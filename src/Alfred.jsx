@@ -2396,6 +2396,7 @@ function IntentionCard({
     }
   }
 
+  /**
   function handleScheduleLater() {
     if (selectedDate && onSchedule) {
       onSchedule(intent.id, selectedDate);
@@ -2403,7 +2404,7 @@ function IntentionCard({
       setSelectedDate("");
     }
   }
-
+ */
   // Get context name for badge
   const contextName =
     intent.contextId && contexts
