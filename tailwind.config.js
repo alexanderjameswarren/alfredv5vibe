@@ -6,15 +6,38 @@ module.exports = {
   theme: {
     extend: {
       colors: {
+        // Primary palette (Teal family)
         primary: {
-          DEFAULT: '#16A085',  // Darker teal for buttons
-          hover: '#138D75',    // Even darker on hover
-          light: '#a2d8c8',    // Your soft teal for accents
-          bg: '#F8FFFE',       // Subtle teal-tinted backgrounds
+          DEFAULT: '#16A085',    // Main teal - buttons, actions
+          hover: '#138D75',      // Darker on hover
+          light: '#a2d8c8',      // Soft teal - backgrounds, accents
+          bg: '#F8FFFE',         // Subtle teal tint for page background
+          dark: '#0E6655',       // Even darker for special emphasis
         },
-        success: '#27AE60',
-        danger: '#E74C3C',
-        dark: '#2C3E50',       // Dark blue-gray for text
+        
+        // Semantic colors
+success: {
+  DEFAULT: '#4DB6AC',    // Soft seafoam
+  hover: '#26A69A',      // Slightly darker
+  light: '#B2DFDB',      // Light seafoam
+},
+        danger: {
+          DEFAULT: '#E74C3C',    // Delete, cancel, error
+          hover: '#C0392B',
+          light: '#FADBD8',      // Light error background
+        },
+warning: {
+  DEFAULT: '#95A5A6',    // Soft gray
+  hover: '#7F8C8D',      // Slightly darker gray
+  light: '#ECF0F1',      // Very light gray background
+},
+        
+        // Neutral colors (text)
+        dark: '#2C3E50',         // Primary text color (replaces black)
+        muted: '#7F8C8D',        // Secondary text, less important
+        
+        // Keep Tailwind's gray scale
+        // gray-50 through gray-900 still available
       },
     },
   },

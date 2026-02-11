@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Plus,
   Share2,
@@ -19,6 +19,7 @@ const storage = {
     intent: "intents",
     event: "events",
     execution: "executions",
+    inbox: "inbox",
   },
 
   // Convert camelCase to snake_case for database
@@ -152,6 +153,10 @@ const storage = {
 const uid = () =>
   Date.now().toString(36) + Math.random().toString(36).substr(2);
 
+function getTodayDate() {
+  return new Date().toISOString().split("T")[0];
+}
+
 export default function Alfred() {
   const [view, setView] = useState("home");
   const [contexts, setContexts] = useState([]);
@@ -161,7 +166,10 @@ export default function Alfred() {
   const [activeExecution, setActiveExecution] = useState(null); // currently viewed
   const [activeExecutions, setActiveExecutions] = useState([]);
   const [pausedExecutions, setPausedExecutions] = useState([]);
+  const [inboxItems, setInboxItems] = useState([]);
 
+  const captureRef = useRef(null);
+  const [executionTab, setExecutionTab] = useState("active");
   const [captureText, setCaptureText] = useState("");
   const [showContextForm, setShowContextForm] = useState(false);
   const [editingContext, setEditingContext] = useState(null);
@@ -229,6 +237,16 @@ export default function Alfred() {
     }
     setEvents(allEvents);
 
+    const inboxKeys = await storage.list("inbox:");
+    const inboxData = await Promise.all(
+      inboxKeys.map((key) => storage.get(key))
+    );
+    setInboxItems(
+      inboxData
+        .filter((item) => item && !item.archived)
+        .sort((a, b) => b.createdAt - a.createdAt)
+    );
+
     try {
       const { data } = await supabase
         .from("executions")
@@ -263,107 +281,89 @@ export default function Alfred() {
   async function handleCapture() {
     if (!captureText.trim()) return;
 
-    const intent = {
+    const inboxItem = {
       id: uid(),
-      text: captureText,
+      capturedText: captureText.trim(),
       createdAt: Date.now(),
-      isIntention: false,
-      isItem: false,
       archived: false,
-      itemId: null,
-      contextId: null,
-      recurrence: "once",
+      triagedAt: null,
+      suggestedContextId: null,
+      suggestItem: false,
+      suggestedItemText: null,
+      suggestedItemDescription: null,
+      suggestedItemElements: null,
+      suggestIntent: false,
+      suggestedIntentText: null,
+      suggestedIntentRecurrence: null,
+      suggestEvent: false,
+      suggestedEventDate: null,
     };
 
-    await storage.set(`intent:${intent.id}`, intent);
-    setIntents([...intents, intent]);
+    await storage.set(`inbox:${inboxItem.id}`, inboxItem);
+    setInboxItems([inboxItem, ...inboxItems]);
     setCaptureText("");
+    if (captureRef.current) {
+      captureRef.current.style.height = "auto";
+    }
+    setView("inbox");
   }
 
-  async function discardIntent(intentId) {
-    const intent = intents.find((i) => i.id === intentId);
-    if (!intent) return;
-
-    const updated = {
-      id: intent.id,
-      text: intent.text,
-      createdAt: intent.createdAt,
-      isIntention: intent.isIntention || false,
-      isItem: intent.isItem || false,
-      archived: true,
-      itemId: intent.itemId || null,
-      contextId: intent.contextId || null,
-      recurrence: intent.recurrence || "once",
-    };
-
-    await storage.set(`intent:${intent.id}`, updated);
-    setIntents(intents.map((i) => (i.id === intentId ? updated : i)));
+  async function archiveInboxItem(inboxItemId) {
+    const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
+    if (!inboxItem) return;
+    const updated = { ...inboxItem, archived: true, triagedAt: Date.now() };
+    await storage.set(`inbox:${inboxItem.id}`, updated);
+    setInboxItems(inboxItems.filter((i) => i.id !== inboxItemId));
   }
 
-  async function makeIntention(
-    intentId,
-    contextId = null,
-    recurrence = "once",
-  ) {
-    const intent = intents.find((i) => i.id === intentId);
-    if (!intent) return;
+  async function handleInboxSave(inboxItemId, triageData) {
+    const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
+    if (!inboxItem) return;
 
-    const updated = {
-      id: intent.id,
-      text: intent.text,
-      createdAt: intent.createdAt,
-      isIntention: true,
-      isItem: intent.isItem || false,
-      archived: false,
-      itemId: intent.itemId || null,
-      contextId,
-      recurrence,
-    };
+    let createdItemId = null;
 
-    await storage.set(`intent:${intent.id}`, updated);
-    setIntents(intents.map((i) => (i.id === intentId ? updated : i)));
-  }
+    // Create item if checked
+    if (triageData.createItem && triageData.itemData) {
+      const newItem = {
+        id: uid(),
+        name: triageData.itemData.name,
+        description: triageData.itemData.description || "",
+        contextId: triageData.itemData.contextId,
+        elements: triageData.itemData.elements || [],
+        isCaptureTarget: false,
+        createdAt: Date.now(),
+      };
 
-  async function saveAsItem(
-    intentId,
-    contextId = null,
-    alsoMakeIntention = false,
-    recurrence = "once",
-  ) {
-    const intent = intents.find((i) => i.id === intentId);
-    if (!intent) return;
+      const context = contexts.find((c) => c.id === newItem.contextId);
+      const isShared = context?.shared || false;
+      await storage.set(`item:${newItem.id}`, newItem, isShared);
+      setItems((prev) => [...prev, newItem]);
+      createdItemId = newItem.id;
+    }
 
-    // Create the item
-    const item = {
-      id: uid(),
-      name: intent.text,
-      description: "",
-      contextId,
-      elements: [],
-      isCaptureTarget: false,
-      createdAt: Date.now(),
-    };
+    // Create intention if checked
+    if (triageData.createIntention && triageData.intentionData) {
+      const intentionItemId =
+        triageData.intentionData.itemId || createdItemId;
+      const newIntent = {
+        id: uid(),
+        text: triageData.intentionData.text,
+        createdAt: Date.now(),
+        isIntention: true,
+        isItem: !!intentionItemId,
+        archived: false,
+        itemId: intentionItemId,
+        contextId: triageData.intentionData.contextId,
+        recurrence: triageData.intentionData.recurrence || "once",
+      };
+      await storage.set(`intent:${newIntent.id}`, newIntent);
+      setIntents((prev) => [...prev, newIntent]);
+    }
 
-    const context = contexts.find((c) => c.id === contextId);
-    const isShared = context?.shared || false;
-    await storage.set(`item:${item.id}`, item, isShared);
-    setItems([...items, item]);
-
-    // Update the intent
-    const updated = {
-      id: intent.id,
-      text: intent.text,
-      createdAt: intent.createdAt,
-      isIntention: alsoMakeIntention,
-      isItem: true,
-      archived: false,
-      itemId: item.id,
-      contextId: alsoMakeIntention ? contextId : null,
-      recurrence: alsoMakeIntention ? recurrence : "once",
-    };
-
-    await storage.set(`intent:${intent.id}`, updated);
-    setIntents(intents.map((i) => (i.id === intentId ? updated : i)));
+    // Archive inbox item
+    const updated = { ...inboxItem, archived: true, triagedAt: Date.now() };
+    await storage.set(`inbox:${inboxItem.id}`, updated);
+    setInboxItems((prev) => prev.filter((i) => i.id !== inboxItemId));
   }
 
   async function moveToPlanner(intentId, scheduledDate = "today") {
@@ -379,11 +379,13 @@ export default function Alfred() {
       return;
     }
 
+    const eventDate = scheduledDate === "today" ? getTodayDate() : scheduledDate;
+
     // Create event for this intent
     const event = {
       id: uid(),
       intentId,
-      time: scheduledDate,
+      time: eventDate,
       itemIds: intent.itemId ? [intent.itemId] : [],
       contextId: intent.contextId,
       archived: false,
@@ -532,7 +534,7 @@ export default function Alfred() {
       await storage.delete(`execution:${activeExecution.id}`);
       setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
       setActiveExecution(null);
-      setView("schedule");
+      setView(previousView);
       return;
     }
 
@@ -564,7 +566,20 @@ export default function Alfred() {
 
     setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
     setActiveExecution(null);
-    setView("schedule");
+    setView(previousView);
+  }
+
+  async function cancelExecutionForEvent(eventId) {
+    const exec =
+      activeExecutions.find((e) => e.eventId === eventId) ||
+      pausedExecutions.find((e) => e.eventId === eventId);
+    if (!exec) return;
+    await storage.delete(`execution:${exec.id}`);
+    setActiveExecutions((prev) => prev.filter((e) => e.id !== exec.id));
+    setPausedExecutions((prev) => prev.filter((e) => e.id !== exec.id));
+    if (activeExecution && activeExecution.id === exec.id) {
+      setActiveExecution(null);
+    }
   }
 
   async function pauseExecution() {
@@ -598,6 +613,12 @@ export default function Alfred() {
     const updated = { ...activeExecution, elements: updatedElements };
     await storage.set(`execution:${updated.id}`, updated);
     setActiveExecution(updated);
+    setActiveExecutions((prev) =>
+      prev.map((e) => (e.id === updated.id ? updated : e))
+    );
+    setPausedExecutions((prev) =>
+      prev.map((e) => (e.id === updated.id ? updated : e))
+    );
   }
 
   async function updateExecutionNotes(notes) {
@@ -605,6 +626,12 @@ export default function Alfred() {
     const updated = { ...activeExecution, notes };
     await storage.set(`execution:${updated.id}`, updated);
     setActiveExecution(updated);
+    setActiveExecutions((prev) =>
+      prev.map((e) => (e.id === updated.id ? updated : e))
+    );
+    setPausedExecutions((prev) =>
+      prev.map((e) => (e.id === updated.id ? updated : e))
+    );
   }
 
   async function saveContext(
@@ -687,6 +714,7 @@ export default function Alfred() {
     if (context) {
       setEditingContext(context);
       setShowContextForm(true);
+      setView("contexts");
     }
   }
 
@@ -737,10 +765,6 @@ export default function Alfred() {
     return newIntent.id; // Return the ID so it can be scheduled
   }
 
-  // Inbox: Not yet triaged (not intention, not item, not archived)
-  const inboxIntents = intents.filter(
-    (i) => !i.isIntention && !i.isItem && !i.archived,
-  );
 
   // Filter events to only show those with valid, non-archived intents
   const validEvents = events.filter((e) => {
@@ -749,7 +773,7 @@ export default function Alfred() {
     return intent && !intent.archived;
   });
 
-  const todayEvents = validEvents.filter((e) => e.time === "today");
+  const todayEvents = validEvents.filter((e) => e.time === getTodayDate());
   const allNonArchivedEvents = validEvents;
   const pinnedContexts = contexts.filter((c) => c.pinned);
   const allLiveExecutions = [...activeExecutions, ...pausedExecutions];
@@ -783,7 +807,7 @@ export default function Alfred() {
     const newEvent = {
       id: uid(),
       intentId: newIntent.id,
-      time: "today",
+      time: getTodayDate(),
       itemIds: [item.id],
       contextId: item.contextId || null,
       archived: false,
@@ -830,6 +854,66 @@ export default function Alfred() {
     setView("execution-detail");
   }
 
+  async function startNowFromIntention(intentId) {
+    const intent = intents.find((i) => i.id === intentId);
+    if (!intent) return;
+
+    // Find linked item if any
+    const linkedItem = intent.itemId
+      ? items.find((i) => i.id === intent.itemId)
+      : null;
+
+    // Create event for today
+    const newEvent = {
+      id: uid(),
+      intentId: intent.id,
+      time: getTodayDate(),
+      itemIds: linkedItem ? [linkedItem.id] : [],
+      contextId: intent.contextId || null,
+      archived: false,
+      createdAt: Date.now(),
+    };
+    await storage.set(`event:${newEvent.id}`, newEvent);
+    setEvents((prev) => [...prev, newEvent]);
+
+    // Build execution elements from linked item
+    const itemElements = [];
+    if (linkedItem && (linkedItem.elements || linkedItem.components)) {
+      const els = (linkedItem.elements || linkedItem.components).map((el) => {
+        const element =
+          typeof el === "string"
+            ? { name: el, displayType: "step", quantity: "", description: "" }
+            : { ...el };
+        return {
+          ...element,
+          isCompleted: false,
+          completedAt: null,
+          sourceItemId: linkedItem.id,
+        };
+      });
+      itemElements.push(...els);
+    }
+
+    const execution = {
+      id: uid(),
+      eventId: newEvent.id,
+      intentId: intent.id,
+      contextId: intent.contextId || null,
+      itemIds: linkedItem ? [linkedItem.id] : [],
+      startedAt: Date.now(),
+      status: "active",
+      notes: "",
+      elements: itemElements,
+      progress: [],
+    };
+
+    await storage.set(`execution:${execution.id}`, execution);
+    setActiveExecution(execution);
+    setActiveExecutions((prev) => [execution, ...prev]);
+    setPreviousView(view);
+    setView("execution-detail");
+  }
+
   // Intentions: Marked as intentions, not archived, no active event
   const intentionsWithoutActiveEvent = intents.filter((i) => {
     if (!i.isIntention || i.archived) return false;
@@ -845,7 +929,7 @@ export default function Alfred() {
       <div className="bg-white border-b border-gray-200 shadow-sm">
         <div className="max-w-4xl mx-auto px-4 py-4">
           <h1 className="text-2xl font-bold text-dark">Alfred v5 (vibe)</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm text-muted mt-1">
             Capture decisions. Hold intent. Execute with focus.
           </p>
         </div>
@@ -873,7 +957,7 @@ export default function Alfred() {
                   : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
               }`}
             >
-              Inbox {inboxIntents.length > 0 && `(${inboxIntents.length})`}
+              Inbox {inboxItems.length > 0 && `(${inboxItems.length})`}
             </button>
             <button
               onClick={() => setView("contexts")}
@@ -922,14 +1006,14 @@ export default function Alfred() {
           <div className="flex gap-2">
             <button
               onClick={() => setView("settings")}
-              className="p-2 text-gray-600 hover:text-gray-900"
+              className="p-2 text-gray-600 hover:text-dark"
               title="Settings"
             >
               <span className="text-xl">⚙️</span>
             </button>
             <button
               onClick={() => setView("recycle")}
-              className="p-2 text-gray-600 hover:text-gray-900"
+              className="p-2 text-gray-600 hover:text-dark"
               title="Recycle Bin"
             >
               <Trash2 className="w-5 h-5" />
@@ -943,76 +1027,105 @@ export default function Alfred() {
         {/* Home View */}
         {view === "home" && (
           <div>
-            <h2 className="text-xl font-semibold mb-4 text-dark">Home</h2>
-
-            {/* Active Executions Section */}
-            {activeExecutions.length > 0 && (
-              <div className="mb-8">
-                <h3 className="text-lg font-semibold mb-3 text-dark">
-                  Active ({activeExecutions.length})
-                </h3>
-                <div className="space-y-2">
-                  {activeExecutions.map((exec) => (
-                    <ExecutionBadge
-                      key={exec.id}
-                      exec={exec}
-                      intents={intents}
-                      contexts={contexts}
-                      getIntentDisplay={getIntentDisplay}
-                      onOpen={openExecution}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Paused Executions Section */}
-            {pausedExecutions.length > 0 && (
-              <div className="mb-8">
-                <h3 className="text-lg font-semibold mb-3 text-dark">
-                  Paused ({pausedExecutions.length})
-                </h3>
-                <div className="space-y-2">
-                  {pausedExecutions.map((exec) => (
-                    <ExecutionBadge
-                      key={exec.id}
-                      exec={exec}
-                      intents={intents}
-                      contexts={contexts}
-                      getIntentDisplay={getIntentDisplay}
-                      onOpen={openExecution}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Today's Events Section */}
+            {/* Executions & Today Tabs */}
             <div className="mb-8">
-              <h3 className="text-lg font-semibold mb-3 text-dark">
-                Events Today ({todayEvents.length})
-              </h3>
-              {todayEvents.length === 0 ? (
-                <p className="text-gray-500 text-sm">
-                  No events scheduled for today.
-                </p>
-              ) : (
+              <div className="flex gap-6 border-b border-gray-200 mb-4">
+                <button
+                  onClick={() => setExecutionTab("active")}
+                  className={`pb-2 border-b-2 cursor-pointer transition-colors ${
+                    executionTab === "active"
+                      ? "border-primary text-primary font-medium"
+                      : "border-transparent text-muted hover:text-dark hover:border-gray-300"
+                  }`}
+                >
+                  Active ({activeExecutions.length})
+                </button>
+                {pausedExecutions.length > 0 && (
+                  <button
+                    onClick={() => setExecutionTab("paused")}
+                    className={`pb-2 border-b-2 cursor-pointer transition-colors ${
+                      executionTab === "paused"
+                        ? "border-primary text-primary font-medium"
+                        : "border-transparent text-muted hover:text-dark hover:border-gray-300"
+                    }`}
+                  >
+                    Paused ({pausedExecutions.length})
+                  </button>
+                )}
+                <button
+                  onClick={() => setExecutionTab("today")}
+                  className={`pb-2 border-b-2 cursor-pointer transition-colors ${
+                    executionTab === "today"
+                      ? "border-primary text-primary font-medium"
+                      : "border-transparent text-muted hover:text-dark hover:border-gray-300"
+                  }`}
+                >
+                  Today ({todayEvents.length})
+                </button>
+              </div>
+
+              {executionTab === "active" && (
                 <div className="space-y-2">
-                  {todayEvents.map((event) => {
-                    const intent = intents.find((i) => i.id === event.intentId);
-                    if (!intent) return null;
-                    return (
-                      <EventCard
-                        key={event.id}
-                        event={event}
-                        intent={intent}
+                  {activeExecutions.length > 0 ? (
+                    activeExecutions.map((exec) => (
+                      <ExecutionBadge
+                        key={exec.id}
+                        exec={exec}
+                        intents={intents}
                         contexts={contexts}
-                        onUpdate={updateEvent}
-                        onActivate={activate}
                         getIntentDisplay={getIntentDisplay}
+                        onOpen={openExecution}
                       />
-                    );
-                  })}
+                    ))
+                  ) : (
+                    <p className="text-muted text-sm">No active executions.</p>
+                  )}
+                </div>
+              )}
+
+              {executionTab === "paused" && (
+                <div className="space-y-2">
+                  {pausedExecutions.length > 0 ? (
+                    pausedExecutions.map((exec) => (
+                      <ExecutionBadge
+                        key={exec.id}
+                        exec={exec}
+                        intents={intents}
+                        contexts={contexts}
+                        getIntentDisplay={getIntentDisplay}
+                        onOpen={openExecution}
+                      />
+                    ))
+                  ) : (
+                    <p className="text-muted text-sm">No paused executions.</p>
+                  )}
+                </div>
+              )}
+
+              {executionTab === "today" && (
+                <div className="space-y-2">
+                  {todayEvents.length > 0 ? (
+                    todayEvents.map((event) => {
+                      const intent = intents.find((i) => i.id === event.intentId);
+                      if (!intent) return null;
+                      return (
+                        <EventCard
+                          key={event.id}
+                          event={event}
+                          intent={intent}
+                          contexts={contexts}
+                          onUpdate={updateEvent}
+                          onActivate={activate}
+                          getIntentDisplay={getIntentDisplay}
+                          executions={allLiveExecutions}
+                          onOpenExecution={openExecution}
+                          onCancelExecution={cancelExecutionForEvent}
+                        />
+                      );
+                    })
+                  ) : (
+                    <p className="text-muted text-sm">No events scheduled for today.</p>
+                  )}
                 </div>
               )}
             </div>
@@ -1021,7 +1134,7 @@ export default function Alfred() {
             <div>
               <h3 className="text-lg font-semibold mb-3 text-dark">Pinned Contexts</h3>
               {pinnedContexts.length === 0 ? (
-                <p className="text-gray-500 text-sm">
+                <p className="text-muted text-sm">
                   No pinned contexts. Pin contexts to see them here.
                 </p>
               ) : (
@@ -1044,22 +1157,21 @@ export default function Alfred() {
         {view === "inbox" && (
           <div>
             <h2 className="text-xl font-semibold mb-4">Inbox</h2>
-            {inboxIntents.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
+            {inboxItems.length === 0 ? (
+              <div className="text-center py-12 text-muted">
                 <p>Empty inbox.</p>
                 <p className="text-sm mt-2">This is success, not failure.</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {inboxIntents.map((intent) => (
+                {inboxItems.map((inboxItem) => (
                   <InboxCard
-                    key={intent.id}
-                    intent={intent}
+                    key={inboxItem.id}
+                    inboxItem={inboxItem}
                     contexts={contexts}
-                    onDiscard={discardIntent}
-                    onMakeIntention={makeIntention}
-                    onSaveAsItem={saveAsItem}
-                    onUpdate={updateIntent}
+                    items={items}
+                    onSave={handleInboxSave}
+                    onArchive={archiveInboxItem}
                   />
                 ))}
               </div>
@@ -1077,7 +1189,7 @@ export default function Alfred() {
                   setEditingContext(null);
                   setShowContextForm(true);
                 }}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
               >
                 <Plus className="w-4 h-4" />
                 Add Context
@@ -1094,7 +1206,7 @@ export default function Alfred() {
                 }}
               />
             ) : contexts.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
+              <div className="text-center py-12 text-muted">
                 <p>No contexts yet.</p>
                 <p className="text-sm mt-2">
                   Add a context to define how things get done.
@@ -1125,7 +1237,7 @@ export default function Alfred() {
             contextId={selectedContextId}
             context={contexts.find((c) => c.id === selectedContextId)}
             items={items.filter((i) => i.contextId === selectedContextId && !i.archived)}
-            intents={intents.filter((i) => i.contextId === selectedContextId)}
+            intents={intents.filter((i) => i.contextId === selectedContextId && !(i.isIntention && i.archived))}
             contexts={contexts}
             onBack={() => {
               setSelectedContextId(null);
@@ -1147,6 +1259,8 @@ export default function Alfred() {
             events={events}
             onUpdateEvent={updateEvent}
             onActivate={activate}
+            onCancelExecution={cancelExecutionForEvent}
+            onStartNow={startNowFromIntention}
           />
         )}
 
@@ -1170,6 +1284,7 @@ export default function Alfred() {
             onViewItemDetail={(id) => viewItemDetail(id, "intention-detail")}
             executions={allLiveExecutions}
             onOpenExecution={openExecution}
+            onCancelExecution={cancelExecutionForEvent}
           />
         )}
 
@@ -1195,6 +1310,8 @@ export default function Alfred() {
             onUpdateEvent={updateEvent}
             onActivate={activate}
             onAddIntention={handleAddIntentionToContext}
+            onCancelExecution={cancelExecutionForEvent}
+            onStartNowIntention={startNowFromIntention}
           />
         )}
 
@@ -1222,7 +1339,7 @@ export default function Alfred() {
           <div>
             <h2 className="text-xl font-semibold mb-4">Schedule</h2>
             {allNonArchivedEvents.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
+              <div className="text-center py-12 text-muted">
                 <p>No scheduled events.</p>
                 <p className="text-sm mt-2">This is a valid state.</p>
               </div>
@@ -1241,6 +1358,9 @@ export default function Alfred() {
                       onUpdate={updateEvent}
                       onActivate={activate}
                       getIntentDisplay={getIntentDisplay}
+                      executions={allLiveExecutions}
+                      onOpenExecution={openExecution}
+                      onCancelExecution={cancelExecutionForEvent}
                     />
                   );
                 })}
@@ -1256,7 +1376,7 @@ export default function Alfred() {
               <h2 className="text-xl font-semibold">Intentions</h2>
               <button
                 onClick={() => setShowAddIntentionForm(true)}
-                className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+                className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
               >
                 <Plus className="w-4 h-4" />
                 Add Intention
@@ -1300,7 +1420,7 @@ export default function Alfred() {
             )}
 
             {intentionsWithoutActiveEvent.length === 0 && !showAddIntentionForm ? (
-              <div className="text-center py-12 text-gray-500">
+              <div className="text-center py-12 text-muted">
                 <p>No available intentions.</p>
                 <p className="text-sm mt-2">
                   All intentions are currently scheduled.
@@ -1316,12 +1436,16 @@ export default function Alfred() {
                     items={items}
                     onUpdate={updateIntent}
                     onSchedule={moveToPlanner}
+                    onStartNow={startNowFromIntention}
                     getIntentDisplay={getIntentDisplay}
                     showScheduling={true}
                     onViewDetail={(id) => viewIntentionDetail(id, "intentions")}
                     events={validEvents}
                     onUpdateEvent={updateEvent}
                     onActivate={activate}
+                    executions={allLiveExecutions}
+                    onOpenExecution={openExecution}
+                    onCancelExecution={cancelExecutionForEvent}
                   />
                 ))}
               </div>
@@ -1334,7 +1458,7 @@ export default function Alfred() {
           <div>
             <h2 className="text-xl font-semibold mb-4">Memories</h2>
             {memoriesWithoutContext.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
+              <div className="text-center py-12 text-muted">
                 <p>No memories without context.</p>
               </div>
             ) : (
@@ -1362,7 +1486,7 @@ export default function Alfred() {
           <div>
             <h2 className="text-xl font-semibold mb-4">Settings</h2>
             <div className="p-6 bg-white border border-gray-200 rounded">
-              <p className="text-gray-500">Settings coming soon...</p>
+              <p className="text-muted">Settings coming soon...</p>
             </div>
           </div>
         )}
@@ -1372,7 +1496,7 @@ export default function Alfred() {
           <div>
             <h2 className="text-xl font-semibold mb-4">Recycle Bin</h2>
             <div className="p-6 bg-white border border-gray-200 rounded">
-              <p className="text-gray-500">Recycle bin coming soon...</p>
+              <p className="text-muted">Recycle bin coming soon...</p>
             </div>
           </div>
         )}
@@ -1381,18 +1505,28 @@ export default function Alfred() {
       {/* Capture bar - fixed at bottom */}
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg">
         <div className="max-w-4xl mx-auto px-4 py-4">
-          <div className="flex gap-2">
-            <input
-              type="text"
+          <div className="flex gap-2 items-end">
+            <textarea
+              ref={captureRef}
               value={captureText}
-              onChange={(e) => setCaptureText(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && handleCapture()}
+              onChange={(e) => {
+                setCaptureText(e.target.value);
+                e.target.style.height = "auto";
+                e.target.style.height = Math.min(e.target.scrollHeight, window.innerHeight * 0.5) + "px";
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleCapture();
+                }
+              }}
               placeholder="Capture anything..."
-              className="flex-1 px-4 py-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-primary"
+              rows={1}
+              className="flex-1 px-4 py-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden min-h-[42px] max-h-[50vh]"
             />
             <button
               onClick={handleCapture}
-              className="px-6 py-3 bg-primary text-white rounded hover:bg-primary-hover shadow-sm hover:shadow transition-all duration-150"
+              className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Capture
             </button>
@@ -1404,176 +1538,537 @@ export default function Alfred() {
 }
 
 function InboxCard({
-  intent,
+  inboxItem,
   contexts,
-  onDiscard,
-  onMakeIntention,
-  onSaveAsItem,
-  onUpdate,
+  items,
+  onSave,
+  onArchive,
 }) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [editedText, setEditedText] = useState(intent.text);
   const [expanded, setExpanded] = useState(false);
 
-  // Triage state
-  const [showTriageOptions, setShowTriageOptions] = useState(false);
-  const [selectedContext, setSelectedContext] = useState("");
-  const [selectedRecurrence, setSelectedRecurrence] = useState("once");
+  // Triage checkboxes
+  const [createIntention, setCreateIntention] = useState(false);
+  const [createItem, setCreateItem] = useState(false);
 
-  const textLines = intent.text.split("\n");
-  const needsTruncation = textLines.length > 5;
-  const displayText =
-    expanded || !needsTruncation
-      ? intent.text
-      : textLines.slice(0, 5).join("\n");
+  // Intention form state
+  const [intentText, setIntentText] = useState(inboxItem.capturedText);
+  const [intentRecurrence, setIntentRecurrence] = useState("once");
+  const [intentContextId, setIntentContextId] = useState("");
+  const [intentContextSearch, setIntentContextSearch] = useState("");
+  const [showIntentContextPicker, setShowIntentContextPicker] = useState(false);
+  const [intentItemId, setIntentItemId] = useState("");
+  const [intentItemSearch, setIntentItemSearch] = useState("");
+  const [showIntentItemPicker, setShowIntentItemPicker] = useState(false);
 
-  function saveEdit() {
-    if (editedText !== intent.text) {
-      onUpdate(intent.id, { text: editedText });
+  // Item form state
+  const [itemName, setItemName] = useState(inboxItem.capturedText);
+  const [itemDescription, setItemDescription] = useState("");
+  const [itemContextId, setItemContextId] = useState("");
+  const [itemElements, setItemElements] = useState([]);
+  const [draggedIndex, setDraggedIndex] = useState(null);
+
+  // Autocomplete filtering
+  const filteredIntentContexts =
+    contexts && intentContextSearch.trim()
+      ? contexts
+          .filter((c) =>
+            c.name.toLowerCase().includes(intentContextSearch.toLowerCase()),
+          )
+          .slice(0, 10)
+      : [];
+
+  const filteredIntentItems =
+    items && intentItemSearch.trim()
+      ? items
+          .filter((item) =>
+            item.name.toLowerCase().includes(intentItemSearch.toLowerCase()),
+          )
+          .slice(0, 10)
+      : [];
+
+  // Item element helpers
+  function addElement() {
+    setItemElements([
+      ...itemElements,
+      { name: "", displayType: "step", quantity: "", description: "" },
+    ]);
+  }
+
+  function insertElementAbove(index) {
+    const newElements = [...itemElements];
+    newElements.splice(index, 0, {
+      name: "",
+      displayType: "step",
+      quantity: "",
+      description: "",
+    });
+    setItemElements(newElements);
+  }
+
+  function updateElement(index, field, value) {
+    const newElements = [...itemElements];
+    newElements[index] = { ...newElements[index], [field]: value };
+    setItemElements(newElements);
+  }
+
+  function deleteElement(index) {
+    setItemElements(itemElements.filter((_, i) => i !== index));
+  }
+
+  function handleElementKeyPress(e, index) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      insertElementAbove(index + 1);
+      setTimeout(() => {
+        const inputs = document.querySelectorAll(".inbox-element-input");
+        if (inputs[index + 1]) {
+          inputs[index + 1].focus();
+        }
+      }, 50);
     }
   }
 
-  function handleDiscard() {
-    saveEdit();
-    onDiscard(intent.id);
+  function handleDragStart(e, index) {
+    setDraggedIndex(index);
+    e.dataTransfer.effectAllowed = "move";
   }
 
-  function handleMakeIntention() {
-    saveEdit();
-    onMakeIntention(intent.id, selectedContext || null, selectedRecurrence);
-    setShowTriageOptions(false);
-    setSelectedContext("");
+  function handleDragOver(e, index) {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === index) return;
+    const newElements = [...itemElements];
+    const draggedItem = newElements[draggedIndex];
+    newElements.splice(draggedIndex, 1);
+    newElements.splice(index, 0, draggedItem);
+    setItemElements(newElements);
+    setDraggedIndex(index);
   }
 
-  function handleSaveAsItem() {
-    saveEdit();
-    onSaveAsItem(intent.id, selectedContext || null, false);
-    setShowTriageOptions(false);
-    setSelectedContext("");
+  function handleDragEnd() {
+    setDraggedIndex(null);
   }
 
-  function handleBoth() {
-    saveEdit();
-    onSaveAsItem(intent.id, selectedContext || null, true, selectedRecurrence);
-    setShowTriageOptions(false);
-    setSelectedContext("");
+  function handleSave() {
+    if (!createIntention && !createItem) return;
+    if (createIntention && !intentText.trim()) return;
+    if (createItem && !itemName.trim()) return;
+
+    onSave(inboxItem.id, {
+      createIntention,
+      intentionData: createIntention
+        ? {
+            text: intentText,
+            contextId: intentContextId || null,
+            recurrence: intentRecurrence,
+            itemId: intentItemId || null,
+          }
+        : null,
+      createItem,
+      itemData: createItem
+        ? {
+            name: itemName,
+            description: itemDescription,
+            contextId: itemContextId || null,
+            elements: itemElements,
+          }
+        : null,
+    });
   }
 
+  function handleCancel() {
+    setExpanded(false);
+    setCreateIntention(false);
+    setCreateItem(false);
+    setIntentText(inboxItem.capturedText);
+    setIntentRecurrence("once");
+    setIntentContextId("");
+    setIntentContextSearch("");
+    setIntentItemId("");
+    setIntentItemSearch("");
+    setItemName(inboxItem.capturedText);
+    setItemDescription("");
+    setItemContextId("");
+    setItemElements([]);
+  }
+
+  // Collapsed display
+  if (!expanded) {
+    const textLines = inboxItem.capturedText.split("\n");
+    const preview =
+      textLines.length > 2
+        ? textLines.slice(0, 2).join("\n") + "..."
+        : inboxItem.capturedText;
+
+    return (
+      <div
+        className="p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary transition-colors"
+        onClick={() => setExpanded(true)}
+      >
+        <p className="whitespace-pre-wrap text-dark">{preview}</p>
+      </div>
+    );
+  }
+
+  // Expanded triage view
   return (
-    <div className="p-4 bg-white border border-gray-200 rounded">
-      <div className="flex items-start gap-2 mb-3">
-        {isEditing ? (
-          <textarea
-            value={editedText}
-            onChange={(e) => setEditedText(e.target.value)}
-            onBlur={saveEdit}
-            className="flex-1 px-3 py-2 border border-gray-300 rounded min-h-[100px]"
-            autoFocus
+    <div className="p-4 bg-white border-2 border-primary rounded">
+      {/* Captured text at top */}
+      <p className="text-lg text-dark mb-4 whitespace-pre-wrap">
+        {inboxItem.capturedText}
+      </p>
+
+      {/* Checkboxes */}
+      <div className="space-y-2 mb-4">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={createIntention}
+            onChange={(e) => setCreateIntention(e.target.checked)}
+            className="accent-primary"
           />
-        ) : (
-          <p className="flex-1 whitespace-pre-wrap">{displayText}</p>
-        )}
-        <button
-          onClick={() => setIsEditing(!isEditing)}
-          className="text-gray-500 hover:text-gray-700"
-          title="Edit"
-        >
-          ✏️
-        </button>
+          <span>Create Intention</span>
+        </label>
+
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={createItem}
+            onChange={(e) => setCreateItem(e.target.checked)}
+            className="accent-primary"
+          />
+          <span>Create Item</span>
+        </label>
       </div>
 
-      {needsTruncation && !expanded && !isEditing && (
-        <button
-          onClick={() => setExpanded(true)}
-          className="text-sm text-blue-600 hover:text-blue-700 mb-3"
-        >
-          Show more
-        </button>
-      )}
-      {needsTruncation && expanded && !isEditing && (
-        <button
-          onClick={() => setExpanded(false)}
-          className="text-sm text-blue-600 hover:text-blue-700 mb-3"
-        >
-          Show less
-        </button>
+      {/* Intention form */}
+      {createIntention && (
+        <div className="mb-4 p-4 border border-gray-200 rounded">
+          <h4 className="font-medium mb-3">Intention</h4>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Name
+              </label>
+              <input
+                type="text"
+                value={intentText}
+                onChange={(e) => setIntentText(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Linked Context (optional)
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={intentContextSearch}
+                  onChange={(e) => {
+                    setIntentContextSearch(e.target.value);
+                    setShowIntentContextPicker(true);
+                  }}
+                  onFocus={() => setShowIntentContextPicker(true)}
+                  onBlur={() =>
+                    setTimeout(() => setShowIntentContextPicker(false), 200)
+                  }
+                  placeholder="Search for a context..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded"
+                />
+                {intentContextId && !intentContextSearch && contexts && (
+                  <div className="mt-1 text-sm text-gray-600">
+                    Selected:{" "}
+                    {contexts.find((c) => c.id === intentContextId)?.name}
+                    <button
+                      onClick={() => {
+                        setIntentContextId("");
+                        setIntentContextSearch("");
+                      }}
+                      className="ml-2 text-danger hover:text-danger-hover"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+                {showIntentContextPicker &&
+                  intentContextSearch &&
+                  filteredIntentContexts.length > 0 && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded shadow-lg max-h-60 overflow-y-auto">
+                      {filteredIntentContexts.map((ctx) => (
+                        <button
+                          key={ctx.id}
+                          onClick={() => {
+                            setIntentContextId(ctx.id);
+                            setIntentContextSearch(ctx.name);
+                            setShowIntentContextPicker(false);
+                          }}
+                          className="w-full text-left px-3 py-2 hover:bg-primary-bg border-b border-gray-200 last:border-b-0"
+                        >
+                          <div className="font-medium">{ctx.name}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Linked Item (optional)
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={intentItemSearch}
+                  onChange={(e) => {
+                    setIntentItemSearch(e.target.value);
+                    setShowIntentItemPicker(true);
+                  }}
+                  onFocus={() => setShowIntentItemPicker(true)}
+                  onBlur={() =>
+                    setTimeout(() => setShowIntentItemPicker(false), 200)
+                  }
+                  placeholder="Search for an item..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded"
+                />
+                {intentItemId && !intentItemSearch && items && (
+                  <div className="mt-1 text-sm text-gray-600">
+                    Selected:{" "}
+                    {items.find((i) => i.id === intentItemId)?.name}
+                    <button
+                      onClick={() => {
+                        setIntentItemId("");
+                        setIntentItemSearch("");
+                      }}
+                      className="ml-2 text-danger hover:text-danger-hover"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+                {showIntentItemPicker &&
+                  intentItemSearch &&
+                  filteredIntentItems.length > 0 && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded shadow-lg max-h-60 overflow-y-auto">
+                      {filteredIntentItems.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            setIntentItemId(item.id);
+                            setIntentItemSearch(item.name);
+                            setShowIntentItemPicker(false);
+                          }}
+                          className="w-full text-left px-3 py-2 hover:bg-primary-bg border-b border-gray-200 last:border-b-0"
+                        >
+                          <div className="font-medium">{item.name}</div>
+                          {item.contextId && contexts && (
+                            <div className="text-xs text-muted">
+                              {
+                                contexts.find((c) => c.id === item.contextId)
+                                  ?.name
+                              }
+                            </div>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Recurrence
+              </label>
+              <select
+                value={intentRecurrence}
+                onChange={(e) => setIntentRecurrence(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded"
+              >
+                <option value="once">One time</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            </div>
+          </div>
+        </div>
       )}
 
-      {!showTriageOptions ? (
-        <div className="flex gap-2 flex-wrap">
+      {/* Item form */}
+      {createItem && (
+        <div className="mb-4 p-4 border border-gray-200 rounded">
+          <h4 className="font-medium mb-3">Item</h4>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Name
+              </label>
+              <input
+                type="text"
+                value={itemName}
+                onChange={(e) => setItemName(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Description
+              </label>
+              <textarea
+                value={itemDescription}
+                onChange={(e) => setItemDescription(e.target.value)}
+                placeholder="Optional description"
+                className="w-full px-3 py-2 border border-gray-300 rounded"
+                rows="2"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Context
+              </label>
+              <select
+                value={itemContextId}
+                onChange={(e) => setItemContextId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded"
+              >
+                <option value="">No context</option>
+                {contexts.map((ctx) => (
+                  <option key={ctx.id} value={ctx.id}>
+                    {ctx.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Elements
+              </label>
+              <div className="space-y-2">
+                {itemElements.map((element, index) => (
+                  <div key={index}>
+                    <div
+                      className={`space-y-2 p-3 border border-gray-200 rounded ${draggedIndex === index ? "opacity-50" : ""}`}
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, index)}
+                      onDragOver={(e) => handleDragOver(e, index)}
+                      onDragEnd={handleDragEnd}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="text-sm text-muted cursor-move"
+                          title="Drag to reorder"
+                        >
+                          ☰
+                        </span>
+                        <input
+                          type="text"
+                          value={element.name}
+                          onChange={(e) =>
+                            updateElement(index, "name", e.target.value)
+                          }
+                          onKeyPress={(e) => handleElementKeyPress(e, index)}
+                          placeholder="Element name"
+                          className="inbox-element-input flex-1 px-3 py-2 border border-gray-300 rounded"
+                        />
+                        <select
+                          value={element.displayType || "step"}
+                          onChange={(e) =>
+                            updateElement(index, "displayType", e.target.value)
+                          }
+                          className="px-2 py-2 border border-gray-300 rounded text-sm"
+                        >
+                          <option value="header">Header</option>
+                          <option value="bullet">Bullet</option>
+                          <option value="step">Step</option>
+                        </select>
+                        <button
+                          onClick={() => deleteElement(index)}
+                          className="text-danger hover:text-danger-hover"
+                          title="Delete"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <input
+                        type="text"
+                        value={element.quantity || ""}
+                        onChange={(e) =>
+                          updateElement(index, "quantity", e.target.value)
+                        }
+                        placeholder="Quantity (optional)"
+                        className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                      />
+
+                      <textarea
+                        value={element.description || ""}
+                        onChange={(e) =>
+                          updateElement(index, "description", e.target.value)
+                        }
+                        placeholder="Description (optional)"
+                        className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                        rows="2"
+                      />
+                    </div>
+
+                    {index < itemElements.length - 1 && (
+                      <div className="flex justify-center -my-1">
+                        <button
+                          onClick={() => insertElementAbove(index + 1)}
+                          className="text-success hover:text-success-hover text-lg"
+                          title="Insert element below"
+                        >
+                          +
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                <button
+                  onClick={addElement}
+                  className="w-full px-4 py-2.5 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-primary hover:text-primary transition-all duration-200"
+                >
+                  + Add Element
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div className="flex items-center justify-between">
+        <div className="flex gap-2">
           <button
-            onClick={handleDiscard}
-            className="px-4 py-2 bg-gray-400 text-white rounded text-sm hover:bg-gray-500"
+            onClick={handleSave}
+            disabled={!createIntention && !createItem}
+            className={`px-4 py-2.5 rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${
+              createIntention || createItem
+                ? "bg-primary hover:bg-primary-hover text-white"
+                : "bg-gray-200 text-gray-400 cursor-not-allowed"
+            }`}
           >
-            Discard
+            Save
           </button>
           <button
-            onClick={() => setShowTriageOptions(true)}
-            className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+            onClick={handleCancel}
+            className="px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
-            Triage →
+            Cancel
           </button>
         </div>
-      ) : (
-        <div className="space-y-3 border-t pt-3">
-          <div className="flex gap-2 items-center flex-wrap">
-            <select
-              value={selectedContext}
-              onChange={(e) => setSelectedContext(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded text-sm"
-            >
-              <option value="">No Context</option>
-              {contexts.map((ctx) => (
-                <option key={ctx.id} value={ctx.id}>
-                  {ctx.name}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={selectedRecurrence}
-              onChange={(e) => setSelectedRecurrence(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded text-sm"
-            >
-              <option value="once">One time</option>
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-              <option value="monthly">Monthly</option>
-            </select>
-          </div>
-
-          <div className="flex gap-2 flex-wrap">
-            <button
-              onClick={handleMakeIntention}
-              className="px-4 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700"
-            >
-              Make Intention
-            </button>
-            <button
-              onClick={handleSaveAsItem}
-              className="px-4 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700"
-            >
-              Save as Item
-            </button>
-            <button
-              onClick={handleBoth}
-              className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
-            >
-              Both
-            </button>
-            <button
-              onClick={() => {
-                setShowTriageOptions(false);
-                setSelectedContext("");
-                setSelectedRecurrence("once");
-              }}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
+        <button
+          onClick={() => onArchive(inboxItem.id)}
+          className="text-muted hover:text-danger transition-colors"
+        >
+          Archive
+        </button>
+      </div>
     </div>
   );
 }
@@ -1586,7 +2081,7 @@ function ContextForm({ editing, onSave, onCancel }) {
   const [pinned, setPinned] = useState(editing?.pinned || false);
 
   return (
-    <div className="mb-6 p-6 bg-white border-2 border-blue-500 rounded-lg shadow-lg">
+    <div className="mb-6 p-6 bg-white border-2 border-primary rounded-lg shadow-lg">
       <h3 className="font-semibold text-lg mb-4">
         {editing ? "Edit Context" : "New Context"}
       </h3>
@@ -1637,7 +2132,7 @@ function ContextForm({ editing, onSave, onCancel }) {
             type="checkbox"
             checked={shared}
             onChange={(e) => setShared(e.target.checked)}
-            className="rounded"
+            className="rounded accent-primary"
           />
           <span className="text-sm">Share this context</span>
         </label>
@@ -1647,7 +2142,7 @@ function ContextForm({ editing, onSave, onCancel }) {
             type="checkbox"
             checked={pinned}
             onChange={(e) => setPinned(e.target.checked)}
-            className="rounded"
+            className="rounded accent-primary"
           />
           <span className="text-sm">Pin to home</span>
         </label>
@@ -1657,13 +2152,13 @@ function ContextForm({ editing, onSave, onCancel }) {
             onClick={() =>
               name.trim() && onSave(name, shared, keywords, description, pinned)
             }
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             Save
           </button>
           <button
             onClick={onCancel}
-            className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+            className="px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             Cancel
           </button>
@@ -1683,7 +2178,7 @@ function ContextCard({ context, onClick, onEdit, showSettings = false }) {
             <h3 className="font-semibold text-dark">{context.name}</h3>
           </div>
           {context.description && (
-            <p className="text-sm text-gray-500 mt-1">{context.description}</p>
+            <p className="text-sm text-muted mt-1">{context.description}</p>
           )}
           <div className="flex items-center gap-2 mt-1">
             {context.shared && (
@@ -1700,7 +2195,7 @@ function ContextCard({ context, onClick, onEdit, showSettings = false }) {
               e.stopPropagation();
               onEdit();
             }}
-            className="text-gray-500 hover:text-gray-700"
+            className="text-muted hover:text-dark"
           >
             <span className="text-lg">⚙️</span>
           </button>
@@ -1731,6 +2226,8 @@ function ContextDetailView({
   events = [],
   onUpdateEvent,
   onActivate,
+  onCancelExecution,
+  onStartNow,
 }) {
   const [showAddItemForm, setShowAddItemForm] = useState(false);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
@@ -1792,7 +2289,7 @@ function ContextDetailView({
     <div>
       <button
         onClick={onBack}
-        className="flex items-center gap-2 mb-4 text-blue-600 hover:text-blue-700"
+        className="flex items-center gap-2 mb-4 text-primary hover:text-primary-hover"
       >
         <ArrowLeft className="w-4 h-4" />
         Back
@@ -1803,7 +2300,7 @@ function ContextDetailView({
           <h2 className="text-2xl font-bold">{context.name}</h2>
           <button
             onClick={onEditContext}
-            className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+            className="flex items-center gap-2 px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             <span>⚙️</span>
             Edit Context
@@ -1813,7 +2310,7 @@ function ContextDetailView({
           <p className="text-gray-600">{context.description}</p>
         )}
         {context.keywords && (
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm text-muted mt-1">
             Keywords: {context.keywords}
           </p>
         )}
@@ -1825,7 +2322,7 @@ function ContextDetailView({
             <h3 className="text-lg font-semibold">Items ({items.length})</h3>
             <button
               onClick={() => setShowAddItemForm(true)}
-              className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               <Plus className="w-4 h-4" />
               Add Item
@@ -1845,7 +2342,7 @@ function ContextDetailView({
           )}
 
           {items.length === 0 ? (
-            <p className="text-gray-500 text-sm">No items in this context</p>
+            <p className="text-muted text-sm">No items in this context</p>
           ) : (
             <div className="space-y-2">
               {items.map((item) => (
@@ -1872,7 +2369,7 @@ function ContextDetailView({
             </h3>
             <button
               onClick={() => setShowAddIntentionForm(true)}
-              className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               <Plus className="w-4 h-4" />
               Add Intention
@@ -1896,7 +2393,7 @@ function ContextDetailView({
           )}
 
           {intents.length === 0 ? (
-            <p className="text-gray-500 text-sm">
+            <p className="text-muted text-sm">
               No intentions in this context
             </p>
           ) : (
@@ -1910,11 +2407,15 @@ function ContextDetailView({
                   getIntentDisplay={getIntentDisplay}
                   onUpdate={onUpdateIntent}
                   onSchedule={onSchedule}
+                  onStartNow={onStartNow}
                   showScheduling={true}
                   onViewDetail={onViewIntentionDetail}
                   events={events}
                   onUpdateEvent={onUpdateEvent}
                   onActivate={onActivate}
+                  executions={executions}
+                  onOpenExecution={onOpenExecution}
+                  onCancelExecution={onCancelExecution}
                 />
               ))}
             </div>
@@ -1940,6 +2441,7 @@ function IntentionDetailView({
   onViewItemDetail,
   executions = [],
   onOpenExecution,
+  onCancelExecution,
 }) {
   const [isEditing, setIsEditing] = useState(false);
 
@@ -1962,7 +2464,7 @@ function IntentionDetailView({
       <div>
         <button
           onClick={onBack}
-          className="flex items-center gap-2 mb-4 text-blue-600 hover:text-blue-700"
+          className="flex items-center gap-2 mb-4 text-primary hover:text-primary-hover"
         >
           <ArrowLeft className="w-4 h-4" />
           Back
@@ -1993,7 +2495,7 @@ function IntentionDetailView({
     <div>
       <button
         onClick={onBack}
-        className="flex items-center gap-2 mb-4 text-blue-600 hover:text-blue-700"
+        className="flex items-center gap-2 mb-4 text-primary hover:text-primary-hover"
       >
         <ArrowLeft className="w-4 h-4" />
         Back
@@ -2004,14 +2506,14 @@ function IntentionDetailView({
           <div className="flex-1">
             <h2 className="text-2xl font-bold">{intention.text}</h2>
             {contextName && (
-              <span className="inline-block mt-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+              <span className="inline-block mt-2 text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
                 {contextName}
               </span>
             )}
           </div>
           <button
             onClick={() => setIsEditing(true)}
-            className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+            className="flex items-center gap-2 px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             <span>⚙️</span>
             Edit Intention
@@ -2040,7 +2542,7 @@ function IntentionDetailView({
                 onOpenExecution={onOpenExecution}
               />
             ) : (
-              <p className="text-gray-500 text-sm">Item not found</p>
+              <p className="text-muted text-sm">Item not found</p>
             );
           })()}
         </div>
@@ -2051,7 +2553,7 @@ function IntentionDetailView({
           Scheduled Events ({intentionEvents.length})
         </h3>
         {intentionEvents.length === 0 ? (
-          <p className="text-gray-500 text-sm">
+          <p className="text-muted text-sm">
             No events scheduled for this intention
           </p>
         ) : (
@@ -2065,6 +2567,9 @@ function IntentionDetailView({
                 onUpdate={onUpdateEvent}
                 onActivate={onActivate}
                 getIntentDisplay={getIntentDisplay}
+                executions={executions}
+                onOpenExecution={onOpenExecution}
+                onCancelExecution={onCancelExecution}
               />
             ))}
           </div>
@@ -2092,6 +2597,8 @@ function ItemDetailView({
   onUpdateEvent,
   onActivate,
   onAddIntention,
+  onCancelExecution,
+  onStartNowIntention,
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
@@ -2115,7 +2622,7 @@ function ItemDetailView({
       <div>
         <button
           onClick={onBack}
-          className="flex items-center gap-2 mb-4 text-blue-600 hover:text-blue-700"
+          className="flex items-center gap-2 mb-4 text-primary hover:text-primary-hover"
         >
           <ArrowLeft className="w-4 h-4" />
           Back
@@ -2143,7 +2650,7 @@ function ItemDetailView({
     <div>
       <button
         onClick={onBack}
-        className="flex items-center gap-2 mb-4 text-blue-600 hover:text-blue-700"
+        className="flex items-center gap-2 mb-4 text-primary hover:text-primary-hover"
       >
         <ArrowLeft className="w-4 h-4" />
         Back
@@ -2154,7 +2661,7 @@ function ItemDetailView({
           <div className="flex-1">
             <h2 className="text-2xl font-bold">{item.name}</h2>
             {contextName && (
-              <span className="inline-block mt-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+              <span className="inline-block mt-2 text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
                 {contextName}
               </span>
             )}
@@ -2163,7 +2670,7 @@ function ItemDetailView({
             {onStartNow && (
               <button
                 onClick={() => onStartNow(item.id)}
-                className="flex items-center gap-2 px-3 py-2 text-sm bg-green-600 text-white rounded hover:bg-green-700"
+                className="flex items-center gap-2 px-4 py-2.5 bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
               >
                 <Play className="w-4 h-4" />
                 Start Now
@@ -2171,7 +2678,7 @@ function ItemDetailView({
             )}
             <button
               onClick={() => setIsEditing(true)}
-              className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+              className="flex items-center gap-2 px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               <span>⚙️</span>
               Edit Item
@@ -2190,7 +2697,7 @@ function ItemDetailView({
       {/* Capture Target Badge */}
       {item.isCaptureTarget && (
         <div className="mb-4">
-          <span className="inline-block text-xs bg-green-100 text-green-700 px-2 py-1 rounded">
+          <span className="inline-block text-xs bg-success-light text-dark px-2 py-1 rounded">
             📍 Capture Target
           </span>
         </div>
@@ -2202,31 +2709,58 @@ function ItemDetailView({
           <div className="mb-6">
             <h3 className="text-lg font-semibold mb-3">Elements</h3>
             <div className="space-y-2">
-              {(item.elements || item.components).map((element, index) => {
-                const el =
-                  typeof element === "string"
-                    ? { name: element, displayType: "step" }
-                    : element;
+              {(() => {
+                let stepCounter = 0;
+                return (item.elements || item.components).map((element, index) => {
+                  const el =
+                    typeof element === "string"
+                      ? { name: element, displayType: "step" }
+                      : element;
 
-                if (el.displayType === "header") {
-                  return (
-                    <div key={index} className="mt-4 mb-2">
-                      <h4 className="text-md font-bold text-gray-800">
-                        {el.name}
-                      </h4>
-                      {el.description && (
-                        <p className="text-sm text-gray-600 mt-1">
-                          {el.description}
-                        </p>
-                      )}
-                    </div>
-                  );
-                }
+                  if (el.displayType === "header") {
+                    return (
+                      <div key={index} className="mt-4 mb-2">
+                        <h4 className="text-md font-bold text-gray-800">
+                          {el.name}
+                        </h4>
+                        {el.description && (
+                          <p className="text-sm text-gray-600 mt-1">
+                            {el.description}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  }
 
-                if (el.displayType === "bullet") {
+                  if (el.displayType === "bullet") {
+                    return (
+                      <div key={index} className="ml-4 flex items-start gap-2">
+                        <span className="text-gray-600 mt-1">•</span>
+                        <div className="flex-1">
+                          <span className="text-gray-700">
+                            {el.quantity && (
+                              <span className="font-medium">{el.quantity} </span>
+                            )}
+                            {el.name}
+                          </span>
+                          {el.description && (
+                            <p className="text-sm text-gray-600 mt-1">
+                              {el.description}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // Default: step
+                  stepCounter++;
+                  const stepNum = stepCounter;
                   return (
-                    <div key={index} className="ml-4 flex items-start gap-2">
-                      <span className="text-gray-600 mt-1">•</span>
+                    <div key={index} className="flex items-start gap-3">
+                      <span className="text-gray-600 font-medium min-w-[24px]">
+                        {stepNum}.
+                      </span>
                       <div className="flex-1">
                         <span className="text-gray-700">
                           {el.quantity && (
@@ -2242,30 +2776,8 @@ function ItemDetailView({
                       </div>
                     </div>
                   );
-                }
-
-                // Default: step
-                return (
-                  <div key={index} className="flex items-start gap-3">
-                    <span className="text-gray-600 font-medium min-w-[24px]">
-                      {index + 1}.
-                    </span>
-                    <div className="flex-1">
-                      <span className="text-gray-700">
-                        {el.quantity && (
-                          <span className="font-medium">{el.quantity} </span>
-                        )}
-                        {el.name}
-                      </span>
-                      {el.description && (
-                        <p className="text-sm text-gray-600 mt-1">
-                          {el.description}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                });
+              })()}
             </div>
           </div>
         )}
@@ -2300,7 +2812,7 @@ function ItemDetailView({
           {onAddIntention && (
             <button
               onClick={() => setShowAddIntentionForm(true)}
-              className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               <Plus className="w-4 h-4" />
               Create Intention
@@ -2345,7 +2857,7 @@ function ItemDetailView({
         )}
 
         {itemIntentions.length === 0 && !showAddIntentionForm ? (
-          <p className="text-gray-500 text-sm">
+          <p className="text-muted text-sm">
             No intentions linked to this item
           </p>
         ) : (
@@ -2358,11 +2870,15 @@ function ItemDetailView({
                 items={items}
                 onUpdate={onUpdateIntent}
                 onSchedule={onSchedule}
+                onStartNow={onStartNowIntention}
                 getIntentDisplay={getIntentDisplay}
                 showScheduling={true}
                 events={events}
                 onUpdateEvent={onUpdateEvent}
                 onActivate={onActivate}
+                executions={executions}
+                onOpenExecution={onOpenExecution}
+                onCancelExecution={onCancelExecution}
               />
             ))}
           </div>
@@ -2395,9 +2911,7 @@ function ExecutionDetailView({
       : null;
 
   const displayName = intent ? getIntentDisplay(intent) : "Execution";
-  const dateDisplay = event?.time === "today"
-    ? new Date().toLocaleDateString()
-    : event?.time || "";
+  const dateDisplay = event?.time || "";
 
   return (
     <div>
@@ -2413,15 +2927,15 @@ function ExecutionDetailView({
       </button>
 
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-900">{displayName}</h2>
+        <h2 className="text-2xl font-bold text-dark">{displayName}</h2>
         <div className="flex items-center gap-2 mt-1">
           {contextName && (
-            <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
+            <span className="text-xs bg-success-light text-dark px-2 py-0.5 rounded">
               {contextName}
             </span>
           )}
           {dateDisplay && (
-            <span className="text-sm text-gray-500">{dateDisplay}</span>
+            <span className="text-sm text-muted">{dateDisplay}</span>
           )}
         </div>
       </div>
@@ -2429,73 +2943,83 @@ function ExecutionDetailView({
       {execution.elements && execution.elements.length > 0 && (
         <div className="mb-6">
           <div className="border-t border-gray-200 pt-4 space-y-2">
-            {execution.elements.map((el, index) => {
-              if (el.displayType === "header") {
-                return (
-                  <div key={index} className="mt-4 mb-2">
-                    <h4 className="text-md font-bold text-gray-800 uppercase tracking-wide">
-                      {el.name}
-                    </h4>
-                  </div>
-                );
-              }
+            {(() => {
+              let stepCounter = 0;
+              return execution.elements.map((el, index) => {
+                if (el.displayType === "header") {
+                  return (
+                    <div key={index} className="mt-4 mb-2">
+                      <h4 className="text-md font-bold text-gray-800 uppercase tracking-wide">
+                        {el.name}
+                      </h4>
+                    </div>
+                  );
+                }
 
-              if (el.displayType === "bullet") {
-                return (
-                  <div key={index} className="ml-4 flex items-start gap-2 py-1">
-                    <span className="text-gray-500 mt-0.5">•</span>
-                    <div className="flex-1">
-                      <span className="text-gray-700">
-                        {el.quantity && (
-                          <span className="font-medium">{el.quantity} · </span>
+                if (el.displayType === "bullet") {
+                  return (
+                    <div key={index} className="ml-4 flex items-start gap-2 py-1">
+                      <span className="text-muted mt-0.5">•</span>
+                      <div className="flex-1">
+                        <span className="text-gray-700">
+                          {el.quantity && (
+                            <span className="font-medium">{el.quantity} · </span>
+                          )}
+                          {el.name}
+                        </span>
+                        {el.description && (
+                          <p className="text-sm text-muted">{el.description}</p>
                         )}
+                      </div>
+                    </div>
+                  );
+                }
+
+                // step or any other displayType
+                stepCounter++;
+                const stepNum = stepCounter;
+                return (
+                  <div
+                    key={index}
+                    onClick={() => onToggleElement(index)}
+                    className="flex items-start gap-3 py-2 px-3 rounded cursor-pointer hover:bg-gray-50"
+                  >
+                    <span className={`font-medium min-w-[24px] mt-0.5 ${el.isCompleted ? "text-gray-400" : "text-gray-600"}`}>
+                      {stepNum}.
+                    </span>
+                    <span className={`mt-1 w-5 h-5 flex-shrink-0 rounded border-2 flex items-center justify-center ${
+                      el.isCompleted
+                        ? "bg-primary border-primary"
+                        : "bg-white border-gray-300"
+                    }`}>
+                      {el.isCompleted && (
+                        <Check className="w-3 h-3 text-white" />
+                      )}
+                    </span>
+                    <div className="flex-1">
+                      <span
+                        className={
+                          el.isCompleted
+                            ? "line-through text-gray-400"
+                            : "text-gray-800"
+                        }
+                      >
                         {el.name}
                       </span>
-                      {el.description && (
-                        <p className="text-sm text-gray-500">{el.description}</p>
+                      {(el.quantity || el.description) && (
+                        <p
+                          className={`text-sm ${el.isCompleted ? "text-gray-300" : "text-muted"}`}
+                        >
+                          {[el.quantity, el.description]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </p>
                       )}
                     </div>
                   </div>
                 );
-              }
-
-              // step or any other displayType
-              return (
-                <div
-                  key={index}
-                  onClick={() => onToggleElement(index)}
-                  className="flex items-start gap-3 py-2 px-3 rounded cursor-pointer hover:bg-gray-50"
-                >
-                  <span className="mt-0.5 text-lg">
-                    {el.isCompleted ? (
-                      <span className="text-green-600">☑</span>
-                    ) : (
-                      <span className="text-gray-400">☐</span>
-                    )}
-                  </span>
-                  <div className="flex-1">
-                    <span
-                      className={
-                        el.isCompleted
-                          ? "line-through text-gray-400"
-                          : "text-gray-800"
-                      }
-                    >
-                      {el.name}
-                    </span>
-                    {(el.quantity || el.description) && (
-                      <p
-                        className={`text-sm ${el.isCompleted ? "text-gray-300" : "text-gray-500"}`}
-                      >
-                        {[el.quantity, el.description]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+              });
+            })()}
           </div>
         </div>
       )}
@@ -2518,7 +3042,7 @@ function ExecutionDetailView({
       <div className="flex items-center justify-between pt-4 border-t border-gray-200">
         <button
           onClick={onCancel}
-          className="flex items-center gap-2 px-6 py-3 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+          className="flex items-center gap-2 px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
         >
           <X className="w-4 h-4" />
           Cancel
@@ -2526,7 +3050,7 @@ function ExecutionDetailView({
         {execution.status === "paused" ? (
           <button
             onClick={onMakeActive}
-            className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded hover:bg-blue-700"
+            className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             <Play className="w-4 h-4" />
             Make Active
@@ -2534,7 +3058,7 @@ function ExecutionDetailView({
         ) : (
           <button
             onClick={onPause}
-            className="flex items-center gap-2 px-6 py-3 bg-yellow-500 text-white rounded hover:bg-yellow-600"
+            className="flex items-center gap-2 px-4 py-2.5 bg-warning hover:bg-warning-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             <Pause className="w-4 h-4" />
             Pause
@@ -2542,7 +3066,7 @@ function ExecutionDetailView({
         )}
         <button
           onClick={onComplete}
-          className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded hover:bg-green-700"
+          className="flex items-center gap-2 px-4 py-2.5 bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
         >
           <Check className="w-5 h-5" />
           Complete
@@ -2565,7 +3089,7 @@ function ExecutionBadge({ exec, intents, contexts, getIntentDisplay, onOpen }) {
       className={`p-4 rounded cursor-pointer shadow-sm hover:shadow-md transition-shadow duration-200 ${
         isActive
           ? "bg-primary-light border-2 border-primary"
-          : "bg-yellow-50 border-2 border-yellow-400"
+          : "bg-warning-light border-2 border-warning"
       }`}
     >
       <p className="font-medium text-dark">
@@ -2577,13 +3101,13 @@ function ExecutionBadge({ exec, intents, contexts, getIntentDisplay, onOpen }) {
         </p>
       )}
       {isActive && (
-        <p className="text-xs text-primary mt-1 flex items-center gap-1">
+        <p className="text-xs text-dark mt-1 flex items-center gap-1">
           <Play className="w-3 h-3" />
           Active
         </p>
       )}
       {!isActive && (
-        <p className="text-xs text-yellow-700 mt-1 flex items-center gap-1">
+        <p className="text-xs text-warning mt-1 flex items-center gap-1">
           <Pause className="w-3 h-3" />
           Paused — click to resume
         </p>
@@ -2728,7 +3252,7 @@ function ItemCard({
 
   if (isEditing) {
     return (
-      <div className="p-4 bg-white border-2 border-blue-500 rounded">
+      <div className="p-4 bg-white border-2 border-primary rounded">
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -2761,7 +3285,7 @@ function ItemCard({
               type="checkbox"
               checked={isCaptureTarget}
               onChange={(e) => setIsCaptureTarget(e.target.checked)}
-              className="rounded"
+              className="rounded accent-primary"
             />
             <span className="text-sm">
               Use as capture target (available in quick capture)
@@ -2802,7 +3326,7 @@ function ItemCard({
                   >
                     <div className="flex items-center gap-2">
                       <span
-                        className="text-sm text-gray-500 cursor-move"
+                        className="text-sm text-muted cursor-move"
                         title="Drag to reorder"
                       >
                         ☰
@@ -2830,7 +3354,7 @@ function ItemCard({
                       </select>
                       <button
                         onClick={() => deleteElement(index)}
-                        className="text-red-600 hover:text-red-800"
+                        className="text-danger hover:text-danger-hover"
                         title="Delete"
                       >
                         ✕
@@ -2862,7 +3386,7 @@ function ItemCard({
                     <div className="flex justify-center -my-1">
                       <button
                         onClick={() => insertElementAbove(index + 1)}
-                        className="text-green-600 hover:text-green-800 text-lg"
+                        className="text-success hover:text-success-hover text-lg"
                         title="Insert element below"
                       >
                         +
@@ -2873,7 +3397,7 @@ function ItemCard({
               ))}
               <button
                 onClick={addElement}
-                className="w-full px-3 py-2 border-2 border-dashed border-gray-300 rounded text-gray-600 hover:border-blue-500 hover:text-blue-600"
+                className="w-full px-4 py-2.5 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-primary hover:text-primary transition-all duration-200"
               >
                 + Add Element
               </button>
@@ -2883,13 +3407,13 @@ function ItemCard({
           <div className="flex gap-2 pt-2">
             <button
               onClick={handleSave}
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Save
             </button>
             <button
               onClick={handleCancel}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+              className="px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Cancel
             </button>
@@ -2898,7 +3422,7 @@ function ItemCard({
                 onUpdate(item.id, { archived: true });
                 setIsEditing(false);
               }}
-              className="px-4 py-2 bg-red-100 text-red-700 rounded hover:bg-red-200 ml-auto"
+              className="px-4 py-2.5 bg-danger hover:bg-danger-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ml-auto"
             >
               Archive
             </button>
@@ -2910,7 +3434,7 @@ function ItemCard({
 
   return (
     <div
-      className="p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-blue-500"
+      className="p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary"
       onClick={() => {
         if (onViewDetail) {
           onViewDetail(item.id);
@@ -2954,6 +3478,7 @@ function IntentionCard({
   items,
   onUpdate,
   onSchedule,
+  onStartNow,
   getIntentDisplay,
   showScheduling = false,
   isEditing: initialEditing = false,
@@ -2962,6 +3487,9 @@ function IntentionCard({
   events = [],
   onUpdateEvent,
   onActivate,
+  executions = [],
+  onOpenExecution,
+  onCancelExecution,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(intent.text);
@@ -3046,7 +3574,7 @@ function IntentionCard({
 
   if (isEditing) {
     return (
-      <div className="p-4 bg-white border-2 border-blue-500 rounded">
+      <div className="p-4 bg-white border-2 border-primary rounded">
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -3086,7 +3614,7 @@ function IntentionCard({
                       setSelectedContextId("");
                       setContextSearch("");
                     }}
-                    className="ml-2 text-red-600 hover:text-red-800"
+                    className="ml-2 text-danger hover:text-danger-hover"
                   >
                     ✕
                   </button>
@@ -3102,7 +3630,7 @@ function IntentionCard({
                         setContextSearch(ctx.name);
                         setShowContextPicker(false);
                       }}
-                      className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b border-gray-200 last:border-b-0"
+                      className="w-full text-left px-3 py-2 hover:bg-primary-bg border-b border-gray-200 last:border-b-0"
                     >
                       <div className="font-medium">{ctx.name}</div>
                     </button>
@@ -3137,7 +3665,7 @@ function IntentionCard({
                       setSelectedItemId("");
                       setItemSearch("");
                     }}
-                    className="ml-2 text-red-600 hover:text-red-800"
+                    className="ml-2 text-danger hover:text-danger-hover"
                   >
                     ✕
                   </button>
@@ -3153,11 +3681,11 @@ function IntentionCard({
                         setItemSearch(item.name);
                         setShowItemPicker(false);
                       }}
-                      className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b border-gray-200 last:border-b-0"
+                      className="w-full text-left px-3 py-2 hover:bg-primary-bg border-b border-gray-200 last:border-b-0"
                     >
                       <div className="font-medium">{item.name}</div>
                       {item.contextId && contexts && (
-                        <div className="text-xs text-gray-500">
+                        <div className="text-xs text-muted">
                           {contexts.find((c) => c.id === item.contextId)?.name}
                         </div>
                       )}
@@ -3191,14 +3719,14 @@ function IntentionCard({
               <>
                 <button
                   onClick={() => handleSave("today")}
-                  className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                  className="px-4 py-2.5 bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
                 >
                   Do Today
                 </button>
 
                 <button
                   onClick={() => setShowDatePicker(!showDatePicker)}
-                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                  className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
                 >
                   Schedule Later
                 </button>
@@ -3218,14 +3746,14 @@ function IntentionCard({
               onClick={() =>
                 handleSave(showDatePicker && selectedDate ? selectedDate : null)
               }
-              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+              className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Save Changes
             </button>
 
             <button
               onClick={handleCancel}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+              className="px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Cancel
             </button>
@@ -3237,7 +3765,7 @@ function IntentionCard({
 
   return (
     <div
-      className="p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-blue-500"
+      className="p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary"
       onClick={() => {
         if (onViewDetail) {
           onViewDetail(intent.id);
@@ -3251,28 +3779,42 @@ function IntentionCard({
           <p className="font-medium">{getIntentDisplay(intent)}</p>
           <div className="flex items-center gap-2 mt-1">
             {showScheduling && (
-              <span className="text-sm text-gray-500 capitalize">
+              <span className="text-sm text-muted capitalize">
                 {intent.recurrence || "once"}
               </span>
             )}
             {contextName && (
-              <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+              <span className="text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
                 {contextName}
               </span>
             )}
           </div>
         </div>
-        {showScheduling && onSchedule && relatedEvents.length === 0 && (
+        {showScheduling && relatedEvents.length === 0 && (
           <div className="flex gap-2">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onSchedule(intent.id, "today");
-              }}
-              className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
-            >
-              Do Today
-            </button>
+            {onSchedule && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSchedule(intent.id, "today");
+                }}
+                className="px-4 py-2.5 bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              >
+                Do Today
+              </button>
+            )}
+            {onStartNow && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onStartNow(intent.id);
+                }}
+                className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              >
+                <Play className="w-4 h-4" />
+                Start Now
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -3287,6 +3829,10 @@ function IntentionCard({
               onUpdate={onUpdateEvent}
               onActivate={onActivate}
               getIntentDisplay={getIntentDisplay}
+              executions={executions}
+              onOpenExecution={onOpenExecution}
+              onCancelExecution={onCancelExecution}
+              nested
             />
           ))}
         </div>
@@ -3302,22 +3848,25 @@ function EventCard({
   onUpdate,
   onActivate,
   getIntentDisplay,
+  executions = [],
+  onOpenExecution,
+  onCancelExecution,
+  nested = false,
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [scheduledDate, setScheduledDate] = useState(event.time);
-  const [eventName, setEventName] = useState(intent?.text || "");
+  const [eventName, setEventName] = useState(event.text || intent?.text || "");
 
   function handleSave() {
-    // Update both event date and intent name
-    onUpdate(event.id, { time: scheduledDate });
-    if (intent && eventName !== intent.text) {
-      // We need to update the intent too, but we don't have that function here
-      // For now, just update the event
-    }
+    onUpdate(event.id, { time: scheduledDate, text: eventName });
     setIsEditing(false);
   }
 
   async function handleCancelEvent() {
+    // Delete the execution if one exists for this event
+    if (onCancelExecution) {
+      await onCancelExecution(event.id);
+    }
     // Archive the event
     onUpdate(event.id, { archived: true });
     setIsEditing(false);
@@ -3325,7 +3874,7 @@ function EventCard({
 
   if (isEditing) {
     return (
-      <div className="p-4 bg-white border-2 border-blue-500 rounded">
+      <div className="p-4 bg-white border-2 border-primary rounded">
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -3346,11 +3895,7 @@ function EventCard({
             </label>
             <input
               type="date"
-              value={
-                scheduledDate === "today"
-                  ? new Date().toISOString().split("T")[0]
-                  : scheduledDate
-              }
+              value={scheduledDate}
               onChange={(e) => setScheduledDate(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded"
             />
@@ -3359,23 +3904,23 @@ function EventCard({
           <div className="flex gap-2">
             <button
               onClick={handleSave}
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Save
             </button>
             <button
               onClick={handleCancelEvent}
-              className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+              className="px-4 py-2.5 bg-danger hover:bg-danger-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Cancel Event
             </button>
             <button
               onClick={() => {
                 setScheduledDate(event.time);
-                setEventName(intent?.text || "");
+                setEventName(event.text || intent?.text || "");
                 setIsEditing(false);
               }}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+              className="px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Close
             </button>
@@ -3385,30 +3930,58 @@ function EventCard({
     );
   }
 
+  const execution = executions.find((ex) => ex.eventId === event.id);
+
   return (
     <div className="p-3 bg-white border border-gray-200 rounded shadow-sm hover:shadow-md transition-shadow duration-200">
       <div className="flex items-center justify-between">
         <div className="flex-1" onClick={() => setIsEditing(true)}>
           <p className="font-medium text-dark cursor-pointer hover:text-primary">
-            {getIntentDisplay(intent)}
+            {nested ? `Event: ${event.text || getIntentDisplay(intent)}` : (event.text || getIntentDisplay(intent))}
           </p>
-          <p className="text-sm text-gray-500">{event.time}</p>
+          <p className="text-sm text-muted">{event.time}</p>
           {event.contextId && (
             <span className="inline-block mt-1 text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
               {contexts.find((c) => c.id === event.contextId)?.name}
             </span>
           )}
         </div>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onActivate(event.id);
-          }}
-          className="flex items-center gap-2 px-3 py-1 text-sm bg-primary text-white rounded hover:bg-primary-hover shadow-sm hover:shadow transition-all duration-150"
-        >
-          <Play className="w-3 h-3" />
-          Start
-        </button>
+        {execution ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onOpenExecution) onOpenExecution(execution);
+            }}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${
+              execution.status === "active"
+                ? "bg-primary hover:bg-primary-hover text-white"
+                : "bg-warning hover:bg-warning-hover text-white"
+            }`}
+          >
+            {execution.status === "active" ? (
+              <>
+                <Play className="w-3 h-3" />
+                Active
+              </>
+            ) : (
+              <>
+                <Pause className="w-3 h-3" />
+                Paused
+              </>
+            )}
+          </button>
+        ) : (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onActivate(event.id);
+            }}
+            className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+          >
+            <Play className="w-3 h-3" />
+            Start
+          </button>
+        )}
       </div>
     </div>
   );
