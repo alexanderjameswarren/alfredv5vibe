@@ -158,7 +158,9 @@ export default function Alfred() {
   const [items, setItems] = useState([]);
   const [intents, setIntents] = useState([]);
   const [events, setEvents] = useState([]);
-  const [activeExecution, setActiveExecution] = useState(null);
+  const [activeExecution, setActiveExecution] = useState(null); // currently viewed
+  const [activeExecutions, setActiveExecutions] = useState([]);
+  const [pausedExecutions, setPausedExecutions] = useState([]);
 
   const [captureText, setCaptureText] = useState("");
   const [showContextForm, setShowContextForm] = useState(false);
@@ -167,6 +169,7 @@ export default function Alfred() {
   const [selectedIntentionId, setSelectedIntentionId] = useState(null);
   const [selectedItemId, setSelectedItemId] = useState(null);
   const [previousView, setPreviousView] = useState("home");
+  const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -227,10 +230,33 @@ export default function Alfred() {
     setEvents(allEvents);
 
     try {
-      const execution = await storage.get("execution:active");
-      if (execution) setActiveExecution(execution);
+      const { data } = await supabase
+        .from("executions")
+        .select("*")
+        .eq("status", "active")
+        .order("started_at", { ascending: false });
+      if (data && data.length > 0) {
+        setActiveExecutions(data.map((d) => storage.toCamelCase(d)));
+      } else {
+        setActiveExecutions([]);
+      }
     } catch (e) {
-      // No active execution - this is fine
+      // No active executions - this is fine
+    }
+
+    try {
+      const { data: pausedData } = await supabase
+        .from("executions")
+        .select("*")
+        .eq("status", "paused")
+        .order("started_at", { ascending: false });
+      if (pausedData && pausedData.length > 0) {
+        setPausedExecutions(pausedData.map((d) => storage.toCamelCase(d)));
+      } else {
+        setPausedExecutions([]);
+      }
+    } catch (e) {
+      // No paused executions - this is fine
     }
   }
 
@@ -341,12 +367,11 @@ export default function Alfred() {
   }
 
   async function moveToPlanner(intentId, scheduledDate = "today") {
-    let intent = intents.find((i) => i.id === intentId);
-
-    // If intent not found in state, try loading from storage
-    // (this handles the case where a new intent was just created and state hasn't updated yet)
+    // Always read from storage first to get the latest data
+    // (state may be stale if updateIntent was just called)
+    let intent = await storage.get(`intent:${intentId}`);
     if (!intent) {
-      intent = await storage.get(`intent:${intentId}`);
+      intent = intents.find((i) => i.id === intentId);
     }
 
     if (!intent) {
@@ -430,6 +455,10 @@ export default function Alfred() {
         updates.isCaptureTarget !== undefined
           ? updates.isCaptureTarget
           : item.isCaptureTarget || false,
+      archived:
+        updates.archived !== undefined
+          ? updates.archived
+          : item.archived || false,
       createdAt: item.createdAt,
     };
 
@@ -453,9 +482,26 @@ export default function Alfred() {
     const event = events.find((e) => e.id === eventId);
     if (!event) return;
 
-    if (!event.contextId && !event.itemIds.length) {
-      // Event needs either a Context or an Item to activate
-      return;
+    const itemElements = [];
+    if (event.itemIds && event.itemIds.length > 0) {
+      for (const itemId of event.itemIds) {
+        const item = items.find((i) => i.id === itemId);
+        if (item && (item.elements || item.components)) {
+          const els = (item.elements || item.components).map((el) => {
+            const element =
+              typeof el === "string"
+                ? { name: el, displayType: "step", quantity: "", description: "" }
+                : { ...el };
+            return {
+              ...element,
+              isCompleted: false,
+              completedAt: null,
+              sourceItemId: itemId,
+            };
+          });
+          itemElements.push(...els);
+        }
+      }
     }
 
     const execution = {
@@ -466,16 +512,29 @@ export default function Alfred() {
       itemIds: event.itemIds,
       startedAt: Date.now(),
       status: "active",
+      notes: "",
+      elements: itemElements,
       progress: [],
     };
 
-    await storage.set("execution:active", execution);
+    await storage.set(`execution:${execution.id}`, execution);
     setActiveExecution(execution);
-    setView("home");
+    setActiveExecutions((prev) => [execution, ...prev]);
+    setPreviousView(view);
+    setView("execution-detail");
   }
 
   async function closeExecution(outcome) {
     if (!activeExecution) return;
+
+    // Cancel = Delete: just remove active execution, don't archive anything
+    if (outcome === "cancelled") {
+      await storage.delete(`execution:${activeExecution.id}`);
+      setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
+      setActiveExecution(null);
+      setView("schedule");
+      return;
+    }
 
     const closed = {
       ...activeExecution,
@@ -484,9 +543,8 @@ export default function Alfred() {
       status: "closed",
     };
 
-    // Archive the execution
+    // Archive the execution (notes and elements are preserved via spread)
     await storage.set(`execution:${closed.id}`, closed);
-    await storage.delete("execution:active");
 
     // Archive the event
     const event = events.find((e) => e.id === activeExecution.eventId);
@@ -504,8 +562,49 @@ export default function Alfred() {
       setIntents(intents.map((i) => (i.id === intent.id ? archivedIntent : i)));
     }
 
+    setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
     setActiveExecution(null);
     setView("schedule");
+  }
+
+  async function pauseExecution() {
+    if (!activeExecution) return;
+    const paused = { ...activeExecution, status: "paused" };
+    await storage.set(`execution:${paused.id}`, paused);
+    setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
+    setPausedExecutions((prev) => [paused, ...prev]);
+    setActiveExecution(null);
+    setView("home");
+  }
+
+  async function makeExecutionActive() {
+    if (!activeExecution) return;
+    const activated = { ...activeExecution, status: "active" };
+    await storage.set(`execution:${activated.id}`, activated);
+    setPausedExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
+    setActiveExecutions((prev) => [activated, ...prev]);
+    setActiveExecution(activated);
+  }
+
+  async function toggleExecutionElement(elementIndex) {
+    if (!activeExecution) return;
+    const updatedElements = [...activeExecution.elements];
+    const el = updatedElements[elementIndex];
+    updatedElements[elementIndex] = {
+      ...el,
+      isCompleted: !el.isCompleted,
+      completedAt: !el.isCompleted ? Date.now() : null,
+    };
+    const updated = { ...activeExecution, elements: updatedElements };
+    await storage.set(`execution:${updated.id}`, updated);
+    setActiveExecution(updated);
+  }
+
+  async function updateExecutionNotes(notes) {
+    if (!activeExecution) return;
+    const updated = { ...activeExecution, notes };
+    await storage.set(`execution:${updated.id}`, updated);
+    setActiveExecution(updated);
   }
 
   async function saveContext(
@@ -547,11 +646,12 @@ export default function Alfred() {
   }
 
   function getIntentDisplay(intent) {
+    if (intent.text) return intent.text;
     if (intent.itemId) {
       const item = items.find((i) => i.id === intent.itemId);
-      return item?.name || intent.text;
+      return item?.name || "Untitled";
     }
-    return intent.text;
+    return intent.text || "Untitled";
   }
 
   function viewContextDetail(contextId) {
@@ -618,6 +718,7 @@ export default function Alfred() {
     text,
     contextId,
     recurrence = "once",
+    itemId = null,
   ) {
     const newIntent = {
       id: uid(),
@@ -626,7 +727,7 @@ export default function Alfred() {
       isIntention: true,
       isItem: false,
       archived: false,
-      itemId: null,
+      itemId: itemId,
       contextId: contextId,
       recurrence: recurrence,
     };
@@ -651,6 +752,83 @@ export default function Alfred() {
   const todayEvents = validEvents.filter((e) => e.time === "today");
   const allNonArchivedEvents = validEvents;
   const pinnedContexts = contexts.filter((c) => c.pinned);
+  const allLiveExecutions = [...activeExecutions, ...pausedExecutions];
+
+  function openExecution(exec) {
+    setPreviousView(view);
+    setActiveExecution(exec);
+    setView("execution-detail");
+  }
+
+  async function startNowFromItem(itemId) {
+    const item = items.find((i) => i.id === itemId);
+    if (!item) return;
+
+    // Create intention linked to this item
+    const newIntent = {
+      id: uid(),
+      text: item.name,
+      createdAt: Date.now(),
+      isIntention: true,
+      isItem: false,
+      archived: false,
+      itemId: item.id,
+      contextId: item.contextId || null,
+      recurrence: "once",
+    };
+    await storage.set(`intent:${newIntent.id}`, newIntent);
+    setIntents((prev) => [...prev, newIntent]);
+
+    // Create event for today
+    const newEvent = {
+      id: uid(),
+      intentId: newIntent.id,
+      time: "today",
+      itemIds: [item.id],
+      contextId: item.contextId || null,
+      archived: false,
+      createdAt: Date.now(),
+    };
+    await storage.set(`event:${newEvent.id}`, newEvent);
+    setEvents((prev) => [...prev, newEvent]);
+
+    // Build execution inline (can't call activate — state hasn't updated yet)
+    const itemElements = [];
+    if (item.elements || item.components) {
+      const els = (item.elements || item.components).map((el) => {
+        const element =
+          typeof el === "string"
+            ? { name: el, displayType: "step", quantity: "", description: "" }
+            : { ...el };
+        return {
+          ...element,
+          isCompleted: false,
+          completedAt: null,
+          sourceItemId: item.id,
+        };
+      });
+      itemElements.push(...els);
+    }
+
+    const execution = {
+      id: uid(),
+      eventId: newEvent.id,
+      intentId: newIntent.id,
+      contextId: item.contextId || null,
+      itemIds: [item.id],
+      startedAt: Date.now(),
+      status: "active",
+      notes: "",
+      elements: itemElements,
+      progress: [],
+    };
+
+    await storage.set(`execution:${execution.id}`, execution);
+    setActiveExecution(execution);
+    setActiveExecutions((prev) => [execution, ...prev]);
+    setPreviousView(view);
+    setView("execution-detail");
+  }
 
   // Intentions: Marked as intentions, not archived, no active event
   const intentionsWithoutActiveEvent = intents.filter((i) => {
@@ -659,14 +837,14 @@ export default function Alfred() {
     return !hasActiveEvent;
   });
 
-  const memoriesWithoutContext = items.filter((i) => !i.contextId);
+  const memoriesWithoutContext = items.filter((i) => !i.contextId && !i.archived);
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-primary-bg">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200">
+      <div className="bg-white border-b border-gray-200 shadow-sm">
         <div className="max-w-4xl mx-auto px-4 py-4">
-          <h1 className="text-2xl font-bold text-gray-900">Alfred v5 (vibe)</h1>
+          <h1 className="text-2xl font-bold text-dark">Alfred v5 (vibe)</h1>
           <p className="text-sm text-gray-500 mt-1">
             Capture decisions. Hold intent. Execute with focus.
           </p>
@@ -681,8 +859,8 @@ export default function Alfred() {
               onClick={() => setView("home")}
               className={`px-4 py-2 rounded ${
                 view === "home"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white text-gray-700 border border-gray-300"
+                  ? "bg-primary text-white shadow-sm"
+                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
               }`}
             >
               Home
@@ -691,8 +869,8 @@ export default function Alfred() {
               onClick={() => setView("inbox")}
               className={`px-4 py-2 rounded ${
                 view === "inbox"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white text-gray-700 border border-gray-300"
+                  ? "bg-primary text-white shadow-sm"
+                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
               }`}
             >
               Inbox {inboxIntents.length > 0 && `(${inboxIntents.length})`}
@@ -701,8 +879,8 @@ export default function Alfred() {
               onClick={() => setView("contexts")}
               className={`px-4 py-2 rounded ${
                 view === "contexts"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white text-gray-700 border border-gray-300"
+                  ? "bg-primary text-white shadow-sm"
+                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
               }`}
             >
               Contexts
@@ -711,8 +889,8 @@ export default function Alfred() {
               onClick={() => setView("schedule")}
               className={`px-4 py-2 rounded ${
                 view === "schedule"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white text-gray-700 border border-gray-300"
+                  ? "bg-primary text-white shadow-sm"
+                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
               }`}
             >
               Schedule{" "}
@@ -723,8 +901,8 @@ export default function Alfred() {
               onClick={() => setView("intentions")}
               className={`px-4 py-2 rounded ${
                 view === "intentions"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white text-gray-700 border border-gray-300"
+                  ? "bg-primary text-white shadow-sm"
+                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
               }`}
             >
               Intentions
@@ -733,8 +911,8 @@ export default function Alfred() {
               onClick={() => setView("memories")}
               className={`px-4 py-2 rounded ${
                 view === "memories"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white text-gray-700 border border-gray-300"
+                  ? "bg-primary text-white shadow-sm"
+                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
               }`}
             >
               Memories
@@ -765,63 +943,53 @@ export default function Alfred() {
         {/* Home View */}
         {view === "home" && (
           <div>
-            <h2 className="text-xl font-semibold mb-4">Home</h2>
+            <h2 className="text-xl font-semibold mb-4 text-dark">Home</h2>
 
-            {/* Active Execution Section */}
-            {activeExecution && (
+            {/* Active Executions Section */}
+            {activeExecutions.length > 0 && (
               <div className="mb-8">
-                <h3 className="text-lg font-semibold mb-3">Active</h3>
-                <div className="p-6 bg-green-50 border-2 border-green-500 rounded">
-                  <div className="mb-6">
-                    <p className="text-lg font-medium mb-2">
-                      {(() => {
-                        const intent = intents.find(
-                          (i) => i.id === activeExecution.intentId,
-                        );
-                        return intent ? getIntentDisplay(intent) : "Execution";
-                      })()}
-                    </p>
-                    {activeExecution.contextId && (
-                      <p className="text-sm text-gray-600">
-                        {
-                          contexts.find(
-                            (c) => c.id === activeExecution.contextId,
-                          )?.name
-                        }
-                      </p>
-                    )}
-                  </div>
+                <h3 className="text-lg font-semibold mb-3 text-dark">
+                  Active ({activeExecutions.length})
+                </h3>
+                <div className="space-y-2">
+                  {activeExecutions.map((exec) => (
+                    <ExecutionBadge
+                      key={exec.id}
+                      exec={exec}
+                      intents={intents}
+                      contexts={contexts}
+                      getIntentDisplay={getIntentDisplay}
+                      onOpen={openExecution}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
 
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => closeExecution("done")}
-                      className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded hover:bg-green-700"
-                    >
-                      <Check className="w-5 h-5" />
-                      Done
-                    </button>
-                    <button
-                      onClick={() => closeExecution("paused")}
-                      className="flex items-center gap-2 px-6 py-3 bg-yellow-600 text-white rounded hover:bg-yellow-700"
-                    >
-                      <Pause className="w-5 h-5" />
-                      Pause
-                    </button>
-                    <button
-                      onClick={() => closeExecution("cancelled")}
-                      className="flex items-center gap-2 px-6 py-3 bg-red-600 text-white rounded hover:bg-red-700"
-                    >
-                      <X className="w-5 h-5" />
-                      Cancel
-                    </button>
-                  </div>
+            {/* Paused Executions Section */}
+            {pausedExecutions.length > 0 && (
+              <div className="mb-8">
+                <h3 className="text-lg font-semibold mb-3 text-dark">
+                  Paused ({pausedExecutions.length})
+                </h3>
+                <div className="space-y-2">
+                  {pausedExecutions.map((exec) => (
+                    <ExecutionBadge
+                      key={exec.id}
+                      exec={exec}
+                      intents={intents}
+                      contexts={contexts}
+                      getIntentDisplay={getIntentDisplay}
+                      onOpen={openExecution}
+                    />
+                  ))}
                 </div>
               </div>
             )}
 
             {/* Today's Events Section */}
             <div className="mb-8">
-              <h3 className="text-lg font-semibold mb-3">
+              <h3 className="text-lg font-semibold mb-3 text-dark">
                 Events Today ({todayEvents.length})
               </h3>
               {todayEvents.length === 0 ? (
@@ -851,7 +1019,7 @@ export default function Alfred() {
 
             {/* Pinned Contexts Section */}
             <div>
-              <h3 className="text-lg font-semibold mb-3">Pinned Contexts</h3>
+              <h3 className="text-lg font-semibold mb-3 text-dark">Pinned Contexts</h3>
               {pinnedContexts.length === 0 ? (
                 <p className="text-gray-500 text-sm">
                   No pinned contexts. Pin contexts to see them here.
@@ -956,7 +1124,7 @@ export default function Alfred() {
           <ContextDetailView
             contextId={selectedContextId}
             context={contexts.find((c) => c.id === selectedContextId)}
-            items={items.filter((i) => i.contextId === selectedContextId)}
+            items={items.filter((i) => i.contextId === selectedContextId && !i.archived)}
             intents={intents.filter((i) => i.contextId === selectedContextId)}
             contexts={contexts}
             onBack={() => {
@@ -974,6 +1142,11 @@ export default function Alfred() {
               viewIntentionDetail(id, "context-detail")
             }
             onViewItemDetail={(id) => viewItemDetail(id, "context-detail")}
+            executions={allLiveExecutions}
+            onOpenExecution={openExecution}
+            events={events}
+            onUpdateEvent={updateEvent}
+            onActivate={activate}
           />
         )}
 
@@ -995,6 +1168,8 @@ export default function Alfred() {
             onActivate={activate}
             getIntentDisplay={getIntentDisplay}
             onViewItemDetail={(id) => viewItemDetail(id, "intention-detail")}
+            executions={allLiveExecutions}
+            onOpenExecution={openExecution}
           />
         )}
 
@@ -1013,6 +1188,31 @@ export default function Alfred() {
             }}
             onUpdateIntent={updateIntent}
             onSchedule={moveToPlanner}
+            getIntentDisplay={getIntentDisplay}
+            executions={allLiveExecutions.filter((ex) => ex.itemIds?.includes(selectedItemId))}
+            onOpenExecution={openExecution}
+            onStartNow={startNowFromItem}
+            onUpdateEvent={updateEvent}
+            onActivate={activate}
+            onAddIntention={handleAddIntentionToContext}
+          />
+        )}
+
+        {/* Execution Detail View */}
+        {view === "execution-detail" && activeExecution && (
+          <ExecutionDetailView
+            execution={activeExecution}
+            intent={intents.find((i) => i.id === activeExecution.intentId)}
+            event={events.find((e) => e.id === activeExecution.eventId)}
+            items={items}
+            contexts={contexts}
+            onToggleElement={toggleExecutionElement}
+            onUpdateNotes={updateExecutionNotes}
+            onComplete={() => closeExecution("done")}
+            onPause={pauseExecution}
+            onMakeActive={makeExecutionActive}
+            onCancel={() => closeExecution("cancelled")}
+            onBack={() => setView(previousView)}
             getIntentDisplay={getIntentDisplay}
           />
         )}
@@ -1052,8 +1252,54 @@ export default function Alfred() {
         {/* Intentions View */}
         {view === "intentions" && (
           <div>
-            <h2 className="text-xl font-semibold mb-4">Intentions</h2>
-            {intentionsWithoutActiveEvent.length === 0 ? (
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold">Intentions</h2>
+              <button
+                onClick={() => setShowAddIntentionForm(true)}
+                className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                <Plus className="w-4 h-4" />
+                Add Intention
+              </button>
+            </div>
+
+            {showAddIntentionForm && (
+              <div className="mb-3">
+                <IntentionCard
+                  intent={{
+                    id: null,
+                    text: "",
+                    contextId: "",
+                    recurrence: "once",
+                    isIntention: true,
+                    isItem: false,
+                    archived: false,
+                    itemId: null,
+                  }}
+                  contexts={contexts}
+                  items={items}
+                  onUpdate={async (_, updates, scheduledDate) => {
+                    const newIntentId = await handleAddIntentionToContext(
+                      updates.text,
+                      updates.contextId || null,
+                      updates.recurrence || "once",
+                      updates.itemId || null,
+                    );
+                    if (scheduledDate && newIntentId) {
+                      moveToPlanner(newIntentId, scheduledDate);
+                    }
+                    setShowAddIntentionForm(false);
+                  }}
+                  onSchedule={moveToPlanner}
+                  getIntentDisplay={getIntentDisplay}
+                  showScheduling={true}
+                  isEditing={true}
+                  onCancel={() => setShowAddIntentionForm(false)}
+                />
+              </div>
+            )}
+
+            {intentionsWithoutActiveEvent.length === 0 && !showAddIntentionForm ? (
               <div className="text-center py-12 text-gray-500">
                 <p>No available intentions.</p>
                 <p className="text-sm mt-2">
@@ -1073,6 +1319,9 @@ export default function Alfred() {
                     getIntentDisplay={getIntentDisplay}
                     showScheduling={true}
                     onViewDetail={(id) => viewIntentionDetail(id, "intentions")}
+                    events={validEvents}
+                    onUpdateEvent={updateEvent}
+                    onActivate={activate}
                   />
                 ))}
               </div>
@@ -1097,6 +1346,10 @@ export default function Alfred() {
                     contexts={contexts}
                     onUpdate={updateItem}
                     onViewDetail={(id) => viewItemDetail(id, "memories")}
+                    executions={allLiveExecutions.filter((ex) => ex.itemIds?.includes(item.id))}
+                    intents={intents}
+                    getIntentDisplay={getIntentDisplay}
+                    onOpenExecution={openExecution}
                   />
                 ))}
               </div>
@@ -1135,11 +1388,11 @@ export default function Alfred() {
               onChange={(e) => setCaptureText(e.target.value)}
               onKeyPress={(e) => e.key === "Enter" && handleCapture()}
               placeholder="Capture anything..."
-              className="flex-1 px-4 py-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="flex-1 px-4 py-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-primary"
             />
             <button
               onClick={handleCapture}
-              className="px-6 py-3 bg-blue-600 text-white rounded hover:bg-blue-700"
+              className="px-6 py-3 bg-primary text-white rounded hover:bg-primary-hover shadow-sm hover:shadow transition-all duration-150"
             >
               Capture
             </button>
@@ -1422,19 +1675,19 @@ function ContextForm({ editing, onSave, onCancel }) {
 
 function ContextCard({ context, onClick, onEdit, showSettings = false }) {
   return (
-    <div className="p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-blue-500 transition-colors">
+    <div className="p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow duration-200">
       <div className="flex items-center justify-between">
         <div className="flex-1" onClick={onClick}>
           <div className="flex items-center gap-2">
             {context.pinned && <span className="text-gray-400">📌</span>}
-            <h3 className="font-semibold">{context.name}</h3>
+            <h3 className="font-semibold text-dark">{context.name}</h3>
           </div>
           {context.description && (
             <p className="text-sm text-gray-500 mt-1">{context.description}</p>
           )}
           <div className="flex items-center gap-2 mt-1">
             {context.shared && (
-              <span className="text-xs text-blue-600 flex items-center gap-1">
+              <span className="text-xs text-primary flex items-center gap-1">
                 <Share2 className="w-3 h-3" />
                 Shared
               </span>
@@ -1473,6 +1726,11 @@ function ContextDetailView({
   onAddIntention,
   onViewIntentionDetail,
   onViewItemDetail,
+  executions = [],
+  onOpenExecution,
+  events = [],
+  onUpdateEvent,
+  onActivate,
 }) {
   const [showAddItemForm, setShowAddItemForm] = useState(false);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
@@ -1597,6 +1855,10 @@ function ContextDetailView({
                   contexts={contexts}
                   onUpdate={onUpdateItem}
                   onViewDetail={onViewItemDetail}
+                  executions={executions.filter((ex) => ex.itemIds?.includes(item.id))}
+                  intents={intents}
+                  getIntentDisplay={getIntentDisplay}
+                  onOpenExecution={onOpenExecution}
                 />
               ))}
             </div>
@@ -1650,6 +1912,9 @@ function ContextDetailView({
                   onSchedule={onSchedule}
                   showScheduling={true}
                   onViewDetail={onViewIntentionDetail}
+                  events={events}
+                  onUpdateEvent={onUpdateEvent}
+                  onActivate={onActivate}
                 />
               ))}
             </div>
@@ -1673,6 +1938,8 @@ function IntentionDetailView({
   onActivate,
   getIntentDisplay,
   onViewItemDetail,
+  executions = [],
+  onOpenExecution,
 }) {
   const [isEditing, setIsEditing] = useState(false);
 
@@ -1767,6 +2034,10 @@ function IntentionDetailView({
                 contexts={contexts}
                 onUpdate={onUpdateItem}
                 onViewDetail={onViewItemDetail}
+                executions={executions.filter((ex) => ex.itemIds?.includes(linkedItem.id))}
+                intents={[intention]}
+                getIntentDisplay={getIntentDisplay}
+                onOpenExecution={onOpenExecution}
               />
             ) : (
               <p className="text-gray-500 text-sm">Item not found</p>
@@ -1815,8 +2086,15 @@ function ItemDetailView({
   onUpdateIntent,
   onSchedule,
   getIntentDisplay,
+  executions = [],
+  onOpenExecution,
+  onStartNow,
+  onUpdateEvent,
+  onActivate,
+  onAddIntention,
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
 
   if (!item) return null;
 
@@ -1848,7 +2126,11 @@ function ItemDetailView({
           contexts={contexts}
           onUpdate={(id, updates) => {
             onUpdateItem(id, updates);
-            setIsEditing(false);
+            if (updates.archived) {
+              onBack();
+            } else {
+              setIsEditing(false);
+            }
           }}
           isEditing={true}
           onCancel={() => setIsEditing(false)}
@@ -1877,13 +2159,24 @@ function ItemDetailView({
               </span>
             )}
           </div>
-          <button
-            onClick={() => setIsEditing(true)}
-            className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
-          >
-            <span>⚙️</span>
-            Edit Item
-          </button>
+          <div className="flex gap-2">
+            {onStartNow && (
+              <button
+                onClick={() => onStartNow(item.id)}
+                className="flex items-center gap-2 px-3 py-2 text-sm bg-green-600 text-white rounded hover:bg-green-700"
+              >
+                <Play className="w-4 h-4" />
+                Start Now
+              </button>
+            )}
+            <button
+              onClick={() => setIsEditing(true)}
+              className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+            >
+              <span>⚙️</span>
+              Edit Item
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1977,12 +2270,81 @@ function ItemDetailView({
           </div>
         )}
 
+      {/* Active/Paused Executions Section */}
+      {executions.length > 0 && (
+        <div className="mb-6">
+          <h3 className="text-lg font-semibold mb-3">
+            Executions ({executions.length})
+          </h3>
+          <div className="space-y-2">
+            {executions.map((exec) => (
+              <ExecutionBadge
+                key={exec.id}
+                exec={exec}
+                intents={intents}
+                contexts={contexts}
+                getIntentDisplay={getIntentDisplay}
+                onOpen={onOpenExecution}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Related Intentions Section */}
       <div>
-        <h3 className="text-lg font-semibold mb-3">
-          Related Intentions ({itemIntentions.length})
-        </h3>
-        {itemIntentions.length === 0 ? (
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-semibold">
+            Related Intentions ({itemIntentions.length})
+          </h3>
+          {onAddIntention && (
+            <button
+              onClick={() => setShowAddIntentionForm(true)}
+              className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              <Plus className="w-4 h-4" />
+              Create Intention
+            </button>
+          )}
+        </div>
+
+        {showAddIntentionForm && (
+          <div className="mb-3">
+            <IntentionCard
+              intent={{
+                id: null,
+                text: item.name,
+                contextId: item.contextId || null,
+                recurrence: "once",
+                isIntention: true,
+                isItem: false,
+                archived: false,
+                itemId: item.id,
+              }}
+              contexts={contexts}
+              items={items}
+              onUpdate={async (_, updates, scheduledDate) => {
+                const newIntentId = await onAddIntention(
+                  updates.text,
+                  updates.contextId !== undefined ? updates.contextId : item.contextId,
+                  updates.recurrence || "once",
+                  updates.itemId !== undefined ? updates.itemId : item.id,
+                );
+                if (scheduledDate && onSchedule && newIntentId) {
+                  onSchedule(newIntentId, scheduledDate);
+                }
+                setShowAddIntentionForm(false);
+              }}
+              onSchedule={onSchedule}
+              getIntentDisplay={getIntentDisplay}
+              showScheduling={true}
+              isEditing={true}
+              onCancel={() => setShowAddIntentionForm(false)}
+            />
+          </div>
+        )}
+
+        {itemIntentions.length === 0 && !showAddIntentionForm ? (
           <p className="text-gray-500 text-sm">
             No intentions linked to this item
           </p>
@@ -1998,11 +2360,234 @@ function ItemDetailView({
                 onSchedule={onSchedule}
                 getIntentDisplay={getIntentDisplay}
                 showScheduling={true}
+                events={events}
+                onUpdateEvent={onUpdateEvent}
+                onActivate={onActivate}
               />
             ))}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ExecutionDetailView({
+  execution,
+  intent,
+  event,
+  items,
+  contexts,
+  onToggleElement,
+  onUpdateNotes,
+  onComplete,
+  onPause,
+  onMakeActive,
+  onCancel,
+  onBack,
+  getIntentDisplay,
+}) {
+  const [localNotes, setLocalNotes] = useState(execution.notes || "");
+
+  const contextName =
+    execution.contextId && contexts
+      ? contexts.find((c) => c.id === execution.contextId)?.name
+      : null;
+
+  const displayName = intent ? getIntentDisplay(intent) : "Execution";
+  const dateDisplay = event?.time === "today"
+    ? new Date().toLocaleDateString()
+    : event?.time || "";
+
+  return (
+    <div>
+      <button
+        onClick={() => {
+          onUpdateNotes(localNotes);
+          onBack();
+        }}
+        className="flex items-center gap-2 mb-4 text-gray-600 hover:text-gray-800"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Back
+      </button>
+
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold text-gray-900">{displayName}</h2>
+        <div className="flex items-center gap-2 mt-1">
+          {contextName && (
+            <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
+              {contextName}
+            </span>
+          )}
+          {dateDisplay && (
+            <span className="text-sm text-gray-500">{dateDisplay}</span>
+          )}
+        </div>
+      </div>
+
+      {execution.elements && execution.elements.length > 0 && (
+        <div className="mb-6">
+          <div className="border-t border-gray-200 pt-4 space-y-2">
+            {execution.elements.map((el, index) => {
+              if (el.displayType === "header") {
+                return (
+                  <div key={index} className="mt-4 mb-2">
+                    <h4 className="text-md font-bold text-gray-800 uppercase tracking-wide">
+                      {el.name}
+                    </h4>
+                  </div>
+                );
+              }
+
+              if (el.displayType === "bullet") {
+                return (
+                  <div key={index} className="ml-4 flex items-start gap-2 py-1">
+                    <span className="text-gray-500 mt-0.5">•</span>
+                    <div className="flex-1">
+                      <span className="text-gray-700">
+                        {el.quantity && (
+                          <span className="font-medium">{el.quantity} · </span>
+                        )}
+                        {el.name}
+                      </span>
+                      {el.description && (
+                        <p className="text-sm text-gray-500">{el.description}</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
+              // step or any other displayType
+              return (
+                <div
+                  key={index}
+                  onClick={() => onToggleElement(index)}
+                  className="flex items-start gap-3 py-2 px-3 rounded cursor-pointer hover:bg-gray-50"
+                >
+                  <span className="mt-0.5 text-lg">
+                    {el.isCompleted ? (
+                      <span className="text-green-600">☑</span>
+                    ) : (
+                      <span className="text-gray-400">☐</span>
+                    )}
+                  </span>
+                  <div className="flex-1">
+                    <span
+                      className={
+                        el.isCompleted
+                          ? "line-through text-gray-400"
+                          : "text-gray-800"
+                      }
+                    >
+                      {el.name}
+                    </span>
+                    {(el.quantity || el.description) && (
+                      <p
+                        className={`text-sm ${el.isCompleted ? "text-gray-300" : "text-gray-500"}`}
+                      >
+                        {[el.quantity, el.description]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="mb-6">
+        <div className="border-t border-gray-200 pt-4">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Notes
+          </label>
+          <textarea
+            value={localNotes}
+            onChange={(e) => setLocalNotes(e.target.value)}
+            onBlur={() => onUpdateNotes(localNotes)}
+            placeholder="Add notes about this execution..."
+            className="w-full px-3 py-2 border border-gray-300 rounded min-h-[120px]"
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between pt-4 border-t border-gray-200">
+        <button
+          onClick={onCancel}
+          className="flex items-center gap-2 px-6 py-3 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+        >
+          <X className="w-4 h-4" />
+          Cancel
+        </button>
+        {execution.status === "paused" ? (
+          <button
+            onClick={onMakeActive}
+            className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded hover:bg-blue-700"
+          >
+            <Play className="w-4 h-4" />
+            Make Active
+          </button>
+        ) : (
+          <button
+            onClick={onPause}
+            className="flex items-center gap-2 px-6 py-3 bg-yellow-500 text-white rounded hover:bg-yellow-600"
+          >
+            <Pause className="w-4 h-4" />
+            Pause
+          </button>
+        )}
+        <button
+          onClick={onComplete}
+          className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded hover:bg-green-700"
+        >
+          <Check className="w-5 h-5" />
+          Complete
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ExecutionBadge({ exec, intents, contexts, getIntentDisplay, onOpen }) {
+  const intent = intents.find((i) => i.id === exec.intentId);
+  const isActive = exec.status === "active";
+
+  return (
+    <div
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen(exec);
+      }}
+      className={`p-4 rounded cursor-pointer shadow-sm hover:shadow-md transition-shadow duration-200 ${
+        isActive
+          ? "bg-primary-light border-2 border-primary"
+          : "bg-yellow-50 border-2 border-yellow-400"
+      }`}
+    >
+      <p className="font-medium text-dark">
+        {intent ? getIntentDisplay(intent) : "Execution"}
+      </p>
+      {exec.contextId && (
+        <p className="text-sm text-gray-700">
+          {contexts.find((c) => c.id === exec.contextId)?.name}
+        </p>
+      )}
+      {isActive && (
+        <p className="text-xs text-primary mt-1 flex items-center gap-1">
+          <Play className="w-3 h-3" />
+          Active
+        </p>
+      )}
+      {!isActive && (
+        <p className="text-xs text-yellow-700 mt-1 flex items-center gap-1">
+          <Pause className="w-3 h-3" />
+          Paused — click to resume
+        </p>
+      )}
     </div>
   );
 }
@@ -2014,6 +2599,10 @@ function ItemCard({
   isEditing: initialEditing = false,
   onCancel,
   onViewDetail,
+  executions = [],
+  intents = [],
+  getIntentDisplay,
+  onOpenExecution,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(item.name);
@@ -2304,6 +2893,15 @@ function ItemCard({
             >
               Cancel
             </button>
+            <button
+              onClick={() => {
+                onUpdate(item.id, { archived: true });
+                setIsEditing(false);
+              }}
+              className="px-4 py-2 bg-red-100 text-red-700 rounded hover:bg-red-200 ml-auto"
+            >
+              Archive
+            </button>
           </div>
         </div>
       </div>
@@ -2332,6 +2930,20 @@ function ItemCard({
             })}
           </ol>
         )}
+      {executions.length > 0 && onOpenExecution && (
+        <div className="mt-2 space-y-1">
+          {executions.map((exec) => (
+            <ExecutionBadge
+              key={exec.id}
+              exec={exec}
+              intents={intents}
+              contexts={contexts}
+              getIntentDisplay={getIntentDisplay}
+              onOpen={onOpenExecution}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2347,6 +2959,9 @@ function IntentionCard({
   isEditing: initialEditing = false,
   onCancel,
   onViewDetail,
+  events = [],
+  onUpdateEvent,
+  onActivate,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(intent.text);
@@ -2356,8 +2971,20 @@ function IntentionCard({
   const [itemSearch, setItemSearch] = useState("");
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState(intent.itemId || "");
+  const [selectedContextId, setSelectedContextId] = useState(intent.contextId || "");
+  const [contextSearch, setContextSearch] = useState("");
+  const [showContextPicker, setShowContextPicker] = useState(false);
 
   // Autocomplete search logic
+  const filteredContexts =
+    contexts && contextSearch.trim()
+      ? contexts
+          .filter((c) =>
+            c.name.toLowerCase().includes(contextSearch.toLowerCase()),
+          )
+          .slice(0, 10)
+      : [];
+
   const filteredItems =
     items && itemSearch.trim()
       ? items
@@ -2374,8 +3001,8 @@ function IntentionCard({
     }
     if (onUpdate) {
       const updates = showScheduling
-        ? { text: name, recurrence, itemId: selectedItemId || null }
-        : { text: name, itemId: selectedItemId || null };
+        ? { text: name, recurrence, itemId: selectedItemId || null, contextId: selectedContextId || null }
+        : { text: name, itemId: selectedItemId || null, contextId: selectedContextId || null };
       onUpdate(intent.id, updates, scheduledDate);
     }
     if (!onCancel) {
@@ -2392,6 +3019,8 @@ function IntentionCard({
       setRecurrence(intent.recurrence || "once");
       setSelectedItemId(intent.itemId || "");
       setItemSearch("");
+      setSelectedContextId(intent.contextId || "");
+      setContextSearch("");
       setIsEditing(false);
     }
   }
@@ -2411,6 +3040,10 @@ function IntentionCard({
       ? contexts.find((c) => c.id === intent.contextId)?.name
       : null;
 
+  const relatedEvents = events.filter(
+    (e) => e.intentId === intent.id && !e.archived,
+  );
+
   if (isEditing) {
     return (
       <div className="p-4 bg-white border-2 border-blue-500 rounded">
@@ -2426,6 +3059,57 @@ function IntentionCard({
               className="w-full px-3 py-2 border border-gray-300 rounded"
               autoFocus
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Linked Context (optional)
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                value={contextSearch}
+                onChange={(e) => {
+                  setContextSearch(e.target.value);
+                  setShowContextPicker(true);
+                }}
+                onFocus={() => setShowContextPicker(true)}
+                onBlur={() => setTimeout(() => setShowContextPicker(false), 200)}
+                placeholder="Search for a context..."
+                className="w-full px-3 py-2 border border-gray-300 rounded"
+              />
+              {selectedContextId && !contextSearch && contexts && (
+                <div className="mt-1 text-sm text-gray-600">
+                  Selected: {contexts.find((c) => c.id === selectedContextId)?.name}
+                  <button
+                    onClick={() => {
+                      setSelectedContextId("");
+                      setContextSearch("");
+                    }}
+                    className="ml-2 text-red-600 hover:text-red-800"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+              {showContextPicker && contextSearch && filteredContexts.length > 0 && (
+                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded shadow-lg max-h-60 overflow-y-auto">
+                  {filteredContexts.map((ctx) => (
+                    <button
+                      key={ctx.id}
+                      onClick={() => {
+                        setSelectedContextId(ctx.id);
+                        setContextSearch(ctx.name);
+                        setShowContextPicker(false);
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b border-gray-200 last:border-b-0"
+                    >
+                      <div className="font-medium">{ctx.name}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div>
@@ -2503,7 +3187,7 @@ function IntentionCard({
           )}
 
           <div className="flex gap-2 flex-wrap">
-            {showScheduling && onSchedule && (
+            {showScheduling && onSchedule && relatedEvents.length === 0 && (
               <>
                 <button
                   onClick={() => handleSave("today")}
@@ -2578,7 +3262,7 @@ function IntentionCard({
             )}
           </div>
         </div>
-        {showScheduling && onSchedule && (
+        {showScheduling && onSchedule && relatedEvents.length === 0 && (
           <div className="flex gap-2">
             <button
               onClick={(e) => {
@@ -2592,6 +3276,21 @@ function IntentionCard({
           </div>
         )}
       </div>
+      {relatedEvents.length > 0 && (
+        <div className="mt-2 space-y-2">
+          {relatedEvents.map((ev) => (
+            <EventCard
+              key={ev.id}
+              event={ev}
+              intent={intent}
+              contexts={contexts}
+              onUpdate={onUpdateEvent}
+              onActivate={onActivate}
+              getIntentDisplay={getIntentDisplay}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2687,17 +3386,17 @@ function EventCard({
   }
 
   return (
-    <div className="p-3 bg-white border border-gray-200 rounded">
+    <div className="p-3 bg-white border border-gray-200 rounded shadow-sm hover:shadow-md transition-shadow duration-200">
       <div className="flex items-center justify-between">
         <div className="flex-1" onClick={() => setIsEditing(true)}>
-          <p className="font-medium cursor-pointer hover:text-blue-600">
+          <p className="font-medium text-dark cursor-pointer hover:text-primary">
             {getIntentDisplay(intent)}
           </p>
           <p className="text-sm text-gray-500">{event.time}</p>
           {event.contextId && (
-            <p className="text-sm text-gray-500">
+            <span className="inline-block mt-1 text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
               {contexts.find((c) => c.id === event.contextId)?.name}
-            </p>
+            </span>
           )}
         </div>
         <button
@@ -2705,7 +3404,7 @@ function EventCard({
             e.stopPropagation();
             onActivate(event.id);
           }}
-          className="flex items-center gap-2 px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
+          className="flex items-center gap-2 px-3 py-1 text-sm bg-primary text-white rounded hover:bg-primary-hover shadow-sm hover:shadow transition-all duration-150"
         >
           <Play className="w-3 h-3" />
           Start

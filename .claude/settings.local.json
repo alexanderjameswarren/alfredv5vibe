@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(git -C \"c:\\\\Users\\\\Alex\\\\projects\\\\alfred-v5\" log --oneline --all)",
+      "Bash(git -C \"c:\\\\Users\\\\Alex\\\\projects\\\\alfred-v5\" log --name-status --all)",
+      "Bash(npx eslint:*)"
+    ]
+  }
+}
