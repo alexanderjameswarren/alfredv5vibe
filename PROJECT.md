@@ -70,6 +70,7 @@ Wait ~2 minutes for Vercel to build and deploy.
 - **intents** - Captured thoughts, triaged into intentions or items
 - **events** - Scheduled instances of intentions
 - **executions** - Active execution tracking with progress
+- **inbox** - Captured items awaiting triage with AI suggestions (future)
 
 ### Key Relationships
 - Items can link to contexts

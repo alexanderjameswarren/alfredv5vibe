@@ -8,6 +8,7 @@ import {
   X,
   Trash2,
   ArrowLeft,
+  Menu,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -159,6 +160,7 @@ function getTodayDate() {
 
 export default function Alfred() {
   const [view, setView] = useState("home");
+  const [menuOpen, setMenuOpen] = useState(false);
   const [contexts, setContexts] = useState([]);
   const [items, setItems] = useState([]);
   const [intents, setIntents] = useState([]);
@@ -925,23 +927,116 @@ export default function Alfred() {
 
   return (
     <div className="min-h-screen bg-primary-bg">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 shadow-sm">
-        <div className="max-w-4xl mx-auto px-4 py-4">
-          <h1 className="text-2xl font-bold text-dark">Alfred v5 (vibe)</h1>
-          <p className="text-sm text-muted mt-1">
-            Capture decisions. Hold intent. Execute with focus.
-          </p>
+      {/* Mobile header with hamburger */}
+      <header className="sm:hidden sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm">
+        <div className="px-3 py-3 flex items-center justify-between">
+          <button
+            onClick={() => setMenuOpen(!menuOpen)}
+            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-dark"
+          >
+            <Menu className="w-6 h-6" />
+          </button>
+          <h1 className="text-lg font-bold text-dark">Alfred v5</h1>
+          <div className="flex gap-1">
+            <button
+              onClick={() => setView("settings")}
+              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark"
+              title="Settings"
+            >
+              <span className="text-xl">⚙️</span>
+            </button>
+            <button
+              onClick={() => setView("recycle")}
+              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark"
+              title="Recycle Bin"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
+          </div>
         </div>
-      </div>
+      </header>
 
-      {/* Navigation */}
-      <div className="max-w-4xl mx-auto px-4 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex gap-2">
+      {/* Mobile slide-out menu */}
+      {menuOpen && (
+        <>
+          <div
+            className="sm:hidden fixed inset-0 bg-black bg-opacity-50 z-30"
+            onClick={() => setMenuOpen(false)}
+          />
+          <nav className="sm:hidden fixed top-0 left-0 bottom-0 w-64 bg-white shadow-xl z-40">
+            <div className="p-4 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <h2 className="font-bold text-dark">Menu</h2>
+                <button
+                  onClick={() => setMenuOpen(false)}
+                  className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-2">
+              {[
+                { key: "home", label: "Home", icon: "🏠" },
+                { key: "inbox", label: `Inbox${inboxItems.length > 0 ? ` (${inboxItems.length})` : ""}`, icon: "📥" },
+                { key: "contexts", label: "Contexts", icon: "📁" },
+                { key: "schedule", label: `Schedule${allNonArchivedEvents.length > 0 ? ` (${allNonArchivedEvents.length})` : ""}`, icon: "📅" },
+                { key: "intentions", label: "Intentions", icon: "💡" },
+                { key: "memories", label: "Memories", icon: "⭐" },
+              ].map((item) => (
+                <button
+                  key={item.key}
+                  onClick={() => {
+                    setView(item.key);
+                    setMenuOpen(false);
+                  }}
+                  className={`w-full text-left px-4 py-3 rounded-lg mb-1 ${
+                    view === item.key
+                      ? "bg-primary-light text-dark font-medium"
+                      : "text-dark hover:bg-gray-100"
+                  }`}
+                >
+                  {item.icon} {item.label}
+                </button>
+              ))}
+            </div>
+          </nav>
+        </>
+      )}
+
+      {/* Desktop header with tabs */}
+      <div className="hidden sm:block sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm">
+        <div className="max-w-4xl mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-dark">Alfred v5</h1>
+              <p className="text-sm text-muted mt-1">
+                Capture decisions. Hold intent. Execute with focus.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setView("settings")}
+                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark"
+                title="Settings"
+              >
+                <span className="text-xl">⚙️</span>
+              </button>
+              <button
+                onClick={() => setView("recycle")}
+                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark"
+                title="Recycle Bin"
+              >
+                <Trash2 className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Desktop navigation tabs */}
+          <nav className="flex gap-2 mt-3 pb-1">
             <button
               onClick={() => setView("home")}
-              className={`px-4 py-2 rounded ${
+              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "home"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
@@ -951,7 +1046,7 @@ export default function Alfred() {
             </button>
             <button
               onClick={() => setView("inbox")}
-              className={`px-4 py-2 rounded ${
+              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "inbox"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
@@ -961,7 +1056,7 @@ export default function Alfred() {
             </button>
             <button
               onClick={() => setView("contexts")}
-              className={`px-4 py-2 rounded ${
+              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "contexts"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
@@ -971,7 +1066,7 @@ export default function Alfred() {
             </button>
             <button
               onClick={() => setView("schedule")}
-              className={`px-4 py-2 rounded ${
+              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "schedule"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
@@ -983,7 +1078,7 @@ export default function Alfred() {
             </button>
             <button
               onClick={() => setView("intentions")}
-              className={`px-4 py-2 rounded ${
+              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "intentions"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
@@ -993,7 +1088,7 @@ export default function Alfred() {
             </button>
             <button
               onClick={() => setView("memories")}
-              className={`px-4 py-2 rounded ${
+              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "memories"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
@@ -1001,29 +1096,12 @@ export default function Alfred() {
             >
               Memories
             </button>
-          </div>
-
-          <div className="flex gap-2">
-            <button
-              onClick={() => setView("settings")}
-              className="p-2 text-gray-600 hover:text-dark"
-              title="Settings"
-            >
-              <span className="text-xl">⚙️</span>
-            </button>
-            <button
-              onClick={() => setView("recycle")}
-              className="p-2 text-gray-600 hover:text-dark"
-              title="Recycle Bin"
-            >
-              <Trash2 className="w-5 h-5" />
-            </button>
-          </div>
+          </nav>
         </div>
       </div>
 
       {/* Main content */}
-      <div className="max-w-4xl mx-auto px-4 py-6 pb-32">
+      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 pb-28 sm:pb-32">
         {/* Home View */}
         {view === "home" && (
           <div>
@@ -1156,7 +1234,7 @@ export default function Alfred() {
         {/* Inbox View */}
         {view === "inbox" && (
           <div>
-            <h2 className="text-xl font-semibold mb-4">Inbox</h2>
+            <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Inbox</h2>
             {inboxItems.length === 0 ? (
               <div className="text-center py-12 text-muted">
                 <p>Empty inbox.</p>
@@ -1182,14 +1260,14 @@ export default function Alfred() {
         {/* Contexts View */}
         {view === "contexts" && (
           <div>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold">Contexts</h2>
+            <div className="flex items-center justify-between mb-3 sm:mb-4">
+              <h2 className="text-lg sm:text-xl font-semibold">Contexts</h2>
               <button
                 onClick={() => {
                   setEditingContext(null);
                   setShowContextForm(true);
                 }}
-                className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
               >
                 <Plus className="w-4 h-4" />
                 Add Context
@@ -1337,7 +1415,7 @@ export default function Alfred() {
         {/* Schedule View */}
         {view === "schedule" && (
           <div>
-            <h2 className="text-xl font-semibold mb-4">Schedule</h2>
+            <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Schedule</h2>
             {allNonArchivedEvents.length === 0 ? (
               <div className="text-center py-12 text-muted">
                 <p>No scheduled events.</p>
@@ -1372,11 +1450,11 @@ export default function Alfred() {
         {/* Intentions View */}
         {view === "intentions" && (
           <div>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold">Intentions</h2>
+            <div className="flex items-center justify-between mb-3 sm:mb-4">
+              <h2 className="text-lg sm:text-xl font-semibold">Intentions</h2>
               <button
                 onClick={() => setShowAddIntentionForm(true)}
-                className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
               >
                 <Plus className="w-4 h-4" />
                 Add Intention
@@ -1456,7 +1534,7 @@ export default function Alfred() {
         {/* Memories View */}
         {view === "memories" && (
           <div>
-            <h2 className="text-xl font-semibold mb-4">Memories</h2>
+            <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Memories</h2>
             {memoriesWithoutContext.length === 0 ? (
               <div className="text-center py-12 text-muted">
                 <p>No memories without context.</p>
@@ -1484,8 +1562,8 @@ export default function Alfred() {
         {/* Settings View */}
         {view === "settings" && (
           <div>
-            <h2 className="text-xl font-semibold mb-4">Settings</h2>
-            <div className="p-6 bg-white border border-gray-200 rounded">
+            <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Settings</h2>
+            <div className="p-4 sm:p-6 bg-white border border-gray-200 rounded">
               <p className="text-muted">Settings coming soon...</p>
             </div>
           </div>
@@ -1494,8 +1572,8 @@ export default function Alfred() {
         {/* Recycle Bin View */}
         {view === "recycle" && (
           <div>
-            <h2 className="text-xl font-semibold mb-4">Recycle Bin</h2>
-            <div className="p-6 bg-white border border-gray-200 rounded">
+            <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Recycle Bin</h2>
+            <div className="p-4 sm:p-6 bg-white border border-gray-200 rounded">
               <p className="text-muted">Recycle bin coming soon...</p>
             </div>
           </div>
@@ -1503,8 +1581,8 @@ export default function Alfred() {
       </div>
 
       {/* Capture bar - fixed at bottom */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg">
-        <div className="max-w-4xl mx-auto px-4 py-4">
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-20">
+        <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2 sm:py-4">
           <div className="flex gap-2 items-end">
             <textarea
               ref={captureRef}
@@ -1522,11 +1600,11 @@ export default function Alfred() {
               }}
               placeholder="Capture anything..."
               rows={1}
-              className="flex-1 px-4 py-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden min-h-[42px] max-h-[50vh]"
+              className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden min-h-[44px] max-h-[50vh] text-base"
             />
             <button
               onClick={handleCapture}
-              className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
               Capture
             </button>
@@ -1701,7 +1779,7 @@ function InboxCard({
 
     return (
       <div
-        className="p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary transition-colors"
+        className="p-3 sm:p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary transition-colors"
         onClick={() => setExpanded(true)}
       >
         <p className="whitespace-pre-wrap text-dark">{preview}</p>
@@ -1711,7 +1789,7 @@ function InboxCard({
 
   // Expanded triage view
   return (
-    <div className="p-4 bg-white border-2 border-primary rounded">
+    <div className="p-3 sm:p-4 bg-white border-2 border-primary rounded">
       {/* Captured text at top */}
       <p className="text-lg text-dark mb-4 whitespace-pre-wrap">
         {inboxItem.capturedText}
@@ -1753,7 +1831,7 @@ function InboxCard({
                 type="text"
                 value={intentText}
                 onChange={(e) => setIntentText(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
               />
             </div>
 
@@ -1774,7 +1852,7 @@ function InboxCard({
                     setTimeout(() => setShowIntentContextPicker(false), 200)
                   }
                   placeholder="Search for a context..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded"
+                  className="w-full px-3 py-2 border border-gray-300 rounded text-base"
                 />
                 {intentContextId && !intentContextSearch && contexts && (
                   <div className="mt-1 text-sm text-gray-600">
@@ -1830,7 +1908,7 @@ function InboxCard({
                     setTimeout(() => setShowIntentItemPicker(false), 200)
                   }
                   placeholder="Search for an item..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded"
+                  className="w-full px-3 py-2 border border-gray-300 rounded text-base"
                 />
                 {intentItemId && !intentItemSearch && items && (
                   <div className="mt-1 text-sm text-gray-600">
@@ -1884,7 +1962,7 @@ function InboxCard({
               <select
                 value={intentRecurrence}
                 onChange={(e) => setIntentRecurrence(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
               >
                 <option value="once">One time</option>
                 <option value="daily">Daily</option>
@@ -1909,7 +1987,7 @@ function InboxCard({
                 type="text"
                 value={itemName}
                 onChange={(e) => setItemName(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
               />
             </div>
 
@@ -1921,7 +1999,7 @@ function InboxCard({
                 value={itemDescription}
                 onChange={(e) => setItemDescription(e.target.value)}
                 placeholder="Optional description"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
                 rows="2"
               />
             </div>
@@ -1933,7 +2011,7 @@ function InboxCard({
               <select
                 value={itemContextId}
                 onChange={(e) => setItemContextId(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
               >
                 <option value="">No context</option>
                 {contexts.map((ctx) => (
@@ -2047,7 +2125,7 @@ function InboxCard({
           <button
             onClick={handleSave}
             disabled={!createIntention && !createItem}
-            className={`px-4 py-2.5 rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${
+            className={`px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${
               createIntention || createItem
                 ? "bg-primary hover:bg-primary-hover text-white"
                 : "bg-gray-200 text-gray-400 cursor-not-allowed"
@@ -2057,14 +2135,14 @@ function InboxCard({
           </button>
           <button
             onClick={handleCancel}
-            className="px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            className="px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             Cancel
           </button>
         </div>
         <button
           onClick={() => onArchive(inboxItem.id)}
-          className="text-muted hover:text-danger transition-colors"
+          className="min-h-[44px] text-muted hover:text-danger transition-colors"
         >
           Archive
         </button>
@@ -2081,7 +2159,7 @@ function ContextForm({ editing, onSave, onCancel }) {
   const [pinned, setPinned] = useState(editing?.pinned || false);
 
   return (
-    <div className="mb-6 p-6 bg-white border-2 border-primary rounded-lg shadow-lg">
+    <div className="mb-4 sm:mb-6 p-4 sm:p-6 bg-white border-2 border-primary rounded-lg shadow-lg">
       <h3 className="font-semibold text-lg mb-4">
         {editing ? "Edit Context" : "New Context"}
       </h3>
@@ -2096,7 +2174,7 @@ function ContextForm({ editing, onSave, onCancel }) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Context name"
-            className="w-full px-3 py-2 border border-gray-300 rounded"
+            className="w-full px-3 py-2 border border-gray-300 rounded text-base"
             autoFocus
           />
         </div>
@@ -2110,7 +2188,7 @@ function ContextForm({ editing, onSave, onCancel }) {
             value={keywords}
             onChange={(e) => setKeywords(e.target.value)}
             placeholder="Keywords (comma separated)"
-            className="w-full px-3 py-2 border border-gray-300 rounded"
+            className="w-full px-3 py-2 border border-gray-300 rounded text-base"
           />
         </div>
 
@@ -2123,7 +2201,7 @@ function ContextForm({ editing, onSave, onCancel }) {
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Description"
             rows={3}
-            className="w-full px-3 py-2 border border-gray-300 rounded"
+            className="w-full px-3 py-2 border border-gray-300 rounded text-base"
           />
         </div>
 
@@ -2152,13 +2230,13 @@ function ContextForm({ editing, onSave, onCancel }) {
             onClick={() =>
               name.trim() && onSave(name, shared, keywords, description, pinned)
             }
-            className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             Save
           </button>
           <button
             onClick={onCancel}
-            className="px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            className="px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             Cancel
           </button>
@@ -2170,9 +2248,9 @@ function ContextForm({ editing, onSave, onCancel }) {
 
 function ContextCard({ context, onClick, onEdit, showSettings = false }) {
   return (
-    <div className="p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow duration-200">
+    <div className="p-3 sm:p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow duration-200">
       <div className="flex items-center justify-between">
-        <div className="flex-1" onClick={onClick}>
+        <div className="flex-1 min-w-0" onClick={onClick}>
           <div className="flex items-center gap-2">
             {context.pinned && <span className="text-gray-400">📌</span>}
             <h3 className="font-semibold text-dark">{context.name}</h3>
@@ -2195,7 +2273,7 @@ function ContextCard({ context, onClick, onEdit, showSettings = false }) {
               e.stopPropagation();
               onEdit();
             }}
-            className="text-muted hover:text-dark"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center text-muted hover:text-dark"
           >
             <span className="text-lg">⚙️</span>
           </button>
@@ -2289,21 +2367,22 @@ function ContextDetailView({
     <div>
       <button
         onClick={onBack}
-        className="flex items-center gap-2 mb-4 text-primary hover:text-primary-hover"
+        className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
       >
         <ArrowLeft className="w-4 h-4" />
         Back
       </button>
 
-      <div className="mb-6">
-        <div className="flex items-start justify-between mb-2">
-          <h2 className="text-2xl font-bold">{context.name}</h2>
+      <div className="mb-4 sm:mb-6">
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <h2 className="text-xl sm:text-2xl font-bold">{context.name}</h2>
           <button
             onClick={onEditContext}
-            className="flex items-center gap-2 px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base shrink-0"
           >
             <span>⚙️</span>
-            Edit Context
+            <span className="hidden sm:inline">Edit Context</span>
+            <span className="sm:hidden">Edit</span>
           </button>
         </div>
         {context.description && (
@@ -2319,10 +2398,10 @@ function ContextDetailView({
       <div className="space-y-6">
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg font-semibold">Items ({items.length})</h3>
+            <h3 className="text-base sm:text-lg font-semibold">Items ({items.length})</h3>
             <button
               onClick={() => setShowAddItemForm(true)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
               <Plus className="w-4 h-4" />
               Add Item
@@ -2364,12 +2443,12 @@ function ContextDetailView({
 
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg font-semibold">
+            <h3 className="text-base sm:text-lg font-semibold">
               Intentions ({intents.length})
             </h3>
             <button
               onClick={() => setShowAddIntentionForm(true)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
               <Plus className="w-4 h-4" />
               Add Intention
@@ -2464,7 +2543,7 @@ function IntentionDetailView({
       <div>
         <button
           onClick={onBack}
-          className="flex items-center gap-2 mb-4 text-primary hover:text-primary-hover"
+          className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
         >
           <ArrowLeft className="w-4 h-4" />
           Back
@@ -2495,16 +2574,16 @@ function IntentionDetailView({
     <div>
       <button
         onClick={onBack}
-        className="flex items-center gap-2 mb-4 text-primary hover:text-primary-hover"
+        className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
       >
         <ArrowLeft className="w-4 h-4" />
         Back
       </button>
 
-      <div className="mb-6">
-        <div className="flex items-start justify-between mb-2">
+      <div className="mb-4 sm:mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-2">
           <div className="flex-1">
-            <h2 className="text-2xl font-bold">{intention.text}</h2>
+            <h2 className="text-xl sm:text-2xl font-bold">{intention.text}</h2>
             {contextName && (
               <span className="inline-block mt-2 text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
                 {contextName}
@@ -2513,10 +2592,11 @@ function IntentionDetailView({
           </div>
           <button
             onClick={() => setIsEditing(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base shrink-0"
           >
             <span>⚙️</span>
-            Edit Intention
+            <span className="hidden sm:inline">Edit Intention</span>
+            <span className="sm:hidden">Edit</span>
           </button>
         </div>
         <p className="text-sm text-gray-600 capitalize">
@@ -2622,7 +2702,7 @@ function ItemDetailView({
       <div>
         <button
           onClick={onBack}
-          className="flex items-center gap-2 mb-4 text-primary hover:text-primary-hover"
+          className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
         >
           <ArrowLeft className="w-4 h-4" />
           Back
@@ -2650,16 +2730,16 @@ function ItemDetailView({
     <div>
       <button
         onClick={onBack}
-        className="flex items-center gap-2 mb-4 text-primary hover:text-primary-hover"
+        className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
       >
         <ArrowLeft className="w-4 h-4" />
         Back
       </button>
 
-      <div className="mb-6">
-        <div className="flex items-start justify-between mb-2">
+      <div className="mb-4 sm:mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-2">
           <div className="flex-1">
-            <h2 className="text-2xl font-bold">{item.name}</h2>
+            <h2 className="text-xl sm:text-2xl font-bold">{item.name}</h2>
             {contextName && (
               <span className="inline-block mt-2 text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
                 {contextName}
@@ -2670,7 +2750,7 @@ function ItemDetailView({
             {onStartNow && (
               <button
                 onClick={() => onStartNow(item.id)}
-                className="flex items-center gap-2 px-4 py-2.5 bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
               >
                 <Play className="w-4 h-4" />
                 Start Now
@@ -2678,10 +2758,11 @@ function ItemDetailView({
             )}
             <button
               onClick={() => setIsEditing(true)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
               <span>⚙️</span>
-              Edit Item
+              <span className="hidden sm:inline">Edit Item</span>
+              <span className="sm:hidden">Edit</span>
             </button>
           </div>
         </div>
@@ -2920,14 +3001,14 @@ function ExecutionDetailView({
           onUpdateNotes(localNotes);
           onBack();
         }}
-        className="flex items-center gap-2 mb-4 text-gray-600 hover:text-gray-800"
+        className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-gray-600 hover:text-gray-800"
       >
         <ArrowLeft className="w-4 h-4" />
         Back
       </button>
 
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-dark">{displayName}</h2>
+      <div className="mb-4 sm:mb-6">
+        <h2 className="text-xl sm:text-2xl font-bold text-dark">{displayName}</h2>
         <div className="flex items-center gap-2 mt-1">
           {contextName && (
             <span className="text-xs bg-success-light text-dark px-2 py-0.5 rounded">
@@ -3039,10 +3120,10 @@ function ExecutionDetailView({
         </div>
       </div>
 
-      <div className="flex items-center justify-between pt-4 border-t border-gray-200">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-0 pt-4 border-t border-gray-200">
         <button
           onClick={onCancel}
-          className="flex items-center gap-2 px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+          className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
         >
           <X className="w-4 h-4" />
           Cancel
@@ -3050,7 +3131,7 @@ function ExecutionDetailView({
         {execution.status === "paused" ? (
           <button
             onClick={onMakeActive}
-            className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             <Play className="w-4 h-4" />
             Make Active
@@ -3058,7 +3139,7 @@ function ExecutionDetailView({
         ) : (
           <button
             onClick={onPause}
-            className="flex items-center gap-2 px-4 py-2.5 bg-warning hover:bg-warning-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-warning hover:bg-warning-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             <Pause className="w-4 h-4" />
             Pause
@@ -3066,7 +3147,7 @@ function ExecutionDetailView({
         )}
         <button
           onClick={onComplete}
-          className="flex items-center gap-2 px-4 py-2.5 bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+          className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
         >
           <Check className="w-5 h-5" />
           Complete
@@ -3086,7 +3167,7 @@ function ExecutionBadge({ exec, intents, contexts, getIntentDisplay, onOpen }) {
         e.stopPropagation();
         onOpen(exec);
       }}
-      className={`p-4 rounded cursor-pointer shadow-sm hover:shadow-md transition-shadow duration-200 ${
+      className={`p-3 sm:p-4 rounded cursor-pointer shadow-sm hover:shadow-md transition-shadow duration-200 min-h-[44px] ${
         isActive
           ? "bg-primary-light border-2 border-primary"
           : "bg-warning-light border-2 border-warning"
@@ -3252,7 +3333,7 @@ function ItemCard({
 
   if (isEditing) {
     return (
-      <div className="p-4 bg-white border-2 border-primary rounded">
+      <div className="p-3 sm:p-4 bg-white border-2 border-primary rounded">
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -3262,7 +3343,7 @@ function ItemCard({
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded"
+              className="w-full px-3 py-2 border border-gray-300 rounded text-base"
               autoFocus
             />
           </div>
@@ -3275,7 +3356,7 @@ function ItemCard({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Optional description for this item"
-              className="w-full px-3 py-2 border border-gray-300 rounded"
+              className="w-full px-3 py-2 border border-gray-300 rounded text-base"
               rows="2"
             />
           </div>
@@ -3299,7 +3380,7 @@ function ItemCard({
             <select
               value={contextId}
               onChange={(e) => setContextId(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded"
+              className="w-full px-3 py-2 border border-gray-300 rounded text-base"
             >
               <option value="">No context</option>
               {contexts.map((ctx) => (
@@ -3404,16 +3485,16 @@ function ItemCard({
             </div>
           </div>
 
-          <div className="flex gap-2 pt-2">
+          <div className="flex flex-wrap gap-2 pt-2">
             <button
               onClick={handleSave}
-              className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Save
             </button>
             <button
               onClick={handleCancel}
-              className="px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Cancel
             </button>
@@ -3422,7 +3503,7 @@ function ItemCard({
                 onUpdate(item.id, { archived: true });
                 setIsEditing(false);
               }}
-              className="px-4 py-2.5 bg-danger hover:bg-danger-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ml-auto"
+              className="px-4 py-2.5 min-h-[44px] bg-danger hover:bg-danger-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ml-auto"
             >
               Archive
             </button>
@@ -3434,7 +3515,7 @@ function ItemCard({
 
   return (
     <div
-      className="p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary"
+      className="p-3 sm:p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary"
       onClick={() => {
         if (onViewDetail) {
           onViewDetail(item.id);
@@ -3574,7 +3655,7 @@ function IntentionCard({
 
   if (isEditing) {
     return (
-      <div className="p-4 bg-white border-2 border-primary rounded">
+      <div className="p-3 sm:p-4 bg-white border-2 border-primary rounded">
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -3584,7 +3665,7 @@ function IntentionCard({
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded"
+              className="w-full px-3 py-2 border border-gray-300 rounded text-base"
               autoFocus
             />
           </div>
@@ -3604,7 +3685,7 @@ function IntentionCard({
                 onFocus={() => setShowContextPicker(true)}
                 onBlur={() => setTimeout(() => setShowContextPicker(false), 200)}
                 placeholder="Search for a context..."
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
               />
               {selectedContextId && !contextSearch && contexts && (
                 <div className="mt-1 text-sm text-gray-600">
@@ -3655,7 +3736,7 @@ function IntentionCard({
                 onFocus={() => setShowItemPicker(true)}
                 onBlur={() => setTimeout(() => setShowItemPicker(false), 200)}
                 placeholder="Search for an item..."
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
               />
               {selectedItemId && !itemSearch && items && (
                 <div className="mt-1 text-sm text-gray-600">
@@ -3704,7 +3785,7 @@ function IntentionCard({
               <select
                 value={recurrence}
                 onChange={(e) => setRecurrence(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
               >
                 <option value="once">One time</option>
                 <option value="daily">Daily</option>
@@ -3719,14 +3800,14 @@ function IntentionCard({
               <>
                 <button
                   onClick={() => handleSave("today")}
-                  className="px-4 py-2.5 bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+                  className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
                 >
                   Do Today
                 </button>
 
                 <button
                   onClick={() => setShowDatePicker(!showDatePicker)}
-                  className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+                  className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
                 >
                   Schedule Later
                 </button>
@@ -3736,7 +3817,7 @@ function IntentionCard({
                     type="date"
                     value={selectedDate}
                     onChange={(e) => setSelectedDate(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded"
+                    className="px-3 py-2 min-h-[44px] border border-gray-300 rounded"
                   />
                 )}
               </>
@@ -3746,14 +3827,14 @@ function IntentionCard({
               onClick={() =>
                 handleSave(showDatePicker && selectedDate ? selectedDate : null)
               }
-              className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
               Save Changes
             </button>
 
             <button
               onClick={handleCancel}
-              className="px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
               Cancel
             </button>
@@ -3765,7 +3846,7 @@ function IntentionCard({
 
   return (
     <div
-      className="p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary"
+      className="p-3 sm:p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary"
       onClick={() => {
         if (onViewDetail) {
           onViewDetail(intent.id);
@@ -3774,10 +3855,10 @@ function IntentionCard({
         }
       }}
     >
-      <div className="flex items-center justify-between">
-        <div className="flex-1">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div className="flex-1 min-w-0">
           <p className="font-medium">{getIntentDisplay(intent)}</p>
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
             {showScheduling && (
               <span className="text-sm text-muted capitalize">
                 {intent.recurrence || "once"}
@@ -3791,14 +3872,14 @@ function IntentionCard({
           </div>
         </div>
         {showScheduling && relatedEvents.length === 0 && (
-          <div className="flex gap-2">
+          <div className="flex gap-2 shrink-0">
             {onSchedule && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   onSchedule(intent.id, "today");
                 }}
-                className="px-4 py-2.5 bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+                className="px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
               >
                 Do Today
               </button>
@@ -3809,7 +3890,7 @@ function IntentionCard({
                   e.stopPropagation();
                   onStartNow(intent.id);
                 }}
-                className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
               >
                 <Play className="w-4 h-4" />
                 Start Now
@@ -3874,7 +3955,7 @@ function EventCard({
 
   if (isEditing) {
     return (
-      <div className="p-4 bg-white border-2 border-primary rounded">
+      <div className="p-3 sm:p-4 bg-white border-2 border-primary rounded">
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -3884,7 +3965,7 @@ function EventCard({
               type="text"
               value={eventName}
               onChange={(e) => setEventName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded"
+              className="w-full px-3 py-2 min-h-[44px] border border-gray-300 rounded text-base"
               autoFocus
             />
           </div>
@@ -3897,20 +3978,20 @@ function EventCard({
               type="date"
               value={scheduledDate}
               onChange={(e) => setScheduledDate(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded"
+              className="w-full px-3 py-2 min-h-[44px] border border-gray-300 rounded"
             />
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={handleSave}
-              className="px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Save
             </button>
             <button
               onClick={handleCancelEvent}
-              className="px-4 py-2.5 bg-danger hover:bg-danger-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="px-4 py-2.5 min-h-[44px] bg-danger hover:bg-danger-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Cancel Event
             </button>
@@ -3920,7 +4001,7 @@ function EventCard({
                 setEventName(event.text || intent?.text || "");
                 setIsEditing(false);
               }}
-              className="px-4 py-2.5 bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Close
             </button>
@@ -3934,8 +4015,8 @@ function EventCard({
 
   return (
     <div className="p-3 bg-white border border-gray-200 rounded shadow-sm hover:shadow-md transition-shadow duration-200">
-      <div className="flex items-center justify-between">
-        <div className="flex-1" onClick={() => setIsEditing(true)}>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div className="flex-1 min-w-0" onClick={() => setIsEditing(true)}>
           <p className="font-medium text-dark cursor-pointer hover:text-primary">
             {nested ? `Event: ${event.text || getIntentDisplay(intent)}` : (event.text || getIntentDisplay(intent))}
           </p>
@@ -3952,7 +4033,7 @@ function EventCard({
               e.stopPropagation();
               if (onOpenExecution) onOpenExecution(execution);
             }}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${
+            className={`flex items-center justify-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 shrink-0 text-sm sm:text-base ${
               execution.status === "active"
                 ? "bg-primary hover:bg-primary-hover text-white"
                 : "bg-warning hover:bg-warning-hover text-white"
@@ -3976,7 +4057,7 @@ function EventCard({
               e.stopPropagation();
               onActivate(event.id);
             }}
-            className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 shrink-0 text-sm sm:text-base"
           >
             <Play className="w-3 h-3" />
             Start

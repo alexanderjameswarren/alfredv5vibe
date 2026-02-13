@@ -1,0 +1,182 @@
+{
+  "id": "song_001",
+  "title": "Someone Like You",
+  "artist": "Adele",
+  "source": "manual",
+  "key": "A major",
+  "timeSignature": "4/4",
+  "defaultBpm": 68,
+  "createdAt": "2026-02-12T00:00:00Z",
+  "updatedAt": "2026-02-12T00:00:00Z",
+
+  "measures": [
+    {
+      "number": 1,
+      "beats": [
+        { "beat": 1, "duration": "q",
+          "lh": [{ "midi": 57, "name": "A3", "duration": "q" }],
+          "rh": [{ "midi": 69, "name": "A4", "duration": "q" }, { "midi": 73, "name": "C#5", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 2, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 69, "name": "A4", "duration": "q" }, { "midi": 73, "name": "C#5", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 3, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 69, "name": "A4", "duration": "q" }, { "midi": 73, "name": "C#5", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 4, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 69, "name": "A4", "duration": "q" }, { "midi": 73, "name": "C#5", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "beats": [
+        { "beat": 1, "duration": "q",
+          "lh": [{ "midi": 57, "name": "A3", "duration": "q" }],
+          "rh": [{ "midi": 69, "name": "A4", "duration": "q" }, { "midi": 73, "name": "C#5", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 2, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 69, "name": "A4", "duration": "q" }, { "midi": 73, "name": "C#5", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 3, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 69, "name": "A4", "duration": "q" }, { "midi": 73, "name": "C#5", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 4, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 69, "name": "A4", "duration": "q" }, { "midi": 73, "name": "C#5", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        }
+      ]
+    },
+    {
+      "number": 3,
+      "beats": [
+        { "beat": 1, "duration": "q",
+          "lh": [{ "midi": 52, "name": "E3", "duration": "q" }],
+          "rh": [{ "midi": 68, "name": "G#4", "duration": "q" }, { "midi": 71, "name": "B4", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 2, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 68, "name": "G#4", "duration": "q" }, { "midi": 71, "name": "B4", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 3, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 68, "name": "G#4", "duration": "q" }, { "midi": 71, "name": "B4", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 4, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 68, "name": "G#4", "duration": "q" }, { "midi": 71, "name": "B4", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        }
+      ]
+    },
+    {
+      "number": 4,
+      "beats": [
+        { "beat": 1, "duration": "q",
+          "lh": [{ "midi": 52, "name": "E3", "duration": "q" }],
+          "rh": [{ "midi": 68, "name": "G#4", "duration": "q" }, { "midi": 71, "name": "B4", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 2, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 68, "name": "G#4", "duration": "q" }, { "midi": 71, "name": "B4", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 3, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 68, "name": "G#4", "duration": "q" }, { "midi": 71, "name": "B4", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 4, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 68, "name": "G#4", "duration": "q" }, { "midi": 71, "name": "B4", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        }
+      ]
+    },
+    {
+      "number": 5,
+      "beats": [
+        { "beat": 1, "duration": "q",
+          "lh": [{ "midi": 50, "name": "D3", "duration": "q" }],
+          "rh": [{ "midi": 66, "name": "F#4", "duration": "q" }, { "midi": 69, "name": "A4", "duration": "q" }, { "midi": 74, "name": "D5", "duration": "q" }]
+        },
+        { "beat": 2, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 66, "name": "F#4", "duration": "q" }, { "midi": 69, "name": "A4", "duration": "q" }, { "midi": 74, "name": "D5", "duration": "q" }]
+        },
+        { "beat": 3, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 66, "name": "F#4", "duration": "q" }, { "midi": 69, "name": "A4", "duration": "q" }, { "midi": 74, "name": "D5", "duration": "q" }]
+        },
+        { "beat": 4, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 66, "name": "F#4", "duration": "q" }, { "midi": 69, "name": "A4", "duration": "q" }, { "midi": 74, "name": "D5", "duration": "q" }]
+        }
+      ]
+    },
+    {
+      "number": 6,
+      "beats": [
+        { "beat": 1, "duration": "q",
+          "lh": [{ "midi": 50, "name": "D3", "duration": "q" }],
+          "rh": [{ "midi": 66, "name": "F#4", "duration": "q" }, { "midi": 69, "name": "A4", "duration": "q" }, { "midi": 74, "name": "D5", "duration": "q" }]
+        },
+        { "beat": 2, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 66, "name": "F#4", "duration": "q" }, { "midi": 69, "name": "A4", "duration": "q" }, { "midi": 74, "name": "D5", "duration": "q" }]
+        },
+        { "beat": 3, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 66, "name": "F#4", "duration": "q" }, { "midi": 69, "name": "A4", "duration": "q" }, { "midi": 74, "name": "D5", "duration": "q" }]
+        },
+        { "beat": 4, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 66, "name": "F#4", "duration": "q" }, { "midi": 69, "name": "A4", "duration": "q" }, { "midi": 74, "name": "D5", "duration": "q" }]
+        }
+      ]
+    },
+    {
+      "number": 7,
+      "beats": [
+        { "beat": 1, "duration": "q",
+          "lh": [{ "midi": 57, "name": "A3", "duration": "q" }],
+          "rh": [{ "midi": 69, "name": "A4", "duration": "q" }, { "midi": 73, "name": "C#5", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 2, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 69, "name": "A4", "duration": "q" }, { "midi": 73, "name": "C#5", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 3, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 69, "name": "A4", "duration": "q" }, { "midi": 73, "name": "C#5", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        },
+        { "beat": 4, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 69, "name": "A4", "duration": "q" }, { "midi": 73, "name": "C#5", "duration": "q" }, { "midi": 76, "name": "E5", "duration": "q" }]
+        }
+      ]
+    },
+    {
+      "number": 8,
+      "beats": [
+        { "beat": 1, "duration": "q",
+          "lh": [{ "midi": 52, "name": "E3", "duration": "q" }],
+          "rh": [{ "midi": 64, "name": "E4", "duration": "q" }, { "midi": 68, "name": "G#4", "duration": "q" }, { "midi": 71, "name": "B4", "duration": "q" }]
+        },
+        { "beat": 2, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 64, "name": "E4", "duration": "q" }, { "midi": 68, "name": "G#4", "duration": "q" }, { "midi": 71, "name": "B4", "duration": "q" }]
+        },
+        { "beat": 3, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 64, "name": "E4", "duration": "q" }, { "midi": 68, "name": "G#4", "duration": "q" }, { "midi": 71, "name": "B4", "duration": "q" }]
+        },
+        { "beat": 4, "duration": "q",
+          "lh": [],
+          "rh": [{ "midi": 64, "name": "E4", "duration": "q" }, { "midi": 68, "name": "G#4", "duration": "q" }, { "midi": 71, "name": "B4", "duration": "q" }]
+        }
+      ]
+    }
+  ]
+}
