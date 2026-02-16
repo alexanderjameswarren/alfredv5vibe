@@ -396,7 +396,6 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
     // Build beat events from all copies
     const beatsPerMeasure = 4; // 4/4 time
     const totalMusicalBeatsPerCopy = measures.length * beatsPerMeasure;
-    const beatsPerCopy = copyBeatCounts[0] || 0;
     let copyOffset = 0;
     let copyIdx = 0;
     const events = allBeatMeta.map((meta, globalIdx) => {
