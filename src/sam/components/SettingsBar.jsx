@@ -62,6 +62,7 @@ export default function SettingsBar({
             <input
               type="number"
               value={bpmInput}
+              onFocus={(e) => e.target.select()}
               onChange={(e) => {
                 setBpmInput(e.target.value);
                 const n = Number(e.target.value);
@@ -81,6 +82,7 @@ export default function SettingsBar({
             <input
               type="number"
               value={windowMsInput}
+              onFocus={(e) => e.target.select()}
               onChange={(e) => {
                 setWindowMsInput(e.target.value);
                 const n = Number(e.target.value);
@@ -100,6 +102,7 @@ export default function SettingsBar({
             <input
               type="number"
               value={chordMsInput}
+              onFocus={(e) => e.target.select()}
               onChange={(e) => {
                 setChordMsInput(e.target.value);
                 const n = Number(e.target.value);

@@ -42,6 +42,28 @@ export function getBeamGroups(vexNotes) {
   return groups;
 }
 
+// Layout constants
+export const CLEF_EXTRA = 80; // extra width on first measure for clef + time sig
+
+// Compute measure width based on note density.
+// Measures with more voice events get more space; sparse measures get less.
+const NOTE_PX = 50;
+const MIN_MEASURE_WIDTH = 160;
+export function getMeasureWidth(measure, isFirst) {
+  const rhCount = (measure.rh || []).length;
+  const lhCount = (measure.lh || []).length;
+  // For legacy beats format, use beats array length
+  const beatsCount = (measure.beats || []).length;
+  const maxEvents = Math.max(rhCount, lhCount, beatsCount, 1);
+  const width = Math.max(maxEvents * NOTE_PX, MIN_MEASURE_WIDTH);
+  return width + (isFirst ? CLEF_EXTRA : 0);
+}
+
+// Formatter justification width — accounts for clef/time sig on first measure
+export function getFormatWidth(measWidth, isFirst) {
+  return isFirst ? measWidth - 100 : measWidth - 30;
+}
+
 // Color all SVG elements for a beat event
 // beatEvent: { svgEls: SVGElement[] }
 // color: CSS color string, e.g. '#16a34a' (green), '#dc2626' (red)

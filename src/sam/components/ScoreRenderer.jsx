@@ -1,12 +1,10 @@
 import React, { useEffect, useRef } from "react";
-import { midiToVexKey, midiAccidental, getBeamGroups } from "../lib/vexflowHelpers";
+import { midiToVexKey, midiAccidental, getBeamGroups, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
 
 // Layout constants
-const BEAT_PX = 150;
 const TREBLE_Y = 10;
 const BASS_Y = 140;
 const STAFF_H = 280;
-const CLEF_EXTRA = 80; // extra width on first measure for clef + time sig
 
 // Duration → quarter-note beat values (for voice format tick tracking)
 const DURATION_BEATS = {
@@ -49,10 +47,8 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap }) {
     const container = containerRef.current;
     container.innerHTML = "";
 
-    // Calculate total width
-    const measureWidths = measures.map((_, i) =>
-      BEAT_PX * 4 + (i === 0 ? CLEF_EXTRA : 0)
-    );
+    // Calculate total width based on note density per measure
+    const measureWidths = measures.map((m, i) => getMeasureWidth(m, i === 0));
     const totalWidth = measureWidths.reduce((a, b) => a + b, 0) + 20;
 
     // Create renderer
@@ -302,7 +298,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap }) {
       new VF.Formatter()
         .joinVoices([trebleVoice])
         .joinVoices([bassVoice])
-        .format([trebleVoice, bassVoice], measWidth - 70);
+        .format([trebleVoice, bassVoice], getFormatWidth(measWidth, isFirst));
 
       // 4. Draw treble notes individually, each wrapped in an SVG <g> group
       trebleNotes.forEach((note, i) => {
