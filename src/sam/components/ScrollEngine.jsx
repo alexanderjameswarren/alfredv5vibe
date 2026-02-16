@@ -156,7 +156,9 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart) {
         if (!tickMap.has(rt)) tickMap.set(rt, { allMidi: [], trebleIdx: null, bassIdx: null });
         const entry = tickMap.get(rt);
         entry.trebleIdx = i;
-        (evt.notes || []).forEach((n) => entry.allMidi.push(n.midi));
+        const notes = evt.notes || [];
+        const allTieEnd = notes.length > 0 && notes.every((n) => n.tie === "end");
+        if (!allTieEnd) notes.forEach((n) => entry.allMidi.push(n.midi));
         tick += DURATION_BEATS[evt.duration] || 1;
       });
 
@@ -166,7 +168,9 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart) {
         if (!tickMap.has(rt)) tickMap.set(rt, { allMidi: [], trebleIdx: null, bassIdx: null });
         const entry = tickMap.get(rt);
         entry.bassIdx = i;
-        (evt.notes || []).forEach((n) => entry.allMidi.push(n.midi));
+        const notes = evt.notes || [];
+        const allTieEnd = notes.length > 0 && notes.every((n) => n.tie === "end");
+        if (!allTieEnd) notes.forEach((n) => entry.allMidi.push(n.midi));
         tick += DURATION_BEATS[evt.duration] || 1;
       });
 
