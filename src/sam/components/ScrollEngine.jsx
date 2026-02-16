@@ -349,6 +349,38 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart) {
 
 const GRACE_MS = 300; // ms after target line before marking a beat as missed
 
+// Interpolate scroll offset from sorted keyframes so each note hits the
+// target line at exactly its targetTimeMs.  cursorRef advances forward and
+// should be reset whenever keyframes are rebuilt (e.g. on teleport).
+function getScrollOffset(elapsed, keyframes, cursorRef, targetX, pxPerMs) {
+  const kf = keyframes;
+  if (!kf || kf.length === 0) return elapsed * pxPerMs;
+
+  // Advance cursor to first keyframe with timeMs > elapsed
+  while (cursorRef.current < kf.length && kf[cursorRef.current].timeMs <= elapsed) {
+    cursorRef.current++;
+  }
+
+  const nextIdx = cursorRef.current;
+  const prevIdx = nextIdx - 1;
+
+  if (prevIdx < 0) {
+    // Before first keyframe — extrapolate backward at average speed
+    return kf[0].xPx - targetX - (kf[0].timeMs - elapsed) * pxPerMs;
+  }
+  if (nextIdx >= kf.length) {
+    // After last keyframe — extrapolate forward at average speed
+    return kf[prevIdx].xPx - targetX + (elapsed - kf[prevIdx].timeMs) * pxPerMs;
+  }
+
+  // Interpolate between the two bracketing keyframes
+  const prev = kf[prevIdx];
+  const next = kf[nextIdx];
+  const frac = (elapsed - prev.timeMs) / (next.timeMs - prev.timeMs);
+  const xPx = prev.xPx + (next.xPx - prev.xPx) * frac;
+  return xPx - targetX;
+}
+
 export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
@@ -357,6 +389,8 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
   const beatEventsRef = useRef([]);
   const copyWidthRef = useRef(0);
   const nextCheckRef = useRef(0);
+  const keyframesRef = useRef([]);
+  const scrollCursorRef = useRef(0);
   const [svgReady, setSvgReady] = useState(false);
 
   // Render 3 copies of the score SVG into the scroll layer
@@ -468,6 +502,12 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
       events[i].targetTimeMs = approachMs + events[i].musicalBeat * msPerBeat;
     }
 
+    // Build sorted keyframes for scroll interpolation
+    keyframesRef.current = events
+      .map((evt) => ({ timeMs: evt.targetTimeMs, xPx: evt.xPx }))
+      .sort((a, b) => a.timeMs - b.timeMs);
+    scrollCursorRef.current = 0;
+
     let loopCount = 0;
     nextCheckRef.current = 0;
 
@@ -515,10 +555,16 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
           }
         }
         nextCheckRef.current = 0;
+
+        // Rebuild sorted keyframes after targetTimeMs update
+        keyframesRef.current = beatEventsRef.current
+          .map((evt) => ({ timeMs: evt.targetTimeMs, xPx: evt.xPx }))
+          .sort((a, b) => a.timeMs - b.timeMs);
+        scrollCursorRef.current = 0;
       }
 
-      // Compute final scroll offset (may have been adjusted by teleport)
-      const scrollOffset = state.originPx + elapsed * state.pxPerMs;
+      // Compute interpolated scroll offset so notes hit target line at their targetTimeMs
+      const scrollOffset = getScrollOffset(elapsed, keyframesRef.current, scrollCursorRef, targetX, state.pxPerMs);
       scrollLayer.style.transform = `translateX(${-scrollOffset}px)`;
 
       // --- Miss detection: forward-scan from nextCheck (time-based) ---
