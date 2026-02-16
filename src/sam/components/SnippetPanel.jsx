@@ -4,7 +4,7 @@ import { supabase } from "../../supabaseClient";
 
 export default function SnippetPanel({
   songDbId, totalMeasures, snippet, onSnippetChange,
-  bpm, chordMs, onSettingsOverride,
+  bpm, windowMs, chordMs, onSettingsOverride,
 }) {
   const [open, setOpen] = useState(false);
   const [startMeas, setStartMeas] = useState(snippet?.startMeasure || 1);
@@ -113,7 +113,7 @@ export default function SnippetPanel({
       start_measure: startMeas,
       end_measure: endMeas,
       rest_measures: restMeasures,
-      settings: { bpm, chordGroupMs: chordMs },
+      settings: { bpm, windowMs, chordGroupMs: chordMs },
     };
 
     supabase

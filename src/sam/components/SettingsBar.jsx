@@ -4,6 +4,7 @@ import { Play, Square } from "lucide-react";
 export default function SettingsBar({
   song, snippet,
   bpm, bpmInput, setBpm, setBpmInput,
+  windowMs, windowMsInput, setWindowMs, setWindowMsInput,
   chordMs, chordMsInput, setChordMs, setChordMsInput,
   playing, songDbId,
   onPlayToggle, onChangeSong,
@@ -73,6 +74,25 @@ export default function SettingsBar({
               }}
               className="w-16 px-2 py-1 border border-gray-300 rounded text-sm min-h-[44px]"
               min={20} max={300}
+            />
+          </label>
+          <label className="text-sm text-muted">
+            Window ms:{" "}
+            <input
+              type="number"
+              value={windowMsInput}
+              onChange={(e) => {
+                setWindowMsInput(e.target.value);
+                const n = Number(e.target.value);
+                if (n > 0) setWindowMs(n);
+              }}
+              onBlur={() => {
+                const n = Number(windowMsInput);
+                if (!n || n <= 0) { setWindowMs(500); setWindowMsInput("500"); }
+                else setWindowMsInput(String(n));
+              }}
+              className="w-16 px-2 py-1 border border-gray-300 rounded text-sm min-h-[44px]"
+              min={100} max={2000}
             />
           </label>
           <label className="text-sm text-muted">
