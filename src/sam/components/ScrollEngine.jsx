@@ -416,6 +416,10 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
     });
 
     beatEventsRef.current = events;
+    console.log('[ScrollEngine] Beat events:', events.length, 'Sample:', events.slice(0, 10).map(e => ({
+      meas: e.meas, beat: e.beat, allMidi: e.allMidi,
+      musicalBeat: e.musicalBeat
+    })));
     if (onBeatEvents) onBeatEvents(events);
     setSvgReady(true);
 
@@ -528,6 +532,7 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
         if (elapsed > evt.targetTimeMs + GRACE_MS) {
           // Beat's timing window has passed
           if (evt.allMidi.length > 0) {
+            console.log('[ScrollEngine] MISS:', evt.meas, evt.beat, 'elapsed:', Math.round(elapsed), 'target:', Math.round(evt.targetTimeMs));
             evt.state = "missed";
             colorBeatEls(evt, "#dc2626");
             if (onBeatMiss) onBeatMiss(evt);

@@ -1,0 +1,191 @@
+{
+  "id": "song_test_timing",
+  "title": "Timing & Spacing Test",
+  "artist": "Test",
+  "source": "manual",
+  "key": "C major",
+  "timeSignature": "4/4",
+  "defaultBpm": 72,
+  "createdAt": "2026-02-16T00:00:00Z",
+  "updatedAt": "2026-02-16T00:00:00Z",
+  "sections": [],
+  "measures": [
+    {
+      "number": 1,
+      "lh": [{ "duration": "w", "notes": [{ "midi": 48, "name": "C3" }] }],
+      "rh": [{ "duration": "w", "notes": [{ "midi": 60, "name": "C4" }] }]
+    },
+    {
+      "number": 2,
+      "lh": [
+        { "duration": "h", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "h", "notes": [{ "midi": 48, "name": "C3" }] }
+      ],
+      "rh": [
+        { "duration": "h", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "h", "notes": [{ "midi": 60, "name": "C4" }] }
+      ]
+    },
+    {
+      "number": 3,
+      "lh": [
+        { "duration": "h", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "q", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "q", "notes": [{ "midi": 48, "name": "C3" }] }
+      ],
+      "rh": [
+        { "duration": "h", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "q", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "q", "notes": [{ "midi": 60, "name": "C4" }] }
+      ]
+    },
+    {
+      "number": 4,
+      "lh": [
+        { "duration": "q", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "q", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "q", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "q", "notes": [{ "midi": 48, "name": "C3" }] }
+      ],
+      "rh": [
+        { "duration": "q", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "q", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "q", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "q", "notes": [{ "midi": 60, "name": "C4" }] }
+      ]
+    },
+    {
+      "number": 5,
+      "lh": [
+        { "duration": "q", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "q", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] }
+      ],
+      "rh": [
+        { "duration": "q", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "q", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] }
+      ]
+    },
+    {
+      "number": 6,
+      "lh": [
+        { "duration": "q", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] }
+      ],
+      "rh": [
+        { "duration": "q", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] }
+      ]
+    },
+    {
+      "number": 7,
+      "lh": [
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] }
+      ],
+      "rh": [
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] }
+      ]
+    },
+    {
+      "number": 8,
+      "lh": [
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "8", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] }
+      ],
+      "rh": [
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "8", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] }
+      ]
+    },
+    {
+      "number": 9,
+      "lh": [
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] },
+        { "duration": "16", "notes": [{ "midi": 48, "name": "C3" }] }
+      ],
+      "rh": [
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] },
+        { "duration": "16", "notes": [{ "midi": 60, "name": "C4" }] }
+      ]
+    }
+  ]
+}
