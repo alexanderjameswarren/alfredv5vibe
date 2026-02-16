@@ -11,6 +11,7 @@ import {
   Menu,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
+import SamPlayer from "./sam/SamPlayer";
 
 const storage = {
   // Map key prefixes to table names
@@ -1071,6 +1072,14 @@ export default function Alfred() {
     return <LoginScreen />;
   }
 
+  if (view === "sam") {
+    return (
+      <SamPlayer
+        onBack={() => setView(previousView || "home")}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-primary-bg">
       {/* Mobile header with hamburger */}
@@ -1136,10 +1145,12 @@ export default function Alfred() {
                 { key: "schedule", label: `Schedule${allNonArchivedEvents.length > 0 ? ` (${allNonArchivedEvents.length})` : ""}`, icon: "📅" },
                 { key: "intentions", label: "Intentions", icon: "💡" },
                 { key: "memories", label: "Memories", icon: "⭐" },
+                { key: "sam", label: "Sam", icon: "🎹" },
               ].map((item) => (
                 <button
                   key={item.key}
                   onClick={() => {
+                    if (item.key === "sam") setPreviousView(view);
                     setView(item.key);
                     setMenuOpen(false);
                   }}
@@ -1255,6 +1266,19 @@ export default function Alfred() {
               }`}
             >
               Memories
+            </button>
+            <button
+              onClick={() => {
+                setPreviousView(view);
+                setView("sam");
+              }}
+              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+                view === "sam"
+                  ? "bg-primary text-white shadow-sm"
+                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
+              }`}
+            >
+              Sam
             </button>
           </nav>
         </div>
