@@ -228,10 +228,10 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
           <h3 className="text-sm font-medium text-muted mb-2">Your songs</h3>
           <div className="flex flex-col gap-1">
             {library.map((row) => (
-              <button
+              <div
                 key={row.id}
                 onClick={() => handleLoadFromLibrary(row)}
-                className="flex items-center gap-3 w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors min-h-[44px] group"
+                className="flex items-center gap-3 w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors min-h-[44px] group cursor-pointer"
               >
                 <Music className="w-4 h-4 text-muted flex-shrink-0" />
                 <div className="flex-1 min-w-0">
@@ -250,7 +250,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
                 >
                   <Archive className="w-4 h-4" />
                 </button>
-              </button>
+              </div>
             ))}
           </div>
         </div>

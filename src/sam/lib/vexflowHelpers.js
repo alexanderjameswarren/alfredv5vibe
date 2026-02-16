@@ -69,12 +69,13 @@ export function getFormatWidth(measWidth, isFirst) {
 // color: CSS color string, e.g. '#16a34a' (green), '#dc2626' (red)
 export function colorBeatEls(beatEvent, color) {
   if (!beatEvent?.svgEls) return;
-  beatEvent.svgEls.forEach((el) => {
-    // Each svgEl is a <g> group — color all child paths/rects/lines
-    const children = el.querySelectorAll('*');
-    children.forEach((child) => {
-      child.setAttribute('fill', color);
-      child.setAttribute('stroke', color);
-    });
-  });
+  for (const el of beatEvent.svgEls) {
+    const targets = el.tagName === 'g'
+      ? el.querySelectorAll('path, line, rect, ellipse, polygon')
+      : [el];
+    for (const t of targets) {
+      t.style.fill = color;
+      t.style.stroke = color;
+    }
+  }
 }

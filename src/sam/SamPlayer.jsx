@@ -113,6 +113,17 @@ export default function SamPlayer({ onBack }) {
     console.log(`[Sam] beatEvents ready: ${events.length} beats`, events);
   }, []);
 
+  const handleLoopCount = useCallback((n) => {
+    setLoopCount(n);
+    setLoopIteration(n);
+  }, [setLoopIteration]);
+
+  const handleBeatMiss = useCallback((evt) => {
+    missCountRef.current++;
+    setMissCount(missCountRef.current);
+    recordEvent({ beatEvent: evt, played: [], timingDeltaMs: null, result: "miss" });
+  }, [recordEvent]);
+
   function handleSongLoaded(loadedSong) {
     setSong(loadedSong);
     setSongDbId(null);
@@ -232,12 +243,8 @@ export default function SamPlayer({ onBack }) {
                 bpm={bpm}
                 playing={playing}
                 onBeatEvents={handleBeatEvents}
-                onLoopCount={(n) => { setLoopCount(n); setLoopIteration(n); }}
-                onBeatMiss={(evt) => {
-                  missCountRef.current++;
-                  setMissCount(missCountRef.current);
-                  recordEvent({ beatEvent: evt, played: [], timingDeltaMs: null, result: "miss" });
-                }}
+                onLoopCount={handleLoopCount}
+                onBeatMiss={handleBeatMiss}
                 scrollStateExtRef={scrollStateExtRef}
                 onTap={handleScoreTap}
               />

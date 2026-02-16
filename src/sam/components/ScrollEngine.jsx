@@ -344,7 +344,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart) {
   return { beatMeta, copyWidth };
 }
 
-const GRACE_MS = 300; // ms after target line before marking a beat as missed
+const GRACE_MS = 150; // ms after target time before marking a beat as missed
 
 export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap }) {
   const viewportRef = useRef(null);
@@ -416,10 +416,7 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
     });
 
     beatEventsRef.current = events;
-    console.log('[ScrollEngine] Beat events:', events.length, 'Sample:', events.slice(0, 10).map(e => ({
-      meas: e.meas, beat: e.beat, allMidi: e.allMidi,
-      musicalBeat: e.musicalBeat
-    })));
+    console.log(`[Sam] beatEvents ready: ${events.length} beats`);
     if (onBeatEvents) onBeatEvents(events);
     setSvgReady(true);
 
@@ -532,7 +529,6 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
         if (elapsed > evt.targetTimeMs + GRACE_MS) {
           // Beat's timing window has passed
           if (evt.allMidi.length > 0) {
-            console.log('[ScrollEngine] MISS:', evt.meas, evt.beat, 'elapsed:', Math.round(elapsed), 'target:', Math.round(evt.targetTimeMs));
             evt.state = "missed";
             colorBeatEls(evt, "#dc2626");
             if (onBeatMiss) onBeatMiss(evt);
