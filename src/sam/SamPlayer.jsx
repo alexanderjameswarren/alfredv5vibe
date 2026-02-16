@@ -10,6 +10,7 @@ import useMIDI from "./lib/useMIDI";
 import usePracticeSession from "./lib/usePracticeSession";
 import { matchChord, findClosestBeat } from "./lib/noteMatching";
 import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
+import { normalizeMeasure } from "./lib/measureUtils";
 
 export default function SamPlayer({ onBack }) {
   const [song, setSong] = useState(null);
@@ -33,30 +34,29 @@ export default function SamPlayer({ onBack }) {
 
   const { startSession, endSession, recordEvent, setLoopIteration, stats: sessionStats } = usePracticeSession();
 
-  // Derive active measures from snippet range, appending rest measures
+  // Derive active measures from snippet range, appending rest measures.
+  // normalizeMeasure ensures both voice format (lh[]/rh[]) and legacy beats[]
+  // are converted to beats[] for the renderers.
   const activeMeasures = useMemo(() => {
     if (!song) return [];
-    if (!snippet) return song.measures;
-    const start = snippet.startMeasure - 1;
-    const end = snippet.endMeasure;
-    const sliced = song.measures.slice(start, end);
 
-    // Append empty rest measures
-    const restCount = snippet.restMeasures || 0;
+    const baseMeasures = !snippet
+      ? song.measures
+      : song.measures.slice(snippet.startMeasure - 1, snippet.endMeasure);
+
+    // Append empty rest measures (voice format — whole-note rests)
+    const restCount = snippet?.restMeasures || 0;
     const restMeasures = [];
+    const endNum = snippet?.endMeasure || baseMeasures.length;
     for (let i = 0; i < restCount; i++) {
       restMeasures.push({
-        number: end + i + 1,
-        beats: [
-          { beat: 1, duration: "q", rh: [], lh: [] },
-          { beat: 2, duration: "q", rh: [], lh: [] },
-          { beat: 3, duration: "q", rh: [], lh: [] },
-          { beat: 4, duration: "q", rh: [], lh: [] },
-        ],
+        number: endNum + i + 1,
+        lh: [{ duration: "w", notes: [] }],
+        rh: [{ duration: "w", notes: [] }],
       });
     }
 
-    return [...sliced, ...restMeasures];
+    return [...baseMeasures, ...restMeasures].map(normalizeMeasure);
   }, [song, snippet]);
 
   const handleChord = useCallback((played) => {

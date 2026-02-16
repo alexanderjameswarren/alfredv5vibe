@@ -266,6 +266,7 @@ This is the implementation roadmap for building Sam within the Alfred project. E
 
 ## Future Steps (not yet specified)
 
+- **Step 21: Data model migration** — Update all components and parsers to prefer the voice format (`lh[]/rh[]` per measure) over the legacy beats format. The player already accepts both, but new code (MusicXML parser, song editor, MCP export) should produce voice format only. Update `sam-tech-spec.md` songParser section accordingly.
 - **Tempo ramping** — adjustable BPM during practice
 - **Offline/PWA** — service worker + bundled VexFlow
 - **MCP integration** — expose Sam data as Claude tools (per Alfred Phase 7.1)

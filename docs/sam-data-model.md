@@ -12,13 +12,16 @@ enabling detailed analysis of timing, accuracy, and progress over time.
 
 A song is the top-level container. It holds the full notation and metadata.
 
+### Measure Format (preferred): Independent Voices
+
+Each measure has `lh` and `rh` as separate voice arrays. Each voice event is one tickable (note, chord, or rest) with its own duration. Voices are independent — LH can have a whole note while RH has 8 eighth notes. Durations within each voice must sum to 4 beats (in 4/4 time).
+
 ```json
 {
   "id": "song_001",
   "title": "Someone Like You",
   "artist": "Adele",
-  "source": "musescore",
-  "sourceFile": "someone-like-you.musicxml",
+  "source": "manual",
   "key": "A major",
   "timeSignature": "4/4",
   "defaultBpm": 68,
@@ -28,51 +31,52 @@ A song is the top-level container. It holds the full notation and metadata.
   "measures": [
     {
       "number": 1,
-      "beats": [
+      "lh": [
         {
-          "beat": 1,
-          "duration": "q",
-          "lh": [
-            { "midi": 57, "name": "A3", "duration": "q" }
-          ],
-          "rh": [
-            { "midi": 69, "name": "A4", "duration": "q" },
-            { "midi": 73, "name": "C#5", "duration": "q" },
-            { "midi": 76, "name": "E5", "duration": "q" }
-          ]
-        },
-        {
-          "beat": 2,
-          "duration": "q",
-          "lh": [
-            { "midi": 57, "name": "A3", "duration": "q" }
-          ],
-          "rh": [
-            { "midi": 69, "name": "A4", "duration": "q" },
-            { "midi": 73, "name": "C#5", "duration": "q" },
-            { "midi": 76, "name": "E5", "duration": "q" }
-          ]
-        },
-        {
-          "beat": 3,
-          "duration": "q",
-          "lh": [],
-          "rh": [
-            { "midi": 69, "name": "A4", "duration": "q" },
-            { "midi": 73, "name": "C#5", "duration": "q" },
-            { "midi": 76, "name": "E5", "duration": "q" }
-          ]
-        },
-        {
-          "beat": 4,
-          "duration": "q",
-          "lh": [],
-          "rh": [
-            { "midi": 69, "name": "A4", "duration": "q" },
-            { "midi": 73, "name": "C#5", "duration": "q" },
-            { "midi": 76, "name": "E5", "duration": "q" }
+          "duration": "w",
+          "notes": [
+            { "midi": 45, "name": "A2", "tie": "start" },
+            { "midi": 50, "name": "D3", "tie": "start" }
           ]
         }
+      ],
+      "rh": [
+        { "duration": "8", "notes": [{ "midi": 69, "name": "A4" }] },
+        { "duration": "8", "notes": [{ "midi": 73, "name": "C#5" }] },
+        { "duration": "8", "notes": [{ "midi": 76, "name": "E5" }] },
+        { "duration": "8", "notes": [{ "midi": 73, "name": "C#5" }] },
+        { "duration": "8", "notes": [{ "midi": 69, "name": "A4" }] },
+        { "duration": "8", "notes": [{ "midi": 73, "name": "C#5" }] },
+        { "duration": "8", "notes": [{ "midi": 76, "name": "E5" }] },
+        { "duration": "8", "notes": [{ "midi": 73, "name": "C#5" }] }
+      ]
+    }
+  ]
+}
+```
+
+### Voice event structure:
+- `duration` — `"w"`, `"h"`, `"q"`, `"8"`, `"16"` (required)
+- `notes[]` — array of simultaneous notes (chord). Empty array or omitted = rest.
+- Each note: `midi` (number), `name` (human readable, e.g. "C#5")
+- Optional per-note: `tie` — `"start"`, `"end"`, or `"both"` for tied notes across measures
+
+### Legacy Format: Shared Beats Array
+
+The older format uses `beats[]` where LH and RH share the same beat grid. This works for music where both hands play on the same rhythmic positions (e.g., block chords). The player accepts both formats.
+
+```json
+{
+  "number": 1,
+  "beats": [
+    {
+      "beat": 1,
+      "duration": "q",
+      "lh": [{ "midi": 57, "name": "A3", "duration": "q" }],
+      "rh": [
+        { "midi": 69, "name": "A4", "duration": "q" },
+        { "midi": 73, "name": "C#5", "duration": "q" },
+        { "midi": 76, "name": "E5", "duration": "q" }
       ]
     }
   ]
@@ -81,12 +85,13 @@ A song is the top-level container. It holds the full notation and metadata.
 
 ### Notes on Song structure:
 - `measures` is an ordered array — measure.number is the display number
-- Each measure contains `beats` — one entry per rhythmic event
-- Each beat has `lh` and `rh` arrays of individual notes
-- Individual notes carry `midi`, `name` (human readable), and `duration`
-- Duration values: "w" (whole), "h" (half), "q" (quarter), "8" (eighth), "16" (sixteenth)
-- Rests are beats with empty lh and rh arrays
-- This structure supports future: ties, dotted notes, triplets via additional fields
+- **Voice format (preferred):** each measure has `lh[]` and `rh[]` as independent voice arrays
+- **Legacy format:** each measure has `beats[]` with shared LH/RH per beat position
+- Duration values: `"w"` (whole=4 beats), `"h"` (half=2), `"q"` (quarter=1), `"8"` (eighth=0.5), `"16"` (sixteenth=0.25)
+- Each voice's durations must sum to 4 beats in 4/4 time
+- Rests: voice events with empty `notes[]`, or implicit (the player pads with rests if a voice is short)
+- Ties: set `"tie": "start"` on last note of measure, `"tie": "end"` on first note of next measure
+- Multiple notes in a voice event = chord (stacked noteheads)
 
 ---
 
@@ -285,10 +290,27 @@ Compare across beats
 
 ---
 
-## 5. Storage Strategy (Superseded)
+## 5. Storage Strategy
 
-**Note:** Sam uses Supabase for all storage. See the schema in sam-tech-spec.md §2. This section is retained for historical context only.
+### For MVP / Local:
+- Store everything as JSON in localStorage or IndexedDB
+- One key per song, one key per snippet index, one key per session
+- Sessions can get large — consider storing only the current session in memory
+  and flushing to IndexedDB on pause/stop
 
+### For Future / Cloud:
+- Songs and Snippets → small, sync easily
+- Practice Sessions → can be large (900 events in a 15-min session)
+- Consider: store full events locally, sync only summaries to cloud
+- Full event data available for Claude analysis when user uploads/shares
+
+### Key naming convention for IndexedDB:
+```
+songs:{songId}              → song data
+snippets:{songId}           → array of snippets for a song
+sessions:{snippetId}:{date} → session data
+sessions:{songId}:{date}    → full-song session data
+```
 
 ---
 

@@ -9,8 +9,10 @@ function validateSong(song) {
     return "Invalid song: must have a non-empty measures array";
   for (let i = 0; i < song.measures.length; i++) {
     const m = song.measures[i];
-    if (!Array.isArray(m.beats) || m.beats.length === 0)
-      return `Invalid song: measure ${i + 1} must have a non-empty beats array`;
+    const hasBeats = Array.isArray(m.beats) && m.beats.length > 0;
+    const hasVoices = Array.isArray(m.rh) || Array.isArray(m.lh);
+    if (!hasBeats && !hasVoices)
+      return `Invalid song: measure ${i + 1} must have beats[] or rh[]/lh[] arrays`;
   }
   return null;
 }

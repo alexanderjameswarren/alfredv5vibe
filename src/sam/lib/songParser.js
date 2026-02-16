@@ -102,6 +102,45 @@ const KEY_NAMES = {
   "5": "B major", "6": "F# major", "7": "C# major",
 };
 
+// Build an independent voice array from note events assigned to one hand.
+// Returns [{ duration, notes: [{ midi, name }] }] — voice format.
+function buildVoice(handEvents, divisions) {
+  const posMap = new Map();
+  for (const evt of handEvents) {
+    if (!posMap.has(evt.position)) posMap.set(evt.position, []);
+    posMap.get(evt.position).push(evt);
+  }
+
+  const positions = [...posMap.keys()].sort((a, b) => a - b);
+  const voice = [];
+  let cursor = 0;
+
+  for (const pos of positions) {
+    // Fill gap with rest
+    if (pos > cursor) {
+      voice.push({ duration: divisionsToVex(pos - cursor, divisions), notes: [] });
+    }
+
+    const events = posMap.get(pos);
+    const primary = events[0];
+    const dur = primary.vexDuration || divisionsToVex(primary.duration, divisions);
+
+    const notes = events
+      .filter((e) => !e.isRest)
+      .map((e) => ({ midi: e.midi, name: e.name }));
+
+    voice.push({ duration: dur, notes });
+    cursor = pos + primary.duration;
+  }
+
+  // Empty voice → whole-note rest
+  if (voice.length === 0) {
+    voice.push({ duration: "w", notes: [] });
+  }
+
+  return voice;
+}
+
 export function parseMusicXML(xmlString) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlString, "text/xml");
@@ -177,47 +216,26 @@ export function parseMusicXML(xmlString) {
       noteEvents.push(...part2Events);
     }
 
-    // Group notes by position
-    const posMap = new Map();
-    noteEvents.forEach((evt) => {
-      if (!posMap.has(evt.position)) posMap.set(evt.position, []);
-      posMap.get(evt.position).push(evt);
-    });
+    // Separate note events by hand
+    const rhEvents = [];
+    const lhEvents = [];
 
-    const sortedPositions = [...posMap.keys()].sort((a, b) => a - b);
-
-    const beats = [];
-    sortedPositions.forEach((pos) => {
-      const events = posMap.get(pos);
-      const beatNumber = pos / divisions + 1; // 1-indexed quarter-note beats
-
-      // Use note type for duration; fall back to divisions-based calculation
-      const primary = events.find((e) => !e.isRest) || events[0];
-      const vexDuration = primary.vexDuration || "q";
-
-      const rh = [];
-      const lh = [];
-
-      events.forEach((evt) => {
-        if (evt.isRest) return;
-        const noteObj = { midi: evt.midi, name: evt.name, duration: evt.vexDuration || vexDuration };
-        // staff 1 = treble/RH, staff 2 = bass/LH, 0 = split by MIDI number
-        if (evt.staff === 2 || (evt.staff === 0 && evt.midi < 60)) {
-          lh.push(noteObj);
-        } else {
-          rh.push(noteObj);
-        }
-      });
-
-      beats.push({ beat: beatNumber, duration: vexDuration, rh, lh });
-    });
-
-    // Empty measure → full-measure rest
-    if (beats.length === 0) {
-      beats.push({ beat: 1, duration: "w", rh: [], lh: [] });
+    for (const evt of noteEvents) {
+      if (evt.isRest) {
+        // Assign rest to voice by staff; skip unspecified (gaps filled by buildVoice)
+        if (evt.staff === 2) lhEvents.push(evt);
+        else if (evt.staff === 1) rhEvents.push(evt);
+      } else if (evt.staff === 2 || (evt.staff === 0 && evt.midi < 60)) {
+        lhEvents.push(evt);
+      } else {
+        rhEvents.push(evt);
+      }
     }
 
-    measures.push({ number: measIdx + 1, beats });
+    const rh = buildVoice(rhEvents, divisions);
+    const lh = buildVoice(lhEvents, divisions);
+
+    measures.push({ number: measIdx + 1, rh, lh });
   });
 
   return {
