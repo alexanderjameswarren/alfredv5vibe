@@ -60,6 +60,8 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap }) {
     renderer.resize(totalWidth, STAFF_H);
     const ctx = renderer.getContext();
 
+    const svg = container.querySelector("svg");
+
     // Track beat metadata for position extraction
     const beatMeta = [];
     let beatMetaOffset = 0;
@@ -98,6 +100,16 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap }) {
         .setType(VF.StaveConnector.type.SINGLE_LEFT)
         .setContext(ctx)
         .draw();
+
+      // Measure number above treble staff
+      const measNumEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      measNumEl.setAttribute("x", xOffset + 5);
+      measNumEl.setAttribute("y", TREBLE_Y - 2);
+      measNumEl.setAttribute("font-size", "10");
+      measNumEl.setAttribute("font-family", "monospace");
+      measNumEl.setAttribute("fill", "#999");
+      measNumEl.textContent = measure.number;
+      svg.appendChild(measNumEl);
 
       // Build VexFlow notes and beat metadata
       const trebleNotes = [];

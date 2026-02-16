@@ -77,6 +77,17 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart) {
       .setContext(ctx)
       .draw();
 
+    // Measure number above treble staff
+    const svg = ctx.svg;
+    const measNumEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    measNumEl.setAttribute("x", xOffset + 5);
+    measNumEl.setAttribute("y", TREBLE_Y - 2);
+    measNumEl.setAttribute("font-size", "10");
+    measNumEl.setAttribute("font-family", "monospace");
+    measNumEl.setAttribute("fill", "#999");
+    measNumEl.textContent = measure.number;
+    svg.appendChild(measNumEl);
+
     // Build VexFlow notes and beat metadata
     const trebleNotes = [];
     const bassNotes = [];
@@ -183,6 +194,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart) {
         beatMeta.push({
           meas: measure.number,
           beat: t + 1,
+          musicalBeatInCopy: measIdx * 4 + t,
           allMidi: entry.allMidi.sort((a, b) => a - b),
           trebleNote: entry.trebleIdx !== null ? trebleNotes[entry.trebleIdx] : null,
           bassNote: entry.bassIdx !== null ? bassNotes[entry.bassIdx] : null,
@@ -237,6 +249,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart) {
         beatMeta.push({
           meas: measure.number,
           beat: beat.beat,
+          musicalBeatInCopy: measIdx * 4 + (beat.beat - 1),
           allMidi,
           trebleNote,
           bassNote,
@@ -372,14 +385,26 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
 
     // Render 3 identical copies
     const allBeatMeta = [];
+    const copyBeatCounts = [];
     for (let c = 0; c < NUM_COPIES; c++) {
       const xStart = 10 + c * singleCopyWidth;
       const { beatMeta } = renderCopy(VF, ctx, measures, c, xStart);
+      copyBeatCounts.push(beatMeta.length);
       allBeatMeta.push(...beatMeta);
     }
 
     // Build beat events from all copies
+    const beatsPerMeasure = 4; // 4/4 time
+    const totalMusicalBeatsPerCopy = measures.length * beatsPerMeasure;
+    const beatsPerCopy = copyBeatCounts[0] || 0;
+    let copyOffset = 0;
+    let copyIdx = 0;
     const events = allBeatMeta.map((meta, globalIdx) => {
+      // Track which copy this event belongs to
+      while (copyIdx < copyBeatCounts.length - 1 && globalIdx >= copyOffset + copyBeatCounts[copyIdx]) {
+        copyOffset += copyBeatCounts[copyIdx];
+        copyIdx++;
+      }
       const refNote = meta.trebleNote || meta.bassNote;
       const xPx = refNote ? refNote.getAbsoluteX() : 0;
       const svgEls = [];
@@ -389,6 +414,7 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
         globalIdx,
         meas: meta.meas,
         beat: meta.beat,
+        musicalBeat: copyIdx * totalMusicalBeatsPerCopy + meta.musicalBeatInCopy,
         allMidi: meta.allMidi,
         xPx,
         state: "pending",
@@ -426,12 +452,22 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
 
     const viewportWidth = viewport.clientWidth;
     const targetX = viewportWidth * TARGET_LINE_PCT;
-    const pxPerMs = BEAT_PX / (60000 / bpm);
+    const msPerBeat = 60000 / bpm;
+    const pxPerMs = BEAT_PX / msPerBeat;
     const copyWidth = copyWidthRef.current;
 
     // Start so first beat approaches from off-screen right
     const firstBeatX = beatEventsRef.current[0]?.xPx || 0;
     const originPx = firstBeatX - viewportWidth;
+
+    // Approach time: ms for the first beat to travel from off-screen to the target line
+    const approachMs = (viewportWidth - targetX) / pxPerMs;
+
+    // Compute targetTimeMs for every beat event from musical position
+    const events = beatEventsRef.current;
+    for (let i = 0; i < events.length; i++) {
+      events[i].targetTimeMs = approachMs + events[i].musicalBeat * msPerBeat;
+    }
 
     let loopCount = 0;
     nextCheckRef.current = 0;
@@ -466,13 +502,17 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
         loopCount++;
         if (onLoopCount) onLoopCount(loopCount);
 
-        // Reset beat states and colors for copy 1 (which is now the active copy again)
+        // Reset beat states, colors, and targetTimeMs for copy 1
         const beatsPerCopy = beatEventsRef.current.length / NUM_COPIES;
+        const totalMusicalBeats = measures.length * 4;
+        const passOffset = (loopCount + 2) * totalMusicalBeats;
         for (let i = 0; i < beatsPerCopy; i++) {
           const evt = beatEventsRef.current[i];
           if (evt) {
             evt.state = "pending";
             colorBeatEls(evt, "#000000");
+            evt.musicalBeat = passOffset + (evt.musicalBeat % totalMusicalBeats);
+            evt.targetTimeMs = approachMs + evt.musicalBeat * msPerBeat;
           }
         }
         nextCheckRef.current = 0;
@@ -482,20 +522,18 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
       const scrollOffset = state.originPx + elapsed * state.pxPerMs;
       scrollLayer.style.transform = `translateX(${-scrollOffset}px)`;
 
-      // --- Miss detection: forward-scan from nextCheck ---
-      const events = beatEventsRef.current;
-      const gracePx = GRACE_MS * state.pxPerMs;
+      // --- Miss detection: forward-scan from nextCheck (time-based) ---
+      const evts = beatEventsRef.current;
       let nc = nextCheckRef.current;
 
-      while (nc < events.length) {
-        const evt = events[nc];
+      while (nc < evts.length) {
+        const evt = evts[nc];
         if (evt.state !== "pending") {
           nc++;
           continue;
         }
-        const screenX = evt.xPx - scrollOffset;
-        if (screenX < state.targetX - gracePx) {
-          // Beat has scrolled past the timing window
+        if (elapsed > evt.targetTimeMs + GRACE_MS) {
+          // Beat's timing window has passed
           if (evt.allMidi.length > 0) {
             evt.state = "missed";
             colorBeatEls(evt, "#dc2626");

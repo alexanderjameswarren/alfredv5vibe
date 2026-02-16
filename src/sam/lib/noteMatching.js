@@ -23,10 +23,11 @@ export function matchChord(played, expected) {
 }
 
 /**
- * Find the closest pending beat to the target line within the timing window.
+ * Find the closest pending beat within the timing window.
+ * Uses targetTimeMs (musical timing) instead of SVG x-positions.
  * Returns { beat, timingDeltaMs } or null if no candidate.
  *
- * scrollState: { originPx, pxPerMs, scrollStartT, targetX }
+ * scrollState: { scrollStartT }
  * windowMs: how far ahead/behind (in ms) to search
  */
 export function findClosestBeat(beatEvents, scrollState, windowMs = 500) {
@@ -34,9 +35,6 @@ export function findClosestBeat(beatEvents, scrollState, windowMs = 500) {
 
   const now = performance.now();
   const elapsed = now - scrollState.scrollStartT;
-  const scrollOffset = scrollState.originPx + elapsed * scrollState.pxPerMs;
-  const targetX = scrollState.targetX;
-  const windowPx = windowMs * scrollState.pxPerMs;
 
   let closest = null;
   let closestDist = Infinity;
@@ -46,21 +44,20 @@ export function findClosestBeat(beatEvents, scrollState, windowMs = 500) {
     if (evt.state !== "pending") continue;
     if (evt.allMidi.length === 0) continue; // skip rests
 
-    const screenX = evt.xPx - scrollOffset;
-    const dist = Math.abs(screenX - targetX);
+    // Positive timingDelta = beat is in the future (player is early)
+    // Negative timingDelta = beat is in the past (player is late)
+    const timingDeltaMs = evt.targetTimeMs - elapsed;
+    const dist = Math.abs(timingDeltaMs);
 
     // Only consider beats within the timing window
-    if (dist > windowPx) {
-      // If we've passed the window to the right, stop scanning
-      if (screenX > targetX + windowPx) break;
+    if (dist > windowMs) {
+      // If this beat is far in the future, stop scanning
+      if (timingDeltaMs > windowMs) break;
       continue;
     }
 
     if (dist < closestDist) {
       closestDist = dist;
-      // Positive delta = beat is to the right of target (player is early)
-      // Negative delta = beat is to the left of target (player is late)
-      const timingDeltaMs = (screenX - targetX) / scrollState.pxPerMs;
       closest = { beat: evt, timingDeltaMs };
     }
   }
