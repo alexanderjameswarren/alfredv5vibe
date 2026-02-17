@@ -444,6 +444,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         globalIdx,
         meas: meta.meas,
         beat: meta.beat,
+        baseBeat: meta.musicalBeatInCopy,
         musicalBeat: copyIdx * totalMusicalBeatsPerCopy + meta.musicalBeatInCopy,
         allMidi: meta.allMidi,
         xPx,
@@ -602,11 +603,18 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
               evt.state = "pending";
               evt._logged = false;
               colorBeatEls(evt, "#000000");
-              evt.musicalBeat = passOffset + (evt.musicalBeat % totalMusicalBeats);
+              evt.musicalBeat = passOffset + evt.baseBeat;
               evt.targetTimeMs = approachMs + evt.musicalBeat * msPerBeat;
             }
           }
         }
+        console.log('[Teleport] elapsed:', Math.round(elapsed),
+          'first 3 reset events:',
+          beatEventsRef.current.slice(0, 3).map(e => ({
+            meas: e.meas, beat: e.beat,
+            musicalBeat: e.musicalBeat,
+            targetTimeMs: Math.round(e.targetTimeMs)
+          })));
         // Copy 0 is back at the target line after teleport — scan from its start
         nextCheckRef.current = 0;
         // Unhide any hidden measures from the first-pass resume
