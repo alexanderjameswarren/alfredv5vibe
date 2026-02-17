@@ -278,7 +278,7 @@ export default function SamPlayer({ onBack }) {
               lastResult={lastResult}
             />
 
-            {playbackState === "stopped" && (
+            {playbackState !== "playing" && (
               <SnippetPanel
                 songDbId={songDbId}
                 totalMeasures={song.measures.length}
@@ -291,11 +291,18 @@ export default function SamPlayer({ onBack }) {
               />
             )}
 
-            {playbackState === "playing" ? (
+            {playbackState === "stopped" ? (
+              <ScoreRenderer
+                measures={activeMeasures}
+                onBeatEvents={handleBeatEvents}
+                onTap={handleScoreTap}
+                measureWidth={measureWidth}
+              />
+            ) : (
               <ScrollEngine
                 measures={activeMeasures}
                 bpm={bpm}
-                playing={true}
+                playbackState={playbackState}
                 onBeatEvents={handleBeatEvents}
                 onLoopCount={handleLoopCount}
                 onBeatMiss={handleBeatMiss}
@@ -307,13 +314,6 @@ export default function SamPlayer({ onBack }) {
                     ? Math.max(0, activeMeasures.findIndex(m => m.number >= pausedMeasure))
                     : 0
                 }
-              />
-            ) : (
-              <ScoreRenderer
-                measures={activeMeasures}
-                onBeatEvents={handleBeatEvents}
-                onTap={handleScoreTap}
-                measureWidth={measureWidth}
               />
             )}
           </>

@@ -170,6 +170,7 @@ export default function SnippetPanel({
                   const n = Number(e.target.value);
                   if (n >= 1 && n <= endMeas) setStartMeas(n);
                 }}
+                onFocus={(e) => e.target.select()}
                 className="w-14 px-2 py-1 border border-gray-300 rounded text-sm min-h-[44px]"
                 min={1} max={endMeas}
               />
@@ -183,6 +184,7 @@ export default function SnippetPanel({
                   const n = Number(e.target.value);
                   if (n >= startMeas && n <= maxMeas) setEndMeas(n);
                 }}
+                onFocus={(e) => e.target.select()}
                 className="w-14 px-2 py-1 border border-gray-300 rounded text-sm min-h-[44px]"
                 min={startMeas} max={maxMeas}
               />

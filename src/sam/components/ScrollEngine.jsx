@@ -49,8 +49,9 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
   measures.forEach((measure, measIdx) => {
     const measWidth = measureWidths[measIdx];
 
-    // Wrap entire measure in a group for show/hide during resume
-    const measGroupEl = ctx.openGroup("sam-measure", `measure-${copyIdx}-${measIdx}`);
+    // Snapshot SVG child count before drawing this measure
+    const svgEl = ctx.svg;
+    const childCountBefore = svgEl.childElementCount;
 
     const treble = new VF.Stave(xOffset, TREBLE_Y, measWidth);
     const bass = new VF.Stave(xOffset, BASS_Y, measWidth);
@@ -62,16 +63,6 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
       .setType(VF.StaveConnector.type.SINGLE_LEFT)
       .setContext(ctx)
       .draw();
-
-    // Measure number above treble staff (append to measure group)
-    const measNumEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    measNumEl.setAttribute("x", xOffset + 5);
-    measNumEl.setAttribute("y", TREBLE_Y - 2);
-    measNumEl.setAttribute("font-size", "10");
-    measNumEl.setAttribute("font-family", "monospace");
-    measNumEl.setAttribute("fill", "#999");
-    measNumEl.textContent = measure.number;
-    measGroupEl.appendChild(measNumEl);
 
     // Build VexFlow notes and beat metadata
     const trebleNotes = [];
@@ -294,7 +285,26 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
     trebleBeams.forEach((b) => b.setContext(ctx).draw());
     bassBeams.forEach((b) => b.setContext(ctx).draw());
 
-    ctx.closeGroup(); // Close measure group
+    // Wrap all SVG elements added during this measure into a single <g> group.
+    // VexFlow appends stave lines directly to the SVG root, so ctx.openGroup
+    // doesn't capture them. This manual approach grabs everything.
+    const measGroupEl = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    measGroupEl.setAttribute("class", "sam-measure");
+    measGroupEl.setAttribute("id", `measure-${copyIdx}-${measIdx}`);
+    while (svgEl.childElementCount > childCountBefore) {
+      measGroupEl.appendChild(svgEl.children[childCountBefore]);
+    }
+    svgEl.appendChild(measGroupEl);
+
+    // Measure number above treble staff
+    const measNumEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    measNumEl.setAttribute("x", xOffset + 5);
+    measNumEl.setAttribute("y", TREBLE_Y - 2);
+    measNumEl.setAttribute("font-size", "10");
+    measNumEl.setAttribute("font-family", "monospace");
+    measNumEl.setAttribute("fill", "#999");
+    measNumEl.textContent = measure.number;
+    measGroupEl.appendChild(measNumEl);
 
     beatMetaOffset += measBeatCount;
     xOffset += measWidth;
@@ -336,7 +346,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
 
 const GRACE_MS = 150; // ms after target time before marking a beat as missed
 
-export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, firstPassStart = 0 }) {
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, firstPassStart = 0 }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -416,16 +426,19 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
 
   // Animation loop with seamless looping
   useEffect(() => {
-    if (!playing || !svgReady) {
+    if (playbackState !== "playing" || !svgReady) {
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      if (scrollLayerRef.current) {
-        scrollLayerRef.current.style.transform = "translateX(0px)";
+      // Only reset transform/scrollState when fully stopped — preserve on pause
+      if (playbackState === "stopped") {
+        if (scrollLayerRef.current) {
+          scrollLayerRef.current.style.transform = "translateX(0px)";
+        }
+        scrollStateRef.current = null;
+        if (scrollStateExtRef) scrollStateExtRef.current = null;
       }
-      scrollStateRef.current = null;
-      if (scrollStateExtRef) scrollStateExtRef.current = null;
       return;
     }
 
@@ -442,6 +455,18 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
     const copyWidth = copyWidthRef.current;
 
     const events = beatEventsRef.current;
+
+    // Reset from previous session: clear colors, states, and unhidden measure groups
+    for (let i = 0; i < events.length; i++) {
+      events[i].state = "pending";
+      colorBeatEls(events[i], "#000000");
+    }
+    const svgEl = scrollLayer.querySelector("svg");
+    if (svgEl) {
+      svgEl.querySelectorAll('g.sam-measure[style]').forEach(el => {
+        el.style.visibility = "";
+      });
+    }
 
     // Find the first beat at the firstPassStart measure (for resume-from-measure)
     let startEvtIdx = 0;
@@ -592,7 +617,7 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
         rafRef.current = null;
       }
     };
-  }, [playing, svgReady, bpm]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [playbackState, svgReady, bpm]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="relative">
