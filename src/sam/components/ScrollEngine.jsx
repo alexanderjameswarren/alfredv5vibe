@@ -70,6 +70,8 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
     let trebleIdxMap = null; // null = 1:1 mapping (legacy)
     let bassIdxMap = null;
     let measBeatCount = 0;
+    let trebleTicks = [];
+    let bassTicks = [];
 
     if (measure.rh || measure.lh) {
       // === Voice format: independent RH/LH voices ===
@@ -180,6 +182,12 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
       });
 
       measBeatCount = sortedTicks.length;
+
+      // Tick onset positions for time-proportional repositioning
+      let tt = 0;
+      for (const evt of rhEvents) { trebleTicks.push(tt); tt += DURATION_BEATS[evt.duration] || 1; }
+      tt = 0;
+      for (const evt of lhEvents) { bassTicks.push(tt); tt += DURATION_BEATS[evt.duration] || 1; }
     } else {
       // === Legacy beats format ===
       measure.beats.forEach((beat) => {
@@ -235,6 +243,8 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
       });
 
       measBeatCount = measure.beats.length;
+      trebleTicks = measure.beats.map(b => b.beat - 1);
+      bassTicks = trebleTicks;
     }
 
     // 1. Create voices and add tickables
@@ -254,6 +264,20 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
       .joinVoices([trebleVoice])
       .joinVoices([bassVoice])
       .format([trebleVoice, bassVoice], getFormatWidth(measWidth, false));
+
+    // 3.5. Reposition notes to time-proportional X (constant scroll speed = constant time spacing)
+    const noteStartX = treble.getNoteStartX();
+    const usableWidth = treble.getNoteEndX() - noteStartX;
+    trebleNotes.forEach((note, i) => {
+      note.setStave(treble);
+      const correctX = noteStartX + (trebleTicks[i] / 4) * usableWidth;
+      note.setXShift(correctX - note.getAbsoluteX());
+    });
+    bassNotes.forEach((note, i) => {
+      note.setStave(bass);
+      const correctX = noteStartX + (bassTicks[i] / 4) * usableWidth;
+      note.setXShift(correctX - note.getAbsoluteX());
+    });
 
     // 4. Draw treble notes individually, each wrapped in SVG <g> group
     trebleNotes.forEach((note, i) => {
