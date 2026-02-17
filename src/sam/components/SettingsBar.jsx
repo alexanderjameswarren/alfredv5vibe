@@ -1,5 +1,5 @@
 import React from "react";
-import { Play, Square } from "lucide-react";
+import { Play, Pause, RotateCcw } from "lucide-react";
 
 export default function SettingsBar({
   song, snippet,
@@ -7,38 +7,62 @@ export default function SettingsBar({
   windowMs, windowMsInput, setWindowMs, setWindowMsInput,
   chordMs, chordMsInput, setChordMs, setChordMsInput,
   measureWidth, measureWidthInput, setMeasureWidth, setMeasureWidthInput,
-  playing, songDbId,
-  onPlayToggle, onChangeSong,
+  playbackState, songDbId,
+  onPlay, onPause, onResume, onRestart,
+  onChangeSong,
   midiConnected, midiDevice,
+  pausedMeasure,
 }) {
+  const isStopped = playbackState === "stopped";
+  const isPlaying = playbackState === "playing";
+  const isPaused = playbackState === "paused";
+
   return (
     <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
       <div className="flex items-center gap-3">
-        <button
-          onClick={onPlayToggle}
-          disabled={!playing && !songDbId}
-          className={`flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors ${
-            !playing && !songDbId
-              ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-              : playing
-                ? "bg-red-500 hover:bg-red-600 text-white"
+        {/* Play / Resume button — visible when stopped or paused */}
+        {!isPlaying && (
+          <button
+            onClick={isPaused ? onResume : onPlay}
+            disabled={isStopped && !songDbId}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors ${
+              isStopped && !songDbId
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                 : "bg-primary hover:bg-primary-hover text-white"
-          }`}
-        >
-          {playing ? (
-            <><Square className="w-4 h-4" /> Stop</>
-          ) : !songDbId ? (
-            <><Play className="w-4 h-4" /> Saving...</>
-          ) : (
-            <><Play className="w-4 h-4" /> Play</>
-          )}
-        </button>
+            }`}
+          >
+            <Play className="w-4 h-4" />
+            {isStopped && !songDbId ? "Saving..." : isPaused ? "Resume" : "Play"}
+          </button>
+        )}
+
+        {/* Pause button — visible when playing */}
+        {isPlaying && (
+          <button
+            onClick={onPause}
+            className="flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors bg-amber-500 hover:bg-amber-600 text-white"
+          >
+            <Pause className="w-4 h-4" /> Pause
+          </button>
+        )}
+
+        {/* Restart button — visible when paused */}
+        {isPaused && (
+          <button
+            onClick={onRestart}
+            className="flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors bg-red-500 hover:bg-red-600 text-white"
+          >
+            <RotateCcw className="w-4 h-4" /> Restart
+          </button>
+        )}
+
         <h2 className="text-sm font-medium text-dark">
           {song.title || "Untitled"}
           <span className="text-muted font-normal">
             {snippet
               ? ` (${snippet.title || `m.${snippet.startMeasure}–${snippet.endMeasure}`} · ${bpm} BPM${snippet.restMeasures > 0 ? ` · ${snippet.restMeasures} rest` : ""})`
               : ` (full song · ${bpm} BPM)`}
+            {isPaused && pausedMeasure != null && ` — paused at m.${pausedMeasure}`}
           </span>
           {song.artist && (
             <span className="text-muted"> — {song.artist}</span>
@@ -56,7 +80,7 @@ export default function SettingsBar({
       </div>
 
       {/* Tunable inputs — hidden during play */}
-      {!playing && (
+      {!isPlaying && (
         <div className="flex items-center gap-3">
           <label className="text-sm text-muted">
             BPM:{" "}

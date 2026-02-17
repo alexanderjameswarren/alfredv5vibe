@@ -49,6 +49,9 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
   measures.forEach((measure, measIdx) => {
     const measWidth = measureWidths[measIdx];
 
+    // Wrap entire measure in a group for show/hide during resume
+    const measGroupEl = ctx.openGroup("sam-measure", `measure-${copyIdx}-${measIdx}`);
+
     const treble = new VF.Stave(xOffset, TREBLE_Y, measWidth);
     const bass = new VF.Stave(xOffset, BASS_Y, measWidth);
 
@@ -60,7 +63,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
       .setContext(ctx)
       .draw();
 
-    // Measure number above treble staff
+    // Measure number above treble staff (append to measure group)
     const measNumEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
     measNumEl.setAttribute("x", xOffset + 5);
     measNumEl.setAttribute("y", TREBLE_Y - 2);
@@ -68,7 +71,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
     measNumEl.setAttribute("font-family", "monospace");
     measNumEl.setAttribute("fill", "#999");
     measNumEl.textContent = measure.number;
-    ctx.svg.appendChild(measNumEl);
+    measGroupEl.appendChild(measNumEl);
 
     // Build VexFlow notes and beat metadata
     const trebleNotes = [];
@@ -291,6 +294,8 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
     trebleBeams.forEach((b) => b.setContext(ctx).draw());
     bassBeams.forEach((b) => b.setContext(ctx).draw());
 
+    ctx.closeGroup(); // Close measure group
+
     beatMetaOffset += measBeatCount;
     xOffset += measWidth;
   });
@@ -331,7 +336,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
 
 const GRACE_MS = 150; // ms after target time before marking a beat as missed
 
-export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth }) {
+export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, firstPassStart = 0 }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -401,7 +406,6 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
     });
 
     beatEventsRef.current = events;
-    console.log(`[Sam] beatEvents ready: ${events.length} beats`);
     if (onBeatEvents) onBeatEvents(events);
     setSvgReady(true);
 
@@ -437,26 +441,57 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
     const pxPerMs = pxPerBeat / msPerBeat;
     const copyWidth = copyWidthRef.current;
 
-    // Start so first beat approaches from off-screen right
-    const firstBeatX = beatEventsRef.current[0]?.xPx || 0;
-    const originPx = firstBeatX - viewportWidth;
+    const events = beatEventsRef.current;
 
-    // Approach time: ms for the first beat to travel from off-screen to the target line
-    const approachMs = (viewportWidth - targetX) / pxPerMs;
+    // Find the first beat at the firstPassStart measure (for resume-from-measure)
+    let startEvtIdx = 0;
+    if (firstPassStart > 0 && measures[firstPassStart]) {
+      const startMeasNum = measures[firstPassStart].number;
+      const beatsPerCopy = events.length / NUM_COPIES;
+      for (let i = 0; i < beatsPerCopy; i++) {
+        if (events[i].meas >= startMeasNum) {
+          startEvtIdx = i;
+          break;
+        }
+      }
+    }
+
+    // Origin: position so that the startEvtIdx beat approaches from off-screen right
+    const startBeatX = events[startEvtIdx]?.xPx || events[0]?.xPx || 0;
+    const originPx = startBeatX - viewportWidth;
+
+    // Approach time adjusted for the start offset so that
+    // targetTimeMs = approachMs + musicalBeat * msPerBeat matches the geometric scroll position.
+    // The start beat (musicalBeat = S) reaches targetX at elapsed = baseApproach,
+    // so approachMs = baseApproach - S * msPerBeat.
+    const baseApproachMs = (viewportWidth - targetX) / pxPerMs;
+    const startMusicalBeat = events[startEvtIdx]?.musicalBeat || 0;
+    const approachMs = baseApproachMs - startMusicalBeat * msPerBeat;
 
     // Compute targetTimeMs for every beat event from musical position
-    const events = beatEventsRef.current;
     for (let i = 0; i < events.length; i++) {
       events[i].targetTimeMs = approachMs + events[i].musicalBeat * msPerBeat;
     }
-    console.log('[Timing] approachMs:', Math.round(approachMs), 'msPerBeat:', Math.round(msPerBeat), 'pxPerMs:', pxPerMs.toFixed(4));
-    console.log('[Timing] First 10 events:', events.slice(0, 10).map(e => ({
-      meas: e.meas, beat: e.beat, musicalBeat: e.musicalBeat, targetTimeMs: Math.round(e.targetTimeMs)
-    })));
-    console.log('[Timing] viewportWidth:', viewportRef.current?.clientWidth, 'targetX:', targetX, 'firstBeatX:', events[0]?.xPx);
+
+    // Mark beats before the start as skipped (not checked for miss or MIDI match)
+    for (let i = 0; i < startEvtIdx; i++) {
+      events[i].state = "skipped";
+    }
+
+    // On resume: hide measures before firstPassStart in copy 0 for blank lead-in.
+    // Each measure is wrapped in a <g class="sam-measure" id="measure-{copy}-{meas}">.
+    if (startEvtIdx > 0) {
+      const svg = scrollLayer.querySelector("svg");
+      if (svg) {
+        for (let m = 0; m < firstPassStart; m++) {
+          const el = svg.getElementById(`measure-0-${m}`);
+          if (el) el.style.visibility = "hidden";
+        }
+      }
+    }
 
     let loopCount = 0;
-    nextCheckRef.current = 0;
+    nextCheckRef.current = startEvtIdx;
 
     scrollStateRef.current = {
       scrollStartT: performance.now(),
@@ -506,6 +541,13 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
         }
         // Copy 0 is back at the target line after teleport — scan from its start
         nextCheckRef.current = 0;
+        // Unhide any hidden measures from the first-pass resume
+        const svg = scrollLayer.querySelector("svg");
+        if (svg) {
+          svg.querySelectorAll('g.sam-measure[style]').forEach(el => {
+            el.style.visibility = "";
+          });
+        }
       }
 
       // Compute final scroll offset (may have been adjusted by teleport)
@@ -515,14 +557,6 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
       // --- Miss detection: forward-scan from nextCheck (time-based) ---
       const evts = beatEventsRef.current;
       let nc = nextCheckRef.current;
-
-      // Watchdog: check upcoming events for unexpected states
-      for (let i = nc; i < Math.min(nc + 10, evts.length); i++) {
-        if (evts[i].state !== "pending" && !evts[i]._logged) {
-          console.log(`[StateWatch] event ${i} meas=${evts[i].meas} beat=${evts[i].beat} state=${evts[i].state} — NOT PENDING`);
-          evts[i]._logged = true;
-        }
-      }
 
       while (nc < evts.length) {
         const evt = evts[nc];

@@ -17,7 +17,8 @@ export default function SamPlayer({ onBack }) {
   const [songDbId, setSongDbId] = useState(null);
   const [bpm, setBpm] = useState(68);
   const [bpmInput, setBpmInput] = useState("68");
-  const [playing, setPlaying] = useState(false);
+  const [playbackState, setPlaybackState] = useState("stopped"); // 'stopped' | 'playing' | 'paused'
+  const [pausedMeasure, setPausedMeasure] = useState(null);
   const [loopCount, setLoopCount] = useState(0);
   const [missCount, setMissCount] = useState(0);
   const [windowMs, setWindowMs] = useState(500);
@@ -62,7 +63,7 @@ export default function SamPlayer({ onBack }) {
   }, [song, snippet]);
 
   const handleChord = useCallback((played) => {
-    if (!playing) return;
+    if (playbackState !== "playing") return;
     const scrollState = scrollStateExtRef.current;
     if (!scrollState) return;
 
@@ -101,7 +102,7 @@ export default function SamPlayer({ onBack }) {
       timingMs: Math.round(timingDeltaMs),
       noteName: `${sign}${Math.round(timingDeltaMs)}ms`,
     });
-  }, [playing, recordEvent, windowMs]);
+  }, [playbackState, recordEvent, windowMs]);
 
   const { connected: midiConnected, deviceName: midiDevice, lastNote } = useMIDI({
     onChord: handleChord,
@@ -112,7 +113,6 @@ export default function SamPlayer({ onBack }) {
     beatEventsRef.current = events;
     window.samBeatEvents = events;
     window.colorBeatEls = colorBeatEls;
-    console.log(`[Sam] beatEvents ready: ${events.length} beats`, events);
   }, []);
 
   const handleLoopCount = useCallback((n) => {
@@ -133,7 +133,8 @@ export default function SamPlayer({ onBack }) {
     const defaultBpm = loadedSong.defaultBpm || 68;
     setBpm(defaultBpm);
     setBpmInput(String(defaultBpm));
-    setPlaying(false);
+    setPlaybackState("stopped");
+    setPausedMeasure(null);
     setLoopCount(0);
     setMissCount(0);
     setHitCount(0);
@@ -161,31 +162,75 @@ export default function SamPlayer({ onBack }) {
     }
   }
 
-  function handlePlayToggle() {
-    if (!playing) {
-      hitCountRef.current = 0;
-      missCountRef.current = 0;
-      setHitCount(0);
-      setMissCount(0);
-      setLastResult(null);
-      startSession({
-        songId: songDbId,
-        snippetId: snippet?.dbId || null,
-        settings: { bpm, windowMs, chordGroupMs: chordMs, measureWidth },
-      });
-    } else {
-      endSession();
+  function resetCounters() {
+    hitCountRef.current = 0;
+    missCountRef.current = 0;
+    setHitCount(0);
+    setMissCount(0);
+    setLastResult(null);
+  }
+
+  function beginSession() {
+    startSession({
+      songId: songDbId,
+      snippetId: snippet?.dbId || null,
+      settings: { bpm, windowMs, chordGroupMs: chordMs, measureWidth },
+    });
+  }
+
+  // Determine which measure is at the target line right now
+  function getCurrentMeasure() {
+    const scrollState = scrollStateExtRef.current;
+    const events = beatEventsRef.current;
+    if (!scrollState || !events.length) return null;
+    const elapsed = performance.now() - scrollState.scrollStartT;
+    let lastMeas = null;
+    for (const evt of events) {
+      if (evt.targetTimeMs <= elapsed) lastMeas = evt.meas;
+      else break;
     }
-    setPlaying(!playing);
+    return lastMeas;
+  }
+
+  function handlePlay() {
+    resetCounters();
+    setPausedMeasure(null);
+    beginSession();
+    setPlaybackState("playing");
+  }
+
+  function handlePause() {
+    const meas = getCurrentMeasure();
+    setPausedMeasure(meas);
+    endSession();
+    setPlaybackState("paused");
+  }
+
+  function handleResume() {
+    // Resume from pausedMeasure — ScrollEngine slices measures from that point
+    resetCounters();
+    beginSession();
+    setPlaybackState("playing");
+  }
+
+  function handleRestart() {
+    resetCounters();
+    setPausedMeasure(null);
+    beginSession();
+    setPlaybackState("playing");
   }
 
   function handleScoreTap() {
-    if (!playing && !songDbId) return;
-    handlePlayToggle();
+    if (playbackState === "stopped" && !songDbId) return;
+    if (playbackState === "stopped") handlePlay();
+    else if (playbackState === "playing") handlePause();
+    else if (playbackState === "paused") handleResume();
   }
 
   function handleChangeSong() {
-    setPlaying(false);
+    if (playbackState === "playing") endSession();
+    setPlaybackState("stopped");
+    setPausedMeasure(null);
     setSong(null);
   }
 
@@ -217,9 +262,11 @@ export default function SamPlayer({ onBack }) {
               windowMs={windowMs} windowMsInput={windowMsInput} setWindowMs={setWindowMs} setWindowMsInput={setWindowMsInput}
               chordMs={chordMs} chordMsInput={chordMsInput} setChordMs={setChordMs} setChordMsInput={setChordMsInput}
               measureWidth={measureWidth} measureWidthInput={measureWidthInput} setMeasureWidth={setMeasureWidth} setMeasureWidthInput={setMeasureWidthInput}
-              playing={playing} songDbId={songDbId}
-              onPlayToggle={handlePlayToggle} onChangeSong={handleChangeSong}
+              playbackState={playbackState} songDbId={songDbId}
+              onPlay={handlePlay} onPause={handlePause} onResume={handleResume} onRestart={handleRestart}
+              onChangeSong={handleChangeSong}
               midiConnected={midiConnected} midiDevice={midiDevice}
+              pausedMeasure={pausedMeasure}
             />
 
             <StatsBar
@@ -231,7 +278,7 @@ export default function SamPlayer({ onBack }) {
               lastResult={lastResult}
             />
 
-            {!playing && (
+            {playbackState === "stopped" && (
               <SnippetPanel
                 songDbId={songDbId}
                 totalMeasures={song.measures.length}
@@ -244,17 +291,22 @@ export default function SamPlayer({ onBack }) {
               />
             )}
 
-            {playing ? (
+            {playbackState === "playing" ? (
               <ScrollEngine
                 measures={activeMeasures}
                 bpm={bpm}
-                playing={playing}
+                playing={true}
                 onBeatEvents={handleBeatEvents}
                 onLoopCount={handleLoopCount}
                 onBeatMiss={handleBeatMiss}
                 scrollStateExtRef={scrollStateExtRef}
                 onTap={handleScoreTap}
                 measureWidth={measureWidth}
+                firstPassStart={
+                  pausedMeasure != null
+                    ? Math.max(0, activeMeasures.findIndex(m => m.number >= pausedMeasure))
+                    : 0
+                }
               />
             ) : (
               <ScoreRenderer
