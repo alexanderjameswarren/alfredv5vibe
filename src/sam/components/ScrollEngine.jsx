@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { midiToVexKey, midiAccidental, getBeamGroups, colorBeatEls, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
 
 const TARGET_LINE_PCT = 0.15; // 15% from left edge
-const STAFF_H = 280;
+const STAFF_H = 310;
 const NUM_COPIES = 3;
 
 // Duration → quarter-note beat values (for voice format tick tracking)
@@ -33,8 +33,8 @@ function padVoice(events) {
 // Renders a single copy of the score into the given VexFlow context.
 // Returns { beatMeta[], copyWidth } for that copy.
 function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
-  const TREBLE_Y = 10;
-  const BASS_Y = 140;
+  const TREBLE_Y = 40;
+  const BASS_Y = 170;
 
   const measureWidths = measures.map(() => getMeasureWidth(null, false, measureWidth));
   const copyWidth = measureWidths.reduce((a, b) => a + b, 0);
@@ -329,6 +329,18 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
     measNumEl.setAttribute("fill", "#999");
     measNumEl.textContent = measure.number;
     measGroupEl.appendChild(measNumEl);
+
+    // Chord label underneath measure number
+    if (measure.chord) {
+      const chordEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      chordEl.setAttribute("x", xOffset + 5);
+      chordEl.setAttribute("y", TREBLE_Y + 18);
+      chordEl.setAttribute("font-size", "20");
+      chordEl.setAttribute("font-family", "serif");
+      chordEl.setAttribute("fill", "#333");
+      chordEl.textContent = measure.chord;
+      measGroupEl.appendChild(chordEl);
+    }
 
     beatMetaOffset += measBeatCount;
     xOffset += measWidth;

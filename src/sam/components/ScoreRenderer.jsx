@@ -2,9 +2,9 @@ import React, { useEffect, useRef } from "react";
 import { midiToVexKey, midiAccidental, getBeamGroups, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
 
 // Layout constants
-const TREBLE_Y = 10;
-const BASS_Y = 140;
-const STAFF_H = 280;
+const TREBLE_Y = 40;
+const BASS_Y = 170;
+const STAFF_H = 310;
 
 // Duration → quarter-note beat values (for voice format tick tracking)
 const DURATION_BEATS = {
@@ -106,6 +106,18 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
       measNumEl.setAttribute("fill", "#999");
       measNumEl.textContent = measure.number;
       svg.appendChild(measNumEl);
+
+      // Chord label underneath measure number
+      if (measure.chord) {
+        const chordEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        chordEl.setAttribute("x", xOffset + (isFirst ? 80 : 5));
+        chordEl.setAttribute("y", TREBLE_Y + 18);
+        chordEl.setAttribute("font-size", "20");
+        chordEl.setAttribute("font-family", "serif");
+        chordEl.setAttribute("fill", "#333");
+        chordEl.textContent = measure.chord;
+        svg.appendChild(chordEl);
+      }
 
       // Build VexFlow notes and beat metadata
       const trebleNotes = [];
