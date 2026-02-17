@@ -6,6 +6,7 @@ export default function SettingsBar({
   bpm, bpmInput, setBpm, setBpmInput,
   windowMs, windowMsInput, setWindowMs, setWindowMsInput,
   chordMs, chordMsInput, setChordMs, setChordMsInput,
+  measureWidth, measureWidthInput, setMeasureWidth, setMeasureWidthInput,
   playing, songDbId,
   onPlayToggle, onChangeSong,
   midiConnected, midiDevice,
@@ -115,6 +116,28 @@ export default function SettingsBar({
               }}
               className="w-16 px-2 py-1 border border-gray-300 rounded text-sm min-h-[44px]"
               min={10} max={500}
+            />
+          </label>
+          <label className="text-sm text-muted">
+            Measure W:{" "}
+            <input
+              type="number"
+              value={measureWidthInput}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => {
+                setMeasureWidthInput(e.target.value);
+                const n = Number(e.target.value);
+                if (n >= 150 && n <= 600) setMeasureWidth(n);
+              }}
+              onBlur={() => {
+                let n = Number(measureWidthInput);
+                if (!n || n < 150) n = 150;
+                if (n > 600) n = 600;
+                setMeasureWidth(n);
+                setMeasureWidthInput(String(n));
+              }}
+              className="w-16 px-2 py-1 border border-gray-300 rounded text-sm min-h-[44px]"
+              min={150} max={600} step={50}
             />
           </label>
           <button

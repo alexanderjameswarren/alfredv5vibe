@@ -25,6 +25,8 @@ export default function SamPlayer({ onBack }) {
   const [chordMs, setChordMs] = useState(80);
   const [chordMsInput, setChordMsInput] = useState("80");
   const [hitCount, setHitCount] = useState(0);
+  const [measureWidth, setMeasureWidth] = useState(300);
+  const [measureWidthInput, setMeasureWidthInput] = useState("300");
   const [lastResult, setLastResult] = useState(null);
   const [snippet, setSnippet] = useState(null); // { startMeasure, endMeasure, restMeasures, dbId }
   const beatEventsRef = useRef([]);
@@ -153,6 +155,10 @@ export default function SamPlayer({ onBack }) {
       setChordMs(settings.chordGroupMs);
       setChordMsInput(String(settings.chordGroupMs));
     }
+    if (settings.measureWidth) {
+      setMeasureWidth(settings.measureWidth);
+      setMeasureWidthInput(String(settings.measureWidth));
+    }
   }
 
   function handlePlayToggle() {
@@ -165,7 +171,7 @@ export default function SamPlayer({ onBack }) {
       startSession({
         songId: songDbId,
         snippetId: snippet?.dbId || null,
-        settings: { bpm, windowMs, chordGroupMs: chordMs },
+        settings: { bpm, windowMs, chordGroupMs: chordMs, measureWidth },
       });
     } else {
       endSession();
@@ -210,6 +216,7 @@ export default function SamPlayer({ onBack }) {
               bpm={bpm} bpmInput={bpmInput} setBpm={setBpm} setBpmInput={setBpmInput}
               windowMs={windowMs} windowMsInput={windowMsInput} setWindowMs={setWindowMs} setWindowMsInput={setWindowMsInput}
               chordMs={chordMs} chordMsInput={chordMsInput} setChordMs={setChordMs} setChordMsInput={setChordMsInput}
+              measureWidth={measureWidth} measureWidthInput={measureWidthInput} setMeasureWidth={setMeasureWidth} setMeasureWidthInput={setMeasureWidthInput}
               playing={playing} songDbId={songDbId}
               onPlayToggle={handlePlayToggle} onChangeSong={handleChangeSong}
               midiConnected={midiConnected} midiDevice={midiDevice}
@@ -247,12 +254,14 @@ export default function SamPlayer({ onBack }) {
                 onBeatMiss={handleBeatMiss}
                 scrollStateExtRef={scrollStateExtRef}
                 onTap={handleScoreTap}
+                measureWidth={measureWidth}
               />
             ) : (
               <ScoreRenderer
                 measures={activeMeasures}
                 onBeatEvents={handleBeatEvents}
                 onTap={handleScoreTap}
+                measureWidth={measureWidth}
               />
             )}
           </>

@@ -45,17 +45,10 @@ export function getBeamGroups(vexNotes) {
 // Layout constants
 export const CLEF_EXTRA = 80; // extra width on first measure for clef + time sig
 
-// Compute measure width based on note density.
-// Measures with more voice events get more space; sparse measures get less.
-const NOTE_PX = 50;
-const MIN_MEASURE_WIDTH = 160;
-export function getMeasureWidth(measure, isFirst) {
-  const rhCount = (measure.rh || []).length;
-  const lhCount = (measure.lh || []).length;
-  // For legacy beats format, use beats array length
-  const beatsCount = (measure.beats || []).length;
-  const maxEvents = Math.max(rhCount, lhCount, beatsCount, 1);
-  const width = Math.max(maxEvents * NOTE_PX, MIN_MEASURE_WIDTH);
+// Fixed measure width — all measures same width for correct scroll-timing sync.
+const DEFAULT_MEASURE_WIDTH = 300;
+export function getMeasureWidth(measure, isFirst, fixedWidth) {
+  const width = fixedWidth || DEFAULT_MEASURE_WIDTH;
   return width + (isFirst ? CLEF_EXTRA : 0);
 }
 

@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { midiToVexKey, midiAccidental, getBeamGroups, colorBeatEls, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
 
-const SCROLL_PX_PER_BEAT = 100; // pixels per beat for scroll speed
 const TARGET_LINE_PCT = 0.15; // 15% from left edge
 const STAFF_H = 280;
 const NUM_COPIES = 3;
@@ -33,11 +32,11 @@ function padVoice(events) {
 
 // Renders a single copy of the score into the given VexFlow context.
 // Returns { beatMeta[], copyWidth } for that copy.
-function renderCopy(VF, ctx, measures, copyIdx, xStart) {
+function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
   const TREBLE_Y = 10;
   const BASS_Y = 140;
 
-  const measureWidths = measures.map((m, i) => getMeasureWidth(m, i === 0));
+  const measureWidths = measures.map(() => getMeasureWidth(null, false, measureWidth));
   const copyWidth = measureWidths.reduce((a, b) => a + b, 0);
 
   const beatMeta = [];
@@ -48,26 +47,13 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart) {
   const tieTracker = { treble: [], bass: [] };
 
   measures.forEach((measure, measIdx) => {
-    const isFirst = measIdx === 0;
     const measWidth = measureWidths[measIdx];
 
     const treble = new VF.Stave(xOffset, TREBLE_Y, measWidth);
     const bass = new VF.Stave(xOffset, BASS_Y, measWidth);
 
-    if (isFirst) {
-      treble.addClef("treble").addTimeSignature("4/4");
-      bass.addClef("bass").addTimeSignature("4/4");
-    }
-
     treble.setContext(ctx).draw();
     bass.setContext(ctx).draw();
-
-    if (isFirst) {
-      new VF.StaveConnector(treble, bass)
-        .setType(VF.StaveConnector.type.BRACE)
-        .setContext(ctx)
-        .draw();
-    }
 
     new VF.StaveConnector(treble, bass)
       .setType(VF.StaveConnector.type.SINGLE_LEFT)
@@ -75,7 +61,6 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart) {
       .draw();
 
     // Measure number above treble staff
-    const svg = ctx.svg;
     const measNumEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
     measNumEl.setAttribute("x", xOffset + 5);
     measNumEl.setAttribute("y", TREBLE_Y - 2);
@@ -83,7 +68,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart) {
     measNumEl.setAttribute("font-family", "monospace");
     measNumEl.setAttribute("fill", "#999");
     measNumEl.textContent = measure.number;
-    svg.appendChild(measNumEl);
+    ctx.svg.appendChild(measNumEl);
 
     // Build VexFlow notes and beat metadata
     const trebleNotes = [];
@@ -274,7 +259,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart) {
     new VF.Formatter()
       .joinVoices([trebleVoice])
       .joinVoices([bassVoice])
-      .format([trebleVoice, bassVoice], getFormatWidth(measWidth, isFirst));
+      .format([trebleVoice, bassVoice], getFormatWidth(measWidth, false));
 
     // 4. Draw treble notes individually, each wrapped in SVG <g> group
     trebleNotes.forEach((note, i) => {
@@ -346,7 +331,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart) {
 
 const GRACE_MS = 150; // ms after target time before marking a beat as missed
 
-export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap }) {
+export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -366,8 +351,8 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
     const scrollLayer = scrollLayerRef.current;
     scrollLayer.innerHTML = "";
 
-    // Calculate single copy width to size the SVG
-    const singleMeasureWidths = measures.map((m, i) => getMeasureWidth(m, i === 0));
+    // Calculate single copy width — all measures uniform, no clef/time sig
+    const singleMeasureWidths = measures.map(() => getMeasureWidth(null, false, measureWidth));
     const singleCopyWidth = singleMeasureWidths.reduce((a, b) => a + b, 0);
     const totalWidth = singleCopyWidth * NUM_COPIES + 20;
 
@@ -382,7 +367,7 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
     const copyBeatCounts = [];
     for (let c = 0; c < NUM_COPIES; c++) {
       const xStart = 10 + c * singleCopyWidth;
-      const { beatMeta } = renderCopy(VF, ctx, measures, c, xStart);
+      const { beatMeta } = renderCopy(VF, ctx, measures, c, xStart, measureWidth);
       copyBeatCounts.push(beatMeta.length);
       allBeatMeta.push(...beatMeta);
     }
@@ -423,7 +408,7 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
     return () => {
       setSvgReady(false);
     };
-  }, [measures]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [measures, measureWidth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Animation loop with seamless looping
   useEffect(() => {
@@ -447,7 +432,9 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
     const viewportWidth = viewport.clientWidth;
     const targetX = viewportWidth * TARGET_LINE_PCT;
     const msPerBeat = 60000 / bpm;
-    const pxPerMs = SCROLL_PX_PER_BEAT / msPerBeat;
+    const effectiveMeasureWidth = getMeasureWidth(null, false, measureWidth);
+    const pxPerBeat = effectiveMeasureWidth / 4; // 4 beats per measure in 4/4
+    const pxPerMs = pxPerBeat / msPerBeat;
     const copyWidth = copyWidthRef.current;
 
     // Start so first beat approaches from off-screen right
@@ -462,6 +449,11 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
     for (let i = 0; i < events.length; i++) {
       events[i].targetTimeMs = approachMs + events[i].musicalBeat * msPerBeat;
     }
+    console.log('[Timing] approachMs:', Math.round(approachMs), 'msPerBeat:', Math.round(msPerBeat), 'pxPerMs:', pxPerMs.toFixed(4));
+    console.log('[Timing] First 10 events:', events.slice(0, 10).map(e => ({
+      meas: e.meas, beat: e.beat, musicalBeat: e.musicalBeat, targetTimeMs: Math.round(e.targetTimeMs)
+    })));
+    console.log('[Timing] viewportWidth:', viewportRef.current?.clientWidth, 'targetX:', targetX, 'firstBeatX:', events[0]?.xPx);
 
     let loopCount = 0;
     nextCheckRef.current = 0;
@@ -485,30 +477,34 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
       const elapsed = now - state.scrollStartT;
 
       // Check for seamless loop teleport BEFORE computing final offset.
-      // Copy 2 starts at world x = 10 + copyWidth.
+      // Copy 1 starts at world x = 10 + copyWidth.
       // Screen position = worldX - scrollOffset.
-      // When copy 2's start crosses the target line, jump BACK by copyWidth
-      // so copy 1 (identical content) takes its place on screen.
+      // When copy 1's start crosses the target line, jump BACK by copyWidth
+      // so copy 0 (identical content, freshly reset) takes its place later.
       const rawScrollOffset = state.originPx + elapsed * state.pxPerMs;
-      const copy2ScreenX = (10 + copyWidth) - rawScrollOffset;
-      if (copy2ScreenX <= targetX) {
+      const copy1ScreenX = (10 + copyWidth) - rawScrollOffset;
+      if (copy1ScreenX <= targetX) {
         state.originPx -= copyWidth;
         loopCount++;
         if (onLoopCount) onLoopCount(loopCount);
 
-        // Reset beat states, colors, and targetTimeMs for copy 1
+        // Reset ALL copies: copy 0 = current pass, copy 1 = next, copy 2 = after that
         const beatsPerCopy = beatEventsRef.current.length / NUM_COPIES;
         const totalMusicalBeats = measures.length * 4;
-        const passOffset = (loopCount + 2) * totalMusicalBeats;
-        for (let i = 0; i < beatsPerCopy; i++) {
-          const evt = beatEventsRef.current[i];
-          if (evt) {
-            evt.state = "pending";
-            colorBeatEls(evt, "#000000");
-            evt.musicalBeat = passOffset + (evt.musicalBeat % totalMusicalBeats);
-            evt.targetTimeMs = approachMs + evt.musicalBeat * msPerBeat;
+        for (let c = 0; c < NUM_COPIES; c++) {
+          const passOffset = (loopCount + c) * totalMusicalBeats;
+          for (let i = 0; i < beatsPerCopy; i++) {
+            const evt = beatEventsRef.current[c * beatsPerCopy + i];
+            if (evt) {
+              evt.state = "pending";
+              evt._logged = false;
+              colorBeatEls(evt, "#000000");
+              evt.musicalBeat = passOffset + (evt.musicalBeat % totalMusicalBeats);
+              evt.targetTimeMs = approachMs + evt.musicalBeat * msPerBeat;
+            }
           }
         }
+        // Copy 0 is back at the target line after teleport — scan from its start
         nextCheckRef.current = 0;
       }
 
@@ -520,25 +516,32 @@ export default function ScrollEngine({ measures, bpm, playing, onBeatEvents, onL
       const evts = beatEventsRef.current;
       let nc = nextCheckRef.current;
 
+      // Watchdog: check upcoming events for unexpected states
+      for (let i = nc; i < Math.min(nc + 10, evts.length); i++) {
+        if (evts[i].state !== "pending" && !evts[i]._logged) {
+          console.log(`[StateWatch] event ${i} meas=${evts[i].meas} beat=${evts[i].beat} state=${evts[i].state} — NOT PENDING`);
+          evts[i]._logged = true;
+        }
+      }
+
       while (nc < evts.length) {
         const evt = evts[nc];
         if (evt.state !== "pending") {
           nc++;
           continue;
         }
+        // Skip rests immediately — don't block scanner behind padding rests
+        if (evt.allMidi.length === 0) {
+          evt.state = "skipped";
+          nc++;
+          continue;
+        }
         if (elapsed > evt.targetTimeMs + GRACE_MS) {
-          // Beat's timing window has passed
-          if (evt.allMidi.length > 0) {
-            evt.state = "missed";
-            colorBeatEls(evt, "#dc2626");
-            if (onBeatMiss) onBeatMiss(evt);
-          } else {
-            // Rest beat — skip silently
-            evt.state = "skipped";
-          }
+          evt.state = "missed";
+          colorBeatEls(evt, "#dc2626");
+          if (onBeatMiss) onBeatMiss(evt);
           nc++;
         } else {
-          // This beat hasn't passed yet — stop scanning
           break;
         }
       }

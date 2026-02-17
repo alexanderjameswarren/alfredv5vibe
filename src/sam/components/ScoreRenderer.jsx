@@ -31,7 +31,7 @@ function padVoice(events) {
   return result;
 }
 
-export default function ScoreRenderer({ measures, onBeatEvents, onTap }) {
+export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWidth }) {
   const containerRef = useRef(null);
   const pointerRef = useRef(null);
 
@@ -47,8 +47,8 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap }) {
     const container = containerRef.current;
     container.innerHTML = "";
 
-    // Calculate total width based on note density per measure
-    const measureWidths = measures.map((m, i) => getMeasureWidth(m, i === 0));
+    // Calculate total width — fixed width per measure
+    const measureWidths = measures.map((m, i) => getMeasureWidth(m, i === 0, measureWidth));
     const totalWidth = measureWidths.reduce((a, b) => a + b, 0) + 20;
 
     // Create renderer

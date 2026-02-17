@@ -11,19 +11,37 @@
   "sections": [],
   "measures": [
     {
-      "number": 1,
-      "lh": [{ "duration": "w", "notes": [{ "midi": 48, "name": "C3" }] }],
-      "rh": [{ "duration": "w", "notes": [{ "midi": 60, "name": "C4" }] }]
+      "number": 1, "section": "Intro", "chord": "A",
+      "lh": [{ "duration": "w", "notes": [
+        { "midi": 45, "name": "A2", "tie": "end" },
+        { "midi": 52, "name": "E3", "tie": "end" }
+      ]}],
+      "rh": [
+        { "duration": "8", "notes": [{ "midi": 57, "name": "A3" }] },
+        { "duration": "8", "notes": [{ "midi": 61, "name": "C#4" }] },
+        { "duration": "8", "notes": [{ "midi": 64, "name": "E4" }] },
+        { "duration": "8", "notes": [{ "midi": 61, "name": "C#4" }] },
+        { "duration": "8", "notes": [{ "midi": 57, "name": "A3" }] },
+        { "duration": "8", "notes": [{ "midi": 61, "name": "C#4" }] },
+        { "duration": "8", "notes": [{ "midi": 64, "name": "E4" }] },
+        { "duration": "8", "notes": [{ "midi": 61, "name": "C#4" }] }
+      ]
     },
     {
-      "number": 2,
-      "lh": [
-        { "duration": "h", "notes": [{ "midi": 48, "name": "C3" }] },
-        { "duration": "h", "notes": [{ "midi": 48, "name": "C3" }] }
-      ],
+      "number": 2, "section": "Intro", "chord": "A",
+      "lh": [{ "duration": "w", "notes": [
+        { "midi": 45, "name": "A2", "tie": "end" },
+        { "midi": 52, "name": "E3", "tie": "end" }
+      ]}],
       "rh": [
-        { "duration": "h", "notes": [{ "midi": 60, "name": "C4" }] },
-        { "duration": "h", "notes": [{ "midi": 60, "name": "C4" }] }
+        { "duration": "8", "notes": [{ "midi": 57, "name": "A3" }] },
+        { "duration": "8", "notes": [{ "midi": 61, "name": "C#4" }] },
+        { "duration": "8", "notes": [{ "midi": 64, "name": "E4" }] },
+        { "duration": "8", "notes": [{ "midi": 61, "name": "C#4" }] },
+        { "duration": "8", "notes": [{ "midi": 57, "name": "A3" }] },
+        { "duration": "8", "notes": [{ "midi": 61, "name": "C#4" }] },
+        { "duration": "8", "notes": [{ "midi": 64, "name": "E4" }] },
+        { "duration": "8", "notes": [{ "midi": 61, "name": "C#4" }] }
       ]
     },
     {
