@@ -388,7 +388,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
     if (onBeatEvents) {
       onBeatEvents(beatEvents);
     }
-  }, [measures, onBeatEvents]);
+  }, [measures, onBeatEvents, measureWidth]);
 
   function handlePointerDown(e) {
     pointerRef.current = { x: e.clientX, y: e.clientY, t: Date.now() };
