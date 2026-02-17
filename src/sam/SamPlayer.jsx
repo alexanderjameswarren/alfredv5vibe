@@ -30,10 +30,12 @@ export default function SamPlayer({ onBack }) {
   const [measureWidthInput, setMeasureWidthInput] = useState("300");
   const [lastResult, setLastResult] = useState(null);
   const [snippet, setSnippet] = useState(null); // { startMeasure, endMeasure, restMeasures, dbId }
+  const [metronome, setMetronome] = useState(false);
   const beatEventsRef = useRef([]);
   const scrollStateExtRef = useRef(null);
   const hitCountRef = useRef(0);
   const missCountRef = useRef(0);
+  const audioCtxRef = useRef(null);
 
   const { startSession, endSession, recordEvent, setLoopIteration, stats: sessionStats } = usePracticeSession();
 
@@ -192,7 +194,17 @@ export default function SamPlayer({ onBack }) {
     return lastMeas;
   }
 
+  function ensureAudioContext() {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    } else if (audioCtxRef.current.state === "suspended") {
+      audioCtxRef.current.resume();
+    }
+    return audioCtxRef.current;
+  }
+
   function handlePlay() {
+    ensureAudioContext();
     resetCounters();
     setPausedMeasure(null);
     beginSession();
@@ -207,13 +219,14 @@ export default function SamPlayer({ onBack }) {
   }
 
   function handleResume() {
-    // Resume from pausedMeasure — ScrollEngine slices measures from that point
+    ensureAudioContext();
     resetCounters();
     beginSession();
     setPlaybackState("playing");
   }
 
   function handleRestart() {
+    ensureAudioContext();
     resetCounters();
     setPausedMeasure(null);
     beginSession();
@@ -267,6 +280,7 @@ export default function SamPlayer({ onBack }) {
               onChangeSong={handleChangeSong}
               midiConnected={midiConnected} midiDevice={midiDevice}
               pausedMeasure={pausedMeasure}
+              metronome={metronome} setMetronome={setMetronome}
             />
 
             <StatsBar
@@ -309,6 +323,8 @@ export default function SamPlayer({ onBack }) {
                 scrollStateExtRef={scrollStateExtRef}
                 onTap={handleScoreTap}
                 measureWidth={measureWidth}
+                metronomeEnabled={metronome}
+                audioCtx={audioCtxRef.current}
                 firstPassStart={
                   pausedMeasure != null
                     ? Math.max(0, activeMeasures.findIndex(m => m.number >= pausedMeasure))

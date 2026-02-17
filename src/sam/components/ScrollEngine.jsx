@@ -346,7 +346,20 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
 
 const GRACE_MS = 150; // ms after target time before marking a beat as missed
 
-export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, firstPassStart = 0 }) {
+// Play a short click sound at the given audioContext time
+function playClick(audioCtx, when) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = "sine";
+  osc.frequency.value = 800;
+  gain.gain.setValueAtTime(0.3, when);
+  gain.gain.exponentialRampToValueAtTime(0.001, when + 0.04);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(when);
+  osc.stop(when + 0.04);
+}
+
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronomeEnabled = false, audioCtx = null, firstPassStart = 0 }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -518,6 +531,12 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     let loopCount = 0;
     nextCheckRef.current = startEvtIdx;
 
+    // Metronome scheduling state — aligned to the musical grid.
+    // First tick = approachMs % msPerBeat (so ticks land on quarter-note boundaries).
+    let nextMetroBeatIdx = 0;
+    const metroStartMs = approachMs % msPerBeat;
+    const audioBaseTime = audioCtx ? audioCtx.currentTime : 0;
+
     scrollStateRef.current = {
       scrollStartT: performance.now(),
       originPx,
@@ -578,6 +597,20 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       // Compute final scroll offset (may have been adjusted by teleport)
       const scrollOffset = state.originPx + elapsed * state.pxPerMs;
       scrollLayer.style.transform = `translateX(${-scrollOffset}px)`;
+
+      // --- Metronome: schedule clicks via Web Audio lookahead ---
+      if (metronomeEnabled && audioCtx) {
+        const LOOKAHEAD_MS = 100;
+        while (true) {
+          const tickElapsedMs = metroStartMs + nextMetroBeatIdx * msPerBeat;
+          if (tickElapsedMs > elapsed + LOOKAHEAD_MS) break;
+          if (tickElapsedMs >= elapsed) {
+            const delayS = (tickElapsedMs - elapsed) / 1000;
+            playClick(audioCtx, audioBaseTime + (elapsed / 1000) + delayS);
+          }
+          nextMetroBeatIdx++;
+        }
+      }
 
       // --- Miss detection: forward-scan from nextCheck (time-based) ---
       const evts = beatEventsRef.current;

@@ -12,6 +12,7 @@ export default function SettingsBar({
   onChangeSong,
   midiConnected, midiDevice,
   pausedMeasure,
+  metronome, setMetronome,
 }) {
   const isStopped = playbackState === "stopped";
   const isPlaying = playbackState === "playing";
@@ -101,6 +102,15 @@ export default function SettingsBar({
               className="w-16 px-2 py-1 border border-gray-300 rounded text-sm min-h-[44px]"
               min={20} max={300}
             />
+          </label>
+          <label className="text-sm text-muted flex items-center gap-1 min-h-[44px] cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={metronome}
+              onChange={(e) => setMetronome(e.target.checked)}
+              className="w-4 h-4"
+            />
+            Metronome
           </label>
           <label className="text-sm text-muted">
             Window ms:{" "}
