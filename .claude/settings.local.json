@@ -11,7 +11,8 @@
       "Bash(npm install:*)",
       "Bash(npx supabase:*)",
       "Bash(npx vite build)",
-      "Bash(npx vite build:*)"
+      "Bash(npx vite build:*)",
+      "WebFetch(domain:cdn.jsdelivr.net)"
     ]
   }
 }

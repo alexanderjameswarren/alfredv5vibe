@@ -270,30 +270,43 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
       .joinVoices([bassVoice])
       .format([trebleVoice, bassVoice], getFormatWidth(measWidth, false));
 
-    // 4.5. Fix accidental positioning — VexFlow's preFormat may not offset
-    //       accidentals properly when notes are drawn individually.
-    [...trebleNotes, ...bassNotes].forEach(note => {
-      for (const mod of note.getModifiers()) {
-        if (mod.getCategory() === 'accidentals') {
-          const w = mod.getWidth?.() || 10;
-          mod.setXShift(-(w + 2));
-        }
-      }
-    });
-
-    // 4.6. Reposition notes to time-proportional X (constant scroll speed = constant time spacing)
+    // 4.5. Reposition notes to time-proportional X (constant scroll speed = constant time spacing)
     const noteStartX = treble.getNoteStartX();
     const usableWidth = treble.getNoteEndX() - noteStartX;
+    const ACC_W = { '#': 11, 'b': 9, 'n': 8, '##': 14, 'bb': 14 };
+    const accPad = (note) => {
+      let w = 0;
+      for (const mod of note.getModifiers()) {
+        if (mod.type in ACC_W) w = Math.max(w, ACC_W[mod.type]);
+      }
+      return w > 0 ? w + 3 : 0;
+    };
     trebleNotes.forEach((note, i) => {
       note.setStave(treble);
-      const correctX = noteStartX + (trebleTicks[i] / 4) * usableWidth;
+      let correctX = noteStartX + (trebleTicks[i] / 4) * usableWidth;
+      if (trebleTicks[i] === 0) correctX += accPad(note);
       note.setXShift(correctX - note.getAbsoluteX());
     });
     bassNotes.forEach((note, i) => {
       note.setStave(bass);
-      const correctX = noteStartX + (bassTicks[i] / 4) * usableWidth;
+      let correctX = noteStartX + (bassTicks[i] / 4) * usableWidth;
+      if (bassTicks[i] === 0) correctX += accPad(note);
       note.setXShift(correctX - note.getAbsoluteX());
     });
+
+    // 4.6. Patch getModifierStartXY to include note's time-proportional x_shift.
+    // VexFlow's default returns getAbsoluteX() (formatter position) without x_shift,
+    // so accidentals would render at the pre-repositioned X instead of next to the notehead.
+    const patchModXY = (note) => {
+      const _orig = note.getModifierStartXY;
+      note.getModifierStartXY = function(pos, idx, opts) {
+        const pt = _orig.call(this, pos, idx, opts);
+        pt.x += this.getXShift();
+        return pt;
+      };
+    };
+    trebleNotes.forEach(patchModXY);
+    bassNotes.forEach(patchModXY);
 
     // 5. Draw treble notes individually, each wrapped in SVG <g> group
     trebleNotes.forEach((note, i) => {

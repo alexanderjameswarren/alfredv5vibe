@@ -317,17 +317,6 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         .joinVoices([bassVoice])
         .format([trebleVoice, bassVoice], getFormatWidth(measWidth, isFirst));
 
-      // 4.5. Fix accidental positioning — VexFlow's preFormat may not offset
-      //       accidentals properly when notes are drawn individually.
-      [...trebleNotes, ...bassNotes].forEach(note => {
-        for (const mod of note.getModifiers()) {
-          if (mod.getCategory() === 'accidentals') {
-            const w = mod.getWidth?.() || 10;
-            mod.setXShift(-(w + 2));
-          }
-        }
-      });
-
       // 5. Draw treble notes individually, each wrapped in an SVG <g> group
       trebleNotes.forEach((note, i) => {
         const groupEl = ctx.openGroup("sam-note", `t-${measIdx}-${i}`);
