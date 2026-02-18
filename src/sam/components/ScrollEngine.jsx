@@ -566,15 +566,17 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       }
     }
 
-    // Origin: position so that the startEvtIdx beat approaches from off-screen right
+    // Origin: position so that the startEvtIdx beat starts 25% of viewport width
+    // to the right of the target line (short lead-in before first note arrives).
     const startBeatX = events[startEvtIdx]?.xPx || events[0]?.xPx || 0;
-    const originPx = startBeatX - viewportWidth;
+    const leadInPx = viewportWidth * 0.25;
+    const originPx = startBeatX - targetX - leadInPx;
 
     // Approach time adjusted for the start offset so that
     // targetTimeMs = approachMs + musicalBeat * msPerBeat matches the geometric scroll position.
     // The start beat (musicalBeat = S) reaches targetX at elapsed = baseApproach,
     // so approachMs = baseApproach - S * msPerBeat.
-    const baseApproachMs = (viewportWidth - targetX) / pxPerMs;
+    const baseApproachMs = leadInPx / pxPerMs;
     const startMusicalBeat = events[startEvtIdx]?.musicalBeat || 0;
     const approachMs = baseApproachMs - startMusicalBeat * msPerBeat;
 
