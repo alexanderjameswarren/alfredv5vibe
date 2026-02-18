@@ -5,14 +5,39 @@ const NOTE_NAMES = ['c','c','d','d','e','f','f','g','g','a','a','b'];
 const ACCIDENTALS = [null,'#',null,'#',null,null,'#',null,'#',null,'#',null];
 const DISPLAY_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 
-// MIDI number → VexFlow key string: 69 → "a/4"
+// MIDI number → VexFlow key string: 69 → "a/4" (always sharps)
 export function midiToVexKey(midi) {
   return NOTE_NAMES[midi % 12] + '/' + (Math.floor(midi / 12) - 1);
 }
 
-// MIDI number → accidental: 73 → "#", 60 → null
+// MIDI number → accidental: 73 → "#", 60 → null (always sharps)
 export function midiAccidental(midi) {
   return ACCIDENTALS[midi % 12];
+}
+
+// Parse note name like "Eb4", "C#4", "Bb4", "C4" → { letter, accidental, octave }
+function parseNoteName(name) {
+  const m = /^([A-Ga-g])(#{1,2}|b{1,2})?(\d+)$/.exec(name);
+  if (!m) return null;
+  return { letter: m[1].toLowerCase(), accidental: m[2] || null, octave: m[3] };
+}
+
+// Note object → VexFlow key: { name: "Eb4" } → "eb/4", falls back to MIDI
+export function noteToVexKey(note) {
+  if (note.name) {
+    const parsed = parseNoteName(note.name);
+    if (parsed) return `${parsed.letter}${parsed.accidental || ''}/${parsed.octave}`;
+  }
+  return midiToVexKey(note.midi);
+}
+
+// Note object → accidental string or null: { name: "Eb4" } → "b"
+export function noteAccidental(note) {
+  if (note.name) {
+    const parsed = parseNoteName(note.name);
+    if (parsed) return parsed.accidental;
+  }
+  return midiAccidental(note.midi);
 }
 
 // MIDI number → display name: 69 → "A4", 73 → "C#5"

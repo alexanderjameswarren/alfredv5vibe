@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from "react";
-import { midiToVexKey, midiAccidental, getBeamGroups, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
+import { noteToVexKey, noteAccidental, getBeamGroups, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
 
 // Layout constants
 const TREBLE_Y = 40;
@@ -135,10 +135,10 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         for (const evt of rhEvents) {
           const notes = evt.notes || [];
           if (notes.length > 0) {
-            const keys = notes.map((n) => midiToVexKey(n.midi));
+            const keys = notes.map((n) => noteToVexKey(n));
             const sn = new VF.StaveNote({ clef: "treble", keys, duration: evt.duration });
             notes.forEach((n, ki) => {
-              const acc = midiAccidental(n.midi);
+              const acc = noteAccidental(n);
               if (acc) sn.addModifier(new VF.Accidental(acc), ki);
             });
             trebleNotes.push(sn);
@@ -163,10 +163,10 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         for (const evt of lhEvents) {
           const notes = evt.notes || [];
           if (notes.length > 0) {
-            const keys = notes.map((n) => midiToVexKey(n.midi));
+            const keys = notes.map((n) => noteToVexKey(n));
             const sn = new VF.StaveNote({ clef: "bass", keys, duration: evt.duration });
             notes.forEach((n, ki) => {
-              const acc = midiAccidental(n.midi);
+              const acc = noteAccidental(n);
               if (acc) sn.addModifier(new VF.Accidental(acc), ki);
             });
             bassNotes.push(sn);
@@ -252,11 +252,11 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
 
           let trebleNote;
           if (trebleGroup.length > 0) {
-            const keys = trebleGroup.map((n) => midiToVexKey(n.midi));
+            const keys = trebleGroup.map((n) => noteToVexKey(n));
             const dur = beat.duration || "q";
             trebleNote = new VF.StaveNote({ clef: "treble", keys, duration: dur });
             trebleGroup.forEach((n, ki) => {
-              const acc = midiAccidental(n.midi);
+              const acc = noteAccidental(n);
               if (acc) trebleNote.addModifier(new VF.Accidental(acc), ki);
             });
           } else {
@@ -267,11 +267,11 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
 
           let bassNote;
           if (bassGroup.length > 0) {
-            const keys = bassGroup.map((n) => midiToVexKey(n.midi));
+            const keys = bassGroup.map((n) => noteToVexKey(n));
             const dur = beat.duration || "q";
             bassNote = new VF.StaveNote({ clef: "bass", keys, duration: dur });
             bassGroup.forEach((n, ki) => {
-              const acc = midiAccidental(n.midi);
+              const acc = noteAccidental(n);
               if (acc) bassNote.addModifier(new VF.Accidental(acc), ki);
             });
           } else {
@@ -294,7 +294,12 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         measBeatCount = measure.beats.length;
       }
 
-      // 1. Create voices and add tickables
+      // 1. Set staves before formatting so VexFlow can compute note head
+      //    dimensions during preFormat (required for accidental positioning)
+      trebleNotes.forEach((note) => note.setStave(treble));
+      bassNotes.forEach((note) => note.setStave(bass));
+
+      // 2. Create voices and add tickables
       const trebleVoice = new VF.Voice({ num_beats: 4, beat_value: 4 })
         .setStrict(false)
         .addTickables(trebleNotes);
@@ -302,17 +307,28 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         .setStrict(false)
         .addTickables(bassNotes);
 
-      // 2. Create beams (after addTickables, before draw — suppresses flags)
+      // 3. Create beams (after addTickables, before draw — suppresses flags)
       const trebleBeams = getBeamGroups(trebleNotes).map((g) => new VF.Beam(g));
       const bassBeams = getBeamGroups(bassNotes).map((g) => new VF.Beam(g));
 
-      // 3. Format — align rhythmic positions across both staves
+      // 4. Format — align rhythmic positions across both staves
       new VF.Formatter()
         .joinVoices([trebleVoice])
         .joinVoices([bassVoice])
         .format([trebleVoice, bassVoice], getFormatWidth(measWidth, isFirst));
 
-      // 4. Draw treble notes individually, each wrapped in an SVG <g> group
+      // 4.5. Fix accidental positioning — VexFlow's preFormat may not offset
+      //       accidentals properly when notes are drawn individually.
+      [...trebleNotes, ...bassNotes].forEach(note => {
+        for (const mod of note.getModifiers()) {
+          if (mod.getCategory() === 'accidentals') {
+            const w = mod.getWidth?.() || 10;
+            mod.setXShift(-(w + 2));
+          }
+        }
+      });
+
+      // 5. Draw treble notes individually, each wrapped in an SVG <g> group
       trebleNotes.forEach((note, i) => {
         const groupEl = ctx.openGroup("sam-note", `t-${measIdx}-${i}`);
         note.setStave(treble);
@@ -338,7 +354,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         }
       });
 
-      // 5. Draw beams after notes
+      // 6. Draw beams after notes
       trebleBeams.forEach((b) => b.setContext(ctx).draw());
       bassBeams.forEach((b) => b.setContext(ctx).draw());
 
