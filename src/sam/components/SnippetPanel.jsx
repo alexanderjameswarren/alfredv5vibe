@@ -227,9 +227,6 @@ export default function SnippetPanel({
               <Save className="w-3.5 h-3.5" />
               {saving ? "Saving..." : "Save"}
             </button>
-          </div>
-
-          <div className="flex items-center gap-2 mt-3">
             <button
               onClick={handleApply}
               className="flex items-center gap-1 px-3 py-1.5 bg-primary hover:bg-primary-hover text-white rounded text-sm font-medium min-h-[44px]"

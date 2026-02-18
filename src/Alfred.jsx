@@ -564,6 +564,28 @@ export default function Alfred() {
     }
   }
 
+  async function archiveIntention(intentId) {
+    // Archive the intention
+    const intent = intents.find((i) => i.id === intentId);
+    if (!intent) return;
+
+    const archivedIntent = { ...intent, archived: true };
+    await storage.set(`intent:${intentId}`, archivedIntent);
+    setIntents(intents.map((i) => (i.id === intentId ? archivedIntent : i)));
+
+    // Archive all related events
+    const relatedEvents = events.filter((e) => e.intentId === intentId && !e.archived);
+    for (const event of relatedEvents) {
+      const archivedEvent = { ...event, archived: true };
+      await storage.set(`event:${event.id}`, archivedEvent);
+      setEvents((prev) => prev.map((e) => (e.id === event.id ? archivedEvent : e)));
+    }
+
+    // Navigate back to previous view
+    setSelectedIntentionId(null);
+    setView(previousView);
+  }
+
   async function updateItem(itemId, updates) {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
@@ -1523,6 +1545,7 @@ export default function Alfred() {
             onActivate={activate}
             onCancelExecution={cancelExecutionForEvent}
             onStartNow={startNowFromIntention}
+            onArchiveIntention={archiveIntention}
           />
         )}
 
@@ -1547,6 +1570,7 @@ export default function Alfred() {
             executions={allLiveExecutions}
             onOpenExecution={openExecution}
             onCancelExecution={cancelExecutionForEvent}
+            onArchiveIntention={archiveIntention}
           />
         )}
 
@@ -1574,6 +1598,7 @@ export default function Alfred() {
             onAddIntention={handleAddIntentionToContext}
             onCancelExecution={cancelExecutionForEvent}
             onStartNowIntention={startNowFromIntention}
+            onArchiveIntention={archiveIntention}
           />
         )}
 
@@ -1708,6 +1733,7 @@ export default function Alfred() {
                     executions={allLiveExecutions}
                     onOpenExecution={openExecution}
                     onCancelExecution={cancelExecutionForEvent}
+                    onArchive={archiveIntention}
                   />
                 ))}
               </div>
@@ -2490,6 +2516,7 @@ function ContextDetailView({
   onActivate,
   onCancelExecution,
   onStartNow,
+  onArchiveIntention,
 }) {
   const [showAddItemForm, setShowAddItemForm] = useState(false);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
@@ -2679,6 +2706,7 @@ function ContextDetailView({
                   executions={executions}
                   onOpenExecution={onOpenExecution}
                   onCancelExecution={onCancelExecution}
+                  onArchive={onArchiveIntention}
                 />
               ))}
             </div>
@@ -2705,6 +2733,7 @@ function IntentionDetailView({
   executions = [],
   onOpenExecution,
   onCancelExecution,
+  onArchiveIntention,
 }) {
   const [isEditing, setIsEditing] = useState(false);
 
@@ -2749,6 +2778,7 @@ function IntentionDetailView({
           showScheduling={true}
           isEditing={true}
           onCancel={() => setIsEditing(false)}
+          onArchive={onArchiveIntention}
         />
       </div>
     );
@@ -2863,6 +2893,7 @@ function ItemDetailView({
   onAddIntention,
   onCancelExecution,
   onStartNowIntention,
+  onArchiveIntention,
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
@@ -3144,6 +3175,7 @@ function ItemDetailView({
                 executions={executions}
                 onOpenExecution={onOpenExecution}
                 onCancelExecution={onCancelExecution}
+                onArchive={onArchiveIntention}
               />
             ))}
           </div>
@@ -3755,6 +3787,7 @@ function IntentionCard({
   executions = [],
   onOpenExecution,
   onCancelExecution,
+  onArchive,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(intent.text);
@@ -3767,6 +3800,20 @@ function IntentionCard({
   const [selectedContextId, setSelectedContextId] = useState(intent.contextId || "");
   const [contextSearch, setContextSearch] = useState("");
   const [showContextPicker, setShowContextPicker] = useState(false);
+  const [hasActiveExecutions, setHasActiveExecutions] = useState(false);
+
+  useEffect(() => {
+    if (!intent.id || !onArchive) return;
+    async function checkActiveExecutions() {
+      const { data } = await supabase
+        .from('executions')
+        .select('id')
+        .eq('intent_id', intent.id)
+        .is('closed_at', null);
+      setHasActiveExecutions(data && data.length > 0);
+    }
+    checkActiveExecutions();
+  }, [intent.id, onArchive]);
 
   // Autocomplete search logic
   const filteredContexts =
@@ -4022,6 +4069,17 @@ function IntentionCard({
             >
               Cancel
             </button>
+
+            {onArchive && intent.id && (
+              <button
+                onClick={() => onArchive(intent.id)}
+                disabled={hasActiveExecutions}
+                className={`px-3 sm:px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base ${hasActiveExecutions ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-danger hover:bg-danger-hover text-white'}`}
+                title={hasActiveExecutions ? 'Cannot archive: active execution in progress' : 'Archive this intention and all related events'}
+              >
+                Archive
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -4121,6 +4179,20 @@ function EventCard({
   const [isEditing, setIsEditing] = useState(false);
   const [scheduledDate, setScheduledDate] = useState(event.time);
   const [eventName, setEventName] = useState(event.text || intent?.text || "");
+  const [hasActiveExecution, setHasActiveExecution] = useState(false);
+
+  useEffect(() => {
+    if (!event.id) return;
+    async function checkActiveExecution() {
+      const { data } = await supabase
+        .from('executions')
+        .select('id')
+        .eq('event_id', event.id)
+        .is('closed_at', null);
+      setHasActiveExecution(data && data.length > 0);
+    }
+    checkActiveExecution();
+  }, [event.id]);
 
   function handleSave() {
     onUpdate(event.id, { time: scheduledDate, text: eventName });
@@ -4128,6 +4200,18 @@ function EventCard({
   }
 
   async function handleCancelEvent() {
+    // Double-check for active execution
+    const { data: activeExecs } = await supabase
+      .from('executions')
+      .select('id')
+      .eq('event_id', event.id)
+      .is('closed_at', null);
+
+    if (activeExecs && activeExecs.length > 0) {
+      alert('Cannot archive: this event has an active execution. Complete or cancel it first.');
+      return;
+    }
+
     // Delete the execution if one exists for this event
     if (onCancelExecution) {
       await onCancelExecution(event.id);
@@ -4175,9 +4259,11 @@ function EventCard({
             </button>
             <button
               onClick={handleCancelEvent}
-              className="px-4 py-2.5 min-h-[44px] bg-danger hover:bg-danger-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              disabled={hasActiveExecution}
+              className={`px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${hasActiveExecution ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-danger hover:bg-danger-hover text-white'}`}
+              title={hasActiveExecution ? 'Cannot archive: active execution in progress' : 'Archive this event'}
             >
-              Cancel Event
+              Archive Event
             </button>
             <button
               onClick={() => {
