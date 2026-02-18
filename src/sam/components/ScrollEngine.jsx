@@ -535,8 +535,14 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
 
     const events = beatEventsRef.current;
 
-    // Reset from previous session: clear colors, states, and unhidden measure groups
+    // Reset from previous session: clear colors, states, and stale musicalBeat values.
+    // musicalBeat is modified by teleport, so it must be restored to its original
+    // copy-relative value before recomputing approachMs / targetTimeMs.
+    const beatsPerCopy = events.length / NUM_COPIES;
+    const totalMusicalBeatsPerCopy = measures.length * 4;
     for (let i = 0; i < events.length; i++) {
+      const c = Math.floor(i / beatsPerCopy);
+      events[i].musicalBeat = c * totalMusicalBeatsPerCopy + events[i].baseBeat;
       events[i].state = "pending";
       colorBeatEls(events[i], "#000000");
     }
