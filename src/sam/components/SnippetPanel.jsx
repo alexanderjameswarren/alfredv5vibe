@@ -8,7 +8,9 @@ export default function SnippetPanel({
 }) {
   const [open, setOpen] = useState(false);
   const [startMeas, setStartMeas] = useState(snippet?.startMeasure || 1);
+  const [startInput, setStartInput] = useState(String(snippet?.startMeasure || 1));
   const [endMeas, setEndMeas] = useState(snippet?.endMeasure || totalMeasures);
+  const [endInput, setEndInput] = useState(String(snippet?.endMeasure || totalMeasures));
   const [restMeasures, setRestMeasures] = useState(snippet?.restMeasures || 0);
   const [saving, setSaving] = useState(false);
   const [savedSnippets, setSavedSnippets] = useState([]);
@@ -47,14 +49,18 @@ export default function SnippetPanel({
 
   function handleFullSong() {
     setStartMeas(1);
+    setStartInput("1");
     setEndMeas(totalMeasures);
+    setEndInput(String(totalMeasures));
     setRestMeasures(0);
     onSnippetChange(null);
   }
 
   function handleLoadSnippet(s) {
     setStartMeas(s.start_measure);
+    setStartInput(String(s.start_measure));
     setEndMeas(s.end_measure);
+    setEndInput(String(s.end_measure));
     setRestMeasures(s.rest_measures || 0);
 
     onSnippetChange({
@@ -165,10 +171,14 @@ export default function SnippetPanel({
               Start:{" "}
               <input
                 type="number"
-                value={startMeas}
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  if (n >= 1 && n <= endMeas) setStartMeas(n);
+                value={startInput}
+                onChange={(e) => setStartInput(e.target.value)}
+                onBlur={() => {
+                  let n = Number(startInput);
+                  if (!n || n < 1) n = 1;
+                  if (n > endMeas) n = endMeas;
+                  setStartMeas(n);
+                  setStartInput(String(n));
                 }}
                 onFocus={(e) => e.target.select()}
                 className="w-14 px-2 py-1 border border-gray-300 rounded text-sm min-h-[44px]"
@@ -179,10 +189,14 @@ export default function SnippetPanel({
               End:{" "}
               <input
                 type="number"
-                value={endMeas}
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  if (n >= startMeas && n <= maxMeas) setEndMeas(n);
+                value={endInput}
+                onChange={(e) => setEndInput(e.target.value)}
+                onBlur={() => {
+                  let n = Number(endInput);
+                  if (!n || n < startMeas) n = startMeas;
+                  if (n > maxMeas) n = maxMeas;
+                  setEndMeas(n);
+                  setEndInput(String(n));
                 }}
                 onFocus={(e) => e.target.select()}
                 className="w-14 px-2 py-1 border border-gray-300 rounded text-sm min-h-[44px]"
