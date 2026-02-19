@@ -4347,7 +4347,7 @@ function ExecutionDetailView({
       onRefreshCollection(execution.collectionId);
     }, 5000);
     return () => clearInterval(interval);
-  }, [execution.collectionId]);
+  }, [execution.collectionId, onRefreshCollection]);
 
   // Timer tick for in-progress elements
   useEffect(() => {
