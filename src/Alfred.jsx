@@ -9,6 +9,7 @@ import {
   Trash2,
   ArrowLeft,
   Menu,
+  Copy,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import SamPlayer from "./sam/SamPlayer";
@@ -156,6 +157,131 @@ const storage = {
 const uid = () =>
   Date.now().toString(36) + Math.random().toString(36).substr(2);
 
+// Flatten elements that reference other items (via itemId) into a single array with indent levels.
+// itemsMap: object keyed by item id -> item, or a lookup function
+async function flattenElements(elements, getItem, depth = 0, visited = new Set()) {
+  if (depth >= 3) return elements.map((el) => ({ ...el, indent: depth }));
+  const result = [];
+  for (const el of elements) {
+    if (el.itemId && !visited.has(el.itemId)) {
+      const childItem = typeof getItem === "function" ? await getItem(el.itemId) : null;
+      if (childItem && childItem.elements && childItem.elements.length > 0) {
+        // Add a header for the referenced item
+        result.push({ ...el, displayType: "header", indent: depth });
+        visited.add(el.itemId);
+        const childFlattened = await flattenElements(
+          childItem.elements, getItem, depth + 1, visited
+        );
+        result.push(...childFlattened);
+      } else {
+        // Deleted or missing child — show placeholder
+        result.push({ ...el, indent: depth, missing: !childItem });
+      }
+    } else if (el.itemId && visited.has(el.itemId)) {
+      // Circular reference detected — skip
+      result.push({ ...el, indent: depth, circular: true });
+    } else {
+      result.push({ ...el, indent: depth });
+    }
+  }
+  return result;
+}
+
+// Test suite for flattenElements — run via: window.testFlatten()
+window.testFlatten = async function () {
+  let passed = 0;
+  let failed = 0;
+
+  function assert(name, condition) {
+    if (condition) { console.log(`  ✅ ${name}`); passed++; }
+    else { console.error(`  ❌ ${name}`); failed++; }
+  }
+
+  console.log("=== flattenElements tests ===");
+
+  // Test 1: Simple reference (depth 1)
+  const items1 = {
+    childA: { elements: [{ name: "Child step 1", displayType: "step" }, { name: "Child step 2", displayType: "step" }] },
+  };
+  const r1 = await flattenElements(
+    [{ name: "Header", displayType: "header" }, { name: "Ref", displayType: "bullet", itemId: "childA" }],
+    (id) => items1[id]
+  );
+  assert("1. Simple ref: correct count", r1.length === 4);
+  assert("1. Simple ref: header at indent 0", r1[0].indent === 0);
+  assert("1. Simple ref: child steps at indent 1", r1[2].indent === 1 && r1[3].indent === 1);
+
+  // Test 2: Nested reference (depth 2)
+  const items2 = {
+    b: { elements: [{ name: "B step", displayType: "step", itemId: "c" }] },
+    c: { elements: [{ name: "C step", displayType: "step" }] },
+  };
+  const r2 = await flattenElements(
+    [{ name: "A ref B", displayType: "bullet", itemId: "b" }],
+    (id) => items2[id]
+  );
+  assert("2. Nested ref: has depth 2 element", r2.some((e) => e.indent === 2));
+
+  // Test 3: Max depth (stops at depth 3)
+  const items3 = {
+    d1: { elements: [{ name: "d1", displayType: "step", itemId: "d2" }] },
+    d2: { elements: [{ name: "d2", displayType: "step", itemId: "d3" }] },
+    d3: { elements: [{ name: "d3", displayType: "step", itemId: "d4" }] },
+    d4: { elements: [{ name: "d4 deep", displayType: "step" }] },
+  };
+  const r3 = await flattenElements(
+    [{ name: "top", displayType: "step", itemId: "d1" }],
+    (id) => items3[id]
+  );
+  assert("3. Max depth: no element beyond indent 3", r3.every((e) => e.indent <= 3));
+
+  // Test 4: Circular reference
+  const items4 = {
+    loopA: { elements: [{ name: "A", displayType: "step", itemId: "loopB" }] },
+    loopB: { elements: [{ name: "B", displayType: "step", itemId: "loopA" }] },
+  };
+  const r4 = await flattenElements(
+    [{ name: "start", displayType: "step", itemId: "loopA" }],
+    (id) => items4[id]
+  );
+  assert("4. Circular ref: has circular flag", r4.some((e) => e.circular === true));
+  assert("4. Circular ref: terminates", r4.length < 20);
+
+  // Test 5: Deleted child (returns null)
+  const r5 = await flattenElements(
+    [{ name: "Ref deleted", displayType: "step", itemId: "gone" }],
+    () => null
+  );
+  assert("5. Deleted child: marks missing", r5[0].missing === true);
+  assert("5. Deleted child: still in result", r5.length === 1);
+
+  // Test 6: Missing child (returns undefined)
+  const r6 = await flattenElements(
+    [{ name: "Ref missing", displayType: "step", itemId: "nope" }],
+    () => undefined
+  );
+  assert("6. Missing child: marks missing", r6[0].missing === true);
+
+  // Test 7: Multiple references
+  const items7 = {
+    m1: { elements: [{ name: "M1 step", displayType: "step" }] },
+    m2: { elements: [{ name: "M2 step", displayType: "step" }] },
+  };
+  const r7 = await flattenElements(
+    [
+      { name: "Ref M1", displayType: "bullet", itemId: "m1" },
+      { name: "Ref M2", displayType: "bullet", itemId: "m2" },
+    ],
+    (id) => items7[id]
+  );
+  assert("7. Multiple refs: both flattened", r7.length === 4);
+  assert("7. Multiple refs: M1 step present", r7.some((e) => e.name === "M1 step"));
+  assert("7. Multiple refs: M2 step present", r7.some((e) => e.name === "M2 step"));
+
+  console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
+  return { passed, failed };
+};
+
 function getTodayDate() {
   return new Date().toISOString().split("T")[0];
 }
@@ -236,6 +362,247 @@ function LoadingOverlay({ message }) {
   );
 }
 
+function TagInput({ value = [], onChange, placeholder = "Add tags (comma separated)" }) {
+  const [inputValue, setInputValue] = useState("");
+  const [error, setError] = useState("");
+
+  function processTags(raw) {
+    return raw
+      .split(",")
+      .map((t) => t.toLowerCase().trim())
+      .filter((t) => t.length > 0 && t.length <= 50)
+      .filter((t) => /^[a-z0-9_-]+$/.test(t));
+  }
+
+  function addTags() {
+    if (!inputValue.trim()) return;
+    const rawParts = inputValue.split(",").map((t) => t.toLowerCase().trim()).filter((t) => t.length > 0);
+    const validTags = processTags(inputValue);
+    const rejected = rawParts.filter((t) => !validTags.includes(t));
+    if (rejected.length > 0) {
+      setError("Invalid tags removed (use only letters, numbers, hyphens, underscores)");
+      setTimeout(() => setError(""), 3000);
+    }
+    if (value.length >= 20) {
+      setError("Maximum 20 tags allowed");
+      setTimeout(() => setError(""), 3000);
+      setInputValue("");
+      return;
+    }
+    const merged = [...new Set([...value, ...validTags])].slice(0, 20);
+    onChange(merged);
+    setInputValue("");
+  }
+
+  function removeTag(tag) {
+    onChange(value.filter((t) => t !== tag));
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addTags();
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onBlur={addTags}
+          placeholder={placeholder}
+          className="flex-1 min-w-0 px-3 py-2 min-h-[44px] border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+      </div>
+      {error && (
+        <p className="text-xs text-red-500 mt-1">{error}</p>
+      )}
+      {value.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-2">
+          {value.map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex items-center gap-1 px-2 py-0.5 bg-teal-100 text-teal-700 text-xs rounded-full"
+            >
+              {tag}
+              <button
+                onClick={() => removeTag(tag)}
+                className="p-1 hover:text-teal-900"
+              >
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TagFilter({ entities, activeTag, onFilter }) {
+  const tagCounts = {};
+  for (const entity of entities) {
+    if (entity.tags) {
+      for (const tag of entity.tags) {
+        tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+      }
+    }
+  }
+
+  const sortedTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]);
+
+  if (sortedTags.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap gap-1.5 mb-3">
+      {sortedTags.map(([tag, count]) => (
+        <button
+          key={tag}
+          onClick={() => onFilter(activeTag === tag ? null : tag)}
+          className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
+            activeTag === tag
+              ? "bg-teal-600 text-white"
+              : "bg-teal-100 text-teal-700 hover:bg-teal-200"
+          }`}
+        >
+          {tag} ({count})
+        </button>
+      ))}
+      {activeTag && (
+        <button
+          onClick={() => onFilter(null)}
+          className="px-3 py-1.5 text-sm rounded-full bg-gray-200 text-gray-600 hover:bg-gray-300"
+        >
+          Clear
+        </button>
+      )}
+    </div>
+  );
+}
+
+function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItems }) {
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState({});
+
+  const filtered = search.trim()
+    ? availableItems.filter((item) =>
+        item.name.toLowerCase().includes(search.toLowerCase()) ||
+        (item.tags && item.tags.some((t) => t.includes(search.toLowerCase())))
+      )
+    : availableItems;
+
+  function toggleItem(itemId) {
+    setSelected((prev) => {
+      if (prev[itemId]) {
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
+      }
+      if (Object.keys(prev).length >= maxItems) return prev;
+      return { ...prev, [itemId]: { itemId, quantity: "" } };
+    });
+  }
+
+  function setQuantity(itemId, quantity) {
+    setSelected((prev) => ({
+      ...prev,
+      [itemId]: { ...prev[itemId], quantity },
+    }));
+  }
+
+  return (
+    <div>
+      <button
+        onClick={onCancel}
+        className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Back to Collection
+      </button>
+
+      <h2 className="text-lg font-semibold mb-3">Add Items to Collection</h2>
+
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search items by name or tag..."
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-base mb-3"
+        autoFocus
+      />
+
+      <div className="space-y-2 mb-4" style={{ maxHeight: "50vh", overflowY: "auto" }}>
+        {filtered.length === 0 ? (
+          <p className="text-muted text-sm py-4 text-center">No matching items</p>
+        ) : (
+          filtered.map((item) => {
+            const isSelected = !!selected[item.id];
+            const contextName = item.contextId && contexts
+              ? contexts.find((c) => c.id === item.contextId)?.name
+              : null;
+            return (
+              <div
+                key={item.id}
+                className={`flex items-center gap-2 p-3 border rounded cursor-pointer ${
+                  isSelected ? "border-primary bg-primary-bg" : "border-gray-200 bg-white hover:border-primary-light"
+                }`}
+                onClick={() => toggleItem(item.id)}
+              >
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                  className="rounded accent-primary pointer-events-none"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm truncate">{item.name}</p>
+                  {contextName && (
+                    <span className="text-xs text-muted">{contextName}</span>
+                  )}
+                </div>
+                {isSelected && (
+                  <input
+                    type="text"
+                    value={selected[item.id]?.quantity || ""}
+                    onChange={(e) => {
+                      e.stopPropagation();
+                      setQuantity(item.id, e.target.value);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    placeholder="Qty"
+                    className="w-20 sm:w-24 px-2 py-2 border border-gray-300 rounded text-base"
+                  />
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={() => onAdd(Object.values(selected))}
+          disabled={Object.keys(selected).length === 0}
+          className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm disabled:opacity-50 text-sm"
+        >
+          Add {Object.keys(selected).length > 0 ? `(${Object.keys(selected).length})` : ""} to Collection
+        </button>
+        <button
+          onClick={onCancel}
+          className="px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg text-sm"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function Alfred() {
   const [view, setView] = useState("home");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -247,6 +614,10 @@ export default function Alfred() {
   const [activeExecutions, setActiveExecutions] = useState([]);
   const [pausedExecutions, setPausedExecutions] = useState([]);
   const [inboxItems, setInboxItems] = useState([]);
+  const [collections, setCollections] = useState([]);
+  const [filterTag, setFilterTag] = useState(null);
+  const [selectedCollectionId, setSelectedCollectionId] = useState(null);
+  const [collectionContextFilter, setCollectionContextFilter] = useState("");
 
   const captureRef = useRef(null);
   const [executionTab, setExecutionTab] = useState("active");
@@ -257,6 +628,8 @@ export default function Alfred() {
   const [selectedIntentionId, setSelectedIntentionId] = useState(null);
   const [selectedItemId, setSelectedItemId] = useState(null);
   const [previousView, setPreviousView] = useState("home");
+  const [intentionReturnView, setIntentionReturnView] = useState("home");
+  const [itemHistoryStack, setItemHistoryStack] = useState([]);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -281,6 +654,10 @@ export default function Alfred() {
     checkAuth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    setFilterTag(null);
+  }, [view]);
 
   async function checkAuth() {
     // Check current session
@@ -413,6 +790,14 @@ export default function Alfred() {
         .filter((item) => item && !item.archived)
         .sort((a, b) => b.createdAt - a.createdAt)
     );
+
+    const collectionKeys = await storage.list("item_collections:");
+    const allCollections = [];
+    for (const key of collectionKeys) {
+      const coll = await storage.get(key);
+      if (coll) allCollections.push(coll);
+    }
+    setCollections(allCollections);
 
     try {
       const { data } = await supabase
@@ -565,6 +950,7 @@ export default function Alfred() {
         time: eventDate,
         itemIds: intent.itemId ? [intent.itemId] : [],
         contextId: intent.contextId,
+        collectionId: intent.collectionId || null,
         archived: false,
         createdAt: Date.now(),
       };
@@ -584,6 +970,7 @@ export default function Alfred() {
       // Be explicit about what we're storing
       const updated = {
         id: intent.id,
+        userId: intent.userId,
         text: updates.text !== undefined ? updates.text : intent.text,
         createdAt: intent.createdAt,
         isIntention:
@@ -603,6 +990,10 @@ export default function Alfred() {
           updates.recurrence !== undefined
             ? updates.recurrence
             : intent.recurrence || "once",
+        tags:
+          updates.tags !== undefined ? updates.tags : intent.tags || [],
+        collectionId:
+          updates.collectionId !== undefined ? updates.collectionId : intent.collectionId || null,
       };
 
       await storage.set(`intent:${intent.id}`, updated);
@@ -643,6 +1034,7 @@ export default function Alfred() {
     return withLoading('Saving...', async () => {
       const updated = {
         id: item.id,
+        userId: item.userId,
         name: updates.name !== undefined ? updates.name : item.name,
         description:
           updates.description !== undefined
@@ -654,6 +1046,8 @@ export default function Alfred() {
           updates.elements !== undefined
             ? updates.elements
             : item.elements || item.components || [],
+        tags:
+          updates.tags !== undefined ? updates.tags : item.tags || [],
         isCaptureTarget:
           updates.isCaptureTarget !== undefined
             ? updates.isCaptureTarget
@@ -673,6 +1067,59 @@ export default function Alfred() {
     });
   }
 
+  async function deepCloneItem(sourceItemId, newName) {
+    const source = items.find((i) => i.id === sourceItemId);
+    if (!source) return null;
+    return withLoading('Cloning...', async () => {
+      const clonedIds = new Map(); // sourceId -> cloneId
+      const newItems = [];
+
+      // Recursively clone item and its children
+      async function cloneRecursive(itemId, visited = new Set()) {
+        if (visited.has(itemId) || clonedIds.has(itemId)) return clonedIds.get(itemId);
+        visited.add(itemId);
+
+        const item = items.find((i) => i.id === itemId);
+        if (!item) return null;
+
+        const cloneId = uid();
+        clonedIds.set(itemId, cloneId);
+
+        // Clone child references first
+        const clonedElements = [];
+        for (const el of (item.elements || [])) {
+          if (el.itemId) {
+            const childCloneId = await cloneRecursive(el.itemId, new Set(visited));
+            clonedElements.push({ ...el, itemId: childCloneId || el.itemId });
+          } else {
+            clonedElements.push({ ...el });
+          }
+        }
+
+        const cloned = {
+          id: cloneId,
+          userId: user.id,
+          name: itemId === sourceItemId ? newName : item.name,
+          description: item.description || "",
+          contextId: item.contextId || null,
+          elements: clonedElements,
+          tags: [...(item.tags || [])],
+          isCaptureTarget: false,
+          archived: false,
+          createdAt: Date.now(),
+        };
+
+        await storage.set(`item:${cloneId}`, cloned);
+        newItems.push(cloned);
+        return cloneId;
+      }
+
+      await cloneRecursive(sourceItemId);
+      setItems((prev) => [...prev, ...newItems]);
+      return newItems.find((i) => i.id === clonedIds.get(sourceItemId));
+    });
+  }
+
   async function updateEvent(eventId, updates) {
     const event = events.find((e) => e.id === eventId);
     if (!event) return;
@@ -687,23 +1134,52 @@ export default function Alfred() {
     const event = events.find((e) => e.id === eventId);
     if (!event) return;
     return withLoading('Starting execution...', async () => {
+      // Collection-based execution
+      if (event.collectionId) {
+        const execution = {
+          id: uid(),
+          user_id: user.id,
+          eventId,
+          intentId: event.intentId,
+          contextId: event.contextId,
+          collectionId: event.collectionId,
+          itemIds: [],
+          startedAt: Date.now(),
+          status: "active",
+          notes: "",
+          elements: [],
+          completedItemIds: [],
+          progress: [],
+        };
+        await storage.set(`execution:${execution.id}`, execution);
+        setActiveExecution(execution);
+        setActiveExecutions((prev) => [execution, ...prev]);
+        setPreviousView(view);
+        setView("execution-detail");
+        return;
+      }
+
+      // Item-based execution
       const itemElements = [];
+      const getItem = (id) => items.find((i) => i.id === id) || null;
       if (event.itemIds && event.itemIds.length > 0) {
         for (const itemId of event.itemIds) {
           const item = items.find((i) => i.id === itemId);
           if (item && (item.elements || item.components)) {
-            const els = (item.elements || item.components).map((el) => {
-              const element =
-                typeof el === "string"
-                  ? { name: el, displayType: "step", quantity: "", description: "" }
-                  : { ...el };
-              return {
-                ...element,
-                isCompleted: false,
-                completedAt: null,
-                sourceItemId: itemId,
-              };
-            });
+            const rawEls = (item.elements || item.components).map((el) =>
+              typeof el === "string"
+                ? { name: el, displayType: "step", quantity: "", description: "" }
+                : { ...el }
+            );
+            const flattened = await flattenElements(rawEls, getItem);
+            const els = flattened.map((el) => ({
+              ...el,
+              isCompleted: false,
+              completedAt: null,
+              inProgress: false,
+              startedAt: null,
+              sourceItemId: el.sourceItemId || itemId,
+            }));
             itemElements.push(...els);
           }
         }
@@ -769,6 +1245,24 @@ export default function Alfred() {
         setIntents(intents.map((i) => (i.id === intent.id ? archivedIntent : i)));
       }
 
+      // Remove completed items from collection
+      if (outcome === "done" && activeExecution.collectionId) {
+        const completedIds = activeExecution.completedItemIds || [];
+        if (completedIds.length > 0) {
+          const coll = collections.find((c) => c.id === activeExecution.collectionId);
+          if (coll) {
+            const remainingItems = (coll.items || []).filter(
+              (ci) => !completedIds.includes(ci.itemId)
+            );
+            const updatedColl = { ...coll, items: remainingItems };
+            await storage.set(`item_collections:${coll.id}`, updatedColl);
+            setCollections(collections.map((c) =>
+              c.id === coll.id ? updatedColl : c
+            ));
+          }
+        }
+      }
+
       setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
       setActiveExecution(null);
       setView(previousView);
@@ -821,7 +1315,23 @@ export default function Alfred() {
       ...el,
       isCompleted: !el.isCompleted,
       completedAt: !el.isCompleted ? Date.now() : null,
+      inProgress: false,
     };
+    const updated = { ...activeExecution, elements: updatedElements };
+    await storage.set(`execution:${updated.id}`, updated);
+    setActiveExecution(updated);
+    setActiveExecutions((prev) =>
+      prev.map((e) => (e.id === updated.id ? updated : e))
+    );
+    setPausedExecutions((prev) =>
+      prev.map((e) => (e.id === updated.id ? updated : e))
+    );
+  }
+
+  async function updateExecutionElement(elementIndex, fields) {
+    if (!activeExecution) return;
+    const updatedElements = [...activeExecution.elements];
+    updatedElements[elementIndex] = { ...updatedElements[elementIndex], ...fields };
     const updated = { ...activeExecution, elements: updatedElements };
     await storage.set(`execution:${updated.id}`, updated);
     setActiveExecution(updated);
@@ -844,6 +1354,44 @@ export default function Alfred() {
     setPausedExecutions((prev) =>
       prev.map((e) => (e.id === updated.id ? updated : e))
     );
+  }
+
+  async function toggleCollectionItem(itemId) {
+    if (!activeExecution) return;
+    const completed = activeExecution.completedItemIds || [];
+    const isCompleted = completed.includes(itemId);
+    const updatedIds = isCompleted
+      ? completed.filter((id) => id !== itemId)
+      : [...completed, itemId];
+    const updated = { ...activeExecution, completedItemIds: updatedIds };
+    await storage.set(`execution:${updated.id}`, updated);
+    setActiveExecution(updated);
+    setActiveExecutions((prev) =>
+      prev.map((e) => (e.id === updated.id ? updated : e))
+    );
+    setPausedExecutions((prev) =>
+      prev.map((e) => (e.id === updated.id ? updated : e))
+    );
+  }
+
+  async function updateCollectionItemQty(collectionId, itemId, quantity) {
+    const coll = collections.find((c) => c.id === collectionId);
+    if (!coll) return;
+    const newItems = (coll.items || []).map((ci) =>
+      ci.itemId === itemId ? { ...ci, quantity } : ci
+    );
+    const updated = { ...coll, items: newItems };
+    await storage.set(`item_collections:${coll.id}`, updated);
+    setCollections(collections.map((c) => (c.id === collectionId ? updated : c)));
+  }
+
+  async function refreshCollection(collectionId) {
+    const coll = await storage.get(`item_collections:${collectionId}`);
+    if (coll) {
+      setCollections((prev) =>
+        prev.map((c) => (c.id === collectionId ? coll : c))
+      );
+    }
   }
 
   async function saveContext(
@@ -904,24 +1452,38 @@ export default function Alfred() {
 
   function viewIntentionDetail(intentionId, fromView) {
     setSelectedIntentionId(intentionId);
-    setPreviousView(fromView || view);
+    setIntentionReturnView(fromView || view);
     setView("intention-detail");
   }
 
   function handleBackFromIntentionDetail() {
     setSelectedIntentionId(null);
-    setView(previousView);
+    setView(intentionReturnView);
   }
 
   function viewItemDetail(itemId, fromView) {
+    // If already on item-detail, push current item onto stack
+    if (view === "item-detail" && selectedItemId) {
+      setItemHistoryStack((prev) => [...prev, selectedItemId]);
+    } else {
+      setPreviousView(fromView || view);
+      setItemHistoryStack([]);
+    }
     setSelectedItemId(itemId);
-    setPreviousView(fromView || view);
     setView("item-detail");
   }
 
   function handleBackFromItemDetail() {
-    setSelectedItemId(null);
-    setView(previousView);
+    if (itemHistoryStack.length > 0) {
+      // Pop back to previous item
+      const stack = [...itemHistoryStack];
+      const prevItemId = stack.pop();
+      setItemHistoryStack(stack);
+      setSelectedItemId(prevItemId);
+    } else {
+      setSelectedItemId(null);
+      setView(previousView);
+    }
   }
 
   function handleEditContextFromDetail() {
@@ -965,6 +1527,7 @@ export default function Alfred() {
     contextId,
     recurrence = "once",
     itemId = null,
+    collectionId = null,
   ) {
     return withLoading('Saving...', async () => {
       const newIntent = {
@@ -978,6 +1541,7 @@ export default function Alfred() {
         itemId: itemId,
         contextId: contextId,
         recurrence: recurrence,
+        collectionId: collectionId,
       };
 
       await storage.set(`intent:${newIntent.id}`, newIntent);
@@ -986,6 +1550,47 @@ export default function Alfred() {
     });
   }
 
+
+  // Collection CRUD
+  async function addCollection(name, contextId = null) {
+    return withLoading('Creating collection...', async () => {
+      const newColl = {
+        id: uid(),
+        userId: user.id,
+        name: name || "New Collection",
+        contextId: contextId || null,
+        shared: false,
+        isCaptureTarget: false,
+        items: [],
+        createdAt: new Date().toISOString(),
+      };
+      await storage.set(`item_collections:${newColl.id}`, newColl);
+      setCollections([...collections, newColl]);
+      return newColl.id;
+    });
+  }
+
+  async function updateCollection(collId, updates, silent = false) {
+    const coll = collections.find((c) => c.id === collId);
+    if (!coll) return;
+    const doSave = async () => {
+      const updated = { ...coll, ...updates };
+      await storage.set(`item_collections:${coll.id}`, updated);
+      setCollections(collections.map((c) => (c.id === collId ? updated : c)));
+    };
+    if (silent) {
+      try { await doSave(); } catch (e) { console.error('Collection save error:', e); }
+    } else {
+      return withLoading('Saving...', doSave);
+    }
+  }
+
+  async function deleteCollection(collId) {
+    return withLoading('Deleting...', async () => {
+      await storage.delete(`item_collections:${collId}`);
+      setCollections(collections.filter((c) => c.id !== collId));
+    });
+  }
 
   // Filter events to only show those with valid, non-archived intents
   const validEvents = events.filter((e) => {
@@ -1040,21 +1645,24 @@ export default function Alfred() {
       setEvents((prev) => [...prev, newEvent]);
 
       // Build execution inline (can't call activate — state hasn't updated yet)
-      const itemElements = [];
+      let itemElements = [];
       if (item.elements || item.components) {
-        const els = (item.elements || item.components).map((el) => {
-          const element =
-            typeof el === "string"
-              ? { name: el, displayType: "step", quantity: "", description: "" }
-              : { ...el };
-          return {
-            ...element,
-            isCompleted: false,
-            completedAt: null,
-            sourceItemId: item.id,
-          };
-        });
-        itemElements.push(...els);
+        const rawEls = (item.elements || item.components).map((el) =>
+          typeof el === "string"
+            ? { name: el, displayType: "step", quantity: "", description: "" }
+            : { ...el }
+        );
+        // Flatten item references
+        const getItem = (id) => items.find((i) => i.id === id) || null;
+        const flattened = await flattenElements(rawEls, getItem);
+        itemElements = flattened.map((el) => ({
+          ...el,
+          isCompleted: false,
+          completedAt: null,
+          inProgress: false,
+          startedAt: null,
+          sourceItemId: el.sourceItemId || item.id,
+        }));
       }
 
       const execution = {
@@ -1096,28 +1704,56 @@ export default function Alfred() {
         time: getTodayDate(),
         itemIds: linkedItem ? [linkedItem.id] : [],
         contextId: intent.contextId || null,
+        collectionId: intent.collectionId || null,
         archived: false,
         createdAt: Date.now(),
       };
       await storage.set(`event:${newEvent.id}`, newEvent);
       setEvents((prev) => [...prev, newEvent]);
 
+      // Collection-based execution
+      if (intent.collectionId) {
+        const execution = {
+          id: uid(),
+          user_id: user.id,
+          eventId: newEvent.id,
+          intentId: intent.id,
+          contextId: intent.contextId || null,
+          collectionId: intent.collectionId,
+          itemIds: [],
+          startedAt: Date.now(),
+          status: "active",
+          notes: "",
+          elements: [],
+          completedItemIds: [],
+          progress: [],
+        };
+        await storage.set(`execution:${execution.id}`, execution);
+        setActiveExecution(execution);
+        setActiveExecutions((prev) => [execution, ...prev]);
+        setPreviousView(view);
+        setView("execution-detail");
+        return;
+      }
+
       // Build execution elements from linked item
-      const itemElements = [];
+      let itemElements = [];
       if (linkedItem && (linkedItem.elements || linkedItem.components)) {
-        const els = (linkedItem.elements || linkedItem.components).map((el) => {
-          const element =
-            typeof el === "string"
-              ? { name: el, displayType: "step", quantity: "", description: "" }
-              : { ...el };
-          return {
-            ...element,
-            isCompleted: false,
-            completedAt: null,
-            sourceItemId: linkedItem.id,
-          };
-        });
-        itemElements.push(...els);
+        const rawEls = (linkedItem.elements || linkedItem.components).map((el) =>
+          typeof el === "string"
+            ? { name: el, displayType: "step", quantity: "", description: "" }
+            : { ...el }
+        );
+        const getItem = (id) => items.find((i) => i.id === id) || null;
+        const flattened = await flattenElements(rawEls, getItem);
+        itemElements = flattened.map((el) => ({
+          ...el,
+          isCompleted: false,
+          completedAt: null,
+          inProgress: false,
+          startedAt: null,
+          sourceItemId: el.sourceItemId || linkedItem.id,
+        }));
       }
 
       const execution = {
@@ -1238,6 +1874,7 @@ export default function Alfred() {
                 { key: "schedule", label: `Schedule${allNonArchivedEvents.length > 0 ? ` (${allNonArchivedEvents.length})` : ""}`, icon: "📅" },
                 { key: "intentions", label: "Intentions", icon: "💡" },
                 { key: "memories", label: "Memories", icon: "⭐" },
+                { key: "collections", label: "Collections", icon: "📋" },
                 { key: "sam", label: "Sam", icon: "🎹" },
               ].map((item) => (
                 <button
@@ -1359,6 +1996,16 @@ export default function Alfred() {
               }`}
             >
               Memories
+            </button>
+            <button
+              onClick={() => setView("collections")}
+              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+                view === "collections"
+                  ? "bg-primary text-white shadow-sm"
+                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
+              }`}
+            >
+              Collections
             </button>
             <button
               onClick={() => {
@@ -1596,7 +2243,7 @@ export default function Alfred() {
             contexts={contexts}
             onBack={() => {
               setSelectedContextId(null);
-              setView(previousView);
+              setView("contexts");
             }}
             getIntentDisplay={getIntentDisplay}
             onUpdateItem={updateItem}
@@ -1617,6 +2264,10 @@ export default function Alfred() {
             onCancelExecution={cancelExecutionForEvent}
             onStartNow={startNowFromIntention}
             onArchiveIntention={archiveIntention}
+            filterTag={filterTag}
+            onFilterTag={setFilterTag}
+            allItems={items}
+            collections={collections}
           />
         )}
 
@@ -1642,6 +2293,7 @@ export default function Alfred() {
             onOpenExecution={openExecution}
             onCancelExecution={cancelExecutionForEvent}
             onArchiveIntention={archiveIntention}
+            collections={collections}
           />
         )}
 
@@ -1670,6 +2322,14 @@ export default function Alfred() {
             onCancelExecution={cancelExecutionForEvent}
             onStartNowIntention={startNowFromIntention}
             onArchiveIntention={archiveIntention}
+            onViewItem={viewItemDetail}
+            onClone={async (itemId, newName) => {
+              const cloned = await deepCloneItem(itemId, newName);
+              if (cloned) {
+                viewItemDetail(cloned.id, "item-detail");
+              }
+            }}
+            collections={collections}
           />
         )}
 
@@ -1681,7 +2341,12 @@ export default function Alfred() {
             event={events.find((e) => e.id === activeExecution.eventId)}
             items={items}
             contexts={contexts}
+            collections={collections}
             onToggleElement={toggleExecutionElement}
+            onUpdateElement={updateExecutionElement}
+            onToggleCollectionItem={toggleCollectionItem}
+            onUpdateCollectionItemQty={updateCollectionItemQty}
+            onRefreshCollection={refreshCollection}
             onUpdateNotes={updateExecutionNotes}
             onComplete={() => closeExecution("done")}
             onPause={pauseExecution}
@@ -1756,12 +2421,14 @@ export default function Alfred() {
                   }}
                   contexts={contexts}
                   items={items}
+                  collections={collections}
                   onUpdate={async (_, updates, scheduledDate) => {
                     const newIntentId = await handleAddIntentionToContext(
                       updates.text,
                       updates.contextId || null,
                       updates.recurrence || "once",
                       updates.itemId || null,
+                      updates.collectionId || null,
                     );
                     if (scheduledDate && newIntentId) {
                       moveToPlanner(newIntentId, scheduledDate);
@@ -1777,6 +2444,8 @@ export default function Alfred() {
               </div>
             )}
 
+            <TagFilter entities={intentionsWithoutActiveEvent} activeTag={filterTag} onFilter={setFilterTag} />
+
             {intentionsWithoutActiveEvent.length === 0 && !showAddIntentionForm ? (
               <div className="text-center py-12 text-muted">
                 <p>No available intentions.</p>
@@ -1786,12 +2455,15 @@ export default function Alfred() {
               </div>
             ) : (
               <div className="space-y-3">
-                {intentionsWithoutActiveEvent.map((intent) => (
+                {intentionsWithoutActiveEvent
+                  .filter((intent) => !filterTag || (intent.tags && intent.tags.includes(filterTag)))
+                  .map((intent) => (
                   <IntentionCard
                     key={intent.id}
                     intent={intent}
                     contexts={contexts}
                     items={items}
+                    collections={collections}
                     onUpdate={updateIntent}
                     onSchedule={moveToPlanner}
                     onStartNow={startNowFromIntention}
@@ -1816,13 +2488,16 @@ export default function Alfred() {
         {view === "memories" && (
           <div>
             <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Memories</h2>
+            <TagFilter entities={memoriesWithoutContext} activeTag={filterTag} onFilter={setFilterTag} />
             {memoriesWithoutContext.length === 0 ? (
               <div className="text-center py-12 text-muted">
                 <p>No memories without context.</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {memoriesWithoutContext.map((item) => (
+                {memoriesWithoutContext
+                  .filter((item) => !filterTag || (item.tags && item.tags.includes(filterTag)))
+                  .map((item) => (
                   <ItemCard
                     key={item.id}
                     item={item}
@@ -1839,6 +2514,262 @@ export default function Alfred() {
             )}
           </div>
         )}
+
+        {/* Collections View */}
+        {view === "collections" && (
+          <div>
+            <div className="flex items-center justify-between mb-3 sm:mb-4">
+              <h2 className="text-lg sm:text-xl font-semibold">Collections</h2>
+              <button
+                onClick={async () => {
+                  const id = await addCollection("New Collection");
+                  if (id) {
+                    setPreviousView("collections");
+                    setSelectedCollectionId(id);
+                    setView("collection-detail");
+                  }
+                }}
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              >
+                <Plus className="w-4 h-4" />
+                New Collection
+              </button>
+            </div>
+
+            {contexts.length > 0 && (
+              <div className="mb-3">
+                <select
+                  value={collectionContextFilter}
+                  onChange={(e) => setCollectionContextFilter(e.target.value)}
+                  className="px-3 py-2 min-h-[44px] border border-gray-300 rounded text-base"
+                >
+                  <option value="">All Contexts</option>
+                  <option value="__none__">No Context</option>
+                  {contexts.filter((c) => !c.archived).map((ctx) => (
+                    <option key={ctx.id} value={ctx.id}>{ctx.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {(() => {
+              const filtered = collections.filter((coll) => {
+                if (!collectionContextFilter) return true;
+                if (collectionContextFilter === "__none__") return !coll.contextId;
+                return coll.contextId === collectionContextFilter;
+              });
+
+              if (filtered.length === 0) return (
+                <div className="text-center py-12 text-muted">
+                  <p>No collections{collectionContextFilter ? " in this context" : " yet"}.</p>
+                  <p className="text-sm mt-2">Create a collection to group items together.</p>
+                </div>
+              );
+
+              return (
+              <div className="space-y-2">
+                {filtered.map((coll) => {
+                  const contextName = coll.contextId && contexts
+                    ? contexts.find((c) => c.id === coll.contextId)?.name
+                    : null;
+                  return (
+                    <div
+                      key={coll.id}
+                      onClick={() => {
+                        setPreviousView("collections");
+                        setSelectedCollectionId(coll.id);
+                        setView("collection-detail");
+                      }}
+                      className="p-3 sm:p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium">{coll.name}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-sm text-muted">
+                              {coll.items ? coll.items.length : 0} {coll.items && coll.items.length === 1 ? "item" : "items"}
+                            </span>
+                            {contextName && (
+                              <span className="text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
+                                {contextName}
+                              </span>
+                            )}
+                            {coll.shared && (
+                              <span className="text-xs text-primary flex items-center gap-1">
+                                <Share2 className="w-3 h-3" />
+                                Shared
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* Collection Detail View */}
+        {view === "collection-detail" && (() => {
+          const coll = collections.find((c) => c.id === selectedCollectionId);
+          if (!coll) return <p className="text-muted">Collection not found</p>;
+          return (
+            <div>
+              <button
+                onClick={() => {
+                  setSelectedCollectionId(null);
+                  setView(previousView || "collections");
+                }}
+                className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Back
+              </button>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                  <input
+                    type="text"
+                    value={coll.name}
+                    onChange={(e) => {
+                      const updated = { ...coll, name: e.target.value };
+                      setCollections(collections.map((c) => (c.id === coll.id ? updated : c)));
+                    }}
+                    onBlur={() => updateCollection(coll.id, { name: coll.name }, true)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Context</label>
+                  <select
+                    value={coll.contextId || ""}
+                    onChange={(e) => updateCollection(coll.id, { contextId: e.target.value || null })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                  >
+                    <option value="">No context</option>
+                    {contexts.map((ctx) => (
+                      <option key={ctx.id} value={ctx.id}>{ctx.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={coll.shared || false}
+                    onChange={(e) => updateCollection(coll.id, { shared: e.target.checked })}
+                    className="rounded accent-primary"
+                  />
+                  <span className="text-sm">Shared collection</span>
+                </label>
+
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-base font-semibold">
+                      Items ({coll.items ? coll.items.length : 0})
+                    </h3>
+                    <button
+                      onClick={() => setView("collection-add-items")}
+                      className="flex items-center gap-2 px-3 py-2 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Add Items
+                    </button>
+                  </div>
+
+                  {coll.items && coll.items.length >= 50 && coll.items.length < 200 && (
+                    <p className="text-xs text-amber-600 mb-2">Warning: {coll.items.length} items. Performance may degrade above 200.</p>
+                  )}
+                  {coll.items && coll.items.length >= 200 && (
+                    <p className="text-xs text-red-500 mb-2">Maximum 200 items reached.</p>
+                  )}
+
+                  {(!coll.items || coll.items.length === 0) ? (
+                    <p className="text-muted text-sm py-4 text-center">No items in this collection</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {coll.items.map((collItem, index) => {
+                        const linkedItem = items.find((i) => i.id === collItem.itemId);
+                        return (
+                          <div key={collItem.itemId || index} className="flex items-center gap-2 p-3 bg-white border border-gray-200 rounded">
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-sm truncate">
+                                {linkedItem ? linkedItem.name : collItem.itemId}
+                              </p>
+                            </div>
+                            <input
+                              type="text"
+                              value={collItem.quantity || ""}
+                              onChange={(e) => {
+                                const newItems = [...coll.items];
+                                newItems[index] = { ...newItems[index], quantity: e.target.value };
+                                setCollections(collections.map((c) => (c.id === coll.id ? { ...coll, items: newItems } : c)));
+                              }}
+                              onBlur={() => updateCollection(coll.id, { items: coll.items }, true)}
+                              placeholder="Qty"
+                              className="w-20 sm:w-24 px-2 py-2 border border-gray-300 rounded text-base"
+                            />
+                            <button
+                              onClick={() => {
+                                const newItems = coll.items.filter((_, i) => i !== index);
+                                updateCollection(coll.id, { items: newItems });
+                              }}
+                              className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-danger"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-4 border-t border-gray-200">
+                  <button
+                    onClick={() => {
+                      if (window.confirm("Delete this collection?")) {
+                        deleteCollection(coll.id);
+                        setSelectedCollectionId(null);
+                        setView("collections");
+                      }
+                    }}
+                    className="px-4 py-2.5 min-h-[44px] bg-danger hover:bg-danger-hover text-white rounded-lg text-sm"
+                  >
+                    Delete Collection
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Collection Add Items View */}
+        {view === "collection-add-items" && (() => {
+          const coll = collections.find((c) => c.id === selectedCollectionId);
+          if (!coll) return <p className="text-muted">Collection not found</p>;
+          const existingItemIds = new Set((coll.items || []).map((ci) => ci.itemId));
+          const availableItems = items.filter((i) => !i.archived && !existingItemIds.has(i.id));
+
+          return (
+            <CollectionAddItems
+              availableItems={availableItems}
+              contexts={contexts}
+              onAdd={(selectedItems) => {
+                const newItems = [...(coll.items || []), ...selectedItems];
+                updateCollection(coll.id, { items: newItems });
+                setView("collection-detail");
+              }}
+              onCancel={() => setView("collection-detail")}
+              maxItems={200 - (coll.items ? coll.items.length : 0)}
+            />
+          );
+        })()}
 
         {/* Settings View */}
         {view === "settings" && (
@@ -2588,6 +3519,10 @@ function ContextDetailView({
   onCancelExecution,
   onStartNow,
   onArchiveIntention,
+  filterTag,
+  onFilterTag,
+  allItems = [],
+  collections = [],
 }) {
   const [showAddItemForm, setShowAddItemForm] = useState(false);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
@@ -2636,6 +3571,8 @@ function ContextDetailView({
       updates.text,
       finalContextId,
       updates.recurrence,
+      updates.itemId || null,
+      updates.collectionId || null,
     );
 
     if (scheduledDate && onSchedule) {
@@ -2698,21 +3635,26 @@ function ContextDetailView({
                 onUpdate={handleSaveNewItem}
                 isEditing={true}
                 onCancel={() => setShowAddItemForm(false)}
+                allItems={allItems}
               />
             </div>
           )}
 
+          <TagFilter entities={items} activeTag={filterTag} onFilter={onFilterTag} />
           {items.length === 0 ? (
             <p className="text-muted text-sm">No items in this context</p>
           ) : (
             <div className="space-y-2">
-              {items.map((item) => (
+              {items
+                .filter((item) => !filterTag || (item.tags && item.tags.includes(filterTag)))
+                .map((item) => (
                 <ItemCard
                   key={item.id}
                   item={item}
                   contexts={contexts}
                   onUpdate={onUpdateItem}
                   onViewDetail={onViewItemDetail}
+                  allItems={allItems}
                   executions={executions.filter((ex) => ex.itemIds?.includes(item.id))}
                   intents={intents}
                   getIntentDisplay={getIntentDisplay}
@@ -2743,6 +3685,7 @@ function ContextDetailView({
                 intent={newIntention}
                 contexts={contexts}
                 items={items}
+                collections={collections}
                 onUpdate={handleSaveNewIntention}
                 onSchedule={onSchedule}
                 getIntentDisplay={getIntentDisplay}
@@ -2765,6 +3708,7 @@ function ContextDetailView({
                   intent={intent}
                   contexts={contexts}
                   items={items}
+                  collections={collections}
                   getIntentDisplay={getIntentDisplay}
                   onUpdate={onUpdateIntent}
                   onSchedule={onSchedule}
@@ -2805,6 +3749,7 @@ function IntentionDetailView({
   onOpenExecution,
   onCancelExecution,
   onArchiveIntention,
+  collections = [],
 }) {
   const [isEditing, setIsEditing] = useState(false);
 
@@ -2837,6 +3782,7 @@ function IntentionDetailView({
           intent={intention}
           contexts={contexts}
           items={items}
+          collections={collections}
           onUpdate={(id, updates, scheduledDate) => {
             onUpdateIntention(id, updates, scheduledDate);
             setIsEditing(false);
@@ -2965,9 +3911,14 @@ function ItemDetailView({
   onCancelExecution,
   onStartNowIntention,
   onArchiveIntention,
+  onViewItem,
+  onClone,
+  collections = [],
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
+  const [showCloneDialog, setShowCloneDialog] = useState(false);
+  const [cloneName, setCloneName] = useState("");
 
   if (!item) return null;
 
@@ -3007,6 +3958,7 @@ function ItemDetailView({
           }}
           isEditing={true}
           onCancel={() => setIsEditing(false)}
+          allItems={items}
         />
       </div>
     );
@@ -3042,6 +3994,18 @@ function ItemDetailView({
                 Start Now
               </button>
             )}
+            {onClone && (
+              <button
+                onClick={() => {
+                  setCloneName(item.name + " (Copy)");
+                  setShowCloneDialog(true);
+                }}
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              >
+                <Copy className="w-4 h-4" />
+                <span className="hidden sm:inline">Clone</span>
+              </button>
+            )}
             <button
               onClick={() => setIsEditing(true)}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
@@ -3053,6 +4017,48 @@ function ItemDetailView({
           </div>
         </div>
       </div>
+
+      {/* Clone Dialog */}
+      {showCloneDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold mb-4">Clone Item</h3>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Name for clone</label>
+            <input
+              type="text"
+              value={cloneName}
+              onChange={(e) => setCloneName(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-primary"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && cloneName.trim()) {
+                  setShowCloneDialog(false);
+                  onClone(item.id, cloneName.trim());
+                }
+              }}
+            />
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowCloneDialog(false)}
+                className="px-4 py-2 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (cloneName.trim()) {
+                    setShowCloneDialog(false);
+                    onClone(item.id, cloneName.trim());
+                  }
+                }}
+                className="px-4 py-2 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg"
+              >
+                Clone
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Item Description */}
       {item.description && (
@@ -3149,6 +4155,57 @@ function ItemDetailView({
           </div>
         )}
 
+      {/* References Section - items this item links to */}
+      {(() => {
+        const refs = (item.elements || [])
+          .filter((el) => el.itemId)
+          .map((el) => items.find((i) => i.id === el.itemId))
+          .filter(Boolean);
+        if (refs.length === 0) return null;
+        return (
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold mb-3">References ({refs.length})</h3>
+            <div className="space-y-1">
+              {refs.map((ref) => (
+                <button
+                  key={ref.id}
+                  onClick={() => onViewItem(ref.id, "item-detail")}
+                  className="flex items-center gap-2 w-full text-left px-3 py-2 rounded hover:bg-gray-100 text-primary hover:text-primary-hover"
+                >
+                  <span>→</span>
+                  <span>{ref.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Used In Section - items that reference this item */}
+      {(() => {
+        const parents = items.filter(
+          (i) => i.id !== item.id && !i.archived && (i.elements || []).some((el) => el.itemId === item.id)
+        );
+        if (parents.length === 0) return null;
+        return (
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold mb-3">Used In ({parents.length})</h3>
+            <div className="space-y-1">
+              {parents.map((parent) => (
+                <button
+                  key={parent.id}
+                  onClick={() => onViewItem(parent.id, "item-detail")}
+                  className="flex items-center gap-2 w-full text-left px-3 py-2 rounded hover:bg-gray-100 text-primary hover:text-primary-hover"
+                >
+                  <span>←</span>
+                  <span>{parent.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Active/Paused Executions Section */}
       {executions.length > 0 && (
         <div className="mb-6">
@@ -3202,12 +4259,14 @@ function ItemDetailView({
               }}
               contexts={contexts}
               items={items}
+              collections={collections}
               onUpdate={async (_, updates, scheduledDate) => {
                 const newIntentId = await onAddIntention(
                   updates.text,
                   updates.contextId !== undefined ? updates.contextId : item.contextId,
                   updates.recurrence || "once",
                   updates.itemId !== undefined ? updates.itemId : item.id,
+                  updates.collectionId || null,
                 );
                 if (scheduledDate && onSchedule && newIntentId) {
                   onSchedule(newIntentId, scheduledDate);
@@ -3235,6 +4294,7 @@ function ItemDetailView({
                 intent={intent}
                 contexts={contexts}
                 items={items}
+                collections={collections}
                 onUpdate={onUpdateIntent}
                 onSchedule={onSchedule}
                 onStartNow={onStartNowIntention}
@@ -3262,7 +4322,12 @@ function ExecutionDetailView({
   event,
   items,
   contexts,
+  collections,
   onToggleElement,
+  onUpdateElement,
+  onToggleCollectionItem,
+  onUpdateCollectionItemQty,
+  onRefreshCollection,
   onUpdateNotes,
   onComplete,
   onPause,
@@ -3272,6 +4337,35 @@ function ExecutionDetailView({
   getIntentDisplay,
 }) {
   const [localNotes, setLocalNotes] = useState(execution.notes || "");
+  const [, setTick] = useState(0);
+
+  // Poll collection every 5 seconds for collection-based executions
+  useEffect(() => {
+    if (!execution.collectionId || !onRefreshCollection) return;
+    onRefreshCollection(execution.collectionId);
+    const interval = setInterval(() => {
+      onRefreshCollection(execution.collectionId);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [execution.collectionId]);
+
+  // Timer tick for in-progress elements
+  useEffect(() => {
+    const hasInProgress = execution.elements?.some((el) => el.inProgress);
+    if (!hasInProgress) return;
+    const interval = setInterval(() => setTick((t) => t + 1), 10000);
+    return () => clearInterval(interval);
+  }, [execution.elements]);
+
+  function formatElapsed(startedAt) {
+    if (!startedAt) return "";
+    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m ago`;
+  }
 
   const contextName =
     execution.contextId && contexts
@@ -3308,15 +4402,98 @@ function ExecutionDetailView({
         </div>
       </div>
 
-      {execution.elements && execution.elements.length > 0 && (
+      {/* Collection-based execution view */}
+      {execution.collectionId && (() => {
+        const coll = collections?.find((c) => c.id === execution.collectionId);
+        const collItems = coll?.items || [];
+        const completedIds = execution.completedItemIds || [];
+        const completedCount = collItems.filter((ci) => completedIds.includes(ci.itemId)).length;
+
+        return (
+          <div className="mb-6">
+            <div className="border-t border-gray-200 pt-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-base font-semibold">
+                  {coll ? coll.name : "Collection"} ({completedCount}/{collItems.length})
+                </h3>
+              </div>
+              {collItems.length === 0 ? (
+                <p className="text-muted text-sm py-4 text-center">No items in collection</p>
+              ) : (
+                <div className="space-y-1">
+                  {collItems.map((collItem) => {
+                    const linkedItem = items.find((i) => i.id === collItem.itemId);
+                    const isChecked = completedIds.includes(collItem.itemId);
+                    return (
+                      <div
+                        key={collItem.itemId}
+                        className="flex items-center gap-3 py-2 px-3 rounded hover:bg-gray-50"
+                      >
+                        <span
+                          onClick={() => onToggleCollectionItem(collItem.itemId)}
+                          className={`w-5 h-5 flex-shrink-0 rounded border-2 flex items-center justify-center cursor-pointer ${
+                            isChecked
+                              ? "bg-primary border-primary"
+                              : "bg-white border-gray-300"
+                          }`}
+                        >
+                          {isChecked && (
+                            <Check className="w-3 h-3 text-white" />
+                          )}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <span className={isChecked ? "line-through text-gray-400" : "text-gray-800"}>
+                            {linkedItem ? linkedItem.name : collItem.itemId}
+                          </span>
+                        </div>
+                        <input
+                          type="text"
+                          value={collItem.quantity || ""}
+                          onChange={(e) => {
+                            onUpdateCollectionItemQty(execution.collectionId, collItem.itemId, e.target.value);
+                          }}
+                          placeholder="Qty"
+                          className="w-20 sm:w-24 px-2 py-2 border border-gray-300 rounded text-base"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Element-based execution view */}
+      {!execution.collectionId && execution.elements && execution.elements.length > 0 && (
         <div className="mb-6">
           <div className="border-t border-gray-200 pt-4 space-y-2">
             {(() => {
               let stepCounter = 0;
               return execution.elements.map((el, index) => {
+                const indent = el.indent || 0;
+                const indentPx = indent * 24;
+
+                if (el.missing) {
+                  return (
+                    <div key={index} className="flex items-center gap-2 py-1 text-gray-400 italic" style={{ marginLeft: indentPx }}>
+                      <span>⚠ {el.name} (item deleted)</span>
+                    </div>
+                  );
+                }
+
+                if (el.circular) {
+                  return (
+                    <div key={index} className="flex items-center gap-2 py-1 text-gray-400 italic" style={{ marginLeft: indentPx }}>
+                      <span>↻ {el.name} (circular ref)</span>
+                    </div>
+                  );
+                }
+
                 if (el.displayType === "header") {
                   return (
-                    <div key={index} className="mt-4 mb-2">
+                    <div key={index} className="mt-4 mb-2" style={{ marginLeft: indentPx }}>
                       <h4 className="text-md font-bold text-gray-800 uppercase tracking-wide">
                         {el.name}
                       </h4>
@@ -3326,7 +4503,7 @@ function ExecutionDetailView({
 
                 if (el.displayType === "bullet") {
                   return (
-                    <div key={index} className="ml-4 flex items-start gap-2 py-1">
+                    <div key={index} className="flex items-start gap-2 py-1" style={{ marginLeft: indentPx + 16 }}>
                       <span className="text-muted mt-0.5">•</span>
                       <div className="flex-1">
                         <span className="text-gray-700">
@@ -3347,43 +4524,71 @@ function ExecutionDetailView({
                 stepCounter++;
                 const stepNum = stepCounter;
                 return (
-                  <div
-                    key={index}
-                    onClick={() => onToggleElement(index)}
-                    className="flex items-start gap-3 py-2 px-3 rounded cursor-pointer hover:bg-gray-50"
-                  >
-                    <span className={`font-medium min-w-[24px] mt-0.5 ${el.isCompleted ? "text-gray-400" : "text-gray-600"}`}>
-                      {stepNum}.
-                    </span>
-                    <span className={`mt-1 w-5 h-5 flex-shrink-0 rounded border-2 flex items-center justify-center ${
-                      el.isCompleted
-                        ? "bg-primary border-primary"
-                        : "bg-white border-gray-300"
-                    }`}>
-                      {el.isCompleted && (
-                        <Check className="w-3 h-3 text-white" />
-                      )}
-                    </span>
-                    <div className="flex-1">
-                      <span
-                        className={
-                          el.isCompleted
-                            ? "line-through text-gray-400"
-                            : "text-gray-800"
-                        }
-                      >
-                        {el.name}
+                  <div key={index} style={{ marginLeft: indentPx }}>
+                    <div
+                      className="flex items-start gap-3 py-2 px-3 rounded hover:bg-gray-50"
+                    >
+                      <span className={`font-medium min-w-[24px] mt-0.5 ${el.isCompleted ? "text-gray-400" : "text-gray-600"}`}>
+                        {stepNum}.
                       </span>
-                      {(el.quantity || el.description) && (
-                        <p
-                          className={`text-sm ${el.isCompleted ? "text-gray-300" : "text-muted"}`}
+                      <span
+                        onClick={() => onToggleElement(index)}
+                        className={`mt-1 w-5 h-5 flex-shrink-0 rounded border-2 flex items-center justify-center cursor-pointer ${
+                          el.isCompleted
+                            ? "bg-primary border-primary"
+                            : el.inProgress
+                              ? "bg-white border-teal-400"
+                              : "bg-white border-gray-300"
+                        }`}
+                      >
+                        {el.isCompleted && (
+                          <Check className="w-3 h-3 text-white" />
+                        )}
+                      </span>
+                      <div className="flex-1">
+                        <span
+                          className={
+                            el.isCompleted
+                              ? "line-through text-gray-400"
+                              : el.inProgress
+                                ? "text-teal-700 font-medium"
+                                : "text-gray-800"
+                          }
                         >
-                          {[el.quantity, el.description]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </p>
+                          {el.name}
+                        </span>
+                        {(el.quantity || el.description) && (
+                          <p
+                            className={`text-sm ${el.isCompleted ? "text-gray-300" : "text-muted"}`}
+                          >
+                            {[el.quantity, el.description]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </p>
+                        )}
+                      </div>
+                      {!el.isCompleted && !el.inProgress && (
+                        <button
+                          onClick={() => onUpdateElement(index, { inProgress: true, startedAt: Date.now() })}
+                          className="text-sm text-primary hover:text-primary-hover whitespace-nowrap"
+                        >
+                          Start
+                        </button>
+                      )}
+                      {el.inProgress && !el.isCompleted && (
+                        <button
+                          onClick={() => onUpdateElement(index, { inProgress: false, startedAt: null })}
+                          className="text-sm text-muted hover:text-gray-600 whitespace-nowrap"
+                        >
+                          Reset
+                        </button>
                       )}
                     </div>
+                    {el.inProgress && el.startedAt && !el.isCompleted && (
+                      <div className="ml-16 pb-1 text-xs text-teal-600">
+                        ⏱ Started {formatElapsed(el.startedAt)}
+                      </div>
+                    )}
                   </div>
                 );
               });
@@ -3491,6 +4696,7 @@ function ItemCard({
   isEditing: initialEditing = false,
   onCancel,
   onViewDetail,
+  allItems = [],
   executions = [],
   intents = [],
   getIntentDisplay,
@@ -3509,13 +4715,17 @@ function ItemCard({
             displayType: el.displayType || "step",
             quantity: el.quantity || "",
             description: el.description || "",
+            ...(el.itemId ? { itemId: el.itemId } : {}),
           },
     ),
   );
+  const [tags, setTags] = useState(item.tags || []);
   const [isCaptureTarget, setIsCaptureTarget] = useState(
     item.isCaptureTarget || false,
   );
   const [draggedIndex, setDraggedIndex] = useState(null);
+  const [linkingElementIndex, setLinkingElementIndex] = useState(null);
+  const [linkSearch, setLinkSearch] = useState("");
 
   function handleSave() {
     if (!name.trim()) {
@@ -3528,6 +4738,7 @@ function ItemCard({
       description,
       contextId: finalContextId,
       elements,
+      tags,
       isCaptureTarget,
     });
     if (!onCancel) {
@@ -3550,6 +4761,7 @@ function ItemCard({
             : { ...el },
         ),
       );
+      setTags(item.tags || []);
       setIsCaptureTarget(item.isCaptureTarget || false);
       setIsEditing(false);
     }
@@ -3646,6 +4858,13 @@ function ItemCard({
               className="w-full px-3 py-2 border border-gray-300 rounded text-base"
               rows="2"
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Tags
+            </label>
+            <TagInput value={tags} onChange={setTags} />
           </div>
 
           <label className="flex items-center gap-2">
@@ -3748,6 +4967,66 @@ function ItemCard({
                       className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
                       rows="2"
                     />
+
+                    {/* Item reference link */}
+                    {element.itemId ? (
+                      <div className="flex items-center gap-2 px-2 py-1 bg-teal-50 border border-teal-200 rounded text-sm">
+                        <span className="text-teal-700">
+                          → {allItems.find((i) => i.id === element.itemId)?.name || element.itemId}
+                        </span>
+                        <button
+                          onClick={() => updateElement(index, "itemId", undefined)}
+                          className="text-teal-500 hover:text-teal-700 ml-auto"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ) : linkingElementIndex === index ? (
+                      <div className="space-y-1">
+                        <input
+                          type="text"
+                          value={linkSearch}
+                          onChange={(e) => setLinkSearch(e.target.value)}
+                          placeholder="Search for an item to link..."
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                          autoFocus
+                        />
+                        <div className="max-h-32 overflow-y-auto border border-gray-200 rounded">
+                          {allItems
+                            .filter((i) => !i.archived && i.id !== item.id && i.name.toLowerCase().includes(linkSearch.toLowerCase()))
+                            .slice(0, 8)
+                            .map((i) => (
+                              <button
+                                key={i.id}
+                                onClick={() => {
+                                  updateElement(index, "itemId", i.id);
+                                  setLinkingElementIndex(null);
+                                  setLinkSearch("");
+                                }}
+                                className="w-full text-left px-2 py-1.5 text-sm hover:bg-primary-bg border-b border-gray-100 last:border-b-0"
+                              >
+                                {i.name}
+                              </button>
+                            ))}
+                          {allItems.filter((i) => !i.archived && i.id !== item.id && i.name.toLowerCase().includes(linkSearch.toLowerCase())).length === 0 && (
+                            <p className="text-xs text-muted px-2 py-1">No matching items</p>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => { setLinkingElementIndex(null); setLinkSearch(""); }}
+                          className="text-xs text-muted hover:text-dark"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setLinkingElementIndex(index)}
+                        className="text-xs text-primary hover:text-primary-hover"
+                      >
+                        Link to Item →
+                      </button>
+                    )}
                   </div>
 
                   {index < elements.length - 1 && (
@@ -3812,6 +5091,20 @@ function ItemCard({
       }}
     >
       <p className="font-medium mb-2">{item.name}</p>
+      {item.tags && item.tags.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-2">
+          {item.tags.slice(0, 3).map((tag) => (
+            <span key={tag} className="px-2 py-0.5 bg-teal-100 text-teal-700 text-xs rounded-full">
+              {tag}
+            </span>
+          ))}
+          {item.tags.length > 3 && (
+            <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs rounded-full">
+              +{item.tags.length - 3} more
+            </span>
+          )}
+        </div>
+      )}
       {(item.elements || item.components) &&
         (item.elements || item.components).length > 0 && (
           <ol className="text-sm text-gray-600 list-decimal list-inside space-y-1">
@@ -3859,6 +5152,7 @@ function IntentionCard({
   onOpenExecution,
   onCancelExecution,
   onArchive,
+  collections = [],
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(intent.text);
@@ -3868,6 +5162,8 @@ function IntentionCard({
   const [itemSearch, setItemSearch] = useState("");
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState(intent.itemId || "");
+  const [selectedCollectionId, setSelectedCollectionId] = useState(intent.collectionId || "");
+  const [tags, setTags] = useState(intent.tags || []);
   const [selectedContextId, setSelectedContextId] = useState(intent.contextId || "");
   const [contextSearch, setContextSearch] = useState("");
   const [showContextPicker, setShowContextPicker] = useState(false);
@@ -3912,8 +5208,8 @@ function IntentionCard({
     }
     if (onUpdate) {
       const updates = showScheduling
-        ? { text: name, recurrence, itemId: selectedItemId || null, contextId: selectedContextId || null }
-        : { text: name, itemId: selectedItemId || null, contextId: selectedContextId || null };
+        ? { text: name, recurrence, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null }
+        : { text: name, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null };
       onUpdate(intent.id, updates, scheduledDate);
     }
     if (!onCancel) {
@@ -3928,7 +5224,9 @@ function IntentionCard({
     } else {
       setName(intent.text);
       setRecurrence(intent.recurrence || "once");
+      setTags(intent.tags || []);
       setSelectedItemId(intent.itemId || "");
+      setSelectedCollectionId(intent.collectionId || "");
       setItemSearch("");
       setSelectedContextId(intent.contextId || "");
       setContextSearch("");
@@ -4079,6 +5377,31 @@ function IntentionCard({
             </div>
           </div>
 
+          {collections.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Linked Collection (optional)
+              </label>
+              <select
+                value={selectedCollectionId}
+                onChange={(e) => setSelectedCollectionId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+              >
+                <option value="">None</option>
+                {collections.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Tags
+            </label>
+            <TagInput value={tags} onChange={setTags} />
+          </div>
+
           {showScheduling && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -4180,6 +5503,16 @@ function IntentionCard({
             {contextName && (
               <span className="text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
                 {contextName}
+              </span>
+            )}
+            {intent.tags && intent.tags.length > 0 && intent.tags.slice(0, 3).map((tag) => (
+              <span key={tag} className="px-2 py-0.5 bg-teal-100 text-teal-700 text-xs rounded-full">
+                {tag}
+              </span>
+            ))}
+            {intent.tags && intent.tags.length > 3 && (
+              <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs rounded-full">
+                +{intent.tags.length - 3} more
               </span>
             )}
           </div>
