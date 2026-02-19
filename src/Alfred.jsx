@@ -159,6 +159,20 @@ function getTodayDate() {
   return new Date().toISOString().split("T")[0];
 }
 
+function formatEventDate(dateString) {
+  const eventDate = new Date(dateString + 'T00:00:00');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  eventDate.setHours(0, 0, 0, 0);
+
+  const isToday = eventDate.getTime() === today.getTime();
+
+  if (isToday) {
+    return 'Today, ' + eventDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+  }
+  return eventDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+}
+
 function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -210,6 +224,17 @@ function LoginScreen() {
   );
 }
 
+function LoadingOverlay({ message }) {
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-8 flex flex-col items-center gap-4">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+        <p className="text-dark font-medium">{message || 'Loading...'}</p>
+      </div>
+    </div>
+  );
+}
+
 export default function Alfred() {
   const [view, setView] = useState("home");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -234,6 +259,22 @@ export default function Alfred() {
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('');
+
+  async function withLoading(message, operation) {
+    setIsLoading(true);
+    setLoadingMessage(message);
+    try {
+      return await operation();
+    } catch (error) {
+      console.error('Operation failed:', error);
+      alert('Operation failed: ' + error.message);
+    } finally {
+      setIsLoading(false);
+      setLoadingMessage('');
+    }
+  }
 
   useEffect(() => {
     checkAuth();
@@ -308,6 +349,7 @@ export default function Alfred() {
   }
 
   async function loadData() {
+    return withLoading('Loading your data...', async () => {
     const privateContextKeys = await storage.list("context:");
     const sharedContextKeys = await storage.list("context:", true);
 
@@ -400,324 +442,336 @@ export default function Alfred() {
     } catch (e) {
       // No paused executions - this is fine
     }
+    });
   }
 
   async function handleCapture() {
     if (!captureText.trim()) return;
+    return withLoading('Saving...', async () => {
+      const inboxItem = {
+        id: uid(),
+        user_id: user.id,
+        capturedText: captureText.trim(),
+        createdAt: Date.now(),
+        archived: false,
+        triagedAt: null,
+        suggestedContextId: null,
+        suggestItem: false,
+        suggestedItemText: null,
+        suggestedItemDescription: null,
+        suggestedItemElements: null,
+        suggestIntent: false,
+        suggestedIntentText: null,
+        suggestedIntentRecurrence: null,
+        suggestEvent: false,
+        suggestedEventDate: null,
+      };
 
-    const inboxItem = {
-      id: uid(),
-      user_id: user.id,
-      capturedText: captureText.trim(),
-      createdAt: Date.now(),
-      archived: false,
-      triagedAt: null,
-      suggestedContextId: null,
-      suggestItem: false,
-      suggestedItemText: null,
-      suggestedItemDescription: null,
-      suggestedItemElements: null,
-      suggestIntent: false,
-      suggestedIntentText: null,
-      suggestedIntentRecurrence: null,
-      suggestEvent: false,
-      suggestedEventDate: null,
-    };
-
-    await storage.set(`inbox:${inboxItem.id}`, inboxItem);
-    setInboxItems([inboxItem, ...inboxItems]);
-    setCaptureText("");
-    if (captureRef.current) {
-      captureRef.current.style.height = "auto";
-    }
-    setView("inbox");
+      await storage.set(`inbox:${inboxItem.id}`, inboxItem);
+      setInboxItems([inboxItem, ...inboxItems]);
+      setCaptureText("");
+      if (captureRef.current) {
+        captureRef.current.style.height = "auto";
+      }
+      setView("inbox");
+    });
   }
 
   async function archiveInboxItem(inboxItemId) {
     const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
     if (!inboxItem) return;
-    const updated = { ...inboxItem, archived: true, triagedAt: Date.now() };
-    await storage.set(`inbox:${inboxItem.id}`, updated);
-    setInboxItems(inboxItems.filter((i) => i.id !== inboxItemId));
+    return withLoading('Archiving...', async () => {
+      const updated = { ...inboxItem, archived: true, triagedAt: Date.now() };
+      await storage.set(`inbox:${inboxItem.id}`, updated);
+      setInboxItems(inboxItems.filter((i) => i.id !== inboxItemId));
+    });
   }
 
   async function handleInboxSave(inboxItemId, triageData) {
     const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
     if (!inboxItem) return;
+    return withLoading('Saving...', async () => {
+      let createdItemId = null;
 
-    let createdItemId = null;
+      // Create item if checked
+      if (triageData.createItem && triageData.itemData) {
+        const newItem = {
+          id: uid(),
+          user_id: user.id,
+          name: triageData.itemData.name,
+          description: triageData.itemData.description || "",
+          contextId: triageData.itemData.contextId,
+          elements: triageData.itemData.elements || [],
+          isCaptureTarget: false,
+          createdAt: Date.now(),
+        };
 
-    // Create item if checked
-    if (triageData.createItem && triageData.itemData) {
-      const newItem = {
-        id: uid(),
-        user_id: user.id,
-        name: triageData.itemData.name,
-        description: triageData.itemData.description || "",
-        contextId: triageData.itemData.contextId,
-        elements: triageData.itemData.elements || [],
-        isCaptureTarget: false,
-        createdAt: Date.now(),
-      };
+        const context = contexts.find((c) => c.id === newItem.contextId);
+        const isShared = context?.shared || false;
+        await storage.set(`item:${newItem.id}`, newItem, isShared);
+        setItems((prev) => [...prev, newItem]);
+        createdItemId = newItem.id;
+      }
 
-      const context = contexts.find((c) => c.id === newItem.contextId);
-      const isShared = context?.shared || false;
-      await storage.set(`item:${newItem.id}`, newItem, isShared);
-      setItems((prev) => [...prev, newItem]);
-      createdItemId = newItem.id;
-    }
+      // Create intention if checked
+      if (triageData.createIntention && triageData.intentionData) {
+        const intentionItemId =
+          triageData.intentionData.itemId || createdItemId;
+        const newIntent = {
+          id: uid(),
+          user_id: user.id,
+          text: triageData.intentionData.text,
+          createdAt: Date.now(),
+          isIntention: true,
+          isItem: !!intentionItemId,
+          archived: false,
+          itemId: intentionItemId,
+          contextId: triageData.intentionData.contextId,
+          recurrence: triageData.intentionData.recurrence || "once",
+        };
+        await storage.set(`intent:${newIntent.id}`, newIntent);
+        setIntents((prev) => [...prev, newIntent]);
+      }
 
-    // Create intention if checked
-    if (triageData.createIntention && triageData.intentionData) {
-      const intentionItemId =
-        triageData.intentionData.itemId || createdItemId;
-      const newIntent = {
-        id: uid(),
-        user_id: user.id,
-        text: triageData.intentionData.text,
-        createdAt: Date.now(),
-        isIntention: true,
-        isItem: !!intentionItemId,
-        archived: false,
-        itemId: intentionItemId,
-        contextId: triageData.intentionData.contextId,
-        recurrence: triageData.intentionData.recurrence || "once",
-      };
-      await storage.set(`intent:${newIntent.id}`, newIntent);
-      setIntents((prev) => [...prev, newIntent]);
-    }
-
-    // Archive inbox item
-    const updated = { ...inboxItem, archived: true, triagedAt: Date.now() };
-    await storage.set(`inbox:${inboxItem.id}`, updated);
-    setInboxItems((prev) => prev.filter((i) => i.id !== inboxItemId));
+      // Archive inbox item
+      const updated = { ...inboxItem, archived: true, triagedAt: Date.now() };
+      await storage.set(`inbox:${inboxItem.id}`, updated);
+      setInboxItems((prev) => prev.filter((i) => i.id !== inboxItemId));
+    });
   }
 
   async function moveToPlanner(intentId, scheduledDate = "today") {
-    // Always read from storage first to get the latest data
-    // (state may be stale if updateIntent was just called)
-    let intent = await storage.get(`intent:${intentId}`);
-    if (!intent) {
-      intent = intents.find((i) => i.id === intentId);
-    }
+    return withLoading('Scheduling...', async () => {
+      // Always read from storage first to get the latest data
+      // (state may be stale if updateIntent was just called)
+      let intent = await storage.get(`intent:${intentId}`);
+      if (!intent) {
+        intent = intents.find((i) => i.id === intentId);
+      }
 
-    if (!intent) {
-      console.error("Intent not found:", intentId);
-      return;
-    }
+      if (!intent) {
+        console.error("Intent not found:", intentId);
+        return;
+      }
 
-    const eventDate = scheduledDate === "today" ? getTodayDate() : scheduledDate;
+      const eventDate = scheduledDate === "today" ? getTodayDate() : scheduledDate;
 
-    // Create event for this intent
-    const event = {
-      id: uid(),
-      user_id: user.id,
-      intentId,
-      time: eventDate,
-      itemIds: intent.itemId ? [intent.itemId] : [],
-      contextId: intent.contextId,
-      archived: false,
-      createdAt: Date.now(),
-    };
+      // Create event for this intent
+      const event = {
+        id: uid(),
+        user_id: user.id,
+        intentId,
+        time: eventDate,
+        itemIds: intent.itemId ? [intent.itemId] : [],
+        contextId: intent.contextId,
+        archived: false,
+        createdAt: Date.now(),
+      };
 
-    await storage.set(`event:${event.id}`, event);
-    setEvents([...events, event]);
-    if (scheduledDate === "today") {
-      setView("schedule");
-    }
+      await storage.set(`event:${event.id}`, event);
+      setEvents([...events, event]);
+      if (scheduledDate === "today") {
+        setView("schedule");
+      }
+    });
   }
 
   async function updateIntent(intentId, updates, scheduledDate) {
     const intent = intents.find((i) => i.id === intentId);
     if (!intent) return;
+    return withLoading('Saving...', async () => {
+      // Be explicit about what we're storing
+      const updated = {
+        id: intent.id,
+        text: updates.text !== undefined ? updates.text : intent.text,
+        createdAt: intent.createdAt,
+        isIntention:
+          updates.isIntention !== undefined
+            ? updates.isIntention
+            : intent.isIntention || false,
+        isItem:
+          updates.isItem !== undefined ? updates.isItem : intent.isItem || false,
+        archived:
+          updates.archived !== undefined
+            ? updates.archived
+            : intent.archived || false,
+        itemId: updates.itemId !== undefined ? updates.itemId : intent.itemId,
+        contextId:
+          updates.contextId !== undefined ? updates.contextId : intent.contextId,
+        recurrence:
+          updates.recurrence !== undefined
+            ? updates.recurrence
+            : intent.recurrence || "once",
+      };
 
-    // Be explicit about what we're storing
-    const updated = {
-      id: intent.id,
-      text: updates.text !== undefined ? updates.text : intent.text,
-      createdAt: intent.createdAt,
-      isIntention:
-        updates.isIntention !== undefined
-          ? updates.isIntention
-          : intent.isIntention || false,
-      isItem:
-        updates.isItem !== undefined ? updates.isItem : intent.isItem || false,
-      archived:
-        updates.archived !== undefined
-          ? updates.archived
-          : intent.archived || false,
-      itemId: updates.itemId !== undefined ? updates.itemId : intent.itemId,
-      contextId:
-        updates.contextId !== undefined ? updates.contextId : intent.contextId,
-      recurrence:
-        updates.recurrence !== undefined
-          ? updates.recurrence
-          : intent.recurrence || "once",
-    };
+      await storage.set(`intent:${intent.id}`, updated);
+      setIntents(intents.map((i) => (i.id === intentId ? updated : i)));
 
-    await storage.set(`intent:${intent.id}`, updated);
-    setIntents(intents.map((i) => (i.id === intentId ? updated : i)));
-
-    // If scheduledDate provided, create an event
-    if (scheduledDate) {
-      await moveToPlanner(intentId, scheduledDate);
-    }
+      // If scheduledDate provided, create an event
+      if (scheduledDate) {
+        await moveToPlanner(intentId, scheduledDate);
+      }
+    });
   }
 
   async function archiveIntention(intentId) {
-    // Archive the intention
     const intent = intents.find((i) => i.id === intentId);
     if (!intent) return;
+    return withLoading('Archiving...', async () => {
+      const archivedIntent = { ...intent, archived: true };
+      await storage.set(`intent:${intentId}`, archivedIntent);
+      setIntents(intents.map((i) => (i.id === intentId ? archivedIntent : i)));
 
-    const archivedIntent = { ...intent, archived: true };
-    await storage.set(`intent:${intentId}`, archivedIntent);
-    setIntents(intents.map((i) => (i.id === intentId ? archivedIntent : i)));
+      // Archive all related events
+      const relatedEvents = events.filter((e) => e.intentId === intentId && !e.archived);
+      for (const event of relatedEvents) {
+        const archivedEvent = { ...event, archived: true };
+        await storage.set(`event:${event.id}`, archivedEvent);
+        setEvents((prev) => prev.map((e) => (e.id === event.id ? archivedEvent : e)));
+      }
 
-    // Archive all related events
-    const relatedEvents = events.filter((e) => e.intentId === intentId && !e.archived);
-    for (const event of relatedEvents) {
-      const archivedEvent = { ...event, archived: true };
-      await storage.set(`event:${event.id}`, archivedEvent);
-      setEvents((prev) => prev.map((e) => (e.id === event.id ? archivedEvent : e)));
-    }
-
-    // Navigate back to previous view
-    setSelectedIntentionId(null);
-    setView(previousView);
+      // Navigate back to previous view
+      setSelectedIntentionId(null);
+      setView(previousView);
+    });
   }
 
   async function updateItem(itemId, updates) {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
+    return withLoading('Saving...', async () => {
+      const updated = {
+        id: item.id,
+        name: updates.name !== undefined ? updates.name : item.name,
+        description:
+          updates.description !== undefined
+            ? updates.description
+            : item.description || "",
+        contextId:
+          updates.contextId !== undefined ? updates.contextId : item.contextId,
+        elements:
+          updates.elements !== undefined
+            ? updates.elements
+            : item.elements || item.components || [],
+        isCaptureTarget:
+          updates.isCaptureTarget !== undefined
+            ? updates.isCaptureTarget
+            : item.isCaptureTarget || false,
+        archived:
+          updates.archived !== undefined
+            ? updates.archived
+            : item.archived || false,
+        createdAt: item.createdAt,
+      };
 
-    const updated = {
-      id: item.id,
-      name: updates.name !== undefined ? updates.name : item.name,
-      description:
-        updates.description !== undefined
-          ? updates.description
-          : item.description || "",
-      contextId:
-        updates.contextId !== undefined ? updates.contextId : item.contextId,
-      elements:
-        updates.elements !== undefined
-          ? updates.elements
-          : item.elements || item.components || [],
-      isCaptureTarget:
-        updates.isCaptureTarget !== undefined
-          ? updates.isCaptureTarget
-          : item.isCaptureTarget || false,
-      archived:
-        updates.archived !== undefined
-          ? updates.archived
-          : item.archived || false,
-      createdAt: item.createdAt,
-    };
+      const context = contexts.find((c) => c.id === updated.contextId);
+      const isShared = context?.shared || false;
 
-    const context = contexts.find((c) => c.id === updated.contextId);
-    const isShared = context?.shared || false;
-
-    await storage.set(`item:${item.id}`, updated, isShared);
-    setItems(items.map((i) => (i.id === itemId ? updated : i)));
+      await storage.set(`item:${item.id}`, updated, isShared);
+      setItems(items.map((i) => (i.id === itemId ? updated : i)));
+    });
   }
 
   async function updateEvent(eventId, updates) {
     const event = events.find((e) => e.id === eventId);
     if (!event) return;
-
-    const updated = { ...event, ...updates };
-    await storage.set(`event:${event.id}`, updated);
-    setEvents(events.map((e) => (e.id === eventId ? updated : e)));
+    return withLoading('Saving...', async () => {
+      const updated = { ...event, ...updates };
+      await storage.set(`event:${event.id}`, updated);
+      setEvents(events.map((e) => (e.id === eventId ? updated : e)));
+    });
   }
 
   async function activate(eventId) {
     const event = events.find((e) => e.id === eventId);
     if (!event) return;
-
-    const itemElements = [];
-    if (event.itemIds && event.itemIds.length > 0) {
-      for (const itemId of event.itemIds) {
-        const item = items.find((i) => i.id === itemId);
-        if (item && (item.elements || item.components)) {
-          const els = (item.elements || item.components).map((el) => {
-            const element =
-              typeof el === "string"
-                ? { name: el, displayType: "step", quantity: "", description: "" }
-                : { ...el };
-            return {
-              ...element,
-              isCompleted: false,
-              completedAt: null,
-              sourceItemId: itemId,
-            };
-          });
-          itemElements.push(...els);
+    return withLoading('Starting execution...', async () => {
+      const itemElements = [];
+      if (event.itemIds && event.itemIds.length > 0) {
+        for (const itemId of event.itemIds) {
+          const item = items.find((i) => i.id === itemId);
+          if (item && (item.elements || item.components)) {
+            const els = (item.elements || item.components).map((el) => {
+              const element =
+                typeof el === "string"
+                  ? { name: el, displayType: "step", quantity: "", description: "" }
+                  : { ...el };
+              return {
+                ...element,
+                isCompleted: false,
+                completedAt: null,
+                sourceItemId: itemId,
+              };
+            });
+            itemElements.push(...els);
+          }
         }
       }
-    }
 
-    const execution = {
-      id: uid(),
-      user_id: user.id,
-      eventId,
-      intentId: event.intentId,
-      contextId: event.contextId,
-      itemIds: event.itemIds,
-      startedAt: Date.now(),
-      status: "active",
-      notes: "",
-      elements: itemElements,
-      progress: [],
-    };
+      const execution = {
+        id: uid(),
+        user_id: user.id,
+        eventId,
+        intentId: event.intentId,
+        contextId: event.contextId,
+        itemIds: event.itemIds,
+        startedAt: Date.now(),
+        status: "active",
+        notes: "",
+        elements: itemElements,
+        progress: [],
+      };
 
-    await storage.set(`execution:${execution.id}`, execution);
-    setActiveExecution(execution);
-    setActiveExecutions((prev) => [execution, ...prev]);
-    setPreviousView(view);
-    setView("execution-detail");
+      await storage.set(`execution:${execution.id}`, execution);
+      setActiveExecution(execution);
+      setActiveExecutions((prev) => [execution, ...prev]);
+      setPreviousView(view);
+      setView("execution-detail");
+    });
   }
 
   async function closeExecution(outcome) {
     if (!activeExecution) return;
+    return withLoading('Completing...', async () => {
+      // Cancel = Delete: just remove active execution, don't archive anything
+      if (outcome === "cancelled") {
+        await storage.delete(`execution:${activeExecution.id}`);
+        setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
+        setActiveExecution(null);
+        setView(previousView);
+        return;
+      }
 
-    // Cancel = Delete: just remove active execution, don't archive anything
-    if (outcome === "cancelled") {
-      await storage.delete(`execution:${activeExecution.id}`);
+      const closed = {
+        ...activeExecution,
+        closedAt: Date.now(),
+        outcome,
+        status: "closed",
+      };
+
+      // Archive the execution (notes and elements are preserved via spread)
+      await storage.set(`execution:${closed.id}`, closed);
+
+      // Archive the event
+      const event = events.find((e) => e.id === activeExecution.eventId);
+      if (event) {
+        const archivedEvent = { ...event, archived: true };
+        await storage.set(`event:${event.id}`, archivedEvent);
+        setEvents(events.map((e) => (e.id === event.id ? archivedEvent : e)));
+      }
+
+      // If intent is one-time and outcome is 'done', archive it
+      const intent = intents.find((i) => i.id === activeExecution.intentId);
+      if (intent && intent.recurrence === "once" && outcome === "done") {
+        const archivedIntent = { ...intent, archived: true };
+        await storage.set(`intent:${intent.id}`, archivedIntent);
+        setIntents(intents.map((i) => (i.id === intent.id ? archivedIntent : i)));
+      }
+
       setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
       setActiveExecution(null);
       setView(previousView);
-      return;
-    }
-
-    const closed = {
-      ...activeExecution,
-      closedAt: Date.now(),
-      outcome,
-      status: "closed",
-    };
-
-    // Archive the execution (notes and elements are preserved via spread)
-    await storage.set(`execution:${closed.id}`, closed);
-
-    // Archive the event
-    const event = events.find((e) => e.id === activeExecution.eventId);
-    if (event) {
-      const archivedEvent = { ...event, archived: true };
-      await storage.set(`event:${event.id}`, archivedEvent);
-      setEvents(events.map((e) => (e.id === event.id ? archivedEvent : e)));
-    }
-
-    // If intent is one-time and outcome is 'done', archive it
-    const intent = intents.find((i) => i.id === activeExecution.intentId);
-    if (intent && intent.recurrence === "once" && outcome === "done") {
-      const archivedIntent = { ...intent, archived: true };
-      await storage.set(`intent:${intent.id}`, archivedIntent);
-      setIntents(intents.map((i) => (i.id === intent.id ? archivedIntent : i)));
-    }
-
-    setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
-    setActiveExecution(null);
-    setView(previousView);
+    });
   }
 
   async function cancelExecutionForEvent(eventId) {
@@ -725,31 +779,37 @@ export default function Alfred() {
       activeExecutions.find((e) => e.eventId === eventId) ||
       pausedExecutions.find((e) => e.eventId === eventId);
     if (!exec) return;
-    await storage.delete(`execution:${exec.id}`);
-    setActiveExecutions((prev) => prev.filter((e) => e.id !== exec.id));
-    setPausedExecutions((prev) => prev.filter((e) => e.id !== exec.id));
-    if (activeExecution && activeExecution.id === exec.id) {
-      setActiveExecution(null);
-    }
+    return withLoading('Cancelling...', async () => {
+      await storage.delete(`execution:${exec.id}`);
+      setActiveExecutions((prev) => prev.filter((e) => e.id !== exec.id));
+      setPausedExecutions((prev) => prev.filter((e) => e.id !== exec.id));
+      if (activeExecution && activeExecution.id === exec.id) {
+        setActiveExecution(null);
+      }
+    });
   }
 
   async function pauseExecution() {
     if (!activeExecution) return;
-    const paused = { ...activeExecution, status: "paused" };
-    await storage.set(`execution:${paused.id}`, paused);
-    setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
-    setPausedExecutions((prev) => [paused, ...prev]);
-    setActiveExecution(null);
-    setView("home");
+    return withLoading('Pausing...', async () => {
+      const paused = { ...activeExecution, status: "paused" };
+      await storage.set(`execution:${paused.id}`, paused);
+      setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
+      setPausedExecutions((prev) => [paused, ...prev]);
+      setActiveExecution(null);
+      setView("home");
+    });
   }
 
   async function makeExecutionActive() {
     if (!activeExecution) return;
-    const activated = { ...activeExecution, status: "active" };
-    await storage.set(`execution:${activated.id}`, activated);
-    setPausedExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
-    setActiveExecutions((prev) => [activated, ...prev]);
-    setActiveExecution(activated);
+    return withLoading('Resuming...', async () => {
+      const activated = { ...activeExecution, status: "active" };
+      await storage.set(`execution:${activated.id}`, activated);
+      setPausedExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
+      setActiveExecutions((prev) => [activated, ...prev]);
+      setActiveExecution(activated);
+    });
   }
 
   async function toggleExecutionElement(elementIndex) {
@@ -792,36 +852,38 @@ export default function Alfred() {
     description = "",
     pinned = false,
   ) {
-    const context = editingContext
-      ? {
-          ...editingContext,
-          name,
-          shared,
-          keywords,
-          description,
-          pinned,
-        }
-      : {
-          id: uid(),
-          user_id: user.id,
-          name,
-          shared,
-          keywords,
-          description,
-          pinned,
-          createdAt: Date.now(),
-        };
+    return withLoading('Saving context...', async () => {
+      const context = editingContext
+        ? {
+            ...editingContext,
+            name,
+            shared,
+            keywords,
+            description,
+            pinned,
+          }
+        : {
+            id: uid(),
+            user_id: user.id,
+            name,
+            shared,
+            keywords,
+            description,
+            pinned,
+            createdAt: Date.now(),
+          };
 
-    await storage.set(`context:${context.id}`, context, shared);
+      await storage.set(`context:${context.id}`, context, shared);
 
-    if (editingContext) {
-      setContexts(contexts.map((c) => (c.id === context.id ? context : c)));
-    } else {
-      setContexts([...contexts, context]);
-    }
+      if (editingContext) {
+        setContexts(contexts.map((c) => (c.id === context.id ? context : c)));
+      } else {
+        setContexts([...contexts, context]);
+      }
 
-    setShowContextForm(false);
-    setEditingContext(null);
+      setShowContextForm(false);
+      setEditingContext(null);
+    });
   }
 
   function getIntentDisplay(intent) {
@@ -877,22 +939,24 @@ export default function Alfred() {
     description = "",
     isCaptureTarget = false,
   ) {
-    const newItem = {
-      id: uid(),
-      user_id: user.id,
-      name: name || "New Item",
-      description: description || "",
-      contextId: contextId,
-      elements: elements || [],
-      isCaptureTarget: isCaptureTarget || false,
-      createdAt: Date.now(),
-    };
+    return withLoading('Saving...', async () => {
+      const newItem = {
+        id: uid(),
+        user_id: user.id,
+        name: name || "New Item",
+        description: description || "",
+        contextId: contextId,
+        elements: elements || [],
+        isCaptureTarget: isCaptureTarget || false,
+        createdAt: Date.now(),
+      };
 
-    const context = contexts.find((c) => c.id === contextId);
-    const isShared = context?.shared || false;
+      const context = contexts.find((c) => c.id === contextId);
+      const isShared = context?.shared || false;
 
-    await storage.set(`item:${newItem.id}`, newItem, isShared);
-    setItems([...items, newItem]);
+      await storage.set(`item:${newItem.id}`, newItem, isShared);
+      setItems([...items, newItem]);
+    });
   }
 
   async function handleAddIntentionToContext(
@@ -901,22 +965,24 @@ export default function Alfred() {
     recurrence = "once",
     itemId = null,
   ) {
-    const newIntent = {
-      id: uid(),
-      user_id: user.id,
-      text: text || "New Intention",
-      createdAt: Date.now(),
-      isIntention: true,
-      isItem: false,
-      archived: false,
-      itemId: itemId,
-      contextId: contextId,
-      recurrence: recurrence,
-    };
+    return withLoading('Saving...', async () => {
+      const newIntent = {
+        id: uid(),
+        user_id: user.id,
+        text: text || "New Intention",
+        createdAt: Date.now(),
+        isIntention: true,
+        isItem: false,
+        archived: false,
+        itemId: itemId,
+        contextId: contextId,
+        recurrence: recurrence,
+      };
 
-    await storage.set(`intent:${newIntent.id}`, newIntent);
-    setIntents([...intents, newIntent]);
-    return newIntent.id; // Return the ID so it can be scheduled
+      await storage.set(`intent:${newIntent.id}`, newIntent);
+      setIntents([...intents, newIntent]);
+      return newIntent.id; // Return the ID so it can be scheduled
+    });
   }
 
 
@@ -941,136 +1007,138 @@ export default function Alfred() {
   async function startNowFromItem(itemId) {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
+    return withLoading('Starting execution...', async () => {
+      // Create intention linked to this item
+      const newIntent = {
+        id: uid(),
+        user_id: user.id,
+        text: item.name,
+        createdAt: Date.now(),
+        isIntention: true,
+        isItem: false,
+        archived: false,
+        itemId: item.id,
+        contextId: item.contextId || null,
+        recurrence: "once",
+      };
+      await storage.set(`intent:${newIntent.id}`, newIntent);
+      setIntents((prev) => [...prev, newIntent]);
 
-    // Create intention linked to this item
-    const newIntent = {
-      id: uid(),
-      user_id: user.id,
-      text: item.name,
-      createdAt: Date.now(),
-      isIntention: true,
-      isItem: false,
-      archived: false,
-      itemId: item.id,
-      contextId: item.contextId || null,
-      recurrence: "once",
-    };
-    await storage.set(`intent:${newIntent.id}`, newIntent);
-    setIntents((prev) => [...prev, newIntent]);
+      // Create event for today
+      const newEvent = {
+        id: uid(),
+        user_id: user.id,
+        intentId: newIntent.id,
+        time: getTodayDate(),
+        itemIds: [item.id],
+        contextId: item.contextId || null,
+        archived: false,
+        createdAt: Date.now(),
+      };
+      await storage.set(`event:${newEvent.id}`, newEvent);
+      setEvents((prev) => [...prev, newEvent]);
 
-    // Create event for today
-    const newEvent = {
-      id: uid(),
-      user_id: user.id,
-      intentId: newIntent.id,
-      time: getTodayDate(),
-      itemIds: [item.id],
-      contextId: item.contextId || null,
-      archived: false,
-      createdAt: Date.now(),
-    };
-    await storage.set(`event:${newEvent.id}`, newEvent);
-    setEvents((prev) => [...prev, newEvent]);
+      // Build execution inline (can't call activate — state hasn't updated yet)
+      const itemElements = [];
+      if (item.elements || item.components) {
+        const els = (item.elements || item.components).map((el) => {
+          const element =
+            typeof el === "string"
+              ? { name: el, displayType: "step", quantity: "", description: "" }
+              : { ...el };
+          return {
+            ...element,
+            isCompleted: false,
+            completedAt: null,
+            sourceItemId: item.id,
+          };
+        });
+        itemElements.push(...els);
+      }
 
-    // Build execution inline (can't call activate — state hasn't updated yet)
-    const itemElements = [];
-    if (item.elements || item.components) {
-      const els = (item.elements || item.components).map((el) => {
-        const element =
-          typeof el === "string"
-            ? { name: el, displayType: "step", quantity: "", description: "" }
-            : { ...el };
-        return {
-          ...element,
-          isCompleted: false,
-          completedAt: null,
-          sourceItemId: item.id,
-        };
-      });
-      itemElements.push(...els);
-    }
+      const execution = {
+        id: uid(),
+        user_id: user.id,
+        eventId: newEvent.id,
+        intentId: newIntent.id,
+        contextId: item.contextId || null,
+        itemIds: [item.id],
+        startedAt: Date.now(),
+        status: "active",
+        notes: "",
+        elements: itemElements,
+        progress: [],
+      };
 
-    const execution = {
-      id: uid(),
-      user_id: user.id,
-      eventId: newEvent.id,
-      intentId: newIntent.id,
-      contextId: item.contextId || null,
-      itemIds: [item.id],
-      startedAt: Date.now(),
-      status: "active",
-      notes: "",
-      elements: itemElements,
-      progress: [],
-    };
-
-    await storage.set(`execution:${execution.id}`, execution);
-    setActiveExecution(execution);
-    setActiveExecutions((prev) => [execution, ...prev]);
-    setPreviousView(view);
-    setView("execution-detail");
+      await storage.set(`execution:${execution.id}`, execution);
+      setActiveExecution(execution);
+      setActiveExecutions((prev) => [execution, ...prev]);
+      setPreviousView(view);
+      setView("execution-detail");
+    });
   }
 
   async function startNowFromIntention(intentId) {
     const intent = intents.find((i) => i.id === intentId);
     if (!intent) return;
+    return withLoading('Starting execution...', async () => {
+      // Find linked item if any
+      const linkedItem = intent.itemId
+        ? items.find((i) => i.id === intent.itemId)
+        : null;
 
-    // Find linked item if any
-    const linkedItem = intent.itemId
-      ? items.find((i) => i.id === intent.itemId)
-      : null;
+      // Create event for today
+      const newEvent = {
+        id: uid(),
+        user_id: user.id,
+        intentId: intent.id,
+        time: getTodayDate(),
+        itemIds: linkedItem ? [linkedItem.id] : [],
+        contextId: intent.contextId || null,
+        archived: false,
+        createdAt: Date.now(),
+      };
+      await storage.set(`event:${newEvent.id}`, newEvent);
+      setEvents((prev) => [...prev, newEvent]);
 
-    // Create event for today
-    const newEvent = {
-      id: uid(),
-      user_id: user.id,
-      intentId: intent.id,
-      time: getTodayDate(),
-      itemIds: linkedItem ? [linkedItem.id] : [],
-      contextId: intent.contextId || null,
-      archived: false,
-      createdAt: Date.now(),
-    };
-    await storage.set(`event:${newEvent.id}`, newEvent);
-    setEvents((prev) => [...prev, newEvent]);
+      // Build execution elements from linked item
+      const itemElements = [];
+      if (linkedItem && (linkedItem.elements || linkedItem.components)) {
+        const els = (linkedItem.elements || linkedItem.components).map((el) => {
+          const element =
+            typeof el === "string"
+              ? { name: el, displayType: "step", quantity: "", description: "" }
+              : { ...el };
+          return {
+            ...element,
+            isCompleted: false,
+            completedAt: null,
+            sourceItemId: linkedItem.id,
+          };
+        });
+        itemElements.push(...els);
+      }
 
-    // Build execution elements from linked item
-    const itemElements = [];
-    if (linkedItem && (linkedItem.elements || linkedItem.components)) {
-      const els = (linkedItem.elements || linkedItem.components).map((el) => {
-        const element =
-          typeof el === "string"
-            ? { name: el, displayType: "step", quantity: "", description: "" }
-            : { ...el };
-        return {
-          ...element,
-          isCompleted: false,
-          completedAt: null,
-          sourceItemId: linkedItem.id,
-        };
-      });
-      itemElements.push(...els);
-    }
+      const execution = {
+        id: uid(),
+        user_id: user.id,
+        eventId: newEvent.id,
+        intentId: intent.id,
+        contextId: intent.contextId || null,
+        itemIds: linkedItem ? [linkedItem.id] : [],
+        startedAt: Date.now(),
+        status: "active",
+        notes: "",
+        elements: itemElements,
+        progress: [],
+      };
 
-    const execution = {
-      id: uid(),
-      user_id: user.id,
-      eventId: newEvent.id,
-      intentId: intent.id,
-      contextId: intent.contextId || null,
-      itemIds: linkedItem ? [linkedItem.id] : [],
-      startedAt: Date.now(),
-      status: "active",
-      notes: "",
-      elements: itemElements,
-      progress: [],
-    };
-
-    await storage.set(`execution:${execution.id}`, execution);
-    setActiveExecution(execution);
-    setActiveExecutions((prev) => [execution, ...prev]);
-    setPreviousView(view);
-    setView("execution-detail");
+      await storage.set(`execution:${execution.id}`, execution);
+      setActiveExecution(execution);
+      setActiveExecutions((prev) => [execution, ...prev]);
+      setPreviousView(view);
+      setView("execution-detail");
+    });
   }
 
   // Intentions: Marked as intentions, not archived, no active event
@@ -1104,6 +1172,8 @@ export default function Alfred() {
 
   return (
     <div className="min-h-screen bg-primary-bg">
+      {isLoading && <LoadingOverlay message={loadingMessage} />}
+
       {/* Mobile header with hamburger */}
       <header className="sm:hidden sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm">
         <div className="px-3 py-3 flex items-center justify-between">
@@ -3208,7 +3278,7 @@ function ExecutionDetailView({
       : null;
 
   const displayName = intent ? getIntentDisplay(intent) : "Execution";
-  const dateDisplay = event?.time || "";
+  const dateDisplay = event?.time ? formatEventDate(event.time) : "";
 
   return (
     <div>
@@ -4290,7 +4360,7 @@ function EventCard({
           <p className="font-medium text-dark cursor-pointer hover:text-primary">
             {nested ? `Event: ${event.text || getIntentDisplay(intent)}` : (event.text || getIntentDisplay(intent))}
           </p>
-          <p className="text-sm text-muted">{event.time}</p>
+          <p className="text-sm text-muted">{formatEventDate(event.time)}</p>
           {event.contextId && (
             <span className="inline-block mt-1 text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
               {contexts.find((c) => c.id === event.contextId)?.name}

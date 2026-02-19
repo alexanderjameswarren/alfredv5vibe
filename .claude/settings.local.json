@@ -12,7 +12,8 @@
       "Bash(npx supabase:*)",
       "Bash(npx vite build)",
       "Bash(npx vite build:*)",
-      "WebFetch(domain:cdn.jsdelivr.net)"
+      "WebFetch(domain:cdn.jsdelivr.net)",
+      "Bash(npx --no-install eslint:*)"
     ]
   }
 }
