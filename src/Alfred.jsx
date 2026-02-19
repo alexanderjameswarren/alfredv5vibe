@@ -22,6 +22,7 @@ const storage = {
     event: "events",
     execution: "executions",
     inbox: "inbox",
+    item_collections: "item_collections",
   },
 
   // Convert camelCase to snake_case for database
