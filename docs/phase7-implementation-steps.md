@@ -141,42 +141,7 @@ NOTE: New columns will be added in Phase 7.1: suggested_tags, suggested_item_id,
 
 ## Step 6: Build MCP Edge Function with Read-Only Tools
 
-### What to do (CLAUDE CLI):
-
-**Create `supabase/functions/mcp/deno.json`:**
-```json
-{
-  "imports": {
-    "@hono/mcp": "npm:@hono/mcp@^0.1.1",
-    "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@^1.24.3",
-    "hono": "npm:hono@^4.9.2",
-    "zod": "npm:zod@^4.1.13"
-  }
-}
-```
-
-**Update `supabase/functions/mcp/index.ts`:**
-- Import from `@modelcontextprotocol/sdk`, `@hono/mcp`, and `hono`
-- Import tool definitions and handlers from `../_shared/alfred-tools/`
-- Create an McpServer instance named 'alfred-mcp' version '0.1.0'
-- Register each tool from the shared tool definitions using `server.registerTool()`
-- For each tool registration, the handler should:
-  1. Create a Supabase client (initially without auth token for authless dev)
-  2. Call the corresponding tool handler from the shared library
-  3. Return the result as `{ content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }`
-- Mount on Hono app at root path `/`
-- Use `StreamableHTTPTransport` from `@hono/mcp`
-- Handle both GET and POST on `/` (MCP protocol requirement)
-- Export with `Deno.serve(app.fetch)`
-
-**Important Supabase Edge Function routing note:**
-Within Edge Functions, all paths are prefixed with the function name. So the MCP endpoint path inside the function should be `/` (root), and it will be accessible at `https://<project>.supabase.co/functions/v1/mcp`.
-
-### Verification:
-- [ ] `supabase/functions/mcp/index.ts` exists and imports shared tools
-- [ ] `supabase/functions/mcp/deno.json` exists with dependencies
-- [ ] All 7 read tools are registered
-
+"Read docs/phase7-step6-exact-code.md. Create all 5 files exactly as specified. Do NOT search the web — everything you need is in the file. After creating the files, tell me what commands to run to test."
 ---
 
 ## Step 7: Test MCP Server Locally

@@ -14,7 +14,12 @@
       "Bash(npx vite build:*)",
       "WebFetch(domain:cdn.jsdelivr.net)",
       "Bash(npx --no-install eslint:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:jsr.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:supabase.com)",
+      "WebFetch(domain:hono.dev)"
     ]
   }
 }

@@ -1,7 +1,7 @@
-# Phase 7.0 Progress: MCP Server Foundation
+ # Phase 7.0 Progress: MCP Server Foundation
 
 **Started**: 2026-02-19
-**Last Updated**: 2026-02-19
+**Last Updated**: 2026-02-20
 **Status**: 🟡 In Progress
 
 ---
@@ -13,12 +13,12 @@
 | 1 | Enable OAuth 2.1 Server in Supabase | ✅ Complete | Enabled, auth path set to /oauth/consent |
 | 2 | Configure OAuth redirect URLs | ✅ Complete | Added claude.ai and claude.com callback URLs |
 | 3 | Enable Dynamic Client Registration | ✅ Complete | Toggle enabled in OAuth Server settings |
-| 4 | Install Supabase CLI & initialize Edge Functions | ⬜ Not Started | |
-| 5 | Create shared tool library (_shared/alfred-tools/) | ⬜ Not Started | |
-| 6 | Build MCP Edge Function with read-only tools | ⬜ Not Started | |
-| 7 | Test MCP server locally with MCP Inspector | ⬜ Not Started | |
-| 8 | Build OAuth consent page (/oauth/consent) | ⬜ Not Started | |
-| 9 | Deploy MCP function to production | ⬜ Not Started | |
+| 4 | Install Supabase CLI & initialize Edge Functions | ✅ Complete | Scoop + 7zip, linked project, created mcp function |
+| 5 | Create shared tool library (_shared/alfred-tools/) | ✅ Complete | 4 files: client, types, definitions, handlers |
+| 6 | Build MCP Edge Function with read-only tools | ✅ Complete | Hono + MCP SDK, 7 tools registered |
+| 7 | Test MCP server with MCP Inspector | ✅ Complete | Tested against prod (no Docker), all 7 tools return data |
+| 8 | Build OAuth consent page (/oauth/consent) | 🟡 In Progress | |
+| 9 | Deploy MCP function to production | ✅ Complete | Deployed --no-verify-jwt, verified via Inspector |
 | 10 | Connect Claude.ai as custom connector | ⬜ Not Started | |
 | 11 | Verify both users can query Alfred data | ⬜ Not Started | |
 
