@@ -11,7 +11,7 @@ import {
   Menu,
   Copy,
 } from "lucide-react";
-import { supabase } from "./supabaseClient";
+import { supabase, supabaseUrl } from "./supabaseClient";
 import SamPlayer from "./sam/SamPlayer";
 
 const storage = {
@@ -635,6 +635,7 @@ export default function Alfred() {
   const [authLoading, setAuthLoading] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
+  const [realtimeStatus, setRealtimeStatus] = useState('disconnected'); // 'connected', 'connecting', 'disconnected'
 
   async function withLoading(message, operation) {
     setIsLoading(true);
@@ -651,75 +652,102 @@ export default function Alfred() {
   }
 
   useEffect(() => {
-    checkAuth();
+    let realtimeCleanup = null;
+    let isInitialized = false;
+
+    async function handleAuthChange(event, session) {
+      try {
+        console.log('[Auth] State changed:', event, 'User:', session?.user?.email || 'none');
+
+        // Skip SIGNED_IN event - wait for INITIAL_SESSION when session is fully ready
+        if (event === 'SIGNED_IN') {
+          console.log('[Auth] Skipping SIGNED_IN - waiting for INITIAL_SESSION');
+          return;
+        }
+
+        // Check allowlist if user exists
+        if (session?.user) {
+          console.log('[Auth] Checking allowlist for:', session.user.email);
+
+          // Add timeout to prevent hanging forever
+          const queryPromise = supabase
+            .from('allowed_emails')
+            .select('email')
+            .eq('email', session.user.email)
+            .maybeSingle();
+
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Allowlist query timeout after 5 seconds')), 5000)
+          );
+
+          const { data, error } = await Promise.race([queryPromise, timeoutPromise]);
+
+          console.log('[Auth] Allowlist query completed:', { data, error });
+
+          if (error) {
+            console.error('[Auth] Allowlist query error:', error);
+            alert(`Allowlist check failed: ${error.message}\n\nPlease check:\n1. RLS policy on allowed_emails table\n2. Your email is in the allowed_emails table\n3. Supabase console for errors`);
+            setAuthLoading(false);
+            setIsLoading(false);
+            return;
+          }
+
+          if (!data) {
+            console.log('[Auth] Email not in allowlist, signing out');
+            await supabase.auth.signOut();
+            alert('Access denied. Your email is not authorized to access this app.');
+            setUser(null);
+            setAuthLoading(false);
+            return;
+          }
+
+          console.log('[Auth] Email allowed');
+        }
+
+        setUser(session?.user ?? null);
+        setAuthLoading(false);
+
+        // Only initialize once on first auth event with user
+        if (session?.user && !isInitialized) {
+          isInitialized = true;
+          console.log('[Auth] First-time init - loading data...');
+          await loadData();
+          console.log('[Auth] Data loaded');
+
+          console.log('[Auth] Setting up realtime...');
+          realtimeCleanup = await setupRealtimeSubscriptions(session.user);
+          console.log('[Auth] Realtime setup complete');
+        } else if (session?.user && isInitialized) {
+          // Subsequent auth changes - just reload data
+          console.log('[Auth] Reloading data...');
+          loadData();
+        }
+      } catch (error) {
+        console.error('[Auth] handleAuthChange error:', error);
+        setAuthLoading(false);
+        setIsLoading(false);
+      }
+    }
+
+    // Listen for auth state changes (fires immediately with current session)
+    console.log('[Init] Setting up auth listener');
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(handleAuthChange);
+    console.log('[Init] Auth listener ready');
+
+    // Cleanup function
+    return () => {
+      console.log('[Init] Cleanup: unsubscribing');
+      subscription.unsubscribe();
+      if (realtimeCleanup) {
+        realtimeCleanup();
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     setFilterTag(null);
   }, [view]);
-
-  async function checkAuth() {
-    // Check current session
-    const { data: { user } } = await supabase.auth.getUser();
-
-    // If user exists, check if they're allowed
-    if (user) {
-      console.log('Checking allowlist for:', user.email);
-
-      const { data, error } = await supabase
-        .from('allowed_emails')
-        .select('email')
-        .eq('email', user.email)
-        .maybeSingle();
-
-      console.log('Allowlist result:', { data, error });
-
-      if (error || !data) {
-        console.log('Email not allowed, signing out');
-        await supabase.auth.signOut();
-        alert('Access denied. Your email is not authorized to access this app.');
-        setUser(null);
-        setAuthLoading(false);
-        return; // Stop here, don't load data
-      }
-
-      console.log('Email allowed, proceeding');
-    }
-
-    setUser(user);
-    setAuthLoading(false);
-
-    if (user) {
-      loadData();
-    }
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (session?.user) {
-        // Check allowlist on every auth change
-        const { data } = await supabase
-          .from('allowed_emails')
-          .select('email')
-          .eq('email', session.user.email)
-          .maybeSingle();
-
-        if (!data) {
-          await supabase.auth.signOut();
-          alert('Access denied.');
-          setUser(null);
-          return;
-        }
-      }
-
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        loadData();
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }
 
   async function handleSignOut() {
     await supabase.auth.signOut();
@@ -788,7 +816,7 @@ export default function Alfred() {
     setInboxItems(
       inboxData
         .filter((item) => item && !item.archived)
-        .sort((a, b) => b.createdAt - a.createdAt)
+        .sort((a, b) => a.createdAt - b.createdAt) // Oldest first
     );
 
     const collectionKeys = await storage.list("item_collections:");
@@ -831,6 +859,284 @@ export default function Alfred() {
     });
   }
 
+  async function setupRealtimeSubscriptions(currentUser) {
+    if (!currentUser) return null;
+
+    console.log('[Realtime] Setting up subscriptions for user:', currentUser.id);
+    setRealtimeStatus('connecting');
+
+    // Helper to convert snake_case database records to camelCase
+    const toCamelCase = (obj) => {
+      if (!obj) return obj;
+      const camelObj = {};
+      for (const key in obj) {
+        const camelKey = key.replace(/_([a-z])/g, (g) => g[1].toUpperCase());
+        camelObj[camelKey] = obj[key];
+      }
+      return camelObj;
+    };
+
+    // Subscribe to inbox changes
+    const inboxChannel = supabase
+      .channel('inbox-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'inbox',
+          filter: `user_id=eq.${currentUser.id}`
+        },
+        (payload) => {
+          console.log('[Realtime] Inbox change:', payload.eventType, payload);
+          handleInboxChange(payload, toCamelCase);
+        }
+      )
+      .subscribe((status) => {
+        console.log('[Realtime] Inbox subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          setRealtimeStatus('connected');
+        }
+      });
+
+    // Subscribe to contexts changes
+    const contextsChannel = supabase
+      .channel('contexts-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'contexts'
+        },
+        (payload) => {
+          console.log('[Realtime] Context change:', payload.eventType);
+          handleContextChange(payload, toCamelCase);
+        }
+      )
+      .subscribe();
+
+    // Subscribe to items changes
+    const itemsChannel = supabase
+      .channel('items-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'items'
+        },
+        (payload) => {
+          console.log('[Realtime] Item change:', payload.eventType);
+          handleItemChange(payload, toCamelCase);
+        }
+      )
+      .subscribe();
+
+    // Subscribe to intents changes
+    const intentsChannel = supabase
+      .channel('intents-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'intents'
+        },
+        (payload) => {
+          console.log('[Realtime] Intent change:', payload.eventType);
+          handleIntentChange(payload, toCamelCase);
+        }
+      )
+      .subscribe();
+
+    // Subscribe to events changes
+    const eventsChannel = supabase
+      .channel('events-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'events'
+        },
+        (payload) => {
+          console.log('[Realtime] Event change:', payload.eventType);
+          handleEventChange(payload, toCamelCase);
+        }
+      )
+      .subscribe();
+
+    // Subscribe to executions changes
+    const executionsChannel = supabase
+      .channel('executions-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'executions'
+        },
+        (payload) => {
+          console.log('[Realtime] Execution change:', payload.eventType);
+          handleExecutionChange(payload, toCamelCase);
+        }
+      )
+      .subscribe();
+
+    // Return cleanup function
+    return () => {
+      console.log('[Realtime] Unsubscribing all channels');
+      setRealtimeStatus('disconnected');
+      inboxChannel.unsubscribe();
+      contextsChannel.unsubscribe();
+      itemsChannel.unsubscribe();
+      intentsChannel.unsubscribe();
+      eventsChannel.unsubscribe();
+      executionsChannel.unsubscribe();
+    };
+  }
+
+  function handleInboxChange(payload, toCamelCase) {
+    const { eventType, new: newRecord, old: oldRecord } = payload;
+
+    if (eventType === 'INSERT') {
+      const record = toCamelCase(newRecord);
+      setInboxItems(prev => {
+        // Don't add duplicates
+        if (prev.find(item => item.id === record.id)) return prev;
+        // Add to top, maintain sort by createdAt
+        return [record, ...prev].sort((a, b) => a.createdAt - b.createdAt);
+      });
+    } else if (eventType === 'UPDATE') {
+      const record = toCamelCase(newRecord);
+      setInboxItems(prev =>
+        prev.map(item => item.id === record.id ? record : item)
+      );
+    } else if (eventType === 'DELETE') {
+      setInboxItems(prev =>
+        prev.filter(item => item.id !== oldRecord.id)
+      );
+    }
+  }
+
+  function handleContextChange(payload, toCamelCase) {
+    const { eventType, new: newRecord, old: oldRecord } = payload;
+
+    if (eventType === 'INSERT') {
+      const record = toCamelCase(newRecord);
+      setContexts(prev => {
+        if (prev.find(ctx => ctx.id === record.id)) return prev;
+        return [...prev, record];
+      });
+    } else if (eventType === 'UPDATE') {
+      const record = toCamelCase(newRecord);
+      setContexts(prev =>
+        prev.map(ctx => ctx.id === record.id ? record : ctx)
+      );
+    } else if (eventType === 'DELETE') {
+      setContexts(prev =>
+        prev.filter(ctx => ctx.id !== oldRecord.id)
+      );
+    }
+  }
+
+  function handleItemChange(payload, toCamelCase) {
+    const { eventType, new: newRecord, old: oldRecord } = payload;
+
+    if (eventType === 'INSERT') {
+      const record = toCamelCase(newRecord);
+      setItems(prev => {
+        if (prev.find(item => item.id === record.id)) return prev;
+        return [...prev, record];
+      });
+    } else if (eventType === 'UPDATE') {
+      const record = toCamelCase(newRecord);
+      setItems(prev =>
+        prev.map(item => item.id === record.id ? record : item)
+      );
+    } else if (eventType === 'DELETE') {
+      setItems(prev =>
+        prev.filter(item => item.id !== oldRecord.id)
+      );
+    }
+  }
+
+  function handleIntentChange(payload, toCamelCase) {
+    const { eventType, new: newRecord, old: oldRecord } = payload;
+
+    if (eventType === 'INSERT') {
+      const record = toCamelCase(newRecord);
+      setIntents(prev => {
+        if (prev.find(intent => intent.id === record.id)) return prev;
+        return [...prev, record];
+      });
+    } else if (eventType === 'UPDATE') {
+      const record = toCamelCase(newRecord);
+      setIntents(prev =>
+        prev.map(intent => intent.id === record.id ? record : intent)
+      );
+    } else if (eventType === 'DELETE') {
+      setIntents(prev =>
+        prev.filter(intent => intent.id !== oldRecord.id)
+      );
+    }
+  }
+
+  function handleEventChange(payload, toCamelCase) {
+    const { eventType, new: newRecord, old: oldRecord } = payload;
+
+    if (eventType === 'INSERT') {
+      const record = toCamelCase(newRecord);
+      setEvents(prev => {
+        if (prev.find(event => event.id === record.id)) return prev;
+        return [...prev, record];
+      });
+    } else if (eventType === 'UPDATE') {
+      const record = toCamelCase(newRecord);
+      setEvents(prev =>
+        prev.map(event => event.id === record.id ? record : event)
+      );
+    } else if (eventType === 'DELETE') {
+      setEvents(prev =>
+        prev.filter(event => event.id !== oldRecord.id)
+      );
+    }
+  }
+
+  function handleExecutionChange(payload, toCamelCase) {
+    const { eventType, new: newRecord, old: oldRecord } = payload;
+
+    if (eventType === 'INSERT') {
+      const record = toCamelCase(newRecord);
+      if (record.status === 'active') {
+        setActiveExecutions(prev => {
+          if (prev.find(exec => exec.id === record.id)) return prev;
+          return [...prev, record];
+        });
+      } else if (record.status === 'paused') {
+        setPausedExecutions(prev => {
+          if (prev.find(exec => exec.id === record.id)) return prev;
+          return [...prev, record];
+        });
+      }
+    } else if (eventType === 'UPDATE') {
+      const record = toCamelCase(newRecord);
+      // Remove from both lists first
+      setActiveExecutions(prev => prev.filter(exec => exec.id !== record.id));
+      setPausedExecutions(prev => prev.filter(exec => exec.id !== record.id));
+      // Add to appropriate list based on status
+      if (record.status === 'active') {
+        setActiveExecutions(prev => [...prev, record]);
+      } else if (record.status === 'paused') {
+        setPausedExecutions(prev => [...prev, record]);
+      }
+    } else if (eventType === 'DELETE') {
+      setActiveExecutions(prev => prev.filter(exec => exec.id !== oldRecord.id));
+      setPausedExecutions(prev => prev.filter(exec => exec.id !== oldRecord.id));
+    }
+  }
+
   async function handleCapture() {
     if (!captureText.trim()) return;
     return withLoading('Saving...', async () => {
@@ -851,10 +1157,19 @@ export default function Alfred() {
         suggestedIntentRecurrence: null,
         suggestEvent: false,
         suggestedEventDate: null,
+        // NEW fields from Phase 7.2.1
+        aiStatus: 'not_started',
+        sourceType: 'manual',
+        sourceMetadata: {},
+        aiConfidence: null,
+        aiReasoning: null,
+        suggestedTags: [],
+        suggestedItemId: null,
+        suggestedCollectionId: null,
       };
 
       await storage.set(`inbox:${inboxItem.id}`, inboxItem);
-      setInboxItems([inboxItem, ...inboxItems]);
+      setInboxItems([...inboxItems, inboxItem]); // Add to end (oldest first)
       setCaptureText("");
       if (captureRef.current) {
         captureRef.current.style.height = "auto";
@@ -873,13 +1188,19 @@ export default function Alfred() {
     });
   }
 
+  function handleInboxEnrich(inboxItemId, updatedItem) {
+    setInboxItems((prev) =>
+      prev.map((item) => (item.id === inboxItemId ? updatedItem : item))
+    );
+  }
+
   async function handleInboxSave(inboxItemId, triageData) {
     const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
     if (!inboxItem) return;
     return withLoading('Saving...', async () => {
       let createdItemId = null;
 
-      // Create item if checked
+      // Create item if Item section was open
       if (triageData.createItem && triageData.itemData) {
         const newItem = {
           id: uid(),
@@ -888,6 +1209,7 @@ export default function Alfred() {
           description: triageData.itemData.description || "",
           contextId: triageData.itemData.contextId,
           elements: triageData.itemData.elements || [],
+          tags: triageData.itemData.tags || [],
           isCaptureTarget: false,
           createdAt: Date.now(),
         };
@@ -899,7 +1221,7 @@ export default function Alfred() {
         createdItemId = newItem.id;
       }
 
-      // Create intention if checked
+      // Create intention if Intention section was open
       if (triageData.createIntention && triageData.intentionData) {
         const intentionItemId =
           triageData.intentionData.itemId || createdItemId;
@@ -914,9 +1236,52 @@ export default function Alfred() {
           itemId: intentionItemId,
           contextId: triageData.intentionData.contextId,
           recurrence: triageData.intentionData.recurrence || "once",
+          tags: triageData.intentionData.tags || [],
         };
         await storage.set(`intent:${newIntent.id}`, newIntent);
         setIntents((prev) => [...prev, newIntent]);
+
+        // Create event if scheduled
+        if (triageData.intentionData.createEvent && triageData.intentionData.eventDate) {
+          const newEvent = {
+            id: uid(),
+            user_id: user.id,
+            intentId: newIntent.id,
+            contextId: triageData.intentionData.contextId,
+            time: triageData.intentionData.eventDate,
+            itemIds: intentionItemId ? [intentionItemId] : [],
+            archived: false,
+            createdAt: Date.now(),
+            text: triageData.intentionData.text,
+          };
+          await storage.set(`event:${newEvent.id}`, newEvent);
+          setEvents((prev) => [...prev, newEvent]);
+        }
+      }
+
+      // Add to collection if Collection section was open
+      if (triageData.addToCollection && triageData.collectionData) {
+        const targetItemId = triageData.collectionData.itemId || createdItemId;
+        if (targetItemId && triageData.collectionData.collectionId) {
+          const collection = collections.find(
+            (c) => c.id === triageData.collectionData.collectionId
+          );
+          if (collection) {
+            const updatedItems = [
+              ...(collection.items || []),
+              {
+                itemId: targetItemId,
+                quantity: triageData.collectionData.quantity || '1',
+                addedAt: Date.now(),
+              },
+            ];
+            const updatedCollection = { ...collection, items: updatedItems };
+            await storage.set(`item_collections:${collection.id}`, updatedCollection);
+            setCollections((prev) =>
+              prev.map((c) => (c.id === collection.id ? updatedCollection : c))
+            );
+          }
+        }
       }
 
       // Archive inbox item
@@ -1822,6 +2187,17 @@ export default function Alfred() {
           </button>
           <h1 className="text-lg font-bold text-dark">Alfred v5</h1>
           <div className="flex gap-1 items-center">
+            {/* Connection status indicator */}
+            <div
+              className="flex items-center gap-1"
+              title={realtimeStatus === 'connected' ? 'Connected' : realtimeStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
+            >
+              <div className={`w-2 h-2 rounded-full ${
+                realtimeStatus === 'connected' ? 'bg-success' :
+                realtimeStatus === 'connecting' ? 'bg-warning animate-pulse' :
+                'bg-gray-400'
+              }`} />
+            </div>
             <button
               onClick={() => setView("settings")}
               className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark"
@@ -1909,6 +2285,17 @@ export default function Alfred() {
               </p>
             </div>
             <div className="flex gap-2 items-center">
+              {/* Connection status indicator */}
+              <div
+                className="flex items-center gap-1"
+                title={realtimeStatus === 'connected' ? 'Connected' : realtimeStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
+              >
+                <div className={`w-2 h-2 rounded-full ${
+                  realtimeStatus === 'connected' ? 'bg-success' :
+                  realtimeStatus === 'connecting' ? 'bg-warning animate-pulse' :
+                  'bg-gray-400'
+                }`} />
+              </div>
               <button
                 onClick={() => setView("settings")}
                 className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark"
@@ -2172,8 +2559,10 @@ export default function Alfred() {
                     inboxItem={inboxItem}
                     contexts={contexts}
                     items={items}
+                    collections={collections}
                     onSave={handleInboxSave}
                     onArchive={archiveInboxItem}
+                    onEnrich={handleInboxEnrich}
                   />
                 ))}
               </div>
@@ -2827,35 +3216,125 @@ export default function Alfred() {
   );
 }
 
+// Helper functions for InboxCard
+function friendlyDate(timestamp) {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+
+  const timeStr = date.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  if (isToday) return `Today at ${timeStr}`;
+  if (isYesterday) return `Yesterday at ${timeStr}`;
+
+  return date.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }) + ` at ${timeStr}`;
+}
+
+function AiStatusBadge({ status }) {
+  const config = {
+    not_started: { label: 'Not enriched', bg: 'bg-gray-100', text: 'text-gray-500', dot: 'bg-gray-400' },
+    in_progress: { label: 'Enriching...', bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-400 animate-pulse' },
+    enriched: { label: 'Enriched (Sonnet)', bg: 'bg-green-50', text: 'text-green-700', dot: 'bg-green-500' },
+    re_enriched: { label: 'Re-enriched (Opus)', bg: 'bg-purple-50', text: 'text-purple-700', dot: 'bg-purple-500' },
+  };
+  const c = config[status] || config.not_started;
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${c.bg} ${c.text}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
+      {c.label}
+    </span>
+  );
+}
+
+function SourceIcon({ sourceType }) {
+  const icons = { manual: '✏️', mcp: '🤖', email: '✉️' };
+  return <span title={`Source: ${sourceType || 'manual'}`}>{icons[sourceType] || icons.manual}</span>;
+}
+
 function InboxCard({
   inboxItem,
   contexts,
   items,
+  collections,
   onSave,
   onArchive,
+  onEnrich,
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [showAiInfo, setShowAiInfo] = useState(false);
+  const [enriching, setEnriching] = useState(false);
 
-  // Triage checkboxes
-  const [createIntention, setCreateIntention] = useState(false);
-  const [createItem, setCreateItem] = useState(false);
+  // Accordion section open/closed state — auto-open if suggestions exist
+  const [intentionOpen, setIntentionOpen] = useState(!!inboxItem.suggestIntent);
+  const [itemOpen, setItemOpen] = useState(!!inboxItem.suggestItem);
+  const [collectionOpen, setCollectionOpen] = useState(!!inboxItem.suggestedCollectionId);
 
-  // Intention form state
-  const [intentText, setIntentText] = useState(inboxItem.capturedText);
-  const [intentRecurrence, setIntentRecurrence] = useState("once");
-  const [intentContextId, setIntentContextId] = useState("");
+  // Schedule Event sub-accordion (inside Intention)
+  const [scheduleEventOpen, setScheduleEventOpen] = useState(!!inboxItem.suggestEvent);
+  const [eventDate, setEventDate] = useState(inboxItem.suggestedEventDate || '');
+
+  // Tags (shared suggestions applied to whichever sections are open)
+  const [intentTags, setIntentTags] = useState(inboxItem.suggestedTags || []);
+
+  // Intention form state (updated to pre-fill from suggestions)
+  const [intentText, setIntentText] = useState(
+    inboxItem.suggestedIntentText || inboxItem.capturedText
+  );
+  const [intentRecurrence, setIntentRecurrence] = useState(
+    inboxItem.suggestedIntentRecurrence || 'once'
+  );
+  const [intentContextId, setIntentContextId] = useState(
+    inboxItem.suggestedContextId || ''
+  );
   const [intentContextSearch, setIntentContextSearch] = useState("");
   const [showIntentContextPicker, setShowIntentContextPicker] = useState(false);
-  const [intentItemId, setIntentItemId] = useState("");
-  const [intentItemSearch, setIntentItemSearch] = useState("");
+  const [intentItemId, setIntentItemId] = useState(
+    inboxItem.suggestedItemId || ''
+  );
+  const [intentItemSearch, setIntentItemSearch] = useState(
+    (inboxItem.suggestedItemId && items?.find(i => i.id === inboxItem.suggestedItemId)?.name) || ''
+  );
   const [showIntentItemPicker, setShowIntentItemPicker] = useState(false);
 
-  // Item form state
-  const [itemName, setItemName] = useState(inboxItem.capturedText);
-  const [itemDescription, setItemDescription] = useState("");
-  const [itemContextId, setItemContextId] = useState("");
-  const [itemElements, setItemElements] = useState([]);
+  // Item form state (updated to pre-fill from suggestions)
+  const [itemName, setItemName] = useState(
+    inboxItem.suggestedItemText || inboxItem.capturedText
+  );
+  const [itemDescription, setItemDescription] = useState(
+    inboxItem.suggestedItemDescription || ''
+  );
+  const [itemContextId, setItemContextId] = useState(
+    inboxItem.suggestedContextId || ''
+  );
+  const [itemElements, setItemElements] = useState(
+    inboxItem.suggestedItemElements || []
+  );
+  const [itemTags, setItemTags] = useState(inboxItem.suggestedTags || []);
   const [draggedIndex, setDraggedIndex] = useState(null);
+
+  // Collection form state
+  const [selectedCollectionId, setSelectedCollectionId] = useState(
+    inboxItem.suggestedCollectionId || ''
+  );
+  const [collectionItemId, setCollectionItemId] = useState(
+    inboxItem.suggestedItemId || ''
+  );
+  const [collectionItemSearch, setCollectionItemSearch] = useState(
+    (inboxItem.suggestedItemId && items?.find(i => i.id === inboxItem.suggestedItemId)?.name) || ''
+  );
+  const [showCollectionItemPicker, setShowCollectionItemPicker] = useState(false);
+  const [collectionQuantity, setCollectionQuantity] = useState('1');
 
   // Autocomplete filtering
   const filteredIntentContexts =
@@ -2875,6 +3354,54 @@ function InboxCard({
           )
           .slice(0, 10)
       : [];
+
+  const filteredCollectionItems =
+    items && collectionItemSearch.trim()
+      ? items
+          .filter((item) =>
+            item.name.toLowerCase().includes(collectionItemSearch.toLowerCase()),
+          )
+          .slice(0, 10)
+      : [];
+
+  // Re-sync local state when enrichment populates suggestions
+  useEffect(() => {
+    if (inboxItem.aiStatus === 'enriched' || inboxItem.aiStatus === 're_enriched') {
+      // Open sections based on suggestions
+      if (inboxItem.suggestIntent) {
+        setIntentionOpen(true);
+        setIntentText(inboxItem.suggestedIntentText || inboxItem.capturedText);
+        setIntentRecurrence(inboxItem.suggestedIntentRecurrence || 'once');
+        setIntentContextId(inboxItem.suggestedContextId || '');
+        setIntentTags(inboxItem.suggestedTags || []);
+      }
+      if (inboxItem.suggestItem) {
+        setItemOpen(true);
+        setItemName(inboxItem.suggestedItemText || inboxItem.capturedText);
+        setItemDescription(inboxItem.suggestedItemDescription || '');
+        setItemContextId(inboxItem.suggestedContextId || '');
+        setItemElements(inboxItem.suggestedItemElements || []);
+        setItemTags(inboxItem.suggestedTags || []);
+      }
+      if (inboxItem.suggestedCollectionId) {
+        setCollectionOpen(true);
+        setSelectedCollectionId(inboxItem.suggestedCollectionId);
+      }
+      if (inboxItem.suggestEvent) {
+        setScheduleEventOpen(true);
+        setEventDate(inboxItem.suggestedEventDate || '');
+      }
+      if (inboxItem.suggestedItemId) {
+        setIntentItemId(inboxItem.suggestedItemId);
+        setCollectionItemId(inboxItem.suggestedItemId);
+        const existingItem = items?.find(i => i.id === inboxItem.suggestedItemId);
+        if (existingItem) {
+          setIntentItemSearch(existingItem.name);
+          setCollectionItemSearch(existingItem.name);
+        }
+      }
+    }
+  }, [inboxItem.aiStatus, inboxItem, items]);
 
   // Item element helpers
   function addElement() {
@@ -2938,28 +3465,115 @@ function InboxCard({
     setDraggedIndex(null);
   }
 
+  async function handleEnrich() {
+    setEnriching(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch(
+        `${supabaseUrl}/functions/v1/ai-enrich`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ inbox_id: inboxItem.id }),
+        }
+      );
+
+      let result;
+      try {
+        result = await response.json();
+      } catch (e) {
+        throw new Error(`Enrich failed: ${response.status} - Could not parse response`);
+      }
+
+      if (!response.ok) {
+        throw new Error(result.error || `Enrich failed: ${response.status}`);
+      }
+
+      if (result.success) {
+        // Convert snake_case to camelCase
+        const camelSuggestions = storage.toCamelCase(result.suggestions);
+        const updatedItem = {
+          ...inboxItem,
+          aiStatus: result.status,
+          ...camelSuggestions,
+        };
+        onEnrich(inboxItem.id, updatedItem);
+      } else {
+        throw new Error(result.error || 'Enrichment failed');
+      }
+    } catch (error) {
+      console.error('Enrich error:', error);
+      alert('Enrichment failed: ' + error.message);
+    } finally {
+      setEnriching(false);
+    }
+  }
+
+  async function handleReEnrich() {
+    // Save current form state back to inbox record first
+    const updatedInbox = {
+      ...inboxItem,
+      suggestedContextId: intentContextId || null,
+      suggestIntent: intentionOpen,
+      suggestedIntentText: intentText,
+      suggestedIntentRecurrence: intentRecurrence,
+      suggestItem: itemOpen,
+      suggestedItemText: itemName,
+      suggestedItemDescription: itemDescription,
+      suggestedItemElements: itemElements.length > 0 ? itemElements : null,
+      suggestEvent: scheduleEventOpen,
+      suggestedEventDate: eventDate || null,
+      suggestedTags: intentTags.length > 0 ? intentTags : [],
+      suggestedItemId: intentItemId || null,
+      suggestedCollectionId: selectedCollectionId || null,
+    };
+
+    await storage.set(`inbox:${inboxItem.id}`, updatedInbox);
+    onEnrich(inboxItem.id, updatedInbox);
+
+    // Now trigger enrichment
+    await handleEnrich();
+  }
+
   function handleSave() {
-    if (!createIntention && !createItem) return;
-    if (createIntention && !intentText.trim()) return;
-    if (createItem && !itemName.trim()) return;
+    if (!intentionOpen && !itemOpen && !collectionOpen) return;
+    if (intentionOpen && !intentText.trim()) return;
+    if (itemOpen && !itemName.trim()) return;
+    if (collectionOpen && !selectedCollectionId) return;
 
     onSave(inboxItem.id, {
-      createIntention,
-      intentionData: createIntention
+      createIntention: intentionOpen,
+      intentionData: intentionOpen
         ? {
             text: intentText,
             contextId: intentContextId || null,
             recurrence: intentRecurrence,
             itemId: intentItemId || null,
+            tags: intentTags,
+            createEvent: scheduleEventOpen,
+            eventDate: eventDate || null,
           }
         : null,
-      createItem,
-      itemData: createItem
+      createItem: itemOpen,
+      itemData: itemOpen
         ? {
             name: itemName,
             description: itemDescription,
             contextId: itemContextId || null,
             elements: itemElements,
+            tags: itemTags,
+          }
+        : null,
+      addToCollection: collectionOpen,
+      collectionData: collectionOpen
+        ? {
+            collectionId: selectedCollectionId,
+            itemId: collectionItemId || null,
+            quantity: collectionQuantity,
           }
         : null,
     });
@@ -2967,34 +3581,62 @@ function InboxCard({
 
   function handleCancel() {
     setExpanded(false);
-    setCreateIntention(false);
-    setCreateItem(false);
-    setIntentText(inboxItem.capturedText);
-    setIntentRecurrence("once");
-    setIntentContextId("");
-    setIntentContextSearch("");
-    setIntentItemId("");
-    setIntentItemSearch("");
-    setItemName(inboxItem.capturedText);
-    setItemDescription("");
-    setItemContextId("");
-    setItemElements([]);
+
+    // Reset accordion states
+    setIntentionOpen(!!inboxItem.suggestIntent);
+    setItemOpen(!!inboxItem.suggestItem);
+    setCollectionOpen(!!inboxItem.suggestedCollectionId);
+    setScheduleEventOpen(!!inboxItem.suggestEvent);
+
+    // Reset Intention form to suggestions
+    setIntentText(inboxItem.suggestedIntentText || inboxItem.capturedText);
+    setIntentRecurrence(inboxItem.suggestedIntentRecurrence || 'once');
+    setIntentContextId(inboxItem.suggestedContextId || '');
+    setIntentContextSearch('');
+    setIntentItemId(inboxItem.suggestedItemId || '');
+    setIntentItemSearch(
+      (inboxItem.suggestedItemId && items?.find(i => i.id === inboxItem.suggestedItemId)?.name) || ''
+    );
+    setIntentTags(inboxItem.suggestedTags || []);
+    setEventDate(inboxItem.suggestedEventDate || '');
+
+    // Reset Item form to suggestions
+    setItemName(inboxItem.suggestedItemText || inboxItem.capturedText);
+    setItemDescription(inboxItem.suggestedItemDescription || '');
+    setItemContextId(inboxItem.suggestedContextId || '');
+    setItemElements(inboxItem.suggestedItemElements || []);
+    setItemTags(inboxItem.suggestedTags || []);
+
+    // Reset Collection form to suggestions
+    setSelectedCollectionId(inboxItem.suggestedCollectionId || '');
+    setCollectionItemId(inboxItem.suggestedItemId || '');
+    setCollectionItemSearch(
+      (inboxItem.suggestedItemId && items?.find(i => i.id === inboxItem.suggestedItemId)?.name) || ''
+    );
+    setCollectionQuantity('1');
   }
 
   // Collapsed display
   if (!expanded) {
-    const textLines = inboxItem.capturedText.split("\n");
-    const preview =
-      textLines.length > 2
-        ? textLines.slice(0, 2).join("\n") + "..."
-        : inboxItem.capturedText;
+    const truncated = inboxItem.capturedText.length > 100
+      ? inboxItem.capturedText.substring(0, 100) + '...'
+      : inboxItem.capturedText;
 
     return (
       <div
         className="p-3 sm:p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary transition-colors"
         onClick={() => setExpanded(true)}
       >
-        <p className="whitespace-pre-wrap text-dark">{preview}</p>
+        <p className="text-dark mb-2">{truncated}</p>
+        <div className="flex items-center justify-between text-xs text-muted">
+          <span>{friendlyDate(inboxItem.createdAt)}</span>
+          <div className="flex items-center gap-2">
+            <AiStatusBadge status={inboxItem.aiStatus} />
+            <span className="flex items-center gap-1">
+              source: <SourceIcon sourceType={inboxItem.sourceType} />
+            </span>
+          </div>
+        </div>
       </div>
     );
   }
@@ -3002,39 +3644,72 @@ function InboxCard({
   // Expanded triage view
   return (
     <div className="p-3 sm:p-4 bg-white border-2 border-primary rounded">
-      {/* Captured text at top */}
-      <p className="text-lg text-dark mb-4 whitespace-pre-wrap">
+      {/* Captured text */}
+      <p className="text-lg text-dark mb-2 whitespace-pre-wrap">
         {inboxItem.capturedText}
       </p>
 
-      {/* Checkboxes */}
-      <div className="space-y-2 mb-4">
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={createIntention}
-            onChange={(e) => setCreateIntention(e.target.checked)}
-            className="accent-primary"
-          />
-          <span>Create Intention</span>
-        </label>
-
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={createItem}
-            onChange={(e) => setCreateItem(e.target.checked)}
-            className="accent-primary"
-          />
-          <span>Create Item</span>
-        </label>
+      {/* Metadata row */}
+      <div className="flex items-center justify-between text-xs text-muted mb-3">
+        <span>{friendlyDate(inboxItem.createdAt)}</span>
+        <div className="flex items-center gap-2">
+          <AiStatusBadge status={inboxItem.aiStatus} />
+          {(inboxItem.aiStatus === 'enriched' || inboxItem.aiStatus === 're_enriched') && (
+            <button
+              onClick={() => setShowAiInfo(!showAiInfo)}
+              className="text-muted hover:text-dark transition-colors"
+              title="Enrichment details"
+            >
+              ℹ️
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Intention form */}
-      {createIntention && (
-        <div className="mb-4 p-4 border border-gray-200 rounded">
-          <h4 className="font-medium mb-3">Intention</h4>
-          <div className="space-y-3">
+      {/* AI info panel (collapsible) */}
+      {showAiInfo && (inboxItem.aiStatus === 'enriched' || inboxItem.aiStatus === 're_enriched') && (
+        <div className="mb-3 p-3 bg-gray-50 border border-gray-200 rounded text-sm">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-muted">Source:</span>
+            <SourceIcon sourceType={inboxItem.sourceType} />
+            <span>{inboxItem.sourceType || 'manual'}</span>
+          </div>
+          {inboxItem.aiConfidence != null && (
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-muted">Confidence:</span>
+              <span>{Math.round(inboxItem.aiConfidence * 100)}%</span>
+              <div className="flex-1 max-w-[120px] h-1.5 bg-gray-200 rounded-full">
+                <div
+                  className="h-full bg-primary rounded-full"
+                  style={{ width: `${inboxItem.aiConfidence * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
+          {inboxItem.aiReasoning && (
+            <div>
+              <span className="text-muted">Reasoning:</span>
+              <p className="mt-1 text-dark">{inboxItem.aiReasoning}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      <hr className="mb-4 border-gray-200" />
+
+      {/* Intention accordion */}
+      <div className={`border rounded mb-3 ${intentionOpen ? 'border-primary bg-white' : 'border-gray-200 bg-gray-50'}`}>
+        <button
+          onClick={() => setIntentionOpen(!intentionOpen)}
+          className={`flex items-center gap-2 w-full text-left px-4 py-3 font-medium ${
+            intentionOpen ? 'text-dark' : 'text-muted'
+          }`}
+        >
+          <span>{intentionOpen ? '▾' : '▸'}</span>
+          Intention
+        </button>
+        {intentionOpen && (
+          <div className="px-4 pb-4 space-y-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Name
@@ -3106,8 +3781,11 @@ function InboxCard({
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Linked Item (optional)
+                {itemOpen && (
+                  <span className="text-xs text-muted ml-2">— new item will auto-link</span>
+                )}
               </label>
-              <div className="relative">
+              <div className={`relative ${itemOpen ? 'opacity-50 pointer-events-none' : ''}`}>
                 <input
                   type="text"
                   value={intentItemSearch}
@@ -3182,15 +3860,53 @@ function InboxCard({
                 <option value="monthly">Monthly</option>
               </select>
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* Item form */}
-      {createItem && (
-        <div className="mb-4 p-4 border border-gray-200 rounded">
-          <h4 className="font-medium mb-3">Item</h4>
-          <div className="space-y-3">
+            {/* Tags */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Tags</label>
+              <TagInput value={intentTags} onChange={setIntentTags} />
+            </div>
+
+            {/* Schedule Event sub-accordion */}
+            <div className="mt-3">
+              <button
+                onClick={() => setScheduleEventOpen(!scheduleEventOpen)}
+                className={`flex items-center gap-2 w-full text-left text-sm font-medium py-2 ${
+                  scheduleEventOpen ? 'text-dark' : 'text-muted'
+                }`}
+              >
+                <span>{scheduleEventOpen ? '▾' : '▸'}</span>
+                Schedule Event
+              </button>
+              {scheduleEventOpen && (
+                <div className="ml-4 mt-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={eventDate}
+                    onChange={(e) => setEventDate(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded text-base"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Item accordion */}
+      <div className={`border rounded mb-3 ${itemOpen ? 'border-primary bg-white' : 'border-gray-200 bg-gray-50'}`}>
+        <button
+          onClick={() => setItemOpen(!itemOpen)}
+          className={`flex items-center gap-2 w-full text-left px-4 py-3 font-medium ${
+            itemOpen ? 'text-dark' : 'text-muted'
+          }`}
+        >
+          <span>{itemOpen ? '▾' : '▸'}</span>
+          Item
+        </button>
+        {itemOpen && (
+          <div className="px-4 pb-4 space-y-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Name
@@ -3327,18 +4043,155 @@ function InboxCard({
                 </button>
               </div>
             </div>
+
+            {/* Tags */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Tags</label>
+              <TagInput value={itemTags} onChange={setItemTags} />
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
+
+      {/* Add to Collection accordion */}
+      <div className={`border rounded mb-3 ${collectionOpen ? 'border-primary bg-white' : 'border-gray-200 bg-gray-50'}`}>
+        <button
+          onClick={() => setCollectionOpen(!collectionOpen)}
+          className={`flex items-center gap-2 w-full text-left px-4 py-3 font-medium ${
+            collectionOpen ? 'text-dark' : 'text-muted'
+          }`}
+        >
+          <span>{collectionOpen ? '▾' : '▸'}</span>
+          Add to Collection
+        </button>
+        {collectionOpen && (
+          <div className="px-4 pb-4 space-y-3">
+            {/* Collection dropdown */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Collection</label>
+              <select
+                value={selectedCollectionId}
+                onChange={(e) => setSelectedCollectionId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+              >
+                <option value="">Select collection...</option>
+                {collections?.map((col) => (
+                  <option key={col.id} value={col.id}>{col.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Item — disabled if Create Item section is open */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Item
+                {itemOpen && (
+                  <span className="text-xs text-muted ml-2">— new item will be added</span>
+                )}
+              </label>
+              <div className={`relative ${itemOpen ? 'opacity-50 pointer-events-none' : ''}`}>
+                <input
+                  type="text"
+                  value={collectionItemSearch}
+                  onChange={(e) => {
+                    setCollectionItemSearch(e.target.value);
+                    setShowCollectionItemPicker(true);
+                  }}
+                  onFocus={() => setShowCollectionItemPicker(true)}
+                  onBlur={() =>
+                    setTimeout(() => setShowCollectionItemPicker(false), 200)
+                  }
+                  placeholder="Search for an item..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                />
+                {collectionItemId && !collectionItemSearch && items && (
+                  <div className="mt-1 text-sm text-gray-600">
+                    Selected:{" "}
+                    {items.find((i) => i.id === collectionItemId)?.name}
+                    <button
+                      onClick={() => {
+                        setCollectionItemId("");
+                        setCollectionItemSearch("");
+                      }}
+                      className="ml-2 text-danger hover:text-danger-hover"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+                {showCollectionItemPicker &&
+                  collectionItemSearch &&
+                  filteredCollectionItems.length > 0 && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded shadow-lg max-h-60 overflow-y-auto">
+                      {filteredCollectionItems.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            setCollectionItemId(item.id);
+                            setCollectionItemSearch(item.name);
+                            setShowCollectionItemPicker(false);
+                          }}
+                          className="w-full text-left px-3 py-2 hover:bg-primary-bg border-b border-gray-200 last:border-b-0"
+                        >
+                          <div className="font-medium">{item.name}</div>
+                          {item.contextId && contexts && (
+                            <div className="text-xs text-muted">
+                              {
+                                contexts.find((c) => c.id === item.contextId)
+                                  ?.name
+                              }
+                            </div>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+              </div>
+            </div>
+
+            {/* Quantity */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
+              <input
+                type="text"
+                value={collectionQuantity}
+                onChange={(e) => setCollectionQuantity(e.target.value)}
+                className="w-32 px-3 py-2 border border-gray-300 rounded text-base"
+              />
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Action buttons */}
       <div className="flex items-center justify-between">
         <div className="flex gap-2">
+          {/* Enrich / Re-enrich button */}
+          {inboxItem.aiStatus !== 'in_progress' && !enriching && (
+            <button
+              onClick={inboxItem.aiStatus === 'not_started' ? handleEnrich : handleReEnrich}
+              className="px-4 py-2.5 min-h-[44px] bg-purple-600 hover:bg-purple-700 text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            >
+              {inboxItem.aiStatus === 'not_started'
+                ? 'Enrich (Sonnet)'
+                : 'Re-enrich (Opus)'}
+            </button>
+          )}
+          {(inboxItem.aiStatus === 'in_progress' || enriching) && (
+            <button
+              disabled
+              className="px-4 py-2.5 min-h-[44px] bg-amber-100 text-amber-700 rounded-lg cursor-not-allowed"
+            >
+              Enriching...
+            </button>
+          )}
+
+          {/* Save button */}
           <button
             onClick={handleSave}
-            disabled={!createIntention && !createItem}
+            disabled={!intentionOpen && !itemOpen && !collectionOpen}
             className={`px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${
-              createIntention || createItem
+              intentionOpen || itemOpen || collectionOpen
                 ? "bg-primary hover:bg-primary-hover text-white"
                 : "bg-gray-200 text-gray-400 cursor-not-allowed"
             }`}

@@ -230,8 +230,9 @@ export async function getInbox(
       .is("triaged_at", null)
       .order("created_at", { ascending: false });
 
-    // ai_status filtering will be added in Phase 7.1 when column exists
-    // For now, return all non-archived, non-triaged inbox items
+    if (params.ai_status) {
+      query = query.eq("ai_status", params.ai_status);
+    }
 
     const { data, error } = await query;
     if (error) return { error: error.message };
@@ -278,6 +279,80 @@ export async function getTags(
       .sort((a, b) => b.count - a.count);
 
     return { data: result };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+export async function createInboxItem(
+  client: SupabaseClient,
+  params: {
+    captured_text: string;
+    source_type?: string;
+    source_metadata?: Record<string, unknown>;
+    suggested_context_id?: string;
+    suggest_item?: boolean;
+    suggested_item_text?: string;
+    suggested_item_description?: string;
+    suggested_item_elements?: unknown[];
+    suggested_item_id?: string;
+    suggest_intent?: boolean;
+    suggested_intent_text?: string;
+    suggested_intent_recurrence?: string;
+    suggest_event?: boolean;
+    suggested_event_date?: string;
+    suggested_tags?: string[];
+    suggested_collection_id?: string;
+    ai_status?: string;
+    ai_confidence?: number;
+    ai_reasoning?: string;
+  }
+): Promise<ToolResult> {
+  try {
+    // Get the authenticated user's ID
+    const { data: { user }, error: userError } = await client.auth.getUser();
+    if (userError || !user) {
+      return { error: "Could not identify authenticated user" };
+    }
+
+    const record = {
+      id: crypto.randomUUID(),
+      created_at: Date.now(),
+      archived: false,
+      triaged_at: null,
+      captured_text: params.captured_text,
+      user_id: user.id,
+      // Source tracking
+      source_type: params.source_type || "mcp",
+      source_metadata: params.source_metadata || {},
+      // AI suggestions
+      suggested_context_id: params.suggested_context_id || null,
+      suggest_item: params.suggest_item || false,
+      suggested_item_text: params.suggested_item_text || null,
+      suggested_item_description: params.suggested_item_description || null,
+      suggested_item_elements: params.suggested_item_elements || null,
+      suggested_item_id: params.suggested_item_id || null,
+      suggest_intent: params.suggest_intent || false,
+      suggested_intent_text: params.suggested_intent_text || null,
+      suggested_intent_recurrence: params.suggested_intent_recurrence || null,
+      suggest_event: params.suggest_event || false,
+      suggested_event_date: params.suggested_event_date || null,
+      suggested_tags: params.suggested_tags || [],
+      suggested_collection_id: params.suggested_collection_id || null,
+      // AI enrichment status
+      ai_status: params.ai_status || "enriched",
+      ai_confidence: params.ai_confidence ?? null,
+      ai_reasoning: params.ai_reasoning || null,
+    };
+
+    const { data, error } = await client
+      .from("inbox")
+      .insert(record)
+      .select()
+      .single();
+
+    if (error) return { error: error.message };
+    return { data };
   } catch (e) {
     return { error: String(e) };
   }

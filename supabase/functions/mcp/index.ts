@@ -15,6 +15,7 @@ import {
   getCollections,
   getInbox,
   getTags,
+  createInboxItem,
 } from "../_shared/alfred-tools/tool-handlers.ts";
 
 const app = new Hono().basePath("/mcp");
@@ -179,6 +180,84 @@ function createMcpServer(token: string) {
       const result = await getTags(client, {});
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "create_inbox_item",
+    {
+      title: "Create Inbox Item",
+      description:
+        "Create a new item in Alfred's inbox with pre-filled AI suggestions. Use this when the user wants to capture something to Alfred — a task, recipe, reminder, grocery item, etc. The inbox item will appear in Alfred's UI for the user to review and approve. You should use the read tools (get_contexts, search_items, get_tags, get_collections) FIRST to look up the correct context_id, item_id, collection_id, and tags before creating the inbox item.",
+      inputSchema: {
+        captured_text: z.string().describe("The raw text being captured — what the user said or wants to remember"),
+        suggested_context_id: z.string().optional().describe("ID of an existing context to suggest (use get_contexts to find the right one)"),
+        suggest_item: z.boolean().optional().describe("Should this become a reusable Item? (true for recipes, checklists, reference material)"),
+        suggested_item_text: z.string().optional().describe("Suggested name for the new item"),
+        suggested_item_description: z.string().optional().describe("Suggested description for the new item"),
+        suggested_item_elements: z.array(z.unknown()).optional().describe("Structured elements array (steps, ingredients, checklist items)"),
+        suggested_item_id: z.string().optional().describe("ID of an EXISTING item to link to (use search_items to find it). Use this when referencing a known item like 'make chicken tikka tonight'"),
+        suggest_intent: z.boolean().optional().describe("Should this become an Intention/task? (true for action items, to-dos)"),
+        suggested_intent_text: z.string().optional().describe("Suggested text for the intention (what the user intends to do)"),
+        suggested_intent_recurrence: z.string().optional().describe("Recurrence pattern: 'once', 'daily', 'weekly', 'monthly', 'yearly'"),
+        suggest_event: z.boolean().optional().describe("Is there a specific date associated? (true if user mentions a date/time)"),
+        suggested_event_date: z.string().optional().describe("Suggested date in YYYY-MM-DD format. Resolve relative dates like 'tomorrow', 'next Tuesday' to absolute dates."),
+        suggested_tags: z.array(z.string()).optional().describe("Suggested tags — use get_tags first to match existing taxonomy. Lowercase, underscore-separated."),
+        suggested_collection_id: z.string().optional().describe("ID of an existing collection to add to (use get_collections to find it). E.g., grocery list."),
+        ai_confidence: z.number().optional().describe("Your confidence in these suggestions, 0.0 to 1.0"),
+        ai_reasoning: z.string().optional().describe("Brief explanation of why you made these suggestions"),
+      },
+    },
+    async ({ captured_text, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id, ai_confidence, ai_reasoning }: {
+      captured_text: string;
+      suggested_context_id?: string;
+      suggest_item?: boolean;
+      suggested_item_text?: string;
+      suggested_item_description?: string;
+      suggested_item_elements?: unknown[];
+      suggested_item_id?: string;
+      suggest_intent?: boolean;
+      suggested_intent_text?: string;
+      suggested_intent_recurrence?: string;
+      suggest_event?: boolean;
+      suggested_event_date?: string;
+      suggested_tags?: string[];
+      suggested_collection_id?: string;
+      ai_confidence?: number;
+      ai_reasoning?: string;
+    }) => {
+      const client = createUserClient(token);
+      const result = await createInboxItem(client, {
+        captured_text,
+        suggested_context_id,
+        suggest_item,
+        suggested_item_text,
+        suggested_item_description,
+        suggested_item_elements,
+        suggested_item_id,
+        suggest_intent,
+        suggested_intent_text,
+        suggested_intent_recurrence,
+        suggest_event,
+        suggested_event_date,
+        suggested_tags,
+        suggested_collection_id,
+        ai_confidence,
+        ai_reasoning,
+        source_type: "mcp",
+        ai_status: "enriched",
+      });
+
+      if (result.error) {
+        return {
+          content: [{ type: "text" as const, text: `Error creating inbox item: ${result.error}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: `Inbox item created successfully. The user can review and approve it in Alfred.\n\n${JSON.stringify(result.data, null, 2)}` }],
       };
     }
   );

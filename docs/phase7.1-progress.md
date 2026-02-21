@@ -2,7 +2,7 @@
 
 **Started**: 2026-02-20
 **Last Updated**: 2026-02-20
-**Status**: 🟡 In Progress
+**Status**: ✅ Complete
 
 ---
 
@@ -10,12 +10,12 @@
 
 | # | Step | Status | Notes |
 |---|------|--------|-------|
-| 1 | Run inbox schema migration (add new columns) | ⬜ Not Started | SQL — run in Supabase SQL Editor |
-| 2 | Verify RLS policies on inbox allow inserts | ⬜ Not Started | SQL — check/update in Supabase SQL Editor |
-| 3 | Add createInboxItem handler to shared tool library | ⬜ Not Started | Claude CLI |
-| 4 | Register create_inbox_item tool in MCP server | ⬜ Not Started | Claude CLI |
-| 5 | Deploy updated MCP function | ⬜ Not Started | Terminal command |
-| 6 | Test write tool from Claude.ai | ⬜ Not Started | Manual verification |
+| 1 | Run inbox schema migration (add new columns) | ✅ Complete | SQL migration ran |
+| 2 | Verify RLS policies on inbox allow inserts | ✅ Complete | RLS policies verified |
+| 3 | Add createInboxItem handler to shared tool library | ✅ Complete | Added to tool-handlers.ts |
+| 4 | Register create_inbox_item tool in MCP server | ✅ Complete | Registered in createMcpServer with full Zod schema |
+| 5 | Deploy updated MCP function | ✅ Complete | Deployed with 8 tools (7 read + 1 write) |
+| 6 | Test write tool from Claude.ai | ✅ Complete | All 3 tests passed — task, recipe ref, collection ref |
 
 ---
 
