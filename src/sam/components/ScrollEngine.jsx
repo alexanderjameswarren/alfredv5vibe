@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { noteToVexKey, noteAccidental, getBeamGroups, colorBeatEls, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
+import { getMeasDurationQ } from "../lib/measureUtils";
 
 const TARGET_LINE_PCT = 0.15; // 15% from left edge
 const STAFF_H = 350;
@@ -9,12 +10,12 @@ const DURATION_BEATS = {
   w: 4, hd: 3, h: 2, qd: 1.5, q: 1, "8d": 0.75, "8": 0.5, "16": 0.25, "32": 0.125,
 };
 
-// Pad a voice event array with rests so durations sum to 4 beats (4/4 time)
-function padVoice(events) {
+// Pad a voice event array with rests so durations sum to targetBeats
+function padVoice(events, targetBeats = 4) {
   let total = 0;
   for (const evt of events) total += DURATION_BEATS[evt.duration] || 1;
   const result = [...events];
-  let remaining = 4 - total;
+  let remaining = targetBeats - total;
   const restDurs = ["w", "h", "q", "8", "16"];
   const restVals = [4, 2, 1, 0.5, 0.25];
   while (remaining > 0.001) {
@@ -31,11 +32,11 @@ function padVoice(events) {
 
 // Renders a single copy of the score into the given VexFlow context.
 // Returns { beatMeta[], copyWidth } for that copy.
-function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
+function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurations, measStartBeats) {
   const TREBLE_Y = 40;
   const BASS_Y = 210;
 
-  const measureWidths = measures.map(() => getMeasureWidth(null, false, measureWidth));
+  const measureWidths = measures.map((m) => getMeasureWidth(m.timeSignature, false, measureWidth));
   const copyWidth = measureWidths.reduce((a, b) => a + b, 0);
 
   const beatMeta = [];
@@ -71,11 +72,12 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
     let measBeatCount = 0;
     let trebleTicks = [];
     let bassTicks = [];
+    const durationQ = measDurations[measIdx];
 
     if (measure.rh || measure.lh) {
       // === Voice format: independent RH/LH voices ===
-      const rhEvents = padVoice(measure.rh || []);
-      const lhEvents = padVoice(measure.lh || []);
+      const rhEvents = padVoice(measure.rh || [], durationQ);
+      const lhEvents = padVoice(measure.lh || [], durationQ);
 
       // Build treble StaveNotes from RH voice events
       for (const evt of rhEvents) {
@@ -178,7 +180,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
         beatMeta.push({
           meas: measure.number,
           beat: t + 1,
-          musicalBeatInCopy: measIdx * 4 + t,
+          musicalBeatInCopy: measStartBeats[measIdx] + t,
           allMidi: entry.allMidi.sort((a, b) => a - b),
           trebleNote: entry.trebleIdx !== null ? trebleNotes[entry.trebleIdx] : null,
           bassNote: entry.bassIdx !== null ? bassNotes[entry.bassIdx] : null,
@@ -239,7 +241,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
         beatMeta.push({
           meas: measure.number,
           beat: beat.beat,
-          musicalBeatInCopy: measIdx * 4 + (beat.beat - 1),
+          musicalBeatInCopy: measStartBeats[measIdx] + (beat.beat - 1),
           allMidi,
           trebleNote,
           bassNote,
@@ -259,10 +261,11 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
     bassNotes.forEach((note) => note.setStave(bass));
 
     // 2. Create voices and add tickables
-    const trebleVoice = new VF.Voice({ num_beats: 4, beat_value: 4 })
+    const ts = measure.timeSignature || { beats: 4, beatType: 4 };
+    const trebleVoice = new VF.Voice({ num_beats: ts.beats, beat_value: ts.beatType })
       .setStrict(false)
       .addTickables(trebleNotes);
-    const bassVoice = new VF.Voice({ num_beats: 4, beat_value: 4 })
+    const bassVoice = new VF.Voice({ num_beats: ts.beats, beat_value: ts.beatType })
       .setStrict(false)
       .addTickables(bassNotes);
 
@@ -289,13 +292,13 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth) {
     };
     trebleNotes.forEach((note, i) => {
       note.setStave(treble);
-      let correctX = noteStartX + (trebleTicks[i] / 4) * usableWidth;
+      let correctX = noteStartX + (trebleTicks[i] / durationQ) * usableWidth;
       if (trebleTicks[i] === 0) correctX += accPad(note);
       note.setXShift(correctX - note.getAbsoluteX());
     });
     bassNotes.forEach((note, i) => {
       note.setStave(bass);
-      let correctX = noteStartX + (bassTicks[i] / 4) * usableWidth;
+      let correctX = noteStartX + (bassTicks[i] / durationQ) * usableWidth;
       if (bassTicks[i] === 0) correctX += accPad(note);
       note.setXShift(correctX - note.getAbsoluteX());
     });
@@ -471,8 +474,17 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     // Use 1 copy for non-looping playback, 3 copies for seamless looping
     const numCopies = loop ? 3 : 1;
 
-    // Calculate single copy width — all measures uniform, no clef/time sig
-    const singleMeasureWidths = measures.map(() => getMeasureWidth(null, false, measureWidth));
+    // Precompute per-measure durations and cumulative start beats
+    const measDurations = measures.map(m => getMeasDurationQ(m));
+    const measStartBeats = [];
+    let cumBeat = 0;
+    for (let i = 0; i < measures.length; i++) {
+      measStartBeats.push(cumBeat);
+      cumBeat += measDurations[i];
+    }
+
+    // Calculate single copy width — proportional to time signature
+    const singleMeasureWidths = measures.map((m) => getMeasureWidth(m.timeSignature, false, measureWidth));
     const singleCopyWidth = singleMeasureWidths.reduce((a, b) => a + b, 0);
     const totalWidth = singleCopyWidth * numCopies + 20;
 
@@ -487,14 +499,13 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     const copyBeatCounts = [];
     for (let c = 0; c < numCopies; c++) {
       const xStart = 10 + c * singleCopyWidth;
-      const { beatMeta } = renderCopy(VF, ctx, measures, c, xStart, measureWidth);
+      const { beatMeta } = renderCopy(VF, ctx, measures, c, xStart, measureWidth, measDurations, measStartBeats);
       copyBeatCounts.push(beatMeta.length);
       allBeatMeta.push(...beatMeta);
     }
 
     // Build beat events from all copies
-    const beatsPerMeasure = 4; // 4/4 time
-    const totalMusicalBeatsPerCopy = measures.length * beatsPerMeasure;
+    const totalMusicalBeatsPerCopy = cumBeat; // sum of all measure durationQ values
     let copyOffset = 0;
     let copyIdx = 0;
     const events = allBeatMeta.map((meta, globalIdx) => {
@@ -555,8 +566,9 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     const viewportWidth = viewport.clientWidth;
     const targetX = viewportWidth * TARGET_LINE_PCT;
     const msPerBeat = 60000 / bpm;
-    const effectiveMeasureWidth = getMeasureWidth(null, false, measureWidth);
-    const pxPerBeat = effectiveMeasureWidth / 4; // 4 beats per measure in 4/4
+    const firstDurationQ = getMeasDurationQ(measures[0]);
+    const firstMeasWidth = getMeasureWidth(measures[0].timeSignature, false, measureWidth);
+    const pxPerBeat = firstMeasWidth / firstDurationQ;
     const pxPerMs = pxPerBeat / msPerBeat;
     const copyWidth = copyWidthRef.current;
 
@@ -567,7 +579,8 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     // copy-relative value before recomputing approachMs / targetTimeMs.
     const numCopies = loop ? 3 : 1;
     const beatsPerCopy = events.length / numCopies;
-    const totalMusicalBeatsPerCopy = measures.length * 4;
+    let totalMusicalBeatsPerCopy = 0;
+    for (const m of measures) totalMusicalBeatsPerCopy += getMeasDurationQ(m);
     for (let i = 0; i < events.length; i++) {
       const c = Math.floor(i / beatsPerCopy);
       events[i].musicalBeat = c * totalMusicalBeatsPerCopy + events[i].baseBeat;
@@ -683,7 +696,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         // (This code only runs when loop=true, so numCopies=3)
         const numCopiesForLoop = 3;
         const beatsPerCopy = beatEventsRef.current.length / numCopiesForLoop;
-        const totalMusicalBeats = measures.length * 4;
+        const totalMusicalBeats = totalMusicalBeatsPerCopy;
         for (let c = 0; c < numCopiesForLoop; c++) {
           const passOffset = (loopCount + c) * totalMusicalBeats;
           for (let i = 0; i < beatsPerCopy; i++) {

@@ -70,11 +70,15 @@ export function getBeamGroups(vexNotes) {
 // Layout constants
 export const CLEF_EXTRA = 80; // extra width on first measure for clef + time sig
 
-// Fixed measure width — all measures same width for correct scroll-timing sync.
+// Fixed measure width — scaled by time signature duration relative to 4/4.
 const DEFAULT_MEASURE_WIDTH = 300;
-export function getMeasureWidth(measure, isFirst, fixedWidth) {
-  const width = fixedWidth || DEFAULT_MEASURE_WIDTH;
-  return width + (isFirst ? CLEF_EXTRA : 0);
+export function getMeasureWidth(timeSig, isFirst, fixedWidth) {
+  const base = fixedWidth || DEFAULT_MEASURE_WIDTH;
+  const durationQ = timeSig ? (timeSig.beats / timeSig.beatType) * 4 : 4;
+  const scaled = base * (durationQ / 4);
+  // Enforce minimum width so VexFlow can render notes without overlap
+  const clamped = Math.max(scaled, 100);
+  return clamped + (isFirst ? CLEF_EXTRA : 0);
 }
 
 // Formatter justification width — accounts for clef/time sig on first measure

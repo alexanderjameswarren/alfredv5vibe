@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { noteToVexKey, noteAccidental, getBeamGroups, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
+import { measureDurationQ } from "../lib/measureUtils";
 
 // Layout constants
 const TREBLE_Y = 40;
@@ -11,12 +12,12 @@ const DURATION_BEATS = {
   w: 4, hd: 3, h: 2, qd: 1.5, q: 1, "8d": 0.75, "8": 0.5, "16": 0.25, "32": 0.125,
 };
 
-// Pad a voice event array with rests so durations sum to 4 beats (4/4 time)
-function padVoice(events) {
+// Pad a voice event array with rests so durations sum to targetBeats
+function padVoice(events, targetBeats = 4) {
   let total = 0;
   for (const evt of events) total += DURATION_BEATS[evt.duration] || 1;
   const result = [...events];
-  let remaining = 4 - total;
+  let remaining = targetBeats - total;
   const restDurs = ["w", "h", "q", "8", "16"];
   const restVals = [4, 2, 1, 0.5, 0.25];
   while (remaining > 0.001) {
@@ -48,7 +49,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
     container.innerHTML = "";
 
     // Calculate total width — fixed width per measure
-    const measureWidths = measures.map((m, i) => getMeasureWidth(m, i === 0, measureWidth));
+    const measureWidths = measures.map((m, i) => getMeasureWidth(m.timeSignature, i === 0, measureWidth));
     const totalWidth = measureWidths.reduce((a, b) => a + b, 0) + 20;
 
     // Create renderer
@@ -76,8 +77,10 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
       const bass = new VF.Stave(xOffset, BASS_Y, measWidth);
 
       if (isFirst) {
-        treble.addClef("treble").addTimeSignature("4/4");
-        bass.addClef("bass").addTimeSignature("4/4");
+        const firstTs = measures[0]?.timeSignature || { beats: 4, beatType: 4 };
+        const tsStr = `${firstTs.beats}/${firstTs.beatType}`;
+        treble.addClef("treble").addTimeSignature(tsStr);
+        bass.addClef("bass").addTimeSignature(tsStr);
       }
 
       treble.setContext(ctx).draw();
@@ -128,8 +131,9 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
 
       if (measure.rh || measure.lh) {
         // === Voice format: independent RH/LH voices ===
-        const rhEvents = padVoice(measure.rh || []);
-        const lhEvents = padVoice(measure.lh || []);
+        const durationQ = measureDurationQ(measure.timeSignature);
+        const rhEvents = padVoice(measure.rh || [], durationQ);
+        const lhEvents = padVoice(measure.lh || [], durationQ);
 
         // Build treble StaveNotes from RH voice events
         for (const evt of rhEvents) {
@@ -307,10 +311,11 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
       bassNotes.forEach((note) => note.setStave(bass));
 
       // 2. Create voices and add tickables
-      const trebleVoice = new VF.Voice({ num_beats: 4, beat_value: 4 })
+      const ts = measure.timeSignature || { beats: 4, beatType: 4 };
+      const trebleVoice = new VF.Voice({ num_beats: ts.beats, beat_value: ts.beatType })
         .setStrict(false)
         .addTickables(trebleNotes);
-      const bassVoice = new VF.Voice({ num_beats: 4, beat_value: 4 })
+      const bassVoice = new VF.Voice({ num_beats: ts.beats, beat_value: ts.beatType })
         .setStrict(false)
         .addTickables(bassNotes);
 

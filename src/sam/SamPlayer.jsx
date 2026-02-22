@@ -77,7 +77,13 @@ export default function SamPlayer({ onBack }) {
     }
 
     const { beat, timingDeltaMs } = match;
-    const { result } = matchChord(played, beat.allMidi);
+    const { result, missingNotes } = matchChord(played, beat.allMidi);
+
+    // If player hit ONLY wrong notes (zero overlap with expected), don't consume the beat.
+    // Leave it pending so the player can try again before the miss scanner catches it.
+    if (result === "miss" && missingNotes.length === beat.allMidi.length) {
+      return;
+    }
 
     if (result === "hit") {
       beat.state = "hit";

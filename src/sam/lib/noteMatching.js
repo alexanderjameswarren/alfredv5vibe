@@ -9,7 +9,8 @@ export function matchChord(played, expected) {
   const missingNotes = expected.filter((n) => !playedSet.has(n));
   const extraNotes = played.filter((n) => !expectedSet.has(n));
 
-  if (missingNotes.length === 0 && extraNotes.length === 0) {
+  // All expected notes present → hit (extra notes are tolerated)
+  if (missingNotes.length === 0) {
     return { result: "hit", missingNotes, extraNotes };
   }
 

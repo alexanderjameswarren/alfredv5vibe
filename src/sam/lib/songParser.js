@@ -277,7 +277,7 @@ export function parseMusicXML(xmlString) {
     const rh = buildVoice(rhEvents, divisions);
     const lh = buildVoice(lhEvents, divisions);
 
-    measures.push({ number: measIdx + 1, rh, lh });
+    measures.push({ number: measIdx + 1, rh, lh, timeSignature: { beats: timeBeats, beatType: beatType } });
   });
 
   return {

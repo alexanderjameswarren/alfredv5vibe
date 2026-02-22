@@ -1,5 +1,21 @@
 // Voice format ↔ beats format conversion utilities
 
+/**
+ * Calculate measure duration in quarter-note equivalents.
+ * e.g., 4/4 → 4, 3/4 → 3, 6/8 → 3, 7/8 → 3.5, 5/4 → 5
+ */
+export function measureDurationQ(timeSig) {
+  if (!timeSig) return 4;
+  return (timeSig.beats / timeSig.beatType) * 4;
+}
+
+/**
+ * Convenience: extract durationQ from a measure object.
+ */
+export function getMeasDurationQ(measure) {
+  return measureDurationQ(measure?.timeSignature);
+}
+
 // Beat values in quarter-note units
 const DURATION_BEATS = {
   w: 4, hd: 3, h: 2, qd: 1.5, q: 1, "8d": 0.75, "8": 0.5, "16": 0.25, "32": 0.125,
