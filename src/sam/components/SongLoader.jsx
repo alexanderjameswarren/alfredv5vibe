@@ -196,12 +196,10 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
 
     let song;
     let source;
-    let isJson = false;
 
     // Try parsing as JSON first
     try {
       song = JSON.parse(pastedText);
-      isJson = true;
       source = "json_paste";
 
       const validationError = validateSong(song);
