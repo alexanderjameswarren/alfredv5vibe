@@ -325,12 +325,30 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         .format([trebleVoice, bassVoice], getFormatWidth(measWidth, isFirst));
 
       // 5. Draw treble notes individually, each wrapped in an SVG <g> group
+      const LYRIC_Y = TREBLE_Y + 150; // Fixed y position for all lyrics
       trebleNotes.forEach((note, i) => {
         const groupEl = ctx.openGroup("sam-note", `t-${measIdx}-${i}`);
         note.setStave(treble);
         note.setContext(ctx);
         note.draw();
         ctx.closeGroup();
+
+        // Fix lyric annotation y position to a constant baseline
+        const rhEvt = (measure.rh || [])[i];
+        if (rhEvt && rhEvt.lyric) {
+          // Find the annotation text element (VexFlow renders annotations as <text> elements)
+          const textElements = groupEl.querySelectorAll("text");
+          for (const textEl of textElements) {
+            // Annotation text is typically the last text element and contains the lyric
+            if (textEl.textContent === rhEvt.lyric) {
+              textEl.setAttribute("y", LYRIC_Y);
+              // Increase font size by 20% (from default ~10pt to ~12pt)
+              textEl.setAttribute("font-size", "12pt");
+              break;
+            }
+          }
+        }
+
         const bmIdx = trebleIdxMap !== null ? trebleIdxMap[i] : i;
         if (bmIdx !== undefined && beatMeta[beatMetaOffset + bmIdx]) {
           beatMeta[beatMetaOffset + bmIdx].trebleSvgEl = groupEl;

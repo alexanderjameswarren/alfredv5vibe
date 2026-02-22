@@ -57,22 +57,56 @@ function parseNoteEvents(measEl, divisions) {
 
       let midi = 0;
       let name = "";
+      let lyric = undefined;
+      let tie = undefined;
+
       if (!isRest) {
         const pitchEl = el.querySelector("pitch");
         if (pitchEl) {
           const step = pitchEl.querySelector("step")?.textContent || "C";
-          const alter = pitchEl.querySelector("alter")?.textContent || "0";
+          const alterText = pitchEl.querySelector("alter")?.textContent || "0";
+          const alter = parseInt(alterText);
           const octave = pitchEl.querySelector("octave")?.textContent || "4";
-          midi = pitchToMidi(step, alter, octave);
-          name = midiToName(midi);
+          midi = pitchToMidi(step, alterText, octave);
+
+          // Build name from step + accidental + octave
+          let accidental = "";
+          if (alter === 1) accidental = "#";
+          else if (alter === -1) accidental = "b";
+          else if (alter === 2) accidental = "##";
+          else if (alter === -2) accidental = "bb";
+          name = step + accidental + octave;
         }
+      }
+
+      // Extract lyric if present
+      const lyricEl = el.querySelector("lyric");
+      if (lyricEl) {
+        const syllabic = lyricEl.querySelector("syllabic")?.textContent;
+        const text = lyricEl.querySelector("text")?.textContent || "";
+        if (syllabic === "begin" || syllabic === "middle") {
+          lyric = text + "-";
+        } else {
+          lyric = text;
+        }
+      }
+
+      // Extract tie information
+      const tieStart = el.querySelector('tie[type="start"]');
+      const tieStop = el.querySelector('tie[type="stop"]');
+      if (tieStart && tieStop) {
+        tie = "both";
+      } else if (tieStart) {
+        tie = "start";
+      } else if (tieStop) {
+        tie = "end";
       }
 
       const notePos = isChord
         ? (events.length > 0 ? events[events.length - 1].position : position)
         : position;
 
-      events.push({
+      const event = {
         position: notePos,
         midi,
         name,
@@ -80,7 +114,13 @@ function parseNoteEvents(measEl, divisions) {
         staff,
         isRest,
         vexDuration: type ? xmlTypeToVex(type, dots) : divisionsToVex(duration, divisions),
-      });
+      };
+
+      // Add optional fields only if defined
+      if (lyric !== undefined) event.lyric = lyric;
+      if (tie !== undefined) event.tie = tie;
+
+      events.push(event);
 
       if (!isChord) {
         position += duration;
@@ -127,9 +167,16 @@ function buildVoice(handEvents, divisions) {
 
     const notes = events
       .filter((e) => !e.isRest)
-      .map((e) => ({ midi: e.midi, name: e.name }));
+      .map((e) => {
+        const note = { midi: e.midi, name: e.name };
+        if (e.tie !== undefined) note.tie = e.tie;
+        return note;
+      });
 
-    voice.push({ duration: dur, notes });
+    const voiceEvent = { duration: dur, notes };
+    if (primary.lyric !== undefined) voiceEvent.lyric = primary.lyric;
+
+    voice.push(voiceEvent);
     cursor = pos + primary.duration;
   }
 
