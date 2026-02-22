@@ -1,5 +1,5 @@
 import React from "react";
-import { Play, Pause, RotateCcw } from "lucide-react";
+import { Play, Pause, RotateCcw, Download } from "lucide-react";
 
 export default function SettingsBar({
   song, snippet,
@@ -10,6 +10,7 @@ export default function SettingsBar({
   playbackState, songDbId,
   onPlay, onPause, onResume, onRestart,
   onChangeSong,
+  onExport,
   midiConnected, midiDevice,
   pausedMeasure,
   metronome, setMetronome,
@@ -174,6 +175,13 @@ export default function SettingsBar({
               min={150} max={600} step={50}
             />
           </label>
+          <button
+            onClick={onExport}
+            className="flex items-center gap-1 text-sm text-muted hover:text-dark min-h-[44px] px-2"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export
+          </button>
           <button
             onClick={onChangeSong}
             className="text-sm text-muted hover:text-dark min-h-[44px] px-2"

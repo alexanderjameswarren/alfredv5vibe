@@ -3,8 +3,8 @@ import { noteToVexKey, noteAccidental, getBeamGroups, getMeasureWidth, getFormat
 
 // Layout constants
 const TREBLE_Y = 40;
-const BASS_Y = 170;
-const STAFF_H = 310;
+const BASS_Y = 210;
+const STAFF_H = 350;
 
 // Duration → quarter-note beat values (for voice format tick tracking)
 const DURATION_BEATS = {
@@ -141,6 +141,13 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
               const acc = noteAccidental(n);
               if (acc) sn.addModifier(new VF.Accidental(acc), ki);
             });
+            // Add lyric if present
+            if (evt.lyric) {
+              sn.addModifier(
+                new VF.Annotation(evt.lyric).setVerticalJustification(VF.Annotation.VerticalJustify.BOTTOM),
+                0
+              );
+            }
             trebleNotes.push(sn);
             // Track tie info for cross-barline tie rendering
             const starts = [];

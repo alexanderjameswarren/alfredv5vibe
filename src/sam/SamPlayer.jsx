@@ -252,6 +252,30 @@ export default function SamPlayer({ onBack }) {
     setSong(null);
   }
 
+  function handleExport() {
+    if (!song) return;
+
+    const exportData = {
+      title: song.title,
+      artist: song.artist,
+      defaultBpm: song.defaultBpm || bpm,
+      measures: song.measures,
+    };
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+      type: "application/json",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${song.title || "song"}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="min-h-screen bg-primary-bg">
       <header className="sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm">
@@ -283,6 +307,7 @@ export default function SamPlayer({ onBack }) {
               playbackState={playbackState} songDbId={songDbId}
               onPlay={handlePlay} onPause={handlePause} onResume={handleResume} onRestart={handleRestart}
               onChangeSong={handleChangeSong}
+              onExport={handleExport}
               midiConnected={midiConnected} midiDevice={midiDevice}
               pausedMeasure={pausedMeasure}
               metronome={metronome} setMetronome={setMetronome}
