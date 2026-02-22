@@ -1,14 +1,9 @@
 // MusicXML → Sam internal JSON parser
 
 const STEP_SEMITONES = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
-const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 function pitchToMidi(step, alter, octave) {
   return (parseInt(octave) + 1) * 12 + STEP_SEMITONES[step] + (parseInt(alter) || 0);
-}
-
-function midiToName(midi) {
-  return NOTE_NAMES[midi % 12] + (Math.floor(midi / 12) - 1);
 }
 
 // MusicXML <type> → VexFlow duration
