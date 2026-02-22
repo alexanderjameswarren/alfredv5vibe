@@ -233,6 +233,11 @@ export default function SamPlayer({ onBack }) {
     setPlaybackState("playing");
   }
 
+  function handleStop() {
+    setPlaybackState("stopped");
+    endSession();
+  }
+
   function handleScoreTap() {
     if (playbackState === "stopped" && !songDbId) return;
     if (playbackState === "stopped") handlePlay();
@@ -330,6 +335,8 @@ export default function SamPlayer({ onBack }) {
                     ? Math.max(0, activeMeasures.findIndex(m => m.number >= pausedMeasure))
                     : 0
                 }
+                loop={!!snippet}
+                onEnded={handleStop}
               />
             )}
           </>

@@ -3,7 +3,6 @@ import { noteToVexKey, noteAccidental, getBeamGroups, colorBeatEls, getMeasureWi
 
 const TARGET_LINE_PCT = 0.15; // 15% from left edge
 const STAFF_H = 310;
-const NUM_COPIES = 3;
 
 // Duration → quarter-note beat values (for voice format tick tracking)
 const DURATION_BEATS = {
@@ -424,7 +423,7 @@ function playClick(audioCtx, when) {
   osc.stop(when + 0.04);
 }
 
-export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronomeEnabled = false, audioCtx = null, firstPassStart = 0 }) {
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronomeEnabled = false, audioCtx = null, firstPassStart = 0, loop = true, onEnded }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -434,7 +433,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
   const nextCheckRef = useRef(0);
   const [svgReady, setSvgReady] = useState(false);
 
-  // Render 3 copies of the score SVG into the scroll layer
+  // Render copies of the score SVG into the scroll layer (1 copy for non-looping, 3 for looping)
   useEffect(() => {
     if (!measures || measures.length === 0) return;
 
@@ -444,10 +443,13 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     const scrollLayer = scrollLayerRef.current;
     scrollLayer.innerHTML = "";
 
+    // Use 1 copy for non-looping playback, 3 copies for seamless looping
+    const numCopies = loop ? 3 : 1;
+
     // Calculate single copy width — all measures uniform, no clef/time sig
     const singleMeasureWidths = measures.map(() => getMeasureWidth(null, false, measureWidth));
     const singleCopyWidth = singleMeasureWidths.reduce((a, b) => a + b, 0);
-    const totalWidth = singleCopyWidth * NUM_COPIES + 20;
+    const totalWidth = singleCopyWidth * numCopies + 20;
 
     copyWidthRef.current = singleCopyWidth;
 
@@ -455,10 +457,10 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     renderer.resize(totalWidth, STAFF_H);
     const ctx = renderer.getContext();
 
-    // Render 3 identical copies
+    // Render copies (1 for non-looping, 3 for looping)
     const allBeatMeta = [];
     const copyBeatCounts = [];
-    for (let c = 0; c < NUM_COPIES; c++) {
+    for (let c = 0; c < numCopies; c++) {
       const xStart = 10 + c * singleCopyWidth;
       const { beatMeta } = renderCopy(VF, ctx, measures, c, xStart, measureWidth);
       copyBeatCounts.push(beatMeta.length);
@@ -501,7 +503,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     return () => {
       setSvgReady(false);
     };
-  }, [measures, measureWidth]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [measures, measureWidth, loop]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Animation loop with seamless looping
   useEffect(() => {
@@ -538,7 +540,8 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     // Reset from previous session: clear colors, states, and stale musicalBeat values.
     // musicalBeat is modified by teleport, so it must be restored to its original
     // copy-relative value before recomputing approachMs / targetTimeMs.
-    const beatsPerCopy = events.length / NUM_COPIES;
+    const numCopies = loop ? 3 : 1;
+    const beatsPerCopy = events.length / numCopies;
     const totalMusicalBeatsPerCopy = measures.length * 4;
     for (let i = 0; i < events.length; i++) {
       const c = Math.floor(i / beatsPerCopy);
@@ -557,8 +560,8 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     let startEvtIdx = 0;
     if (firstPassStart > 0 && measures[firstPassStart]) {
       const startMeasNum = measures[firstPassStart].number;
-      const beatsPerCopy = events.length / NUM_COPIES;
-      for (let i = 0; i < beatsPerCopy; i++) {
+      const beatsPerCopyForStart = events.length / numCopies;
+      for (let i = 0; i < beatsPerCopyForStart; i++) {
         if (events[i].meas >= startMeasNum) {
           startEvtIdx = i;
           break;
@@ -637,14 +640,26 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       const rawScrollOffset = state.originPx + elapsed * state.pxPerMs;
       const copy1ScreenX = (10 + copyWidth) - rawScrollOffset;
       if (copy1ScreenX <= targetX) {
+        // If loop is false, stop playback instead of looping
+        if (!loop) {
+          if (rafRef.current) {
+            cancelAnimationFrame(rafRef.current);
+            rafRef.current = null;
+          }
+          if (onEnded) onEnded();
+          return;
+        }
+
         state.originPx -= copyWidth;
         loopCount++;
         if (onLoopCount) onLoopCount(loopCount);
 
         // Reset ALL copies: copy 0 = current pass, copy 1 = next, copy 2 = after that
-        const beatsPerCopy = beatEventsRef.current.length / NUM_COPIES;
+        // (This code only runs when loop=true, so numCopies=3)
+        const numCopiesForLoop = 3;
+        const beatsPerCopy = beatEventsRef.current.length / numCopiesForLoop;
         const totalMusicalBeats = measures.length * 4;
-        for (let c = 0; c < NUM_COPIES; c++) {
+        for (let c = 0; c < numCopiesForLoop; c++) {
           const passOffset = (loopCount + c) * totalMusicalBeats;
           for (let i = 0; i < beatsPerCopy; i++) {
             const evt = beatEventsRef.current[c * beatsPerCopy + i];

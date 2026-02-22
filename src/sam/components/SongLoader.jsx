@@ -24,6 +24,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
   const [archived, setArchived] = useState([]);
   const [loadingLibrary, setLoadingLibrary] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
+  const [pastedText, setPastedText] = useState("");
   const fileInputRef = useRef(null);
 
   // Fetch song library on mount
@@ -185,6 +186,76 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
     if (file) handleFile(file);
   }
 
+  function handlePastedText() {
+    setError(null);
+
+    if (!pastedText.trim()) {
+      setError("Please paste JSON or MusicXML content");
+      return;
+    }
+
+    let song;
+    let source;
+    let isJson = false;
+
+    // Try parsing as JSON first
+    try {
+      song = JSON.parse(pastedText);
+      isJson = true;
+      source = "json_paste";
+
+      const validationError = validateSong(song);
+      if (validationError) {
+        setError(validationError);
+        return;
+      }
+    } catch {
+      // Not JSON, try MusicXML
+      try {
+        song = parseMusicXML(pastedText);
+        source = "musicxml_paste";
+
+        const validationError = validateSong(song);
+        if (validationError) {
+          setError(validationError);
+          return;
+        }
+      } catch (e) {
+        setError("Invalid format — could not parse as JSON or MusicXML: " + e.message);
+        return;
+      }
+    }
+
+    // Load song immediately
+    onSongLoaded(song);
+    setPastedText(""); // Clear the text area
+
+    // Save to Supabase in the background
+    supabase
+      .from("sam_songs")
+      .insert({
+        title: song.title || "Pasted Song",
+        artist: song.artist || null,
+        source,
+        source_file: null,
+        key_signature: song.key || null,
+        time_signature: song.timeSignature || "4/4",
+        default_bpm: song.defaultBpm || 68,
+        measures: song.measures,
+      })
+      .select("id")
+      .single()
+      .then(({ data, error: dbError }) => {
+        if (dbError) {
+          console.error("[Sam] Supabase save error:", dbError);
+        } else {
+          console.log("[Sam] Song saved to Supabase, id:", data.id);
+          if (onSongSaved) onSongSaved(data.id);
+        }
+      })
+      .catch((e) => console.error("[Sam] Supabase save failed:", e));
+  }
+
   return (
     <div className="max-w-lg mx-auto">
       <div
@@ -212,6 +283,26 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
           onChange={handleFileInput}
           className="hidden"
         />
+      </div>
+
+      {/* Text paste section */}
+      <div className="mt-6">
+        <label className="block text-sm font-medium text-muted mb-2">
+          Or paste JSON / MusicXML directly
+        </label>
+        <textarea
+          value={pastedText}
+          onChange={(e) => setPastedText(e.target.value)}
+          placeholder="Paste your JSON or MusicXML content here..."
+          className="w-full p-3 border border-gray-300 rounded-lg text-sm font-mono resize-y min-h-[120px] focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+        />
+        <button
+          onClick={handlePastedText}
+          disabled={!pastedText.trim()}
+          className="mt-2 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-sm font-medium min-h-[44px] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          Load from Paste
+        </button>
       </div>
 
       {error && (
