@@ -436,7 +436,6 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurati
   return { beatMeta, copyWidth };
 }
 
-const GRACE_MS = 150; // ms after target time before marking a beat as missed
 
 // Play a short click sound at the given audioContext time
 function playClick(audioCtx, when) {
@@ -451,7 +450,7 @@ function playClick(audioCtx, when) {
   osc.stop(when + 0.04);
 }
 
-export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronomeEnabled = false, audioCtx = null, firstPassStart = 0, loop = true, onEnded }) {
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronomeEnabled = false, audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300 }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -762,7 +761,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
           nc++;
           continue;
         }
-        if (elapsed > evt.targetTimeMs + GRACE_MS) {
+        if (elapsed > evt.targetTimeMs + timingWindowMs) {
           evt.state = "missed";
           colorBeatEls(evt, "#dc2626");
           if (onBeatMiss) onBeatMiss(evt);
@@ -784,7 +783,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         rafRef.current = null;
       }
     };
-  }, [playbackState, svgReady, bpm]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [playbackState, svgReady, bpm, timingWindowMs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="relative">

@@ -16,6 +16,7 @@ import {
   getInbox,
   getTags,
   createInboxItem,
+  updateInboxItem,
   getDatabaseSchema,
 } from "../_shared/alfred-tools/tool-handlers.ts";
 
@@ -259,6 +260,85 @@ function createMcpServer(token: string) {
 
       return {
         content: [{ type: "text" as const, text: `Inbox item created successfully. The user can review and approve it in Alfred.\n\n${JSON.stringify(result.data, null, 2)}` }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "update_inbox_item",
+    {
+      title: "Update Inbox Item",
+      description:
+        "Update an inbox item with AI enrichment suggestions. Before calling this, read the alfred-enrich skill at /mnt/skills/user/alfred-enrich/SKILL.md and follow the enrichment methodology. Always use read tools (get_contexts, search_items, get_tags, get_collections) to research before writing suggestions. Required fields: inbox_id, ai_confidence, ai_reasoning.",
+      inputSchema: {
+        inbox_id: z.string().describe("ID of the inbox item to update"),
+        ai_confidence: z.number().describe("Confidence score 0.0-1.0"),
+        ai_reasoning: z.string().describe("Brief explanation of suggestions"),
+        ai_status: z.enum(["enriched", "re_enriched"]).optional().describe("Set to 'enriched' for initial enrichment, 're_enriched' for re-enrichment"),
+        suggested_context_id: z.string().optional().describe("ID of an existing context (use get_contexts to find it)"),
+        suggest_item: z.boolean().optional().describe("Should this become a reusable Item? (true for recipes, checklists, reference material)"),
+        suggested_item_text: z.string().optional().describe("Name for the new item"),
+        suggested_item_description: z.string().optional().describe("Description for the new item"),
+        suggested_item_elements: z.array(z.unknown()).optional().describe("Structured elements array. Each element: {type: 'ingredient'|'step'|'header'|'bullet', text: '...'}"),
+        suggested_item_id: z.string().optional().describe("ID of an EXISTING item to link to (use search_items to find it)"),
+        suggest_intent: z.boolean().optional().describe("Should this become an Intention/task?"),
+        suggested_intent_text: z.string().optional().describe("Text for the intention (what the user intends to do)"),
+        suggested_intent_recurrence: z.enum(["once", "daily", "weekly", "monthly", "yearly"]).optional().describe("Recurrence pattern"),
+        suggest_event: z.boolean().optional().describe("Is there a specific date associated?"),
+        suggested_event_date: z.string().optional().describe("Date in YYYY-MM-DD format"),
+        suggested_tags: z.array(z.string()).optional().describe("Suggested tags, lowercase, underscore-separated (use get_tags to match existing taxonomy)"),
+        suggested_collection_id: z.string().optional().describe("ID of an existing collection (use get_collections to find it)"),
+      },
+    },
+    async ({ inbox_id, ai_confidence, ai_reasoning, ai_status, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id }: {
+      inbox_id: string;
+      ai_confidence: number;
+      ai_reasoning: string;
+      ai_status?: "enriched" | "re_enriched";
+      suggested_context_id?: string;
+      suggest_item?: boolean;
+      suggested_item_text?: string;
+      suggested_item_description?: string;
+      suggested_item_elements?: unknown[];
+      suggested_item_id?: string;
+      suggest_intent?: boolean;
+      suggested_intent_text?: string;
+      suggested_intent_recurrence?: "once" | "daily" | "weekly" | "monthly" | "yearly";
+      suggest_event?: boolean;
+      suggested_event_date?: string;
+      suggested_tags?: string[];
+      suggested_collection_id?: string;
+    }) => {
+      const client = createUserClient(token);
+      const result = await updateInboxItem(client, {
+        inbox_id,
+        ai_confidence,
+        ai_reasoning,
+        ai_status,
+        suggested_context_id,
+        suggest_item,
+        suggested_item_text,
+        suggested_item_description,
+        suggested_item_elements,
+        suggested_item_id,
+        suggest_intent,
+        suggested_intent_text,
+        suggested_intent_recurrence,
+        suggest_event,
+        suggested_event_date,
+        suggested_tags,
+        suggested_collection_id,
+      });
+
+      if (result.error) {
+        return {
+          content: [{ type: "text" as const, text: `Error updating inbox item: ${result.error}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: `Inbox item updated successfully.\n\n${JSON.stringify(result.data, null, 2)}` }],
       };
     }
   );

@@ -358,6 +358,83 @@ export async function createInboxItem(
   }
 }
 
+export async function updateInboxItem(
+  client: SupabaseClient,
+  params: {
+    inbox_id: string;
+    ai_confidence: number;
+    ai_reasoning: string;
+    suggested_context_id?: string;
+    suggest_item?: boolean;
+    suggested_item_text?: string;
+    suggested_item_description?: string;
+    suggested_item_elements?: unknown[];
+    suggested_item_id?: string;
+    suggest_intent?: boolean;
+    suggested_intent_text?: string;
+    suggested_intent_recurrence?: string;
+    suggest_event?: boolean;
+    suggested_event_date?: string;
+    suggested_tags?: string[];
+    suggested_collection_id?: string;
+    ai_status?: string;
+  }
+): Promise<ToolResult> {
+  try {
+    const { data: { user }, error: userError } = await client.auth.getUser();
+    if (userError || !user) {
+      return { error: "Could not identify authenticated user" };
+    }
+
+    // Verify ownership
+    const { data: existing, error: fetchError } = await client
+      .from("inbox")
+      .select("id, user_id")
+      .eq("id", params.inbox_id)
+      .single();
+
+    if (fetchError || !existing) {
+      return { error: "Inbox item not found" };
+    }
+    if (existing.user_id !== user.id) {
+      return { error: "Unauthorized: inbox item does not belong to current user" };
+    }
+
+    // Build update object with only explicitly provided fields
+    const updates: Record<string, unknown> = {
+      ai_confidence: params.ai_confidence,
+      ai_reasoning: params.ai_reasoning,
+      ai_status: params.ai_status ?? "enriched",
+    };
+
+    if (params.suggested_context_id !== undefined) updates.suggested_context_id = params.suggested_context_id;
+    if (params.suggest_item !== undefined) updates.suggest_item = params.suggest_item;
+    if (params.suggested_item_text !== undefined) updates.suggested_item_text = params.suggested_item_text;
+    if (params.suggested_item_description !== undefined) updates.suggested_item_description = params.suggested_item_description;
+    if (params.suggested_item_elements !== undefined) updates.suggested_item_elements = params.suggested_item_elements;
+    if (params.suggested_item_id !== undefined) updates.suggested_item_id = params.suggested_item_id;
+    if (params.suggest_intent !== undefined) updates.suggest_intent = params.suggest_intent;
+    if (params.suggested_intent_text !== undefined) updates.suggested_intent_text = params.suggested_intent_text;
+    if (params.suggested_intent_recurrence !== undefined) updates.suggested_intent_recurrence = params.suggested_intent_recurrence;
+    if (params.suggest_event !== undefined) updates.suggest_event = params.suggest_event;
+    if (params.suggested_event_date !== undefined) updates.suggested_event_date = params.suggested_event_date;
+    if (params.suggested_tags !== undefined) updates.suggested_tags = params.suggested_tags;
+    if (params.suggested_collection_id !== undefined) updates.suggested_collection_id = params.suggested_collection_id;
+
+    const { data, error } = await client
+      .from("inbox")
+      .update(updates)
+      .eq("id", params.inbox_id)
+      .select()
+      .single();
+
+    if (error) return { error: error.message };
+    return { data };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
 export async function getDatabaseSchema(
   client: SupabaseClient,
   params: { table_name?: string }

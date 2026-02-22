@@ -4,7 +4,7 @@ import { Play, Pause, RotateCcw, Download } from "lucide-react";
 export default function SettingsBar({
   song, snippet,
   bpm, bpmInput, setBpm, setBpmInput,
-  windowMs, windowMsInput, setWindowMs, setWindowMsInput,
+  timingWindowMs, timingWindowMsInput, setTimingWindowMs, setTimingWindowMsInput,
   chordMs, chordMsInput, setChordMs, setChordMsInput,
   measureWidth, measureWidthInput, setMeasureWidth, setMeasureWidthInput,
   playbackState, songDbId,
@@ -114,20 +114,20 @@ export default function SettingsBar({
             Metronome
           </label>
           <label className="text-sm text-muted">
-            Window ms:{" "}
+            Timing ±ms:{" "}
             <input
               type="number"
-              value={windowMsInput}
+              value={timingWindowMsInput}
               onFocus={(e) => e.target.select()}
               onChange={(e) => {
-                setWindowMsInput(e.target.value);
+                setTimingWindowMsInput(e.target.value);
                 const n = Number(e.target.value);
-                if (n > 0) setWindowMs(n);
+                if (n >= 100) setTimingWindowMs(n);
               }}
               onBlur={() => {
-                const n = Number(windowMsInput);
-                if (!n || n <= 0) { setWindowMs(500); setWindowMsInput("500"); }
-                else setWindowMsInput(String(n));
+                const n = Number(timingWindowMsInput);
+                if (!n || n < 100) { setTimingWindowMs(300); setTimingWindowMsInput("300"); }
+                else setTimingWindowMsInput(String(n));
               }}
               className="w-16 px-2 py-1 border border-gray-300 rounded text-sm min-h-[44px]"
               min={100} max={2000}

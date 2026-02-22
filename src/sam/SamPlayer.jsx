@@ -21,8 +21,8 @@ export default function SamPlayer({ onBack }) {
   const [pausedMeasure, setPausedMeasure] = useState(null);
   const [loopCount, setLoopCount] = useState(0);
   const [missCount, setMissCount] = useState(0);
-  const [windowMs, setWindowMs] = useState(500);
-  const [windowMsInput, setWindowMsInput] = useState("500");
+  const [timingWindowMs, setTimingWindowMs] = useState(300);
+  const [timingWindowMsInput, setTimingWindowMsInput] = useState("300");
   const [chordMs, setChordMs] = useState(80);
   const [chordMsInput, setChordMsInput] = useState("80");
   const [hitCount, setHitCount] = useState(0);
@@ -69,7 +69,7 @@ export default function SamPlayer({ onBack }) {
     const scrollState = scrollStateExtRef.current;
     if (!scrollState) return;
 
-    const match = findClosestBeat(beatEventsRef.current, scrollState, windowMs);
+    const match = findClosestBeat(beatEventsRef.current, scrollState, timingWindowMs);
     if (!match) {
       const names = played.map((m) => midiDisplayName(m)).join(", ");
       setLastResult({ result: "none", timingMs: 0, noteName: names });
@@ -110,7 +110,7 @@ export default function SamPlayer({ onBack }) {
       timingMs: Math.round(timingDeltaMs),
       noteName: `${sign}${Math.round(timingDeltaMs)}ms`,
     });
-  }, [playbackState, recordEvent, windowMs]);
+  }, [playbackState, recordEvent, timingWindowMs]);
 
   const { connected: midiConnected, deviceName: midiDevice, lastNote } = useMIDI({
     onChord: handleChord,
@@ -157,8 +157,8 @@ export default function SamPlayer({ onBack }) {
       setBpmInput(String(settings.bpm));
     }
     if (settings.windowMs) {
-      setWindowMs(settings.windowMs);
-      setWindowMsInput(String(settings.windowMs));
+      setTimingWindowMs(settings.windowMs);
+      setTimingWindowMsInput(String(settings.windowMs));
     }
     if (settings.chordGroupMs) {
       setChordMs(settings.chordGroupMs);
@@ -182,7 +182,7 @@ export default function SamPlayer({ onBack }) {
     startSession({
       songId: songDbId,
       snippetId: snippet?.dbId || null,
-      settings: { bpm, windowMs, chordGroupMs: chordMs, measureWidth },
+      settings: { bpm, windowMs: timingWindowMs, chordGroupMs: chordMs, measureWidth },
     });
   }
 
@@ -307,7 +307,7 @@ export default function SamPlayer({ onBack }) {
             <SettingsBar
               song={song} snippet={snippet}
               bpm={bpm} bpmInput={bpmInput} setBpm={setBpm} setBpmInput={setBpmInput}
-              windowMs={windowMs} windowMsInput={windowMsInput} setWindowMs={setWindowMs} setWindowMsInput={setWindowMsInput}
+              timingWindowMs={timingWindowMs} timingWindowMsInput={timingWindowMsInput} setTimingWindowMs={setTimingWindowMs} setTimingWindowMsInput={setTimingWindowMsInput}
               chordMs={chordMs} chordMsInput={chordMsInput} setChordMs={setChordMs} setChordMsInput={setChordMsInput}
               measureWidth={measureWidth} measureWidthInput={measureWidthInput} setMeasureWidth={setMeasureWidth} setMeasureWidthInput={setMeasureWidthInput}
               playbackState={playbackState} songDbId={songDbId}
@@ -335,7 +335,7 @@ export default function SamPlayer({ onBack }) {
                 snippet={snippet}
                 onSnippetChange={setSnippet}
                 bpm={bpm}
-                windowMs={windowMs}
+                timingWindowMs={timingWindowMs}
                 chordMs={chordMs}
                 onSettingsOverride={handleSettingsOverride}
               />
@@ -368,6 +368,7 @@ export default function SamPlayer({ onBack }) {
                 }
                 loop={!!snippet}
                 onEnded={handleStop}
+                timingWindowMs={timingWindowMs}
               />
             )}
           </>
