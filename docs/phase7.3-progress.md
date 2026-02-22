@@ -2,7 +2,7 @@
 
 **Started**: 2026-02-21
 **Last Updated**: 2026-02-21
-**Status**: 🟡 In Progress
+**Status**: ✅ Complete
 
 ---
 
@@ -12,10 +12,10 @@
 |---|------|--------|-------|
 | 1 | Postmark account + inbound settings configured | ✅ Complete | Webhook URL set, approval pending |
 | 2 | Secorus forwarding rules configured | ✅ Complete | +alfred and +elise+alfred forward to Postmark |
-| 3 | Create email-capture Edge Function | ⬜ Not Started | Claude CLI |
-| 4 | Deploy email-capture function | ⬜ Not Started | Terminal command |
-| 5 | Test with Postmark Check button | ⬜ Not Started | Verify webhook receives test payload |
-| 6 | Test end-to-end: forward email → inbox record | ⬜ Not Started | Manual test |
+| 3 | Create email-capture Edge Function | ✅ Complete | Files created with user mappings |
+| 4 | Deploy email-capture function | ✅ Complete | Deployed with --no-verify-jwt |
+| 5 | Test with Postmark Check button | ✅ Complete | 200 response - webhook reachable |
+| 6 | Test end-to-end: forward email → inbox record | ✅ Complete | Email captured successfully |
 
 ---
 

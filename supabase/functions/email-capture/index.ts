@@ -140,12 +140,18 @@ Deno.serve(async (req) => {
   console.log(`[email-capture] Received email from: ${payload.From}, subject: ${payload.Subject}`);
 
   // Extract the To address for user mapping
-  // Check OriginalRecipient first (most reliable for forwarded emails)
-  // Then fall back to ToFull, then To
+  // For Secorus forwarding: ToFull and To have the correct address
+  // OriginalRecipient is Postmark's inbound address, so check it last
+  console.log(`[email-capture] DEBUG - OriginalRecipient: ${payload.OriginalRecipient}`);
+  console.log(`[email-capture] DEBUG - ToFull: ${JSON.stringify(payload.ToFull)}`);
+  console.log(`[email-capture] DEBUG - To: ${payload.To}`);
+  console.log(`[email-capture] DEBUG - From: ${payload.From}`);
+  console.log(`[email-capture] DEBUG - Subject: ${payload.Subject}`);
+
   const toAddress =
-    payload.OriginalRecipient ||
-    payload.ToFull?.[0]?.Email ||
-    payload.To ||
+    payload.ToFull?.[0]?.Email ||  // Check this first for Secorus forwarding
+    payload.To ||                   // Fallback
+    payload.OriginalRecipient ||    // Last resort
     "";
 
   console.log(`[email-capture] To address for mapping: ${toAddress}`);

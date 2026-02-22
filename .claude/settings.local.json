@@ -19,7 +19,10 @@
       "WebFetch(domain:jsr.io)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:supabase.com)",
-      "WebFetch(domain:hono.dev)"
+      "WebFetch(domain:hono.dev)",
+      "Bash(supabase functions deploy:*)",
+      "Bash(supabase db push:*)",
+      "Bash(supabase db execute:*)"
     ]
   }
 }

@@ -357,3 +357,23 @@ export async function createInboxItem(
     return { error: String(e) };
   }
 }
+
+export async function getDatabaseSchema(
+  client: SupabaseClient,
+  params: { table_name?: string }
+): Promise<ToolResult> {
+  try {
+    const targetTable = params.table_name && params.table_name !== "all"
+      ? params.table_name
+      : "";
+
+    const { data, error } = await client.rpc("get_schema_info", {
+      target_table: targetTable,
+    });
+
+    if (error) return { error: error.message };
+    return { data };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}

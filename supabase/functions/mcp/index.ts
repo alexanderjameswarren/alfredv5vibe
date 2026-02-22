@@ -16,6 +16,7 @@ import {
   getInbox,
   getTags,
   createInboxItem,
+  getDatabaseSchema,
 } from "../_shared/alfred-tools/tool-handlers.ts";
 
 const app = new Hono().basePath("/mcp");
@@ -258,6 +259,33 @@ function createMcpServer(token: string) {
 
       return {
         content: [{ type: "text" as const, text: `Inbox item created successfully. The user can review and approve it in Alfred.\n\n${JSON.stringify(result.data, null, 2)}` }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_database_schema",
+    {
+      title: "Get Database Schema",
+      description:
+        "Get schema information for Alfred's database tables including column names, types, defaults, and nullability. Use this to understand the data model before writing queries or making suggestions. Pass a specific table name or omit for all tables.",
+      inputSchema: {
+        table_name: z
+          .string()
+          .optional()
+          .describe("Specific table name (e.g., 'items', 'intents', 'inbox') or omit for all public tables"),
+      },
+    },
+    async ({ table_name }: { table_name?: string }) => {
+      const client = createUserClient(token);
+      const result = await getDatabaseSchema(client, { table_name });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result.data || result.error, null, 2),
+          },
+        ],
       };
     }
   );
