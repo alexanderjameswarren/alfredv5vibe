@@ -435,6 +435,159 @@ export async function updateInboxItem(
   }
 }
 
+export async function getSamSongs(
+  client: SupabaseClient,
+  params: { search_text?: string }
+): Promise<ToolResult> {
+  try {
+    let query = client
+      .from("sam_songs")
+      .select("id, title, artist, source, key_signature, time_signature, default_bpm, created_at, updated_at")
+      .eq("archived", false)
+      .order("title");
+
+    if (params.search_text) {
+      query = query.or(
+        `title.ilike.%${params.search_text}%,artist.ilike.%${params.search_text}%`
+      );
+    }
+
+    const { data, error } = await query;
+    if (error) return { error: error.message };
+    return { data };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+export async function getSamSessions(
+  client: SupabaseClient,
+  params: {
+    song_id?: string;
+    snippet_id?: string;
+    date_from?: string;
+    date_to?: string;
+    limit?: number;
+  }
+): Promise<ToolResult> {
+  try {
+    let query = client
+      .from("sam_sessions")
+      .select("id, song_id, snippet_id, started_at, ended_at, duration_seconds, settings, summary")
+      .order("started_at", { ascending: false })
+      .limit(params.limit || 20);
+
+    if (params.song_id) {
+      query = query.eq("song_id", params.song_id);
+    }
+
+    if (params.snippet_id) {
+      query = query.eq("snippet_id", params.snippet_id);
+    }
+
+    if (params.date_from) {
+      query = query.gte("started_at", params.date_from);
+    }
+
+    if (params.date_to) {
+      query = query.lte("started_at", params.date_to);
+    }
+
+    const { data: sessions, error } = await query;
+    if (error) return { error: error.message };
+
+    // Join song titles
+    const songIds = [...new Set((sessions || []).map((s: { song_id: string | null }) => s.song_id).filter(Boolean))];
+    let songMap: Record<string, { title: string; artist: string | null }> = {};
+
+    if (songIds.length > 0) {
+      const { data: songs } = await client
+        .from("sam_songs")
+        .select("id, title, artist")
+        .in("id", songIds);
+      if (songs) {
+        songMap = Object.fromEntries(songs.map((s: { id: string; title: string; artist: string | null }) => [s.id, { title: s.title, artist: s.artist }]));
+      }
+    }
+
+    // Join snippet titles
+    const snippetIds = [...new Set((sessions || []).map((s: { snippet_id: string | null }) => s.snippet_id).filter(Boolean))];
+    let snippetMap: Record<string, string> = {};
+
+    if (snippetIds.length > 0) {
+      const { data: snippets } = await client
+        .from("sam_snippets")
+        .select("id, title")
+        .in("id", snippetIds);
+      if (snippets) {
+        snippetMap = Object.fromEntries(snippets.map((s: { id: string; title: string }) => [s.id, s.title]));
+      }
+    }
+
+    const results = (sessions || []).map((session: { song_id: string | null; snippet_id: string | null; [key: string]: unknown }) => ({
+      ...session,
+      song_title: session.song_id ? songMap[session.song_id]?.title || null : null,
+      song_artist: session.song_id ? songMap[session.song_id]?.artist || null : null,
+      snippet_title: session.snippet_id ? snippetMap[session.snippet_id] || null : null,
+    }));
+
+    return { data: results };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+export async function getSamSnippets(
+  client: SupabaseClient,
+  params: { song_id?: string; search_text?: string }
+): Promise<ToolResult> {
+  try {
+    let query = client
+      .from("sam_snippets")
+      .select("id, song_id, title, start_measure, end_measure, rest_measures, settings, tags, notes, created_at")
+      .eq("archived", false)
+      .order("song_id")
+      .order("start_measure");
+
+    if (params.song_id) {
+      query = query.eq("song_id", params.song_id);
+    }
+
+    if (params.search_text) {
+      query = query.or(
+        `title.ilike.%${params.search_text}%,notes.ilike.%${params.search_text}%`
+      );
+    }
+
+    const { data: snippets, error } = await query;
+    if (error) return { error: error.message };
+
+    // Join song titles
+    const songIds = [...new Set((snippets || []).map((s: { song_id: string | null }) => s.song_id).filter(Boolean))];
+    let songMap: Record<string, { title: string; artist: string | null }> = {};
+
+    if (songIds.length > 0) {
+      const { data: songs } = await client
+        .from("sam_songs")
+        .select("id, title, artist")
+        .in("id", songIds);
+      if (songs) {
+        songMap = Object.fromEntries(songs.map((s: { id: string; title: string; artist: string | null }) => [s.id, { title: s.title, artist: s.artist }]));
+      }
+    }
+
+    const results = (snippets || []).map((snippet: { song_id: string | null; [key: string]: unknown }) => ({
+      ...snippet,
+      song_title: snippet.song_id ? songMap[snippet.song_id]?.title || null : null,
+      song_artist: snippet.song_id ? songMap[snippet.song_id]?.artist || null : null,
+    }));
+
+    return { data: results };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
 export async function getDatabaseSchema(
   client: SupabaseClient,
   params: { table_name?: string }

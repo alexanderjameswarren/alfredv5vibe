@@ -18,6 +18,9 @@ import {
   createInboxItem,
   updateInboxItem,
   getDatabaseSchema,
+  getSamSongs,
+  getSamSessions,
+  getSamSnippets,
 } from "../_shared/alfred-tools/tool-handlers.ts";
 
 const app = new Hono().basePath("/mcp");
@@ -359,6 +362,104 @@ function createMcpServer(token: string) {
     async ({ table_name }: { table_name?: string }) => {
       const client = createUserClient(token);
       const result = await getDatabaseSchema(client, { table_name });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result.data || result.error, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_sam_songs",
+    {
+      title: "Get SAM Songs",
+      description:
+        "Get songs in the SAM music practice app. Returns song metadata (title, artist, key, BPM). Use search_text to find specific songs. Does not return measure data — use get_database_schema for full details if needed.",
+      inputSchema: {
+        search_text: z.string().optional().describe("Search song titles and artists"),
+      },
+    },
+    async ({ search_text }: { search_text?: string }) => {
+      const client = createUserClient(token);
+      const result = await getSamSongs(client, { search_text });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result.data || result.error, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_sam_sessions",
+    {
+      title: "Get SAM Practice Sessions",
+      description:
+        "Get practice sessions from the SAM music app. Sessions track when the user practiced a song or snippet, how long, and performance summary. Returns most recent sessions first. Use date_from/date_to to filter by time period. Includes song and snippet titles in results.",
+      inputSchema: {
+        song_id: z.string().optional().describe("Filter by song ID"),
+        snippet_id: z.string().optional().describe("Filter by snippet ID"),
+        date_from: z
+          .string()
+          .optional()
+          .describe("Start date filter (ISO 8601 format, e.g. 2025-01-01)"),
+        date_to: z.string().optional().describe("End date filter (ISO 8601 format)"),
+        limit: z.number().optional().describe("Max results to return (default 20)"),
+      },
+    },
+    async ({
+      song_id,
+      snippet_id,
+      date_from,
+      date_to,
+      limit,
+    }: {
+      song_id?: string;
+      snippet_id?: string;
+      date_from?: string;
+      date_to?: string;
+      limit?: number;
+    }) => {
+      const client = createUserClient(token);
+      const result = await getSamSessions(client, {
+        song_id,
+        snippet_id,
+        date_from,
+        date_to,
+        limit,
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result.data || result.error, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_sam_snippets",
+    {
+      title: "Get SAM Snippets",
+      description:
+        "Get practice snippets (sections of songs) from the SAM music app. Snippets define a range of measures within a song for focused practice. Includes song titles in results.",
+      inputSchema: {
+        song_id: z.string().optional().describe("Filter by song ID"),
+        search_text: z.string().optional().describe("Search snippet titles and notes"),
+      },
+    },
+    async ({ song_id, search_text }: { song_id?: string; search_text?: string }) => {
+      const client = createUserClient(token);
+      const result = await getSamSnippets(client, { song_id, search_text });
       return {
         content: [
           {
