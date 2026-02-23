@@ -29,7 +29,6 @@ import {
   Bot,
   Mail,
   Info,
-  MapPin,
   Timer,
   Pencil,
 } from "lucide-react";
