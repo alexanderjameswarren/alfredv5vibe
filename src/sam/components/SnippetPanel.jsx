@@ -152,7 +152,7 @@ export default function SnippetPanel({
     <div className="mb-3">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1 text-sm font-medium text-muted hover:text-dark min-h-[44px] px-1"
+        className="flex items-center gap-1 text-sm font-medium text-muted-foregroundhover:text-dark min-h-[44px] px-1"
       >
         {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         Snippet
@@ -164,10 +164,10 @@ export default function SnippetPanel({
       </button>
 
       {open && (
-        <div className="mt-1 p-3 bg-white border border-gray-200 rounded-lg text-sm">
+        <div className="mt-1 p-3 bg-card border border-border rounded-lg text-sm">
           {/* Measure range controls */}
           <div className="flex items-center gap-3 flex-wrap">
-            <label className="text-muted">
+            <label className="text-muted-foreground">
               Start:{" "}
               <input
                 type="number"
@@ -181,11 +181,11 @@ export default function SnippetPanel({
                   setStartInput(String(n));
                 }}
                 onFocus={(e) => e.target.select()}
-                className="w-14 px-2 py-1 border border-gray-300 rounded text-sm min-h-[44px]"
+                className="w-14 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
                 min={1} max={endMeas}
               />
             </label>
-            <label className="text-muted">
+            <label className="text-muted-foreground">
               End:{" "}
               <input
                 type="number"
@@ -199,22 +199,22 @@ export default function SnippetPanel({
                   setEndInput(String(n));
                 }}
                 onFocus={(e) => e.target.select()}
-                className="w-14 px-2 py-1 border border-gray-300 rounded text-sm min-h-[44px]"
+                className="w-14 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
                 min={startMeas} max={maxMeas}
               />
             </label>
-            <div className="flex items-center gap-1 text-muted">
+            <div className="flex items-center gap-1 text-muted-foreground">
               Rest:
               <button
                 onClick={() => setRestMeasures(Math.max(0, restMeasures - 1))}
-                className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded text-lg min-h-[44px] min-w-[44px]"
+                className="w-8 h-8 flex items-center justify-center border border-border rounded text-lg min-h-[44px] min-w-[44px]"
               >
                 −
               </button>
               <span className="w-6 text-center font-medium text-dark">{restMeasures}</span>
               <button
                 onClick={() => setRestMeasures(restMeasures + 1)}
-                className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded text-lg min-h-[44px] min-w-[44px]"
+                className="w-8 h-8 flex items-center justify-center border border-border rounded text-lg min-h-[44px] min-w-[44px]"
               >
                 +
               </button>
@@ -222,7 +222,7 @@ export default function SnippetPanel({
             <button
               onClick={handleSave}
               disabled={saving || !songDbId}
-              className="flex items-center gap-1 px-3 py-1.5 border border-gray-300 rounded text-sm text-muted hover:text-dark min-h-[44px] disabled:opacity-50"
+              className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foregroundhover:text-dark min-h-[44px] disabled:opacity-50"
             >
               <Save className="w-3.5 h-3.5" />
               {saving ? "Saving..." : "Save"}
@@ -237,7 +237,7 @@ export default function SnippetPanel({
             {snippet && (
               <button
                 onClick={handleFullSong}
-                className="flex items-center gap-1 px-3 py-1.5 border border-gray-300 rounded text-sm text-muted hover:text-dark min-h-[44px]"
+                className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foregroundhover:text-dark min-h-[44px]"
               >
                 <Disc className="w-3.5 h-3.5" />
                 Full Song
@@ -247,8 +247,8 @@ export default function SnippetPanel({
 
           {/* Saved snippets list */}
           {savedSnippets.length > 0 && (
-            <div className="mt-3 border-t border-gray-100 pt-3">
-              <div className="text-xs text-muted mb-2 font-medium">Saved snippets</div>
+            <div className="mt-3 border-t border-border pt-3">
+              <div className="text-xs text-muted-foregroundmb-2 font-medium">Saved snippets</div>
               <div className="flex flex-col gap-1">
                 {savedSnippets.map((s) => (
                   <div
@@ -256,7 +256,7 @@ export default function SnippetPanel({
                     className={`flex items-center gap-1 rounded text-sm min-h-[44px] transition-colors group ${
                       snippet?.dbId === s.id
                         ? "bg-primary-light text-primary font-medium"
-                        : "hover:bg-gray-50 text-dark"
+                        : "hover:bg-secondary text-dark"
                     }`}
                   >
                     <button
@@ -264,7 +264,7 @@ export default function SnippetPanel({
                       className="flex-1 text-left px-3 py-2"
                     >
                       <span className="font-medium">{s.title}</span>
-                      <span className="text-muted ml-2">
+                      <span className="text-muted-foregroundml-2">
                         m.{s.start_measure}–{s.end_measure}
                         {s.settings?.bpm && ` · ${s.settings.bpm} BPM`}
                         {s.rest_measures > 0 && ` · ${s.rest_measures} rest`}
@@ -272,7 +272,7 @@ export default function SnippetPanel({
                     </button>
                     <button
                       onClick={(e) => handleArchiveSnippet(e, s)}
-                      className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-300 hover:text-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
                       title="Archive snippet"
                     >
                       <Archive className="w-3.5 h-3.5" />
@@ -286,10 +286,10 @@ export default function SnippetPanel({
 
           {/* Archived snippets toggle + list */}
           {archivedSnippets.length > 0 && (
-            <div className={`text-center ${savedSnippets.length > 0 ? "mt-2" : "mt-3 border-t border-gray-100 pt-3"}`}>
+            <div className={`text-center ${savedSnippets.length > 0 ? "mt-2" : "mt-3 border-t border-border pt-3"}`}>
               <button
                 onClick={() => setShowArchived(!showArchived)}
-                className="text-xs text-muted hover:text-dark min-h-[44px] px-2"
+                className="text-xs text-muted-foregroundhover:text-dark min-h-[44px] px-2"
               >
                 {showArchived ? "Hide archived snippets" : `View archived snippets (${archivedSnippets.length})`}
               </button>
@@ -304,13 +304,13 @@ export default function SnippetPanel({
                       >
                         <div className="flex-1 px-3 py-2">
                           <span className="font-medium">{s.title}</span>
-                          <span className="text-muted ml-2">
+                          <span className="text-muted-foregroundml-2">
                             m.{s.start_measure}–{s.end_measure}
                           </span>
                         </div>
                         <button
                           onClick={(e) => handleRestoreSnippet(e, s)}
-                          className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted hover:text-green-600 transition-colors"
+                          className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foregroundhover:text-success transition-colors"
                           title="Restore snippet"
                         >
                           <ArchiveRestore className="w-3.5 h-3.5" />

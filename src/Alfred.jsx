@@ -10,6 +10,28 @@ import {
   ArrowLeft,
   Menu,
   Copy,
+  ChevronDown,
+  GripVertical,
+  Settings,
+  Archive,
+  Sparkles,
+  Wifi,
+  WifiOff,
+  Home,
+  Inbox,
+  FolderOpen,
+  Calendar,
+  Lightbulb,
+  Star,
+  ClipboardList,
+  Music,
+  Pin,
+  Bot,
+  Mail,
+  Info,
+  MapPin,
+  Timer,
+  Pencil,
 } from "lucide-react";
 import { supabase, supabaseUrl } from "./supabaseClient";
 import SamPlayer from "./sam/SamPlayer";
@@ -163,12 +185,13 @@ async function flattenElements(elements, getItem, depth = 0, visited = new Set()
   if (depth >= 3) return elements.map((el) => ({ ...el, indent: depth }));
   const result = [];
   for (const el of elements) {
-    if (el.itemId && !visited.has(el.itemId)) {
-      const childItem = typeof getItem === "function" ? await getItem(el.itemId) : null;
+    const itemId = el.itemId || el.item_id;
+    if (itemId && !visited.has(itemId)) {
+      const childItem = typeof getItem === "function" ? await getItem(itemId) : null;
       if (childItem && childItem.elements && childItem.elements.length > 0) {
         // Add a header for the referenced item
         result.push({ ...el, displayType: "header", indent: depth });
-        visited.add(el.itemId);
+        visited.add(itemId);
         const childFlattened = await flattenElements(
           childItem.elements, getItem, depth + 1, visited
         );
@@ -177,7 +200,7 @@ async function flattenElements(elements, getItem, depth = 0, visited = new Set()
         // Deleted or missing child — show placeholder
         result.push({ ...el, indent: depth, missing: !childItem });
       }
-    } else if (el.itemId && visited.has(el.itemId)) {
+    } else if (itemId && visited.has(itemId)) {
       // Circular reference detected — skip
       result.push({ ...el, indent: depth, circular: true });
     } else {
@@ -322,13 +345,13 @@ function LoginScreen() {
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-primary-bg">
+    <div className="flex items-center justify-center min-h-screen bg-background">
       <div className="w-full max-w-md p-8 bg-white rounded-lg shadow-md">
-        <h1 className="text-2xl font-bold text-dark mb-2 text-center">Alfred v5</h1>
-        <p className="text-sm text-muted text-center mb-6">Household task management</p>
+        <h1 className="text-2xl font-bold text-foreground mb-2 text-center">Alfred v5</h1>
+        <p className="text-sm text-muted-foreground text-center mb-6">Household task management</p>
 
         {error && (
-          <div className="mb-4 p-3 bg-danger-light border border-danger text-danger rounded-lg text-sm">
+          <div className="mb-4 p-3 bg-destructive-light border border-destructive text-destructive rounded-lg text-sm">
             {error}
           </div>
         )}
@@ -336,7 +359,7 @@ function LoginScreen() {
         <button
           onClick={handleGoogleLogin}
           disabled={loading}
-          className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white border-2 border-gray-300 rounded-lg hover:border-primary hover:bg-gray-50 transition-colors disabled:opacity-50"
+          className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white border-2 border-border rounded-lg hover:border-primary hover:bg-secondary/50 transition-colors disabled:opacity-50"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24">
             <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -356,7 +379,7 @@ function LoadingOverlay({ message }) {
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-8 flex flex-col items-center gap-4">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-        <p className="text-dark font-medium">{message || 'Loading...'}</p>
+        <p className="text-foreground font-medium">{message || 'Loading...'}</p>
       </div>
     </div>
   );
@@ -415,23 +438,23 @@ function TagInput({ value = [], onChange, placeholder = "Add tags (comma separat
           onKeyDown={handleKeyDown}
           onBlur={addTags}
           placeholder={placeholder}
-          className="flex-1 min-w-0 px-3 py-2 min-h-[44px] border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-primary"
+          className="flex-1 min-w-0 px-3 py-2 min-h-[44px] border border-border rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-primary"
         />
       </div>
       {error && (
-        <p className="text-xs text-red-500 mt-1">{error}</p>
+        <p className="text-xs text-destructive mt-1">{error}</p>
       )}
       {value.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-2">
           {value.map((tag) => (
             <span
               key={tag}
-              className="inline-flex items-center gap-1 px-2 py-0.5 bg-teal-100 text-teal-700 text-xs rounded-full"
+              className="inline-flex items-center gap-1 px-2 py-0.5 bg-warning-light text-accent-foreground text-xs rounded-full"
             >
               {tag}
               <button
                 onClick={() => removeTag(tag)}
-                className="p-1 hover:text-teal-900"
+                className="p-1 hover:text-primary"
               >
                 <X size={12} />
               </button>
@@ -465,8 +488,8 @@ function TagFilter({ entities, activeTag, onFilter }) {
           onClick={() => onFilter(activeTag === tag ? null : tag)}
           className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
             activeTag === tag
-              ? "bg-teal-600 text-white"
-              : "bg-teal-100 text-teal-700 hover:bg-teal-200"
+              ? "bg-primary text-white"
+              : "bg-warning-light text-accent-foreground hover:bg-accent/80"
           }`}
         >
           {tag} ({count})
@@ -475,7 +498,7 @@ function TagFilter({ entities, activeTag, onFilter }) {
       {activeTag && (
         <button
           onClick={() => onFilter(null)}
-          className="px-3 py-1.5 text-sm rounded-full bg-gray-200 text-gray-600 hover:bg-gray-300"
+          className="px-3 py-1.5 text-sm rounded-full bg-secondary text-muted-foreground hover:bg-secondary"
         >
           Clear
         </button>
@@ -484,7 +507,7 @@ function TagFilter({ entities, activeTag, onFilter }) {
   );
 }
 
-function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItems }) {
+function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItems, collection, onCreateItem }) {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState({});
 
@@ -524,20 +547,35 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
         Back to Collection
       </button>
 
-      <h2 className="text-lg font-semibold mb-3">Add Items to Collection</h2>
+      <h2 className="text-lg font-medium mb-3">Add Items to Collection</h2>
 
       <input
         type="text"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         placeholder="Search items by name or tag..."
-        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-base mb-3"
+        className="w-full px-3 py-2 border border-border rounded-lg text-base mb-3"
         autoFocus
       />
 
       <div className="space-y-2 mb-4" style={{ maxHeight: "50vh", overflowY: "auto" }}>
-        {filtered.length === 0 ? (
-          <p className="text-muted text-sm py-4 text-center">No matching items</p>
+        {filtered.length === 0 && search.trim() ? (
+          <div className="py-2">
+            <button
+              onClick={() => onCreateItem(search.trim())}
+              className="w-full flex items-center gap-3 px-4 py-3 border-2 border-dashed border-primary rounded-lg hover:bg-primary/5 transition-colors"
+            >
+              <Plus className="w-5 h-5 text-primary flex-shrink-0" />
+              <div className="text-left flex-1 min-w-0">
+                <div className="font-medium text-primary">Create "{search.trim()}"</div>
+                <div className="text-sm text-muted-foreground">
+                  Add as new item{collection?.contextId && contexts ? ` in ${contexts.find(c => c.id === collection.contextId)?.name || 'this context'}` : ''}
+                </div>
+              </div>
+            </button>
+          </div>
+        ) : filtered.length === 0 ? (
+          <p className="text-muted-foreground text-sm py-4 text-center">No matching items</p>
         ) : (
           filtered.map((item) => {
             const isSelected = !!selected[item.id];
@@ -548,7 +586,7 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
               <div
                 key={item.id}
                 className={`flex items-center gap-2 p-3 border rounded cursor-pointer ${
-                  isSelected ? "border-primary bg-primary-bg" : "border-gray-200 bg-white hover:border-primary-light"
+                  isSelected ? "border-primary bg-background" : "border-border bg-white hover:border-primary"
                 }`}
                 onClick={() => toggleItem(item.id)}
               >
@@ -562,7 +600,7 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-sm truncate">{item.name}</p>
                   {contextName && (
-                    <span className="text-xs text-muted">{contextName}</span>
+                    <span className="text-xs text-muted-foreground">{contextName}</span>
                   )}
                 </div>
                 {isSelected && (
@@ -575,7 +613,7 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
                     }}
                     onClick={(e) => e.stopPropagation()}
                     placeholder="Qty"
-                    className="w-20 sm:w-24 px-2 py-2 border border-gray-300 rounded text-base"
+                    className="w-20 sm:w-24 px-2 py-2 border border-border rounded text-base"
                   />
                 )}
               </div>
@@ -594,7 +632,7 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
         </button>
         <button
           onClick={onCancel}
-          className="px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg text-sm"
+          className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg text-sm"
         >
           Cancel
         </button>
@@ -1219,6 +1257,24 @@ export default function Alfred() {
         await storage.set(`item:${newItem.id}`, newItem, isShared);
         setItems((prev) => [...prev, newItem]);
         createdItemId = newItem.id;
+
+        // Update linked items to reference the newly created item
+        if (triageData.itemItemLinks && triageData.itemItemLinks.length > 0) {
+          for (const linkedItem of triageData.itemItemLinks) {
+            const itemToUpdate = items.find((i) => i.id === linkedItem.id);
+            if (itemToUpdate) {
+              const updatedElements = [
+                ...(itemToUpdate.elements || []),
+                {
+                  name: newItem.name,
+                  displayType: 'bullet',
+                  itemId: newItem.id,
+                },
+              ];
+              await updateItem(linkedItem.id, { elements: updatedElements });
+            }
+          }
+        }
       }
 
       // Create intention if Intention section was open
@@ -1453,9 +1509,10 @@ export default function Alfred() {
         // Clone child references first
         const clonedElements = [];
         for (const el of (item.elements || [])) {
-          if (el.itemId) {
-            const childCloneId = await cloneRecursive(el.itemId, new Set(visited));
-            clonedElements.push({ ...el, itemId: childCloneId || el.itemId });
+          const elItemId = el.itemId || el.item_id;
+          if (elItemId) {
+            const childCloneId = await cloneRecursive(elItemId, new Set(visited));
+            clonedElements.push({ ...el, itemId: childCloneId || elItemId });
           } else {
             clonedElements.push({ ...el });
           }
@@ -1964,9 +2021,16 @@ export default function Alfred() {
     return intent && !intent.archived;
   });
 
-  const todayEvents = validEvents.filter((e) => e.time === getTodayDate());
+  const todayEvents = validEvents
+    .filter((e) => {
+      const today = getTodayDate();
+      // Include all events that are today or in the past (validEvents already excludes archived)
+      return e.time <= today;
+    })
+    .sort((a, b) => a.time.localeCompare(b.time)); // Sort by oldest date first
   const allNonArchivedEvents = validEvents;
   const pinnedContexts = contexts.filter((c) => c.pinned);
+  const pinnedCollections = collections.filter((c) => c.pinned);
   const allLiveExecutions = [...activeExecutions, ...pausedExecutions];
 
   function openExecution(exec) {
@@ -2155,7 +2219,7 @@ export default function Alfred() {
   if (authLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <p className="text-muted">Loading...</p>
+        <p className="text-muted-foreground">Loading...</p>
       </div>
     );
   }
@@ -2173,48 +2237,50 @@ export default function Alfred() {
   }
 
   return (
-    <div className="min-h-screen bg-primary-bg">
+    <div className="min-h-screen bg-background">
       {isLoading && <LoadingOverlay message={loadingMessage} />}
 
       {/* Mobile header with hamburger */}
-      <header className="sm:hidden sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm">
+      <header className="sm:hidden sticky top-0 z-10 bg-white border-b border-border shadow-sm">
         <div className="px-3 py-3 flex items-center justify-between">
           <button
             onClick={() => setMenuOpen(!menuOpen)}
-            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-dark"
+            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-foreground"
           >
             <Menu className="w-6 h-6" />
           </button>
-          <h1 className="text-lg font-bold text-dark">Alfred v5</h1>
+          <h1 className="text-lg font-bold text-foreground">Alfred v5</h1>
           <div className="flex gap-1 items-center">
             {/* Connection status indicator */}
             <div
               className="flex items-center gap-1"
               title={realtimeStatus === 'connected' ? 'Connected' : realtimeStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
             >
-              <div className={`w-2 h-2 rounded-full ${
-                realtimeStatus === 'connected' ? 'bg-success' :
-                realtimeStatus === 'connecting' ? 'bg-warning animate-pulse' :
-                'bg-gray-400'
-              }`} />
+              {realtimeStatus === 'connected' ? (
+                <Wifi className="w-4 h-4 text-success" />
+              ) : realtimeStatus === 'connecting' ? (
+                <Wifi className="w-4 h-4 text-warning animate-pulse" />
+              ) : (
+                <WifiOff className="w-4 h-4 text-muted-foreground" />
+              )}
             </div>
             <button
               onClick={() => setView("settings")}
-              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark"
+              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
               title="Settings"
             >
-              <span className="text-xl">⚙️</span>
+              <Settings className="w-5 h-5" />
             </button>
             <button
               onClick={() => setView("recycle")}
-              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark"
+              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
               title="Recycle Bin"
             >
               <Trash2 className="w-5 h-5" />
             </button>
             <button
               onClick={handleSignOut}
-              className="text-sm px-3 py-1 text-muted hover:text-danger transition-colors"
+              className="text-sm px-3 py-1 text-muted-foreground hover:text-destructive transition-colors"
               title="Sign out"
             >
               Sign out
@@ -2231,12 +2297,12 @@ export default function Alfred() {
             onClick={() => setMenuOpen(false)}
           />
           <nav className="sm:hidden fixed top-0 left-0 bottom-0 w-64 bg-white shadow-xl z-40">
-            <div className="p-4 border-b border-gray-200">
+            <div className="p-4 border-b border-border">
               <div className="flex items-center justify-between">
-                <h2 className="font-bold text-dark">Menu</h2>
+                <h2 className="font-bold text-foreground">Menu</h2>
                 <button
                   onClick={() => setMenuOpen(false)}
-                  className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark"
+                  className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -2244,14 +2310,14 @@ export default function Alfred() {
             </div>
             <div className="p-2">
               {[
-                { key: "home", label: "Home", icon: "🏠" },
-                { key: "inbox", label: `Inbox${inboxItems.length > 0 ? ` (${inboxItems.length})` : ""}`, icon: "📥" },
-                { key: "contexts", label: "Contexts", icon: "📁" },
-                { key: "schedule", label: `Schedule${allNonArchivedEvents.length > 0 ? ` (${allNonArchivedEvents.length})` : ""}`, icon: "📅" },
-                { key: "intentions", label: "Intentions", icon: "💡" },
-                { key: "memories", label: "Memories", icon: "⭐" },
-                { key: "collections", label: "Collections", icon: "📋" },
-                { key: "sam", label: "Sam", icon: "🎹" },
+                { key: "home", label: "Home", icon: <Home className="w-4 h-4" /> },
+                { key: "inbox", label: `Inbox${inboxItems.length > 0 ? ` (${inboxItems.length})` : ""}`, icon: <Inbox className="w-4 h-4" /> },
+                { key: "contexts", label: "Contexts", icon: <FolderOpen className="w-4 h-4" /> },
+                { key: "schedule", label: `Schedule${allNonArchivedEvents.length > 0 ? ` (${allNonArchivedEvents.length})` : ""}`, icon: <Calendar className="w-4 h-4" /> },
+                { key: "intentions", label: "Intentions", icon: <Lightbulb className="w-4 h-4" /> },
+                { key: "memories", label: "Memories", icon: <Star className="w-4 h-4" /> },
+                { key: "collections", label: "Collections", icon: <ClipboardList className="w-4 h-4" /> },
+                { key: "sam", label: "Sam", icon: <Music className="w-4 h-4" /> },
               ].map((item) => (
                 <button
                   key={item.key}
@@ -2262,11 +2328,13 @@ export default function Alfred() {
                   }}
                   className={`w-full text-left px-4 py-3 rounded-lg mb-1 ${
                     view === item.key
-                      ? "bg-primary-light text-dark font-medium"
-                      : "text-dark hover:bg-gray-100"
+                      ? "bg-primary-light text-foreground font-medium"
+                      : "text-foreground hover:bg-secondary/50"
                   }`}
                 >
-                  {item.icon} {item.label}
+                  <span className="flex items-center gap-2">
+                    {item.icon} {item.label}
+                  </span>
                 </button>
               ))}
             </div>
@@ -2275,12 +2343,12 @@ export default function Alfred() {
       )}
 
       {/* Desktop header with tabs */}
-      <div className="hidden sm:block sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm">
+      <div className="hidden sm:block sticky top-0 z-10 bg-white border-b border-border shadow-sm">
         <div className="max-w-4xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-dark">Alfred v5</h1>
-              <p className="text-sm text-muted mt-1">
+              <h1 className="text-2xl font-bold text-foreground">Alfred v5</h1>
+              <p className="text-sm text-muted-foreground mt-1">
                 Capture decisions. Hold intent. Execute with focus.
               </p>
             </div>
@@ -2290,29 +2358,31 @@ export default function Alfred() {
                 className="flex items-center gap-1"
                 title={realtimeStatus === 'connected' ? 'Connected' : realtimeStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
               >
-                <div className={`w-2 h-2 rounded-full ${
-                  realtimeStatus === 'connected' ? 'bg-success' :
-                  realtimeStatus === 'connecting' ? 'bg-warning animate-pulse' :
-                  'bg-gray-400'
-                }`} />
+                {realtimeStatus === 'connected' ? (
+                  <Wifi className="w-4 h-4 text-success" />
+                ) : realtimeStatus === 'connecting' ? (
+                  <Wifi className="w-4 h-4 text-warning animate-pulse" />
+                ) : (
+                  <WifiOff className="w-4 h-4 text-muted-foreground" />
+                )}
               </div>
               <button
                 onClick={() => setView("settings")}
-                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark"
+                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
                 title="Settings"
               >
-                <span className="text-xl">⚙️</span>
+                <Settings className="w-5 h-5" />
               </button>
               <button
                 onClick={() => setView("recycle")}
-                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark"
+                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
                 title="Recycle Bin"
               >
                 <Trash2 className="w-5 h-5" />
               </button>
               <button
                 onClick={handleSignOut}
-                className="text-sm px-3 py-1 text-muted hover:text-danger transition-colors"
+                className="text-sm px-3 py-1 text-muted-foreground hover:text-destructive transition-colors"
                 title="Sign out"
               >
                 Sign out
@@ -2327,7 +2397,7 @@ export default function Alfred() {
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "home"
                   ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
+                  : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Home
@@ -2337,7 +2407,7 @@ export default function Alfred() {
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "inbox"
                   ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
+                  : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Inbox {inboxItems.length > 0 && `(${inboxItems.length})`}
@@ -2347,7 +2417,7 @@ export default function Alfred() {
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "contexts"
                   ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
+                  : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Contexts
@@ -2357,7 +2427,7 @@ export default function Alfred() {
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "schedule"
                   ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
+                  : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Schedule{" "}
@@ -2369,7 +2439,7 @@ export default function Alfred() {
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "intentions"
                   ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
+                  : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Intentions
@@ -2379,7 +2449,7 @@ export default function Alfred() {
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "memories"
                   ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
+                  : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Memories
@@ -2389,7 +2459,7 @@ export default function Alfred() {
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "collections"
                   ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
+                  : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Collections
@@ -2402,7 +2472,7 @@ export default function Alfred() {
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "sam"
                   ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-gray-700 border border-gray-300 hover:border-primary-light"
+                  : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Sam
@@ -2418,13 +2488,13 @@ export default function Alfred() {
           <div>
             {/* Executions & Today Tabs */}
             <div className="mb-8">
-              <div className="flex gap-6 border-b border-gray-200 mb-4">
+              <div className="flex gap-6 border-b border-border mb-4">
                 <button
                   onClick={() => setExecutionTab("active")}
                   className={`pb-2 border-b-2 cursor-pointer transition-colors ${
                     executionTab === "active"
                       ? "border-primary text-primary font-medium"
-                      : "border-transparent text-muted hover:text-dark hover:border-gray-300"
+                      : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
                   }`}
                 >
                   Active ({activeExecutions.length})
@@ -2435,7 +2505,7 @@ export default function Alfred() {
                     className={`pb-2 border-b-2 cursor-pointer transition-colors ${
                       executionTab === "paused"
                         ? "border-primary text-primary font-medium"
-                        : "border-transparent text-muted hover:text-dark hover:border-gray-300"
+                        : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
                     }`}
                   >
                     Paused ({pausedExecutions.length})
@@ -2446,7 +2516,7 @@ export default function Alfred() {
                   className={`pb-2 border-b-2 cursor-pointer transition-colors ${
                     executionTab === "today"
                       ? "border-primary text-primary font-medium"
-                      : "border-transparent text-muted hover:text-dark hover:border-gray-300"
+                      : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
                   }`}
                 >
                   Today ({todayEvents.length})
@@ -2467,7 +2537,7 @@ export default function Alfred() {
                       />
                     ))
                   ) : (
-                    <p className="text-muted text-sm">No active executions.</p>
+                    <p className="text-muted-foreground text-sm">No active executions.</p>
                   )}
                 </div>
               )}
@@ -2486,7 +2556,7 @@ export default function Alfred() {
                       />
                     ))
                   ) : (
-                    <p className="text-muted text-sm">No paused executions.</p>
+                    <p className="text-muted-foreground text-sm">No paused executions.</p>
                   )}
                 </div>
               )}
@@ -2513,17 +2583,67 @@ export default function Alfred() {
                       );
                     })
                   ) : (
-                    <p className="text-muted text-sm">No events scheduled for today.</p>
+                    <p className="text-muted-foreground text-sm">No events scheduled for today.</p>
                   )}
                 </div>
               )}
             </div>
 
+            {/* Pinned Collections Section */}
+            {pinnedCollections.length > 0 && (
+              <div>
+                <h3 className="text-lg font-medium mb-3 text-foreground">Pinned Collections</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {pinnedCollections.map((coll) => {
+                    const contextName = coll.contextId && contexts
+                      ? contexts.find((c) => c.id === coll.contextId)?.name
+                      : null;
+                    return (
+                      <div
+                        key={coll.id}
+                        onClick={() => {
+                          setPreviousView("home");
+                          setSelectedCollectionId(coll.id);
+                          setView("collection-detail");
+                        }}
+                        className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <Pin className="w-4 h-4 text-muted-foreground" />
+                              <p className="font-medium">{coll.name}</p>
+                            </div>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-sm text-muted-foreground">
+                                {coll.items ? coll.items.length : 0} {coll.items && coll.items.length === 1 ? "item" : "items"}
+                              </span>
+                              {contextName && (
+                                <span className="text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
+                                  {contextName}
+                                </span>
+                              )}
+                              {coll.shared && (
+                                <span className="text-xs text-primary flex items-center gap-1">
+                                  <Share2 className="w-3 h-3" />
+                                  Shared
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Pinned Contexts Section */}
-            <div>
-              <h3 className="text-lg font-semibold mb-3 text-dark">Pinned Contexts</h3>
+            <div className="mt-6">
+              <h3 className="text-lg font-medium mb-3 text-foreground">Pinned Contexts</h3>
               {pinnedContexts.length === 0 ? (
-                <p className="text-muted text-sm">
+                <p className="text-muted-foreground text-sm">
                   No pinned contexts. Pin contexts to see them here.
                 </p>
               ) : (
@@ -2545,9 +2665,9 @@ export default function Alfred() {
         {/* Inbox View */}
         {view === "inbox" && (
           <div>
-            <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Inbox</h2>
+            <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Inbox</h2>
             {inboxItems.length === 0 ? (
-              <div className="text-center py-12 text-muted">
+              <div className="text-center py-12 text-muted-foreground">
                 <p>Empty inbox.</p>
                 <p className="text-sm mt-2">This is success, not failure.</p>
               </div>
@@ -2574,7 +2694,7 @@ export default function Alfred() {
         {view === "contexts" && (
           <div>
             <div className="flex items-center justify-between mb-3 sm:mb-4">
-              <h2 className="text-lg sm:text-xl font-semibold">Contexts</h2>
+              <h2 className="text-lg sm:text-xl font-medium">Contexts</h2>
               <button
                 onClick={() => {
                   setEditingContext(null);
@@ -2597,7 +2717,7 @@ export default function Alfred() {
                 }}
               />
             ) : contexts.length === 0 ? (
-              <div className="text-center py-12 text-muted">
+              <div className="text-center py-12 text-muted-foreground">
                 <p>No contexts yet.</p>
                 <p className="text-sm mt-2">
                   Add a context to define how things get done.
@@ -2657,6 +2777,11 @@ export default function Alfred() {
             onFilterTag={setFilterTag}
             allItems={items}
             collections={collections}
+            onViewCollection={(id) => {
+              setPreviousView("context-detail");
+              setSelectedCollectionId(id);
+              setView("collection-detail");
+            }}
           />
         )}
 
@@ -2749,9 +2874,9 @@ export default function Alfred() {
         {/* Schedule View */}
         {view === "schedule" && (
           <div>
-            <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Schedule</h2>
+            <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Schedule</h2>
             {allNonArchivedEvents.length === 0 ? (
-              <div className="text-center py-12 text-muted">
+              <div className="text-center py-12 text-muted-foreground">
                 <p>No scheduled events.</p>
                 <p className="text-sm mt-2">This is a valid state.</p>
               </div>
@@ -2785,7 +2910,7 @@ export default function Alfred() {
         {view === "intentions" && (
           <div>
             <div className="flex items-center justify-between mb-3 sm:mb-4">
-              <h2 className="text-lg sm:text-xl font-semibold">Intentions</h2>
+              <h2 className="text-lg sm:text-xl font-medium">Intentions</h2>
               <button
                 onClick={() => setShowAddIntentionForm(true)}
                 className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
@@ -2836,7 +2961,7 @@ export default function Alfred() {
             <TagFilter entities={intentionsWithoutActiveEvent} activeTag={filterTag} onFilter={setFilterTag} />
 
             {intentionsWithoutActiveEvent.length === 0 && !showAddIntentionForm ? (
-              <div className="text-center py-12 text-muted">
+              <div className="text-center py-12 text-muted-foreground">
                 <p>No available intentions.</p>
                 <p className="text-sm mt-2">
                   All intentions are currently scheduled.
@@ -2876,10 +3001,10 @@ export default function Alfred() {
         {/* Memories View */}
         {view === "memories" && (
           <div>
-            <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Memories</h2>
+            <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Memories</h2>
             <TagFilter entities={memoriesWithoutContext} activeTag={filterTag} onFilter={setFilterTag} />
             {memoriesWithoutContext.length === 0 ? (
-              <div className="text-center py-12 text-muted">
+              <div className="text-center py-12 text-muted-foreground">
                 <p>No memories without context.</p>
               </div>
             ) : (
@@ -2908,7 +3033,7 @@ export default function Alfred() {
         {view === "collections" && (
           <div>
             <div className="flex items-center justify-between mb-3 sm:mb-4">
-              <h2 className="text-lg sm:text-xl font-semibold">Collections</h2>
+              <h2 className="text-lg sm:text-xl font-medium">Collections</h2>
               <button
                 onClick={async () => {
                   const id = await addCollection("New Collection");
@@ -2930,7 +3055,7 @@ export default function Alfred() {
                 <select
                   value={collectionContextFilter}
                   onChange={(e) => setCollectionContextFilter(e.target.value)}
-                  className="px-3 py-2 min-h-[44px] border border-gray-300 rounded text-base"
+                  className="px-3 py-2 min-h-[44px] border border-border rounded text-base"
                 >
                   <option value="">All Contexts</option>
                   <option value="__none__">No Context</option>
@@ -2949,7 +3074,7 @@ export default function Alfred() {
               });
 
               if (filtered.length === 0) return (
-                <div className="text-center py-12 text-muted">
+                <div className="text-center py-12 text-muted-foreground">
                   <p>No collections{collectionContextFilter ? " in this context" : " yet"}.</p>
                   <p className="text-sm mt-2">Create a collection to group items together.</p>
                 </div>
@@ -2969,17 +3094,20 @@ export default function Alfred() {
                         setSelectedCollectionId(coll.id);
                         setView("collection-detail");
                       }}
-                      className="p-3 sm:p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary"
+                      className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow"
                     >
                       <div className="flex items-center justify-between">
                         <div>
-                          <p className="font-medium">{coll.name}</p>
+                          <div className="flex items-center gap-2">
+                            {coll.pinned && <Pin className="w-4 h-4 text-muted-foreground" />}
+                            <p className="font-medium">{coll.name}</p>
+                          </div>
                           <div className="flex items-center gap-2 mt-1">
-                            <span className="text-sm text-muted">
+                            <span className="text-sm text-muted-foreground">
                               {coll.items ? coll.items.length : 0} {coll.items && coll.items.length === 1 ? "item" : "items"}
                             </span>
                             {contextName && (
-                              <span className="text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
+                              <span className="text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
                                 {contextName}
                               </span>
                             )}
@@ -3004,7 +3132,7 @@ export default function Alfred() {
         {/* Collection Detail View */}
         {view === "collection-detail" && (() => {
           const coll = collections.find((c) => c.id === selectedCollectionId);
-          if (!coll) return <p className="text-muted">Collection not found</p>;
+          if (!coll) return <p className="text-muted-foreground">Collection not found</p>;
           return (
             <div>
               <button
@@ -3020,7 +3148,7 @@ export default function Alfred() {
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                  <label className="block text-sm font-medium text-foreground mb-1">Name</label>
                   <input
                     type="text"
                     value={coll.name}
@@ -3029,16 +3157,16 @@ export default function Alfred() {
                       setCollections(collections.map((c) => (c.id === coll.id ? updated : c)));
                     }}
                     onBlur={() => updateCollection(coll.id, { name: coll.name }, true)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                    className="w-full px-3 py-2 border border-border rounded text-base"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Context</label>
+                  <label className="block text-sm font-medium text-foreground mb-1">Context</label>
                   <select
                     value={coll.contextId || ""}
                     onChange={(e) => updateCollection(coll.id, { contextId: e.target.value || null })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                    className="w-full px-3 py-2 border border-border rounded text-base"
                   >
                     <option value="">No context</option>
                     {contexts.map((ctx) => (
@@ -3057,9 +3185,19 @@ export default function Alfred() {
                   <span className="text-sm">Shared collection</span>
                 </label>
 
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={coll.pinned || false}
+                    onChange={(e) => updateCollection(coll.id, { pinned: e.target.checked })}
+                    className="rounded accent-primary"
+                  />
+                  <span className="text-sm">Pin to home</span>
+                </label>
+
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-base font-semibold">
+                    <h3 className="text-base font-medium">
                       Items ({coll.items ? coll.items.length : 0})
                     </h3>
                     <button
@@ -3072,20 +3210,20 @@ export default function Alfred() {
                   </div>
 
                   {coll.items && coll.items.length >= 50 && coll.items.length < 200 && (
-                    <p className="text-xs text-amber-600 mb-2">Warning: {coll.items.length} items. Performance may degrade above 200.</p>
+                    <p className="text-xs text-warning mb-2">Warning: {coll.items.length} items. Performance may degrade above 200.</p>
                   )}
                   {coll.items && coll.items.length >= 200 && (
-                    <p className="text-xs text-red-500 mb-2">Maximum 200 items reached.</p>
+                    <p className="text-xs text-destructive mb-2">Maximum 200 items reached.</p>
                   )}
 
                   {(!coll.items || coll.items.length === 0) ? (
-                    <p className="text-muted text-sm py-4 text-center">No items in this collection</p>
+                    <p className="text-muted-foreground text-sm py-4 text-center">No items in this collection</p>
                   ) : (
                     <div className="space-y-2">
                       {coll.items.map((collItem, index) => {
                         const linkedItem = items.find((i) => i.id === collItem.itemId);
                         return (
-                          <div key={collItem.itemId || index} className="flex items-center gap-2 p-3 bg-white border border-gray-200 rounded">
+                          <div key={collItem.itemId || index} className="flex items-center gap-2 p-3 bg-card border border-border rounded-lg">
                             <div className="flex-1 min-w-0">
                               <p className="font-medium text-sm truncate">
                                 {linkedItem ? linkedItem.name : collItem.itemId}
@@ -3101,14 +3239,14 @@ export default function Alfred() {
                               }}
                               onBlur={() => updateCollection(coll.id, { items: coll.items }, true)}
                               placeholder="Qty"
-                              className="w-20 sm:w-24 px-2 py-2 border border-gray-300 rounded text-base"
+                              className="w-20 sm:w-24 px-2 py-2 border border-border rounded text-base"
                             />
                             <button
                               onClick={() => {
                                 const newItems = coll.items.filter((_, i) => i !== index);
                                 updateCollection(coll.id, { items: newItems });
                               }}
-                              className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-danger"
+                              className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-destructive"
                             >
                               <X className="w-4 h-4" />
                             </button>
@@ -3119,7 +3257,7 @@ export default function Alfred() {
                   )}
                 </div>
 
-                <div className="pt-4 border-t border-gray-200">
+                <div className="pt-4 border-t border-border">
                   <button
                     onClick={() => {
                       if (window.confirm("Delete this collection?")) {
@@ -3128,7 +3266,7 @@ export default function Alfred() {
                         setView("collections");
                       }
                     }}
-                    className="px-4 py-2.5 min-h-[44px] bg-danger hover:bg-danger-hover text-white rounded-lg text-sm"
+                    className="px-4 py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg text-sm"
                   >
                     Delete Collection
                   </button>
@@ -3141,7 +3279,7 @@ export default function Alfred() {
         {/* Collection Add Items View */}
         {view === "collection-add-items" && (() => {
           const coll = collections.find((c) => c.id === selectedCollectionId);
-          if (!coll) return <p className="text-muted">Collection not found</p>;
+          if (!coll) return <p className="text-muted-foreground">Collection not found</p>;
           const existingItemIds = new Set((coll.items || []).map((ci) => ci.itemId));
           const availableItems = items.filter((i) => !i.archived && !existingItemIds.has(i.id));
 
@@ -3149,9 +3287,40 @@ export default function Alfred() {
             <CollectionAddItems
               availableItems={availableItems}
               contexts={contexts}
+              collection={coll}
               onAdd={(selectedItems) => {
                 const newItems = [...(coll.items || []), ...selectedItems];
                 updateCollection(coll.id, { items: newItems });
+                setView("collection-detail");
+              }}
+              onCreateItem={async (itemName) => {
+                // Create new item
+                const newItem = {
+                  id: uid(),
+                  user_id: user.id,
+                  name: itemName,
+                  description: '',
+                  contextId: coll.contextId,
+                  elements: [],
+                  tags: [],
+                  isCaptureTarget: false,
+                  createdAt: Date.now(),
+                };
+
+                // Save to database
+                const context = contexts.find((c) => c.id === newItem.contextId);
+                const isShared = context?.shared || false;
+                await storage.set(`item:${newItem.id}`, newItem, isShared);
+
+                // Add to local items state
+                setItems((prev) => [...prev, newItem]);
+
+                // Add to collection
+                const newCollectionItem = { itemId: newItem.id, quantity: '' };
+                const updatedItems = [...(coll.items || []), newCollectionItem];
+                updateCollection(coll.id, { items: updatedItems });
+
+                // Close dialog
                 setView("collection-detail");
               }}
               onCancel={() => setView("collection-detail")}
@@ -3163,9 +3332,9 @@ export default function Alfred() {
         {/* Settings View */}
         {view === "settings" && (
           <div>
-            <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Settings</h2>
-            <div className="p-4 sm:p-6 bg-white border border-gray-200 rounded">
-              <p className="text-muted">Settings coming soon...</p>
+            <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Settings</h2>
+            <div className="p-4 sm:p-6 bg-card border border-border rounded-lg">
+              <p className="text-muted-foreground">Settings coming soon...</p>
             </div>
           </div>
         )}
@@ -3173,16 +3342,16 @@ export default function Alfred() {
         {/* Recycle Bin View */}
         {view === "recycle" && (
           <div>
-            <h2 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4">Recycle Bin</h2>
-            <div className="p-4 sm:p-6 bg-white border border-gray-200 rounded">
-              <p className="text-muted">Recycle bin coming soon...</p>
+            <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Recycle Bin</h2>
+            <div className="p-4 sm:p-6 bg-card border border-border rounded-lg">
+              <p className="text-muted-foreground">Recycle bin coming soon...</p>
             </div>
           </div>
         )}
       </div>
 
       {/* Capture bar - fixed at bottom */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-20">
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border shadow-lg z-20">
         <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2 sm:py-4">
           <div className="flex gap-2 items-end">
             <textarea
@@ -3201,7 +3370,7 @@ export default function Alfred() {
               }}
               placeholder="Capture anything..."
               rows={1}
-              className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden min-h-[44px] max-h-[50vh] text-base"
+              className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden min-h-[44px] max-h-[50vh] text-base"
             />
             <button
               onClick={handleCapture}
@@ -3243,10 +3412,10 @@ function friendlyDate(timestamp) {
 
 function AiStatusBadge({ status }) {
   const config = {
-    not_started: { label: 'Not enriched', bg: 'bg-gray-100', text: 'text-gray-500', dot: 'bg-gray-400' },
-    in_progress: { label: 'Enriching...', bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-400 animate-pulse' },
-    enriched: { label: 'Enriched (Sonnet)', bg: 'bg-green-50', text: 'text-green-700', dot: 'bg-green-500' },
-    re_enriched: { label: 'Re-enriched (Opus)', bg: 'bg-purple-50', text: 'text-purple-700', dot: 'bg-purple-500' },
+    not_started: { label: 'Not enriched', bg: 'bg-secondary/50', text: 'text-muted-foreground', dot: 'bg-muted' },
+    in_progress: { label: 'Enriching...', bg: 'bg-warning-light', text: 'text-warning', dot: 'bg-warning animate-pulse' },
+    enriched: { label: 'Enriched (Sonnet)', bg: 'bg-success-light', text: 'text-success', dot: 'bg-success' },
+    re_enriched: { label: 'Re-enriched (Opus)', bg: 'bg-primary-light', text: 'text-primary', dot: 'bg-primary' },
   };
   const c = config[status] || config.not_started;
   return (
@@ -3258,7 +3427,11 @@ function AiStatusBadge({ status }) {
 }
 
 function SourceIcon({ sourceType }) {
-  const icons = { manual: '✏️', mcp: '🤖', email: '✉️' };
+  const icons = {
+    manual: <Pencil className="w-3.5 h-3.5" />,
+    mcp: <Bot className="w-3.5 h-3.5" />,
+    email: <Mail className="w-3.5 h-3.5" />,
+  };
   return <span title={`Source: ${sourceType || 'manual'}`}>{icons[sourceType] || icons.manual}</span>;
 }
 
@@ -3280,8 +3453,6 @@ function InboxCard({
   const [itemOpen, setItemOpen] = useState(!!inboxItem.suggestItem);
   const [collectionOpen, setCollectionOpen] = useState(!!inboxItem.suggestedCollectionId);
 
-  // Schedule Event sub-accordion (inside Intention)
-  const [scheduleEventOpen, setScheduleEventOpen] = useState(!!inboxItem.suggestEvent);
   const [eventDate, setEventDate] = useState(inboxItem.suggestedEventDate || '');
 
   // Tags (shared suggestions applied to whichever sections are open)
@@ -3318,10 +3489,20 @@ function InboxCard({
     inboxItem.suggestedContextId || ''
   );
   const [itemElements, setItemElements] = useState(
-    inboxItem.suggestedItemElements || []
+    (inboxItem.suggestedItemElements || []).map((el) =>
+      el.name ? el : {
+        name: el.text || '',
+        displayType: el.type || 'step',
+        quantity: el.quantity || '',
+        description: el.description || ''
+      }
+    )
   );
   const [itemTags, setItemTags] = useState(inboxItem.suggestedTags || []);
   const [draggedIndex, setDraggedIndex] = useState(null);
+  const [itemItemLinks, setItemItemLinks] = useState([]);
+  const [showItemItemPicker, setShowItemItemPicker] = useState(false);
+  const [itemItemSearch, setItemItemSearch] = useState('');
 
   // Collection form state
   const [selectedCollectionId, setSelectedCollectionId] = useState(
@@ -3380,7 +3561,14 @@ function InboxCard({
         setItemName(inboxItem.suggestedItemText || inboxItem.capturedText);
         setItemDescription(inboxItem.suggestedItemDescription || '');
         setItemContextId(inboxItem.suggestedContextId || '');
-        setItemElements(inboxItem.suggestedItemElements || []);
+        setItemElements((inboxItem.suggestedItemElements || []).map((el) =>
+          el.name ? el : {
+            name: el.text || '',
+            displayType: el.type || 'step',
+            quantity: el.quantity || '',
+            description: el.description || ''
+          }
+        ));
         setItemTags(inboxItem.suggestedTags || []);
       }
       if (inboxItem.suggestedCollectionId) {
@@ -3388,7 +3576,6 @@ function InboxCard({
         setSelectedCollectionId(inboxItem.suggestedCollectionId);
       }
       if (inboxItem.suggestEvent) {
-        setScheduleEventOpen(true);
         setEventDate(inboxItem.suggestedEventDate || '');
       }
       if (inboxItem.suggestedItemId) {
@@ -3525,7 +3712,7 @@ function InboxCard({
       suggestedItemText: itemName,
       suggestedItemDescription: itemDescription,
       suggestedItemElements: itemElements.length > 0 ? itemElements : null,
-      suggestEvent: scheduleEventOpen,
+      suggestEvent: !!eventDate,
       suggestedEventDate: eventDate || null,
       suggestedTags: intentTags.length > 0 ? intentTags : [],
       suggestedItemId: intentItemId || null,
@@ -3554,7 +3741,7 @@ function InboxCard({
             recurrence: intentRecurrence,
             itemId: intentItemId || null,
             tags: intentTags,
-            createEvent: scheduleEventOpen,
+            createEvent: !!eventDate,
             eventDate: eventDate || null,
           }
         : null,
@@ -3568,6 +3755,7 @@ function InboxCard({
             tags: itemTags,
           }
         : null,
+      itemItemLinks: itemOpen ? itemItemLinks : [],
       addToCollection: collectionOpen,
       collectionData: collectionOpen
         ? {
@@ -3586,7 +3774,6 @@ function InboxCard({
     setIntentionOpen(!!inboxItem.suggestIntent);
     setItemOpen(!!inboxItem.suggestItem);
     setCollectionOpen(!!inboxItem.suggestedCollectionId);
-    setScheduleEventOpen(!!inboxItem.suggestEvent);
 
     // Reset Intention form to suggestions
     setIntentText(inboxItem.suggestedIntentText || inboxItem.capturedText);
@@ -3604,8 +3791,18 @@ function InboxCard({
     setItemName(inboxItem.suggestedItemText || inboxItem.capturedText);
     setItemDescription(inboxItem.suggestedItemDescription || '');
     setItemContextId(inboxItem.suggestedContextId || '');
-    setItemElements(inboxItem.suggestedItemElements || []);
+    setItemElements((inboxItem.suggestedItemElements || []).map((el) =>
+      el.name ? el : {
+        name: el.text || '',
+        displayType: el.type || 'step',
+        quantity: el.quantity || '',
+        description: el.description || ''
+      }
+    ));
     setItemTags(inboxItem.suggestedTags || []);
+    setItemItemLinks([]);
+    setShowItemItemPicker(false);
+    setItemItemSearch('');
 
     // Reset Collection form to suggestions
     setSelectedCollectionId(inboxItem.suggestedCollectionId || '');
@@ -3624,11 +3821,11 @@ function InboxCard({
 
     return (
       <div
-        className="p-3 sm:p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary transition-colors"
+        className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary transition-colors shadow-sm hover:shadow-md"
         onClick={() => setExpanded(true)}
       >
-        <p className="text-dark mb-2">{truncated}</p>
-        <div className="flex items-center justify-between text-xs text-muted">
+        <p className="text-foreground mb-2">{truncated}</p>
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>{friendlyDate(inboxItem.createdAt)}</span>
           <div className="flex items-center gap-2">
             <AiStatusBadge status={inboxItem.aiStatus} />
@@ -3643,24 +3840,24 @@ function InboxCard({
 
   // Expanded triage view
   return (
-    <div className="p-3 sm:p-4 bg-white border-2 border-primary rounded">
+    <div className="p-3 sm:p-4 bg-card border-2 border-primary rounded-lg shadow-md">
       {/* Captured text */}
-      <p className="text-lg text-dark mb-2 whitespace-pre-wrap">
+      <p className="text-lg text-foreground mb-2 whitespace-pre-wrap">
         {inboxItem.capturedText}
       </p>
 
       {/* Metadata row */}
-      <div className="flex items-center justify-between text-xs text-muted mb-3">
+      <div className="flex items-center justify-between text-xs text-muted-foreground mb-3">
         <span>{friendlyDate(inboxItem.createdAt)}</span>
         <div className="flex items-center gap-2">
           <AiStatusBadge status={inboxItem.aiStatus} />
           {(inboxItem.aiStatus === 'enriched' || inboxItem.aiStatus === 're_enriched') && (
             <button
               onClick={() => setShowAiInfo(!showAiInfo)}
-              className="text-muted hover:text-dark transition-colors"
+              className="text-muted-foreground hover:text-foreground transition-colors"
               title="Enrichment details"
             >
-              ℹ️
+              <Info className="w-4 h-4" />
             </button>
           )}
         </div>
@@ -3668,17 +3865,17 @@ function InboxCard({
 
       {/* AI info panel (collapsible) */}
       {showAiInfo && (inboxItem.aiStatus === 'enriched' || inboxItem.aiStatus === 're_enriched') && (
-        <div className="mb-3 p-3 bg-gray-50 border border-gray-200 rounded text-sm">
+        <div className="mb-3 p-3 bg-muted border border-border rounded text-sm">
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-muted">Source:</span>
+            <span className="text-muted-foreground">Source:</span>
             <SourceIcon sourceType={inboxItem.sourceType} />
             <span>{inboxItem.sourceType || 'manual'}</span>
           </div>
           {inboxItem.aiConfidence != null && (
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-muted">Confidence:</span>
+              <span className="text-muted-foreground">Confidence:</span>
               <span>{Math.round(inboxItem.aiConfidence * 100)}%</span>
-              <div className="flex-1 max-w-[120px] h-1.5 bg-gray-200 rounded-full">
+              <div className="flex-1 max-w-[120px] h-1.5 bg-secondary rounded-full">
                 <div
                   className="h-full bg-primary rounded-full"
                   style={{ width: `${inboxItem.aiConfidence * 100}%` }}
@@ -3688,42 +3885,42 @@ function InboxCard({
           )}
           {inboxItem.aiReasoning && (
             <div>
-              <span className="text-muted">Reasoning:</span>
-              <p className="mt-1 text-dark">{inboxItem.aiReasoning}</p>
+              <span className="text-muted-foreground">Reasoning:</span>
+              <p className="mt-1 text-foreground">{inboxItem.aiReasoning}</p>
             </div>
           )}
         </div>
       )}
 
-      <hr className="mb-4 border-gray-200" />
+      <hr className="mb-4 border-border" />
 
       {/* Intention accordion */}
-      <div className={`border rounded mb-3 ${intentionOpen ? 'border-primary bg-white' : 'border-gray-200 bg-gray-50'}`}>
+      <div className={`border rounded mb-3 ${intentionOpen ? 'border-primary bg-white' : 'border-border bg-muted'}`}>
         <button
           onClick={() => setIntentionOpen(!intentionOpen)}
           className={`flex items-center gap-2 w-full text-left px-4 py-3 font-medium ${
-            intentionOpen ? 'text-dark' : 'text-muted'
+            intentionOpen ? 'text-foreground' : 'text-muted-foreground'
           }`}
         >
-          <span>{intentionOpen ? '▾' : '▸'}</span>
+          <ChevronDown className={`w-4 h-4 transition-transform ${intentionOpen ? 'rotate-180' : ''}`} />
           Intention
         </button>
         {intentionOpen && (
           <div className="px-4 pb-4 space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-foreground mb-1">
                 Name
               </label>
               <input
                 type="text"
                 value={intentText}
                 onChange={(e) => setIntentText(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                className="w-full px-3 py-2 border border-border rounded text-base"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-foreground mb-1">
                 Linked Context (optional)
               </label>
               <div className="relative">
@@ -3739,10 +3936,10 @@ function InboxCard({
                     setTimeout(() => setShowIntentContextPicker(false), 200)
                   }
                   placeholder="Search for a context..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                  className="w-full px-3 py-2 border border-border rounded text-base"
                 />
                 {intentContextId && !intentContextSearch && contexts && (
-                  <div className="mt-1 text-sm text-gray-600">
+                  <div className="mt-1 text-sm text-muted-foreground">
                     Selected:{" "}
                     {contexts.find((c) => c.id === intentContextId)?.name}
                     <button
@@ -3750,16 +3947,16 @@ function InboxCard({
                         setIntentContextId("");
                         setIntentContextSearch("");
                       }}
-                      className="ml-2 text-danger hover:text-danger-hover"
+                      className="ml-2 text-destructive hover:text-destructive-hover"
                     >
-                      ✕
+                      <X className="w-3 h-3" />
                     </button>
                   </div>
                 )}
                 {showIntentContextPicker &&
                   intentContextSearch &&
                   filteredIntentContexts.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded shadow-lg max-h-60 overflow-y-auto">
+                    <div className="absolute z-10 w-full mt-1 bg-card border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
                       {filteredIntentContexts.map((ctx) => (
                         <button
                           key={ctx.id}
@@ -3768,7 +3965,7 @@ function InboxCard({
                             setIntentContextSearch(ctx.name);
                             setShowIntentContextPicker(false);
                           }}
-                          className="w-full text-left px-3 py-2 hover:bg-primary-bg border-b border-gray-200 last:border-b-0"
+                          className="w-full text-left px-3 py-2 hover:bg-background border-b border-border last:border-b-0"
                         >
                           <div className="font-medium">{ctx.name}</div>
                         </button>
@@ -3779,10 +3976,10 @@ function InboxCard({
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-foreground mb-1">
                 Linked Item (optional)
                 {itemOpen && (
-                  <span className="text-xs text-muted ml-2">— new item will auto-link</span>
+                  <span className="text-xs text-muted-foreground ml-2">— new item will auto-link</span>
                 )}
               </label>
               <div className={`relative ${itemOpen ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -3798,10 +3995,10 @@ function InboxCard({
                     setTimeout(() => setShowIntentItemPicker(false), 200)
                   }
                   placeholder="Search for an item..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                  className="w-full px-3 py-2 border border-border rounded text-base"
                 />
                 {intentItemId && !intentItemSearch && items && (
-                  <div className="mt-1 text-sm text-gray-600">
+                  <div className="mt-1 text-sm text-muted-foreground">
                     Selected:{" "}
                     {items.find((i) => i.id === intentItemId)?.name}
                     <button
@@ -3809,16 +4006,16 @@ function InboxCard({
                         setIntentItemId("");
                         setIntentItemSearch("");
                       }}
-                      className="ml-2 text-danger hover:text-danger-hover"
+                      className="ml-2 text-destructive hover:text-destructive-hover"
                     >
-                      ✕
+                      <X className="w-3 h-3" />
                     </button>
                   </div>
                 )}
                 {showIntentItemPicker &&
                   intentItemSearch &&
                   filteredIntentItems.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded shadow-lg max-h-60 overflow-y-auto">
+                    <div className="absolute z-10 w-full mt-1 bg-card border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
                       {filteredIntentItems.map((item) => (
                         <button
                           key={item.id}
@@ -3827,11 +4024,11 @@ function InboxCard({
                             setIntentItemSearch(item.name);
                             setShowIntentItemPicker(false);
                           }}
-                          className="w-full text-left px-3 py-2 hover:bg-primary-bg border-b border-gray-200 last:border-b-0"
+                          className="w-full text-left px-3 py-2 hover:bg-background border-b border-border last:border-b-0"
                         >
                           <div className="font-medium">{item.name}</div>
                           {item.contextId && contexts && (
-                            <div className="text-xs text-muted">
+                            <div className="text-xs text-muted-foreground">
                               {
                                 contexts.find((c) => c.id === item.contextId)
                                   ?.name
@@ -3846,13 +4043,13 @@ function InboxCard({
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-foreground mb-1">
                 Recurrence
               </label>
               <select
                 value={intentRecurrence}
                 onChange={(e) => setIntentRecurrence(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                className="w-full px-3 py-2 border border-border rounded text-base"
               >
                 <option value="once">One time</option>
                 <option value="daily">Daily</option>
@@ -3863,83 +4060,72 @@ function InboxCard({
 
             {/* Tags */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Tags</label>
+              <label className="block text-sm font-medium text-foreground mb-1">Tags</label>
               <TagInput value={intentTags} onChange={setIntentTags} />
             </div>
 
-            {/* Schedule Event sub-accordion */}
-            <div className="mt-3">
-              <button
-                onClick={() => setScheduleEventOpen(!scheduleEventOpen)}
-                className={`flex items-center gap-2 w-full text-left text-sm font-medium py-2 ${
-                  scheduleEventOpen ? 'text-dark' : 'text-muted'
-                }`}
-              >
-                <span>{scheduleEventOpen ? '▾' : '▸'}</span>
+            {/* Schedule Event */}
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-1">
                 Schedule Event
-              </button>
-              {scheduleEventOpen && (
-                <div className="ml-4 mt-1">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
-                  <input
-                    type="date"
-                    value={eventDate}
-                    onChange={(e) => setEventDate(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded text-base"
-                  />
-                </div>
-              )}
+              </label>
+              <input
+                type="date"
+                value={eventDate}
+                onChange={(e) => setEventDate(e.target.value)}
+                className="w-full px-3 py-2 border border-border rounded text-base"
+              />
             </div>
           </div>
         )}
       </div>
 
       {/* Item accordion */}
-      <div className={`border rounded mb-3 ${itemOpen ? 'border-primary bg-white' : 'border-gray-200 bg-gray-50'}`}>
+      <div className={`border rounded mb-3 ${itemOpen ? 'border-primary bg-white' : 'border-border bg-muted'}`}>
         <button
           onClick={() => setItemOpen(!itemOpen)}
           className={`flex items-center gap-2 w-full text-left px-4 py-3 font-medium ${
-            itemOpen ? 'text-dark' : 'text-muted'
+            itemOpen ? 'text-foreground' : 'text-muted-foreground'
           }`}
         >
-          <span>{itemOpen ? '▾' : '▸'}</span>
+          <ChevronDown className={`w-4 h-4 transition-transform ${itemOpen ? 'rotate-180' : ''}`} />
           Item
         </button>
         {itemOpen && (
           <div className="px-4 pb-4 space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-foreground mb-1">
                 Name
               </label>
               <input
                 type="text"
                 value={itemName}
                 onChange={(e) => setItemName(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                className="w-full px-3 py-2 border border-border rounded text-base"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-foreground mb-1">
                 Description
               </label>
               <textarea
                 value={itemDescription}
                 onChange={(e) => setItemDescription(e.target.value)}
                 placeholder="Optional description"
-                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                className="w-full px-3 py-2 border border-border rounded text-base"
                 rows="2"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-foreground mb-1">
                 Context
               </label>
               <select
                 value={itemContextId}
                 onChange={(e) => setItemContextId(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                className="w-full px-3 py-2 border border-border rounded text-base"
               >
                 <option value="">No context</option>
                 {contexts.map((ctx) => (
@@ -3951,26 +4137,24 @@ function InboxCard({
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-foreground mb-2">
                 Elements
               </label>
               <div className="space-y-2">
                 {itemElements.map((element, index) => (
                   <div key={index}>
                     <div
-                      className={`space-y-2 p-3 border border-gray-200 rounded ${draggedIndex === index ? "opacity-50" : ""}`}
+                      className={`space-y-2 p-3 border border-border rounded ${draggedIndex === index ? "opacity-50" : ""}`}
                       draggable
                       onDragStart={(e) => handleDragStart(e, index)}
                       onDragOver={(e) => handleDragOver(e, index)}
                       onDragEnd={handleDragEnd}
                     >
                       <div className="flex items-center gap-2">
-                        <span
-                          className="text-sm text-muted cursor-move"
+                        <GripVertical
+                          className="w-4 h-4 text-muted-foreground cursor-move"
                           title="Drag to reorder"
-                        >
-                          ☰
-                        </span>
+                        />
                         <input
                           type="text"
                           value={element.name}
@@ -3979,14 +4163,14 @@ function InboxCard({
                           }
                           onKeyPress={(e) => handleElementKeyPress(e, index)}
                           placeholder="Element name"
-                          className="inbox-element-input flex-1 px-3 py-2 border border-gray-300 rounded"
+                          className="inbox-element-input flex-1 px-3 py-2 border border-border rounded"
                         />
                         <select
                           value={element.displayType || "step"}
                           onChange={(e) =>
                             updateElement(index, "displayType", e.target.value)
                           }
-                          className="px-2 py-2 border border-gray-300 rounded text-sm"
+                          className="px-2 py-2 border border-border rounded text-sm"
                         >
                           <option value="header">Header</option>
                           <option value="bullet">Bullet</option>
@@ -3994,10 +4178,10 @@ function InboxCard({
                         </select>
                         <button
                           onClick={() => deleteElement(index)}
-                          className="text-danger hover:text-danger-hover"
+                          className="text-destructive hover:text-destructive-hover"
                           title="Delete"
                         >
-                          ✕
+                          <X className="w-3 h-3" />
                         </button>
                       </div>
 
@@ -4008,7 +4192,7 @@ function InboxCard({
                           updateElement(index, "quantity", e.target.value)
                         }
                         placeholder="Quantity (optional)"
-                        className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                        className="w-full px-3 py-2 border border-border rounded text-sm"
                       />
 
                       <textarea
@@ -4017,7 +4201,7 @@ function InboxCard({
                           updateElement(index, "description", e.target.value)
                         }
                         placeholder="Description (optional)"
-                        className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                        className="w-full px-3 py-2 border border-border rounded text-sm"
                         rows="2"
                       />
                     </div>
@@ -4037,16 +4221,51 @@ function InboxCard({
                 ))}
                 <button
                   onClick={addElement}
-                  className="w-full px-4 py-2.5 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-primary hover:text-primary transition-all duration-200"
+                  className="w-full px-4 py-2.5 border-2 border-dashed border-border rounded-lg text-muted-foreground hover:border-primary hover:text-primary transition-all duration-200"
                 >
                   + Add Element
                 </button>
               </div>
             </div>
 
+            {/* Attach this Item */}
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-2">
+                Attach this Item (Optional)
+              </label>
+
+              {itemItemLinks.length > 0 && (
+                <div className="space-y-2 mb-3">
+                  {itemItemLinks.map((link, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center gap-2 p-2 bg-primary-light/20 rounded border border-primary-light"
+                    >
+                      <span className="text-sm text-primary font-medium flex-1">→ {link.name}</span>
+                      <button
+                        onClick={() => setItemItemLinks((prev) => prev.filter((_, i) => i !== index))}
+                        className="text-muted-foreground hover:text-destructive"
+                        title="Remove link"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <button
+                onClick={() => setShowItemItemPicker(true)}
+                className="flex items-center gap-2 px-3 py-2 text-sm border border-border rounded-lg hover:bg-accent transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Attach this Item
+              </button>
+            </div>
+
             {/* Tags */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Tags</label>
+              <label className="block text-sm font-medium text-foreground mb-1">Tags</label>
               <TagInput value={itemTags} onChange={setItemTags} />
             </div>
           </div>
@@ -4054,25 +4273,25 @@ function InboxCard({
       </div>
 
       {/* Add to Collection accordion */}
-      <div className={`border rounded mb-3 ${collectionOpen ? 'border-primary bg-white' : 'border-gray-200 bg-gray-50'}`}>
+      <div className={`border rounded mb-3 ${collectionOpen ? 'border-primary bg-white' : 'border-border bg-muted'}`}>
         <button
           onClick={() => setCollectionOpen(!collectionOpen)}
           className={`flex items-center gap-2 w-full text-left px-4 py-3 font-medium ${
-            collectionOpen ? 'text-dark' : 'text-muted'
+            collectionOpen ? 'text-foreground' : 'text-muted-foreground'
           }`}
         >
-          <span>{collectionOpen ? '▾' : '▸'}</span>
+          <ChevronDown className={`w-4 h-4 transition-transform ${collectionOpen ? 'rotate-180' : ''}`} />
           Add to Collection
         </button>
         {collectionOpen && (
           <div className="px-4 pb-4 space-y-3">
             {/* Collection dropdown */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Collection</label>
+              <label className="block text-sm font-medium text-foreground mb-1">Collection</label>
               <select
                 value={selectedCollectionId}
                 onChange={(e) => setSelectedCollectionId(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                className="w-full px-3 py-2 border border-border rounded text-base"
               >
                 <option value="">Select collection...</option>
                 {collections?.map((col) => (
@@ -4083,10 +4302,10 @@ function InboxCard({
 
             {/* Item — disabled if Create Item section is open */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-foreground mb-1">
                 Item
                 {itemOpen && (
-                  <span className="text-xs text-muted ml-2">— new item will be added</span>
+                  <span className="text-xs text-muted-foreground ml-2">— new item will be added</span>
                 )}
               </label>
               <div className={`relative ${itemOpen ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -4102,10 +4321,10 @@ function InboxCard({
                     setTimeout(() => setShowCollectionItemPicker(false), 200)
                   }
                   placeholder="Search for an item..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                  className="w-full px-3 py-2 border border-border rounded text-base"
                 />
                 {collectionItemId && !collectionItemSearch && items && (
-                  <div className="mt-1 text-sm text-gray-600">
+                  <div className="mt-1 text-sm text-muted-foreground">
                     Selected:{" "}
                     {items.find((i) => i.id === collectionItemId)?.name}
                     <button
@@ -4113,16 +4332,16 @@ function InboxCard({
                         setCollectionItemId("");
                         setCollectionItemSearch("");
                       }}
-                      className="ml-2 text-danger hover:text-danger-hover"
+                      className="ml-2 text-destructive hover:text-destructive-hover"
                     >
-                      ✕
+                      <X className="w-3 h-3" />
                     </button>
                   </div>
                 )}
                 {showCollectionItemPicker &&
                   collectionItemSearch &&
                   filteredCollectionItems.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded shadow-lg max-h-60 overflow-y-auto">
+                    <div className="absolute z-10 w-full mt-1 bg-card border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
                       {filteredCollectionItems.map((item) => (
                         <button
                           key={item.id}
@@ -4131,11 +4350,11 @@ function InboxCard({
                             setCollectionItemSearch(item.name);
                             setShowCollectionItemPicker(false);
                           }}
-                          className="w-full text-left px-3 py-2 hover:bg-primary-bg border-b border-gray-200 last:border-b-0"
+                          className="w-full text-left px-3 py-2 hover:bg-background border-b border-border last:border-b-0"
                         >
                           <div className="font-medium">{item.name}</div>
                           {item.contextId && contexts && (
-                            <div className="text-xs text-muted">
+                            <div className="text-xs text-muted-foreground">
                               {
                                 contexts.find((c) => c.id === item.contextId)
                                   ?.name
@@ -4151,12 +4370,12 @@ function InboxCard({
 
             {/* Quantity */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
+              <label className="block text-sm font-medium text-foreground mb-1">Quantity</label>
               <input
                 type="text"
                 value={collectionQuantity}
                 onChange={(e) => setCollectionQuantity(e.target.value)}
-                className="w-32 px-3 py-2 border border-gray-300 rounded text-base"
+                className="w-32 px-3 py-2 border border-border rounded text-base"
               />
             </div>
           </div>
@@ -4170,8 +4389,9 @@ function InboxCard({
           {inboxItem.aiStatus !== 'in_progress' && !enriching && (
             <button
               onClick={inboxItem.aiStatus === 'not_started' ? handleEnrich : handleReEnrich}
-              className="px-4 py-2.5 min-h-[44px] bg-purple-600 hover:bg-purple-700 text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 flex items-center gap-2"
             >
+              <Sparkles className="w-4 h-4" />
               {inboxItem.aiStatus === 'not_started'
                 ? 'Enrich (Sonnet)'
                 : 'Re-enrich (Opus)'}
@@ -4180,7 +4400,7 @@ function InboxCard({
           {(inboxItem.aiStatus === 'in_progress' || enriching) && (
             <button
               disabled
-              className="px-4 py-2.5 min-h-[44px] bg-amber-100 text-amber-700 rounded-lg cursor-not-allowed"
+              className="px-4 py-2.5 min-h-[44px] bg-warning-light text-warning rounded-lg cursor-not-allowed"
             >
               Enriching...
             </button>
@@ -4193,25 +4413,89 @@ function InboxCard({
             className={`px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${
               intentionOpen || itemOpen || collectionOpen
                 ? "bg-primary hover:bg-primary-hover text-white"
-                : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                : "bg-secondary text-muted-foreground cursor-not-allowed"
             }`}
           >
             Save
           </button>
           <button
             onClick={handleCancel}
-            className="px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             Cancel
           </button>
         </div>
         <button
           onClick={() => onArchive(inboxItem.id)}
-          className="min-h-[44px] text-muted hover:text-danger transition-colors"
+          className="min-h-[44px] text-muted-foreground hover:text-destructive transition-colors flex items-center gap-1"
         >
-          Archive
+          <Archive className="w-4 h-4" /> Archive
         </button>
       </div>
+
+      {/* Item Picker Modal */}
+      {showItemItemPicker && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowItemItemPicker(false)}>
+          <div className="bg-card p-6 rounded-lg max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-medium text-foreground">Select Item to Attach</h3>
+              <button onClick={() => setShowItemItemPicker(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <input
+              type="text"
+              placeholder="Search items..."
+              value={itemItemSearch}
+              onChange={(e) => setItemItemSearch(e.target.value)}
+              className="w-full px-3 py-2 border border-border rounded-lg text-base mb-3"
+              autoFocus
+            />
+
+            <div className="space-y-2">
+              {items
+                ?.filter((item) => !item.archived && !itemItemLinks.find((link) => link.id === item.id))
+                .filter((item) => {
+                  if (!itemItemSearch.trim()) return true;
+                  const query = itemItemSearch.toLowerCase();
+                  return (
+                    item.name.toLowerCase().includes(query) ||
+                    (item.description && item.description.toLowerCase().includes(query))
+                  );
+                })
+                .slice(0, 20)
+                .map((item) => {
+                  const contextName = item.contextId && contexts
+                    ? contexts.find((c) => c.id === item.contextId)?.name
+                    : null;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => {
+                        setItemItemLinks((prev) => [...prev, { id: item.id, name: item.name }]);
+                        setShowItemItemPicker(false);
+                        setItemItemSearch('');
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-accent transition-colors border border-border"
+                    >
+                      <div className="font-medium text-foreground">{item.name}</div>
+                      {contextName && (
+                        <div className="text-xs text-muted-foreground">{contextName}</div>
+                      )}
+                      {item.description && (
+                        <div className="text-sm text-muted-foreground mt-1 line-clamp-2">{item.description}</div>
+                      )}
+                    </button>
+                  );
+                })}
+              {items?.filter((item) => !item.archived && !itemItemLinks.find((link) => link.id === item.id)).length === 0 && (
+                <p className="text-muted-foreground text-sm py-4 text-center">No items available to link</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -4225,13 +4509,13 @@ function ContextForm({ editing, onSave, onCancel }) {
 
   return (
     <div className="mb-4 sm:mb-6 p-4 sm:p-6 bg-white border-2 border-primary rounded-lg shadow-lg">
-      <h3 className="font-semibold text-lg mb-4">
+      <h3 className="font-medium text-lg mb-4">
         {editing ? "Edit Context" : "New Context"}
       </h3>
 
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-foreground mb-1">
             Name
           </label>
           <input
@@ -4239,13 +4523,13 @@ function ContextForm({ editing, onSave, onCancel }) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Context name"
-            className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+            className="w-full px-3 py-2 border border-border rounded text-base"
             autoFocus
           />
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-foreground mb-1">
             Keywords
           </label>
           <input
@@ -4253,12 +4537,12 @@ function ContextForm({ editing, onSave, onCancel }) {
             value={keywords}
             onChange={(e) => setKeywords(e.target.value)}
             placeholder="Keywords (comma separated)"
-            className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+            className="w-full px-3 py-2 border border-border rounded text-base"
           />
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-foreground mb-1">
             Description
           </label>
           <textarea
@@ -4266,7 +4550,7 @@ function ContextForm({ editing, onSave, onCancel }) {
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Description"
             rows={3}
-            className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+            className="w-full px-3 py-2 border border-border rounded text-base"
           />
         </div>
 
@@ -4301,7 +4585,7 @@ function ContextForm({ editing, onSave, onCancel }) {
           </button>
           <button
             onClick={onCancel}
-            className="px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             Cancel
           </button>
@@ -4313,15 +4597,15 @@ function ContextForm({ editing, onSave, onCancel }) {
 
 function ContextCard({ context, onClick, onEdit, showSettings = false }) {
   return (
-    <div className="p-3 sm:p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow duration-200">
+    <div className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow duration-200">
       <div className="flex items-center justify-between">
         <div className="flex-1 min-w-0" onClick={onClick}>
           <div className="flex items-center gap-2">
-            {context.pinned && <span className="text-gray-400">📌</span>}
-            <h3 className="font-semibold text-dark">{context.name}</h3>
+            {context.pinned && <Pin className="w-4 h-4 text-muted-foreground" />}
+            <h3 className="font-medium text-foreground">{context.name}</h3>
           </div>
           {context.description && (
-            <p className="text-sm text-muted mt-1">{context.description}</p>
+            <p className="text-sm text-muted-foreground mt-1">{context.description}</p>
           )}
           <div className="flex items-center gap-2 mt-1">
             {context.shared && (
@@ -4338,9 +4622,9 @@ function ContextCard({ context, onClick, onEdit, showSettings = false }) {
               e.stopPropagation();
               onEdit();
             }}
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center text-muted hover:text-dark"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
           >
-            <span className="text-lg">⚙️</span>
+            <Settings className="w-5 h-5" />
           </button>
         )}
       </div>
@@ -4376,6 +4660,7 @@ function ContextDetailView({
   onFilterTag,
   allItems = [],
   collections = [],
+  onViewCollection,
 }) {
   const [showAddItemForm, setShowAddItemForm] = useState(false);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
@@ -4450,18 +4735,18 @@ function ContextDetailView({
           <h2 className="text-xl sm:text-2xl font-bold">{context.name}</h2>
           <button
             onClick={onEditContext}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base shrink-0"
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base shrink-0"
           >
-            <span>⚙️</span>
+            <Settings className="w-4 h-4" />
             <span className="hidden sm:inline">Edit Context</span>
             <span className="sm:hidden">Edit</span>
           </button>
         </div>
         {context.description && (
-          <p className="text-gray-600">{context.description}</p>
+          <p className="text-muted-foreground">{context.description}</p>
         )}
         {context.keywords && (
-          <p className="text-sm text-muted mt-1">
+          <p className="text-sm text-muted-foreground mt-1">
             Keywords: {context.keywords}
           </p>
         )}
@@ -4470,7 +4755,7 @@ function ContextDetailView({
       <div className="space-y-6">
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-base sm:text-lg font-semibold">Items ({items.length})</h3>
+            <h3 className="text-base sm:text-lg font-medium">Items ({items.length})</h3>
             <button
               onClick={() => setShowAddItemForm(true)}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
@@ -4495,7 +4780,7 @@ function ContextDetailView({
 
           <TagFilter entities={items} activeTag={filterTag} onFilter={onFilterTag} />
           {items.length === 0 ? (
-            <p className="text-muted text-sm">No items in this context</p>
+            <p className="text-muted-foreground text-sm">No items in this context</p>
           ) : (
             <div className="space-y-2">
               {items
@@ -4520,7 +4805,7 @@ function ContextDetailView({
 
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-base sm:text-lg font-semibold">
+            <h3 className="text-base sm:text-lg font-medium">
               Intentions ({intents.length})
             </h3>
             <button
@@ -4550,7 +4835,7 @@ function ContextDetailView({
           )}
 
           {intents.length === 0 ? (
-            <p className="text-muted text-sm">
+            <p className="text-muted-foreground text-sm">
               No intentions in this context
             </p>
           ) : (
@@ -4579,6 +4864,54 @@ function ContextDetailView({
               ))}
             </div>
           )}
+        </div>
+
+        {/* Collections Section */}
+        <div>
+          <h3 className="text-base sm:text-lg font-medium mb-3">
+            Collections ({collections.filter((c) => c.contextId === contextId).length})
+          </h3>
+          {(() => {
+            const contextCollections = collections.filter((c) => c.contextId === contextId);
+            if (contextCollections.length === 0) {
+              return (
+                <p className="text-muted-foreground text-sm">
+                  No collections in this context
+                </p>
+              );
+            }
+            return (
+              <div className="space-y-2">
+                {contextCollections.map((coll) => (
+                  <div
+                    key={coll.id}
+                    onClick={() => onViewCollection && onViewCollection(coll.id)}
+                    className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          {coll.pinned && <Pin className="w-4 h-4 text-muted-foreground" />}
+                          <p className="font-medium">{coll.name}</p>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-sm text-muted-foreground">
+                            {coll.items ? coll.items.length : 0} {coll.items && coll.items.length === 1 ? "item" : "items"}
+                          </span>
+                          {coll.shared && (
+                            <span className="text-xs text-primary flex items-center gap-1">
+                              <Share2 className="w-3 h-3" />
+                              Shared
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       </div>
     </div>
@@ -4669,21 +5002,21 @@ function IntentionDetailView({
           <div className="flex-1">
             <h2 className="text-xl sm:text-2xl font-bold">{intention.text}</h2>
             {contextName && (
-              <span className="inline-block mt-2 text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
+              <span className="inline-block mt-2 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
                 {contextName}
               </span>
             )}
           </div>
           <button
             onClick={() => setIsEditing(true)}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base shrink-0"
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base shrink-0"
           >
-            <span>⚙️</span>
+            <Settings className="w-4 h-4" />
             <span className="hidden sm:inline">Edit Intention</span>
             <span className="sm:hidden">Edit</span>
           </button>
         </div>
-        <p className="text-sm text-gray-600 capitalize">
+        <p className="text-sm text-muted-foreground capitalize">
           Recurrence: {intention.recurrence || "once"}
         </p>
       </div>
@@ -4691,7 +5024,7 @@ function IntentionDetailView({
       {/* Linked Item Section */}
       {intention.itemId && items && (
         <div className="mb-6">
-          <h3 className="text-lg font-semibold mb-3">Linked Item</h3>
+          <h3 className="text-lg font-medium mb-3">Linked Item</h3>
           {(() => {
             const linkedItem = items.find((i) => i.id === intention.itemId);
             return linkedItem ? (
@@ -4706,18 +5039,18 @@ function IntentionDetailView({
                 onOpenExecution={onOpenExecution}
               />
             ) : (
-              <p className="text-muted text-sm">Item not found</p>
+              <p className="text-muted-foreground text-sm">Item not found</p>
             );
           })()}
         </div>
       )}
 
       <div>
-        <h3 className="text-lg font-semibold mb-3">
+        <h3 className="text-lg font-medium mb-3">
           Scheduled Events ({intentionEvents.length})
         </h3>
         {intentionEvents.length === 0 ? (
-          <p className="text-muted text-sm">
+          <p className="text-muted-foreground text-sm">
             No events scheduled for this intention
           </p>
         ) : (
@@ -4832,7 +5165,7 @@ function ItemDetailView({
           <div className="flex-1">
             <h2 className="text-xl sm:text-2xl font-bold">{item.name}</h2>
             {contextName && (
-              <span className="inline-block mt-2 text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
+              <span className="inline-block mt-2 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
                 {contextName}
               </span>
             )}
@@ -4853,7 +5186,7 @@ function ItemDetailView({
                   setCloneName(item.name + " (Copy)");
                   setShowCloneDialog(true);
                 }}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
               >
                 <Copy className="w-4 h-4" />
                 <span className="hidden sm:inline">Clone</span>
@@ -4861,9 +5194,9 @@ function ItemDetailView({
             )}
             <button
               onClick={() => setIsEditing(true)}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
-              <span>⚙️</span>
+              <Settings className="w-4 h-4" />
               <span className="hidden sm:inline">Edit Item</span>
               <span className="sm:hidden">Edit</span>
             </button>
@@ -4875,13 +5208,13 @@ function ItemDetailView({
       {showCloneDialog && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
-            <h3 className="text-lg font-semibold mb-4">Clone Item</h3>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Name for clone</label>
+            <h3 className="text-lg font-medium mb-4">Clone Item</h3>
+            <label className="block text-sm font-medium text-foreground mb-1">Name for clone</label>
             <input
               type="text"
               value={cloneName}
               onChange={(e) => setCloneName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full px-3 py-2 border border-border rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-primary"
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === "Enter" && cloneName.trim()) {
@@ -4893,7 +5226,7 @@ function ItemDetailView({
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setShowCloneDialog(false)}
-                className="px-4 py-2 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg"
+                className="px-4 py-2 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg"
               >
                 Cancel
               </button>
@@ -4916,14 +5249,14 @@ function ItemDetailView({
       {/* Item Description */}
       {item.description && (
         <div className="mb-6">
-          <p className="text-gray-600">{item.description}</p>
+          <p className="text-muted-foreground">{item.description}</p>
         </div>
       )}
 
       {/* Capture Target Badge */}
       {item.isCaptureTarget && (
         <div className="mb-4">
-          <span className="inline-block text-xs bg-success-light text-dark px-2 py-1 rounded">
+          <span className="inline-block text-xs bg-success-light text-foreground px-2 py-1 rounded">
             📍 Capture Target
           </span>
         </div>
@@ -4933,7 +5266,7 @@ function ItemDetailView({
       {(item.elements || item.components) &&
         (item.elements || item.components).length > 0 && (
           <div className="mb-6">
-            <h3 className="text-lg font-semibold mb-3">Elements</h3>
+            <h3 className="text-lg font-medium mb-3">Elements</h3>
             <div className="space-y-2">
               {(() => {
                 let stepCounter = 0;
@@ -4941,18 +5274,35 @@ function ItemDetailView({
                   const el =
                     typeof element === "string"
                       ? { name: element, displayType: "step" }
-                      : element;
+                      : {
+                          ...element,
+                          displayType: element.displayType || element.display_type || "step",
+                          itemId: element.itemId || element.item_id,
+                        };
+
+                  const linkedItem = el.itemId ? items.find((i) => i.id === el.itemId) : null;
 
                   if (el.displayType === "header") {
                     return (
-                      <div key={index} className="mt-4 mb-2">
-                        <h4 className="text-md font-bold text-gray-800">
-                          {el.name}
-                        </h4>
-                        {el.description && (
-                          <p className="text-sm text-gray-600 mt-1">
-                            {el.description}
-                          </p>
+                      <div key={index}>
+                        <div className="mt-4 mb-2">
+                          <h4 className="text-md font-bold text-foreground">
+                            {el.name}
+                          </h4>
+                          {el.description && (
+                            <p className="text-sm text-muted-foreground mt-1">
+                              {el.description}
+                            </p>
+                          )}
+                        </div>
+                        {linkedItem && (
+                          <button
+                            onClick={() => onViewItem(linkedItem.id, "item-detail")}
+                            className="ml-0 flex items-center gap-2 text-sm text-primary hover:text-primary-hover mb-2"
+                          >
+                            <span>→</span>
+                            <span>{linkedItem.name}</span>
+                          </button>
                         )}
                       </div>
                     );
@@ -4960,21 +5310,32 @@ function ItemDetailView({
 
                   if (el.displayType === "bullet") {
                     return (
-                      <div key={index} className="ml-4 flex items-start gap-2">
-                        <span className="text-gray-600 mt-1">•</span>
-                        <div className="flex-1">
-                          <span className="text-gray-700">
-                            {el.quantity && (
-                              <span className="font-medium">{el.quantity} </span>
+                      <div key={index}>
+                        <div className="ml-4 flex items-start gap-2">
+                          <span className="text-muted-foreground mt-1">•</span>
+                          <div className="flex-1">
+                            <span className="text-foreground">
+                              {el.quantity && (
+                                <span className="font-medium">{el.quantity} </span>
+                              )}
+                              {el.name}
+                            </span>
+                            {el.description && (
+                              <p className="text-sm text-muted-foreground mt-1">
+                                {el.description}
+                              </p>
                             )}
-                            {el.name}
-                          </span>
-                          {el.description && (
-                            <p className="text-sm text-gray-600 mt-1">
-                              {el.description}
-                            </p>
-                          )}
+                          </div>
                         </div>
+                        {linkedItem && (
+                          <button
+                            onClick={() => onViewItem(linkedItem.id, "item-detail")}
+                            className="ml-6 flex items-center gap-2 text-sm text-primary hover:text-primary-hover mt-1"
+                          >
+                            <span>→</span>
+                            <span>{linkedItem.name}</span>
+                          </button>
+                        )}
                       </div>
                     );
                   }
@@ -4983,23 +5344,34 @@ function ItemDetailView({
                   stepCounter++;
                   const stepNum = stepCounter;
                   return (
-                    <div key={index} className="flex items-start gap-3">
-                      <span className="text-gray-600 font-medium min-w-[24px]">
-                        {stepNum}.
-                      </span>
-                      <div className="flex-1">
-                        <span className="text-gray-700">
-                          {el.quantity && (
-                            <span className="font-medium">{el.quantity} </span>
-                          )}
-                          {el.name}
+                    <div key={index}>
+                      <div className="flex items-start gap-3">
+                        <span className="text-muted-foreground font-medium min-w-[24px]">
+                          {stepNum}.
                         </span>
-                        {el.description && (
-                          <p className="text-sm text-gray-600 mt-1">
-                            {el.description}
-                          </p>
-                        )}
+                        <div className="flex-1">
+                          <span className="text-foreground">
+                            {el.quantity && (
+                              <span className="font-medium">{el.quantity} </span>
+                            )}
+                            {el.name}
+                          </span>
+                          {el.description && (
+                            <p className="text-sm text-muted-foreground mt-1">
+                              {el.description}
+                            </p>
+                          )}
+                        </div>
                       </div>
+                      {linkedItem && (
+                        <button
+                          onClick={() => onViewItem(linkedItem.id, "item-detail")}
+                          className="ml-9 flex items-center gap-2 text-sm text-primary hover:text-primary-hover mt-1"
+                        >
+                          <span>→</span>
+                          <span>{linkedItem.name}</span>
+                        </button>
+                      )}
                     </div>
                   );
                 });
@@ -5008,47 +5380,21 @@ function ItemDetailView({
           </div>
         )}
 
-      {/* References Section - items this item links to */}
-      {(() => {
-        const refs = (item.elements || [])
-          .filter((el) => el.itemId)
-          .map((el) => items.find((i) => i.id === el.itemId))
-          .filter(Boolean);
-        if (refs.length === 0) return null;
-        return (
-          <div className="mb-6">
-            <h3 className="text-lg font-semibold mb-3">References ({refs.length})</h3>
-            <div className="space-y-1">
-              {refs.map((ref) => (
-                <button
-                  key={ref.id}
-                  onClick={() => onViewItem(ref.id, "item-detail")}
-                  className="flex items-center gap-2 w-full text-left px-3 py-2 rounded hover:bg-gray-100 text-primary hover:text-primary-hover"
-                >
-                  <span>→</span>
-                  <span>{ref.name}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        );
-      })()}
-
       {/* Used In Section - items that reference this item */}
       {(() => {
         const parents = items.filter(
-          (i) => i.id !== item.id && !i.archived && (i.elements || []).some((el) => el.itemId === item.id)
+          (i) => i.id !== item.id && !i.archived && (i.elements || []).some((el) => (el.itemId || el.item_id) === item.id)
         );
         if (parents.length === 0) return null;
         return (
           <div className="mb-6">
-            <h3 className="text-lg font-semibold mb-3">Used In ({parents.length})</h3>
+            <h3 className="text-lg font-medium mb-3">Used In ({parents.length})</h3>
             <div className="space-y-1">
               {parents.map((parent) => (
                 <button
                   key={parent.id}
                   onClick={() => onViewItem(parent.id, "item-detail")}
-                  className="flex items-center gap-2 w-full text-left px-3 py-2 rounded hover:bg-gray-100 text-primary hover:text-primary-hover"
+                  className="flex items-center gap-2 w-full text-left px-3 py-2 rounded hover:bg-secondary/50 text-primary hover:text-primary-hover"
                 >
                   <span>←</span>
                   <span>{parent.name}</span>
@@ -5062,7 +5408,7 @@ function ItemDetailView({
       {/* Active/Paused Executions Section */}
       {executions.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-lg font-semibold mb-3">
+          <h3 className="text-lg font-medium mb-3">
             Executions ({executions.length})
           </h3>
           <div className="space-y-2">
@@ -5083,7 +5429,7 @@ function ItemDetailView({
       {/* Related Intentions Section */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold">
+          <h3 className="text-lg font-medium">
             Related Intentions ({itemIntentions.length})
           </h3>
           {onAddIntention && (
@@ -5136,7 +5482,7 @@ function ItemDetailView({
         )}
 
         {itemIntentions.length === 0 && !showAddIntentionForm ? (
-          <p className="text-muted text-sm">
+          <p className="text-muted-foreground text-sm">
             No intentions linked to this item
           </p>
         ) : (
@@ -5235,22 +5581,22 @@ function ExecutionDetailView({
           onUpdateNotes(localNotes);
           onBack();
         }}
-        className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-gray-600 hover:text-gray-800"
+        className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="w-4 h-4" />
         Back
       </button>
 
       <div className="mb-4 sm:mb-6">
-        <h2 className="text-xl sm:text-2xl font-bold text-dark">{displayName}</h2>
+        <h2 className="text-xl sm:text-2xl font-bold text-foreground">{displayName}</h2>
         <div className="flex items-center gap-2 mt-1">
           {contextName && (
-            <span className="text-xs bg-success-light text-dark px-2 py-0.5 rounded">
+            <span className="text-xs bg-success-light text-foreground px-2 py-0.5 rounded">
               {contextName}
             </span>
           )}
           {dateDisplay && (
-            <span className="text-sm text-muted">{dateDisplay}</span>
+            <span className="text-sm text-muted-foreground">{dateDisplay}</span>
           )}
         </div>
       </div>
@@ -5264,14 +5610,14 @@ function ExecutionDetailView({
 
         return (
           <div className="mb-6">
-            <div className="border-t border-gray-200 pt-4">
+            <div className="border-t border-border pt-4">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-base font-semibold">
+                <h3 className="text-base font-medium">
                   {coll ? coll.name : "Collection"} ({completedCount}/{collItems.length})
                 </h3>
               </div>
               {collItems.length === 0 ? (
-                <p className="text-muted text-sm py-4 text-center">No items in collection</p>
+                <p className="text-muted-foreground text-sm py-4 text-center">No items in collection</p>
               ) : (
                 <div className="space-y-1">
                   {collItems.map((collItem) => {
@@ -5280,14 +5626,14 @@ function ExecutionDetailView({
                     return (
                       <div
                         key={collItem.itemId}
-                        className="flex items-center gap-3 py-2 px-3 rounded hover:bg-gray-50"
+                        className="flex items-center gap-3 py-2 px-3 rounded hover:bg-secondary/50"
                       >
                         <span
                           onClick={() => onToggleCollectionItem(collItem.itemId)}
                           className={`w-5 h-5 flex-shrink-0 rounded border-2 flex items-center justify-center cursor-pointer ${
                             isChecked
                               ? "bg-primary border-primary"
-                              : "bg-white border-gray-300"
+                              : "bg-white border-border"
                           }`}
                         >
                           {isChecked && (
@@ -5295,7 +5641,7 @@ function ExecutionDetailView({
                           )}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <span className={isChecked ? "line-through text-gray-400" : "text-gray-800"}>
+                          <span className={isChecked ? "line-through text-muted-foreground" : "text-foreground"}>
                             {linkedItem ? linkedItem.name : collItem.itemId}
                           </span>
                         </div>
@@ -5306,7 +5652,7 @@ function ExecutionDetailView({
                             onUpdateCollectionItemQty(execution.collectionId, collItem.itemId, e.target.value);
                           }}
                           placeholder="Qty"
-                          className="w-20 sm:w-24 px-2 py-2 border border-gray-300 rounded text-base"
+                          className="w-20 sm:w-24 px-2 py-2 border border-border rounded text-base"
                         />
                       </div>
                     );
@@ -5321,7 +5667,7 @@ function ExecutionDetailView({
       {/* Element-based execution view */}
       {!execution.collectionId && execution.elements && execution.elements.length > 0 && (
         <div className="mb-6">
-          <div className="border-t border-gray-200 pt-4 space-y-2">
+          <div className="border-t border-border pt-4 space-y-2">
             {(() => {
               let stepCounter = 0;
               return execution.elements.map((el, index) => {
@@ -5330,7 +5676,7 @@ function ExecutionDetailView({
 
                 if (el.missing) {
                   return (
-                    <div key={index} className="flex items-center gap-2 py-1 text-gray-400 italic" style={{ marginLeft: indentPx }}>
+                    <div key={index} className="flex items-center gap-2 py-1 text-muted-foreground italic" style={{ marginLeft: indentPx }}>
                       <span>⚠ {el.name} (item deleted)</span>
                     </div>
                   );
@@ -5338,7 +5684,7 @@ function ExecutionDetailView({
 
                 if (el.circular) {
                   return (
-                    <div key={index} className="flex items-center gap-2 py-1 text-gray-400 italic" style={{ marginLeft: indentPx }}>
+                    <div key={index} className="flex items-center gap-2 py-1 text-muted-foreground italic" style={{ marginLeft: indentPx }}>
                       <span>↻ {el.name} (circular ref)</span>
                     </div>
                   );
@@ -5347,7 +5693,7 @@ function ExecutionDetailView({
                 if (el.displayType === "header") {
                   return (
                     <div key={index} className="mt-4 mb-2" style={{ marginLeft: indentPx }}>
-                      <h4 className="text-md font-bold text-gray-800 uppercase tracking-wide">
+                      <h4 className="text-md font-bold text-foreground uppercase tracking-wide">
                         {el.name}
                       </h4>
                     </div>
@@ -5357,16 +5703,16 @@ function ExecutionDetailView({
                 if (el.displayType === "bullet") {
                   return (
                     <div key={index} className="flex items-start gap-2 py-1" style={{ marginLeft: indentPx + 16 }}>
-                      <span className="text-muted mt-0.5">•</span>
+                      <span className="text-muted-foreground mt-0.5">•</span>
                       <div className="flex-1">
-                        <span className="text-gray-700">
+                        <span className="text-foreground">
                           {el.quantity && (
                             <span className="font-medium">{el.quantity} · </span>
                           )}
                           {el.name}
                         </span>
                         {el.description && (
-                          <p className="text-sm text-muted">{el.description}</p>
+                          <p className="text-sm text-muted-foreground">{el.description}</p>
                         )}
                       </div>
                     </div>
@@ -5379,9 +5725,9 @@ function ExecutionDetailView({
                 return (
                   <div key={index} style={{ marginLeft: indentPx }}>
                     <div
-                      className="flex items-start gap-3 py-2 px-3 rounded hover:bg-gray-50"
+                      className="flex items-start gap-3 py-2 px-3 rounded hover:bg-secondary/50"
                     >
-                      <span className={`font-medium min-w-[24px] mt-0.5 ${el.isCompleted ? "text-gray-400" : "text-gray-600"}`}>
+                      <span className={`font-medium min-w-[24px] mt-0.5 ${el.isCompleted ? "text-muted-foreground" : "text-muted-foreground"}`}>
                         {stepNum}.
                       </span>
                       <span
@@ -5390,8 +5736,8 @@ function ExecutionDetailView({
                           el.isCompleted
                             ? "bg-primary border-primary"
                             : el.inProgress
-                              ? "bg-white border-teal-400"
-                              : "bg-white border-gray-300"
+                              ? "bg-white border-primary"
+                              : "bg-white border-border"
                         }`}
                       >
                         {el.isCompleted && (
@@ -5402,17 +5748,17 @@ function ExecutionDetailView({
                         <span
                           className={
                             el.isCompleted
-                              ? "line-through text-gray-400"
+                              ? "line-through text-muted-foreground"
                               : el.inProgress
-                                ? "text-teal-700 font-medium"
-                                : "text-gray-800"
+                                ? "text-primary font-medium"
+                                : "text-foreground"
                           }
                         >
                           {el.name}
                         </span>
                         {(el.quantity || el.description) && (
                           <p
-                            className={`text-sm ${el.isCompleted ? "text-gray-300" : "text-muted"}`}
+                            className={`text-sm ${el.isCompleted ? "text-muted-foreground" : "text-muted-foreground"}`}
                           >
                             {[el.quantity, el.description]
                               .filter(Boolean)
@@ -5431,15 +5777,15 @@ function ExecutionDetailView({
                       {el.inProgress && !el.isCompleted && (
                         <button
                           onClick={() => onUpdateElement(index, { inProgress: false, startedAt: null })}
-                          className="text-sm text-muted hover:text-gray-600 whitespace-nowrap"
+                          className="text-sm text-muted-foreground hover:text-muted-foreground whitespace-nowrap"
                         >
                           Reset
                         </button>
                       )}
                     </div>
                     {el.inProgress && el.startedAt && !el.isCompleted && (
-                      <div className="ml-16 pb-1 text-xs text-teal-600">
-                        ⏱ Started {formatElapsed(el.startedAt)}
+                      <div className="ml-16 pb-1 text-xs text-primary">
+                        <Timer className="w-3.5 h-3.5 inline" /> Started {formatElapsed(el.startedAt)}
                       </div>
                     )}
                   </div>
@@ -5451,8 +5797,8 @@ function ExecutionDetailView({
       )}
 
       <div className="mb-6">
-        <div className="border-t border-gray-200 pt-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+        <div className="border-t border-border pt-4">
+          <label className="block text-sm font-medium text-foreground mb-2">
             Notes
           </label>
           <textarea
@@ -5460,15 +5806,15 @@ function ExecutionDetailView({
             onChange={(e) => setLocalNotes(e.target.value)}
             onBlur={() => onUpdateNotes(localNotes)}
             placeholder="Add notes about this execution..."
-            className="w-full px-3 py-2 border border-gray-300 rounded min-h-[120px]"
+            className="w-full px-3 py-2 border border-border rounded min-h-[120px]"
           />
         </div>
       </div>
 
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-0 pt-4 border-t border-gray-200">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-0 pt-4 border-t border-border">
         <button
           onClick={onCancel}
-          className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+          className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
         >
           <X className="w-4 h-4" />
           Cancel
@@ -5518,18 +5864,18 @@ function ExecutionBadge({ exec, intents, contexts, getIntentDisplay, onOpen }) {
           : "bg-warning-light border-2 border-warning"
       }`}
     >
-      <p className="font-medium text-dark">
+      <p className="font-medium text-foreground">
         {intent ? getIntentDisplay(intent) : "Execution"}
       </p>
       {exec.contextId && (
-        <p className="text-sm text-gray-700">
+        <p className="text-sm text-foreground">
           {contexts.find((c) => c.id === exec.contextId)?.name}
         </p>
       )}
       {isActive && (
-        <p className="text-xs text-dark mt-1 flex items-center gap-1">
+        <p className="text-xs text-foreground mt-1 flex items-center gap-1">
           <Play className="w-3 h-3" />
-          Active
+          In progress
         </p>
       )}
       {!isActive && (
@@ -5565,10 +5911,10 @@ function ItemCard({
         ? { name: el, displayType: "step", quantity: "", description: "" }
         : {
             name: el.name || "",
-            displayType: el.displayType || "step",
+            displayType: el.displayType || el.display_type || "step",
             quantity: el.quantity || "",
             description: el.description || "",
-            ...(el.itemId ? { itemId: el.itemId } : {}),
+            ...(el.itemId || el.item_id ? { itemId: el.itemId || el.item_id } : {}),
           },
     ),
   );
@@ -5685,36 +6031,36 @@ function ItemCard({
 
   if (isEditing) {
     return (
-      <div className="p-3 sm:p-4 bg-white border-2 border-primary rounded">
+      <div className="p-3 sm:p-4 bg-card border-2 border-primary rounded-lg shadow-md">
         <div className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Name
             </label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+              className="w-full px-3 py-2 border border-border rounded text-base"
               autoFocus
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Description
             </label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Optional description for this item"
-              className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+              className="w-full px-3 py-2 border border-border rounded text-base"
               rows="2"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Tags
             </label>
             <TagInput value={tags} onChange={setTags} />
@@ -5733,13 +6079,13 @@ function ItemCard({
           </label>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Context
             </label>
             <select
               value={contextId}
               onChange={(e) => setContextId(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+              className="w-full px-3 py-2 border border-border rounded text-base"
             >
               <option value="">No context</option>
               {contexts.map((ctx) => (
@@ -5751,26 +6097,24 @@ function ItemCard({
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-foreground mb-2">
               Elements
             </label>
             <div className="space-y-2">
               {elements.map((element, index) => (
                 <div key={index}>
                   <div
-                    className={`space-y-2 p-3 border border-gray-200 rounded ${draggedIndex === index ? "opacity-50" : ""}`}
+                    className={`space-y-2 p-3 border border-border rounded ${draggedIndex === index ? "opacity-50" : ""}`}
                     draggable
                     onDragStart={(e) => handleDragStart(e, index)}
                     onDragOver={(e) => handleDragOver(e, index)}
                     onDragEnd={handleDragEnd}
                   >
                     <div className="flex items-center gap-2">
-                      <span
-                        className="text-sm text-muted cursor-move"
+                      <GripVertical
+                        className="w-4 h-4 text-muted-foreground cursor-move"
                         title="Drag to reorder"
-                      >
-                        ☰
-                      </span>
+                      />
                       <input
                         type="text"
                         value={element.name}
@@ -5779,14 +6123,14 @@ function ItemCard({
                         }
                         onKeyPress={(e) => handleKeyPress(e, index)}
                         placeholder="Element name"
-                        className="element-input flex-1 px-3 py-2 border border-gray-300 rounded"
+                        className="element-input flex-1 px-3 py-2 border border-border rounded"
                       />
                       <select
                         value={element.displayType || "step"}
                         onChange={(e) =>
                           updateElement(index, "displayType", e.target.value)
                         }
-                        className="px-2 py-2 border border-gray-300 rounded text-sm"
+                        className="px-2 py-2 border border-border rounded text-sm"
                       >
                         <option value="header">Header</option>
                         <option value="bullet">Bullet</option>
@@ -5794,10 +6138,10 @@ function ItemCard({
                       </select>
                       <button
                         onClick={() => deleteElement(index)}
-                        className="text-danger hover:text-danger-hover"
+                        className="text-destructive hover:text-destructive-hover"
                         title="Delete"
                       >
-                        ✕
+                        <X className="w-3 h-3" />
                       </button>
                     </div>
 
@@ -5808,7 +6152,7 @@ function ItemCard({
                         updateElement(index, "quantity", e.target.value)
                       }
                       placeholder="Quantity (optional)"
-                      className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                      className="w-full px-3 py-2 border border-border rounded text-sm"
                     />
 
                     <textarea
@@ -5817,19 +6161,19 @@ function ItemCard({
                         updateElement(index, "description", e.target.value)
                       }
                       placeholder="Description (optional)"
-                      className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                      className="w-full px-3 py-2 border border-border rounded text-sm"
                       rows="2"
                     />
 
                     {/* Item reference link */}
-                    {element.itemId ? (
-                      <div className="flex items-center gap-2 px-2 py-1 bg-teal-50 border border-teal-200 rounded text-sm">
-                        <span className="text-teal-700">
-                          → {allItems.find((i) => i.id === element.itemId)?.name || element.itemId}
+                    {(element.itemId || element.item_id) ? (
+                      <div className="flex items-center gap-2 px-2 py-1 bg-warning-light border border-accent rounded text-sm">
+                        <span className="text-primary">
+                          → {allItems.find((i) => i.id === (element.itemId || element.item_id))?.name || (element.itemId || element.item_id)}
                         </span>
                         <button
                           onClick={() => updateElement(index, "itemId", undefined)}
-                          className="text-teal-500 hover:text-teal-700 ml-auto"
+                          className="text-primary hover:text-primary ml-auto"
                         >
                           <X size={14} />
                         </button>
@@ -5841,10 +6185,10 @@ function ItemCard({
                           value={linkSearch}
                           onChange={(e) => setLinkSearch(e.target.value)}
                           placeholder="Search for an item to link..."
-                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                          className="w-full px-2 py-1 border border-border rounded text-sm"
                           autoFocus
                         />
-                        <div className="max-h-32 overflow-y-auto border border-gray-200 rounded">
+                        <div className="max-h-32 overflow-y-auto border border-border rounded">
                           {allItems
                             .filter((i) => !i.archived && i.id !== item.id && i.name.toLowerCase().includes(linkSearch.toLowerCase()))
                             .slice(0, 8)
@@ -5856,18 +6200,18 @@ function ItemCard({
                                   setLinkingElementIndex(null);
                                   setLinkSearch("");
                                 }}
-                                className="w-full text-left px-2 py-1.5 text-sm hover:bg-primary-bg border-b border-gray-100 last:border-b-0"
+                                className="w-full text-left px-2 py-1.5 text-sm hover:bg-background border-b border-border last:border-b-0"
                               >
                                 {i.name}
                               </button>
                             ))}
                           {allItems.filter((i) => !i.archived && i.id !== item.id && i.name.toLowerCase().includes(linkSearch.toLowerCase())).length === 0 && (
-                            <p className="text-xs text-muted px-2 py-1">No matching items</p>
+                            <p className="text-xs text-muted-foreground px-2 py-1">No matching items</p>
                           )}
                         </div>
                         <button
                           onClick={() => { setLinkingElementIndex(null); setLinkSearch(""); }}
-                          className="text-xs text-muted hover:text-dark"
+                          className="text-xs text-muted-foreground hover:text-foreground"
                         >
                           Cancel
                         </button>
@@ -5897,7 +6241,7 @@ function ItemCard({
               ))}
               <button
                 onClick={addElement}
-                className="w-full px-4 py-2.5 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-primary hover:text-primary transition-all duration-200"
+                className="w-full px-4 py-2.5 border-2 border-dashed border-border rounded-lg text-muted-foreground hover:border-primary hover:text-primary transition-all duration-200"
               >
                 + Add Element
               </button>
@@ -5913,7 +6257,7 @@ function ItemCard({
             </button>
             <button
               onClick={handleCancel}
-              className="px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Cancel
             </button>
@@ -5922,7 +6266,7 @@ function ItemCard({
                 onUpdate(item.id, { archived: true });
                 setIsEditing(false);
               }}
-              className="px-4 py-2.5 min-h-[44px] bg-danger hover:bg-danger-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ml-auto"
+              className="px-4 py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ml-auto"
             >
               Archive
             </button>
@@ -5934,7 +6278,7 @@ function ItemCard({
 
   return (
     <div
-      className="p-3 sm:p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary"
+      className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow"
       onClick={() => {
         if (onViewDetail) {
           onViewDetail(item.id);
@@ -5947,12 +6291,12 @@ function ItemCard({
       {item.tags && item.tags.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-2">
           {item.tags.slice(0, 3).map((tag) => (
-            <span key={tag} className="px-2 py-0.5 bg-teal-100 text-teal-700 text-xs rounded-full">
+            <span key={tag} className="px-2 py-0.5 bg-warning-light text-accent-foreground text-xs rounded-full">
               {tag}
             </span>
           ))}
           {item.tags.length > 3 && (
-            <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs rounded-full">
+            <span className="px-2 py-0.5 bg-secondary/50 text-muted-foreground text-xs rounded-full">
               +{item.tags.length - 3} more
             </span>
           )}
@@ -5960,7 +6304,7 @@ function ItemCard({
       )}
       {(item.elements || item.components) &&
         (item.elements || item.components).length > 0 && (
-          <ol className="text-sm text-gray-600 list-decimal list-inside space-y-1">
+          <ol className="text-sm text-muted-foreground list-decimal list-inside space-y-1">
             {(item.elements || item.components).map((element, index) => {
               const el =
                 typeof element === "string" ? { name: element } : element;
@@ -6108,23 +6452,23 @@ function IntentionCard({
 
   if (isEditing) {
     return (
-      <div className="p-3 sm:p-4 bg-white border-2 border-primary rounded">
+      <div className="p-3 sm:p-4 bg-card border-2 border-primary rounded-lg shadow-md">
         <div className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Name
             </label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+              className="w-full px-3 py-2 border border-border rounded text-base"
               autoFocus
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Linked Context (optional)
             </label>
             <div className="relative">
@@ -6138,24 +6482,24 @@ function IntentionCard({
                 onFocus={() => setShowContextPicker(true)}
                 onBlur={() => setTimeout(() => setShowContextPicker(false), 200)}
                 placeholder="Search for a context..."
-                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                className="w-full px-3 py-2 border border-border rounded text-base"
               />
               {selectedContextId && !contextSearch && contexts && (
-                <div className="mt-1 text-sm text-gray-600">
+                <div className="mt-1 text-sm text-muted-foreground">
                   Selected: {contexts.find((c) => c.id === selectedContextId)?.name}
                   <button
                     onClick={() => {
                       setSelectedContextId("");
                       setContextSearch("");
                     }}
-                    className="ml-2 text-danger hover:text-danger-hover"
+                    className="ml-2 text-destructive hover:text-destructive-hover"
                   >
-                    ✕
+                    <X className="w-3 h-3" />
                   </button>
                 </div>
               )}
               {showContextPicker && contextSearch && filteredContexts.length > 0 && (
-                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded shadow-lg max-h-60 overflow-y-auto">
+                <div className="absolute z-10 w-full mt-1 bg-card border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
                   {filteredContexts.map((ctx) => (
                     <button
                       key={ctx.id}
@@ -6164,7 +6508,7 @@ function IntentionCard({
                         setContextSearch(ctx.name);
                         setShowContextPicker(false);
                       }}
-                      className="w-full text-left px-3 py-2 hover:bg-primary-bg border-b border-gray-200 last:border-b-0"
+                      className="w-full text-left px-3 py-2 hover:bg-background border-b border-border last:border-b-0"
                     >
                       <div className="font-medium">{ctx.name}</div>
                     </button>
@@ -6175,7 +6519,7 @@ function IntentionCard({
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Linked Item (optional)
             </label>
             <div className="relative">
@@ -6189,24 +6533,24 @@ function IntentionCard({
                 onFocus={() => setShowItemPicker(true)}
                 onBlur={() => setTimeout(() => setShowItemPicker(false), 200)}
                 placeholder="Search for an item..."
-                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                className="w-full px-3 py-2 border border-border rounded text-base"
               />
               {selectedItemId && !itemSearch && items && (
-                <div className="mt-1 text-sm text-gray-600">
+                <div className="mt-1 text-sm text-muted-foreground">
                   Selected: {items.find((i) => i.id === selectedItemId)?.name}
                   <button
                     onClick={() => {
                       setSelectedItemId("");
                       setItemSearch("");
                     }}
-                    className="ml-2 text-danger hover:text-danger-hover"
+                    className="ml-2 text-destructive hover:text-destructive-hover"
                   >
-                    ✕
+                    <X className="w-3 h-3" />
                   </button>
                 </div>
               )}
               {showItemPicker && itemSearch && filteredItems.length > 0 && (
-                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded shadow-lg max-h-60 overflow-y-auto">
+                <div className="absolute z-10 w-full mt-1 bg-card border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
                   {filteredItems.map((item) => (
                     <button
                       key={item.id}
@@ -6215,11 +6559,11 @@ function IntentionCard({
                         setItemSearch(item.name);
                         setShowItemPicker(false);
                       }}
-                      className="w-full text-left px-3 py-2 hover:bg-primary-bg border-b border-gray-200 last:border-b-0"
+                      className="w-full text-left px-3 py-2 hover:bg-background border-b border-border last:border-b-0"
                     >
                       <div className="font-medium">{item.name}</div>
                       {item.contextId && contexts && (
-                        <div className="text-xs text-muted">
+                        <div className="text-xs text-muted-foreground">
                           {contexts.find((c) => c.id === item.contextId)?.name}
                         </div>
                       )}
@@ -6232,13 +6576,13 @@ function IntentionCard({
 
           {collections.length > 0 && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-foreground mb-1">
                 Linked Collection (optional)
               </label>
               <select
                 value={selectedCollectionId}
                 onChange={(e) => setSelectedCollectionId(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                className="w-full px-3 py-2 border border-border rounded text-base"
               >
                 <option value="">None</option>
                 {collections.map((c) => (
@@ -6249,7 +6593,7 @@ function IntentionCard({
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Tags
             </label>
             <TagInput value={tags} onChange={setTags} />
@@ -6257,13 +6601,13 @@ function IntentionCard({
 
           {showScheduling && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-foreground mb-1">
                 Recurrence
               </label>
               <select
                 value={recurrence}
                 onChange={(e) => setRecurrence(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded text-base"
+                className="w-full px-3 py-2 border border-border rounded text-base"
               >
                 <option value="once">One time</option>
                 <option value="daily">Daily</option>
@@ -6295,7 +6639,7 @@ function IntentionCard({
                     type="date"
                     value={selectedDate}
                     onChange={(e) => setSelectedDate(e.target.value)}
-                    className="px-3 py-2 min-h-[44px] border border-gray-300 rounded"
+                    className="px-3 py-2 min-h-[44px] border border-border rounded"
                   />
                 )}
               </>
@@ -6312,7 +6656,7 @@ function IntentionCard({
 
             <button
               onClick={handleCancel}
-              className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
               Cancel
             </button>
@@ -6321,7 +6665,7 @@ function IntentionCard({
               <button
                 onClick={() => onArchive(intent.id)}
                 disabled={hasActiveExecutions}
-                className={`px-3 sm:px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base ${hasActiveExecutions ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-danger hover:bg-danger-hover text-white'}`}
+                className={`px-3 sm:px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base ${hasActiveExecutions ? 'bg-secondary text-muted-foreground cursor-not-allowed' : 'bg-destructive hover:bg-destructive-hover text-white'}`}
                 title={hasActiveExecutions ? 'Cannot archive: active execution in progress' : 'Archive this intention and all related events'}
               >
                 Archive
@@ -6335,7 +6679,7 @@ function IntentionCard({
 
   return (
     <div
-      className="p-3 sm:p-4 bg-white border border-gray-200 rounded cursor-pointer hover:border-primary"
+      className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow"
       onClick={() => {
         if (onViewDetail) {
           onViewDetail(intent.id);
@@ -6349,22 +6693,22 @@ function IntentionCard({
           <p className="font-medium">{getIntentDisplay(intent)}</p>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             {showScheduling && (
-              <span className="text-sm text-muted capitalize">
+              <span className="text-sm text-muted-foreground capitalize">
                 {intent.recurrence || "once"}
               </span>
             )}
             {contextName && (
-              <span className="text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
+              <span className="text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
                 {contextName}
               </span>
             )}
             {intent.tags && intent.tags.length > 0 && intent.tags.slice(0, 3).map((tag) => (
-              <span key={tag} className="px-2 py-0.5 bg-teal-100 text-teal-700 text-xs rounded-full">
+              <span key={tag} className="px-2 py-0.5 bg-warning-light text-accent-foreground text-xs rounded-full">
                 {tag}
               </span>
             ))}
             {intent.tags && intent.tags.length > 3 && (
-              <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs rounded-full">
+              <span className="px-2 py-0.5 bg-secondary/50 text-muted-foreground text-xs rounded-full">
                 +{intent.tags.length - 3} more
               </span>
             )}
@@ -6413,6 +6757,8 @@ function IntentionCard({
               onOpenExecution={onOpenExecution}
               onCancelExecution={onCancelExecution}
               nested
+              items={[]}
+              collections={[]}
             />
           ))}
         </div>
@@ -6478,32 +6824,35 @@ function EventCard({
     setIsEditing(false);
   }
 
+  const execution = executions.find((ex) => ex.eventId === event.id);
+
+  // Show editable form when there's no execution
   if (isEditing) {
     return (
-      <div className="p-3 sm:p-4 bg-white border-2 border-primary rounded">
+      <div className="p-3 sm:p-4 bg-card border-2 border-primary rounded-lg shadow-md">
         <div className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Event Name
             </label>
             <input
               type="text"
               value={eventName}
               onChange={(e) => setEventName(e.target.value)}
-              className="w-full px-3 py-2 min-h-[44px] border border-gray-300 rounded text-base"
+              className="w-full px-3 py-2 min-h-[44px] border border-border rounded text-base"
               autoFocus
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Scheduled Date
             </label>
             <input
               type="date"
               value={scheduledDate}
               onChange={(e) => setScheduledDate(e.target.value)}
-              className="w-full px-3 py-2 min-h-[44px] border border-gray-300 rounded"
+              className="w-full px-3 py-2 min-h-[44px] border border-border rounded"
             />
           </div>
 
@@ -6517,7 +6866,7 @@ function EventCard({
             <button
               onClick={handleCancelEvent}
               disabled={hasActiveExecution}
-              className={`px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${hasActiveExecution ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-danger hover:bg-danger-hover text-white'}`}
+              className={`px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${hasActiveExecution ? 'bg-secondary text-muted-foreground cursor-not-allowed' : 'bg-destructive hover:bg-destructive-hover text-white'}`}
               title={hasActiveExecution ? 'Cannot archive: active execution in progress' : 'Archive this event'}
             >
               Archive Event
@@ -6528,7 +6877,7 @@ function EventCard({
                 setEventName(event.text || intent?.text || "");
                 setIsEditing(false);
               }}
-              className="px-4 py-2.5 min-h-[44px] bg-gray-200 hover:bg-gray-300 text-dark rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Close
             </button>
@@ -6538,18 +6887,24 @@ function EventCard({
     );
   }
 
-  const execution = executions.find((ex) => ex.eventId === event.id);
-
   return (
-    <div className="p-3 bg-white border border-gray-200 rounded shadow-sm hover:shadow-md transition-shadow duration-200">
+    <div className="p-3 bg-card border border-border rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <div className="flex-1 min-w-0" onClick={() => setIsEditing(true)}>
-          <p className="font-medium text-dark cursor-pointer hover:text-primary">
+        <div className="flex-1 min-w-0" onClick={() => {
+          if (execution && onOpenExecution) {
+            onOpenExecution(execution);
+          } else {
+            setIsEditing(true);
+          }
+        }}>
+          <p className="font-medium text-foreground cursor-pointer hover:text-primary">
             {nested ? `Event: ${event.text || getIntentDisplay(intent)}` : (event.text || getIntentDisplay(intent))}
           </p>
-          <p className="text-sm text-muted">{formatEventDate(event.time)}</p>
+          <p className="text-sm text-muted-foreground">
+            {formatEventDate(event.time)} • {execution ? (execution.status === "active" ? "In progress" : "Paused") : "Not started"}
+          </p>
           {event.contextId && (
-            <span className="inline-block mt-1 text-xs bg-primary-light text-dark px-2 py-0.5 rounded">
+            <span className="inline-block mt-1 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
               {contexts.find((c) => c.id === event.contextId)?.name}
             </span>
           )}
@@ -6569,7 +6924,7 @@ function EventCard({
             {execution.status === "active" ? (
               <>
                 <Play className="w-3 h-3" />
-                Active
+                Continue
               </>
             ) : (
               <>

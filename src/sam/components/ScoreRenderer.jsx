@@ -106,7 +106,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
       measNumEl.setAttribute("y", TREBLE_Y - 2);
       measNumEl.setAttribute("font-size", "10");
       measNumEl.setAttribute("font-family", "monospace");
-      measNumEl.setAttribute("fill", "#999");
+      measNumEl.setAttribute("fill", "var(--muted-foreground)");
       measNumEl.textContent = measure.number;
       svg.appendChild(measNumEl);
 
@@ -117,7 +117,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         chordEl.setAttribute("y", TREBLE_Y + 18);
         chordEl.setAttribute("font-size", "20");
         chordEl.setAttribute("font-family", "serif");
-        chordEl.setAttribute("fill", "#333");
+        chordEl.setAttribute("fill", "var(--foreground)");
         chordEl.textContent = measure.chord;
         svg.appendChild(chordEl);
       }
@@ -457,7 +457,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
       ref={containerRef}
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
-      className="overflow-x-auto bg-gray-50 rounded-lg border border-gray-200 p-2 cursor-pointer"
+      className="overflow-x-auto bg-white rounded-lg border border-border p-2 cursor-pointer"
     />
   );
 }

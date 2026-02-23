@@ -22,7 +22,10 @@
       "WebFetch(domain:hono.dev)",
       "Bash(supabase functions deploy:*)",
       "Bash(supabase db push:*)",
-      "Bash(supabase db execute:*)"
+      "Bash(supabase db execute:*)",
+      "Bash(\"c:\\\\Users\\\\Alex\\\\projects\\\\alfred-v5\\\\docs\\\\progress-phase75-ui-redesign.md\":*)",
+      "mcp__claude_ai_Aflred_v5__search_items",
+      "mcp__claude_ai_Aflred_v5__get_database_schema"
     ]
   }
 }

@@ -382,7 +382,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurati
     measNumEl.setAttribute("y", TREBLE_Y - 2);
     measNumEl.setAttribute("font-size", "10");
     measNumEl.setAttribute("font-family", "monospace");
-    measNumEl.setAttribute("fill", "#999");
+    measNumEl.setAttribute("fill", "var(--muted-foreground)");
     measNumEl.textContent = measure.number;
     measGroupEl.appendChild(measNumEl);
 
@@ -393,7 +393,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurati
       chordEl.setAttribute("y", TREBLE_Y + 18);
       chordEl.setAttribute("font-size", "20");
       chordEl.setAttribute("font-family", "serif");
-      chordEl.setAttribute("fill", "#333");
+      chordEl.setAttribute("fill", "var(--foreground)");
       chordEl.textContent = measure.chord;
       measGroupEl.appendChild(chordEl);
     }
@@ -791,7 +791,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       <div
         ref={viewportRef}
         onClick={onTap}
-        className="relative overflow-hidden bg-gray-50 rounded-lg border border-gray-200 cursor-pointer"
+        className="relative overflow-hidden bg-white rounded-lg border border-border cursor-pointer"
         style={{ height: STAFF_H + 4 }}
       >
         {/* Target zone (subtle blue tint) */}

@@ -6,38 +6,62 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        // Primary palette (Teal family)
+        background: 'var(--background)',
+        foreground: 'var(--foreground)',
+        card: {
+          DEFAULT: 'var(--card)',
+          foreground: 'var(--card-foreground)',
+        },
+        popover: {
+          DEFAULT: 'var(--popover)',
+          foreground: 'var(--popover-foreground)',
+        },
         primary: {
-          DEFAULT: '#16A085',    // Main teal - buttons, actions
-          hover: '#138D75',      // Darker on hover
-          light: '#a2d8c8',      // Soft teal - backgrounds, accents
-          bg: '#F8FFFE',         // Subtle teal tint for page background
-          dark: '#0E6655',       // Even darker for special emphasis
+          DEFAULT: 'var(--primary)',
+          foreground: 'var(--primary-foreground)',
+          hover: 'var(--primary-hover)',
+          light: 'var(--primary-light)',
+          dark: 'var(--primary-dark)',
         },
-        
-        // Semantic colors
-success: {
-  DEFAULT: '#4DB6AC',    // Soft seafoam
-  hover: '#26A69A',      // Slightly darker
-  light: '#B2DFDB',      // Light seafoam
-},
-        danger: {
-          DEFAULT: '#E74C3C',    // Delete, cancel, error
-          hover: '#C0392B',
-          light: '#FADBD8',      // Light error background
+        secondary: {
+          DEFAULT: 'var(--secondary)',
+          foreground: 'var(--secondary-foreground)',
         },
-warning: {
-  DEFAULT: '#95A5A6',    // Soft gray
-  hover: '#7F8C8D',      // Slightly darker gray
-  light: '#ECF0F1',      // Very light gray background
-},
-        
-        // Neutral colors (text)
-        dark: '#2C3E50',         // Primary text color (replaces black)
-        muted: '#7F8C8D',        // Secondary text, less important
-        
-        // Keep Tailwind's gray scale
-        // gray-50 through gray-900 still available
+        muted: {
+          DEFAULT: 'var(--muted)',
+          foreground: 'var(--muted-foreground)',
+        },
+        accent: {
+          DEFAULT: 'var(--accent)',
+          foreground: 'var(--accent-foreground)',
+        },
+        success: {
+          DEFAULT: 'var(--success)',
+          foreground: 'var(--success-foreground)',
+          hover: 'var(--success-hover)',
+          light: 'var(--success-light)',
+        },
+        destructive: {
+          DEFAULT: 'var(--destructive)',
+          foreground: 'var(--destructive-foreground)',
+          hover: 'var(--destructive-hover)',
+          light: 'var(--destructive-light)',
+        },
+        warning: {
+          DEFAULT: 'var(--warning)',
+          foreground: 'var(--warning-foreground)',
+          hover: 'var(--warning-hover)',
+          light: 'var(--warning-light)',
+        },
+        border: 'var(--border)',
+        input: 'var(--input)',
+        'input-background': 'var(--input-background)',
+        ring: 'var(--ring)',
+      },
+      borderRadius: {
+        lg: 'var(--radius)',
+        md: 'calc(var(--radius) - 2px)',
+        sm: 'calc(var(--radius) - 4px)',
       },
     },
   },

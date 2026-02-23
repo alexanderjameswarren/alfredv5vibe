@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Archive, ArchiveRestore, Music } from "lucide-react";
+import { Archive, ArchiveRestore, Music, Pencil } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 import { parseMusicXML } from "../lib/songParser";
+import JSZip from "jszip";
 
 function validateSong(song) {
   if (!song || typeof song !== "object") return "Invalid JSON: not an object";
@@ -25,6 +26,11 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
   const [loadingLibrary, setLoadingLibrary] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [pastedText, setPastedText] = useState("");
+  const [editingSong, setEditingSong] = useState(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editArtist, setEditArtist] = useState("");
+  const [editBpm, setEditBpm] = useState("");
+  const [saving, setSaving] = useState(false);
   const fileInputRef = useRef(null);
 
   // Fetch song library on mount
@@ -86,24 +92,114 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
     }
   }
 
+  function handleEditClick(e, row) {
+    e.stopPropagation();
+    setEditingSong(row);
+    setEditTitle(row.title || "");
+    setEditArtist(row.artist || "");
+    setEditBpm(String(row.default_bpm || 68));
+  }
+
+  function handleCancelEdit() {
+    setEditingSong(null);
+    setEditTitle("");
+    setEditArtist("");
+    setEditBpm("");
+  }
+
+  async function handleSaveEdit() {
+    if (!editingSong) return;
+
+    const bpmNum = Number(editBpm);
+    if (!editTitle.trim() || !bpmNum || bpmNum <= 0) {
+      alert("Please provide a valid title and BPM");
+      return;
+    }
+
+    setSaving(true);
+    const { error: dbError } = await supabase
+      .from("sam_songs")
+      .update({
+        title: editTitle.trim(),
+        artist: editArtist.trim() || null,
+        default_bpm: bpmNum,
+      })
+      .eq("id", editingSong.id);
+
+    setSaving(false);
+
+    if (dbError) {
+      console.error("[Sam] Song update failed:", dbError);
+      alert("Failed to update song");
+    } else {
+      // Update local state
+      const updatedSong = {
+        ...editingSong,
+        title: editTitle.trim(),
+        artist: editArtist.trim() || null,
+        default_bpm: bpmNum,
+      };
+
+      if (editingSong.archived) {
+        setArchived((prev) => prev.map((s) => (s.id === editingSong.id ? updatedSong : s)));
+      } else {
+        setLibrary((prev) => prev.map((s) => (s.id === editingSong.id ? updatedSong : s)));
+      }
+
+      handleCancelEdit();
+    }
+  }
+
   async function handleFile(file) {
     setError(null);
 
     const name = file.name.toLowerCase();
     const isJson = name.endsWith(".json");
     const isMusicXml = name.endsWith(".musicxml") || name.endsWith(".xml");
+    const isMxl = name.endsWith(".mxl");
 
-    if (!isJson && !isMusicXml) {
-      setError("Supported formats: .json, .musicxml, .xml");
+    if (!isJson && !isMusicXml && !isMxl) {
+      setError("Supported formats: .json, .musicxml, .xml, .mxl");
       return;
     }
 
     let text;
-    try {
-      text = await file.text();
-    } catch {
-      setError("Could not read file");
-      return;
+
+    if (isMxl) {
+      // Handle .mxl (zipped MusicXML)
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const zip = await JSZip.loadAsync(arrayBuffer);
+
+        // Find the first .musicxml or .xml file (skip META-INF/container.xml)
+        let musicXmlFile = null;
+        for (const [filename, zipEntry] of Object.entries(zip.files)) {
+          if (zipEntry.dir) continue;
+          if (filename === "META-INF/container.xml") continue;
+          if (filename.toLowerCase().endsWith(".musicxml") || filename.toLowerCase().endsWith(".xml")) {
+            musicXmlFile = zipEntry;
+            break;
+          }
+        }
+
+        if (!musicXmlFile) {
+          setError("No MusicXML file found in .mxl archive");
+          return;
+        }
+
+        text = await musicXmlFile.async("text");
+      } catch (e) {
+        setError("Could not read .mxl file: " + e.message);
+        return;
+      }
+    } else {
+      // Handle regular text files
+      try {
+        text = await file.text();
+      } catch {
+        setError("Could not read file");
+        return;
+      }
     }
 
     let song;
@@ -142,7 +238,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
     supabase
       .from("sam_songs")
       .insert({
-        title: song.title || file.name.replace(/\.(json|musicxml|xml)$/i, ""),
+        title: song.title || file.name.replace(/\.(json|musicxml|xml|mxl)$/i, ""),
         artist: song.artist || null,
         source,
         source_file: file.name,
@@ -264,20 +360,20 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
         className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors ${
           dragging
             ? "border-primary bg-primary-light"
-            : "border-gray-300 hover:border-primary-light bg-white"
+            : "border-border hover:border-primary-light bg-card"
         }`}
       >
         <div className="text-4xl mb-3">🎵</div>
         <p className="text-dark font-medium mb-1">
           Drop a song file here
         </p>
-        <p className="text-sm text-muted">
-          .json or .musicxml — or click to browse
+        <p className="text-sm text-muted-foreground">
+          .json, .musicxml, or .mxl — or click to browse
         </p>
         <input
           ref={fileInputRef}
           type="file"
-          accept=".json,.musicxml,.xml"
+          accept=".json,.musicxml,.xml,.mxl"
           onChange={handleFileInput}
           className="hidden"
         />
@@ -285,14 +381,14 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
 
       {/* Text paste section */}
       <div className="mt-6">
-        <label className="block text-sm font-medium text-muted mb-2">
+        <label className="block text-sm font-medium text-foreground mb-2">
           Or paste JSON / MusicXML directly
         </label>
         <textarea
           value={pastedText}
           onChange={(e) => setPastedText(e.target.value)}
           placeholder="Paste your JSON or MusicXML content here..."
-          className="w-full p-3 border border-gray-300 rounded-lg text-sm font-mono resize-y min-h-[120px] focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+          className="w-full p-3 border border-border rounded-lg text-sm font-mono resize-y min-h-[120px] focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
         />
         <button
           onClick={handlePastedText}
@@ -311,30 +407,37 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
 
       {/* Song Library */}
       {loadingLibrary ? (
-        <div className="mt-6 text-center text-sm text-muted">Loading library...</div>
+        <div className="mt-6 text-center text-sm text-muted-foreground">Loading library...</div>
       ) : library.length > 0 && (
         <div className="mt-6">
-          <h3 className="text-sm font-medium text-muted mb-2">Your songs</h3>
+          <h3 className="text-sm font-medium text-muted-foregroundmb-2">Your songs</h3>
           <div className="flex flex-col gap-1">
             {library.map((row) => (
               <div
                 key={row.id}
                 onClick={() => handleLoadFromLibrary(row)}
-                className="flex items-center gap-3 w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors min-h-[44px] group cursor-pointer"
+                className="flex items-center gap-3 w-full text-left px-4 py-3 bg-card border border-border rounded-lg hover:bg-secondary transition-colors min-h-[44px] group cursor-pointer"
               >
-                <Music className="w-4 h-4 text-muted flex-shrink-0" />
+                <Music className="w-4 h-4 text-muted-foregroundflex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <span className="font-medium text-dark">{row.title}</span>
                   {row.artist && (
-                    <span className="text-muted ml-1">— {row.artist}</span>
+                    <span className="text-muted-foregroundml-1">— {row.artist}</span>
                   )}
-                  <span className="text-xs text-muted ml-2">
+                  <span className="text-xs text-muted-foregroundml-2">
                     {row.measures?.length || 0} measures · {row.default_bpm || 68} BPM
                   </span>
                 </div>
                 <button
+                  onClick={(e) => handleEditClick(e, row)}
+                  className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Edit song"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button
                   onClick={(e) => handleArchive(e, row)}
-                  className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-300 hover:text-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-warning opacity-0 group-hover:opacity-100 transition-opacity"
                   title="Archive song"
                 >
                   <Archive className="w-4 h-4" />
@@ -350,7 +453,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
         <div className="mt-6 text-center">
           <button
             onClick={() => setShowArchived(!showArchived)}
-            className="text-sm text-muted hover:text-dark min-h-[44px] px-2"
+            className="text-sm text-muted-foregroundhover:text-dark min-h-[44px] px-2"
           >
             {showArchived ? "Hide archived songs" : `View archived songs (${archived.length})`}
           </button>
@@ -361,18 +464,18 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
                 {archived.map((row) => (
                   <div
                     key={row.id}
-                    className="flex items-center gap-3 w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg min-h-[44px] opacity-60"
+                    className="flex items-center gap-3 w-full px-4 py-3 bg-secondary border border-border rounded-lg min-h-[44px] opacity-60"
                   >
-                    <Music className="w-4 h-4 text-muted flex-shrink-0" />
+                    <Music className="w-4 h-4 text-muted-foregroundflex-shrink-0" />
                     <div className="flex-1 min-w-0">
                       <span className="font-medium text-dark">{row.title}</span>
                       {row.artist && (
-                        <span className="text-muted ml-1">— {row.artist}</span>
+                        <span className="text-muted-foregroundml-1">— {row.artist}</span>
                       )}
                     </div>
                     <button
                       onClick={(e) => handleRestore(e, row)}
-                      className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted hover:text-green-600 transition-colors"
+                      className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foregroundhover:text-success transition-colors"
                       title="Restore song"
                     >
                       <ArchiveRestore className="w-4 h-4" />
@@ -382,6 +485,75 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Edit Modal */}
+      {editingSong && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-card border border-border rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-medium text-dark mb-4">Edit Song</h3>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-1">
+                  Title
+                </label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  placeholder="Song title"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-1">
+                  Artist
+                </label>
+                <input
+                  type="text"
+                  value={editArtist}
+                  onChange={(e) => setEditArtist(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  placeholder="Artist name (optional)"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-1">
+                  Default BPM
+                </label>
+                <input
+                  type="number"
+                  value={editBpm}
+                  onChange={(e) => setEditBpm(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  placeholder="68"
+                  min={20}
+                  max={300}
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={handleCancelEdit}
+                disabled={saving}
+                className="flex-1 px-4 py-2 border border-border rounded-lg text-sm font-medium text-foreground hover:bg-secondary min-h-[44px] disabled:opacity-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                disabled={saving}
+                className="flex-1 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-sm font-medium min-h-[44px] disabled:opacity-50 transition-colors"
+              >
+                {saving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

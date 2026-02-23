@@ -284,11 +284,11 @@ export default function SamPlayer({ onBack }) {
 
   return (
     <div className="min-h-screen bg-primary-bg">
-      <header className="sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm">
+      <header className="sticky top-0 z-10 bg-card border-b border-border shadow-sm">
         <div className="max-w-4xl mx-auto px-3 sm:px-4 py-3 flex items-center gap-3">
           <button
             onClick={onBack}
-            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-600 hover:text-dark rounded"
+            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground rounded"
             title="Back to Alfred"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -317,6 +317,7 @@ export default function SamPlayer({ onBack }) {
               midiConnected={midiConnected} midiDevice={midiDevice}
               pausedMeasure={pausedMeasure}
               metronome={metronome} setMetronome={setMetronome}
+              onSongUpdate={setSong}
             />
 
             <StatsBar
