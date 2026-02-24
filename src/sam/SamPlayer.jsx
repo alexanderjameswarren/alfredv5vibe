@@ -141,6 +141,15 @@ export default function SamPlayer({ onBack }) {
     const defaultBpm = loadedSong.defaultBpm || 68;
     setBpm(defaultBpm);
     setBpmInput(String(defaultBpm));
+    const tw = loadedSong.defaultTimingWindowMs ?? 300;
+    setTimingWindowMs(tw);
+    setTimingWindowMsInput(String(tw));
+    const cm = loadedSong.defaultChordMs ?? 80;
+    setChordMs(cm);
+    setChordMsInput(String(cm));
+    const mw = loadedSong.defaultMeasureWidth ?? 300;
+    setMeasureWidth(mw);
+    setMeasureWidthInput(String(mw));
     setPlaybackState("stopped");
     setPausedMeasure(null);
     setLoopCount(0);

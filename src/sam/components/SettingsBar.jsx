@@ -24,6 +24,9 @@ export default function SettingsBar({
   const [editTitle, setEditTitle] = useState("");
   const [editArtist, setEditArtist] = useState("");
   const [editBpm, setEditBpm] = useState("");
+  const [editTimingWindow, setEditTimingWindow] = useState("");
+  const [editChordMs, setEditChordMs] = useState("");
+  const [editMeasureWidth, setEditMeasureWidth] = useState("");
   const [saving, setSaving] = useState(false);
 
   function handleEditClick() {
@@ -31,6 +34,9 @@ export default function SettingsBar({
     setEditTitle(song.title || "");
     setEditArtist(song.artist || "");
     setEditBpm(String(song.defaultBpm || bpm));
+    setEditTimingWindow(song.defaultTimingWindowMs != null ? String(song.defaultTimingWindowMs) : "");
+    setEditChordMs(song.defaultChordMs != null ? String(song.defaultChordMs) : "");
+    setEditMeasureWidth(song.defaultMeasureWidth != null ? String(song.defaultMeasureWidth) : "");
   }
 
   function handleCancelEdit() {
@@ -38,6 +44,9 @@ export default function SettingsBar({
     setEditTitle("");
     setEditArtist("");
     setEditBpm("");
+    setEditTimingWindow("");
+    setEditChordMs("");
+    setEditMeasureWidth("");
   }
 
   async function handleSaveEdit() {
@@ -46,6 +55,10 @@ export default function SettingsBar({
       alert("Please provide a valid title and BPM");
       return;
     }
+
+    const timingNum = editTimingWindow !== "" ? Number(editTimingWindow) : null;
+    const chordNum = editChordMs !== "" ? Number(editChordMs) : null;
+    const widthNum = editMeasureWidth !== "" ? Number(editMeasureWidth) : null;
 
     setSaving(true);
 
@@ -57,6 +70,9 @@ export default function SettingsBar({
           title: editTitle.trim(),
           artist: editArtist.trim() || null,
           default_bpm: bpmNum,
+          default_timing_window_ms: timingNum,
+          default_chord_ms: chordNum,
+          default_measure_width: widthNum,
         })
         .eq("id", songDbId);
 
@@ -74,17 +90,29 @@ export default function SettingsBar({
       title: editTitle.trim(),
       artist: editArtist.trim() || null,
       defaultBpm: bpmNum,
+      defaultTimingWindowMs: timingNum,
+      defaultChordMs: chordNum,
+      defaultMeasureWidth: widthNum,
     };
 
     if (onSongUpdate) {
       onSongUpdate(updatedSong);
     }
 
-    // Update BPM if changed
+    // Apply settings immediately
     if (bpmNum !== bpm) {
       setBpm(bpmNum);
       setBpmInput(String(bpmNum));
     }
+    const tw = timingNum ?? 300;
+    setTimingWindowMs(tw);
+    setTimingWindowMsInput(String(tw));
+    const cm = chordNum ?? 80;
+    setChordMs(cm);
+    setChordMsInput(String(cm));
+    const mw = widthNum ?? 300;
+    setMeasureWidth(mw);
+    setMeasureWidthInput(String(mw));
 
     setSaving(false);
     handleCancelEdit();
@@ -311,6 +339,53 @@ export default function SettingsBar({
                   max={300}
                 />
               </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">
+                    Timing ±ms
+                  </label>
+                  <input
+                    type="number"
+                    value={editTimingWindow}
+                    onChange={(e) => setEditTimingWindow(e.target.value)}
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                    placeholder="300"
+                    min={100}
+                    max={2000}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">
+                    Chord ms
+                  </label>
+                  <input
+                    type="number"
+                    value={editChordMs}
+                    onChange={(e) => setEditChordMs(e.target.value)}
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                    placeholder="80"
+                    min={10}
+                    max={500}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">
+                    Measure width
+                  </label>
+                  <input
+                    type="number"
+                    value={editMeasureWidth}
+                    onChange={(e) => setEditMeasureWidth(e.target.value)}
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                    placeholder="300"
+                    min={150}
+                    max={600}
+                    step={50}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground -mt-1">Leave blank to use app defaults (300ms / 80ms / 300px)</p>
             </div>
 
             <div className="flex gap-3 mt-6">

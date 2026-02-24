@@ -30,6 +30,9 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
   const [editTitle, setEditTitle] = useState("");
   const [editArtist, setEditArtist] = useState("");
   const [editBpm, setEditBpm] = useState("");
+  const [editTimingWindow, setEditTimingWindow] = useState("");
+  const [editChordMs, setEditChordMs] = useState("");
+  const [editMeasureWidth, setEditMeasureWidth] = useState("");
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -37,7 +40,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
   useEffect(() => {
     supabase
       .from("sam_songs")
-      .select("id, title, artist, default_bpm, created_at, archived, measures")
+      .select("id, title, artist, default_bpm, default_timing_window_ms, default_chord_ms, default_measure_width, created_at, archived, measures")
       .order("updated_at", { ascending: false })
       .then(({ data, error: dbError }) => {
         setLoadingLibrary(false);
@@ -56,6 +59,9 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
       title: row.title,
       artist: row.artist,
       defaultBpm: row.default_bpm,
+      defaultTimingWindowMs: row.default_timing_window_ms ?? null,
+      defaultChordMs: row.default_chord_ms ?? null,
+      defaultMeasureWidth: row.default_measure_width ?? null,
       measures: row.measures,
     };
     onSongLoaded(song);
@@ -98,6 +104,9 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
     setEditTitle(row.title || "");
     setEditArtist(row.artist || "");
     setEditBpm(String(row.default_bpm || 68));
+    setEditTimingWindow(row.default_timing_window_ms != null ? String(row.default_timing_window_ms) : "");
+    setEditChordMs(row.default_chord_ms != null ? String(row.default_chord_ms) : "");
+    setEditMeasureWidth(row.default_measure_width != null ? String(row.default_measure_width) : "");
   }
 
   function handleCancelEdit() {
@@ -105,6 +114,9 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
     setEditTitle("");
     setEditArtist("");
     setEditBpm("");
+    setEditTimingWindow("");
+    setEditChordMs("");
+    setEditMeasureWidth("");
   }
 
   async function handleSaveEdit() {
@@ -116,6 +128,10 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
       return;
     }
 
+    const timingNum = editTimingWindow !== "" ? Number(editTimingWindow) : null;
+    const chordNum = editChordMs !== "" ? Number(editChordMs) : null;
+    const widthNum = editMeasureWidth !== "" ? Number(editMeasureWidth) : null;
+
     setSaving(true);
     const { error: dbError } = await supabase
       .from("sam_songs")
@@ -123,6 +139,9 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
         title: editTitle.trim(),
         artist: editArtist.trim() || null,
         default_bpm: bpmNum,
+        default_timing_window_ms: timingNum,
+        default_chord_ms: chordNum,
+        default_measure_width: widthNum,
       })
       .eq("id", editingSong.id);
 
@@ -138,6 +157,9 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
         title: editTitle.trim(),
         artist: editArtist.trim() || null,
         default_bpm: bpmNum,
+        default_timing_window_ms: timingNum,
+        default_chord_ms: chordNum,
+        default_measure_width: widthNum,
       };
 
       if (editingSong.archived) {
@@ -535,6 +557,53 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
                   max={300}
                 />
               </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">
+                    Timing ±ms
+                  </label>
+                  <input
+                    type="number"
+                    value={editTimingWindow}
+                    onChange={(e) => setEditTimingWindow(e.target.value)}
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                    placeholder="300"
+                    min={100}
+                    max={2000}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">
+                    Chord ms
+                  </label>
+                  <input
+                    type="number"
+                    value={editChordMs}
+                    onChange={(e) => setEditChordMs(e.target.value)}
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                    placeholder="80"
+                    min={10}
+                    max={500}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">
+                    Measure width
+                  </label>
+                  <input
+                    type="number"
+                    value={editMeasureWidth}
+                    onChange={(e) => setEditMeasureWidth(e.target.value)}
+                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                    placeholder="300"
+                    min={150}
+                    max={600}
+                    step={50}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground -mt-1">Leave blank to use app defaults (300ms / 80ms / 300px)</p>
             </div>
 
             <div className="flex gap-3 mt-6">
