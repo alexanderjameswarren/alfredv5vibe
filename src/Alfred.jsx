@@ -793,106 +793,39 @@ export default function Alfred() {
 
   async function loadData() {
     return withLoading('Loading your data...', async () => {
-    const privateContextKeys = await storage.list("context:");
-    const sharedContextKeys = await storage.list("context:", true);
+      const [
+        { data: contextsData },
+        { data: itemsData },
+        { data: intentsData },
+        { data: eventsData },
+        { data: inboxData },
+        { data: collectionsData },
+        { data: activeExecData },
+        { data: pausedExecData },
+      ] = await Promise.all([
+        supabase.from("contexts").select("*"),
+        supabase.from("items").select("*"),
+        supabase.from("intents").select("*"),
+        supabase.from("events").select("*"),
+        supabase.from("inbox").select("*"),
+        supabase.from("item_collections").select("*"),
+        supabase.from("executions").select("*").eq("status", "active").order("started_at", { ascending: false }),
+        supabase.from("executions").select("*").eq("status", "paused").order("started_at", { ascending: false }),
+      ]);
 
-    const allContexts = [];
-    const seenContextIds = new Set();
-
-    for (const key of [
-      ...new Set([...privateContextKeys, ...sharedContextKeys]),
-    ]) {
-      const ctx = (await storage.get(key)) || (await storage.get(key, true));
-      if (ctx && !seenContextIds.has(ctx.id)) {
-        allContexts.push(ctx);
-        seenContextIds.add(ctx.id);
-      }
-    }
-    setContexts(allContexts);
-
-    const itemKeys = await storage.list("item:");
-    const sharedItemKeys = await storage.list("item:", true);
-    const allItems = [];
-    const seenItemIds = new Set();
-
-    for (const key of [...new Set([...itemKeys, ...sharedItemKeys])]) {
-      const item = (await storage.get(key)) || (await storage.get(key, true));
-      if (item && !seenItemIds.has(item.id)) {
-        allItems.push(item);
-        seenItemIds.add(item.id);
-      }
-    }
-    setItems(allItems);
-
-    const intentKeys = await storage.list("intent:");
-    const allIntents = [];
-    for (const key of intentKeys) {
-      const intent = await storage.get(key);
-      if (intent) allIntents.push(intent);
-    }
-    setIntents(allIntents);
-
-    const eventKeys = await storage.list("event:");
-    const sharedEventKeys = await storage.list("event:", true);
-    const allEvents = [];
-    const seenEventIds = new Set();
-
-    for (const key of [...new Set([...eventKeys, ...sharedEventKeys])]) {
-      const event = (await storage.get(key)) || (await storage.get(key, true));
-      if (event && !seenEventIds.has(event.id)) {
-        allEvents.push(event);
-        seenEventIds.add(event.id);
-      }
-    }
-    setEvents(allEvents);
-
-    const inboxKeys = await storage.list("inbox:");
-    const inboxData = await Promise.all(
-      inboxKeys.map((key) => storage.get(key))
-    );
-    setInboxItems(
-      inboxData
-        .filter((item) => item && !item.archived)
-        .sort((a, b) => a.createdAt - b.createdAt) // Oldest first
-    );
-
-    const collectionKeys = await storage.list("item_collections:");
-    const allCollections = [];
-    for (const key of collectionKeys) {
-      const coll = await storage.get(key);
-      if (coll) allCollections.push(coll);
-    }
-    setCollections(allCollections);
-
-    try {
-      const { data } = await supabase
-        .from("executions")
-        .select("*")
-        .eq("status", "active")
-        .order("started_at", { ascending: false });
-      if (data && data.length > 0) {
-        setActiveExecutions(data.map((d) => storage.toCamelCase(d)));
-      } else {
-        setActiveExecutions([]);
-      }
-    } catch (e) {
-      // No active executions - this is fine
-    }
-
-    try {
-      const { data: pausedData } = await supabase
-        .from("executions")
-        .select("*")
-        .eq("status", "paused")
-        .order("started_at", { ascending: false });
-      if (pausedData && pausedData.length > 0) {
-        setPausedExecutions(pausedData.map((d) => storage.toCamelCase(d)));
-      } else {
-        setPausedExecutions([]);
-      }
-    } catch (e) {
-      // No paused executions - this is fine
-    }
+      setContexts((contextsData || []).map(d => storage.toCamelCase(d)));
+      setItems((itemsData || []).map(d => storage.toCamelCase(d)));
+      setIntents((intentsData || []).map(d => storage.toCamelCase(d)));
+      setEvents((eventsData || []).map(d => storage.toCamelCase(d)));
+      setInboxItems(
+        (inboxData || [])
+          .map(d => storage.toCamelCase(d))
+          .filter(item => !item.archived)
+          .sort((a, b) => a.createdAt - b.createdAt)
+      );
+      setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
+      setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
+      setPausedExecutions((pausedExecData || []).map(d => storage.toCamelCase(d)));
     });
   }
 
@@ -4663,6 +4596,8 @@ function ContextDetailView({
 }) {
   const [showAddItemForm, setShowAddItemForm] = useState(false);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
+  const [itemsExpanded, setItemsExpanded] = useState(true);
+  const [intentionsExpanded, setIntentionsExpanded] = useState(true);
 
   if (!context) return null;
 
@@ -4754,7 +4689,13 @@ function ContextDetailView({
       <div className="space-y-6">
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-base sm:text-lg font-medium">Items ({items.length})</h3>
+            <button
+              onClick={() => setItemsExpanded(!itemsExpanded)}
+              className="flex items-center gap-2 text-base sm:text-lg font-medium text-foreground"
+            >
+              <ChevronDown className={`w-4 h-4 transition-transform ${itemsExpanded ? "" : "-rotate-90"}`} />
+              Items ({items.length})
+            </button>
             <button
               onClick={() => setShowAddItemForm(true)}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
@@ -4777,36 +4718,44 @@ function ContextDetailView({
             </div>
           )}
 
-          <TagFilter entities={items} activeTag={filterTag} onFilter={onFilterTag} />
-          {items.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No items in this context</p>
-          ) : (
-            <div className="space-y-2">
-              {items
-                .filter((item) => !filterTag || (item.tags && item.tags.includes(filterTag)))
-                .map((item) => (
-                <ItemCard
-                  key={item.id}
-                  item={item}
-                  contexts={contexts}
-                  onUpdate={onUpdateItem}
-                  onViewDetail={onViewItemDetail}
-                  allItems={allItems}
-                  executions={executions.filter((ex) => ex.itemIds?.includes(item.id))}
-                  intents={intents}
-                  getIntentDisplay={getIntentDisplay}
-                  onOpenExecution={onOpenExecution}
-                />
-              ))}
-            </div>
+          {itemsExpanded && (
+            <>
+              <TagFilter entities={items} activeTag={filterTag} onFilter={onFilterTag} />
+              {items.length === 0 ? (
+                <p className="text-muted-foreground text-sm">No items in this context</p>
+              ) : (
+                <div className="space-y-2">
+                  {items
+                    .filter((item) => !filterTag || (item.tags && item.tags.includes(filterTag)))
+                    .map((item) => (
+                    <ItemCard
+                      key={item.id}
+                      item={item}
+                      contexts={contexts}
+                      onUpdate={onUpdateItem}
+                      onViewDetail={onViewItemDetail}
+                      allItems={allItems}
+                      executions={executions.filter((ex) => ex.itemIds?.includes(item.id))}
+                      intents={intents}
+                      getIntentDisplay={getIntentDisplay}
+                      onOpenExecution={onOpenExecution}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
 
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-base sm:text-lg font-medium">
+            <button
+              onClick={() => setIntentionsExpanded(!intentionsExpanded)}
+              className="flex items-center gap-2 text-base sm:text-lg font-medium text-foreground"
+            >
+              <ChevronDown className={`w-4 h-4 transition-transform ${intentionsExpanded ? "" : "-rotate-90"}`} />
               Intentions ({intents.length})
-            </h3>
+            </button>
             <button
               onClick={() => setShowAddIntentionForm(true)}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
@@ -4833,35 +4782,39 @@ function ContextDetailView({
             </div>
           )}
 
-          {intents.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              No intentions in this context
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {intents.map((intent) => (
-                <IntentionCard
-                  key={intent.id}
-                  intent={intent}
-                  contexts={contexts}
-                  items={items}
-                  collections={collections}
-                  getIntentDisplay={getIntentDisplay}
-                  onUpdate={onUpdateIntent}
-                  onSchedule={onSchedule}
-                  onStartNow={onStartNow}
-                  showScheduling={true}
-                  onViewDetail={onViewIntentionDetail}
-                  events={events}
-                  onUpdateEvent={onUpdateEvent}
-                  onActivate={onActivate}
-                  executions={executions}
-                  onOpenExecution={onOpenExecution}
-                  onCancelExecution={onCancelExecution}
-                  onArchive={onArchiveIntention}
-                />
-              ))}
-            </div>
+          {intentionsExpanded && (
+            <>
+              {intents.length === 0 ? (
+                <p className="text-muted-foreground text-sm">
+                  No intentions in this context
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {intents.map((intent) => (
+                    <IntentionCard
+                      key={intent.id}
+                      intent={intent}
+                      contexts={contexts}
+                      items={items}
+                      collections={collections}
+                      getIntentDisplay={getIntentDisplay}
+                      onUpdate={onUpdateIntent}
+                      onSchedule={onSchedule}
+                      onStartNow={onStartNow}
+                      showScheduling={true}
+                      onViewDetail={onViewIntentionDetail}
+                      events={events}
+                      onUpdateEvent={onUpdateEvent}
+                      onActivate={onActivate}
+                      executions={executions}
+                      onOpenExecution={onOpenExecution}
+                      onCancelExecution={onCancelExecution}
+                      onArchive={onArchiveIntention}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -6301,15 +6254,18 @@ function ItemCard({
           )}
         </div>
       )}
+      {item.description && (
+        <p className="text-sm text-muted-foreground mt-1">
+          {item.description.length > 80
+            ? item.description.substring(0, 80) + "..."
+            : item.description}
+        </p>
+      )}
       {(item.elements || item.components) &&
         (item.elements || item.components).length > 0 && (
-          <ol className="text-sm text-muted-foreground list-decimal list-inside space-y-1">
-            {(item.elements || item.components).map((element, index) => {
-              const el =
-                typeof element === "string" ? { name: element } : element;
-              return <li key={index}>{el.name}</li>;
-            })}
-          </ol>
+          <span className="text-xs text-muted-foreground mt-1 block">
+            {(item.elements || item.components).length} elements
+          </span>
         )}
       {executions.length > 0 && onOpenExecution && (
         <div className="mt-2 space-y-1">

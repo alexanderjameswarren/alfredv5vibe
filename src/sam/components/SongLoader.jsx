@@ -40,7 +40,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
   useEffect(() => {
     supabase
       .from("sam_songs")
-      .select("id, title, artist, default_bpm, default_timing_window_ms, default_chord_ms, default_measure_width, created_at, archived, measures")
+      .select("id, title, artist, default_bpm, default_timing_window_ms, default_chord_ms, default_measure_width, created_at, archived")
       .order("updated_at", { ascending: false })
       .then(({ data, error: dbError }) => {
         setLoadingLibrary(false);
@@ -54,18 +54,35 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
       });
   }, []);
 
-  function handleLoadFromLibrary(row) {
+  async function handleLoadFromLibrary(row) {
+    setError(null);
+    setLoadingLibrary(true);
+
+    const { data, error: dbError } = await supabase
+      .from("sam_songs")
+      .select("*")
+      .eq("id", row.id)
+      .single();
+
+    setLoadingLibrary(false);
+
+    if (dbError || !data) {
+      console.error("[Sam] Failed to load song:", dbError);
+      setError("Failed to load song");
+      return;
+    }
+
     const song = {
-      title: row.title,
-      artist: row.artist,
-      defaultBpm: row.default_bpm,
-      defaultTimingWindowMs: row.default_timing_window_ms ?? null,
-      defaultChordMs: row.default_chord_ms ?? null,
-      defaultMeasureWidth: row.default_measure_width ?? null,
-      measures: row.measures,
+      title: data.title,
+      artist: data.artist,
+      defaultBpm: data.default_bpm,
+      defaultTimingWindowMs: data.default_timing_window_ms ?? null,
+      defaultChordMs: data.default_chord_ms ?? null,
+      defaultMeasureWidth: data.default_measure_width ?? null,
+      measures: data.measures,
     };
     onSongLoaded(song);
-    if (onSongSaved) onSongSaved(row.id);
+    if (onSongSaved) onSongSaved(data.id);
   }
 
   async function handleArchive(e, row) {
@@ -447,7 +464,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
                     <span className="text-muted-foregroundml-1">— {row.artist}</span>
                   )}
                   <span className="text-xs text-muted-foregroundml-2">
-                    {row.measures?.length || 0} measures · {row.default_bpm || 68} BPM
+                    {row.default_bpm || 68} BPM
                   </span>
                 </div>
                 <button
