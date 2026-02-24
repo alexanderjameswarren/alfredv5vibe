@@ -438,19 +438,19 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurati
 
 
 // Play a short click sound at the given audioContext time
-function playClick(audioCtx, when) {
+function playClick(audioCtx, when, gainValue = 0.3) {
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
   osc.type = "sine";
   osc.frequency.value = 800;
-  gain.gain.setValueAtTime(0.3, when);
+  gain.gain.setValueAtTime(gainValue, when);
   gain.gain.exponentialRampToValueAtTime(0.001, when + 0.04);
   osc.connect(gain).connect(audioCtx.destination);
   osc.start(when);
   osc.stop(when + 0.04);
 }
 
-export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronomeEnabled = false, audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300 }) {
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300 }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -732,14 +732,29 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       scrollLayer.style.transform = `translateX(${-scrollOffset}px)`;
 
       // --- Metronome: schedule clicks via Web Audio lookahead ---
-      if (metronomeEnabled && audioCtx) {
+      if (metronome !== "off" && audioCtx) {
         const LOOKAHEAD_MS = 100;
+
+        // Calculate subdivision interval based on metronome setting
+        let subdivisionMs = msPerBeat; // Default to beat (quarter note)
+        if (metronome === "halfbeat") {
+          subdivisionMs = msPerBeat / 2; // Eighth note
+        } else if (metronome === "quarterbeat") {
+          subdivisionMs = msPerBeat / 4; // Sixteenth note
+        }
+
         while (true) {
-          const tickElapsedMs = metroStartMs + nextMetroBeatIdx * msPerBeat;
+          const tickElapsedMs = metroStartMs + nextMetroBeatIdx * subdivisionMs;
           if (tickElapsedMs > elapsed + LOOKAHEAD_MS) break;
           if (tickElapsedMs >= elapsed) {
             const delayS = (tickElapsedMs - elapsed) / 1000;
-            playClick(audioCtx, audioBaseTime + (elapsed / 1000) + delayS);
+
+            // Determine if this tick lands on a beat (for gain adjustment)
+            const isOnBeat = metronome === "beat" ||
+              (nextMetroBeatIdx % (msPerBeat / subdivisionMs) === 0);
+            const gainValue = isOnBeat ? 0.3 : 0.15;
+
+            playClick(audioCtx, audioBaseTime + (elapsed / 1000) + delayS, gainValue);
           }
           nextMetroBeatIdx++;
         }

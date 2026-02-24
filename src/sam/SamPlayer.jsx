@@ -30,7 +30,7 @@ export default function SamPlayer({ onBack }) {
   const [measureWidthInput, setMeasureWidthInput] = useState("300");
   const [lastResult, setLastResult] = useState(null);
   const [snippet, setSnippet] = useState(null); // { startMeasure, endMeasure, restMeasures, dbId }
-  const [metronome, setMetronome] = useState(false);
+  const [metronome, setMetronome] = useState("off"); // "off" | "beat" | "halfbeat" | "quarterbeat"
   const beatEventsRef = useRef([]);
   const scrollStateExtRef = useRef(null);
   const hitCountRef = useRef(0);
@@ -316,7 +316,6 @@ export default function SamPlayer({ onBack }) {
               onExport={handleExport}
               midiConnected={midiConnected} midiDevice={midiDevice}
               pausedMeasure={pausedMeasure}
-              metronome={metronome} setMetronome={setMetronome}
               onSongUpdate={setSong}
             />
 
@@ -327,6 +326,8 @@ export default function SamPlayer({ onBack }) {
               missCount={missCount}
               sessionStats={sessionStats}
               lastResult={lastResult}
+              metronome={metronome}
+              setMetronome={setMetronome}
             />
 
             {playbackState !== "playing" && (
@@ -360,7 +361,7 @@ export default function SamPlayer({ onBack }) {
                 scrollStateExtRef={scrollStateExtRef}
                 onTap={handleScoreTap}
                 measureWidth={measureWidth}
-                metronomeEnabled={metronome}
+                metronome={metronome}
                 audioCtx={audioCtxRef.current}
                 firstPassStart={
                   pausedMeasure != null
