@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Play, Pause, RotateCcw, Download, Pencil } from "lucide-react";
+import { Play, Pause, RotateCcw, Square, Download, Pencil } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 
 export default function SettingsBar({
@@ -9,7 +9,7 @@ export default function SettingsBar({
   chordMs, chordMsInput, setChordMs, setChordMsInput,
   measureWidth, measureWidthInput, setMeasureWidth, setMeasureWidthInput,
   playbackState, songDbId,
-  onPlay, onPause, onResume, onRestart,
+  onPlay, onPause, onResume, onRestart, onStop,
   onChangeSong,
   onExport,
   midiConnected, midiDevice,
@@ -154,6 +154,16 @@ export default function SettingsBar({
             className="flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors bg-red-500 hover:bg-red-600 text-white"
           >
             <RotateCcw className="w-4 h-4" /> Restart
+          </button>
+        )}
+
+        {/* Stop button — visible when paused, returns to initial state */}
+        {isPaused && (
+          <button
+            onClick={onStop}
+            className="flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors bg-secondary hover:bg-secondary text-foreground border border-border"
+          >
+            <Square className="w-4 h-4" /> Stop
           </button>
         )}
 

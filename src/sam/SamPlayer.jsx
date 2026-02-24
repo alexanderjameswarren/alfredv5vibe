@@ -253,6 +253,13 @@ export default function SamPlayer({ onBack }) {
     endSession();
   }
 
+  function handleFullStop() {
+    endSession();
+    resetCounters();
+    setPausedMeasure(null);
+    setPlaybackState("stopped");
+  }
+
   function handleScoreTap() {
     if (playbackState === "stopped" && !songDbId) return;
     if (playbackState === "stopped") handlePlay();
@@ -320,7 +327,7 @@ export default function SamPlayer({ onBack }) {
               chordMs={chordMs} chordMsInput={chordMsInput} setChordMs={setChordMs} setChordMsInput={setChordMsInput}
               measureWidth={measureWidth} measureWidthInput={measureWidthInput} setMeasureWidth={setMeasureWidth} setMeasureWidthInput={setMeasureWidthInput}
               playbackState={playbackState} songDbId={songDbId}
-              onPlay={handlePlay} onPause={handlePause} onResume={handleResume} onRestart={handleRestart}
+              onPlay={handlePlay} onPause={handlePause} onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
               onChangeSong={handleChangeSong}
               onExport={handleExport}
               midiConnected={midiConnected} midiDevice={midiDevice}
