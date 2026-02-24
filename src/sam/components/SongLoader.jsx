@@ -33,25 +33,51 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
   const [editTimingWindow, setEditTimingWindow] = useState("");
   const [editChordMs, setEditChordMs] = useState("");
   const [editMeasureWidth, setEditMeasureWidth] = useState("");
+  const [sessionStats, setSessionStats] = useState({}); // { [songId]: { count, lastPlayed } }
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Fetch song library on mount
+  function formatLastPlayed(dateStr) {
+    if (!dateStr) return null;
+    const date = new Date(dateStr);
+    const now = new Date();
+    const opts = { month: "long", day: "numeric" };
+    if (date.getFullYear() !== now.getFullYear()) opts.year = "numeric";
+    return date.toLocaleDateString("en-US", opts);
+  }
+
+  // Fetch song library and session stats on mount
   useEffect(() => {
-    supabase
-      .from("sam_songs")
-      .select("id, title, artist, default_bpm, default_timing_window_ms, default_chord_ms, default_measure_width, created_at, archived")
-      .order("updated_at", { ascending: false })
-      .then(({ data, error: dbError }) => {
-        setLoadingLibrary(false);
-        if (dbError) {
-          console.error("[Sam] Failed to load song library:", dbError);
-        } else {
-          const all = data || [];
-          setLibrary(all.filter((s) => !s.archived));
-          setArchived(all.filter((s) => s.archived));
+    Promise.all([
+      supabase
+        .from("sam_songs")
+        .select("id, title, artist, default_bpm, default_timing_window_ms, default_chord_ms, default_measure_width, created_at, archived")
+        .order("updated_at", { ascending: false }),
+      supabase
+        .from("sam_sessions")
+        .select("song_id, started_at")
+        .order("started_at", { ascending: false }),
+    ]).then(([{ data: songsData, error: songsError }, { data: sessData }]) => {
+      setLoadingLibrary(false);
+      if (songsError) {
+        console.error("[Sam] Failed to load song library:", songsError);
+      } else {
+        const all = songsData || [];
+        setLibrary(all.filter((s) => !s.archived));
+        setArchived(all.filter((s) => s.archived));
+      }
+      const stats = {};
+      for (const sess of (sessData || [])) {
+        if (!stats[sess.song_id]) {
+          stats[sess.song_id] = { count: 0, lastPlayed: null };
         }
-      });
+        stats[sess.song_id].count++;
+        if (!stats[sess.song_id].lastPlayed) {
+          stats[sess.song_id].lastPlayed = sess.started_at;
+        }
+      }
+      setSessionStats(stats);
+    });
   }, []);
 
   async function handleLoadFromLibrary(row) {
@@ -463,9 +489,17 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
                   {row.artist && (
                     <span className="text-muted-foregroundml-1">— {row.artist}</span>
                   )}
-                  <span className="text-xs text-muted-foregroundml-2">
-                    {row.default_bpm || 68} BPM
-                  </span>
+                  {(() => {
+                    const stats = sessionStats[row.id];
+                    if (!stats || stats.count === 0) {
+                      return <span className="text-xs text-muted-foreground mt-0.5 block">never played</span>;
+                    }
+                    return (
+                      <span className="text-xs text-muted-foreground mt-0.5 block">
+                        last played {formatLastPlayed(stats.lastPlayed)} • {stats.count} {stats.count === 1 ? "session" : "sessions"}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <button
                   onClick={(e) => handleEditClick(e, row)}
