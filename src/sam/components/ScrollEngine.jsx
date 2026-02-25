@@ -279,9 +279,13 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurati
       .joinVoices([bassVoice])
       .format([trebleVoice, bassVoice], getFormatWidth(measWidth, false));
 
-    // 4.5. Reposition notes to time-proportional X (constant scroll speed = constant time spacing)
-    const noteStartX = treble.getNoteStartX();
-    const usableWidth = treble.getNoteEndX() - noteStartX;
+    // 4.5. Reposition notes to time-proportional X across the FULL measure width.
+    // Using the full measure width (not just usableWidth) ensures that the visual
+    // note spacing exactly matches the scroll speed. This is critical because
+    // targetTimeMs is computed from the note's visual position (xPx), so the
+    // pixel spacing must be proportional to time.
+    const BARLINE_PAD = 14;
+    const repositionWidth = measWidth - BARLINE_PAD;
     const ACC_W = { '#': 11, 'b': 9, 'n': 8, '##': 14, 'bb': 14 };
     const accPad = (note) => {
       let w = 0;
@@ -292,13 +296,13 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurati
     };
     trebleNotes.forEach((note, i) => {
       note.setStave(treble);
-      let correctX = noteStartX + (trebleTicks[i] / durationQ) * usableWidth;
+      let correctX = xOffset + BARLINE_PAD + (trebleTicks[i] / durationQ) * repositionWidth;
       if (trebleTicks[i] === 0) correctX += accPad(note);
       note.setXShift(correctX - note.getAbsoluteX());
     });
     bassNotes.forEach((note, i) => {
       note.setStave(bass);
-      let correctX = noteStartX + (bassTicks[i] / durationQ) * usableWidth;
+      let correctX = xOffset + BARLINE_PAD + (bassTicks[i] / durationQ) * repositionWidth;
       if (bassTicks[i] === 0) correctX += accPad(note);
       note.setXShift(correctX - note.getAbsoluteX());
     });
