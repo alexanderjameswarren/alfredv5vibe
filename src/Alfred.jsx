@@ -31,6 +31,7 @@ import {
   Info,
   Timer,
   Pencil,
+  RefreshCw,
 } from "lucide-react";
 import { supabase, supabaseUrl } from "./supabaseClient";
 import SamPlayer from "./sam/SamPlayer";
@@ -783,6 +784,23 @@ export default function Alfred() {
   }, []);
 
   useEffect(() => {
+    let lastRefresh = Date.now();
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === 'visible' && user) {
+        const elapsed = Date.now() - lastRefresh;
+        if (elapsed > 30000) { // 30 second debounce
+          lastRefresh = Date.now();
+          refreshData();
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [user]);
+
+  useEffect(() => {
     setFilterTag(null);
   }, [view]);
 
@@ -827,6 +845,48 @@ export default function Alfred() {
       setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
       setPausedExecutions((pausedExecData || []).map(d => storage.toCamelCase(d)));
     });
+  }
+
+  async function refreshData() {
+    try {
+      console.log('[Refresh] Silent background refresh...');
+      const [
+        { data: contextsData },
+        { data: itemsData },
+        { data: intentsData },
+        { data: eventsData },
+        { data: inboxData },
+        { data: collectionsData },
+        { data: activeExecData },
+        { data: pausedExecData },
+      ] = await Promise.all([
+        supabase.from("contexts").select("*"),
+        supabase.from("items").select("*"),
+        supabase.from("intents").select("*"),
+        supabase.from("events").select("*"),
+        supabase.from("inbox").select("*"),
+        supabase.from("item_collections").select("*"),
+        supabase.from("executions").select("*").eq("status", "active").order("started_at", { ascending: false }),
+        supabase.from("executions").select("*").eq("status", "paused").order("started_at", { ascending: false }),
+      ]);
+
+      setContexts((contextsData || []).map(d => storage.toCamelCase(d)));
+      setItems((itemsData || []).map(d => storage.toCamelCase(d)));
+      setIntents((intentsData || []).map(d => storage.toCamelCase(d)));
+      setEvents((eventsData || []).map(d => storage.toCamelCase(d)));
+      setInboxItems(
+        (inboxData || [])
+          .map(d => storage.toCamelCase(d))
+          .filter(item => !item.archived)
+          .sort((a, b) => a.createdAt - b.createdAt)
+      );
+      setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
+      setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
+      setPausedExecutions((pausedExecData || []).map(d => storage.toCamelCase(d)));
+      console.log('[Refresh] Done');
+    } catch (e) {
+      console.error('[Refresh] Failed:', e);
+    }
   }
 
   async function setupRealtimeSubscriptions(currentUser) {
@@ -2183,6 +2243,13 @@ export default function Alfred() {
           </button>
           <h1 className="text-lg font-bold text-foreground">Alfred v5</h1>
           <div className="flex gap-1 items-center">
+            <button
+              onClick={refreshData}
+              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
+              title="Refresh data"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
             {/* Connection status indicator */}
             <div
               className="flex items-center gap-1"
@@ -2285,6 +2352,13 @@ export default function Alfred() {
               </p>
             </div>
             <div className="flex gap-2 items-center">
+              <button
+                onClick={refreshData}
+                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
+                title="Refresh data"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
               {/* Connection status indicator */}
               <div
                 className="flex items-center gap-1"
