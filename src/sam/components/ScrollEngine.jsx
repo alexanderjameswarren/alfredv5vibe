@@ -620,9 +620,11 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     const startMusicalBeat = events[startEvtIdx]?.musicalBeat || 0;
     const approachMs = baseApproachMs - startMusicalBeat * msPerBeat;
 
-    // Compute targetTimeMs for every beat event from musical position
+    // Compute targetTimeMs from each note's actual visual position.
+    // This guarantees timing matches exactly when the note crosses the target line,
+    // eliminating the offset caused by stave padding (noteStartX vs measWidth).
     for (let i = 0; i < events.length; i++) {
-      events[i].targetTimeMs = approachMs + events[i].musicalBeat * msPerBeat;
+      events[i].targetTimeMs = (events[i].xPx - originPx - targetX) / pxPerMs;
     }
 
     // Mark beats before the start as skipped (not checked for miss or MIDI match)
@@ -725,7 +727,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
               evt._logged = false;
               colorBeatEls(evt, "#000000");
               evt.musicalBeat = passOffset + evt.baseBeat;
-              evt.targetTimeMs = approachMs + evt.musicalBeat * msPerBeat;
+              evt.targetTimeMs = (evt.xPx - state.originPx - targetX) / pxPerMs;
             }
           }
         }
