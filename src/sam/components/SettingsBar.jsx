@@ -1,6 +1,7 @@
-import React, { useState } from "react";
-import { Play, Pause, RotateCcw, Square, Download, Pencil } from "lucide-react";
+import React, { useState, useRef } from "react";
+import { Play, Pause, RotateCcw, Square, Download, Pencil, Upload } from "lucide-react";
 import { supabase } from "../../supabaseClient";
+import { uploadAudio } from "../lib/audioPlayer";
 
 export default function SettingsBar({
   song, snippet,
@@ -15,6 +16,7 @@ export default function SettingsBar({
   midiConnected, midiDevice,
   pausedMeasure,
   onSongUpdate,
+  onAudioUploaded,
 }) {
   const isStopped = playbackState === "stopped";
   const isPlaying = playbackState === "playing";
@@ -28,6 +30,8 @@ export default function SettingsBar({
   const [editChordMs, setEditChordMs] = useState("");
   const [editMeasureWidth, setEditMeasureWidth] = useState("");
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const audioInputRef = useRef(null);
 
   function handleEditClick() {
     setEditingSong(true);
@@ -116,6 +120,24 @@ export default function SettingsBar({
 
     setSaving(false);
     handleCancelEdit();
+  }
+
+  async function handleAudioUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file || !songDbId) return;
+    e.target.value = ""; // Reset input
+
+    setUploading(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+      const path = await uploadAudio(songDbId, file, user.id, supabase);
+      if (onAudioUploaded) onAudioUploaded(path);
+    } catch (err) {
+      console.error("[Sam] Audio upload failed:", err);
+      alert("Audio upload failed: " + err.message);
+    }
+    setUploading(false);
   }
 
   return (
@@ -293,6 +315,23 @@ export default function SettingsBar({
             <Download className="w-3.5 h-3.5" />
             Export
           </button>
+          {songDbId && (
+            <button
+              onClick={() => audioInputRef.current?.click()}
+              disabled={uploading}
+              className="flex items-center gap-1 text-sm text-foreground hover:text-primary min-h-[44px] px-2 disabled:opacity-50"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              {uploading ? "Uploading..." : "Audio"}
+            </button>
+          )}
+          <input
+            ref={audioInputRef}
+            type="file"
+            accept=".mp3,audio/mpeg"
+            onChange={handleAudioUpload}
+            className="hidden"
+          />
           <button
             onClick={onChangeSong}
             className="text-sm text-foreground hover:text-primary min-h-[44px] px-2"

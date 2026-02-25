@@ -450,7 +450,7 @@ function playClick(audioCtx, when, gainValue = 0.3) {
   osc.stop(when + 0.04);
 }
 
-export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300 }) {
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -651,12 +651,19 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     const metroStartMs = approachMs % msPerBeat;
     const audioBaseTime = audioCtx ? audioCtx.currentTime : 0;
 
+    // Audio base offset: time in the audio file where measure 1 beat 1 starts (ms).
+    // For now, default to 0. Will be sourced from measure 1's audio_offset_ms when available.
+    const audioBaseOffsetMs = 0;
+
     scrollStateRef.current = {
-      scrollStartT: performance.now(),
+      scrollStartT: audioElement
+        ? performance.now() - (audioElement.currentTime * 1000 - audioBaseOffsetMs)
+        : performance.now(),
       originPx,
       pxPerMs,
       targetX,
       copyWidth,
+      audioBaseOffsetMs,
     };
     if (scrollStateExtRef) scrollStateExtRef.current = scrollStateRef.current;
 
@@ -667,16 +674,29 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       if (!state) return;
 
       const now = performance.now();
-      const elapsed = now - state.scrollStartT;
+
+      // Audio sync: derive elapsed from audioElement.currentTime when available
+      let elapsed;
+      if (audioElement && !audioElement.paused) {
+        elapsed = audioElement.currentTime * 1000 - (state.audioBaseOffsetMs || 0);
+        if (elapsed < 0) elapsed = 0;
+      } else if (audioElement && audioElement.paused) {
+        // Audio paused — freeze at current audio position
+        elapsed = audioElement.currentTime * 1000 - (state.audioBaseOffsetMs || 0);
+        if (elapsed < 0) elapsed = 0;
+      } else {
+        elapsed = now - state.scrollStartT;
+      }
 
       // Check for seamless loop teleport BEFORE computing final offset.
+      // Skip teleport in audio sync mode — audio plays through once.
       // Copy 1 starts at world x = 10 + copyWidth.
       // Screen position = worldX - scrollOffset.
       // When copy 1's start crosses the target line, jump BACK by copyWidth
       // so copy 0 (identical content, freshly reset) takes its place later.
       const rawScrollOffset = state.originPx + elapsed * state.pxPerMs;
       const copy1ScreenX = (10 + copyWidth) - rawScrollOffset;
-      if (copy1ScreenX <= targetX) {
+      if (!audioElement && copy1ScreenX <= targetX) {
         // If loop is false, stop playback instead of looping
         if (!loop) {
           if (rafRef.current) {
@@ -777,6 +797,13 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
           continue;
         }
         if (elapsed > evt.targetTimeMs + timingWindowMs) {
+          console.log(
+            `[MISS] m${evt.meas} beat=${evt.beat} midi=[${evt.allMidi}]`,
+            `| targetTime=${Math.round(evt.targetTimeMs)}ms`,
+            `| windowEnd=${Math.round(evt.targetTimeMs + timingWindowMs)}ms`,
+            `| expired at=${Math.round(elapsed)}ms`,
+            `| late by=${Math.round(elapsed - evt.targetTimeMs)}ms`
+          );
           evt.state = "missed";
           colorBeatEls(evt, "#dc2626");
           if (onBeatMiss) onBeatMiss(evt);
@@ -798,7 +825,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         rafRef.current = null;
       }
     };
-  }, [playbackState, svgReady, bpm, timingWindowMs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [playbackState, svgReady, bpm, timingWindowMs, audioElement]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="relative">

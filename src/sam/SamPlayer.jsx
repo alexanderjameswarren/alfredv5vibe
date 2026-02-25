@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useMemo } from "react";
+import React, { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { ArrowLeft } from "lucide-react";
 import ScoreRenderer from "./components/ScoreRenderer";
 import ScrollEngine from "./components/ScrollEngine";
@@ -6,11 +6,14 @@ import SongLoader from "./components/SongLoader";
 import SettingsBar from "./components/SettingsBar";
 import StatsBar from "./components/StatsBar";
 import SnippetPanel from "./components/SnippetPanel";
+import AudioControls from "./components/AudioControls";
 import useMIDI from "./lib/useMIDI";
 import usePracticeSession from "./lib/usePracticeSession";
 import { matchChord, findClosestBeat } from "./lib/noteMatching";
 import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
 import { normalizeMeasure } from "./lib/measureUtils";
+import { loadAudio } from "./lib/audioPlayer";
+import { supabase } from "../supabaseClient";
 
 export default function SamPlayer({ onBack }) {
   const [song, setSong] = useState(null);
@@ -31,6 +34,8 @@ export default function SamPlayer({ onBack }) {
   const [lastResult, setLastResult] = useState(null);
   const [snippet, setSnippet] = useState(null); // { startMeasure, endMeasure, restMeasures, dbId }
   const [metronome, setMetronome] = useState("off"); // "off" | "beat" | "halfbeat" | "quarterbeat"
+  const [audioElement, setAudioElement] = useState(null);
+  const [audioFilePath, setAudioFilePath] = useState(null);
   const beatEventsRef = useRef([]);
   const scrollStateExtRef = useRef(null);
   const hitCountRef = useRef(0);
@@ -69,19 +74,41 @@ export default function SamPlayer({ onBack }) {
     const scrollState = scrollStateExtRef.current;
     if (!scrollState) return;
 
+    const now = performance.now();
+    const elapsed = now - scrollState.scrollStartT;
+    console.log(
+      `[PLAY] midi=[${played}] at elapsed=${Math.round(elapsed)}ms`
+    );
+
     const match = findClosestBeat(beatEventsRef.current, scrollState, timingWindowMs);
     if (!match) {
+      console.log(`[PLAY] No pending beat found within ±${timingWindowMs}ms`);
       const names = played.map((m) => midiDisplayName(m)).join(", ");
       setLastResult({ result: "none", timingMs: 0, noteName: names });
       return;
     }
 
     const { beat, timingDeltaMs } = match;
-    const { result, missingNotes } = matchChord(played, beat.allMidi);
+
+    console.log(
+      `[MATCH] candidate: m${beat.meas} beat=${beat.beat} midi=[${beat.allMidi}]`,
+      `| targetTime=${Math.round(beat.targetTimeMs)}ms`,
+      `| delta=${Math.round(timingDeltaMs)}ms`,
+      `| ${timingDeltaMs > 0 ? 'EARLY' : 'LATE'} by ${Math.abs(Math.round(timingDeltaMs))}ms`
+    );
+
+    const { result, missingNotes, extraNotes } = matchChord(played, beat.allMidi);
+
+    console.log(
+      `[RESULT] ${result}`,
+      `| played=[${played}] expected=[${beat.allMidi}]`,
+      `| missing=[${missingNotes}] extra=[${extraNotes}]`
+    );
 
     // If player hit ONLY wrong notes (zero overlap with expected), don't consume the beat.
     // Leave it pending so the player can try again before the miss scanner catches it.
     if (result === "miss" && missingNotes.length === beat.allMidi.length) {
+      console.log(`[SKIP] All notes wrong — beat NOT consumed, stays pending`);
       return;
     }
 
@@ -101,6 +128,10 @@ export default function SamPlayer({ onBack }) {
       missCountRef.current++;
       setMissCount(missCountRef.current);
     }
+
+    console.log(
+      `[CONSUME] m${beat.meas} beat=${beat.beat} → ${result}`
+    );
 
     recordEvent({ beatEvent: beat, played, timingDeltaMs, result });
 
@@ -138,6 +169,7 @@ export default function SamPlayer({ onBack }) {
     setSong(loadedSong);
     setSongDbId(null);
     setSnippet(null);
+    setAudioFilePath(loadedSong.audioFilePath || null);
     const defaultBpm = loadedSong.defaultBpm || 68;
     setBpm(defaultBpm);
     setBpmInput(String(defaultBpm));
@@ -158,6 +190,28 @@ export default function SamPlayer({ onBack }) {
     setLastResult(null);
     hitCountRef.current = 0;
     missCountRef.current = 0;
+  }
+
+  // Load audio when song has an audio_file_path
+  useEffect(() => {
+    if (audioElement) {
+      audioElement.pause();
+      setAudioElement(null);
+    }
+    if (!songDbId || !audioFilePath) return;
+
+    let cancelled = false;
+    loadAudio(songDbId, audioFilePath, supabase)
+      .then((audio) => {
+        if (!cancelled) setAudioElement(audio);
+      })
+      .catch((e) => console.error("[Sam] Failed to load audio:", e));
+
+    return () => { cancelled = true; };
+  }, [songDbId, audioFilePath]);
+
+  function handleAudioUploaded(path) {
+    setAudioFilePath(path);
   }
 
   function handleSettingsOverride(settings) {
@@ -269,6 +323,9 @@ export default function SamPlayer({ onBack }) {
 
   function handleChangeSong() {
     if (playbackState === "playing") endSession();
+    if (audioElement) audioElement.pause();
+    setAudioElement(null);
+    setAudioFilePath(null);
     setPlaybackState("stopped");
     setPausedMeasure(null);
     setSong(null);
@@ -333,7 +390,10 @@ export default function SamPlayer({ onBack }) {
               midiConnected={midiConnected} midiDevice={midiDevice}
               pausedMeasure={pausedMeasure}
               onSongUpdate={setSong}
+              onAudioUploaded={handleAudioUploaded}
             />
+
+            <AudioControls audioElement={audioElement} />
 
             <StatsBar
               lastNote={lastNote}
@@ -387,6 +447,7 @@ export default function SamPlayer({ onBack }) {
                 loop={!!snippet}
                 onEnded={handleStop}
                 timingWindowMs={timingWindowMs}
+                audioElement={audioElement}
               />
             )}
           </>

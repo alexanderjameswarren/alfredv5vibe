@@ -118,6 +118,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
       defaultTimingWindowMs: data.default_timing_window_ms ?? null,
       defaultChordMs: data.default_chord_ms ?? null,
       defaultMeasureWidth: data.default_measure_width ?? null,
+      audioFilePath: data.audio_file_path || null,
       measures,
     };
     onSongLoaded(song);
