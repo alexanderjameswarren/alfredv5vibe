@@ -24,44 +24,41 @@ export function matchChord(played, expected) {
 }
 
 /**
- * Find the closest pending beat within the timing window.
- * Uses targetTimeMs (musical timing) instead of SVG x-positions.
- * Returns { beat, timingDeltaMs } or null if no candidate.
+ * Find the first pending beat within the timing window.
+ * Returns the earliest chronological pending beat that falls within
+ * ±windowMs of the current elapsed time.
+ *
+ * "First pending" prevents cascade mismatches when a player is
+ * systematically late — their keypress always matches the beat
+ * they're actually trying to hit, not the next one.
  *
  * scrollState: { scrollStartT }
  * windowMs: how far ahead/behind (in ms) to search
  */
-export function findClosestBeat(beatEvents, scrollState, windowMs = 500) {
+export function findClosestBeat(beatEvents, scrollState, windowMs = 300) {
   if (!scrollState || !beatEvents.length) return null;
 
   const now = performance.now();
   const elapsed = now - scrollState.scrollStartT;
 
-  let closest = null;
-  let closestDist = Infinity;
-
   for (let i = 0; i < beatEvents.length; i++) {
     const evt = beatEvents[i];
     if (evt.state !== "pending") continue;
-    if (evt.allMidi.length === 0) continue; // skip rests
+    if (evt.allMidi.length === 0) continue;
 
     // Positive timingDelta = beat is in the future (player is early)
     // Negative timingDelta = beat is in the past (player is late)
     const timingDeltaMs = evt.targetTimeMs - elapsed;
     const dist = Math.abs(timingDeltaMs);
 
-    // Only consider beats within the timing window
-    if (dist > windowMs) {
-      // If this beat is far in the future, stop scanning
-      if (timingDeltaMs > windowMs) break;
-      continue;
-    }
+    // If this beat is beyond the window in the future, stop scanning
+    if (timingDeltaMs > windowMs) break;
 
-    if (dist < closestDist) {
-      closestDist = dist;
-      closest = { beat: evt, timingDeltaMs };
+    // First pending beat within the window — return it
+    if (dist <= windowMs) {
+      return { beat: evt, timingDeltaMs };
     }
   }
 
-  return closest;
+  return null;
 }
