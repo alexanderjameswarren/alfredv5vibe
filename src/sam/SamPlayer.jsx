@@ -208,7 +208,7 @@ export default function SamPlayer({ onBack }) {
       .catch((e) => console.error("[Sam] Failed to load audio:", e));
 
     return () => { cancelled = true; };
-  }, [songDbId, audioFilePath]);
+  }, [songDbId, audioFilePath]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleAudioUploaded(path) {
     setAudioFilePath(path);
