@@ -1,34 +1,34 @@
 # Progress: Sam Data Layer Normalization + Audio Sync
 
-## Status: Not Started
+## Status: In Progress — Phase 4
 
 ---
 
-## Phase 1: Schema Migration (Manual — Supabase Dashboard)
+## Phase 1: Schema Migration (Manual — Supabase Dashboard) ✅
 
-- [ ] Step 1.1: Create `sam_song_measures` table
-- [ ] Step 1.2: Create `sam_session_events` table
-- [ ] Step 1.3: Add new columns to `sam_songs` (`audio_file_path`, `measures_compiled_at`, `measures_edited_at`)
-- [ ] Step 1.4: Create RLS policies on new tables
-- [ ] Step 1.5: Create Supabase Storage bucket `sam-audio`
-- [ ] Step 1.6: Verify schema — confirm tables visible and RLS working
+- [x] Step 1.1: Create `sam_song_measures` table
+- [x] Step 1.2: Create `sam_session_events` table
+- [x] Step 1.3: Add new columns to `sam_songs` (`audio_file_path`, `measures_compiled_at`, `measures_edited_at`)
+- [x] Step 1.4: Create RLS policies on new tables
+- [x] Step 1.5: Create Supabase Storage bucket `sam-audio`
+- [x] Step 1.6: Verify schema — confirm tables visible and RLS working
 
 ## Phase 2: Measure Fan-Out on Import
 
-- [ ] Step 2.1: Create `measureCompiler.js` service — fan-out (measures array → individual rows) and recompile (rows → blob) functions
-- [ ] Step 2.2: Update `SongLoader.jsx` — after saving song blob, call fan-out to populate `sam_song_measures`
-- [ ] Step 2.3: Verify — import a MusicXML song, confirm measure rows appear in Supabase
+- [x] Step 2.1: Create `measureCompiler.js` service — fan-out (measures array → individual rows) and recompile (rows → blob) functions
+- [x] Step 2.2: Update `SongLoader.jsx` — after saving song blob, call fan-out to populate `sam_song_measures`
+- [x] Step 2.3: Verify — import a MusicXML song, confirm measure rows appear in Supabase
 
 ## Phase 3: Stale Check + Recompile
 
-- [ ] Step 3.1: Add stale check to song load flow — compare `measures_edited_at` vs `measures_compiled_at`
-- [ ] Step 3.2: Implement recompile — fetch measure rows, assemble blob, update `sam_songs.measures` + `measures_compiled_at`
-- [ ] Step 3.3: Verify — manually update a measure row in Supabase, confirm app recompiles on next load
+- [x] Step 3.1: Add stale check to song load flow — compare `measures_edited_at` vs `measures_compiled_at`
+- [x] Step 3.2: Implement recompile — fetch measure rows, assemble blob, update `sam_songs.measures` + `measures_compiled_at`
+- [x] Step 3.3: Verify — manually update a measure row in Supabase, confirm app recompiles on next load
 
 ## Phase 4: Session Events Fan-Out
 
-- [ ] Step 4.1: Update `usePracticeSession.js` — after saving events blob, fan out to `sam_session_events`
-- [ ] Step 4.2: Link `measure_id` by looking up `sam_song_measures` for each event's measure number
+- [x] Step 4.1: Update `usePracticeSession.js` — after saving events blob, fan out to `sam_session_events`
+- [x] Step 4.2: Link `measure_id` by looking up `sam_song_measures` for each event's measure number
 - [ ] Step 4.3: Verify — play a session, confirm event rows appear in Supabase with correct measure links
 
 ## Phase 5: MCP Tools (Supabase Edge Functions or MCP Server Updates)
@@ -57,5 +57,14 @@
 ---
 
 ## Notes
-_Space for notes during execution_
+
+- Phase 1 completed manually via Supabase Dashboard (confirmed by user)
+- Step 2.1: Created `src/sam/lib/measureCompiler.js` (not `src/services/` — follows existing project convention where Sam lib files live in `src/sam/lib/`)
+  - `fanOutMeasures(songId, measuresArray, supabase)` — deletes + re-inserts, batched at 500 rows
+  - `recompileMeasures(songId, supabase)` — fetches rows → assembles blob → writes back
+  - `isMeasuresStale(song)` — compares `measures_edited_at` vs `measures_compiled_at`
+  - Supabase client passed as argument (not imported) for consistency with how SongLoader uses it
+- Step 2.2: Wired `fanOutMeasures` into both SongLoader save paths (file import + paste). Runs after successful Supabase insert, using the returned song ID. Errors are caught and logged but don't block the UI.
+- Steps 3.1 + 3.2: Combined into one edit in `handleLoadFromLibrary`. The functions already existed in measureCompiler.js from Step 2.1. Added stale check before constructing the song object — if stale, recompiles from rows; on failure, falls back to existing blob.
+- Steps 4.1 + 4.2: Combined in `usePracticeSession.js`. Added `songIdRef` to track songId across startSession→endSession lifecycle. After session blob saves, fetches all measure IDs for the song in one query, builds a number→id map, then inserts event rows in batches of 500. measure_id is nullable (graceful if measure rows don't exist yet).
 

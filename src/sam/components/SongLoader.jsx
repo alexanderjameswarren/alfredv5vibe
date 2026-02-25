@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Archive, ArchiveRestore, Music, Pencil } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 import { parseMusicXML } from "../lib/songParser";
+import { fanOutMeasures, isMeasuresStale, recompileMeasures } from "../lib/measureCompiler";
 import JSZip from "jszip";
 
 function validateSong(song) {
@@ -98,6 +99,18 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
       return;
     }
 
+    let measures = data.measures;
+
+    // Stale check: if measure rows were edited since last compile, recompile from rows
+    if (isMeasuresStale(data)) {
+      try {
+        console.log("[Sam] Measures stale — recompiling from rows");
+        measures = await recompileMeasures(data.id, supabase);
+      } catch (e) {
+        console.error("[Sam] Recompile failed, using existing blob:", e);
+      }
+    }
+
     const song = {
       title: data.title,
       artist: data.artist,
@@ -105,7 +118,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
       defaultTimingWindowMs: data.default_timing_window_ms ?? null,
       defaultChordMs: data.default_chord_ms ?? null,
       defaultMeasureWidth: data.default_measure_width ?? null,
-      measures: data.measures,
+      measures,
     };
     onSongLoaded(song);
     if (onSongSaved) onSongSaved(data.id);
@@ -314,12 +327,17 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
       })
       .select("id")
       .single()
-      .then(({ data, error: dbError }) => {
+      .then(async ({ data, error: dbError }) => {
         if (dbError) {
           console.error("[Sam] Supabase save error:", dbError);
         } else {
           console.log("[Sam] Song saved to Supabase, id:", data.id);
           if (onSongSaved) onSongSaved(data.id);
+          try {
+            await fanOutMeasures(data.id, song.measures, supabase);
+          } catch (e) {
+            console.error("[Sam] Measure fan-out failed:", e);
+          }
         }
       })
       .catch((e) => console.error("[Sam] Supabase save failed:", e));
@@ -404,12 +422,17 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
       })
       .select("id")
       .single()
-      .then(({ data, error: dbError }) => {
+      .then(async ({ data, error: dbError }) => {
         if (dbError) {
           console.error("[Sam] Supabase save error:", dbError);
         } else {
           console.log("[Sam] Song saved to Supabase, id:", data.id);
           if (onSongSaved) onSongSaved(data.id);
+          try {
+            await fanOutMeasures(data.id, song.measures, supabase);
+          } catch (e) {
+            console.error("[Sam] Measure fan-out failed:", e);
+          }
         }
       })
       .catch((e) => console.error("[Sam] Supabase save failed:", e));

@@ -12,6 +12,7 @@ export default function usePracticeSession() {
   });
 
   const sessionIdRef = useRef(null);
+  const songIdRef = useRef(null);
   const eventsRef = useRef([]);
   const timingDeltasRef = useRef([]);
   const countersRef = useRef({ hits: 0, misses: 0, partials: 0, totalBeats: 0 });
@@ -24,6 +25,7 @@ export default function usePracticeSession() {
     countersRef.current = { hits: 0, misses: 0, partials: 0, totalBeats: 0 };
     loopCountRef.current = 0;
     sessionIdRef.current = null;
+    songIdRef.current = songId || null;
     setStats({ hits: 0, misses: 0, partials: 0, totalBeats: 0, accuracyPercent: 0, avgTimingDeltaMs: 0 });
 
     // Create session row in Supabase (fire-and-forget style — don't block UI)
@@ -122,24 +124,80 @@ export default function usePracticeSession() {
 
     const now = new Date().toISOString();
 
+    const events = eventsRef.current;
+    const songId = songIdRef.current;
+
     // Fire-and-forget update
     supabase
       .from("sam_sessions")
       .update({
         ended_at: now,
         summary,
-        events: eventsRef.current,
+        events,
       })
       .eq("id", sessionId)
-      .then(({ error }) => {
+      .then(async ({ error }) => {
         if (error) {
           console.error("[Sam] Failed to end session:", error);
-        } else {
-          console.log("[Sam] Session ended:", sessionId, summary);
+          return;
+        }
+        console.log("[Sam] Session ended:", sessionId, summary);
+
+        // Fan out events to sam_session_events
+        if (!songId || events.length === 0) return;
+
+        try {
+          // Batch-fetch measure IDs for this song
+          const { data: measureRows, error: measError } = await supabase
+            .from("sam_song_measures")
+            .select("id, number")
+            .eq("song_id", songId);
+
+          if (measError) {
+            console.error("[Sam] Failed to fetch measure IDs:", measError);
+            return;
+          }
+
+          const measureIdMap = {};
+          for (const row of measureRows || []) {
+            measureIdMap[row.number] = row.id;
+          }
+
+          const eventRows = events.map((evt) => ({
+            session_id: sessionId,
+            song_id: songId,
+            measure_number: evt.measure,
+            beat: evt.beat,
+            result: evt.result,
+            played_notes: evt.playedNotes,
+            expected_notes: evt.expectedNotes,
+            timing_delta_ms: evt.timingDeltaMs,
+            loop_iteration: evt.loopIteration,
+            measure_id: measureIdMap[evt.measure] || null,
+          }));
+
+          // Insert in batches of 500
+          const BATCH_SIZE = 500;
+          for (let i = 0; i < eventRows.length; i += BATCH_SIZE) {
+            const batch = eventRows.slice(i, i + BATCH_SIZE);
+            const { error: insertError } = await supabase
+              .from("sam_session_events")
+              .insert(batch);
+
+            if (insertError) {
+              console.error("[Sam] Failed to insert session events:", insertError);
+              return;
+            }
+          }
+
+          console.log(`[Sam] Session events fan-out complete: ${eventRows.length} events`);
+        } catch (e) {
+          console.error("[Sam] Session events fan-out failed:", e);
         }
       });
 
     sessionIdRef.current = null;
+    songIdRef.current = null;
   }, []);
 
   return { startSession, endSession, recordEvent, setLoopIteration, stats };
