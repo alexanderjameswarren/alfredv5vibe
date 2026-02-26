@@ -284,8 +284,8 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurati
     // note spacing exactly matches the scroll speed. This is critical because
     // targetTimeMs is computed from the note's visual position (xPx), so the
     // pixel spacing must be proportional to time.
-    const BARLINE_PAD = 14;
-    const repositionWidth = measWidth - BARLINE_PAD;
+    const BARLINE_PAD = 0;
+    const repositionWidth = measWidth;
     const ACC_W = { '#': 11, 'b': 9, 'n': 8, '##': 14, 'bb': 14 };
     const accPad = (note) => {
       let w = 0;
