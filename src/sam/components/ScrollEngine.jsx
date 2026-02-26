@@ -518,7 +518,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         copyIdx++;
       }
       const refNote = meta.trebleNote || meta.bassNote;
-      const xPx = refNote ? refNote.getAbsoluteX() : 0;
+      const xPx = refNote ? refNote.getAbsoluteX() + refNote.getXShift() : 0;
       const svgEls = [];
       if (meta.trebleSvgEl) svgEls.push(meta.trebleSvgEl);
       if (meta.bassSvgEl) svgEls.push(meta.bassSvgEl);
