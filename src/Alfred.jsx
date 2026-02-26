@@ -115,7 +115,7 @@ const storage = {
 
   async set(key, value, shared = false) {
     try {
-      const [prefix] = key.split(":");
+      const [prefix, id] = key.split(":");
       const table = this.tableMap[prefix];
 
       if (!table) {
@@ -125,9 +125,29 @@ const storage = {
 
       const dbValue = this.toSnakeCase(value);
 
-      const { error } = await supabase.from(table).upsert(dbValue);
+      if (id) {
+        // Try update first (works for both owned and shared records)
+        const { data: updated, error: updateError } = await supabase
+          .from(table)
+          .update(dbValue)
+          .eq("id", id)
+          .select("id");
 
-      if (error) throw error;
+        if (updateError) throw updateError;
+
+        // If update matched no rows, this is a new record — insert
+        if (!updated || updated.length === 0) {
+          const { error: insertError } = await supabase
+            .from(table)
+            .insert(dbValue);
+          if (insertError) throw insertError;
+        }
+      } else {
+        // No id in key — straight insert
+        const { error } = await supabase.from(table).insert(dbValue);
+        if (error) throw error;
+      }
+
       return true;
     } catch (e) {
       console.error("Storage set error:", e, "Key:", key, "Value:", value);
@@ -655,6 +675,7 @@ export default function Alfred() {
   const [collections, setCollections] = useState([]);
   const [filterTag, setFilterTag] = useState(null);
   const [selectedCollectionId, setSelectedCollectionId] = useState(null);
+  const [collDragIdx, setCollDragIdx] = useState(null);
   const [collectionContextFilter, setCollectionContextFilter] = useState("");
 
   const captureRef = useRef(null);
@@ -671,6 +692,7 @@ export default function Alfred() {
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [dataLoaded, setDataLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [realtimeStatus, setRealtimeStatus] = useState('disconnected'); // 'connected', 'connecting', 'disconnected'
@@ -750,6 +772,7 @@ export default function Alfred() {
           isInitialized = true;
           console.log('[Auth] First-time init - loading data...');
           await loadData();
+          setDataLoaded(true);
           console.log('[Auth] Data loaded');
 
           console.log('[Auth] Setting up realtime...');
@@ -839,7 +862,7 @@ export default function Alfred() {
         (inboxData || [])
           .map(d => storage.toCamelCase(d))
           .filter(item => !item.archived)
-          .sort((a, b) => a.createdAt - b.createdAt)
+          .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
       );
       setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
       setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
@@ -878,7 +901,7 @@ export default function Alfred() {
         (inboxData || [])
           .map(d => storage.toCamelCase(d))
           .filter(item => !item.archived)
-          .sort((a, b) => a.createdAt - b.createdAt)
+          .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
       );
       setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
       setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
@@ -887,6 +910,10 @@ export default function Alfred() {
     } catch (e) {
       console.error('[Refresh] Failed:', e);
     }
+  }
+
+  async function manualRefresh() {
+    return withLoading('Refreshing...', refreshData);
   }
 
   async function setupRealtimeSubscriptions(currentUser) {
@@ -1036,7 +1063,7 @@ export default function Alfred() {
         // Don't add duplicates
         if (prev.find(item => item.id === record.id)) return prev;
         // Add to top, maintain sort by createdAt
-        return [record, ...prev].sort((a, b) => a.createdAt - b.createdAt);
+        return [record, ...prev].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
       });
     } else if (eventType === 'UPDATE') {
       const record = toCamelCase(newRecord);
@@ -1174,7 +1201,7 @@ export default function Alfred() {
         id: uid(),
         user_id: user.id,
         capturedText: captureText.trim(),
-        createdAt: Date.now(),
+        createdAt: new Date().toISOString(),
         archived: false,
         triagedAt: null,
         suggestedContextId: null,
@@ -1212,7 +1239,7 @@ export default function Alfred() {
     const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
     if (!inboxItem) return;
     return withLoading('Archiving...', async () => {
-      const updated = { ...inboxItem, archived: true, triagedAt: Date.now() };
+      const updated = { ...inboxItem, archived: true, triagedAt: new Date().toISOString() };
       await storage.set(`inbox:${inboxItem.id}`, updated);
       setInboxItems(inboxItems.filter((i) => i.id !== inboxItemId));
     });
@@ -1241,7 +1268,7 @@ export default function Alfred() {
           elements: triageData.itemData.elements || [],
           tags: triageData.itemData.tags || [],
           isCaptureTarget: false,
-          createdAt: Date.now(),
+          createdAt: new Date().toISOString(),
         };
 
         const context = contexts.find((c) => c.id === newItem.contextId);
@@ -1277,7 +1304,7 @@ export default function Alfred() {
           id: uid(),
           user_id: user.id,
           text: triageData.intentionData.text,
-          createdAt: Date.now(),
+          createdAt: new Date().toISOString(),
           isIntention: true,
           isItem: !!intentionItemId,
           archived: false,
@@ -1299,7 +1326,7 @@ export default function Alfred() {
             time: triageData.intentionData.eventDate,
             itemIds: intentionItemId ? [intentionItemId] : [],
             archived: false,
-            createdAt: Date.now(),
+            createdAt: new Date().toISOString(),
             text: triageData.intentionData.text,
           };
           await storage.set(`event:${newEvent.id}`, newEvent);
@@ -1320,7 +1347,7 @@ export default function Alfred() {
               {
                 itemId: targetItemId,
                 quantity: triageData.collectionData.quantity || '1',
-                addedAt: Date.now(),
+                addedAt: new Date().toISOString(),
               },
             ];
             const updatedCollection = { ...collection, items: updatedItems };
@@ -1333,7 +1360,7 @@ export default function Alfred() {
       }
 
       // Archive inbox item
-      const updated = { ...inboxItem, archived: true, triagedAt: Date.now() };
+      const updated = { ...inboxItem, archived: true, triagedAt: new Date().toISOString() };
       await storage.set(`inbox:${inboxItem.id}`, updated);
       setInboxItems((prev) => prev.filter((i) => i.id !== inboxItemId));
     });
@@ -1365,7 +1392,7 @@ export default function Alfred() {
         contextId: intent.contextId,
         collectionId: intent.collectionId || null,
         archived: false,
-        createdAt: Date.now(),
+        createdAt: new Date().toISOString(),
       };
 
       await storage.set(`event:${event.id}`, event);
@@ -1520,7 +1547,7 @@ export default function Alfred() {
           tags: [...(item.tags || [])],
           isCaptureTarget: false,
           archived: false,
-          createdAt: Date.now(),
+          createdAt: new Date().toISOString(),
         };
 
         await storage.set(`item:${cloneId}`, cloned);
@@ -1558,7 +1585,7 @@ export default function Alfred() {
           contextId: event.contextId,
           collectionId: event.collectionId,
           itemIds: [],
-          startedAt: Date.now(),
+          startedAt: new Date().toISOString(),
           status: "active",
           notes: "",
           elements: [],
@@ -1606,7 +1633,7 @@ export default function Alfred() {
         intentId: event.intentId,
         contextId: event.contextId,
         itemIds: event.itemIds,
-        startedAt: Date.now(),
+        startedAt: new Date().toISOString(),
         status: "active",
         notes: "",
         elements: itemElements,
@@ -1635,7 +1662,7 @@ export default function Alfred() {
 
       const closed = {
         ...activeExecution,
-        closedAt: Date.now(),
+        closedAt: new Date().toISOString(),
         outcome,
         status: "closed",
       };
@@ -1728,11 +1755,12 @@ export default function Alfred() {
     updatedElements[elementIndex] = {
       ...el,
       isCompleted: !el.isCompleted,
-      completedAt: !el.isCompleted ? Date.now() : null,
+      completedAt: !el.isCompleted ? new Date().toISOString() : null,
       inProgress: false,
     };
     const updated = { ...activeExecution, elements: updatedElements };
-    await storage.set(`execution:${updated.id}`, updated);
+
+    // Optimistic: update UI immediately
     setActiveExecution(updated);
     setActiveExecutions((prev) =>
       prev.map((e) => (e.id === updated.id ? updated : e))
@@ -1740,6 +1768,11 @@ export default function Alfred() {
     setPausedExecutions((prev) =>
       prev.map((e) => (e.id === updated.id ? updated : e))
     );
+
+    // Persist in background — don't block UI
+    storage.set(`execution:${updated.id}`, updated).catch((e) => {
+      console.error('[Execution] Failed to save element toggle:', e);
+    });
   }
 
   async function updateExecutionElement(elementIndex, fields) {
@@ -1833,7 +1866,7 @@ export default function Alfred() {
             keywords,
             description,
             pinned,
-            createdAt: Date.now(),
+            createdAt: new Date().toISOString(),
           };
 
       await storage.set(`context:${context.id}`, context, shared);
@@ -1925,7 +1958,7 @@ export default function Alfred() {
         contextId: contextId,
         elements: elements || [],
         isCaptureTarget: isCaptureTarget || false,
-        createdAt: Date.now(),
+        createdAt: new Date().toISOString(),
       };
 
       const context = contexts.find((c) => c.id === contextId);
@@ -1948,7 +1981,7 @@ export default function Alfred() {
         id: uid(),
         user_id: user.id,
         text: text || "New Intention",
-        createdAt: Date.now(),
+        createdAt: new Date().toISOString(),
         isIntention: true,
         isItem: false,
         archived: false,
@@ -2040,7 +2073,7 @@ export default function Alfred() {
         id: uid(),
         user_id: user.id,
         text: item.name,
-        createdAt: Date.now(),
+        createdAt: new Date().toISOString(),
         isIntention: true,
         isItem: false,
         archived: false,
@@ -2060,7 +2093,7 @@ export default function Alfred() {
         itemIds: [item.id],
         contextId: item.contextId || null,
         archived: false,
-        createdAt: Date.now(),
+        createdAt: new Date().toISOString(),
       };
       await storage.set(`event:${newEvent.id}`, newEvent);
       setEvents((prev) => [...prev, newEvent]);
@@ -2093,7 +2126,7 @@ export default function Alfred() {
         intentId: newIntent.id,
         contextId: item.contextId || null,
         itemIds: [item.id],
-        startedAt: Date.now(),
+        startedAt: new Date().toISOString(),
         status: "active",
         notes: "",
         elements: itemElements,
@@ -2127,7 +2160,7 @@ export default function Alfred() {
         contextId: intent.contextId || null,
         collectionId: intent.collectionId || null,
         archived: false,
-        createdAt: Date.now(),
+        createdAt: new Date().toISOString(),
       };
       await storage.set(`event:${newEvent.id}`, newEvent);
       setEvents((prev) => [...prev, newEvent]);
@@ -2142,7 +2175,7 @@ export default function Alfred() {
           contextId: intent.contextId || null,
           collectionId: intent.collectionId,
           itemIds: [],
-          startedAt: Date.now(),
+          startedAt: new Date().toISOString(),
           status: "active",
           notes: "",
           elements: [],
@@ -2184,7 +2217,7 @@ export default function Alfred() {
         intentId: intent.id,
         contextId: intent.contextId || null,
         itemIds: linkedItem ? [linkedItem.id] : [],
-        startedAt: Date.now(),
+        startedAt: new Date().toISOString(),
         status: "active",
         notes: "",
         elements: itemElements,
@@ -2220,6 +2253,17 @@ export default function Alfred() {
     return <LoginScreen />;
   }
 
+  if (!dataLoaded) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="flex flex-col items-center gap-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+          <p className="text-foreground font-medium">Loading your data...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (view === "sam") {
     return (
       <SamPlayer
@@ -2241,10 +2285,10 @@ export default function Alfred() {
           >
             <Menu className="w-6 h-6" />
           </button>
-          <h1 className="text-lg font-bold text-foreground">Alfred v5</h1>
+          <a href="/" className="text-lg font-bold text-foreground hover:text-foreground">Alfred v5</a>
           <div className="flex gap-1 items-center">
             <button
-              onClick={refreshData}
+              onClick={manualRefresh}
               className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
               title="Refresh data"
             >
@@ -2346,14 +2390,14 @@ export default function Alfred() {
         <div className="max-w-4xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-foreground">Alfred v5</h1>
+              <a href="/" className="text-2xl font-bold text-foreground hover:text-foreground">Alfred v5</a>
               <p className="text-sm text-muted-foreground mt-1">
                 Capture decisions. Hold intent. Execute with focus.
               </p>
             </div>
             <div className="flex gap-2 items-center">
               <button
-                onClick={refreshData}
+                onClick={manualRefresh}
                 className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
                 title="Refresh data"
               >
@@ -2731,7 +2775,7 @@ export default function Alfred() {
               </div>
             ) : (
               <div className="space-y-3">
-                {contexts.map((context) => (
+                {[...contexts].sort((a, b) => a.name.localeCompare(b.name)).map((context) => (
                   <ContextCard
                     key={context.id}
                     context={context}
@@ -2753,7 +2797,7 @@ export default function Alfred() {
           <ContextDetailView
             contextId={selectedContextId}
             context={contexts.find((c) => c.id === selectedContextId)}
-            items={items.filter((i) => i.contextId === selectedContextId && !i.archived)}
+            items={items.filter((i) => i.contextId === selectedContextId && !i.archived).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))}
             intents={intents.filter((i) => i.contextId === selectedContextId && !(i.isIntention && i.archived))}
             contexts={contexts}
             onBack={() => {
@@ -3229,7 +3273,27 @@ export default function Alfred() {
                       {coll.items.map((collItem, index) => {
                         const linkedItem = items.find((i) => i.id === collItem.itemId);
                         return (
-                          <div key={collItem.itemId || index} className="flex items-center gap-2 p-3 bg-card border border-border rounded-lg">
+                          <div
+                            key={collItem.itemId || index}
+                            className={`flex items-center gap-2 p-3 bg-card border border-border rounded-lg ${collDragIdx === index ? "opacity-50" : ""}`}
+                            draggable
+                            onDragStart={(e) => { setCollDragIdx(index); e.dataTransfer.effectAllowed = "move"; }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              if (collDragIdx === null || collDragIdx === index) return;
+                              const newItems = [...coll.items];
+                              const dragged = newItems[collDragIdx];
+                              newItems.splice(collDragIdx, 1);
+                              newItems.splice(index, 0, dragged);
+                              setCollections(collections.map((c) => (c.id === coll.id ? { ...coll, items: newItems } : c)));
+                              setCollDragIdx(index);
+                            }}
+                            onDragEnd={() => {
+                              setCollDragIdx(null);
+                              updateCollection(coll.id, { items: coll.items }, true);
+                            }}
+                          >
+                            <GripVertical className="w-4 h-4 text-muted-foreground cursor-move flex-shrink-0" title="Drag to reorder" />
                             <div className="flex-1 min-w-0">
                               <p className="font-medium text-sm truncate">
                                 {linkedItem ? linkedItem.name : collItem.itemId}
@@ -3287,7 +3351,7 @@ export default function Alfred() {
           const coll = collections.find((c) => c.id === selectedCollectionId);
           if (!coll) return <p className="text-muted-foreground">Collection not found</p>;
           const existingItemIds = new Set((coll.items || []).map((ci) => ci.itemId));
-          const availableItems = items.filter((i) => !i.archived && !existingItemIds.has(i.id));
+          const availableItems = items.filter((i) => !i.archived && !existingItemIds.has(i.id) && (!coll.contextId || i.contextId === coll.contextId));
 
           return (
             <CollectionAddItems
@@ -3310,7 +3374,7 @@ export default function Alfred() {
                   elements: [],
                   tags: [],
                   isCaptureTarget: false,
-                  createdAt: Date.now(),
+                  createdAt: new Date().toISOString(),
                 };
 
                 // Save to database
@@ -3602,6 +3666,10 @@ function InboxCard({
       ...itemElements,
       { name: "", displayType: "step", quantity: "", description: "" },
     ]);
+    setTimeout(() => {
+      const inputs = document.querySelectorAll('.inbox-element-input');
+      if (inputs.length) inputs[inputs.length - 1].focus();
+    }, 0);
   }
 
   function insertElementAbove(index) {
@@ -5584,7 +5652,8 @@ function ExecutionDetailView({
 
   function formatElapsed(startedAt) {
     if (!startedAt) return "";
-    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+    const startMs = typeof startedAt === 'string' ? new Date(startedAt).getTime() : startedAt;
+    const seconds = Math.floor((Date.now() - startMs) / 1000);
     if (seconds < 60) return `${seconds}s ago`;
     const minutes = Math.floor(seconds / 60);
     if (minutes < 60) return `${minutes}m ago`;
@@ -5794,7 +5863,7 @@ function ExecutionDetailView({
                       </div>
                       {!el.isCompleted && !el.inProgress && (
                         <button
-                          onClick={() => onUpdateElement(index, { inProgress: true, startedAt: Date.now() })}
+                          onClick={() => onUpdateElement(index, { inProgress: true, startedAt: new Date().toISOString() })}
                           className="text-sm text-primary hover:text-primary-hover whitespace-nowrap"
                         >
                           Start
@@ -5997,6 +6066,10 @@ function ItemCard({
       ...elements,
       { name: "", displayType: "step", quantity: "", description: "" },
     ]);
+    setTimeout(() => {
+      const inputs = document.querySelectorAll('.element-input');
+      if (inputs.length) inputs[inputs.length - 1].focus();
+    }, 0);
   }
 
   function insertElementAbove(index) {
@@ -6335,10 +6408,11 @@ function ItemCard({
             : item.description}
         </p>
       )}
-      {(item.elements || item.components) &&
-        (item.elements || item.components).length > 0 && (
+      {((item.elements || item.components)?.length > 0 || item.updatedAt) && (
           <span className="text-xs text-muted-foreground mt-1 block">
-            {(item.elements || item.components).length} elements
+            {(item.elements || item.components)?.length > 0 && `${(item.elements || item.components).length} elements`}
+            {(item.elements || item.components)?.length > 0 && item.updatedAt && ' · '}
+            {item.updatedAt && `last updated: ${new Date(item.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`}
           </span>
         )}
       {executions.length > 0 && onOpenExecution && (
