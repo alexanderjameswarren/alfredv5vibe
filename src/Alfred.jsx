@@ -3668,8 +3668,11 @@ function InboxCard({
     ]);
     setTimeout(() => {
       const inputs = document.querySelectorAll('.inbox-element-input');
-      if (inputs.length) inputs[inputs.length - 1].focus();
-    }, 0);
+      if (inputs.length) {
+        inputs[inputs.length - 1].scrollIntoView({ block: 'nearest' });
+        inputs[inputs.length - 1].focus();
+      }
+    }, 50);
   }
 
   function insertElementAbove(index) {
@@ -3681,6 +3684,13 @@ function InboxCard({
       description: "",
     });
     setItemElements(newElements);
+    setTimeout(() => {
+      const inputs = document.querySelectorAll('.inbox-element-input');
+      if (inputs[index]) {
+        inputs[index].scrollIntoView({ block: 'nearest' });
+        inputs[index].focus();
+      }
+    }, 50);
   }
 
   function updateElement(index, field, value) {
@@ -4226,7 +4236,7 @@ function InboxCard({
                     >
                       <div className="flex items-center gap-2">
                         <GripVertical
-                          className="w-4 h-4 text-muted-foreground cursor-move"
+                          className="w-4 h-4 text-muted-foreground cursor-move flex-shrink-0"
                           title="Drag to reorder"
                         />
                         <input
@@ -4237,8 +4247,18 @@ function InboxCard({
                           }
                           onKeyPress={(e) => handleElementKeyPress(e, index)}
                           placeholder="Element name"
-                          className="inbox-element-input flex-1 px-3 py-2 border border-border rounded"
+                          className="inbox-element-input flex-1 min-w-0 px-3 py-2 border border-border rounded"
                         />
+                        <button
+                          onClick={() => deleteElement(index)}
+                          className="text-destructive hover:text-destructive-hover flex-shrink-0"
+                          title="Delete"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-2">
                         <select
                           value={element.displayType || "step"}
                           onChange={(e) =>
@@ -4250,24 +4270,16 @@ function InboxCard({
                           <option value="bullet">Bullet</option>
                           <option value="step">Step</option>
                         </select>
-                        <button
-                          onClick={() => deleteElement(index)}
-                          className="text-destructive hover:text-destructive-hover"
-                          title="Delete"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
+                        <input
+                          type="text"
+                          value={element.quantity || ""}
+                          onChange={(e) =>
+                            updateElement(index, "quantity", e.target.value)
+                          }
+                          placeholder="Qty"
+                          className="w-16 px-2 py-2 border border-border rounded text-sm"
+                        />
                       </div>
-
-                      <input
-                        type="text"
-                        value={element.quantity || ""}
-                        onChange={(e) =>
-                          updateElement(index, "quantity", e.target.value)
-                        }
-                        placeholder="Quantity (optional)"
-                        className="w-full px-3 py-2 border border-border rounded text-sm"
-                      />
 
                       <textarea
                         value={element.description || ""}
@@ -6068,8 +6080,11 @@ function ItemCard({
     ]);
     setTimeout(() => {
       const inputs = document.querySelectorAll('.element-input');
-      if (inputs.length) inputs[inputs.length - 1].focus();
-    }, 0);
+      if (inputs.length) {
+        inputs[inputs.length - 1].scrollIntoView({ block: 'nearest' });
+        inputs[inputs.length - 1].focus();
+      }
+    }, 50);
   }
 
   function insertElementAbove(index) {
@@ -6081,6 +6096,13 @@ function ItemCard({
       description: "",
     });
     setElements(newElements);
+    setTimeout(() => {
+      const inputs = document.querySelectorAll('.element-input');
+      if (inputs[index]) {
+        inputs[index].scrollIntoView({ block: 'nearest' });
+        inputs[index].focus();
+      }
+    }, 50);
   }
 
   function updateElement(index, field, value) {
@@ -6211,7 +6233,7 @@ function ItemCard({
                   >
                     <div className="flex items-center gap-2">
                       <GripVertical
-                        className="w-4 h-4 text-muted-foreground cursor-move"
+                        className="w-4 h-4 text-muted-foreground cursor-move flex-shrink-0"
                         title="Drag to reorder"
                       />
                       <input
@@ -6222,8 +6244,18 @@ function ItemCard({
                         }
                         onKeyPress={(e) => handleKeyPress(e, index)}
                         placeholder="Element name"
-                        className="element-input flex-1 px-3 py-2 border border-border rounded"
+                        className="element-input flex-1 min-w-0 px-3 py-2 border border-border rounded"
                       />
+                      <button
+                        onClick={() => deleteElement(index)}
+                        className="text-destructive hover:text-destructive-hover flex-shrink-0"
+                        title="Delete"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
                       <select
                         value={element.displayType || "step"}
                         onChange={(e) =>
@@ -6235,24 +6267,16 @@ function ItemCard({
                         <option value="bullet">Bullet</option>
                         <option value="step">Step</option>
                       </select>
-                      <button
-                        onClick={() => deleteElement(index)}
-                        className="text-destructive hover:text-destructive-hover"
-                        title="Delete"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
+                      <input
+                        type="text"
+                        value={element.quantity || ""}
+                        onChange={(e) =>
+                          updateElement(index, "quantity", e.target.value)
+                        }
+                        placeholder="Qty"
+                        className="w-16 px-2 py-2 border border-border rounded text-sm"
+                      />
                     </div>
-
-                    <input
-                      type="text"
-                      value={element.quantity || ""}
-                      onChange={(e) =>
-                        updateElement(index, "quantity", e.target.value)
-                      }
-                      placeholder="Quantity (optional)"
-                      className="w-full px-3 py-2 border border-border rounded text-sm"
-                    />
 
                     <textarea
                       value={element.description || ""}
