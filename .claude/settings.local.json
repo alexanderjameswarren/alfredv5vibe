@@ -26,7 +26,8 @@
       "Bash(\"c:\\\\Users\\\\Alex\\\\projects\\\\alfred-v5\\\\docs\\\\progress-phase75-ui-redesign.md\":*)",
       "mcp__claude_ai_Aflred_v5__search_items",
       "mcp__claude_ai_Aflred_v5__get_database_schema",
-      "Bash(ls c:/Users/Alex/projects/alfred-v5/*.config.* c:/Users/Alex/projects/alfred-v5/package.json)"
+      "Bash(ls c:/Users/Alex/projects/alfred-v5/*.config.* c:/Users/Alex/projects/alfred-v5/package.json)",
+      "Bash(node src/utils/recurrence.test.js)"
     ]
   }
 }

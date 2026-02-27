@@ -35,6 +35,8 @@ import {
   ArchiveRestore,
 } from "lucide-react";
 import { supabase, supabaseUrl } from "./supabaseClient";
+import { calculateNextEventDate, getRecurrenceConfig } from "./utils/recurrence";
+import { getRecurrenceDisplayString } from "./utils/recurrenceDisplay";
 import SamPlayer from "./sam/SamPlayer";
 
 const storage = {
@@ -993,7 +995,7 @@ export default function Alfred() {
             .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
           break;
         case "intents":
-          query = supabase.from("intents").select("id, text, context_id, recurrence, tags, updated_at")
+          query = supabase.from("intents").select("id, text, context_id, recurrence_config, target_start_date, end_date, tags, updated_at")
             .eq("archived", true)
             .order("updated_at", { ascending: false, nullsFirst: false })
             .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
@@ -1575,7 +1577,9 @@ export default function Alfred() {
           archived: false,
           itemId: intentionItemId,
           contextId: triageData.intentionData.contextId,
-          recurrence: triageData.intentionData.recurrence || "once",
+          recurrenceConfig: triageData.intentionData.recurrenceConfig || null,
+          targetStartDate: triageData.intentionData.targetStartDate || null,
+          endDate: triageData.intentionData.endDate || null,
           tags: triageData.intentionData.tags || [],
         };
         await storage.set(`intent:${newIntent.id}`, newIntent);
@@ -1691,10 +1695,18 @@ export default function Alfred() {
         itemId: updates.itemId !== undefined ? updates.itemId : intent.itemId,
         contextId:
           updates.contextId !== undefined ? updates.contextId : intent.contextId,
-        recurrence:
-          updates.recurrence !== undefined
-            ? updates.recurrence
-            : intent.recurrence || "once",
+        recurrenceConfig:
+          updates.recurrenceConfig !== undefined
+            ? updates.recurrenceConfig
+            : intent.recurrenceConfig || null,
+        targetStartDate:
+          updates.targetStartDate !== undefined
+            ? updates.targetStartDate
+            : intent.targetStartDate || null,
+        endDate:
+          updates.endDate !== undefined
+            ? updates.endDate
+            : intent.endDate || null,
         tags:
           updates.tags !== undefined ? updates.tags : intent.tags || [],
         collectionId:
@@ -1833,6 +1845,11 @@ export default function Alfred() {
       const updated = { ...event, ...updates };
       await storage.set(`event:${event.id}`, updated);
       setEvents(events.map((e) => (e.id === eventId ? updated : e)));
+
+      // If archiving a recurring event, trigger recurrence to create next event
+      if (updates.archived === true && event.intentId) {
+        await triggerRecurrence(event.intentId, event);
+      }
     });
   }
 
@@ -1913,6 +1930,38 @@ export default function Alfred() {
     });
   }
 
+  /**
+   * Creates the next recurring event for an intent after an event is archived.
+   * Shared by closeExecution (completion) and manual event archive (skip).
+   */
+  async function triggerRecurrence(intentId, archivedEvent) {
+    const intent = intents.find((i) => i.id === intentId);
+    if (!intent) return;
+
+    const config = getRecurrenceConfig(intent);
+    if (config.type === "once") return;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const nextDate = calculateNextEventDate(config, today);
+
+    if (nextDate && (!intent.endDate || nextDate <= new Date(intent.endDate + "T23:59:59"))) {
+      const newEvent = {
+        id: uid(),
+        user_id: user.id,
+        intentId: intent.id,
+        time: nextDate.toISOString().split("T")[0],
+        itemIds: archivedEvent?.itemIds || [],
+        contextId: intent.contextId,
+        collectionId: intent.collectionId || null,
+        archived: false,
+        createdAt: new Date().toISOString(),
+      };
+      await storage.set(`event:${newEvent.id}`, newEvent);
+      setEvents((prev) => [...prev, newEvent]);
+    }
+  }
+
   async function closeExecution(outcome) {
     if (!activeExecution) return;
     return withLoading('Completing...', async () => {
@@ -1943,12 +1992,21 @@ export default function Alfred() {
         setEvents(events.map((e) => (e.id === event.id ? archivedEvent : e)));
       }
 
-      // If intent is one-time and outcome is 'done', archive it
+      // Handle recurrence: archive one-time intents, or create next event for recurring
       const intent = intents.find((i) => i.id === activeExecution.intentId);
-      if (intent && intent.recurrence === "once" && outcome === "done") {
-        const archivedIntent = { ...intent, archived: true };
-        await storage.set(`intent:${intent.id}`, archivedIntent);
-        setIntents(intents.map((i) => (i.id === intent.id ? archivedIntent : i)));
+      if (intent) {
+        const config = getRecurrenceConfig(intent);
+        if (config.type === "once") {
+          // One-time: archive intent on done (existing behavior)
+          if (outcome === "done") {
+            const archivedIntent = { ...intent, archived: true };
+            await storage.set(`intent:${intent.id}`, archivedIntent);
+            setIntents(intents.map((i) => (i.id === intent.id ? archivedIntent : i)));
+          }
+        } else {
+          // Recurring: calculate and create next event
+          await triggerRecurrence(intent.id, event);
+        }
       }
 
       // Remove completed items from collection
@@ -2259,9 +2317,9 @@ export default function Alfred() {
   async function handleAddIntentionToContext(
     text,
     contextId,
-    recurrence = "once",
     itemId = null,
     collectionId = null,
+    recurrenceConfig = null,
   ) {
     return withLoading('Saving...', async () => {
       const newIntent = {
@@ -2274,7 +2332,7 @@ export default function Alfred() {
         archived: false,
         itemId: itemId,
         contextId: contextId,
-        recurrence: recurrence,
+        recurrenceConfig: recurrenceConfig,
         collectionId: collectionId,
       };
 
@@ -2366,7 +2424,7 @@ export default function Alfred() {
         archived: false,
         itemId: item.id,
         contextId: item.contextId || null,
-        recurrence: "once",
+        recurrenceConfig: { type: "once" },
       };
       await storage.set(`intent:${newIntent.id}`, newIntent);
       setIntents((prev) => [...prev, newIntent]);
@@ -3281,7 +3339,6 @@ export default function Alfred() {
                     id: null,
                     text: "",
                     contextId: "",
-                    recurrence: "once",
                     isIntention: true,
                     isItem: false,
                     archived: false,
@@ -3294,9 +3351,9 @@ export default function Alfred() {
                     const newIntentId = await handleAddIntentionToContext(
                       updates.text,
                       updates.contextId || null,
-                      updates.recurrence || "once",
                       updates.itemId || null,
                       updates.collectionId || null,
+                      updates.recurrenceConfig || null,
                     );
                     if (scheduledDate && newIntentId) {
                       moveToPlanner(newIntentId, scheduledDate);
@@ -3807,7 +3864,7 @@ export default function Alfred() {
                       break;
                     case "intents":
                       title = record.text || "Untitled intent";
-                      subtitle = [contextName, record.recurrence !== "once" ? record.recurrence : null].filter(Boolean).join(" · ");
+                      subtitle = [contextName, record.recurrenceConfig && record.recurrenceConfig.type !== "once" ? getRecurrenceDisplayString(record.recurrenceConfig) : null].filter(Boolean).join(" · ");
                       break;
                     case "events": {
                       const intent = intents.find((i) => i.id === record.intentId);
@@ -4003,9 +4060,9 @@ function InboxCard({
   const [intentText, setIntentText] = useState(
     inboxItem.suggestedIntentText || inboxItem.capturedText
   );
-  const [intentRecurrence, setIntentRecurrence] = useState(
-    inboxItem.suggestedIntentRecurrence || 'once'
-  );
+  const [intentRecurrenceConfig, setIntentRecurrenceConfig] = useState(null);
+  const [intentEndDate, setIntentEndDate] = useState(null);
+  const [intentTargetStartDate, setIntentTargetStartDate] = useState(null);
   const [intentContextId, setIntentContextId] = useState(
     inboxItem.suggestedContextId || ''
   );
@@ -4095,7 +4152,9 @@ function InboxCard({
       if (inboxItem.suggestIntent) {
         setIntentionOpen(true);
         setIntentText(inboxItem.suggestedIntentText || inboxItem.capturedText);
-        setIntentRecurrence(inboxItem.suggestedIntentRecurrence || 'once');
+        setIntentRecurrenceConfig(null);
+        setIntentEndDate(null);
+        setIntentTargetStartDate(null);
         setIntentContextId(inboxItem.suggestedContextId || '');
         setIntentTags(inboxItem.suggestedTags || []);
       }
@@ -4137,7 +4196,6 @@ function InboxCard({
     if (!expanded || !onDirtyChange) return;
     const isDirty =
       intentText !== (inboxItem.suggestedIntentText || inboxItem.capturedText) ||
-      intentRecurrence !== (inboxItem.suggestedIntentRecurrence || 'once') ||
       intentContextId !== (inboxItem.suggestedContextId || '') ||
       intentItemId !== (inboxItem.suggestedItemId || '') ||
       JSON.stringify(intentTags) !== JSON.stringify(inboxItem.suggestedTags || []) ||
@@ -4165,7 +4223,7 @@ function InboxCard({
     onDirtyChange(isDirty, "this inbox item");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    expanded, intentText, intentRecurrence, intentContextId, intentItemId,
+    expanded, intentText, intentContextId, intentItemId,
     intentTags, eventDate, itemName, itemDescription, itemContextId,
     itemElements, itemTags, itemItemLinks, selectedCollectionId,
     collectionItemId, intentionOpen, itemOpen, collectionOpen
@@ -4360,7 +4418,6 @@ function InboxCard({
       suggestedContextId: intentContextId || null,
       suggestIntent: intentionOpen,
       suggestedIntentText: intentText,
-      suggestedIntentRecurrence: intentRecurrence,
       suggestItem: itemOpen,
       suggestedItemText: itemName,
       suggestedItemDescription: itemDescription,
@@ -4392,7 +4449,9 @@ function InboxCard({
         ? {
             text: intentText,
             contextId: intentContextId || null,
-            recurrence: intentRecurrence,
+            recurrenceConfig: intentRecurrenceConfig,
+            endDate: intentEndDate,
+            targetStartDate: intentTargetStartDate,
             itemId: intentItemId || null,
             tags: intentTags,
             createEvent: !!eventDate,
@@ -4432,7 +4491,9 @@ function InboxCard({
 
     // Reset Intention form to suggestions
     setIntentText(inboxItem.suggestedIntentText || inboxItem.capturedText);
-    setIntentRecurrence(inboxItem.suggestedIntentRecurrence || 'once');
+    setIntentRecurrenceConfig(null);
+    setIntentEndDate(null);
+    setIntentTargetStartDate(null);
     setIntentContextId(inboxItem.suggestedContextId || '');
     setIntentContextSearch('');
     setIntentItemId(inboxItem.suggestedItemId || '');
@@ -4701,16 +4762,38 @@ function InboxCard({
               <label className="block text-sm font-medium text-foreground mb-1">
                 Recurrence
               </label>
-              <select
-                value={intentRecurrence}
-                onChange={(e) => setIntentRecurrence(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded text-base"
-              >
-                <option value="once">One time</option>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
-              </select>
+              <RecurrenceQuickSelect
+                value={intentRecurrenceConfig}
+                onChange={(config) => {
+                  setIntentRecurrenceConfig(config);
+                }}
+                onEndDateChange={setIntentEndDate}
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-foreground mb-1">
+                  Target Start Date
+                </label>
+                <input
+                  type="date"
+                  value={intentTargetStartDate || ""}
+                  onChange={(e) => setIntentTargetStartDate(e.target.value || null)}
+                  className="w-full px-3 py-2 border border-border rounded text-base"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-foreground mb-1">
+                  End Date
+                </label>
+                <input
+                  type="date"
+                  value={intentEndDate || ""}
+                  onChange={(e) => setIntentEndDate(e.target.value || null)}
+                  className="w-full px-3 py-2 border border-border rounded text-base"
+                />
+              </div>
             </div>
 
             {/* Tags */}
@@ -5376,7 +5459,6 @@ function ContextDetailView({
     id: null,
     text: "",
     contextId: contextId,
-    recurrence: "once",
     isIntention: true,
     isItem: false,
     archived: false,
@@ -5402,9 +5484,9 @@ function ContextDetailView({
     const newIntentId = await onAddIntention(
       updates.text,
       finalContextId,
-      updates.recurrence,
       updates.itemId || null,
       updates.collectionId || null,
+      updates.recurrenceConfig || null,
     );
 
     if (scheduledDate && onSchedule) {
@@ -5732,8 +5814,8 @@ function IntentionDetailView({
             <span className="sm:hidden">Edit</span>
           </button>
         </div>
-        <p className="text-sm text-muted-foreground capitalize">
-          Recurrence: {intention.recurrence || "once"}
+        <p className="text-sm text-muted-foreground">
+          Recurrence: {getRecurrenceDisplayString(getRecurrenceConfig(intention), intention.endDate)}
         </p>
       </div>
 
@@ -6200,7 +6282,6 @@ function ItemDetailView({
                 id: null,
                 text: item.name,
                 contextId: item.contextId || null,
-                recurrence: "once",
                 isIntention: true,
                 isItem: false,
                 archived: false,
@@ -6213,9 +6294,9 @@ function ItemDetailView({
                 const newIntentId = await onAddIntention(
                   updates.text,
                   updates.contextId !== undefined ? updates.contextId : item.contextId,
-                  updates.recurrence || "once",
                   updates.itemId !== undefined ? updates.itemId : item.id,
                   updates.collectionId || null,
+                  updates.recurrenceConfig || null,
                 );
                 if (scheduledDate && onSchedule && newIntentId) {
                   onSchedule(newIntentId, scheduledDate);
@@ -7220,6 +7301,487 @@ function ItemCard({
   );
 }
 
+/**
+ * Custom recurrence dialog — Google Calendar-style fixed schedule builder.
+ * Supports daily/weekly/monthly frequency, interval, day-of-week toggles,
+ * monthly mode (day-of-month vs ordinal weekday), end date, and anchor date.
+ */
+function CustomRecurrenceDialog({ initialConfig, onDone, onCancel }) {
+  const DAY_LABELS = ["M", "T", "W", "T", "F", "S", "S"]; // Mon–Sun
+  const DAY_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const ORDINALS = ["first", "second", "third", "fourth", "last"];
+
+  // Parse initialConfig into local state
+  const init = initialConfig && initialConfig.type === "fixed" ? initialConfig : null;
+  const [frequency, setFrequency] = useState(init?.frequency || "week");
+  const [interval, setInterval] = useState(init?.interval || 1);
+  const [daysOfWeek, setDaysOfWeek] = useState(init?.daysOfWeek || []);
+  const [monthlyMode, setMonthlyMode] = useState(init?.ordinal ? "ordinal" : "dayOfMonth");
+  const [dayOfMonth, setDayOfMonth] = useState(init?.dayOfMonth || new Date().getDate());
+  const [ordinal, setOrdinal] = useState(init?.ordinal || "first");
+  const [dayOfWeek, setDayOfWeek] = useState(init?.dayOfWeek || 1);
+  const [endMode, setEndMode] = useState("never");
+  const [endDate, setEndDate] = useState("");
+  const [anchorDate, setAnchorDate] = useState(init?.anchorDate || "");
+
+  // Map frequency display name
+  const freqToLabel = { day: "day", week: "week", month: "month" };
+  const freqOptions = ["day", "week", "month"];
+
+  // Map internal frequency to config frequency
+  const freqToConfig = { day: "daily", week: "weekly", month: "monthly" };
+
+  // Initialise frequency from config
+  useEffect(() => {
+    if (init?.frequency === "daily") setFrequency("day");
+    else if (init?.frequency === "weekly") setFrequency("week");
+    else if (init?.frequency === "monthly") setFrequency("month");
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function toggleDay(isoDay) {
+    setDaysOfWeek((prev) =>
+      prev.includes(isoDay) ? prev.filter((d) => d !== isoDay) : [...prev, isoDay].sort((a, b) => a - b)
+    );
+  }
+
+  function handleDone() {
+    const config = { type: "fixed", frequency: freqToConfig[frequency], interval };
+
+    if (frequency === "week") {
+      config.daysOfWeek = daysOfWeek.length > 0 ? daysOfWeek : [];
+      if (interval > 1 && anchorDate) {
+        config.anchorDate = anchorDate;
+      }
+    }
+
+    if (frequency === "month") {
+      if (monthlyMode === "dayOfMonth") {
+        config.dayOfMonth = dayOfMonth;
+      } else {
+        config.ordinal = ordinal;
+        config.dayOfWeek = dayOfWeek;
+      }
+    }
+
+    onDone(config, endMode === "on" && endDate ? endDate : null);
+  }
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={onCancel}>
+      <div
+        className="bg-background border border-border rounded-lg shadow-xl p-5 w-full max-w-sm mx-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-semibold mb-4">Custom recurrence</h3>
+
+        {/* Repeat every [N] [frequency] */}
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-sm">Repeat every</span>
+          <input
+            type="number"
+            min={1}
+            max={99}
+            value={interval}
+            onChange={(e) => setInterval(Math.max(1, parseInt(e.target.value) || 1))}
+            className="w-16 px-2 py-1 border border-border rounded text-center text-sm"
+          />
+          <select
+            value={frequency}
+            onChange={(e) => setFrequency(e.target.value)}
+            className="px-2 py-1 border border-border rounded text-sm"
+          >
+            {freqOptions.map((f) => (
+              <option key={f} value={f}>
+                {interval > 1 ? freqToLabel[f] + "s" : freqToLabel[f]}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Weekly: day-of-week toggles */}
+        {frequency === "week" && (
+          <div className="mb-4">
+            <span className="text-sm text-muted-foreground block mb-2">Repeat on</span>
+            <div className="flex gap-1">
+              {DAY_LABELS.map((label, i) => {
+                const isoDay = i + 1; // 1=Mon, 7=Sun
+                const active = daysOfWeek.includes(isoDay);
+                return (
+                  <button
+                    key={isoDay}
+                    type="button"
+                    onClick={() => toggleDay(isoDay)}
+                    className={`w-9 h-9 rounded-full text-xs font-medium transition-colors ${
+                      active
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Weekly + interval > 1: anchor date */}
+        {frequency === "week" && interval > 1 && (
+          <div className="mb-4">
+            <label className="text-sm text-muted-foreground block mb-1">
+              Anchor week of
+            </label>
+            <input
+              type="date"
+              value={anchorDate}
+              onChange={(e) => setAnchorDate(e.target.value)}
+              className="w-full px-2 py-1 border border-border rounded text-sm"
+            />
+            <p className="text-xs text-muted-foreground mt-1">Determines which week is "on"</p>
+          </div>
+        )}
+
+        {/* Monthly: day-of-month vs ordinal weekday */}
+        {frequency === "month" && (
+          <div className="mb-4 space-y-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="radio"
+                name="monthlyMode"
+                checked={monthlyMode === "dayOfMonth"}
+                onChange={() => setMonthlyMode("dayOfMonth")}
+              />
+              <span>On day</span>
+              <input
+                type="number"
+                min={1}
+                max={31}
+                value={dayOfMonth}
+                onChange={(e) => setDayOfMonth(Math.min(31, Math.max(1, parseInt(e.target.value) || 1)))}
+                className="w-14 px-2 py-1 border border-border rounded text-center text-sm"
+                disabled={monthlyMode !== "dayOfMonth"}
+              />
+            </label>
+            <label className="flex items-center gap-2 text-sm flex-wrap">
+              <input
+                type="radio"
+                name="monthlyMode"
+                checked={monthlyMode === "ordinal"}
+                onChange={() => setMonthlyMode("ordinal")}
+              />
+              <span>On the</span>
+              <select
+                value={ordinal}
+                onChange={(e) => setOrdinal(e.target.value)}
+                className="px-2 py-1 border border-border rounded text-sm"
+                disabled={monthlyMode !== "ordinal"}
+              >
+                {ORDINALS.map((o) => (
+                  <option key={o} value={o}>{o}</option>
+                ))}
+              </select>
+              <select
+                value={dayOfWeek}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDayOfWeek(v === "weekday" ? "weekday" : parseInt(v));
+                }}
+                className="px-2 py-1 border border-border rounded text-sm"
+                disabled={monthlyMode !== "ordinal"}
+              >
+                {DAY_FULL.map((name, i) => (
+                  <option key={i + 1} value={i + 1}>{name}</option>
+                ))}
+                <option value="weekday">Weekday (Mon–Fri)</option>
+              </select>
+            </label>
+          </div>
+        )}
+
+        {/* End date */}
+        <div className="mb-4 space-y-2">
+          <span className="text-sm text-muted-foreground block">Ends</span>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="radio"
+              name="endMode"
+              checked={endMode === "never"}
+              onChange={() => setEndMode("never")}
+            />
+            Never
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="radio"
+              name="endMode"
+              checked={endMode === "on"}
+              onChange={() => setEndMode("on")}
+            />
+            <span>On</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="px-2 py-1 border border-border rounded text-sm"
+              disabled={endMode !== "on"}
+            />
+          </label>
+        </div>
+
+        {/* Actions */}
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-4 py-2 text-sm border border-border rounded hover:bg-muted transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleDone}
+            className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 transition-colors"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Interval-from-completion dialog — schedule next event N days/weeks/months after done.
+ */
+function IntervalRecurrenceDialog({ initialConfig, onDone, onCancel }) {
+  const init = initialConfig && initialConfig.type === "interval" ? initialConfig : null;
+  const [every, setEvery] = useState(init?.every || 2);
+  const [unit, setUnit] = useState(init?.unit || "days");
+  const [endMode, setEndMode] = useState("never");
+  const [endDate, setEndDate] = useState("");
+
+  function handleDone() {
+    const config = { type: "interval", every, unit };
+    onDone(config, endMode === "on" && endDate ? endDate : null);
+  }
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={onCancel}>
+      <div
+        className="bg-background border border-border rounded-lg shadow-xl p-5 w-full max-w-sm mx-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-semibold mb-4">Repeat after completion</h3>
+
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-sm">Schedule next event</span>
+          <input
+            type="number"
+            min={1}
+            max={99}
+            value={every}
+            onChange={(e) => setEvery(Math.max(1, parseInt(e.target.value) || 1))}
+            className="w-16 px-2 py-1 border border-border rounded text-center text-sm"
+          />
+          <select
+            value={unit}
+            onChange={(e) => setUnit(e.target.value)}
+            className="px-2 py-1 border border-border rounded text-sm"
+          >
+            <option value="days">{every > 1 ? "days" : "day"}</option>
+            <option value="weeks">{every > 1 ? "weeks" : "week"}</option>
+            <option value="months">{every > 1 ? "months" : "month"}</option>
+          </select>
+          <span className="text-sm">after done</span>
+        </div>
+
+        <div className="mb-4 space-y-2">
+          <span className="text-sm text-muted-foreground block">Ends</span>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="radio" name="intervalEndMode" checked={endMode === "never"} onChange={() => setEndMode("never")} />
+            Never
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="radio" name="intervalEndMode" checked={endMode === "on"} onChange={() => setEndMode("on")} />
+            <span>On</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="px-2 py-1 border border-border rounded text-sm"
+              disabled={endMode !== "on"}
+            />
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onCancel} className="px-4 py-2 text-sm border border-border rounded hover:bg-muted transition-colors">
+            Cancel
+          </button>
+          <button type="button" onClick={handleDone} className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 transition-colors">
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Quick-select recurrence dropdown — replaces the old 4-option <select>.
+ * Shows dynamic labels based on today's date (e.g., "Weekly on Friday").
+ * "Custom..." opens the CustomRecurrenceDialog inline.
+ * "After completion..." opens the interval dialog (Step 8).
+ */
+function RecurrenceQuickSelect({ value, onChange, onOpenInterval, onEndDateChange, className = "" }) {
+  const [open, setOpen] = useState(false);
+  const [showCustom, setShowCustom] = useState(false);
+  const [showInterval, setShowInterval] = useState(false);
+  const ref = useRef(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  // Dynamic labels based on today
+  const today = new Date();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const todayName = dayNames[today.getDay()];
+  const todayIsoDay = today.getDay() === 0 ? 7 : today.getDay();
+  const todayDom = today.getDate();
+
+  function suffix(n) {
+    const m = n % 100;
+    if (m >= 11 && m <= 13) return `${n}th`;
+    switch (n % 10) {
+      case 1: return `${n}st`;
+      case 2: return `${n}nd`;
+      case 3: return `${n}rd`;
+      default: return `${n}th`;
+    }
+  }
+
+  const options = [
+    {
+      label: "Does not repeat",
+      config: { type: "once" },
+    },
+    {
+      label: "Daily",
+      config: { type: "fixed", frequency: "daily", interval: 1 },
+    },
+    {
+      label: `Weekly on ${todayName}`,
+      config: { type: "fixed", frequency: "weekly", interval: 1, daysOfWeek: [todayIsoDay] },
+    },
+    {
+      label: `Monthly on the ${suffix(todayDom)}`,
+      config: { type: "fixed", frequency: "monthly", interval: 1, dayOfMonth: todayDom },
+    },
+    {
+      label: "Every weekday (Mon\u2013Fri)",
+      config: { type: "fixed", frequency: "weekly", interval: 1, daysOfWeek: [1, 2, 3, 4, 5] },
+    },
+  ];
+
+  // Determine display label from current value
+  function getDisplayLabel() {
+    if (!value || value.type === "once") return "Does not repeat";
+    // Check if it matches a quick option (use quick label for those)
+    if (value.type === "fixed") {
+      const match = options.find((o) =>
+        o.config.type === value.type &&
+        o.config.frequency === value.frequency &&
+        o.config.interval === value.interval &&
+        JSON.stringify(o.config.daysOfWeek || null) === JSON.stringify(value.daysOfWeek || null) &&
+        (o.config.dayOfMonth || null) === (value.dayOfMonth || null)
+      );
+      if (match) return match.label;
+    }
+    // For custom configs and interval configs, use the display string helper
+    return getRecurrenceDisplayString(value);
+  }
+
+  function select(option) {
+    onChange(option.config);
+    setOpen(false);
+  }
+
+  return (
+    <div ref={ref} className={`relative ${className}`}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full px-3 py-2 border border-border rounded text-base text-left bg-background flex items-center justify-between"
+      >
+        <span>{getDisplayLabel()}</span>
+        <ChevronDown className="w-4 h-4 text-muted-foreground" />
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full bg-background border border-border rounded shadow-lg">
+          {options.map((option, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => select(option)}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors"
+            >
+              {option.label}
+            </button>
+          ))}
+          <div className="border-t border-border" />
+          <button
+            type="button"
+            onClick={() => { setOpen(false); setShowCustom(true); }}
+            className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors text-muted-foreground"
+          >
+            Custom…
+          </button>
+          <button
+            type="button"
+            onClick={() => { setOpen(false); setShowInterval(true); }}
+            className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors text-muted-foreground"
+          >
+            After completion…
+          </button>
+        </div>
+      )}
+
+      {/* Custom fixed schedule dialog */}
+      {showCustom && (
+        <CustomRecurrenceDialog
+          initialConfig={value && value.type === "fixed" ? value : null}
+          onDone={(config, endDateVal) => {
+            onChange(config);
+            if (onEndDateChange && endDateVal) onEndDateChange(endDateVal);
+            setShowCustom(false);
+          }}
+          onCancel={() => setShowCustom(false)}
+        />
+      )}
+
+      {/* Interval dialog placeholder — implemented in Step 8 */}
+      {showInterval && (
+        <IntervalRecurrenceDialog
+          initialConfig={value && value.type === "interval" ? value : null}
+          onDone={(config, endDateVal) => {
+            onChange(config);
+            if (onEndDateChange && endDateVal) onEndDateChange(endDateVal);
+            setShowInterval(false);
+          }}
+          onCancel={() => setShowInterval(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 function IntentionCard({
   intent,
   contexts,
@@ -7244,7 +7806,9 @@ function IntentionCard({
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(intent.text);
-  const [recurrence, setRecurrence] = useState(intent.recurrence || "once");
+  const [recurrenceConfig, setRecurrenceConfig] = useState(intent.recurrenceConfig || null);
+  const [intentEndDate, setIntentEndDate] = useState(intent.endDate || null);
+  const [targetStartDate, setTargetStartDate] = useState(intent.targetStartDate || null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedDate, setSelectedDate] = useState("");
   const [itemSearch, setItemSearch] = useState("");
@@ -7261,13 +7825,13 @@ function IntentionCard({
     if (!isEditing || !onDirtyChange) return;
     const isDirty =
       name !== intent.text ||
-      recurrence !== (intent.recurrence || "once") ||
+      JSON.stringify(recurrenceConfig) !== JSON.stringify(intent.recurrenceConfig || null) ||
       selectedItemId !== (intent.itemId || "") ||
       selectedCollectionId !== (intent.collectionId || "") ||
       selectedContextId !== (intent.contextId || "") ||
       JSON.stringify(tags) !== JSON.stringify(intent.tags || []);
     onDirtyChange(isDirty, "this intention");
-  }, [isEditing, name, recurrence, selectedItemId, selectedCollectionId, selectedContextId, tags]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isEditing, name, recurrenceConfig, selectedItemId, selectedCollectionId, selectedContextId, tags]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => { if (onDirtyChange) onDirtyChange(false); };
@@ -7313,7 +7877,7 @@ function IntentionCard({
     if (onDirtyChange) onDirtyChange(false);
     if (onUpdate) {
       const updates = showScheduling
-        ? { text: name, recurrence, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null }
+        ? { text: name, recurrenceConfig, endDate: intentEndDate, targetStartDate, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null }
         : { text: name, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null };
       onUpdate(intent.id, updates, scheduledDate);
     }
@@ -7329,7 +7893,9 @@ function IntentionCard({
       onCancel();
     } else {
       setName(intent.text);
-      setRecurrence(intent.recurrence || "once");
+      setRecurrenceConfig(intent.recurrenceConfig || null);
+      setIntentEndDate(intent.endDate || null);
+      setTargetStartDate(intent.targetStartDate || null);
       setTags(intent.tags || []);
       setSelectedItemId(intent.itemId || "");
       setSelectedCollectionId(intent.collectionId || "");
@@ -7513,16 +8079,40 @@ function IntentionCard({
               <label className="block text-sm font-medium text-foreground mb-1">
                 Recurrence
               </label>
-              <select
-                value={recurrence}
-                onChange={(e) => setRecurrence(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded text-base"
-              >
-                <option value="once">One time</option>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
-              </select>
+              <RecurrenceQuickSelect
+                value={recurrenceConfig}
+                onChange={(config) => {
+                  setRecurrenceConfig(config);
+                }}
+                onEndDateChange={setIntentEndDate}
+              />
+            </div>
+          )}
+
+          {showScheduling && (
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-foreground mb-1">
+                  Target Start Date
+                </label>
+                <input
+                  type="date"
+                  value={targetStartDate || ""}
+                  onChange={(e) => setTargetStartDate(e.target.value || null)}
+                  className="w-full px-3 py-2 border border-border rounded text-base"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-foreground mb-1">
+                  End Date
+                </label>
+                <input
+                  type="date"
+                  value={intentEndDate || ""}
+                  onChange={(e) => setIntentEndDate(e.target.value || null)}
+                  className="w-full px-3 py-2 border border-border rounded text-base"
+                />
+              </div>
             </div>
           )}
 
@@ -7602,8 +8192,8 @@ function IntentionCard({
           <p className="font-medium">{getIntentDisplay(intent)}</p>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             {showScheduling && (
-              <span className="text-sm text-muted-foreground capitalize">
-                {intent.recurrence || "once"}
+              <span className="text-sm text-muted-foreground">
+                {getRecurrenceDisplayString(getRecurrenceConfig(intent), intent.endDate)}
               </span>
             )}
             {contextName && (

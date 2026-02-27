@@ -1,6 +1,6 @@
 # Progress: Sam Data Layer Normalization + Audio Sync
 
-## Status: In Progress — Phase 7 (Phase 5 deferred)
+## Status: Complete ✅ (Phase 5 deferred)
 
 ---
 
@@ -47,13 +47,13 @@
 - [x] Step 6.3: Add `AudioControls.jsx` — play/pause, seek bar, tempo slider
 - [x] Step 6.4: Verify — upload an MP3, confirm it plays back, confirm caching works (reload page, check network tab)
 
-## Phase 7: Audio Scroll Sync
+## Phase 7: Audio Scroll Sync ✅
 
 - [x] Step 7.1: Add audio sync mode to `ScrollEngine.jsx` — derive position from `audioElement.currentTime`
 - [x] Step 7.2: Build measure-to-time map from `audio_offset_ms` values (or calculate from BPM for constant-tempo songs)
 - [x] Step 7.3: Implement tempo control — `playbackRate` + `preservesPitch`
-- [ ] Step 7.4: Verify — play Someone Like You with MP3, confirm notation scrolls in sync
-- [ ] Step 7.5: Test tempo at 0.5x — confirm pitch preserved, scroll stays synced
+- [x] Step 7.4: Verify — play Someone Like You with MP3, confirm notation scrolls in sync
+- [x] Step 7.5: Test tempo at 0.5x — confirm pitch preserved, scroll stays synced
 
 ---
 
