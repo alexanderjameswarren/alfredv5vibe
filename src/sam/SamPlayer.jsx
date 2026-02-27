@@ -315,9 +315,8 @@ export default function SamPlayer({ onBack }) {
   }
 
   function handleScoreTap() {
-    if (playbackState === "stopped" && !songDbId) return;
-    if (playbackState === "stopped") handlePlay();
-    else if (playbackState === "playing") handlePause();
+    if (playbackState === "stopped") return;
+    if (playbackState === "playing") handlePause();
     else if (playbackState === "paused") handleResume();
   }
 
