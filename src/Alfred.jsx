@@ -3719,6 +3719,12 @@ export default function Alfred() {
             <div className="p-4 sm:p-6 bg-card border border-border rounded-lg">
               <p className="text-muted-foreground">Settings coming soon...</p>
             </div>
+            {process.env.REACT_APP_BUILD_TIMESTAMP && (
+              <div className="mt-6 text-xs text-muted-foreground/60">
+                <p>Last deployed: {new Date(process.env.REACT_APP_BUILD_TIMESTAMP).toLocaleString()}</p>
+                <p>Commit: {(process.env.REACT_APP_COMMIT_SHA || 'local').slice(0, 7)}</p>
+              </div>
+            )}
           </div>
         )}
 
