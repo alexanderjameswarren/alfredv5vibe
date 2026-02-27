@@ -32,6 +32,7 @@ import {
   Timer,
   Pencil,
   RefreshCw,
+  ArchiveRestore,
 } from "lucide-react";
 import { supabase, supabaseUrl } from "./supabaseClient";
 import SamPlayer from "./sam/SamPlayer";
@@ -696,6 +697,43 @@ export default function Alfred() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [realtimeStatus, setRealtimeStatus] = useState('disconnected'); // 'connected', 'connecting', 'disconnected'
+  const [recycleTab, setRecycleTab] = useState("items");
+  const [recycleData, setRecycleData] = useState([]);
+  const [recycleLoading, setRecycleLoading] = useState(false);
+  const [recycleHasMore, setRecycleHasMore] = useState(false);
+  const [recycleSelected, setRecycleSelected] = useState(new Set());
+
+  // Unsaved changes guard
+  const unsavedChangesRef = useRef(false);
+  const unsavedChangesLabelRef = useRef("");
+
+  function setUnsavedChanges(dirty, label = "") {
+    unsavedChangesRef.current = dirty;
+    unsavedChangesLabelRef.current = label;
+  }
+
+  function guardedSetView(newView) {
+    if (unsavedChangesRef.current) {
+      const label = unsavedChangesLabelRef.current || "this form";
+      if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) {
+        return;
+      }
+      unsavedChangesRef.current = false;
+      unsavedChangesLabelRef.current = "";
+    }
+    setView(newView);
+  }
+
+  useEffect(() => {
+    function handleBeforeUnload(e) {
+      if (unsavedChangesRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
 
   async function withLoading(message, operation) {
     setIsLoading(true);
@@ -915,6 +953,218 @@ export default function Alfred() {
   async function manualRefresh() {
     return withLoading('Refreshing...', refreshData);
   }
+
+  const RECYCLE_PAGE_SIZE = 30;
+
+  async function loadRecycleBin(tab, append = false) {
+    setRecycleLoading(true);
+    try {
+      let query;
+      const offset = append ? recycleData.length : 0;
+
+      switch (tab) {
+        case "items":
+          query = supabase.from("items").select("id, name, context_id, tags, updated_at")
+            .eq("archived", true)
+            .order("updated_at", { ascending: false, nullsFirst: false })
+            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          break;
+        case "intents":
+          query = supabase.from("intents").select("id, text, context_id, recurrence, tags, updated_at")
+            .eq("archived", true)
+            .order("updated_at", { ascending: false, nullsFirst: false })
+            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          break;
+        case "events":
+          query = supabase.from("events").select("id, intent_id, time, context_id, updated_at")
+            .eq("archived", true)
+            .order("updated_at", { ascending: false, nullsFirst: false })
+            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          break;
+        case "executions":
+          query = supabase.from("executions").select("id, intent_id, event_id, outcome, started_at, closed_at, updated_at")
+            .eq("status", "closed")
+            .order("updated_at", { ascending: false, nullsFirst: false })
+            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          break;
+        case "songs":
+          query = supabase.from("sam_songs").select("id, title, artist, updated_at")
+            .eq("archived", true)
+            .order("updated_at", { ascending: false, nullsFirst: false })
+            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          break;
+        case "snippets":
+          query = supabase.from("sam_snippets").select("id, title, song_id, start_measure, end_measure, updated_at")
+            .eq("archived", true)
+            .order("updated_at", { ascending: false, nullsFirst: false })
+            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          break;
+        default:
+          setRecycleLoading(false);
+          return;
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        console.error("[Recycle] Load error:", error);
+        setRecycleLoading(false);
+        return;
+      }
+
+      const camelData = (data || []).map(d => storage.toCamelCase(d));
+      setRecycleData(append ? [...recycleData, ...camelData] : camelData);
+      setRecycleHasMore((data || []).length === RECYCLE_PAGE_SIZE);
+    } catch (e) {
+      console.error("[Recycle] Load error:", e);
+    } finally {
+      setRecycleLoading(false);
+    }
+  }
+
+  async function recycleRestore(tab, id) {
+    setRecycleLoading(true);
+    try {
+      let table, updates;
+      switch (tab) {
+        case "items": table = "items"; updates = { archived: false }; break;
+        case "intents": table = "intents"; updates = { archived: false }; break;
+        case "events": table = "events"; updates = { archived: false }; break;
+        case "executions": table = "executions"; updates = { status: "paused" }; break;
+        case "songs": table = "sam_songs"; updates = { archived: false }; break;
+        case "snippets": table = "sam_snippets"; updates = { archived: false }; break;
+        default: return;
+      }
+
+      const { error } = await supabase.from(table).update(updates).eq("id", id);
+      if (error) throw error;
+
+      setRecycleData(prev => prev.filter(r => r.id !== id));
+
+      if (["items", "intents", "events"].includes(tab)) {
+        refreshData();
+      }
+    } catch (e) {
+      console.error("[Recycle] Restore error:", e);
+      alert("Failed to restore: " + e.message);
+    } finally {
+      setRecycleLoading(false);
+    }
+  }
+
+  async function recyclePermanentDelete(tab, id) {
+    if (!window.confirm("Permanently delete this record? This cannot be undone.")) return;
+    setRecycleLoading(true);
+    try {
+      let table;
+      switch (tab) {
+        case "items": table = "items"; break;
+        case "intents": table = "intents"; break;
+        case "events": table = "events"; break;
+        case "executions": table = "executions"; break;
+        case "songs": table = "sam_songs"; break;
+        case "snippets": table = "sam_snippets"; break;
+        default: return;
+      }
+
+      const { error } = await supabase.from(table).delete().eq("id", id);
+      if (error) throw error;
+
+      setRecycleData(prev => prev.filter(r => r.id !== id));
+    } catch (e) {
+      console.error("[Recycle] Delete error:", e);
+      alert("Failed to delete: " + e.message);
+    } finally {
+      setRecycleLoading(false);
+    }
+  }
+
+  function recycleToggleSelect(id) {
+    setRecycleSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function recycleSelectAll() {
+    if (recycleSelected.size === recycleData.length) {
+      setRecycleSelected(new Set());
+    } else {
+      setRecycleSelected(new Set(recycleData.map(r => r.id)));
+    }
+  }
+
+  async function recycleBulkRestore() {
+    if (recycleSelected.size === 0) return;
+    setRecycleLoading(true);
+    try {
+      let table, updates;
+      switch (recycleTab) {
+        case "items": table = "items"; updates = { archived: false }; break;
+        case "intents": table = "intents"; updates = { archived: false }; break;
+        case "events": table = "events"; updates = { archived: false }; break;
+        case "executions": table = "executions"; updates = { status: "paused" }; break;
+        case "songs": table = "sam_songs"; updates = { archived: false }; break;
+        case "snippets": table = "sam_snippets"; updates = { archived: false }; break;
+        default: return;
+      }
+
+      const ids = Array.from(recycleSelected);
+      const { error } = await supabase.from(table).update(updates).in("id", ids);
+      if (error) throw error;
+
+      setRecycleData(prev => prev.filter(r => !recycleSelected.has(r.id)));
+      setRecycleSelected(new Set());
+
+      if (["items", "intents", "events"].includes(recycleTab)) {
+        refreshData();
+      }
+    } catch (e) {
+      console.error("[Recycle] Bulk restore error:", e);
+      alert("Failed to restore: " + e.message);
+    } finally {
+      setRecycleLoading(false);
+    }
+  }
+
+  async function recycleBulkDelete() {
+    if (recycleSelected.size === 0) return;
+    if (!window.confirm(`Permanently delete ${recycleSelected.size} record${recycleSelected.size > 1 ? "s" : ""}? This cannot be undone.`)) return;
+    setRecycleLoading(true);
+    try {
+      let table;
+      switch (recycleTab) {
+        case "items": table = "items"; break;
+        case "intents": table = "intents"; break;
+        case "events": table = "events"; break;
+        case "executions": table = "executions"; break;
+        case "songs": table = "sam_songs"; break;
+        case "snippets": table = "sam_snippets"; break;
+        default: return;
+      }
+
+      const ids = Array.from(recycleSelected);
+      const { error } = await supabase.from(table).delete().in("id", ids);
+      if (error) throw error;
+
+      setRecycleData(prev => prev.filter(r => !recycleSelected.has(r.id)));
+      setRecycleSelected(new Set());
+    } catch (e) {
+      console.error("[Recycle] Bulk delete error:", e);
+      alert("Failed to delete: " + e.message);
+    } finally {
+      setRecycleLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (view === "recycle") {
+      setRecycleSelected(new Set());
+      loadRecycleBin(recycleTab);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, recycleTab]);
 
   async function setupRealtimeSubscriptions(currentUser) {
     if (!currentUser) return null;
@@ -1904,6 +2154,12 @@ export default function Alfred() {
   }
 
   function handleBackFromIntentionDetail() {
+    if (unsavedChangesRef.current) {
+      const label = unsavedChangesLabelRef.current || "this form";
+      if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) return;
+      unsavedChangesRef.current = false;
+      unsavedChangesLabelRef.current = "";
+    }
     setSelectedIntentionId(null);
     setView(intentionReturnView);
   }
@@ -1921,6 +2177,12 @@ export default function Alfred() {
   }
 
   function handleBackFromItemDetail() {
+    if (unsavedChangesRef.current) {
+      const label = unsavedChangesLabelRef.current || "this form";
+      if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) return;
+      unsavedChangesRef.current = false;
+      unsavedChangesLabelRef.current = "";
+    }
     if (itemHistoryStack.length > 0) {
       // Pop back to previous item
       const stack = [...itemHistoryStack];
@@ -2308,14 +2570,14 @@ export default function Alfred() {
               )}
             </div>
             <button
-              onClick={() => setView("settings")}
+              onClick={() => guardedSetView("settings")}
               className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
               title="Settings"
             >
               <Settings className="w-5 h-5" />
             </button>
             <button
-              onClick={() => setView("recycle")}
+              onClick={() => guardedSetView("recycle")}
               className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
               title="Recycle Bin"
             >
@@ -2365,6 +2627,12 @@ export default function Alfred() {
                 <button
                   key={item.key}
                   onClick={() => {
+                    if (unsavedChangesRef.current) {
+                      const label = unsavedChangesLabelRef.current || "this form";
+                      if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) return;
+                      unsavedChangesRef.current = false;
+                      unsavedChangesLabelRef.current = "";
+                    }
                     if (item.key === "sam") setPreviousView(view);
                     setView(item.key);
                     setMenuOpen(false);
@@ -2417,14 +2685,14 @@ export default function Alfred() {
                 )}
               </div>
               <button
-                onClick={() => setView("settings")}
+                onClick={() => guardedSetView("settings")}
                 className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
                 title="Settings"
               >
                 <Settings className="w-5 h-5" />
               </button>
               <button
-                onClick={() => setView("recycle")}
+                onClick={() => guardedSetView("recycle")}
                 className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
                 title="Recycle Bin"
               >
@@ -2443,7 +2711,7 @@ export default function Alfred() {
           {/* Desktop navigation tabs */}
           <nav className="flex gap-2 mt-3 pb-1">
             <button
-              onClick={() => setView("home")}
+              onClick={() => guardedSetView("home")}
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "home"
                   ? "bg-primary text-white shadow-sm"
@@ -2453,7 +2721,7 @@ export default function Alfred() {
               Home
             </button>
             <button
-              onClick={() => setView("inbox")}
+              onClick={() => guardedSetView("inbox")}
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "inbox"
                   ? "bg-primary text-white shadow-sm"
@@ -2463,7 +2731,7 @@ export default function Alfred() {
               Inbox {inboxItems.length > 0 && `(${inboxItems.length})`}
             </button>
             <button
-              onClick={() => setView("contexts")}
+              onClick={() => guardedSetView("contexts")}
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "contexts"
                   ? "bg-primary text-white shadow-sm"
@@ -2473,7 +2741,7 @@ export default function Alfred() {
               Contexts
             </button>
             <button
-              onClick={() => setView("schedule")}
+              onClick={() => guardedSetView("schedule")}
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "schedule"
                   ? "bg-primary text-white shadow-sm"
@@ -2485,7 +2753,7 @@ export default function Alfred() {
                 `(${allNonArchivedEvents.length})`}
             </button>
             <button
-              onClick={() => setView("intentions")}
+              onClick={() => guardedSetView("intentions")}
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "intentions"
                   ? "bg-primary text-white shadow-sm"
@@ -2495,7 +2763,7 @@ export default function Alfred() {
               Intentions
             </button>
             <button
-              onClick={() => setView("memories")}
+              onClick={() => guardedSetView("memories")}
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "memories"
                   ? "bg-primary text-white shadow-sm"
@@ -2505,7 +2773,7 @@ export default function Alfred() {
               Memories
             </button>
             <button
-              onClick={() => setView("collections")}
+              onClick={() => guardedSetView("collections")}
               className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "collections"
                   ? "bg-primary text-white shadow-sm"
@@ -2516,6 +2784,12 @@ export default function Alfred() {
             </button>
             <button
               onClick={() => {
+                if (unsavedChangesRef.current) {
+                  const label = unsavedChangesLabelRef.current || "this form";
+                  if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) return;
+                  unsavedChangesRef.current = false;
+                  unsavedChangesLabelRef.current = "";
+                }
                 setPreviousView(view);
                 setView("sam");
               }}
@@ -2733,6 +3007,7 @@ export default function Alfred() {
                     onSave={handleInboxSave}
                     onArchive={archiveInboxItem}
                     onEnrich={handleInboxEnrich}
+                    onDirtyChange={setUnsavedChanges}
                   />
                 ))}
               </div>
@@ -2765,6 +3040,7 @@ export default function Alfred() {
                   setShowContextForm(false);
                   setEditingContext(null);
                 }}
+                onDirtyChange={setUnsavedChanges}
               />
             ) : contexts.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
@@ -2832,6 +3108,7 @@ export default function Alfred() {
               setSelectedCollectionId(id);
               setView("collection-detail");
             }}
+            onDirtyChange={setUnsavedChanges}
           />
         )}
 
@@ -2858,6 +3135,7 @@ export default function Alfred() {
             onCancelExecution={cancelExecutionForEvent}
             onArchiveIntention={archiveIntention}
             collections={collections}
+            onDirtyChange={setUnsavedChanges}
           />
         )}
 
@@ -2894,6 +3172,7 @@ export default function Alfred() {
               }
             }}
             collections={collections}
+            onDirtyChange={setUnsavedChanges}
           />
         )}
 
@@ -3004,6 +3283,7 @@ export default function Alfred() {
                   showScheduling={true}
                   isEditing={true}
                   onCancel={() => setShowAddIntentionForm(false)}
+                  onDirtyChange={setUnsavedChanges}
                 />
               </div>
             )}
@@ -3413,9 +3693,168 @@ export default function Alfred() {
         {view === "recycle" && (
           <div>
             <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Recycle Bin</h2>
-            <div className="p-4 sm:p-6 bg-card border border-border rounded-lg">
-              <p className="text-muted-foreground">Recycle bin coming soon...</p>
+
+            {/* Tabs */}
+            <div className="flex gap-4 border-b border-border mb-4 overflow-x-auto">
+              {[
+                { key: "items", label: "Items" },
+                { key: "intents", label: "Intents" },
+                { key: "events", label: "Events" },
+                { key: "executions", label: "Executions" },
+                { key: "songs", label: "Songs" },
+                { key: "snippets", label: "Snippets" },
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setRecycleTab(tab.key)}
+                  className={`pb-2 border-b-2 whitespace-nowrap cursor-pointer transition-colors text-sm ${
+                    recycleTab === tab.key
+                      ? "border-primary text-primary font-medium"
+                      : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
+
+            {/* Bulk action bar */}
+            <div className="flex items-center justify-between mb-3">
+              <label className="flex items-center gap-2 cursor-pointer min-h-[44px]">
+                <input
+                  type="checkbox"
+                  checked={recycleData.length > 0 && recycleSelected.size === recycleData.length}
+                  onChange={recycleSelectAll}
+                  className="w-4 h-4 rounded border-border accent-primary"
+                />
+                <span className="text-sm text-muted-foreground">
+                  {recycleSelected.size > 0
+                    ? `${recycleSelected.size} selected`
+                    : "Select all"}
+                </span>
+              </label>
+              {recycleSelected.size > 0 && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={recycleBulkRestore}
+                    disabled={recycleLoading}
+                    className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-success hover:bg-secondary rounded-lg transition-colors min-h-[44px] disabled:opacity-50"
+                  >
+                    <ArchiveRestore className="w-4 h-4" />
+                    Restore
+                  </button>
+                  <button
+                    onClick={recycleBulkDelete}
+                    disabled={recycleLoading}
+                    className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-destructive hover:bg-secondary rounded-lg transition-colors min-h-[44px] disabled:opacity-50"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Content */}
+            {recycleLoading && recycleData.length === 0 ? (
+              <p className="text-muted-foreground text-sm">Loading...</p>
+            ) : recycleData.length === 0 ? (
+              <p className="text-muted-foreground text-sm">No archived {recycleTab}.</p>
+            ) : (
+              <div className="space-y-2">
+                {recycleData.map((record) => {
+                  let title = "";
+                  let subtitle = "";
+                  const contextName = record.contextId
+                    ? contexts.find((c) => c.id === record.contextId)?.name
+                    : null;
+
+                  switch (recycleTab) {
+                    case "items":
+                      title = record.name || "Untitled item";
+                      subtitle = [contextName, (record.tags || []).join(", ")].filter(Boolean).join(" · ");
+                      break;
+                    case "intents":
+                      title = record.text || "Untitled intent";
+                      subtitle = [contextName, record.recurrence !== "once" ? record.recurrence : null].filter(Boolean).join(" · ");
+                      break;
+                    case "events": {
+                      const intent = intents.find((i) => i.id === record.intentId);
+                      title = intent ? intent.text : "Unknown intent";
+                      subtitle = [record.time, contextName].filter(Boolean).join(" · ");
+                      break;
+                    }
+                    case "executions": {
+                      const intent = intents.find((i) => i.id === record.intentId);
+                      title = intent ? intent.text : "Unknown intent";
+                      subtitle = [record.outcome, record.closedAt ? new Date(record.closedAt).toLocaleDateString() : null].filter(Boolean).join(" · ");
+                      break;
+                    }
+                    case "songs":
+                      title = record.title || "Untitled song";
+                      subtitle = record.artist || "";
+                      break;
+                    case "snippets":
+                      title = record.title || "Untitled snippet";
+                      subtitle = `Measures ${record.startMeasure}–${record.endMeasure}`;
+                      break;
+                    default:
+                      break;
+                  }
+
+                  const updatedLabel = record.updatedAt
+                    ? new Date(record.updatedAt).toLocaleDateString()
+                    : "";
+
+                  return (
+                    <div
+                      key={record.id}
+                      className="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-lg group"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={recycleSelected.has(record.id)}
+                        onChange={() => recycleToggleSelect(record.id)}
+                        className="w-4 h-4 flex-shrink-0 rounded border-border accent-primary"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-foreground truncate">{title}</p>
+                        {(subtitle || updatedLabel) && (
+                          <p className="text-xs text-muted-foreground truncate">
+                            {[subtitle, updatedLabel].filter(Boolean).join(" · ")}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => recycleRestore(recycleTab, record.id)}
+                        className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-success transition-colors"
+                        title="Restore"
+                      >
+                        <ArchiveRestore className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => recyclePermanentDelete(recycleTab, record.id)}
+                        className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-destructive transition-colors"
+                        title="Delete forever"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+
+                {/* Load More */}
+                {recycleHasMore && (
+                  <button
+                    onClick={() => loadRecycleBin(recycleTab, true)}
+                    disabled={recycleLoading}
+                    className="w-full py-3 text-sm text-primary hover:text-primary-hover font-medium disabled:opacity-50"
+                  >
+                    {recycleLoading ? "Loading..." : "Load more"}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -3513,6 +3952,7 @@ function InboxCard({
   onSave,
   onArchive,
   onEnrich,
+  onDirtyChange,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showAiInfo, setShowAiInfo] = useState(false);
@@ -3573,6 +4013,8 @@ function InboxCard({
   const [itemItemLinks, setItemItemLinks] = useState([]);
   const [showItemItemPicker, setShowItemItemPicker] = useState(false);
   const [itemItemSearch, setItemItemSearch] = useState('');
+  const inboxElementDescRefs = useRef([]);
+  const inboxItemDescRef = useRef(null);
 
   // Collection form state
   const [selectedCollectionId, setSelectedCollectionId] = useState(
@@ -3660,6 +4102,47 @@ function InboxCard({
     }
   }, [inboxItem.aiStatus, inboxItem, items]);
 
+  useEffect(() => {
+    if (!expanded || !onDirtyChange) return;
+    const isDirty =
+      intentText !== (inboxItem.suggestedIntentText || inboxItem.capturedText) ||
+      intentRecurrence !== (inboxItem.suggestedIntentRecurrence || 'once') ||
+      intentContextId !== (inboxItem.suggestedContextId || '') ||
+      intentItemId !== (inboxItem.suggestedItemId || '') ||
+      JSON.stringify(intentTags) !== JSON.stringify(inboxItem.suggestedTags || []) ||
+      eventDate !== (inboxItem.suggestedEventDate || '') ||
+      itemName !== (inboxItem.suggestedItemText || inboxItem.capturedText) ||
+      itemDescription !== (inboxItem.suggestedItemDescription || '') ||
+      itemContextId !== (inboxItem.suggestedContextId || '') ||
+      JSON.stringify(itemTags) !== JSON.stringify(inboxItem.suggestedTags || []) ||
+      JSON.stringify(itemElements) !== JSON.stringify(
+        (inboxItem.suggestedItemElements || []).map((el) =>
+          el.name ? el : {
+            name: el.text || '',
+            displayType: el.type || 'step',
+            quantity: el.quantity || '',
+            description: el.description || ''
+          }
+        )
+      ) ||
+      itemItemLinks.length > 0 ||
+      selectedCollectionId !== (inboxItem.suggestedCollectionId || '') ||
+      collectionItemId !== (inboxItem.suggestedItemId || '') ||
+      intentionOpen !== !!inboxItem.suggestIntent ||
+      itemOpen !== !!inboxItem.suggestItem ||
+      collectionOpen !== !!inboxItem.suggestedCollectionId;
+    onDirtyChange(isDirty, "this inbox item");
+  }, [
+    expanded, intentText, intentRecurrence, intentContextId, intentItemId,
+    intentTags, eventDate, itemName, itemDescription, itemContextId,
+    itemElements, itemTags, itemItemLinks, selectedCollectionId,
+    collectionItemId, intentionOpen, itemOpen, collectionOpen
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    return () => { if (onDirtyChange) onDirtyChange(false); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Item element helpers
   function addElement() {
     setItemElements([
@@ -3697,6 +4180,60 @@ function InboxCard({
     const newElements = [...itemElements];
     newElements[index] = { ...newElements[index], [field]: value };
     setItemElements(newElements);
+  }
+
+  function handleInboxItemNameChange(newName) {
+    const OVERFLOW_THRESHOLD = 50;
+    if (itemDescription && itemDescription.trim().length > 0) {
+      setItemName(newName);
+      return;
+    }
+    if (newName.length > OVERFLOW_THRESHOLD) {
+      const textUpToThreshold = newName.substring(0, OVERFLOW_THRESHOLD);
+      const lastSpaceIndex = textUpToThreshold.lastIndexOf(' ');
+      if (lastSpaceIndex > 0) {
+        const nameText = newName.substring(0, lastSpaceIndex).trim();
+        const overflowText = newName.substring(lastSpaceIndex + 1).trim();
+        setItemName(nameText);
+        setItemDescription(overflowText);
+        setTimeout(() => {
+          if (inboxItemDescRef.current) {
+            inboxItemDescRef.current.focus();
+            inboxItemDescRef.current.setSelectionRange(overflowText.length, overflowText.length);
+          }
+        }, 0);
+        return;
+      }
+    }
+    setItemName(newName);
+  }
+
+  function handleElementNameChange(index, newName, currentDescription) {
+    const OVERFLOW_THRESHOLD = 30;
+    if (currentDescription && currentDescription.trim().length > 0) {
+      updateElement(index, 'name', newName);
+      return;
+    }
+    if (newName.length > OVERFLOW_THRESHOLD) {
+      const textUpToThreshold = newName.substring(0, OVERFLOW_THRESHOLD);
+      const lastSpaceIndex = textUpToThreshold.lastIndexOf(' ');
+      if (lastSpaceIndex > 0) {
+        const nameText = newName.substring(0, lastSpaceIndex).trim();
+        const overflowText = newName.substring(lastSpaceIndex + 1).trim();
+        const updatedElements = [...itemElements];
+        updatedElements[index] = { ...updatedElements[index], name: nameText, description: overflowText };
+        setItemElements(updatedElements);
+        setTimeout(() => {
+          const descField = inboxElementDescRefs.current[index];
+          if (descField) {
+            descField.focus();
+            descField.setSelectionRange(overflowText.length, overflowText.length);
+          }
+        }, 0);
+        return;
+      }
+    }
+    updateElement(index, 'name', newName);
   }
 
   function deleteElement(index) {
@@ -3811,6 +4348,7 @@ function InboxCard({
   }
 
   function handleSave() {
+    if (onDirtyChange) onDirtyChange(false);
     if (!intentionOpen && !itemOpen && !collectionOpen) return;
     if (intentionOpen && !intentText.trim()) return;
     if (itemOpen && !itemName.trim()) return;
@@ -3852,6 +4390,7 @@ function InboxCard({
   }
 
   function handleCancel() {
+    if (onDirtyChange) onDirtyChange(false);
     setExpanded(false);
 
     // Reset accordion states
@@ -4063,7 +4602,7 @@ function InboxCard({
               <label className="block text-sm font-medium text-foreground mb-1">
                 Linked Item (optional)
                 {itemOpen && (
-                  <span className="text-xs text-muted-foreground ml-2">— new item will auto-link</span>
+                  <span className="text-xs text-muted-foreground ml-2">— {itemName || "new item"} will auto-link</span>
                 )}
               </label>
               <div className={`relative ${itemOpen ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -4181,12 +4720,19 @@ function InboxCard({
               <label className="block text-sm font-medium text-foreground mb-1">
                 Name
               </label>
-              <input
-                type="text"
-                value={itemName}
-                onChange={(e) => setItemName(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded text-base"
-              />
+              <div className="relative">
+                <input
+                  type="text"
+                  value={itemName}
+                  onChange={(e) => handleInboxItemNameChange(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded text-base"
+                />
+                {itemName.length > 45 && itemName.length <= 50 && (!itemDescription || !itemDescription.trim()) && (
+                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-warning">
+                    {50 - itemName.length}
+                  </span>
+                )}
+              </div>
             </div>
 
             <div>
@@ -4194,6 +4740,7 @@ function InboxCard({
                 Description
               </label>
               <textarea
+                ref={inboxItemDescRef}
                 value={itemDescription}
                 onChange={(e) => setItemDescription(e.target.value)}
                 placeholder="Optional description"
@@ -4239,16 +4786,23 @@ function InboxCard({
                           className="w-4 h-4 text-muted-foreground cursor-move flex-shrink-0"
                           title="Drag to reorder"
                         />
-                        <input
-                          type="text"
-                          value={element.name}
-                          onChange={(e) =>
-                            updateElement(index, "name", e.target.value)
-                          }
-                          onKeyPress={(e) => handleElementKeyPress(e, index)}
-                          placeholder="Element name"
-                          className="inbox-element-input flex-1 min-w-0 px-3 py-2 border border-border rounded"
-                        />
+                        <div className="relative flex-1 min-w-0">
+                          <input
+                            type="text"
+                            value={element.name}
+                            onChange={(e) =>
+                              handleElementNameChange(index, e.target.value, element.description)
+                            }
+                            onKeyPress={(e) => handleElementKeyPress(e, index)}
+                            placeholder="Element name"
+                            className="inbox-element-input w-full px-3 py-2 border border-border rounded"
+                          />
+                          {element.name.length > 25 && element.name.length <= 30 && (!element.description || !element.description.trim()) && (
+                            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-warning">
+                              {30 - element.name.length}
+                            </span>
+                          )}
+                        </div>
                         <button
                           onClick={() => deleteElement(index)}
                           className="text-destructive hover:text-destructive-hover flex-shrink-0"
@@ -4257,6 +4811,17 @@ function InboxCard({
                           <X className="w-3 h-3" />
                         </button>
                       </div>
+
+                      <textarea
+                        ref={(el) => (inboxElementDescRefs.current[index] = el)}
+                        value={element.description || ""}
+                        onChange={(e) =>
+                          updateElement(index, "description", e.target.value)
+                        }
+                        placeholder="Description (optional)"
+                        className="w-full px-3 py-2 border border-border rounded text-sm"
+                        rows="2"
+                      />
 
                       <div className="flex items-center gap-2">
                         <select
@@ -4280,16 +4845,6 @@ function InboxCard({
                           className="w-16 px-2 py-2 border border-border rounded text-sm"
                         />
                       </div>
-
-                      <textarea
-                        value={element.description || ""}
-                        onChange={(e) =>
-                          updateElement(index, "description", e.target.value)
-                        }
-                        placeholder="Description (optional)"
-                        className="w-full px-3 py-2 border border-border rounded text-sm"
-                        rows="2"
-                      />
                     </div>
 
                     {index < itemElements.length - 1 && (
@@ -4512,7 +5067,7 @@ function InboxCard({
           </button>
         </div>
         <button
-          onClick={() => onArchive(inboxItem.id)}
+          onClick={() => { if (onDirtyChange) onDirtyChange(false); onArchive(inboxItem.id); }}
           className="min-h-[44px] text-muted-foreground hover:text-destructive transition-colors flex items-center gap-1"
         >
           <Archive className="w-4 h-4" /> Archive
@@ -4586,12 +5141,27 @@ function InboxCard({
   );
 }
 
-function ContextForm({ editing, onSave, onCancel }) {
+function ContextForm({ editing, onSave, onCancel, onDirtyChange }) {
   const [name, setName] = useState(editing?.name || "");
   const [shared, setShared] = useState(editing?.shared || false);
   const [keywords, setKeywords] = useState(editing?.keywords || "");
   const [description, setDescription] = useState(editing?.description || "");
   const [pinned, setPinned] = useState(editing?.pinned || false);
+
+  useEffect(() => {
+    if (!onDirtyChange) return;
+    const isDirty =
+      name !== (editing?.name || "") ||
+      shared !== (editing?.shared || false) ||
+      keywords !== (editing?.keywords || "") ||
+      description !== (editing?.description || "") ||
+      pinned !== (editing?.pinned || false);
+    onDirtyChange(isDirty, "this context");
+  }, [name, shared, keywords, description, pinned]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    return () => { if (onDirtyChange) onDirtyChange(false); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="mb-4 sm:mb-6 p-4 sm:p-6 bg-white border-2 border-primary rounded-lg shadow-lg">
@@ -4662,15 +5232,18 @@ function ContextForm({ editing, onSave, onCancel }) {
 
         <div className="flex gap-2 pt-2">
           <button
-            onClick={() =>
-              name.trim() && onSave(name, shared, keywords, description, pinned)
-            }
+            onClick={() => {
+              if (name.trim()) {
+                if (onDirtyChange) onDirtyChange(false);
+                onSave(name, shared, keywords, description, pinned);
+              }
+            }}
             className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             Save
           </button>
           <button
-            onClick={onCancel}
+            onClick={() => { if (onDirtyChange) onDirtyChange(false); onCancel(); }}
             className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             Cancel
@@ -4747,6 +5320,7 @@ function ContextDetailView({
   allItems = [],
   collections = [],
   onViewCollection,
+  onDirtyChange,
 }) {
   const [showAddItemForm, setShowAddItemForm] = useState(false);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
@@ -4868,6 +5442,7 @@ function ContextDetailView({
                 isEditing={true}
                 onCancel={() => setShowAddItemForm(false)}
                 allItems={allItems}
+                onDirtyChange={onDirtyChange}
               />
             </div>
           )}
@@ -4932,6 +5507,7 @@ function ContextDetailView({
                 showScheduling={true}
                 isEditing={true}
                 onCancel={() => setShowAddIntentionForm(false)}
+                onDirtyChange={onDirtyChange}
               />
             </div>
           )}
@@ -5042,6 +5618,7 @@ function IntentionDetailView({
   onCancelExecution,
   onArchiveIntention,
   collections = [],
+  onDirtyChange,
 }) {
   const [isEditing, setIsEditing] = useState(false);
 
@@ -5088,6 +5665,7 @@ function IntentionDetailView({
           isEditing={true}
           onCancel={() => setIsEditing(false)}
           onArchive={onArchiveIntention}
+          onDirtyChange={onDirtyChange}
         />
       </div>
     );
@@ -5206,6 +5784,7 @@ function ItemDetailView({
   onViewItem,
   onClone,
   collections = [],
+  onDirtyChange,
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
@@ -5213,6 +5792,15 @@ function ItemDetailView({
   const [cloneName, setCloneName] = useState("");
 
   if (!item) return null;
+
+  function copyElementToClipboard(el) {
+    const linkedItem = (el.itemId || el.item_id) ? items.find((i) => i.id === (el.itemId || el.item_id)) : null;
+    let text = el.name;
+    if (el.description) text += " " + el.description;
+    if (el.quantity) text += " qty:" + el.quantity;
+    if (linkedItem) text += " related item:" + linkedItem.name;
+    navigator.clipboard.writeText(text);
+  }
 
   // Find all non-archived intentions linked to this item
   const itemIntentions = intents.filter(
@@ -5251,6 +5839,7 @@ function ItemDetailView({
           isEditing={true}
           onCancel={() => setIsEditing(false)}
           allItems={items}
+          onDirtyChange={onDirtyChange}
         />
       </div>
     );
@@ -5392,9 +5981,18 @@ function ItemDetailView({
                     return (
                       <div key={index}>
                         <div className="mt-4 mb-2">
-                          <h4 className="text-md font-bold text-foreground">
-                            {el.name}
-                          </h4>
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-md font-bold text-foreground">
+                              {el.name}
+                            </h4>
+                            <button
+                              onClick={() => copyElementToClipboard(el)}
+                              className="text-muted-foreground hover:text-foreground flex-shrink-0"
+                              title="Copy element"
+                            >
+                              <Copy className="w-3 h-3" />
+                            </button>
+                          </div>
                           {el.description && (
                             <p className="text-sm text-muted-foreground mt-1">
                               {el.description}
@@ -5432,6 +6030,13 @@ function ItemDetailView({
                               </p>
                             )}
                           </div>
+                          <button
+                            onClick={() => copyElementToClipboard(el)}
+                            className="text-muted-foreground hover:text-foreground flex-shrink-0 mt-1"
+                            title="Copy element"
+                          >
+                            <Copy className="w-3 h-3" />
+                          </button>
                         </div>
                         {linkedItem && (
                           <button
@@ -5468,6 +6073,13 @@ function ItemDetailView({
                             </p>
                           )}
                         </div>
+                        <button
+                          onClick={() => copyElementToClipboard(el)}
+                          className="text-muted-foreground hover:text-foreground flex-shrink-0 mt-1"
+                          title="Copy element"
+                        >
+                          <Copy className="w-3 h-3" />
+                        </button>
                       </div>
                       {linkedItem && (
                         <button
@@ -5583,6 +6195,7 @@ function ItemDetailView({
               showScheduling={true}
               isEditing={true}
               onCancel={() => setShowAddIntentionForm(false)}
+              onDirtyChange={onDirtyChange}
             />
           </div>
         )}
@@ -6007,6 +6620,7 @@ function ItemCard({
   intents = [],
   getIntentDisplay,
   onOpenExecution,
+  onDirtyChange,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(item.name);
@@ -6032,12 +6646,42 @@ function ItemCard({
   const [draggedIndex, setDraggedIndex] = useState(null);
   const [linkingElementIndex, setLinkingElementIndex] = useState(null);
   const [linkSearch, setLinkSearch] = useState("");
+  const elementDescRefs = useRef([]);
+  const itemDescRef = useRef(null);
+
+  useEffect(() => {
+    if (!isEditing || !onDirtyChange) return;
+    const originalElements = (item.elements || item.components || []).map((el) =>
+      typeof el === "string"
+        ? { name: el, displayType: "step", quantity: "", description: "" }
+        : {
+            name: el.name || "",
+            displayType: el.displayType || el.display_type || "step",
+            quantity: el.quantity || "",
+            description: el.description || "",
+            ...(el.itemId || el.item_id ? { itemId: el.itemId || el.item_id } : {}),
+          }
+    );
+    const isDirty =
+      name !== item.name ||
+      description !== (item.description || "") ||
+      contextId !== (item.contextId || "") ||
+      JSON.stringify(tags) !== JSON.stringify(item.tags || []) ||
+      isCaptureTarget !== (item.isCaptureTarget || false) ||
+      JSON.stringify(elements) !== JSON.stringify(originalElements);
+    onDirtyChange(isDirty, "this item");
+  }, [isEditing, name, description, contextId, elements, tags, isCaptureTarget]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    return () => { if (onDirtyChange) onDirtyChange(false); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSave() {
     if (!name.trim()) {
       // Name is required - just return without saving
       return;
     }
+    if (onDirtyChange) onDirtyChange(false);
     const finalContextId = contextId === "" ? null : contextId;
     onUpdate(item.id, {
       name,
@@ -6054,6 +6698,7 @@ function ItemCard({
   }
 
   function handleCancel() {
+    if (onDirtyChange) onDirtyChange(false);
     if (onCancel) {
       onCancel();
     } else {
@@ -6111,6 +6756,69 @@ function ItemCard({
     setElements(newElements);
   }
 
+  function handleItemNameChange(newName) {
+    const OVERFLOW_THRESHOLD = 50;
+    if (description && description.trim().length > 0) {
+      setName(newName);
+      return;
+    }
+    if (newName.length > OVERFLOW_THRESHOLD) {
+      const textUpToThreshold = newName.substring(0, OVERFLOW_THRESHOLD);
+      const lastSpaceIndex = textUpToThreshold.lastIndexOf(' ');
+      if (lastSpaceIndex > 0) {
+        const nameText = newName.substring(0, lastSpaceIndex).trim();
+        const overflowText = newName.substring(lastSpaceIndex + 1).trim();
+        setName(nameText);
+        setDescription(overflowText);
+        setTimeout(() => {
+          if (itemDescRef.current) {
+            itemDescRef.current.focus();
+            itemDescRef.current.setSelectionRange(overflowText.length, overflowText.length);
+          }
+        }, 0);
+        return;
+      }
+    }
+    setName(newName);
+  }
+
+  function handleElementNameChange(index, newName, currentDescription) {
+    const OVERFLOW_THRESHOLD = 30;
+    if (currentDescription && currentDescription.trim().length > 0) {
+      updateElement(index, 'name', newName);
+      return;
+    }
+    if (newName.length > OVERFLOW_THRESHOLD) {
+      const textUpToThreshold = newName.substring(0, OVERFLOW_THRESHOLD);
+      const lastSpaceIndex = textUpToThreshold.lastIndexOf(' ');
+      if (lastSpaceIndex > 0) {
+        const nameText = newName.substring(0, lastSpaceIndex).trim();
+        const overflowText = newName.substring(lastSpaceIndex + 1).trim();
+        const updatedElements = [...elements];
+        updatedElements[index] = { ...updatedElements[index], name: nameText, description: overflowText };
+        setElements(updatedElements);
+        setTimeout(() => {
+          const descField = elementDescRefs.current[index];
+          if (descField) {
+            descField.focus();
+            descField.setSelectionRange(overflowText.length, overflowText.length);
+          }
+        }, 0);
+        return;
+      }
+    }
+    updateElement(index, 'name', newName);
+  }
+
+  function copyElementToClipboard(el, itemsList) {
+    const linkedItem = (el.itemId || el.item_id) ? itemsList.find((i) => i.id === (el.itemId || el.item_id)) : null;
+    let text = el.name;
+    if (el.description) text += " " + el.description;
+    if (el.quantity) text += " qty:" + el.quantity;
+    if (linkedItem) text += " related item:" + linkedItem.name;
+    navigator.clipboard.writeText(text);
+  }
+
   function deleteElement(index) {
     setElements(elements.filter((_, i) => i !== index));
   }
@@ -6158,13 +6866,20 @@ function ItemCard({
             <label className="block text-sm font-medium text-foreground mb-1">
               Name
             </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full px-3 py-2 border border-border rounded text-base"
-              autoFocus
-            />
+            <div className="relative">
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => handleItemNameChange(e.target.value)}
+                className="w-full px-3 py-2 border border-border rounded text-base"
+                autoFocus
+              />
+              {name.length > 45 && name.length <= 50 && (!description || !description.trim()) && (
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-warning">
+                  {50 - name.length}
+                </span>
+              )}
+            </div>
           </div>
 
           <div>
@@ -6172,6 +6887,7 @@ function ItemCard({
               Description
             </label>
             <textarea
+              ref={itemDescRef}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Optional description for this item"
@@ -6236,16 +6952,30 @@ function ItemCard({
                         className="w-4 h-4 text-muted-foreground cursor-move flex-shrink-0"
                         title="Drag to reorder"
                       />
-                      <input
-                        type="text"
-                        value={element.name}
-                        onChange={(e) =>
-                          updateElement(index, "name", e.target.value)
-                        }
-                        onKeyPress={(e) => handleKeyPress(e, index)}
-                        placeholder="Element name"
-                        className="element-input flex-1 min-w-0 px-3 py-2 border border-border rounded"
-                      />
+                      <div className="relative flex-1 min-w-0">
+                        <input
+                          type="text"
+                          value={element.name}
+                          onChange={(e) =>
+                            handleElementNameChange(index, e.target.value, element.description)
+                          }
+                          onKeyPress={(e) => handleKeyPress(e, index)}
+                          placeholder="Element name"
+                          className="element-input w-full px-3 py-2 border border-border rounded"
+                        />
+                        {element.name.length > 25 && element.name.length <= 30 && (!element.description || !element.description.trim()) && (
+                          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-warning">
+                            {30 - element.name.length}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => copyElementToClipboard(element, allItems)}
+                        className="text-muted-foreground hover:text-foreground flex-shrink-0"
+                        title="Copy element"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </button>
                       <button
                         onClick={() => deleteElement(index)}
                         className="text-destructive hover:text-destructive-hover flex-shrink-0"
@@ -6254,6 +6984,17 @@ function ItemCard({
                         <X className="w-3 h-3" />
                       </button>
                     </div>
+
+                    <textarea
+                      ref={(el) => (elementDescRefs.current[index] = el)}
+                      value={element.description || ""}
+                      onChange={(e) =>
+                        updateElement(index, "description", e.target.value)
+                      }
+                      placeholder="Description (optional)"
+                      className="w-full px-3 py-2 border border-border rounded text-sm"
+                      rows="2"
+                    />
 
                     <div className="flex items-center gap-2">
                       <select
@@ -6277,16 +7018,6 @@ function ItemCard({
                         className="w-16 px-2 py-2 border border-border rounded text-sm"
                       />
                     </div>
-
-                    <textarea
-                      value={element.description || ""}
-                      onChange={(e) =>
-                        updateElement(index, "description", e.target.value)
-                      }
-                      placeholder="Description (optional)"
-                      className="w-full px-3 py-2 border border-border rounded text-sm"
-                      rows="2"
-                    />
 
                     {/* Item reference link */}
                     {(element.itemId || element.item_id) ? (
@@ -6477,6 +7208,7 @@ function IntentionCard({
   onCancelExecution,
   onArchive,
   collections = [],
+  onDirtyChange,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(intent.text);
@@ -6492,6 +7224,22 @@ function IntentionCard({
   const [contextSearch, setContextSearch] = useState("");
   const [showContextPicker, setShowContextPicker] = useState(false);
   const [hasActiveExecutions, setHasActiveExecutions] = useState(false);
+
+  useEffect(() => {
+    if (!isEditing || !onDirtyChange) return;
+    const isDirty =
+      name !== intent.text ||
+      recurrence !== (intent.recurrence || "once") ||
+      selectedItemId !== (intent.itemId || "") ||
+      selectedCollectionId !== (intent.collectionId || "") ||
+      selectedContextId !== (intent.contextId || "") ||
+      JSON.stringify(tags) !== JSON.stringify(intent.tags || []);
+    onDirtyChange(isDirty, "this intention");
+  }, [isEditing, name, recurrence, selectedItemId, selectedCollectionId, selectedContextId, tags]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    return () => { if (onDirtyChange) onDirtyChange(false); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!intent.id || !onArchive) return;
@@ -6530,6 +7278,7 @@ function IntentionCard({
       // Name is required - just return without saving
       return;
     }
+    if (onDirtyChange) onDirtyChange(false);
     if (onUpdate) {
       const updates = showScheduling
         ? { text: name, recurrence, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null }
@@ -6543,6 +7292,7 @@ function IntentionCard({
   }
 
   function handleCancel() {
+    if (onDirtyChange) onDirtyChange(false);
     if (onCancel) {
       onCancel();
     } else {
