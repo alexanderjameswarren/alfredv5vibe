@@ -4132,12 +4132,13 @@ function InboxCard({
       itemOpen !== !!inboxItem.suggestItem ||
       collectionOpen !== !!inboxItem.suggestedCollectionId;
     onDirtyChange(isDirty, "this inbox item");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     expanded, intentText, intentRecurrence, intentContextId, intentItemId,
     intentTags, eventDate, itemName, itemDescription, itemContextId,
     itemElements, itemTags, itemItemLinks, selectedCollectionId,
     collectionItemId, intentionOpen, itemOpen, collectionOpen
-  ]); // eslint-disable-line react-hooks/exhaustive-deps
+  ]);
 
   useEffect(() => {
     return () => { if (onDirtyChange) onDirtyChange(false); };
