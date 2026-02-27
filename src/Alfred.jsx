@@ -905,6 +905,17 @@ export default function Alfred() {
       setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
       setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
       setPausedExecutions((pausedExecData || []).map(d => storage.toCamelCase(d)));
+
+      // Sync activeExecution if one is currently being viewed
+      setActiveExecution(prev => {
+        if (!prev) return prev;
+        const allRefreshed = [
+          ...(activeExecData || []).map(d => storage.toCamelCase(d)),
+          ...(pausedExecData || []).map(d => storage.toCamelCase(d)),
+        ];
+        const refreshed = allRefreshed.find(e => e.id === prev.id);
+        return refreshed || prev;
+      });
     });
   }
 
@@ -944,6 +955,18 @@ export default function Alfred() {
       setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
       setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
       setPausedExecutions((pausedExecData || []).map(d => storage.toCamelCase(d)));
+
+      // Sync activeExecution if one is currently being viewed
+      setActiveExecution(prev => {
+        if (!prev) return prev;
+        const allRefreshed = [
+          ...(activeExecData || []).map(d => storage.toCamelCase(d)),
+          ...(pausedExecData || []).map(d => storage.toCamelCase(d)),
+        ];
+        const refreshed = allRefreshed.find(e => e.id === prev.id);
+        return refreshed || prev;
+      });
+
       console.log('[Refresh] Done');
     } catch (e) {
       console.error('[Refresh] Failed:', e);
@@ -2019,10 +2042,12 @@ export default function Alfred() {
       prev.map((e) => (e.id === updated.id ? updated : e))
     );
 
-    // Persist in background — don't block UI
-    storage.set(`execution:${updated.id}`, updated).catch((e) => {
+    // Persist — await to prevent refresh race condition
+    try {
+      await storage.set(`execution:${updated.id}`, updated);
+    } catch (e) {
       console.error('[Execution] Failed to save element toggle:', e);
-    });
+    }
   }
 
   async function updateExecutionElement(elementIndex, fields) {
@@ -2030,7 +2055,8 @@ export default function Alfred() {
     const updatedElements = [...activeExecution.elements];
     updatedElements[elementIndex] = { ...updatedElements[elementIndex], ...fields };
     const updated = { ...activeExecution, elements: updatedElements };
-    await storage.set(`execution:${updated.id}`, updated);
+
+    // Optimistic: update UI immediately
     setActiveExecution(updated);
     setActiveExecutions((prev) =>
       prev.map((e) => (e.id === updated.id ? updated : e))
@@ -2038,6 +2064,13 @@ export default function Alfred() {
     setPausedExecutions((prev) =>
       prev.map((e) => (e.id === updated.id ? updated : e))
     );
+
+    // Persist — await to prevent refresh race condition
+    try {
+      await storage.set(`execution:${updated.id}`, updated);
+    } catch (e) {
+      console.error('[Execution] Failed to save element update:', e);
+    }
   }
 
   async function updateExecutionNotes(notes) {
