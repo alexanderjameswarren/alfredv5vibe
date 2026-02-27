@@ -1195,16 +1195,8 @@ export default function Alfred() {
     console.log('[Realtime] Setting up subscriptions for user:', currentUser.id);
     setRealtimeStatus('connecting');
 
-    // Helper to convert snake_case database records to camelCase
-    const toCamelCase = (obj) => {
-      if (!obj) return obj;
-      const camelObj = {};
-      for (const key in obj) {
-        const camelKey = key.replace(/_([a-z])/g, (g) => g[1].toUpperCase());
-        camelObj[camelKey] = obj[key];
-      }
-      return camelObj;
-    };
+    // Use the recursive converter so JSONB columns (elements, tags, etc.) get camelCased too
+    const toCamelCase = (obj) => storage.toCamelCase(obj);
 
     // Subscribe to inbox changes
     const inboxChannel = supabase
