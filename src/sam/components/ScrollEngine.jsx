@@ -150,24 +150,24 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurati
       let tick = 0;
       rhEvents.forEach((evt, i) => {
         const rt = Math.round(tick * 1000) / 1000;
-        if (!tickMap.has(rt)) tickMap.set(rt, { allMidi: [], trebleIdx: null, bassIdx: null });
+        if (!tickMap.has(rt)) tickMap.set(rt, { allMidi: [], rhMidi: [], lhMidi: [], trebleIdx: null, bassIdx: null });
         const entry = tickMap.get(rt);
         entry.trebleIdx = i;
         const notes = evt.notes || [];
         const allTieEnd = notes.length > 0 && notes.every((n) => n.tie === "end");
-        if (!allTieEnd) notes.forEach((n) => entry.allMidi.push(n.midi));
+        if (!allTieEnd) notes.forEach((n) => { entry.allMidi.push(n.midi); entry.rhMidi.push(n.midi); });
         tick += DURATION_BEATS[evt.duration] || 1;
       });
 
       tick = 0;
       lhEvents.forEach((evt, i) => {
         const rt = Math.round(tick * 1000) / 1000;
-        if (!tickMap.has(rt)) tickMap.set(rt, { allMidi: [], trebleIdx: null, bassIdx: null });
+        if (!tickMap.has(rt)) tickMap.set(rt, { allMidi: [], rhMidi: [], lhMidi: [], trebleIdx: null, bassIdx: null });
         const entry = tickMap.get(rt);
         entry.bassIdx = i;
         const notes = evt.notes || [];
         const allTieEnd = notes.length > 0 && notes.every((n) => n.tie === "end");
-        if (!allTieEnd) notes.forEach((n) => entry.allMidi.push(n.midi));
+        if (!allTieEnd) notes.forEach((n) => { entry.allMidi.push(n.midi); entry.lhMidi.push(n.midi); });
         tick += DURATION_BEATS[evt.duration] || 1;
       });
 
@@ -182,6 +182,8 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurati
           beat: t + 1,
           musicalBeatInCopy: measStartBeats[measIdx] + t,
           allMidi: entry.allMidi.sort((a, b) => a - b),
+          rhMidi: entry.rhMidi.sort((a, b) => a - b),
+          lhMidi: entry.lhMidi.sort((a, b) => a - b),
           trebleNote: entry.trebleIdx !== null ? trebleNotes[entry.trebleIdx] : null,
           bassNote: entry.bassIdx !== null ? bassNotes[entry.bassIdx] : null,
           trebleSvgEl: null,
@@ -211,6 +213,8 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurati
           ...trebleGroup.map((n) => n.midi),
           ...bassGroup.map((n) => n.midi),
         ].sort((a, b) => a - b);
+        const rhMidi = (beat.rh || []).map((n) => n.midi).sort((a, b) => a - b);
+        const lhMidi = (beat.lh || []).map((n) => n.midi).sort((a, b) => a - b);
 
         let trebleNote;
         if (trebleGroup.length > 0) {
@@ -243,6 +247,8 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurati
           beat: beat.beat,
           musicalBeatInCopy: measStartBeats[measIdx] + (beat.beat - 1),
           allMidi,
+          rhMidi,
+          lhMidi,
           trebleNote,
           bassNote,
           trebleSvgEl: null,
@@ -454,7 +460,7 @@ function playClick(audioCtx, when, gainValue = 0.3) {
   osc.stop(when + 0.04);
 }
 
-export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null }) {
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioLeadInMs = 0, handMode = "both" }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -529,9 +535,13 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         baseBeat: meta.musicalBeatInCopy,
         musicalBeat: copyIdx * totalMusicalBeatsPerCopy + meta.musicalBeatInCopy,
         allMidi: meta.allMidi,
+        rhMidi: meta.rhMidi || [],
+        lhMidi: meta.lhMidi || [],
         xPx,
         state: "pending",
         svgEls,
+        trebleSvgEl: meta.trebleSvgEl,
+        bassSvgEl: meta.bassSvgEl,
       };
     });
 
@@ -658,18 +668,17 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     const audioBaseTime = audioCtx ? audioCtx.currentTime : 0;
 
     // Audio base offset: time in the audio file where measure 1 beat 1 starts (ms).
-    // For now, default to 0. Will be sourced from measure 1's audio_offset_ms when available.
-    const audioBaseOffsetMs = 0;
+    // Sourced from song.audioLeadInMs — the lead-in before notation begins.
+    const audioBaseOffsetMs = audioLeadInMs || 0;
 
     scrollStateRef.current = {
-      scrollStartT: audioElement
-        ? performance.now() - (audioElement.currentTime * 1000 - audioBaseOffsetMs)
-        : performance.now(),
+      scrollStartT: performance.now(),
       originPx,
       pxPerMs,
       targetX,
       copyWidth,
       audioBaseOffsetMs,
+      audioSyncOffset: null, // set on first frame where audio is playing
     };
     if (scrollStateExtRef) scrollStateExtRef.current = scrollStateRef.current;
 
@@ -681,16 +690,27 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
 
       const now = performance.now();
 
-      // Audio sync: derive elapsed from audioElement.currentTime when available
+      // Audio sync: derive elapsed from audioElement.currentTime when available.
+      // audioSyncOffset bridges wall-clock time and audio time so that elapsed
+      // is continuous when audio first starts (which may be delayed by SamPlayer).
       let elapsed;
       if (audioElement && !audioElement.paused) {
-        elapsed = audioElement.currentTime * 1000 - (state.audioBaseOffsetMs || 0);
+        const rate = audioElement.playbackRate || 1;
+        const audioElapsed = (audioElement.currentTime * 1000 - (state.audioBaseOffsetMs || 0)) / rate;
+        // First frame with audio playing — capture offset for continuity
+        if (state.audioSyncOffset === null) {
+          state.audioSyncOffset = (now - state.scrollStartT) - audioElapsed;
+        }
+        elapsed = state.audioSyncOffset + audioElapsed;
         if (elapsed < 0) elapsed = 0;
-      } else if (audioElement && audioElement.paused) {
-        // Audio paused — freeze at current audio position
-        elapsed = audioElement.currentTime * 1000 - (state.audioBaseOffsetMs || 0);
+      } else if (audioElement && audioElement.paused && state.audioSyncOffset !== null) {
+        // Audio was playing but is now paused — freeze at audio-derived position
+        const rate = audioElement.playbackRate || 1;
+        const audioElapsed = (audioElement.currentTime * 1000 - (state.audioBaseOffsetMs || 0)) / rate;
+        elapsed = state.audioSyncOffset + audioElapsed;
         if (elapsed < 0) elapsed = 0;
       } else {
+        // No audio, or audio hasn't started yet — use wall clock
         elapsed = now - state.scrollStartT;
       }
 
@@ -796,22 +816,27 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
           nc++;
           continue;
         }
-        // Skip rests immediately — don't block scanner behind padding rests
-        if (evt.allMidi.length === 0) {
+        // Skip rests — use hand-filtered midi when in LH/RH mode
+        const missActiveMidi = handMode === "lh" ? evt.lhMidi : handMode === "rh" ? evt.rhMidi : evt.allMidi;
+        if (missActiveMidi.length === 0) {
           evt.state = "skipped";
           nc++;
           continue;
         }
         if (elapsed > evt.targetTimeMs + timingWindowMs) {
+          // Color only the active hand's SVG elements for misses
+          const missEls = handMode === "lh" ? [evt.bassSvgEl].filter(Boolean)
+                        : handMode === "rh" ? [evt.trebleSvgEl].filter(Boolean)
+                        : evt.svgEls;
           console.log(
-            `[MISS] m${evt.meas} beat=${evt.beat} midi=[${evt.allMidi}]`,
+            `[MISS] m${evt.meas} beat=${evt.beat} midi=[${missActiveMidi}]`,
             `| targetTime=${Math.round(evt.targetTimeMs)}ms`,
             `| windowEnd=${Math.round(evt.targetTimeMs + timingWindowMs)}ms`,
             `| expired at=${Math.round(elapsed)}ms`,
             `| late by=${Math.round(elapsed - evt.targetTimeMs)}ms`
           );
           evt.state = "missed";
-          colorBeatEls(evt, "#dc2626");
+          colorBeatEls({ svgEls: missEls }, "#dc2626");
           if (onBeatMiss) onBeatMiss(evt);
           nc++;
         } else {

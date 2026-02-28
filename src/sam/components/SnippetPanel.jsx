@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { ChevronDown, ChevronRight, Save, Scissors, Disc, Archive, ArchiveRestore } from "lucide-react";
+import { ChevronDown, ChevronRight, Save, Scissors, Archive, ArchiveRestore } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 
 export default function SnippetPanel({
@@ -12,6 +12,7 @@ export default function SnippetPanel({
   const [endMeas, setEndMeas] = useState(snippet?.endMeasure || totalMeasures);
   const [endInput, setEndInput] = useState(String(snippet?.endMeasure || totalMeasures));
   const [restMeasures, setRestMeasures] = useState(snippet?.restMeasures ?? 1);
+  const [handMode, setHandMode] = useState(snippet?.handMode || "both");
   const [saving, setSaving] = useState(false);
   const [savedSnippets, setSavedSnippets] = useState([]);
   const [archivedSnippets, setArchivedSnippets] = useState([]);
@@ -43,17 +44,9 @@ export default function SnippetPanel({
       startMeasure: startMeas,
       endMeasure: endMeas,
       restMeasures,
+      handMode,
       dbId: null,
     });
-  }
-
-  function handleFullSong() {
-    setStartMeas(1);
-    setStartInput("1");
-    setEndMeas(totalMeasures);
-    setEndInput(String(totalMeasures));
-    setRestMeasures(0);
-    onSnippetChange(null);
   }
 
   function handleLoadSnippet(s) {
@@ -62,11 +55,14 @@ export default function SnippetPanel({
     setEndMeas(s.end_measure);
     setEndInput(String(s.end_measure));
     setRestMeasures(s.rest_measures ?? 1);
+    const hm = s.settings?.handMode || "both";
+    setHandMode(hm);
 
     onSnippetChange({
       startMeasure: s.start_measure,
       endMeasure: s.end_measure,
       restMeasures: s.rest_measures ?? 1,
+      handMode: hm,
       dbId: s.id,
       title: s.title,
     });
@@ -108,7 +104,50 @@ export default function SnippetPanel({
     }
   }
 
-  async function handleSave() {
+  async function handleSaveUpdate() {
+    if (!snippet?.dbId) return;
+
+    const title = prompt("Snippet title:", snippet.title || `Measures ${startMeas}–${endMeas}`);
+    if (!title) return;
+
+    setSaving(true);
+    const updates = {
+      title,
+      start_measure: startMeas,
+      end_measure: endMeas,
+      rest_measures: restMeasures,
+      settings: { bpm, windowMs: timingWindowMs, chordGroupMs: chordMs, handMode },
+    };
+
+    try {
+      const { data, error } = await supabase
+        .from("sam_snippets")
+        .update(updates)
+        .eq("id", snippet.dbId)
+        .select("*")
+        .single();
+
+      if (error) {
+        console.error("[Sam] Snippet update error:", error);
+      } else {
+        console.log("[Sam] Snippet updated:", data.id);
+        setSavedSnippets((prev) => prev.map((s) => s.id === data.id ? data : s));
+        onSnippetChange({
+          startMeasure: startMeas,
+          endMeasure: endMeas,
+          restMeasures,
+          handMode,
+          dbId: data.id,
+          title: data.title,
+        });
+      }
+    } catch (e) {
+      console.error("[Sam] Snippet update failed:", e);
+    }
+    setSaving(false);
+  }
+
+  async function handleSaveNew() {
     const title = prompt("Snippet title:", `Measures ${startMeas}–${endMeas}`);
     if (!title) return;
 
@@ -119,40 +158,41 @@ export default function SnippetPanel({
       start_measure: startMeas,
       end_measure: endMeas,
       rest_measures: restMeasures,
-      settings: { bpm, windowMs: timingWindowMs, chordGroupMs: chordMs },
+      settings: { bpm, windowMs: timingWindowMs, chordGroupMs: chordMs, handMode },
     };
 
-    supabase
-      .from("sam_snippets")
-      .insert(row)
-      .select("*")
-      .single()
-      .then(({ data, error }) => {
-        setSaving(false);
-        if (error) {
-          console.error("[Sam] Snippet save error:", error);
-        } else {
-          console.log("[Sam] Snippet saved:", data.id);
-          setSavedSnippets((prev) => [data, ...prev]);
-          onSnippetChange({
-            startMeasure: startMeas,
-            endMeasure: endMeas,
-            restMeasures,
-            dbId: data.id,
-          });
-        }
-      })
-      .catch((e) => {
-        setSaving(false);
-        console.error("[Sam] Snippet save failed:", e);
-      });
+    try {
+      const { data, error } = await supabase
+        .from("sam_snippets")
+        .insert(row)
+        .select("*")
+        .single();
+
+      if (error) {
+        console.error("[Sam] Snippet save error:", error);
+      } else {
+        console.log("[Sam] Snippet saved:", data.id);
+        setSavedSnippets((prev) => [data, ...prev]);
+        onSnippetChange({
+          startMeasure: startMeas,
+          endMeasure: endMeas,
+          restMeasures,
+          handMode,
+          dbId: data.id,
+          title: data.title,
+        });
+      }
+    } catch (e) {
+      console.error("[Sam] Snippet save failed:", e);
+    }
+    setSaving(false);
   }
 
   return (
     <div className="mb-3">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1 text-sm font-medium text-muted-foregroundhover:text-dark min-h-[44px] px-1"
+        className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-dark min-h-[44px] px-1"
       >
         {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         Snippet
@@ -219,13 +259,39 @@ export default function SnippetPanel({
                 +
               </button>
             </div>
+            <div className="flex items-center gap-1 text-muted-foreground">
+              Hand:
+              {["both", "lh", "rh"].map((mode) => (
+                <label key={mode} className={`px-2 py-1 border rounded text-sm min-h-[44px] flex items-center cursor-pointer ${handMode === mode ? "border-primary bg-primary-light text-primary font-medium" : "border-border"}`}>
+                  <input
+                    type="radio"
+                    name="handMode"
+                    value={mode}
+                    checked={handMode === mode}
+                    onChange={() => setHandMode(mode)}
+                    className="sr-only"
+                  />
+                  {mode === "both" ? "Both" : mode.toUpperCase()}
+                </label>
+              ))}
+            </div>
+            {snippet?.dbId && (
+              <button
+                onClick={handleSaveUpdate}
+                disabled={saving || !songDbId}
+                className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50"
+              >
+                <Save className="w-3.5 h-3.5" />
+                {saving ? "Saving..." : "Save"}
+              </button>
+            )}
             <button
-              onClick={handleSave}
+              onClick={handleSaveNew}
               disabled={saving || !songDbId}
-              className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foregroundhover:text-dark min-h-[44px] disabled:opacity-50"
+              className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50"
             >
               <Save className="w-3.5 h-3.5" />
-              {saving ? "Saving..." : "Save"}
+              {saving ? "Saving..." : "Save New"}
             </button>
             <button
               onClick={handleApply}
@@ -234,21 +300,12 @@ export default function SnippetPanel({
               <Scissors className="w-3.5 h-3.5" />
               Apply m.{startMeas}–{endMeas}
             </button>
-            {snippet && (
-              <button
-                onClick={handleFullSong}
-                className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foregroundhover:text-dark min-h-[44px]"
-              >
-                <Disc className="w-3.5 h-3.5" />
-                Full Song
-              </button>
-            )}
           </div>
 
           {/* Saved snippets list */}
           {savedSnippets.length > 0 && (
             <div className="mt-3 border-t border-border pt-3">
-              <div className="text-xs text-muted-foregroundmb-2 font-medium">Saved snippets</div>
+              <div className="text-xs text-muted-foreground mb-2 font-medium">Saved snippets</div>
               <div className="flex flex-col gap-1">
                 {savedSnippets.map((s) => (
                   <div
@@ -264,7 +321,7 @@ export default function SnippetPanel({
                       className="flex-1 text-left px-3 py-2"
                     >
                       <span className="font-medium">{s.title}</span>
-                      <span className="text-muted-foregroundml-2">
+                      <span className="text-muted-foreground ml-2">
                         m.{s.start_measure}–{s.end_measure}
                         {s.settings?.bpm && ` · ${s.settings.bpm} BPM`}
                         {s.rest_measures > 0 && ` · ${s.rest_measures} rest`}
@@ -289,7 +346,7 @@ export default function SnippetPanel({
             <div className={`text-center ${savedSnippets.length > 0 ? "mt-2" : "mt-3 border-t border-border pt-3"}`}>
               <button
                 onClick={() => setShowArchived(!showArchived)}
-                className="text-xs text-muted-foregroundhover:text-dark min-h-[44px] px-2"
+                className="text-xs text-muted-foreground hover:text-dark min-h-[44px] px-2"
               >
                 {showArchived ? "Hide archived snippets" : `View archived snippets (${archivedSnippets.length})`}
               </button>
@@ -304,13 +361,13 @@ export default function SnippetPanel({
                       >
                         <div className="flex-1 px-3 py-2">
                           <span className="font-medium">{s.title}</span>
-                          <span className="text-muted-foregroundml-2">
+                          <span className="text-muted-foreground ml-2">
                             m.{s.start_measure}–{s.end_measure}
                           </span>
                         </div>
                         <button
                           onClick={(e) => handleRestoreSnippet(e, s)}
-                          className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foregroundhover:text-success transition-colors"
+                          className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-success transition-colors"
                           title="Restore snippet"
                         >
                           <ArchiveRestore className="w-3.5 h-3.5" />

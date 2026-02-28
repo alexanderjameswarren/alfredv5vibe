@@ -35,7 +35,7 @@ export function matchChord(played, expected) {
  * scrollState: { scrollStartT }
  * windowMs: how far ahead/behind (in ms) to search
  */
-export function findClosestBeat(beatEvents, scrollState, windowMs = 300) {
+export function findClosestBeat(beatEvents, scrollState, windowMs = 300, handMode = "both") {
   if (!scrollState || !beatEvents.length) return null;
 
   const now = performance.now();
@@ -44,7 +44,9 @@ export function findClosestBeat(beatEvents, scrollState, windowMs = 300) {
   for (let i = 0; i < beatEvents.length; i++) {
     const evt = beatEvents[i];
     if (evt.state !== "pending") continue;
-    if (evt.allMidi.length === 0) continue;
+    // Use hand-filtered midi when in LH/RH mode
+    const activeMidi = handMode === "lh" ? (evt.lhMidi || evt.allMidi) : handMode === "rh" ? (evt.rhMidi || evt.allMidi) : evt.allMidi;
+    if (activeMidi.length === 0) continue;
 
     // Positive timingDelta = beat is in the future (player is early)
     // Negative timingDelta = beat is in the past (player is late)

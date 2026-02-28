@@ -30,6 +30,7 @@ export async function fanOutMeasures(songId, measuresArray, supabase) {
     time_signature: m.timeSignature
       ? { beats: m.timeSignature.beats, beatType: m.timeSignature.beatType }
       : null,
+    ...(m.audioOffsetMs != null ? { audio_offset_ms: m.audioOffsetMs } : {}),
   }));
 
   // Insert in batches of 500 to avoid payload limits
@@ -74,7 +75,7 @@ export async function fanOutMeasures(songId, measuresArray, supabase) {
 export async function recompileMeasures(songId, supabase) {
   const { data: rows, error: fetchError } = await supabase
     .from("sam_song_measures")
-    .select("number, rh, lh, time_signature")
+    .select("number, rh, lh, time_signature, audio_offset_ms")
     .eq("song_id", songId)
     .order("number", { ascending: true });
 
@@ -91,6 +92,7 @@ export async function recompileMeasures(songId, supabase) {
     timeSignature: row.time_signature
       ? { beats: row.time_signature.beats, beatType: row.time_signature.beatType }
       : undefined,
+    ...(row.audio_offset_ms != null ? { audioOffsetMs: row.audio_offset_ms } : {}),
   }));
 
   // Write back to sam_songs.measures and update compiled timestamp

@@ -10,8 +10,8 @@ import AudioControls from "./components/AudioControls";
 import useMIDI from "./lib/useMIDI";
 import usePracticeSession from "./lib/usePracticeSession";
 import { matchChord, findClosestBeat } from "./lib/noteMatching";
-import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
-import { normalizeMeasure } from "./lib/measureUtils";
+import { colorBeatEls, midiDisplayName, getMeasureWidth } from "./lib/vexflowHelpers";
+import { normalizeMeasure, getMeasDurationQ } from "./lib/measureUtils";
 import { loadAudio } from "./lib/audioPlayer";
 import { supabase } from "../supabaseClient";
 
@@ -36,11 +36,19 @@ export default function SamPlayer({ onBack }) {
   const [metronome, setMetronome] = useState("off"); // "off" | "beat" | "halfbeat" | "quarterbeat"
   const [audioElement, setAudioElement] = useState(null);
   const [audioFilePath, setAudioFilePath] = useState(null);
+  const [audioMuted, setAudioMuted] = useState(false);
+  const [audioLeadInMs, setAudioLeadInMs] = useState(0);
+  const [audioLeadInMsInput, setAudioLeadInMsInput] = useState("0");
+  const [defaultBpm, setDefaultBpm] = useState(68);
+  const [defaultBpmInput, setDefaultBpmInput] = useState("68");
   const beatEventsRef = useRef([]);
   const scrollStateExtRef = useRef(null);
   const hitCountRef = useRef(0);
   const missCountRef = useRef(0);
   const audioCtxRef = useRef(null);
+  const audioDelayTimerRef = useRef(null);
+  const scrollDelayTimerRef = useRef(null);
+  const scrollContainerRef = useRef(null);
 
   const { startSession, endSession, recordEvent, setLoopIteration, stats: sessionStats } = usePracticeSession();
 
@@ -80,7 +88,10 @@ export default function SamPlayer({ onBack }) {
       `[PLAY] midi=[${played}] at elapsed=${Math.round(elapsed)}ms`
     );
 
-    const match = findClosestBeat(beatEventsRef.current, scrollState, timingWindowMs);
+    // Hand mode filtering: only match notes from the active hand
+    const hm = snippet?.handMode || "both";
+
+    const match = findClosestBeat(beatEventsRef.current, scrollState, timingWindowMs, hm);
     if (!match) {
       console.log(`[PLAY] No pending beat found within ±${timingWindowMs}ms`);
       const names = played.map((m) => midiDisplayName(m)).join(", ");
@@ -89,42 +100,48 @@ export default function SamPlayer({ onBack }) {
     }
 
     const { beat, timingDeltaMs } = match;
+    const activeMidi = hm === "lh" ? beat.lhMidi : hm === "rh" ? beat.rhMidi : beat.allMidi;
 
     console.log(
-      `[MATCH] candidate: m${beat.meas} beat=${beat.beat} midi=[${beat.allMidi}]`,
+      `[MATCH] candidate: m${beat.meas} beat=${beat.beat} midi=[${activeMidi}]`,
       `| targetTime=${Math.round(beat.targetTimeMs)}ms`,
       `| delta=${Math.round(timingDeltaMs)}ms`,
       `| ${timingDeltaMs > 0 ? 'EARLY' : 'LATE'} by ${Math.abs(Math.round(timingDeltaMs))}ms`
     );
 
-    const { result, missingNotes, extraNotes } = matchChord(played, beat.allMidi);
+    const { result, missingNotes, extraNotes } = matchChord(played, activeMidi);
 
     console.log(
       `[RESULT] ${result}`,
-      `| played=[${played}] expected=[${beat.allMidi}]`,
+      `| played=[${played}] expected=[${activeMidi}]`,
       `| missing=[${missingNotes}] extra=[${extraNotes}]`
     );
 
     // If player hit ONLY wrong notes (zero overlap with expected), don't consume the beat.
     // Leave it pending so the player can try again before the miss scanner catches it.
-    if (result === "miss" && missingNotes.length === beat.allMidi.length) {
+    if (result === "miss" && missingNotes.length === activeMidi.length) {
       console.log(`[SKIP] All notes wrong — beat NOT consumed, stays pending`);
       return;
     }
 
+    // Color only the active hand's SVG elements; inactive hand stays black
+    const activeEls = hm === "lh" ? [beat.bassSvgEl].filter(Boolean)
+                    : hm === "rh" ? [beat.trebleSvgEl].filter(Boolean)
+                    : beat.svgEls;
+
     if (result === "hit") {
       beat.state = "hit";
-      colorBeatEls(beat, "#16a34a");
+      colorBeatEls({ svgEls: activeEls }, "#16a34a");
       hitCountRef.current++;
       setHitCount(hitCountRef.current);
     } else if (result === "partial") {
       beat.state = "partial";
-      colorBeatEls(beat, "#d97706");
+      colorBeatEls({ svgEls: activeEls }, "#d97706");
       hitCountRef.current++;
       setHitCount(hitCountRef.current);
     } else {
       beat.state = "wrong";
-      colorBeatEls(beat, "#dc2626");
+      colorBeatEls({ svgEls: activeEls }, "#dc2626");
       missCountRef.current++;
       setMissCount(missCountRef.current);
     }
@@ -141,7 +158,7 @@ export default function SamPlayer({ onBack }) {
       timingMs: Math.round(timingDeltaMs),
       noteName: `${sign}${Math.round(timingDeltaMs)}ms`,
     });
-  }, [playbackState, recordEvent, timingWindowMs]);
+  }, [playbackState, recordEvent, timingWindowMs, snippet?.handMode]);
 
   const { connected: midiConnected, deviceName: midiDevice, lastNote } = useMIDI({
     onChord: handleChord,
@@ -170,9 +187,9 @@ export default function SamPlayer({ onBack }) {
     setSongDbId(null);
     setSnippet(null);
     setAudioFilePath(loadedSong.audioFilePath || null);
-    const defaultBpm = loadedSong.defaultBpm || 68;
-    setBpm(defaultBpm);
-    setBpmInput(String(defaultBpm));
+    const activeBpm = loadedSong.playbackBpm || loadedSong.defaultBpm || 68;
+    setBpm(activeBpm);
+    setBpmInput(String(activeBpm));
     const tw = loadedSong.defaultTimingWindowMs ?? 300;
     setTimingWindowMs(tw);
     setTimingWindowMsInput(String(tw));
@@ -182,12 +199,19 @@ export default function SamPlayer({ onBack }) {
     const mw = loadedSong.defaultMeasureWidth ?? 300;
     setMeasureWidth(mw);
     setMeasureWidthInput(String(mw));
+    const li = loadedSong.audioLeadInMs ?? 0;
+    setAudioLeadInMs(li);
+    setAudioLeadInMsInput(String(li));
+    const db = loadedSong.defaultBpm || 68;
+    setDefaultBpm(db);
+    setDefaultBpmInput(String(db));
     setPlaybackState("stopped");
     setPausedMeasure(null);
     setLoopCount(0);
     setMissCount(0);
     setHitCount(0);
     setLastResult(null);
+    setAudioMuted(false);
     hitCountRef.current = 0;
     missCountRef.current = 0;
   }
@@ -209,6 +233,19 @@ export default function SamPlayer({ onBack }) {
 
     return () => { cancelled = true; };
   }, [songDbId, audioFilePath]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync audio playback rate: playback_bpm / default_bpm
+  useEffect(() => {
+    if (!audioElement || !defaultBpm) return;
+    const rate = bpm / defaultBpm;
+    audioElement.playbackRate = rate;
+    audioElement.preservesPitch = true;
+  }, [audioElement, bpm, defaultBpm]);
+
+  // Sync mute state to audio element
+  useEffect(() => {
+    if (audioElement) audioElement.muted = audioMuted;
+  }, [audioElement, audioMuted]);
 
   function handleAudioUploaded(path) {
     setAudioFilePath(path);
@@ -272,18 +309,96 @@ export default function SamPlayer({ onBack }) {
     return audioCtxRef.current;
   }
 
+  // Calculate audio seek position (ms) for snippet start measure.
+  // Uses audio_offset_ms if set on the target measure, else derives from BPM.
+  function getSnippetAudioSeekMs() {
+    if (!snippet || !song) return 0;
+    const targetMeas = song.measures[snippet.startMeasure - 1];
+    if (targetMeas?.audioOffsetMs != null) return targetMeas.audioOffsetMs;
+    // Sum beat durations of measures before snippet start at default (recording) BPM
+    const msPerBeat = 60000 / defaultBpm;
+    let totalBeats = 0;
+    for (let i = 0; i < snippet.startMeasure - 1; i++) {
+      totalBeats += getMeasDurationQ(song.measures[i]);
+    }
+    return audioLeadInMs + totalBeats * msPerBeat;
+  }
+
+  function clearDelayTimers() {
+    if (audioDelayTimerRef.current) {
+      clearTimeout(audioDelayTimerRef.current);
+      audioDelayTimerRef.current = null;
+    }
+    if (scrollDelayTimerRef.current) {
+      clearTimeout(scrollDelayTimerRef.current);
+      scrollDelayTimerRef.current = null;
+    }
+  }
+
+  // Calculate the visual approach time (ms) for the first note to reach the target line.
+  // Must match ScrollEngine's approach calculation: leadInPx = viewportWidth * 0.25.
+  function getApproachMs() {
+    const viewportWidth = scrollContainerRef.current?.clientWidth || 800;
+    const leadInPx = viewportWidth * 0.25;
+    const msPerBeat = 60000 / bpm;
+    const firstMeas = activeMeasures[0];
+    if (!firstMeas) return 0;
+    const firstDurationQ = getMeasDurationQ(firstMeas);
+    const firstMeasWidth = getMeasureWidth(firstMeas.timeSignature, false, measureWidth);
+    const pxPerBeat = firstMeasWidth / firstDurationQ;
+    const pxPerMs = pxPerBeat / msPerBeat;
+    return leadInPx / pxPerMs;
+  }
+
+  function playAudioOrDelay(seekMs = 0) {
+    if (!audioElement) return;
+    const approach = getApproachMs();
+    const audioDelay = Math.max(0, approach - audioLeadInMs);
+
+    audioElement.currentTime = seekMs / 1000;
+
+    if (audioDelay > 0) {
+      audioDelayTimerRef.current = setTimeout(() => {
+        audioElement.play();
+        audioDelayTimerRef.current = null;
+      }, audioDelay);
+    } else {
+      audioElement.play();
+    }
+  }
+
   function handlePlay() {
     ensureAudioContext();
     resetCounters();
     setPausedMeasure(null);
     beginSession();
-    setPlaybackState("playing");
+    clearDelayTimers();
+
+    const approach = getApproachMs();
+    const scrollDelay = Math.max(0, audioLeadInMs - approach);
+    const seekMs = snippet ? getSnippetAudioSeekMs() : 0;
+
+    if (audioElement) {
+      playAudioOrDelay(seekMs);
+    }
+
+    if (scrollDelay > 0) {
+      // Delay scrolling — audio starts first (long audio intro)
+      scrollDelayTimerRef.current = setTimeout(() => {
+        setPlaybackState("playing");
+        scrollDelayTimerRef.current = null;
+      }, scrollDelay);
+    } else {
+      setPlaybackState("playing");
+    }
   }
 
   function handlePause() {
+    clearDelayTimers();
     const meas = getCurrentMeasure();
     setPausedMeasure(meas);
     endSession();
+    if (audioElement) audioElement.pause();
     setPlaybackState("paused");
   }
 
@@ -291,6 +406,7 @@ export default function SamPlayer({ onBack }) {
     ensureAudioContext();
     resetCounters();
     beginSession();
+    if (audioElement) audioElement.play();
     setPlaybackState("playing");
   }
 
@@ -299,18 +415,45 @@ export default function SamPlayer({ onBack }) {
     resetCounters();
     setPausedMeasure(null);
     beginSession();
-    setPlaybackState("playing");
+    clearDelayTimers();
+
+    const approach = getApproachMs();
+    const scrollDelay = Math.max(0, audioLeadInMs - approach);
+    const seekMs = snippet ? getSnippetAudioSeekMs() : 0;
+
+    if (audioElement) {
+      playAudioOrDelay(seekMs);
+    }
+
+    if (scrollDelay > 0) {
+      scrollDelayTimerRef.current = setTimeout(() => {
+        setPlaybackState("playing");
+        scrollDelayTimerRef.current = null;
+      }, scrollDelay);
+    } else {
+      setPlaybackState("playing");
+    }
   }
 
   function handleStop() {
+    clearDelayTimers();
     setPlaybackState("stopped");
     endSession();
+    if (audioElement) {
+      audioElement.pause();
+      audioElement.currentTime = 0;
+    }
   }
 
   function handleFullStop() {
+    clearDelayTimers();
     endSession();
     resetCounters();
     setPausedMeasure(null);
+    if (audioElement) {
+      audioElement.pause();
+      audioElement.currentTime = 0;
+    }
     setPlaybackState("stopped");
   }
 
@@ -321,6 +464,7 @@ export default function SamPlayer({ onBack }) {
   }
 
   function handleChangeSong() {
+    clearDelayTimers();
     if (playbackState === "playing") endSession();
     if (audioElement) audioElement.pause();
     setAudioElement(null);
@@ -371,7 +515,7 @@ export default function SamPlayer({ onBack }) {
         </div>
       </header>
 
-      <div className="mx-auto px-3 sm:px-4 py-6">
+      <div ref={scrollContainerRef} className="mx-auto px-3 sm:px-4 py-6">
         {!song ? (
           <SongLoader onSongLoaded={handleSongLoaded} onSongSaved={setSongDbId} />
         ) : (
@@ -382,6 +526,8 @@ export default function SamPlayer({ onBack }) {
               timingWindowMs={timingWindowMs} timingWindowMsInput={timingWindowMsInput} setTimingWindowMs={setTimingWindowMs} setTimingWindowMsInput={setTimingWindowMsInput}
               chordMs={chordMs} chordMsInput={chordMsInput} setChordMs={setChordMs} setChordMsInput={setChordMsInput}
               measureWidth={measureWidth} measureWidthInput={measureWidthInput} setMeasureWidth={setMeasureWidth} setMeasureWidthInput={setMeasureWidthInput}
+              audioLeadInMs={audioLeadInMs} audioLeadInMsInput={audioLeadInMsInput} setAudioLeadInMs={setAudioLeadInMs} setAudioLeadInMsInput={setAudioLeadInMsInput}
+              defaultBpm={defaultBpm} defaultBpmInput={defaultBpmInput} setDefaultBpm={setDefaultBpm} setDefaultBpmInput={setDefaultBpmInput}
               playbackState={playbackState} songDbId={songDbId}
               onPlay={handlePlay} onPause={handlePause} onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
               onChangeSong={handleChangeSong}
@@ -390,9 +536,22 @@ export default function SamPlayer({ onBack }) {
               pausedMeasure={pausedMeasure}
               onSongUpdate={setSong}
               onAudioUploaded={handleAudioUploaded}
+              onFullSong={() => setSnippet(null)}
             />
 
-            <AudioControls audioElement={audioElement} />
+            <AudioControls audioElement={audioElement} playbackState={playbackState} />
+
+            {audioElement && playbackState !== "playing" && (
+              <label className="flex items-center gap-2 px-3 mb-3 text-sm text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={audioMuted}
+                  onChange={(e) => setAudioMuted(e.target.checked)}
+                  className="w-4 h-4 accent-primary"
+                />
+                Mute audio
+              </label>
+            )}
 
             <StatsBar
               lastNote={lastNote}
@@ -447,6 +606,8 @@ export default function SamPlayer({ onBack }) {
                 onEnded={handleStop}
                 timingWindowMs={timingWindowMs}
                 audioElement={audioElement}
+                audioLeadInMs={snippet && audioElement ? getSnippetAudioSeekMs() : audioLeadInMs}
+                handMode={snippet?.handMode || "both"}
               />
             )}
           </>
