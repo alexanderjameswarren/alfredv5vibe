@@ -324,6 +324,19 @@ export default function SamPlayer({ onBack }) {
     return audioLeadInMs + totalBeats * msPerBeat;
   }
 
+  // Audio file timestamp (ms) where the snippet's real measures end.
+  // Audio should be silent during rest measures that follow.
+  function getSnippetAudioEndMs() {
+    if (!snippet || !song) return null;
+    const startMs = getSnippetAudioSeekMs();
+    const msPerBeat = 60000 / defaultBpm;
+    let totalBeats = 0;
+    for (let i = snippet.startMeasure - 1; i < snippet.endMeasure; i++) {
+      totalBeats += getMeasDurationQ(song.measures[i]);
+    }
+    return startMs + totalBeats * msPerBeat;
+  }
+
   function clearDelayTimers() {
     if (audioDelayTimerRef.current) {
       clearTimeout(audioDelayTimerRef.current);
@@ -607,6 +620,7 @@ export default function SamPlayer({ onBack }) {
                 timingWindowMs={timingWindowMs}
                 audioElement={audioElement}
                 audioLeadInMs={snippet && audioElement ? getSnippetAudioSeekMs() : audioLeadInMs}
+                audioEndMs={snippet && audioElement ? getSnippetAudioEndMs() : null}
                 handMode={snippet?.handMode || "both"}
               />
             )}

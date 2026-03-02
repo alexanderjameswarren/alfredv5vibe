@@ -460,7 +460,7 @@ function playClick(audioCtx, when, gainValue = 0.3) {
   osc.stop(when + 0.04);
 }
 
-export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioLeadInMs = 0, handMode = "both" }) {
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioLeadInMs = 0, audioEndMs = null, handMode = "both" }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -679,6 +679,8 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       copyWidth,
       audioBaseOffsetMs,
       audioSyncOffset: null, // set on first frame where audio is playing
+      audioEndMs,            // audio file timestamp where snippet's real measures end
+      audioRestPaused: false, // true when audio paused for rest measures
     };
     if (scrollStateExtRef) scrollStateExtRef.current = scrollStateRef.current;
 
@@ -703,8 +705,19 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         }
         elapsed = state.audioSyncOffset + audioElapsed;
         if (elapsed < 0) elapsed = 0;
+
+        // Pause audio when snippet's real measures end (rest measures follow)
+        if (state.audioEndMs != null && audioElement.currentTime * 1000 >= state.audioEndMs) {
+          audioElement.pause();
+          state.audioRestPaused = true;
+          state.restWallAnchor = now;
+          state.restElapsedAnchor = elapsed;
+        }
+      } else if (audioElement && audioElement.paused && state.audioRestPaused) {
+        // Rest measures: audio paused, continue scrolling via wall clock
+        elapsed = state.restElapsedAnchor + (now - state.restWallAnchor);
       } else if (audioElement && audioElement.paused && state.audioSyncOffset !== null) {
-        // Audio was playing but is now paused — freeze at audio-derived position
+        // User paused — freeze at audio-derived position
         const rate = audioElement.playbackRate || 1;
         const audioElapsed = (audioElement.currentTime * 1000 - (state.audioBaseOffsetMs || 0)) / rate;
         elapsed = state.audioSyncOffset + audioElapsed;
@@ -715,14 +728,13 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       }
 
       // Check for seamless loop teleport BEFORE computing final offset.
-      // Skip teleport in audio sync mode — audio plays through once.
       // Copy 1 starts at world x = 10 + copyWidth.
       // Screen position = worldX - scrollOffset.
       // When copy 1's start crosses the target line, jump BACK by copyWidth
       // so copy 0 (identical content, freshly reset) takes its place later.
       const rawScrollOffset = state.originPx + elapsed * state.pxPerMs;
       const copy1ScreenX = (10 + copyWidth) - rawScrollOffset;
-      if (!audioElement && copy1ScreenX <= targetX) {
+      if (copy1ScreenX <= targetX) {
         // If loop is false, stop playback instead of looping
         if (!loop) {
           if (rafRef.current) {
@@ -736,6 +748,16 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         state.originPx -= copyWidth;
         loopCount++;
         if (onLoopCount) onLoopCount(loopCount);
+
+        // Audio loop: seek back to snippet start, preserve elapsed continuity
+        if (audioElement) {
+          audioElement.currentTime = (state.audioBaseOffsetMs || 0) / 1000;
+          state.audioSyncOffset = elapsed;
+          if (state.audioRestPaused) {
+            state.audioRestPaused = false;
+            audioElement.play();
+          }
+        }
 
         // Reset ALL copies: copy 0 = current pass, copy 1 = next, copy 2 = after that
         // (This code only runs when loop=true, so numCopies=3)
