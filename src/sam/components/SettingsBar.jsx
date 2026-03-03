@@ -150,7 +150,7 @@ export default function SettingsBar({
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
-      const path = await uploadAudio(songDbId, file, user.id, supabase);
+      const path = await uploadAudio(songDbId, file, user.id, supabase, song?.audioFilePath);
       if (onAudioUploaded) onAudioUploaded(path);
     } catch (err) {
       console.error("[Sam] Audio upload failed:", err);

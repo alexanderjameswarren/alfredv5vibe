@@ -13,7 +13,7 @@ const CACHE_NAME = "sam-audio";
  * @returns {Promise<HTMLAudioElement>}
  */
 export async function loadAudio(songId, audioFilePath, supabase) {
-  const cacheKey = `/sam-audio-cache/${songId}`;
+  const cacheKey = `/sam-audio-cache/${audioFilePath}`;
 
   // Try Cache API first
   try {
@@ -68,21 +68,26 @@ export async function loadAudio(songId, audioFilePath, supabase) {
  * @param {object} supabase - Supabase client
  * @returns {Promise<string>} The storage path
  */
-export async function uploadAudio(songId, file, userId, supabase) {
-  const storagePath = `${userId}/${songId}.mp3`;
+export async function uploadAudio(songId, file, userId, supabase, oldAudioPath = null) {
+  const ts = Date.now();
+  const storagePath = `${userId}/${songId}-${ts}.mp3`;
+
+  // Delete the old file from storage if it exists and is different
+  if (oldAudioPath && oldAudioPath !== storagePath) {
+    await supabase.storage.from("sam-audio").remove([oldAudioPath]);
+  }
 
   const { error: uploadError } = await supabase.storage
     .from("sam-audio")
     .upload(storagePath, file, {
       contentType: "audio/mpeg",
-      upsert: true,
     });
 
   if (uploadError) {
     throw new Error(`Upload failed: ${uploadError.message}`);
   }
 
-  // Update song record with the storage path
+  // Update song record with the new storage path
   const { error: updateError } = await supabase
     .from("sam_songs")
     .update({ audio_file_path: storagePath })
@@ -92,12 +97,14 @@ export async function uploadAudio(songId, file, userId, supabase) {
     throw new Error(`Failed to update song audio path: ${updateError.message}`);
   }
 
-  // Invalidate any cached version so next load picks up the new file
-  try {
-    const cache = await caches.open(CACHE_NAME);
-    await cache.delete(`/sam-audio-cache/${songId}`);
-  } catch (e) {
-    // Cache API not available — no-op
+  // Invalidate old cached version
+  if (oldAudioPath) {
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.delete(`/sam-audio-cache/${oldAudioPath}`);
+    } catch (e) {
+      // Cache API not available — no-op
+    }
   }
 
   console.log("[Sam] Audio uploaded:", storagePath);
