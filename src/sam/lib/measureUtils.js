@@ -38,7 +38,7 @@ function voiceToBeats(measure) {
       const roundedPos = Math.round(pos * 1000) / 1000;
 
       if (!posMap.has(roundedPos)) {
-        posMap.set(roundedPos, { duration: dur, rh: [], lh: [] });
+        posMap.set(roundedPos, { duration: dur, rh: [], lh: [], lyric: undefined });
       }
 
       const entry = posMap.get(roundedPos);
@@ -48,8 +48,12 @@ function voiceToBeats(measure) {
         duration: dur,
       }));
 
-      if (hand === "rh") entry.rh.push(...notes);
-      else entry.lh.push(...notes);
+      if (hand === "rh") {
+        entry.rh.push(...notes);
+        if (evt.lyric !== undefined) entry.lyric = evt.lyric;
+      } else {
+        entry.lh.push(...notes);
+      }
 
       // Use the shortest duration at this position for display
       if ((DURATION_BEATS[dur] || 1) < (DURATION_BEATS[entry.duration] || 1)) {
@@ -67,12 +71,14 @@ function voiceToBeats(measure) {
 
   const beats = sortedPositions.map((pos) => {
     const entry = posMap.get(pos);
-    return {
+    const beat = {
       beat: pos + 1, // 1-indexed quarter-note beats
       duration: entry.duration,
       rh: entry.rh,
       lh: entry.lh,
     };
+    if (entry.lyric !== undefined) beat.lyric = entry.lyric;
+    return beat;
   });
 
   // Ensure at least one beat (whole-measure rest)

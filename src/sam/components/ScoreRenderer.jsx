@@ -330,7 +330,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         .format([trebleVoice, bassVoice], getFormatWidth(measWidth, isFirst));
 
       // 5. Draw treble notes individually, each wrapped in an SVG <g> group
-      const LYRIC_Y = TREBLE_Y + 150; // Fixed y position for all lyrics
+      const LYRIC_Y = TREBLE_Y + 115; // Fixed y position for all lyrics
       trebleNotes.forEach((note, i) => {
         const groupEl = ctx.openGroup("sam-note", `t-${measIdx}-${i}`);
         note.setStave(treble);

@@ -74,7 +74,14 @@ export default function SamPlayer({ onBack }) {
       });
     }
 
-    return [...baseMeasures, ...restMeasures].map(normalizeMeasure);
+    const result = [...baseMeasures, ...restMeasures].map(normalizeMeasure);
+    const withLyrics = result.filter(m => m.rh?.some(e => e.lyric));
+    if (withLyrics.length > 0) {
+      console.log('[Sam Debug] activeMeasures: measures with lyrics:', withLyrics.length);
+    } else {
+      console.log('[Sam Debug] activeMeasures: NO lyrics found after normalizeMeasure');
+    }
+    return result;
   }, [song, snippet]);
 
   const handleChord = useCallback((played) => {
@@ -183,6 +190,12 @@ export default function SamPlayer({ onBack }) {
   }, [recordEvent]);
 
   function handleSongLoaded(loadedSong) {
+    console.log('[Sam Debug] First RH event with lyric:',
+      loadedSong.measures?.find(m => m.rh?.some(e => e.lyric))?.rh?.find(e => e.lyric)
+    );
+    console.log('[Sam Debug] Measures with lyrics count:',
+      loadedSong.measures?.filter(m => m.rh?.some(e => e.lyric)).length
+    );
     setSong(loadedSong);
     setSongDbId(null);
     setSnippet(null);

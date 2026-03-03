@@ -328,7 +328,7 @@ function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurati
     bassNotes.forEach(patchModXY);
 
     // 5. Draw treble notes individually, each wrapped in SVG <g> group
-    const LYRIC_Y = TREBLE_Y + 150; // Fixed y position for all lyrics
+    const LYRIC_Y = TREBLE_Y + 115; // Fixed y position for all lyrics
     trebleNotes.forEach((note, i) => {
       const groupEl = ctx.openGroup("sam-note", `t-${copyIdx}-${measIdx}-${i}`);
       note.setStave(treble);
