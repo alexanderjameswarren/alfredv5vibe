@@ -11,6 +11,10 @@
 # production
 /build
 
+# songs
+/songs
+/separated
+
 # misc
 .DS_Store
 .env.local
