@@ -317,7 +317,6 @@ export async function createInboxItem(
 
     const record = {
       id: crypto.randomUUID(),
-      created_at: Date.now(),
       archived: false,
       triaged_at: null,
       captured_text: params.captured_text,
