@@ -21,6 +21,11 @@ import {
   getSamSongs,
   getSamSessions,
   getSamSnippets,
+  getSamSongMeasures,
+  getSamLyricWorkspace,
+  placeSamLyrics,
+  updateSamSongMeasures,
+  loadSamLyrics,
 } from "../_shared/alfred-tools/tool-handlers.ts";
 
 const app = new Hono().basePath("/mcp");
@@ -467,6 +472,132 @@ function createMcpServer(token: string) {
             text: JSON.stringify(result.data || result.error, null, 2),
           },
         ],
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_sam_song_measures",
+    {
+      title: "Get SAM Song Measures",
+      description:
+        "Read measures for a SAM song, with optional range filter. Returns measure notation (RH/LH events), metadata, and any placed lyrics.",
+      inputSchema: {
+        song_id: z.string().describe("UUID of the song"),
+        start_measure: z.number().optional().describe("First measure number to return (inclusive)"),
+        end_measure: z.number().optional().describe("Last measure number to return (inclusive)"),
+      },
+    },
+    async ({ song_id, start_measure, end_measure }: { song_id: string; start_measure?: number; end_measure?: number }) => {
+      const client = createUserClient(token);
+      const result = await getSamSongMeasures(client, { song_id, start_measure, end_measure });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_sam_lyric_workspace",
+    {
+      title: "Get SAM Lyric Workspace",
+      description:
+        "Get the current lyric placement workspace — returns the next block of measures that need lyrics and the next batch of unplaced syllables. Designed for the iterative lyric placement workflow.",
+      inputSchema: {
+        song_id: z.string().describe("UUID of the song"),
+        batch_size: z.number().optional().describe("Number of measures to return (default 8)"),
+      },
+    },
+    async ({ song_id, batch_size }: { song_id: string; batch_size?: number }) => {
+      const client = createUserClient(token);
+      const result = await getSamLyricWorkspace(client, { song_id, batch_size });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "place_sam_lyrics",
+    {
+      title: "Place SAM Lyrics",
+      description:
+        "Place syllables onto specific notes in a song. Validates monotonic ordering and RH index bounds. Triggers recompilation.",
+      inputSchema: {
+        song_id: z.string().describe("UUID of the song"),
+        starting_word_order: z.number().describe("First word_order being placed (must be the next unplaced syllable)"),
+        placements: z.array(z.array(z.number()).length(2)).describe("Array of [measure_num, rh_index] pairs"),
+      },
+    },
+    async ({ song_id, starting_word_order, placements }: { song_id: string; starting_word_order: number; placements: number[][] }) => {
+      const client = createUserClient(token);
+      const result = await placeSamLyrics(client, { song_id, starting_word_order, placements });
+      if (result.error) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${result.error}` }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result.data, null, 2) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "update_sam_song_measures",
+    {
+      title: "Update SAM Song Measures",
+      description:
+        "Update metadata fields on song measures. Can set chord, section, and audio_offset_ms. CANNOT modify rh, lh, or time_signature.",
+      inputSchema: {
+        song_id: z.string().describe("UUID of the song"),
+        updates: z.array(z.object({
+          measure_num: z.number().describe("Measure number to update"),
+          chord: z.string().optional().describe("Chord symbol (e.g. 'Am', 'G7')"),
+          section: z.string().optional().describe("Section label (e.g. 'Verse 1', 'Chorus')"),
+          audio_offset_ms: z.number().optional().describe("Audio file timestamp for this measure (ms)"),
+        })).describe("Array of measure updates"),
+      },
+    },
+    async ({ song_id, updates }: { song_id: string; updates: { measure_num: number; chord?: string; section?: string; audio_offset_ms?: number }[] }) => {
+      const client = createUserClient(token);
+      const result = await updateSamSongMeasures(client, { song_id, updates });
+      if (result.error) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${result.error}` }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result.data, null, 2) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "load_sam_lyrics",
+    {
+      title: "Load SAM Lyrics",
+      description:
+        "Load pre-split syllables for a song. Inserts rows into sam_song_lyrics with word_order assigned. All rows start unplaced (measure_num and rh_index are NULL). Use replace=true to clear existing lyrics first.",
+      inputSchema: {
+        song_id: z.string().describe("UUID of the song"),
+        syllables: z.array(z.string()).describe("Pre-split syllables in order, e.g. ['Nev-', 'er', 'mind']"),
+        replace: z.boolean().optional().describe("If true, delete existing lyrics first (default false)"),
+      },
+    },
+    async ({ song_id, syllables, replace }: { song_id: string; syllables: string[]; replace?: boolean }) => {
+      const client = createUserClient(token);
+      const result = await loadSamLyrics(client, { song_id, syllables, replace });
+      if (result.error) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${result.error}` }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result.data, null, 2) }],
       };
     }
   );

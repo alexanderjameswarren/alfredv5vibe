@@ -588,6 +588,358 @@ export async function getSamSnippets(
   }
 }
 
+// ---- SAM Song Measures & Lyrics ----
+
+export async function getSamSongMeasures(
+  client: SupabaseClient,
+  params: { song_id: string; start_measure?: number; end_measure?: number }
+): Promise<ToolResult> {
+  try {
+    // 1. Fetch song metadata
+    const { data: song, error: songError } = await client
+      .from("sam_songs")
+      .select("id, title, artist, default_bpm, audio_lead_in_ms, time_signature, key_signature")
+      .eq("id", params.song_id)
+      .single();
+
+    if (songError) return { error: songError.message };
+
+    // 2. Fetch total measure count
+    const { count: totalMeasures } = await client
+      .from("sam_song_measures")
+      .select("*", { count: "exact", head: true })
+      .eq("song_id", params.song_id);
+
+    // 3. Fetch measures with optional range filter
+    let query = client
+      .from("sam_song_measures")
+      .select("number, rh, lh, time_signature, audio_offset_ms, chord, section")
+      .eq("song_id", params.song_id)
+      .order("number", { ascending: true });
+
+    if (params.start_measure) query = query.gte("number", params.start_measure);
+    if (params.end_measure) query = query.lte("number", params.end_measure);
+
+    const { data: measures, error: measError } = await query;
+    if (measError) return { error: measError.message };
+
+    // 4. Fetch placed lyrics for the same range
+    let lyricsQuery = client
+      .from("sam_song_lyrics")
+      .select("measure_num, rh_index, syllable, word_order")
+      .eq("song_id", params.song_id)
+      .not("measure_num", "is", null)
+      .order("word_order", { ascending: true });
+
+    if (params.start_measure) lyricsQuery = lyricsQuery.gte("measure_num", params.start_measure);
+    if (params.end_measure) lyricsQuery = lyricsQuery.lte("measure_num", params.end_measure);
+
+    const { data: lyrics } = await lyricsQuery;
+
+    // 5. Format measures for readability
+    const formatted = (measures || []).map((m: { number: number; rh: unknown[] | null; lh: unknown[] | null; time_signature: unknown; audio_offset_ms: number | null; chord: string | null; section: string | null }) => {
+      const rhEvents = (m.rh || []) as { duration: string; notes?: { name: string }[] }[];
+      const rhDisplay = rhEvents.map((evt, idx) => {
+        const noteNames = (evt.notes || []).map(n => n.name).join("+") || "rest";
+        return `[${idx}] ${evt.duration} - ${noteNames}`;
+      });
+
+      const measLyrics = (lyrics || []).filter((l: { measure_num: number }) => l.measure_num === m.number);
+
+      return {
+        number: m.number,
+        chord: m.chord || null,
+        section: m.section || null,
+        audio_offset_ms: m.audio_offset_ms,
+        time_signature: m.time_signature,
+        rh_events: rhDisplay,
+        rh_event_count: rhEvents.length,
+        lh_event_count: (m.lh || []).length,
+        placed_lyrics: measLyrics.map((l: { rh_index: number; syllable: string; word_order: number }) => ({
+          rh_index: l.rh_index,
+          syllable: l.syllable,
+          word_order: l.word_order,
+        })),
+      };
+    });
+
+    return {
+      data: {
+        song: { title: song.title, artist: song.artist, bpm: song.default_bpm },
+        total_measures: totalMeasures || 0,
+        measures: formatted,
+      },
+    };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+export async function getSamLyricWorkspace(
+  client: SupabaseClient,
+  params: { song_id: string; batch_size?: number }
+): Promise<ToolResult> {
+  try {
+    const batchSize = params.batch_size || 8;
+
+    // 1. Find the last measure that has any placed lyrics
+    const { data: lastPlaced } = await client
+      .from("sam_song_lyrics")
+      .select("measure_num")
+      .eq("song_id", params.song_id)
+      .not("measure_num", "is", null)
+      .order("measure_num", { ascending: false })
+      .limit(1);
+
+    const startFrom = (lastPlaced as { measure_num: number }[] | null)?.[0]?.measure_num || 1;
+    const endAt = startFrom + batchSize - 1;
+
+    // 2. Fetch measures for this range (reuse getSamSongMeasures logic)
+    const measResult = await getSamSongMeasures(client, {
+      song_id: params.song_id,
+      start_measure: startFrom,
+      end_measure: endAt,
+    });
+
+    if (measResult.error) return measResult;
+
+    // 3. Fetch unplaced syllables (next 50)
+    const { data: unplaced } = await client
+      .from("sam_song_lyrics")
+      .select("word_order, syllable")
+      .eq("song_id", params.song_id)
+      .is("measure_num", null)
+      .order("word_order", { ascending: true })
+      .limit(50);
+
+    // 4. Get placement stats
+    const { count: totalSyllables } = await client
+      .from("sam_song_lyrics")
+      .select("*", { count: "exact", head: true })
+      .eq("song_id", params.song_id);
+
+    const { count: placedCount } = await client
+      .from("sam_song_lyrics")
+      .select("*", { count: "exact", head: true })
+      .eq("song_id", params.song_id)
+      .not("measure_num", "is", null);
+
+    const measData = measResult.data as { song: unknown; measures: unknown[] };
+
+    return {
+      data: {
+        progress: `${placedCount || 0}/${totalSyllables || 0} syllables placed`,
+        measures_shown: `${startFrom}-${endAt}`,
+        song: measData.song,
+        measures: measData.measures,
+        unplaced_syllables: unplaced || [],
+      },
+    };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+export async function placeSamLyrics(
+  client: SupabaseClient,
+  params: { song_id: string; starting_word_order: number; placements: number[][] }
+): Promise<ToolResult> {
+  try {
+    // 1. Validate starting_word_order is the next unplaced syllable
+    const { data: nextUnplaced } = await client
+      .from("sam_song_lyrics")
+      .select("word_order")
+      .eq("song_id", params.song_id)
+      .is("measure_num", null)
+      .order("word_order", { ascending: true })
+      .limit(1);
+
+    const nextOrder = (nextUnplaced as { word_order: number }[] | null)?.[0]?.word_order;
+    if (nextOrder == null || nextOrder !== params.starting_word_order) {
+      return {
+        error: `Continuity error: next unplaced word_order is ${nextOrder}, but starting_word_order is ${params.starting_word_order}`,
+      };
+    }
+
+    // 2. Validate monotonic ordering within batch
+    for (let i = 1; i < params.placements.length; i++) {
+      const [prevMeas, prevIdx] = params.placements[i - 1];
+      const [curMeas, curIdx] = params.placements[i];
+      if (curMeas < prevMeas || (curMeas === prevMeas && curIdx <= prevIdx)) {
+        return {
+          error: `Monotonic error at position ${i}: [${curMeas},${curIdx}] must be after [${prevMeas},${prevIdx}]`,
+        };
+      }
+    }
+
+    // 3. Validate first placement is after last placed syllable from prior batches
+    const { data: lastPlacedRow } = await client
+      .from("sam_song_lyrics")
+      .select("measure_num, rh_index")
+      .eq("song_id", params.song_id)
+      .not("measure_num", "is", null)
+      .order("word_order", { ascending: false })
+      .limit(1);
+
+    if ((lastPlacedRow as unknown[] | null)?.length) {
+      const lp = (lastPlacedRow as { measure_num: number; rh_index: number }[])[0];
+      const [firstMeas, firstIdx] = params.placements[0];
+      if (firstMeas < lp.measure_num || (firstMeas === lp.measure_num && firstIdx <= lp.rh_index)) {
+        return {
+          error: `Continuity error: first placement [${firstMeas},${firstIdx}] must be after last placed [${lp.measure_num},${lp.rh_index}]`,
+        };
+      }
+    }
+
+    // 4. Validate rh_index bounds
+    const measureNums = [...new Set(params.placements.map(p => p[0]))];
+    const { data: measures } = await client
+      .from("sam_song_measures")
+      .select("number, rh")
+      .eq("song_id", params.song_id)
+      .in("number", measureNums);
+
+    const measMap: Record<number, { notes?: unknown[] }[]> = {};
+    for (const m of (measures as { number: number; rh: { notes?: unknown[] }[] }[] || [])) {
+      measMap[m.number] = m.rh || [];
+    }
+
+    for (let i = 0; i < params.placements.length; i++) {
+      const [measNum, rhIdx] = params.placements[i];
+      const rh = measMap[measNum];
+      if (!rh) {
+        return { error: `Measure ${measNum} not found` };
+      }
+      if (rhIdx < 0 || rhIdx >= rh.length) {
+        return { error: `rh_index ${rhIdx} out of bounds for measure ${measNum} (has ${rh.length} events)` };
+      }
+      const evt = rh[rhIdx];
+      if (!evt.notes || evt.notes.length === 0) {
+        return { error: `rh_index ${rhIdx} in measure ${measNum} is a rest — cannot place lyric` };
+      }
+    }
+
+    // 5. Write placements
+    for (let i = 0; i < params.placements.length; i++) {
+      const wordOrder = params.starting_word_order + i;
+      const [measNum, rhIdx] = params.placements[i];
+
+      const { error } = await client
+        .from("sam_song_lyrics")
+        .update({
+          measure_num: measNum,
+          rh_index: rhIdx,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("song_id", params.song_id)
+        .eq("word_order", wordOrder);
+
+      if (error) return { error: error.message };
+    }
+
+    return {
+      data: {
+        placed: params.placements.length,
+        word_orders: `${params.starting_word_order}-${params.starting_word_order + params.placements.length - 1}`,
+        message: "Lyrics placed. Recompilation triggered — check the app to verify.",
+      },
+    };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+export async function updateSamSongMeasures(
+  client: SupabaseClient,
+  params: { song_id: string; updates: { measure_num: number; chord?: string; section?: string; audio_offset_ms?: number }[] }
+): Promise<ToolResult> {
+  try {
+    const ALLOWED_FIELDS = ["chord", "section", "audio_offset_ms"] as const;
+
+    for (const update of params.updates) {
+      const fields: Record<string, unknown> = {};
+      for (const key of ALLOWED_FIELDS) {
+        if ((update as Record<string, unknown>)[key] !== undefined) {
+          fields[key] = (update as Record<string, unknown>)[key];
+        }
+      }
+
+      if (Object.keys(fields).length === 0) continue;
+
+      fields.updated_at = new Date().toISOString();
+
+      const { error } = await client
+        .from("sam_song_measures")
+        .update(fields)
+        .eq("song_id", params.song_id)
+        .eq("number", update.measure_num);
+
+      if (error) return { error: error.message };
+    }
+
+    return {
+      data: {
+        updated: params.updates.length,
+        message: "Measure metadata updated. Recompilation triggered.",
+      },
+    };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+export async function loadSamLyrics(
+  client: SupabaseClient,
+  params: { song_id: string; syllables: string[]; replace?: boolean }
+): Promise<ToolResult> {
+  try {
+    if (params.replace) {
+      const { error: delError } = await client
+        .from("sam_song_lyrics")
+        .delete()
+        .eq("song_id", params.song_id);
+      if (delError) return { error: delError.message };
+    }
+
+    // Get current max word_order to append
+    const { data: maxRow } = await client
+      .from("sam_song_lyrics")
+      .select("word_order")
+      .eq("song_id", params.song_id)
+      .order("word_order", { ascending: false })
+      .limit(1);
+
+    const startOrder = ((maxRow as { word_order: number }[] | null)?.[0]?.word_order || 0) + 1;
+
+    const rows = params.syllables.map((syl, i) => ({
+      song_id: params.song_id,
+      word_order: startOrder + i,
+      syllable: syl,
+      measure_num: null,
+      rh_index: null,
+    }));
+
+    // Insert in batches
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      const { error } = await client
+        .from("sam_song_lyrics")
+        .insert(rows.slice(i, i + BATCH_SIZE));
+      if (error) return { error: error.message };
+    }
+
+    return {
+      data: {
+        loaded: rows.length,
+        word_orders: `${startOrder}-${startOrder + rows.length - 1}`,
+        message: `${rows.length} syllables loaded. Use get_sam_lyric_workspace to begin placement.`,
+      },
+    };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
 export async function getDatabaseSchema(
   client: SupabaseClient,
   params: { table_name?: string }

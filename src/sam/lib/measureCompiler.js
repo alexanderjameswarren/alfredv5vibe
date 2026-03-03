@@ -31,6 +31,8 @@ export async function fanOutMeasures(songId, measuresArray, supabase) {
       ? { beats: m.timeSignature.beats, beatType: m.timeSignature.beatType }
       : null,
     ...(m.audioOffsetMs != null ? { audio_offset_ms: m.audioOffsetMs } : {}),
+    ...(m.chord != null ? { chord: m.chord } : {}),
+    ...(m.section != null ? { section: m.section } : {}),
   }));
 
   // Insert in batches of 500 to avoid payload limits
@@ -75,7 +77,7 @@ export async function fanOutMeasures(songId, measuresArray, supabase) {
 export async function recompileMeasures(songId, supabase) {
   const { data: rows, error: fetchError } = await supabase
     .from("sam_song_measures")
-    .select("number, rh, lh, time_signature, audio_offset_ms")
+    .select("number, rh, lh, time_signature, audio_offset_ms, chord, section")
     .eq("song_id", songId)
     .order("number", { ascending: true });
 
@@ -84,16 +86,55 @@ export async function recompileMeasures(songId, supabase) {
     throw fetchError;
   }
 
+  // Fetch placed lyrics for this song
+  const { data: lyricsRows, error: lyricsError } = await supabase
+    .from("sam_song_lyrics")
+    .select("measure_num, rh_index, syllable")
+    .eq("song_id", songId)
+    .not("measure_num", "is", null)
+    .order("measure_num", { ascending: true })
+    .order("rh_index", { ascending: true });
+
+  if (lyricsError) {
+    console.error("[Sam] Failed to fetch lyrics:", lyricsError);
+    throw lyricsError;
+  }
+
+  // Group lyrics by measure_num for fast lookup
+  const lyricsByMeasure = {};
+  for (const lr of (lyricsRows || [])) {
+    if (!lyricsByMeasure[lr.measure_num]) lyricsByMeasure[lr.measure_num] = [];
+    lyricsByMeasure[lr.measure_num].push(lr);
+  }
+
   // Assemble into the measures array format
-  const measures = rows.map((row) => ({
-    number: row.number,
-    rh: row.rh || [],
-    lh: row.lh || [],
-    timeSignature: row.time_signature
-      ? { beats: row.time_signature.beats, beatType: row.time_signature.beatType }
-      : undefined,
-    ...(row.audio_offset_ms != null ? { audioOffsetMs: row.audio_offset_ms } : {}),
-  }));
+  const measures = rows.map((row) => {
+    // Deep copy RH, stripping any stale lyric fields from the stored JSONB
+    const rh = (row.rh || []).map(evt => {
+      const { lyric, ...rest } = evt;
+      return { ...rest, notes: evt.notes ? [...evt.notes] : [] };
+    });
+
+    // Inject lyrics from the lyrics table
+    const measLyrics = lyricsByMeasure[row.number] || [];
+    for (const lr of measLyrics) {
+      if (lr.rh_index >= 0 && lr.rh_index < rh.length) {
+        rh[lr.rh_index] = { ...rh[lr.rh_index], lyric: lr.syllable };
+      }
+    }
+
+    return {
+      number: row.number,
+      rh,
+      lh: row.lh || [],
+      timeSignature: row.time_signature
+        ? { beats: row.time_signature.beats, beatType: row.time_signature.beatType }
+        : undefined,
+      ...(row.audio_offset_ms != null ? { audioOffsetMs: row.audio_offset_ms } : {}),
+      ...(row.chord != null ? { chord: row.chord } : {}),
+      ...(row.section != null ? { section: row.section } : {}),
+    };
+  });
 
   // Write back to sam_songs.measures and update compiled timestamp
   const { error: updateError } = await supabase
