@@ -13,6 +13,7 @@ import { matchChord, findClosestBeat } from "./lib/noteMatching";
 import { colorBeatEls, midiDisplayName, getMeasureWidth } from "./lib/vexflowHelpers";
 import { normalizeMeasure, getMeasDurationQ } from "./lib/measureUtils";
 import { loadAudio } from "./lib/audioPlayer";
+import { recompileMeasures } from "./lib/measureCompiler";
 import { supabase } from "../supabaseClient";
 
 export default function SamPlayer({ onBack }) {
@@ -49,12 +50,40 @@ export default function SamPlayer({ onBack }) {
   const audioDelayTimerRef = useRef(null);
   const scrollDelayTimerRef = useRef(null);
   const scrollContainerRef = useRef(null);
+  const [lyricPlacements, setLyricPlacements] = useState(null); // [{word_order, syllable, measure_num, rh_index}]
+  const [lyricsDirty, setLyricsDirty] = useState(false);
+  const [lyricsSaving, setLyricsSaving] = useState(false);
+  const [skipTiedNotes, setSkipTiedNotes] = useState(false);
 
   const { startSession, endSession, recordEvent, setLoopIteration, stats: sessionStats } = usePracticeSession();
+
+  // Fetch lyrics from sam_song_lyrics when song is loaded
+  useEffect(() => {
+    if (!songDbId) {
+      setLyricPlacements(null);
+      setLyricsDirty(false);
+      return;
+    }
+    supabase
+      .from("sam_song_lyrics")
+      .select("word_order, syllable, measure_num, rh_index")
+      .eq("song_id", songDbId)
+      .order("word_order", { ascending: true })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error("[Sam] Failed to fetch lyrics:", error);
+          setLyricPlacements(null);
+        } else {
+          setLyricPlacements(data && data.length > 0 ? data : null);
+        }
+        setLyricsDirty(false);
+      });
+  }, [songDbId]);
 
   // Derive active measures from snippet range, appending rest measures.
   // normalizeMeasure ensures both voice format (lh[]/rh[]) and legacy beats[]
   // are converted to beats[] for the renderers.
+  // When lyricPlacements state exists, it overrides blob lyrics as the source of truth.
   const activeMeasures = useMemo(() => {
     if (!song) return [];
 
@@ -74,15 +103,226 @@ export default function SamPlayer({ onBack }) {
       });
     }
 
-    const result = [...baseMeasures, ...restMeasures].map(normalizeMeasure);
-    const withLyrics = result.filter(m => m.rh?.some(e => e.lyric));
-    if (withLyrics.length > 0) {
-      console.log('[Sam Debug] activeMeasures: measures with lyrics:', withLyrics.length);
-    } else {
-      console.log('[Sam Debug] activeMeasures: NO lyrics found after normalizeMeasure');
+    let allMeasures = [...baseMeasures, ...restMeasures];
+
+    // If we have lyric placements in state, inject them onto RH events
+    // (overriding any lyrics baked into the blob)
+    if (lyricPlacements) {
+      const lyricsByMeasure = {};
+      for (const lp of lyricPlacements) {
+        if (lp.measure_num == null) continue;
+        if (!lyricsByMeasure[lp.measure_num]) lyricsByMeasure[lp.measure_num] = [];
+        lyricsByMeasure[lp.measure_num].push(lp);
+      }
+
+      allMeasures = allMeasures.map(m => {
+        if (!m.rh) return m;
+        // Strip existing lyrics, then inject from state
+        const rh = m.rh.map(evt => {
+          const { lyric, ...rest } = evt;
+          return rest;
+        });
+        const measLyrics = lyricsByMeasure[m.number] || [];
+        for (const lp of measLyrics) {
+          if (lp.rh_index >= 0 && lp.rh_index < rh.length) {
+            const existing = rh[lp.rh_index].lyric;
+            rh[lp.rh_index] = {
+              ...rh[lp.rh_index],
+              lyric: existing ? existing + " " + lp.syllable : lp.syllable,
+            };
+          }
+        }
+        return { ...m, rh };
+      });
     }
-    return result;
-  }, [song, snippet]);
+
+    return allMeasures.map(normalizeMeasure);
+  }, [song, snippet, lyricPlacements]);
+
+  // Flat sequence of all non-rest RH note positions for lyric navigation
+  // isTiedCont: true if ALL notes have tie='end' or tie='both' (continuation of a tied note)
+  const rhNoteSequence = useMemo(() => {
+    if (!song?.measures) return [];
+    const seq = [];
+    for (const m of song.measures) {
+      const rh = m.rh || [];
+      for (let i = 0; i < rh.length; i++) {
+        if (rh[i].notes && rh[i].notes.length > 0) {
+          const isTiedCont = rh[i].notes.every(n => n.tie === "end" || n.tie === "both");
+          seq.push({ measureNum: m.number, rhIndex: i, isTiedCont });
+        }
+      }
+    }
+    return seq;
+  }, [song]);
+
+  // Map from "measureNum-rhIndex" → sequence index for O(1) lookup
+  const rhSeqIdxMap = useMemo(() => {
+    const map = {};
+    for (let i = 0; i < rhNoteSequence.length; i++) {
+      const n = rhNoteSequence[i];
+      map[`${n.measureNum}-${n.rhIndex}`] = i;
+    }
+    return map;
+  }, [rhNoteSequence]);
+
+  function findRhSeqIdx(measureNum, rhIndex) {
+    return rhSeqIdxMap[`${measureNum}-${rhIndex}`] ?? -1;
+  }
+
+  // Navigate to next/prev position, skipping tied continuations when skipTiedNotes is on
+  function nextNavIdx(fromSeqIdx, direction) {
+    let idx = fromSeqIdx + direction;
+    if (!skipTiedNotes) return idx;
+    while (idx >= 0 && idx < rhNoteSequence.length) {
+      if (!rhNoteSequence[idx].isTiedCont) return idx;
+      idx += direction;
+    }
+    return idx; // out of bounds
+  }
+
+  // --- Lyric editing handlers ---
+  // wordOrders: array of word_orders at the clicked position (group moves together)
+
+  function handleLyricPullBack(wordOrders) {
+    if (!lyricPlacements) return;
+    const first = lyricPlacements.find(lp => lp.word_order === wordOrders[0]);
+    if (!first || first.measure_num == null) return;
+    const seqIdx = findRhSeqIdx(first.measure_num, first.rh_index);
+    const prevIdx = nextNavIdx(seqIdx, -1);
+    if (prevIdx < 0) return;
+    const prevPos = rhNoteSequence[prevIdx];
+    // When multiple syllables share a position, only move the earliest (min word_order)
+    const moveWO = wordOrders.length > 1 ? Math.min(...wordOrders) : wordOrders[0];
+    setLyricPlacements(lyricPlacements.map(lp =>
+      lp.word_order === moveWO
+        ? { ...lp, measure_num: prevPos.measureNum, rh_index: prevPos.rhIndex }
+        : lp
+    ));
+    setLyricsDirty(true);
+  }
+
+  function handleLyricPushForward(wordOrders) {
+    if (!lyricPlacements) return;
+    // When multiple syllables share a position, only move the latest (max word_order)
+    const moveWOs = wordOrders.length > 1 ? [Math.max(...wordOrders)] : [...wordOrders];
+    const first = lyricPlacements.find(lp => lp.word_order === moveWOs[0]);
+    if (!first || first.measure_num == null) return;
+    const seqIdx = findRhSeqIdx(first.measure_num, first.rh_index);
+    const targetIdx = nextNavIdx(seqIdx, 1);
+    if (targetIdx >= rhNoteSequence.length) {
+      alert("Cannot push forward — already at the last note.");
+      return;
+    }
+
+    // Build seqIdx → [word_orders] map for collision detection
+    const posMap = {};
+    for (const lp of lyricPlacements) {
+      if (lp.measure_num == null) continue;
+      const si = findRhSeqIdx(lp.measure_num, lp.rh_index);
+      if (si >= 0) {
+        if (!posMap[si]) posMap[si] = [];
+        posMap[si].push(lp.word_order);
+      }
+    }
+
+    // Collect displacement chain: move clicked group forward, cascade until gap found
+    const moves = []; // [{wordOrders, toIdx}]
+    moves.push({ wordOrders: moveWOs, toIdx: targetIdx });
+    const alreadyMoving = new Set(moveWOs);
+
+    let checkIdx = targetIdx;
+    while (checkIdx < rhNoteSequence.length) {
+      const occupants = (posMap[checkIdx] || []).filter(wo => !alreadyMoving.has(wo));
+      if (occupants.length === 0) break; // gap found
+      const nextIdx = nextNavIdx(checkIdx, 1);
+      if (nextIdx >= rhNoteSequence.length) {
+        alert("Cannot push forward — would exceed available notes.");
+        return;
+      }
+      moves.push({ wordOrders: occupants, toIdx: nextIdx });
+      for (const wo of occupants) alreadyMoving.add(wo);
+      checkIdx = nextIdx;
+    }
+
+    // Apply moves
+    const moveMap = {};
+    for (const move of moves) {
+      const targetPos = rhNoteSequence[move.toIdx];
+      for (const wo of move.wordOrders) {
+        moveMap[wo] = targetPos;
+      }
+    }
+    setLyricPlacements(lyricPlacements.map(lp => {
+      const target = moveMap[lp.word_order];
+      return target ? { ...lp, measure_num: target.measureNum, rh_index: target.rhIndex } : lp;
+    }));
+    setLyricsDirty(true);
+  }
+
+  function handleLyricCascadePullBack(wordOrders) {
+    if (!lyricPlacements) return;
+    const minWO = Math.min(...wordOrders);
+    const toMove = lyricPlacements.filter(lp =>
+      lp.word_order >= minWO && lp.measure_num != null
+    );
+    const toMoveWOs = new Set(toMove.map(lp => lp.word_order));
+    const nonMoving = lyricPlacements.filter(lp =>
+      !toMoveWOs.has(lp.word_order) && lp.measure_num != null
+    );
+
+    // Check all moving syllables: can they go back without collision?
+    const moveTargets = {};
+    for (const lp of toMove) {
+      const seqIdx = findRhSeqIdx(lp.measure_num, lp.rh_index);
+      const prevIdx = nextNavIdx(seqIdx, -1);
+      if (prevIdx < 0) return;
+      const prevPos = rhNoteSequence[prevIdx];
+      if (nonMoving.some(nm => nm.measure_num === prevPos.measureNum && nm.rh_index === prevPos.rhIndex)) {
+        return; // would create multiples
+      }
+      moveTargets[lp.word_order] = prevPos;
+    }
+
+    setLyricPlacements(lyricPlacements.map(lp => {
+      const target = moveTargets[lp.word_order];
+      return target ? { ...lp, measure_num: target.measureNum, rh_index: target.rhIndex } : lp;
+    }));
+    setLyricsDirty(true);
+  }
+
+  function handleLyricCascadePushForward(wordOrders) {
+    if (!lyricPlacements) return;
+    const minWO = Math.min(...wordOrders);
+    const toMove = lyricPlacements.filter(lp =>
+      lp.word_order >= minWO && lp.measure_num != null
+    );
+
+    // Check none would exceed bounds and compute targets
+    const moveTargets = {};
+    for (const lp of toMove) {
+      const seqIdx = findRhSeqIdx(lp.measure_num, lp.rh_index);
+      const nextIdx = nextNavIdx(seqIdx, 1);
+      if (nextIdx >= rhNoteSequence.length) {
+        alert("Cannot push forward — would exceed available notes.");
+        return;
+      }
+      moveTargets[lp.word_order] = rhNoteSequence[nextIdx];
+    }
+
+    setLyricPlacements(lyricPlacements.map(lp => {
+      const target = moveTargets[lp.word_order];
+      return target ? { ...lp, measure_num: target.measureNum, rh_index: target.rhIndex } : lp;
+    }));
+    setLyricsDirty(true);
+  }
+
+  const lyricEditHandlers = useMemo(() => ({
+    onPullBack: handleLyricPullBack,
+    onPushForward: handleLyricPushForward,
+    onCascadePullBack: handleLyricCascadePullBack,
+    onCascadePushForward: handleLyricCascadePushForward,
+  }), [lyricPlacements, rhNoteSequence, rhSeqIdxMap, skipTiedNotes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleChord = useCallback((played) => {
     if (playbackState !== "playing") return;
@@ -189,13 +429,32 @@ export default function SamPlayer({ onBack }) {
     recordEvent({ beatEvent: evt, played: [], timingDeltaMs: null, result: "miss" });
   }, [recordEvent]);
 
+  async function handleSaveLyrics() {
+    if (!songDbId || !lyricPlacements || !lyricsDirty) return;
+    setLyricsSaving(true);
+    try {
+      for (const lp of lyricPlacements) {
+        const { error } = await supabase
+          .from("sam_song_lyrics")
+          .update({ measure_num: lp.measure_num, rh_index: lp.rh_index })
+          .eq("song_id", songDbId)
+          .eq("word_order", lp.word_order);
+        if (error) throw new Error("Failed to save: " + error.message);
+      }
+      // Recompile so playback blob has updated lyrics
+      const newMeasures = await recompileMeasures(songDbId, supabase);
+      setSong(prev => ({ ...prev, measures: newMeasures }));
+      setLyricsDirty(false);
+      console.log("[Sam] Lyrics saved and recompiled.");
+    } catch (err) {
+      console.error("[Sam] Save lyrics failed:", err);
+      alert("Save lyrics failed: " + err.message);
+    } finally {
+      setLyricsSaving(false);
+    }
+  }
+
   function handleSongLoaded(loadedSong) {
-    console.log('[Sam Debug] First RH event with lyric:',
-      loadedSong.measures?.find(m => m.rh?.some(e => e.lyric))?.rh?.find(e => e.lyric)
-    );
-    console.log('[Sam Debug] Measures with lyrics count:',
-      loadedSong.measures?.filter(m => m.rh?.some(e => e.lyric)).length
-    );
     setSong(loadedSong);
     setSongDbId(null);
     setSnippet(null);
@@ -563,6 +822,8 @@ export default function SamPlayer({ onBack }) {
               onSongUpdate={setSong}
               onAudioUploaded={handleAudioUploaded}
               onFullSong={() => setSnippet(null)}
+              onLyricsChanged={(placements) => { setLyricPlacements(placements); setLyricsDirty(false); }}
+              skipTiedNotes={skipTiedNotes}
             />
 
             <AudioControls audioElement={audioElement} playbackState={playbackState} />
@@ -604,12 +865,38 @@ export default function SamPlayer({ onBack }) {
             )}
 
             {playbackState === "stopped" ? (
-              <ScoreRenderer
-                measures={activeMeasures}
-                onBeatEvents={handleBeatEvents}
-                onTap={handleScoreTap}
-                measureWidth={measureWidth}
-              />
+              <>
+                <ScoreRenderer
+                  measures={activeMeasures}
+                  onBeatEvents={handleBeatEvents}
+                  onTap={handleScoreTap}
+                  measureWidth={measureWidth}
+                  lyricPlacements={lyricPlacements}
+                  onLyricEdit={lyricEditHandlers}
+                />
+                {lyricPlacements && (
+                  <div className="flex items-center justify-center gap-4 mt-2 mb-3">
+                    <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={skipTiedNotes}
+                        onChange={(e) => setSkipTiedNotes(e.target.checked)}
+                        className="w-4 h-4 accent-primary"
+                      />
+                      One syllable per tied note
+                    </label>
+                    {lyricsDirty && (
+                      <button
+                        onClick={handleSaveLyrics}
+                        disabled={lyricsSaving}
+                        className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-sm font-medium min-h-[44px] disabled:opacity-50 transition-colors"
+                      >
+                        {lyricsSaving ? "Saving..." : "Save Lyrics"}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </>
             ) : (
               <ScrollEngine
                 measures={activeMeasures}

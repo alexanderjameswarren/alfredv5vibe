@@ -6,6 +6,7 @@ import { measureDurationQ } from "../lib/measureUtils";
 const TREBLE_Y = 40;
 const BASS_Y = 210;
 const STAFF_H = 350;
+const LYRIC_Y = TREBLE_Y + 115; // Fixed y position for all lyrics
 
 // Duration → quarter-note beat values (for voice format tick tracking)
 const DURATION_BEATS = {
@@ -32,9 +33,11 @@ function padVoice(events, targetBeats = 4) {
   return result;
 }
 
-export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWidth }) {
+export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWidth, lyricPlacements, onLyricEdit }) {
   const containerRef = useRef(null);
   const pointerRef = useRef(null);
+  const lyricEditRef = useRef(null);
+  lyricEditRef.current = onLyricEdit; // always fresh
 
   useEffect(() => {
     if (!measures || measures.length === 0) return;
@@ -67,6 +70,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
 
     // Track notes with tie properties across all measures (for cross-barline ties)
     const tieTracker = { treble: [], bass: [] };
+    const lyricPositions = []; // [{x, measureNum, rhIndex}] for editing controls
 
     measures.forEach((measure, measIdx) => {
       const isFirst = measIdx === 0;
@@ -330,7 +334,6 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         .format([trebleVoice, bassVoice], getFormatWidth(measWidth, isFirst));
 
       // 5. Draw treble notes individually, each wrapped in an SVG <g> group
-      const LYRIC_Y = TREBLE_Y + 115; // Fixed y position for all lyrics
       trebleNotes.forEach((note, i) => {
         const groupEl = ctx.openGroup("sam-note", `t-${measIdx}-${i}`);
         note.setStave(treble);
@@ -352,6 +355,15 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
               break;
             }
           }
+        }
+
+        // Collect lyric positions for editing controls
+        if (rhEvt && rhEvt.lyric) {
+          lyricPositions.push({
+            x: note.getAbsoluteX(),
+            measureNum: measure.number,
+            rhIndex: i,
+          });
         }
 
         const bmIdx = trebleIdxMap !== null ? trebleIdxMap[i] : i;
@@ -412,6 +424,49 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
     drawStaveTies(tieTracker.treble);
     drawStaveTies(tieTracker.bass);
 
+    // Lyric editing arrow controls (stopped mode only)
+    if (lyricPlacements && lyricEditRef.current && lyricPositions.length > 0) {
+      // Add CSS for hover
+      const styleEl = document.createElementNS("http://www.w3.org/2000/svg", "style");
+      styleEl.textContent = `.sam-arrow{opacity:0.3;cursor:pointer;user-select:none;fill:var(--muted-foreground)}.sam-arrow:hover{opacity:0.9}`;
+      svg.prepend(styleEl);
+
+      // Build lookup: measureNum-rhIndex → [word_orders]
+      const lyricLookup = {};
+      for (const lp of lyricPlacements) {
+        if (lp.measure_num == null) continue;
+        const key = `${lp.measure_num}-${lp.rh_index}`;
+        if (!lyricLookup[key]) lyricLookup[key] = [];
+        lyricLookup[key].push(lp.word_order);
+      }
+
+      function addArrow(text, x, y, fontSize, onClick) {
+        const el = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        el.setAttribute("x", x);
+        el.setAttribute("y", y);
+        el.setAttribute("font-size", fontSize);
+        el.setAttribute("text-anchor", "middle");
+        el.setAttribute("class", "sam-arrow");
+        el.textContent = text;
+        el.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+        svg.appendChild(el);
+      }
+
+      for (const pos of lyricPositions) {
+        const key = `${pos.measureNum}-${pos.rhIndex}`;
+        const wordOrders = lyricLookup[key];
+        if (!wordOrders || wordOrders.length === 0) continue;
+
+        const x = pos.x;
+        // Single-step arrows above syllable (above 12pt text ~16px cap height)
+        addArrow("\u2190", x - 8, LYRIC_Y - 18, "14px", () => lyricEditRef.current?.onPullBack(wordOrders));
+        addArrow("\u2192", x + 8, LYRIC_Y - 18, "14px", () => lyricEditRef.current?.onPushForward(wordOrders));
+        // Cascade arrows below syllable
+        addArrow("\u21D0", x - 9, LYRIC_Y + 18, "15px", () => lyricEditRef.current?.onCascadePullBack(wordOrders));
+        addArrow("\u21D2", x + 9, LYRIC_Y + 18, "15px", () => lyricEditRef.current?.onCascadePushForward(wordOrders));
+      }
+    }
+
     // Extract beat positions and SVG elements
     const beatEvents = beatMeta.map((meta, globalIdx) => {
       const refNote = meta.trebleNote || meta.bassNote;
@@ -435,7 +490,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
     if (onBeatEvents) {
       onBeatEvents(beatEvents);
     }
-  }, [measures, onBeatEvents, measureWidth]);
+  }, [measures, onBeatEvents, measureWidth, lyricPlacements]);
 
   function handlePointerDown(e) {
     pointerRef.current = { x: e.clientX, y: e.clientY, t: Date.now() };
