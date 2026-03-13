@@ -38,8 +38,9 @@ export function matchChord(played, expected) {
 export function findClosestBeat(beatEvents, scrollState, windowMs = 300, handMode = "both") {
   if (!scrollState || !beatEvents.length) return null;
 
-  const now = performance.now();
-  const elapsed = now - scrollState.scrollStartT;
+  // Use ScrollEngine's audio-synced elapsed (updated every frame) when available,
+  // falling back to raw wall clock for the first frame before elapsed is set.
+  const elapsed = scrollState.elapsed ?? (performance.now() - scrollState.scrollStartT);
 
   for (let i = 0; i < beatEvents.length; i++) {
     const evt = beatEvents[i];
