@@ -174,11 +174,6 @@ export default function SamPlayer({ onBack }) {
     return anchors;
   }, [activeMeasures]);
 
-  // Audio duration in ms from the audio element (null when no audio loaded).
-  const audioDurationMs = useMemo(() => {
-    if (!audioElement || !isFinite(audioElement.duration)) return null;
-    return audioElement.duration * 1000;
-  }, [audioElement, audioElement?.duration]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Flat sequence of all non-rest RH note positions for lyric navigation
   // isTiedCont: true if ALL notes have tie='end' or tie='both' (continuation of a tied note)
