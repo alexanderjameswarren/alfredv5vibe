@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Play, Pause, RotateCcw, Square, Download, Pencil, Upload, Disc, Wand2 } from "lucide-react";
+import { Play, Pause, RotateCcw, Square, Download, Pencil, Upload, Disc, Wand2, RefreshCw } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 import { uploadAudio } from "../lib/audioPlayer";
 import { recompileMeasures } from "../lib/measureCompiler";
@@ -10,8 +10,7 @@ export default function SettingsBar({
   timingWindowMs, timingWindowMsInput, setTimingWindowMs, setTimingWindowMsInput,
   chordMs, chordMsInput, setChordMs, setChordMsInput,
   measureWidth, measureWidthInput, setMeasureWidth, setMeasureWidthInput,
-  audioLeadInMs, audioLeadInMsInput, setAudioLeadInMs, setAudioLeadInMsInput,
-  defaultBpm, defaultBpmInput, setDefaultBpm, setDefaultBpmInput,
+  playbackSpeed, playbackSpeedInput, setPlaybackSpeed, setPlaybackSpeedInput,
   playbackState, songDbId,
   onPlay, onPause, onResume, onRestart, onStop,
   onChangeSong,
@@ -23,6 +22,7 @@ export default function SettingsBar({
   onFullSong,
   onLyricsChanged,
   skipTiedNotes,
+  audioElement,
 }) {
   const isStopped = playbackState === "stopped";
   const isPlaying = playbackState === "playing";
@@ -32,8 +32,7 @@ export default function SettingsBar({
   const [editTitle, setEditTitle] = useState("");
   const [editArtist, setEditArtist] = useState("");
   const [editBpm, setEditBpm] = useState("");
-  const [editPlaybackBpm, setEditPlaybackBpm] = useState("");
-  const [editLeadInMs, setEditLeadInMs] = useState("");
+  const [editPlaybackSpeed, setEditPlaybackSpeed] = useState("");
   const [editTimingWindow, setEditTimingWindow] = useState("");
   const [editChordMs, setEditChordMs] = useState("");
   const [editMeasureWidth, setEditMeasureWidth] = useState("");
@@ -42,6 +41,7 @@ export default function SettingsBar({
   const [hasLyrics, setHasLyrics] = useState(false);
   const [showAutoMatchConfirm, setShowAutoMatchConfirm] = useState(false);
   const [autoMatching, setAutoMatching] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const audioInputRef = useRef(null);
 
   useEffect(() => {
@@ -61,8 +61,7 @@ export default function SettingsBar({
     setEditTitle(song.title || "");
     setEditArtist(song.artist || "");
     setEditBpm(String(song.defaultBpm || bpm));
-    setEditPlaybackBpm(String(song.playbackBpm ?? song.defaultBpm ?? bpm));
-    setEditLeadInMs(String(song.audioLeadInMs ?? 0));
+    setEditPlaybackSpeed(String(song.playbackSpeed ?? playbackSpeed));
     setEditTimingWindow(song.defaultTimingWindowMs != null ? String(song.defaultTimingWindowMs) : "");
     setEditChordMs(song.defaultChordMs != null ? String(song.defaultChordMs) : "");
     setEditMeasureWidth(song.defaultMeasureWidth != null ? String(song.defaultMeasureWidth) : "");
@@ -73,8 +72,7 @@ export default function SettingsBar({
     setEditTitle("");
     setEditArtist("");
     setEditBpm("");
-    setEditPlaybackBpm("");
-    setEditLeadInMs("");
+    setEditPlaybackSpeed("");
     setEditTimingWindow("");
     setEditChordMs("");
     setEditMeasureWidth("");
@@ -82,13 +80,12 @@ export default function SettingsBar({
 
   async function handleSaveEdit() {
     const bpmNum = Number(editBpm);
-    const playbackBpmNum = Number(editPlaybackBpm) || bpmNum;
+    const psNum = Number(editPlaybackSpeed) || 100;
     if (!editTitle.trim() || !bpmNum || bpmNum <= 0) {
       alert("Please provide a valid title and BPM");
       return;
     }
 
-    const leadInNum = Number(editLeadInMs) || 0;
     const timingNum = editTimingWindow !== "" ? Number(editTimingWindow) : null;
     const chordNum = editChordMs !== "" ? Number(editChordMs) : null;
     const widthNum = editMeasureWidth !== "" ? Number(editMeasureWidth) : null;
@@ -103,8 +100,7 @@ export default function SettingsBar({
           title: editTitle.trim(),
           artist: editArtist.trim() || null,
           default_bpm: bpmNum,
-          playback_bpm: playbackBpmNum,
-          audio_lead_in_ms: leadInNum,
+          playback_speed: psNum,
           default_timing_window_ms: timingNum,
           default_chord_ms: chordNum,
           default_measure_width: widthNum,
@@ -125,8 +121,7 @@ export default function SettingsBar({
       title: editTitle.trim(),
       artist: editArtist.trim() || null,
       defaultBpm: bpmNum,
-      playbackBpm: playbackBpmNum,
-      audioLeadInMs: leadInNum,
+      playbackSpeed: psNum,
       defaultTimingWindowMs: timingNum,
       defaultChordMs: chordNum,
       defaultMeasureWidth: widthNum,
@@ -136,11 +131,9 @@ export default function SettingsBar({
       onSongUpdate(updatedSong);
     }
 
-    // Apply settings immediately — use playback BPM as the active practice tempo
-    if (playbackBpmNum !== bpm) {
-      setBpm(playbackBpmNum);
-      setBpmInput(String(playbackBpmNum));
-    }
+    // Apply settings immediately
+    setBpm(bpmNum);
+    setBpmInput(String(bpmNum));
     const tw = timingNum ?? 300;
     setTimingWindowMs(tw);
     setTimingWindowMsInput(String(tw));
@@ -150,10 +143,8 @@ export default function SettingsBar({
     const mw = widthNum ?? 300;
     setMeasureWidth(mw);
     setMeasureWidthInput(String(mw));
-    setAudioLeadInMs(leadInNum);
-    setAudioLeadInMsInput(String(leadInNum));
-    setDefaultBpm(bpmNum);
-    setDefaultBpmInput(String(bpmNum));
+    setPlaybackSpeed(psNum);
+    setPlaybackSpeedInput(String(psNum));
 
     setSaving(false);
     handleCancelEdit();
@@ -266,6 +257,20 @@ export default function SettingsBar({
       alert("Auto-match failed: " + err.message);
     } finally {
       setAutoMatching(false);
+    }
+  }
+
+  async function handleRefresh() {
+    if (!songDbId || refreshing) return;
+    setRefreshing(true);
+    try {
+      const newMeasures = await recompileMeasures(songDbId, supabase);
+      if (onSongUpdate) onSongUpdate({ ...song, measures: newMeasures });
+    } catch (err) {
+      console.error("[Sam] Refresh failed:", err);
+      alert("Refresh failed: " + err.message);
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -391,6 +396,16 @@ export default function SettingsBar({
             onChange={handleAudioUpload}
             className="hidden"
           />
+          {songDbId && (
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="flex items-center gap-1 text-sm text-foreground hover:text-primary min-h-[44px] px-2 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5${refreshing ? " animate-spin" : ""}`} />
+              {refreshing ? "Refreshing..." : "Refresh"}
+            </button>
+          )}
           {songDbId && hasLyrics && (
             <button
               onClick={() => setShowAutoMatchConfirm(true)}
@@ -479,37 +494,26 @@ export default function SettingsBar({
               min={150} max={600} step={50}
             />
           </label>
-          <label className="text-sm text-foreground">
-            Lead-In ms:{" "}
-            <input
-              type="number"
-              value={audioLeadInMsInput}
-              onFocus={(e) => e.target.select()}
-              onChange={(e) => setAudioLeadInMsInput(e.target.value)}
-              onBlur={() => {
-                const n = Number(audioLeadInMsInput);
-                if (isNaN(n)) { setAudioLeadInMs(0); setAudioLeadInMsInput("0"); }
-                else { setAudioLeadInMs(n); setAudioLeadInMsInput(String(n)); }
-              }}
-              className="w-20 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
-            />
-          </label>
-          <label className="text-sm text-foreground">
-            Default BPM:{" "}
-            <input
-              type="number"
-              value={defaultBpmInput}
-              onFocus={(e) => e.target.select()}
-              onChange={(e) => setDefaultBpmInput(e.target.value)}
-              onBlur={() => {
-                const n = Number(defaultBpmInput);
-                if (!n || n <= 0) { setDefaultBpm(68); setDefaultBpmInput("68"); }
-                else { setDefaultBpm(n); setDefaultBpmInput(String(n)); }
-              }}
-              className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
-              min={20} max={300}
-            />
-          </label>
+          {audioElement && (
+            <label className="text-sm text-foreground">
+              Speed %:{" "}
+              <input
+                type="number"
+                value={playbackSpeedInput}
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => setPlaybackSpeedInput(e.target.value)}
+                onBlur={() => {
+                  let n = Number(playbackSpeedInput);
+                  if (!n || n <= 0) n = 100;
+                  if (n > 200) n = 200;
+                  setPlaybackSpeed(n);
+                  setPlaybackSpeedInput(String(n));
+                }}
+                className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
+                min={10} max={200}
+              />
+            </label>
+          )}
         </div>
       )}
 
@@ -563,34 +567,20 @@ export default function SettingsBar({
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-1">
-                    Playback BPM
+                    Playback Speed %
                   </label>
                   <input
                     type="number"
-                    value={editPlaybackBpm}
-                    onChange={(e) => setEditPlaybackBpm(e.target.value)}
+                    value={editPlaybackSpeed}
+                    onChange={(e) => setEditPlaybackSpeed(e.target.value)}
                     className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    placeholder="68"
-                    min={20}
-                    max={300}
+                    placeholder="100"
+                    min={10}
+                    max={200}
                   />
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground -mt-2">Default = recording tempo. Playback = practice tempo.</p>
-
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">
-                  Audio Lead-In (ms)
-                </label>
-                <input
-                  type="number"
-                  value={editLeadInMs}
-                  onChange={(e) => setEditLeadInMs(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                  placeholder="0"
-                />
-                <p className="text-xs text-muted-foreground mt-1">Milliseconds from audio start to measure 1, beat 1.</p>
-              </div>
+              <p className="text-xs text-muted-foreground -mt-2">BPM = no-audio practice tempo. Speed = audio playback rate (100 = original).</p>
 
               <div className="grid grid-cols-3 gap-3">
                 <div>

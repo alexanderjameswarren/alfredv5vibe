@@ -460,7 +460,7 @@ function playClick(audioCtx, when, gainValue = 0.3) {
   osc.stop(when + 0.04);
 }
 
-export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioLeadInMs = 0, audioEndMs = null, handMode = "both" }) {
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioAnchors = [], audioEndMs = null, handMode = "both", onScrollStart = null }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -665,11 +665,27 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     // First tick = approachMs % msPerBeat (so ticks land on quarter-note boundaries).
     let nextMetroBeatIdx = 0;
     const metroStartMs = approachMs % msPerBeat;
-    const audioBaseTime = audioCtx ? audioCtx.currentTime : 0;
-
-    // Audio base offset: time in the audio file where measure 1 beat 1 starts (ms).
-    // Sourced from song.audioLeadInMs — the lead-in before notation begins.
-    const audioBaseOffsetMs = audioLeadInMs || 0;
+    // Convert audio file timestamp (ms) → musical beat position using anchors.
+    // With 0 anchors: virtual anchor at beat 0, audioMs 0 (BPM-based rate).
+    // With 1 anchor: BPM-based rate from the single anchor point.
+    // With 2+ anchors: piecewise-linear interpolation between anchors.
+    function audioMsToBeatPos(audioMs) {
+      const anchors = audioAnchors.length > 0 ? audioAnchors : [{ beatPos: 0, audioMs: 0 }];
+      if (anchors.length === 1) {
+        return anchors[0].beatPos + (audioMs - anchors[0].audioMs) / msPerBeat;
+      }
+      if (audioMs <= anchors[0].audioMs) {
+        const segRate = (anchors[1].audioMs - anchors[0].audioMs) / (anchors[1].beatPos - anchors[0].beatPos);
+        return anchors[0].beatPos + (audioMs - anchors[0].audioMs) / segRate;
+      }
+      for (let i = 0; i < anchors.length - 1; i++) {
+        if (audioMs <= anchors[i + 1].audioMs || i === anchors.length - 2) {
+          const segRate = (anchors[i + 1].audioMs - anchors[i].audioMs) / (anchors[i + 1].beatPos - anchors[i].beatPos);
+          return anchors[i].beatPos + (audioMs - anchors[i].audioMs) / segRate;
+        }
+      }
+      return 0;
+    }
 
     scrollStateRef.current = {
       scrollStartT: performance.now(),
@@ -677,13 +693,14 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       pxPerMs,
       targetX,
       copyWidth,
-      audioBaseOffsetMs,
       audioSyncOffset: null, // set on first frame where audio is playing
       audioEndMs,            // audio file timestamp where snippet's real measures end
       audioRestPaused: false, // true when audio paused for rest measures
+      playbackRate: audioElement ? (audioElement.playbackRate || 1) : 1,
     };
     if (scrollStateExtRef) scrollStateExtRef.current = scrollStateRef.current;
 
+    if (onScrollStart) onScrollStart(scrollStateRef.current.scrollStartT);
     if (onLoopCount) onLoopCount(0);
 
     function frame() {
@@ -692,40 +709,48 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
 
       const now = performance.now();
 
-      // Audio sync: derive elapsed from audioElement.currentTime when available.
-      // audioSyncOffset bridges wall-clock time and audio time so that elapsed
+      // Audio sync: derive elapsed from audioElement.currentTime via anchor interpolation.
+      // audioMsToBeatPos maps audio timestamps to beat positions, then
+      // beatPos * msPerBeat gives "content time" (BPM-based elapsed ms).
+      // audioSyncOffset bridges wall-clock time and content time so that elapsed
       // is continuous when audio first starts (which may be delayed by SamPlayer).
+      const rate = state.playbackRate || 1;
       let elapsed;
       if (audioElement && !audioElement.paused) {
-        const rate = audioElement.playbackRate || 1;
-        const audioElapsed = (audioElement.currentTime * 1000 - (state.audioBaseOffsetMs || 0)) / rate;
-        // First frame with audio playing — capture offset for continuity
+        const audioMs = audioElement.currentTime * 1000;
+        const contentElapsed = audioMsToBeatPos(audioMs) * msPerBeat;
         if (state.audioSyncOffset === null) {
-          state.audioSyncOffset = (now - state.scrollStartT) - audioElapsed;
+          state.audioSyncOffset = (now - state.scrollStartT) * rate - contentElapsed;
         }
-        elapsed = state.audioSyncOffset + audioElapsed;
+        elapsed = state.audioSyncOffset + contentElapsed;
         if (elapsed < 0) elapsed = 0;
 
         // Pause audio when snippet's real measures end (rest measures follow)
-        if (state.audioEndMs != null && audioElement.currentTime * 1000 >= state.audioEndMs) {
+        if (state.audioEndMs != null && audioMs >= state.audioEndMs) {
           audioElement.pause();
           state.audioRestPaused = true;
           state.restWallAnchor = now;
           state.restElapsedAnchor = elapsed;
         }
       } else if (audioElement && audioElement.paused && state.audioRestPaused) {
-        // Rest measures: audio paused, continue scrolling via wall clock
-        elapsed = state.restElapsedAnchor + (now - state.restWallAnchor);
+        // Rest measures: audio paused, continue scrolling via wall clock (scaled)
+        elapsed = state.restElapsedAnchor + (now - state.restWallAnchor) * rate;
       } else if (audioElement && audioElement.paused && state.audioSyncOffset !== null) {
         // User paused — freeze at audio-derived position
-        const rate = audioElement.playbackRate || 1;
-        const audioElapsed = (audioElement.currentTime * 1000 - (state.audioBaseOffsetMs || 0)) / rate;
-        elapsed = state.audioSyncOffset + audioElapsed;
+        const audioMs = audioElement.currentTime * 1000;
+        const contentElapsed = audioMsToBeatPos(audioMs) * msPerBeat;
+        elapsed = state.audioSyncOffset + contentElapsed;
         if (elapsed < 0) elapsed = 0;
+      } else if (audioElement) {
+        // Audio exists but hasn't started yet — scale wall clock by playback rate
+        // so approach speed matches the audio-synced scroll speed
+        elapsed = (now - state.scrollStartT) * rate;
       } else {
-        // No audio, or audio hasn't started yet — use wall clock
+        // No audio — use wall clock at full speed
         elapsed = now - state.scrollStartT;
       }
+
+      state.elapsed = elapsed;
 
       // Check for seamless loop teleport BEFORE computing final offset.
       // Copy 1 starts at world x = 10 + copyWidth.
@@ -751,7 +776,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
 
         // Audio loop: seek back to snippet start, preserve elapsed continuity
         if (audioElement) {
-          audioElement.currentTime = (state.audioBaseOffsetMs || 0) / 1000;
+          audioElement.currentTime = (audioAnchors[0]?.audioMs ?? 0) / 1000;
           state.audioSyncOffset = elapsed;
           if (state.audioRestPaused) {
             state.audioRestPaused = false;
@@ -822,7 +847,8 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
               (nextMetroBeatIdx % (msPerBeat / subdivisionMs) === 0);
             const gainValue = isOnBeat ? 0.3 : 0.15;
 
-            playClick(audioCtx, audioBaseTime + (elapsed / 1000) + delayS, gainValue);
+            // delayS is in content-time; convert to wall-time for audioCtx scheduling
+            playClick(audioCtx, audioCtx.currentTime + delayS / rate, gainValue);
           }
           nextMetroBeatIdx++;
         }

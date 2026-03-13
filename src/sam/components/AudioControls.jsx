@@ -103,10 +103,6 @@ export default function AudioControls({ audioElement, playbackState }) {
       <span className="text-xs text-muted-foreground w-10 tabular-nums">
         {formatTime(duration)}
       </span>
-
-      <span className="text-sm font-mono font-medium text-foreground tabular-nums whitespace-nowrap">
-        {Math.round(currentTime * 1000)} ms
-      </span>
     </div>
   );
 }

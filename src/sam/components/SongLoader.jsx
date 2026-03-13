@@ -31,8 +31,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
   const [editTitle, setEditTitle] = useState("");
   const [editArtist, setEditArtist] = useState("");
   const [editBpm, setEditBpm] = useState("");
-  const [editPlaybackBpm, setEditPlaybackBpm] = useState("");
-  const [editLeadInMs, setEditLeadInMs] = useState("");
+  const [editPlaybackSpeed, setEditPlaybackSpeed] = useState("");
   const [editTimingWindow, setEditTimingWindow] = useState("");
   const [editChordMs, setEditChordMs] = useState("");
   const [editMeasureWidth, setEditMeasureWidth] = useState("");
@@ -54,7 +53,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
     Promise.all([
       supabase
         .from("sam_songs")
-        .select("id, title, artist, default_bpm, playback_bpm, audio_lead_in_ms, default_timing_window_ms, default_chord_ms, default_measure_width, created_at, archived")
+        .select("id, title, artist, default_bpm, playback_speed, default_timing_window_ms, default_chord_ms, default_measure_width, created_at, archived")
         .order("updated_at", { ascending: false }),
       supabase
         .from("sam_sessions")
@@ -117,8 +116,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
       title: data.title,
       artist: data.artist,
       defaultBpm: data.default_bpm,
-      playbackBpm: data.playback_bpm ?? data.default_bpm,
-      audioLeadInMs: data.audio_lead_in_ms ?? 0,
+      playbackSpeed: data.playback_speed ?? 100,
       defaultTimingWindowMs: data.default_timing_window_ms ?? null,
       defaultChordMs: data.default_chord_ms ?? null,
       defaultMeasureWidth: data.default_measure_width ?? null,
@@ -165,8 +163,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
     setEditTitle(row.title || "");
     setEditArtist(row.artist || "");
     setEditBpm(String(row.default_bpm || 68));
-    setEditPlaybackBpm(String(row.playback_bpm ?? row.default_bpm ?? 68));
-    setEditLeadInMs(String(row.audio_lead_in_ms ?? 0));
+    setEditPlaybackSpeed(String(row.playback_speed ?? 100));
     setEditTimingWindow(row.default_timing_window_ms != null ? String(row.default_timing_window_ms) : "");
     setEditChordMs(row.default_chord_ms != null ? String(row.default_chord_ms) : "");
     setEditMeasureWidth(row.default_measure_width != null ? String(row.default_measure_width) : "");
@@ -177,8 +174,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
     setEditTitle("");
     setEditArtist("");
     setEditBpm("");
-    setEditPlaybackBpm("");
-    setEditLeadInMs("");
+    setEditPlaybackSpeed("");
     setEditTimingWindow("");
     setEditChordMs("");
     setEditMeasureWidth("");
@@ -188,13 +184,12 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
     if (!editingSong) return;
 
     const bpmNum = Number(editBpm);
-    const playbackBpmNum = Number(editPlaybackBpm) || bpmNum;
+    const psNum = Number(editPlaybackSpeed) || 100;
     if (!editTitle.trim() || !bpmNum || bpmNum <= 0) {
       alert("Please provide a valid title and BPM");
       return;
     }
 
-    const leadInNum = Number(editLeadInMs) || 0;
     const timingNum = editTimingWindow !== "" ? Number(editTimingWindow) : null;
     const chordNum = editChordMs !== "" ? Number(editChordMs) : null;
     const widthNum = editMeasureWidth !== "" ? Number(editMeasureWidth) : null;
@@ -206,8 +201,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
         title: editTitle.trim(),
         artist: editArtist.trim() || null,
         default_bpm: bpmNum,
-        playback_bpm: playbackBpmNum,
-        audio_lead_in_ms: leadInNum,
+        playback_speed: psNum,
         default_timing_window_ms: timingNum,
         default_chord_ms: chordNum,
         default_measure_width: widthNum,
@@ -226,8 +220,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
         title: editTitle.trim(),
         artist: editArtist.trim() || null,
         default_bpm: bpmNum,
-        playback_bpm: playbackBpmNum,
-        audio_lead_in_ms: leadInNum,
+        playback_speed: psNum,
         default_timing_window_ms: timingNum,
         default_chord_ms: chordNum,
         default_measure_width: widthNum,
@@ -649,34 +642,20 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-1">
-                    Playback BPM
+                    Playback Speed %
                   </label>
                   <input
                     type="number"
-                    value={editPlaybackBpm}
-                    onChange={(e) => setEditPlaybackBpm(e.target.value)}
+                    value={editPlaybackSpeed}
+                    onChange={(e) => setEditPlaybackSpeed(e.target.value)}
                     className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    placeholder="68"
-                    min={20}
-                    max={300}
+                    placeholder="100"
+                    min={10}
+                    max={200}
                   />
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground -mt-2">Default = recording tempo. Playback = practice tempo.</p>
-
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">
-                  Audio Lead-In (ms)
-                </label>
-                <input
-                  type="number"
-                  value={editLeadInMs}
-                  onChange={(e) => setEditLeadInMs(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                  placeholder="0"
-                />
-                <p className="text-xs text-muted-foreground mt-1">Milliseconds from audio start to measure 1, beat 1.</p>
-              </div>
+              <p className="text-xs text-muted-foreground -mt-2">BPM = no-audio practice tempo. Speed = audio playback rate (100 = original).</p>
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
