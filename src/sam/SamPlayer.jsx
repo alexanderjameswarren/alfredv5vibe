@@ -457,6 +457,7 @@ export default function SamPlayer({ onBack }) {
   const handleLoopCount = useCallback((n) => {
     setLoopCount(n);
     setLoopIteration(n);
+    setPausedMeasure(null);
   }, [setLoopIteration]);
 
   const handleBeatMiss = useCallback((evt) => {
