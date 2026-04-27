@@ -468,6 +468,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
   const beatEventsRef = useRef([]);
   const copyWidthRef = useRef(0);
   const nextCheckRef = useRef(0);
+  const hasLoopedRef = useRef(false);
   const [svgReady, setSvgReady] = useState(false);
 
   // Render copies of the score SVG into the scroll layer (1 copy for non-looping, 3 for looping)
@@ -607,6 +608,8 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       });
     }
 
+    hasLoopedRef.current = false;
+
     // Find the first beat at the firstPassStart measure (for resume-from-measure)
     let startEvtIdx = 0;
     if (firstPassStart > 0 && measures[firstPassStart]) {
@@ -641,9 +644,13 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       events[i].targetTimeMs = (events[i].xPx - originPx - targetX) / pxPerMs;
     }
 
-    // Mark beats before the start as skipped (not checked for miss or MIDI match)
-    for (let i = 0; i < startEvtIdx; i++) {
-      events[i].state = "skipped";
+    // Mark beats before the start as skipped (not checked for miss or MIDI match).
+    // Only applies on the first pass — after any loop teleport, all beats in copy 0
+    // represent a fresh loop iteration and must remain "pending".
+    if (!hasLoopedRef.current && startEvtIdx > 0) {
+      for (let i = 0; i < startEvtIdx; i++) {
+        events[i].state = "skipped";
+      }
     }
 
     // On resume: hide measures before firstPassStart in copy 0 for blank lead-in.
@@ -772,12 +779,17 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
 
         state.originPx -= copyWidth;
         loopCount++;
+        hasLoopedRef.current = true;
         if (onLoopCount) onLoopCount(loopCount);
 
-        // Audio loop: seek back to snippet start, preserve elapsed continuity
+        // Audio loop: seek back to snippet start, preserve elapsed continuity.
+        // audioAnchors[0] may be at beatPos > 0 when the snippet's first measure
+        // lacks audioOffsetMs; subtract that offset so contentElapsed restarts at 0
+        // relative to audioSyncOffset on the next frame.
         if (audioElement) {
           audioElement.currentTime = (audioAnchors[0]?.audioMs ?? 0) / 1000;
-          state.audioSyncOffset = elapsed;
+          const anchorBeatOffsetMs = (audioAnchors[0]?.beatPos ?? 0) * msPerBeat;
+          state.audioSyncOffset = elapsed - anchorBeatOffsetMs;
           if (state.audioRestPaused) {
             state.audioRestPaused = false;
             audioElement.play();
@@ -803,9 +815,14 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
           }
         }
         console.log('[Teleport] elapsed:', Math.round(elapsed),
-          'first 3 reset events:',
-          beatEventsRef.current.slice(0, 3).map(e => ({
+          'anchor0:', audioAnchors[0]
+            ? { beatPos: audioAnchors[0].beatPos, audioMs: audioAnchors[0].audioMs }
+            : null,
+          'audioSyncOffset:', Math.round(state.audioSyncOffset ?? NaN),
+          'first 4 reset events:',
+          beatEventsRef.current.slice(0, 4).map(e => ({
             meas: e.meas, beat: e.beat,
+            state: e.state,
             musicalBeat: e.musicalBeat,
             targetTimeMs: Math.round(e.targetTimeMs)
           })));
@@ -904,7 +921,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         rafRef.current = null;
       }
     };
-  }, [playbackState, svgReady, bpm, timingWindowMs, audioElement]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [playbackState, svgReady, bpm, timingWindowMs, audioElement, firstPassStart]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="relative">
