@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Play, Pause, RotateCcw, Square, Download, Pencil, Upload, Disc, Wand2, RefreshCw } from "lucide-react";
+import { Play, Pause, RotateCcw, Square, Download, Pencil, Upload, Disc, Wand2, RefreshCw, AudioWaveform, Save } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 import { uploadAudio } from "../lib/audioPlayer";
 import { recompileMeasures } from "../lib/measureCompiler";
@@ -42,7 +42,54 @@ export default function SettingsBar({
   const [showAutoMatchConfirm, setShowAutoMatchConfirm] = useState(false);
   const [autoMatching, setAutoMatching] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [showBpmEdit, setShowBpmEdit] = useState(false);
+  const [editShowBpm, setEditShowBpm] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
   const audioInputRef = useRef(null);
+
+  const hasAudio = !!song?.audioFilePath;
+
+  const isDirty =
+    bpm !== (song?.defaultBpm ?? 68) ||
+    timingWindowMs !== (song?.defaultTimingWindowMs ?? 300) ||
+    chordMs !== (song?.defaultChordMs ?? 80) ||
+    measureWidth !== (song?.defaultMeasureWidth ?? 300) ||
+    playbackSpeed !== (song?.playbackSpeed ?? 100);
+
+  function handleEnableBpmEdit() {
+    setPlaybackSpeed(100);
+    setPlaybackSpeedInput("100");
+    setShowBpmEdit(true);
+  }
+
+  async function handleSaveSettings() {
+    if (!songDbId) return;
+    setSavingSettings(true);
+    const { error } = await supabase
+      .from("sam_songs")
+      .update({
+        default_bpm: bpm,
+        default_timing_window_ms: timingWindowMs,
+        default_chord_ms: chordMs,
+        default_measure_width: measureWidth,
+        playback_speed: playbackSpeed,
+      })
+      .eq("id", songDbId);
+    if (error) {
+      console.error("[Sam] Settings save failed:", error);
+      alert("Failed to save settings");
+    } else if (onSongUpdate) {
+      onSongUpdate({
+        ...song,
+        defaultBpm: bpm,
+        defaultTimingWindowMs: timingWindowMs,
+        defaultChordMs: chordMs,
+        defaultMeasureWidth: measureWidth,
+        playbackSpeed: playbackSpeed,
+      });
+    }
+    setSavingSettings(false);
+  }
 
   useEffect(() => {
     if (!songDbId) {
@@ -65,6 +112,12 @@ export default function SettingsBar({
     setEditTimingWindow(song.defaultTimingWindowMs != null ? String(song.defaultTimingWindowMs) : "");
     setEditChordMs(song.defaultChordMs != null ? String(song.defaultChordMs) : "");
     setEditMeasureWidth(song.defaultMeasureWidth != null ? String(song.defaultMeasureWidth) : "");
+    setEditShowBpm(false);
+  }
+
+  function handleEditEnableBpm() {
+    setEditPlaybackSpeed("100");
+    setEditShowBpm(true);
   }
 
   function handleCancelEdit() {
@@ -428,22 +481,24 @@ export default function SettingsBar({
       {/* Settings row — hidden during play */}
       {!isPlaying && (
         <div className="flex items-center gap-3 mb-3 flex-wrap">
-          <label className="text-sm text-foreground">
-            BPM:{" "}
-            <input
-              type="number"
-              value={bpmInput}
-              onFocus={(e) => e.target.select()}
-              onChange={(e) => setBpmInput(e.target.value)}
-              onBlur={() => {
-                const n = Number(bpmInput);
-                if (!n || n <= 0) { setBpm(68); setBpmInput("68"); }
-                else { setBpm(n); setBpmInput(String(n)); }
-              }}
-              className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
-              min={20} max={300}
-            />
-          </label>
+          {!hasAudio && (
+            <label className="text-sm text-foreground">
+              BPM:{" "}
+              <input
+                type="number"
+                value={bpmInput}
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => setBpmInput(e.target.value)}
+                onBlur={() => {
+                  const n = Number(bpmInput);
+                  if (!n || n <= 0) { setBpm(68); setBpmInput("68"); }
+                  else { setBpm(n); setBpmInput(String(n)); }
+                }}
+                className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
+                min={20} max={300}
+              />
+            </label>
+          )}
           <label className="text-sm text-foreground">
             Timing ±ms:{" "}
             <input
@@ -494,25 +549,62 @@ export default function SettingsBar({
               min={150} max={600} step={50}
             />
           </label>
-          {audioElement && (
-            <label className="text-sm text-foreground">
-              Speed %:{" "}
-              <input
-                type="number"
-                value={playbackSpeedInput}
-                onFocus={(e) => e.target.select()}
-                onChange={(e) => setPlaybackSpeedInput(e.target.value)}
-                onBlur={() => {
-                  let n = Number(playbackSpeedInput);
-                  if (!n || n <= 0) n = 100;
-                  if (n > 200) n = 200;
-                  setPlaybackSpeed(n);
-                  setPlaybackSpeedInput(String(n));
-                }}
-                className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
-                min={10} max={200}
-              />
-            </label>
+          {hasAudio && (
+            <>
+              <label className="text-sm text-foreground">
+                Playback Speed %:{" "}
+                <input
+                  type="number"
+                  value={playbackSpeedInput}
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => setPlaybackSpeedInput(e.target.value)}
+                  onBlur={() => {
+                    let n = Number(playbackSpeedInput);
+                    if (!n || n <= 0) n = 100;
+                    if (n > 200) n = 200;
+                    setPlaybackSpeed(n);
+                    setPlaybackSpeedInput(String(n));
+                    if (n !== 100) setShowBpmEdit(false);
+                  }}
+                  className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
+                  min={10} max={200}
+                />
+              </label>
+              {showBpmEdit ? (
+                <label className="text-sm text-foreground">
+                  BPM:{" "}
+                  <input
+                    type="number"
+                    value={bpmInput}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setBpmInput(e.target.value)}
+                    onBlur={() => {
+                      const n = Number(bpmInput);
+                      if (!n || n <= 0) { setBpm(68); setBpmInput("68"); }
+                      else { setBpm(n); setBpmInput(String(n)); }
+                    }}
+                    className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
+                    min={20} max={300}
+                  />
+                </label>
+              ) : (
+                <AudioWaveform
+                  onClick={handleEnableBpmEdit}
+                  title="Edit audio sync"
+                  className="w-4 h-4 text-muted hover:text-dark cursor-pointer"
+                />
+              )}
+            </>
+          )}
+          {isDirty && (
+            <button
+              onClick={handleSaveSettings}
+              disabled={savingSettings || !songDbId}
+              className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50"
+            >
+              <Save className="w-3.5 h-3.5" />
+              {savingSettings ? "Saving..." : "Save"}
+            </button>
           )}
         </div>
       )}
@@ -550,37 +642,70 @@ export default function SettingsBar({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">
-                    Default BPM
-                  </label>
-                  <input
-                    type="number"
-                    value={editBpm}
-                    onChange={(e) => setEditBpm(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    placeholder="68"
-                    min={20}
-                    max={300}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">
-                    Playback Speed %
-                  </label>
-                  <input
-                    type="number"
-                    value={editPlaybackSpeed}
-                    onChange={(e) => setEditPlaybackSpeed(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    placeholder="100"
-                    min={10}
-                    max={200}
-                  />
-                </div>
+              <div className="flex gap-3">
+                {!hasAudio && (
+                  <div className="flex-1">
+                    <label className="block text-sm font-medium text-foreground mb-1">
+                      Default BPM
+                    </label>
+                    <input
+                      type="number"
+                      value={editBpm}
+                      onChange={(e) => setEditBpm(e.target.value)}
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                      placeholder="68"
+                      min={20}
+                      max={300}
+                    />
+                  </div>
+                )}
+                {hasAudio && (
+                  <>
+                    <div className="flex-1">
+                      <label className="flex items-center gap-2 text-sm font-medium text-foreground mb-1">
+                        Playback Speed %
+                        {!editShowBpm && (
+                          <AudioWaveform
+                            onClick={handleEditEnableBpm}
+                            title="Edit audio sync"
+                            className="w-4 h-4 text-muted hover:text-dark cursor-pointer"
+                          />
+                        )}
+                      </label>
+                      <input
+                        type="number"
+                        value={editPlaybackSpeed}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setEditPlaybackSpeed(v);
+                          if (Number(v) !== 100) setEditShowBpm(false);
+                        }}
+                        className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                        placeholder="100"
+                        min={10}
+                        max={200}
+                      />
+                    </div>
+                    {editShowBpm && (
+                      <div className="flex-1">
+                        <label className="block text-sm font-medium text-foreground mb-1">
+                          Default BPM
+                        </label>
+                        <input
+                          type="number"
+                          value={editBpm}
+                          onChange={(e) => setEditBpm(e.target.value)}
+                          className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                          placeholder="68"
+                          min={20}
+                          max={300}
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
-              <p className="text-xs text-muted-foreground -mt-2">BPM = no-audio practice tempo. Speed = audio playback rate (100 = original).</p>
+              <p className="text-xs text-muted-foreground -mt-2">Without an audio file, BPM controls how fast the sheet music scrolls. With an audio file, set Playback Speed to 100% then adjust BPM until the scroll matches the song — save once aligned. Use Playback Speed during practice to slow down or speed up without losing sync.</p>
 
               <div className="grid grid-cols-3 gap-3">
                 <div>

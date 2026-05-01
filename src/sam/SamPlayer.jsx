@@ -552,8 +552,43 @@ export default function SamPlayer({ onBack }) {
     if (audioElement) audioElement.muted = audioMuted;
   }, [audioElement, audioMuted]);
 
+  // Snippet ↔ full-song transitions (and snippet → different snippet) reset
+  // playback to the stopped state, mirroring the Stop button so the score is
+  // scrollable again and only the Play button is visible.
+  const prevSnippetRef = useRef(snippet);
+  useEffect(() => {
+    const prev = prevSnippetRef.current;
+    prevSnippetRef.current = snippet;
+    if (prev === snippet) return;
+    handleFullStop();
+  }, [snippet]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function handleAudioUploaded(path) {
     setAudioFilePath(path);
+  }
+
+  async function handleAudioOffsetChange(measureNumber, audioMs) {
+    if (!song || !songDbId) return;
+
+    const updatedMeasures = song.measures.map((m) => {
+      if (m.number !== measureNumber) return m;
+      if (audioMs == null) {
+        const { audioOffsetMs, ...rest } = m;
+        return rest;
+      }
+      return { ...m, audioOffsetMs: audioMs };
+    });
+
+    setSong({ ...song, measures: updatedMeasures });
+
+    const { error } = await supabase
+      .from("sam_songs")
+      .update({ measures: updatedMeasures })
+      .eq("id", songDbId);
+
+    if (error) {
+      console.error("[Sam] Audio offset update failed:", error);
+    }
   }
 
   function handleSettingsOverride(settings) {
@@ -918,6 +953,8 @@ export default function SamPlayer({ onBack }) {
                   measureWidth={measureWidth}
                   lyricPlacements={lyricPlacements}
                   onLyricEdit={lyricEditHandlers}
+                  showAudioOffset={!!song?.audioFilePath}
+                  onAudioOffsetChange={handleAudioOffsetChange}
                 />
                 {lyricPlacements && (
                   <div className="flex items-center justify-center gap-4 mt-2 mb-3">
