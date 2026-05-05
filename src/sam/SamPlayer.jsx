@@ -9,11 +9,13 @@ import SnippetPanel from "./components/SnippetPanel";
 import AudioControls from "./components/AudioControls";
 import useMIDI from "./lib/useMIDI";
 import usePracticeSession from "./lib/usePracticeSession";
+import useLyricEditor from "./lib/useLyricEditor";
+import useAudioSync from "./lib/useAudioSync";
+import useNumericInput from "./lib/useNumericInput";
 import { matchChord, findClosestBeat } from "./lib/noteMatching";
-import { colorBeatEls, midiDisplayName, getMeasureWidth } from "./lib/vexflowHelpers";
-import { normalizeMeasure, getMeasDurationQ } from "./lib/measureUtils";
+import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
+import { normalizeMeasure } from "./lib/measureUtils";
 import { loadAudio } from "./lib/audioPlayer";
-import { recompileMeasures } from "./lib/measureCompiler";
 import { supabase } from "../supabaseClient";
 
 function AudioMsCounter({ audioElement }) {
@@ -40,65 +42,40 @@ function AudioMsCounter({ audioElement }) {
 export default function SamPlayer({ onBack }) {
   const [song, setSong] = useState(null);
   const [songDbId, setSongDbId] = useState(null);
-  const [bpm, setBpm] = useState(68);
-  const [bpmInput, setBpmInput] = useState("68");
+  const bpm = useNumericInput(68);
   const [playbackState, setPlaybackState] = useState("stopped"); // 'stopped' | 'playing' | 'paused'
   const [pausedMeasure, setPausedMeasure] = useState(null);
   const [loopCount, setLoopCount] = useState(0);
   const [missCount, setMissCount] = useState(0);
-  const [timingWindowMs, setTimingWindowMs] = useState(300);
-  const [timingWindowMsInput, setTimingWindowMsInput] = useState("300");
-  const [chordMs, setChordMs] = useState(80);
-  const [chordMsInput, setChordMsInput] = useState("80");
+  const timingWindowMs = useNumericInput(300);
+  const chordMs = useNumericInput(80);
   const [hitCount, setHitCount] = useState(0);
-  const [measureWidth, setMeasureWidth] = useState(300);
-  const [measureWidthInput, setMeasureWidthInput] = useState("300");
+  const measureWidth = useNumericInput(300);
   const [lastResult, setLastResult] = useState(null);
   const [snippet, setSnippet] = useState(null); // { startMeasure, endMeasure, restMeasures, dbId }
   const [metronome, setMetronome] = useState("off"); // "off" | "beat" | "halfbeat" | "quarterbeat"
   const [audioElement, setAudioElement] = useState(null);
   const [audioFilePath, setAudioFilePath] = useState(null);
   const [audioMuted, setAudioMuted] = useState(false);
-  const [playbackSpeed, setPlaybackSpeed] = useState(100);
-  const [playbackSpeedInput, setPlaybackSpeedInput] = useState("100");
+  const playbackSpeed = useNumericInput(100);
   const beatEventsRef = useRef([]);
   const scrollStateExtRef = useRef(null);
   const hitCountRef = useRef(0);
   const missCountRef = useRef(0);
   const audioCtxRef = useRef(null);
-  const audioDelayTimerRef = useRef(null);
-  const scrollDelayTimerRef = useRef(null);
-  const pendingAudioSeekRef = useRef(null);
   const scrollContainerRef = useRef(null);
-  const [lyricPlacements, setLyricPlacements] = useState(null); // [{word_order, syllable, measure_num, rh_index}]
-  const [lyricsDirty, setLyricsDirty] = useState(false);
-  const [lyricsSaving, setLyricsSaving] = useState(false);
   const [skipTiedNotes, setSkipTiedNotes] = useState(false);
 
   const { startSession, endSession, recordEvent, setLoopIteration, stats: sessionStats } = usePracticeSession();
 
-  // Fetch lyrics from sam_song_lyrics when song is loaded
-  useEffect(() => {
-    if (!songDbId) {
-      setLyricPlacements(null);
-      setLyricsDirty(false);
-      return;
-    }
-    supabase
-      .from("sam_song_lyrics")
-      .select("word_order, syllable, measure_num, rh_index")
-      .eq("song_id", songDbId)
-      .order("word_order", { ascending: true })
-      .then(({ data, error }) => {
-        if (error) {
-          console.error("[Sam] Failed to fetch lyrics:", error);
-          setLyricPlacements(null);
-        } else {
-          setLyricPlacements(data && data.length > 0 ? data : null);
-        }
-        setLyricsDirty(false);
-      });
-  }, [songDbId]);
+  const {
+    lyricPlacements,
+    setLyricPlacements,
+    lyricsDirty,
+    lyricsSaving,
+    lyricEditHandlers,
+    saveLyrics,
+  } = useLyricEditor({ song, songDbId, skipTiedNotes, supabase });
 
   // Derive active measures from snippet range, appending rest measures.
   // normalizeMeasure ensures both voice format (lh[]/rh[]) and legacy beats[]
@@ -159,206 +136,23 @@ export default function SamPlayer({ onBack }) {
     return allMeasures.map(normalizeMeasure);
   }, [song, snippet, lyricPlacements]);
 
-  // Audio anchors: map each measure with audioOffsetMs to its cumulative beat position.
-  // Each anchor = { beatPos, audioMs } where beatPos is beats from activeMeasures[0].
-  const audioAnchors = useMemo(() => {
-    if (!activeMeasures.length) return [];
-    const anchors = [];
-    let cumulativeBeats = 0;
-    for (const m of activeMeasures) {
-      if (m.audioOffsetMs != null) {
-        anchors.push({ beatPos: cumulativeBeats, audioMs: m.audioOffsetMs });
-      }
-      cumulativeBeats += getMeasDurationQ(m);
-    }
-    return anchors;
-  }, [activeMeasures]);
-
-
-  // Flat sequence of all non-rest RH note positions for lyric navigation
-  // isTiedCont: true if ALL notes have tie='end' or tie='both' (continuation of a tied note)
-  const rhNoteSequence = useMemo(() => {
-    if (!song?.measures) return [];
-    const seq = [];
-    for (const m of song.measures) {
-      const rh = m.rh || [];
-      for (let i = 0; i < rh.length; i++) {
-        if (rh[i].notes && rh[i].notes.length > 0) {
-          const isTiedCont = rh[i].notes.every(n => n.tie === "end" || n.tie === "both");
-          seq.push({ measureNum: m.number, rhIndex: i, isTiedCont });
-        }
-      }
-    }
-    return seq;
-  }, [song]);
-
-  // Map from "measureNum-rhIndex" → sequence index for O(1) lookup
-  const rhSeqIdxMap = useMemo(() => {
-    const map = {};
-    for (let i = 0; i < rhNoteSequence.length; i++) {
-      const n = rhNoteSequence[i];
-      map[`${n.measureNum}-${n.rhIndex}`] = i;
-    }
-    return map;
-  }, [rhNoteSequence]);
-
-  function findRhSeqIdx(measureNum, rhIndex) {
-    return rhSeqIdxMap[`${measureNum}-${rhIndex}`] ?? -1;
-  }
-
-  // Navigate to next/prev position, skipping tied continuations when skipTiedNotes is on
-  function nextNavIdx(fromSeqIdx, direction) {
-    let idx = fromSeqIdx + direction;
-    if (!skipTiedNotes) return idx;
-    while (idx >= 0 && idx < rhNoteSequence.length) {
-      if (!rhNoteSequence[idx].isTiedCont) return idx;
-      idx += direction;
-    }
-    return idx; // out of bounds
-  }
-
-  // --- Lyric editing handlers ---
-  // wordOrders: array of word_orders at the clicked position (group moves together)
-
-  function handleLyricPullBack(wordOrders) {
-    if (!lyricPlacements) return;
-    const first = lyricPlacements.find(lp => lp.word_order === wordOrders[0]);
-    if (!first || first.measure_num == null) return;
-    const seqIdx = findRhSeqIdx(first.measure_num, first.rh_index);
-    const prevIdx = nextNavIdx(seqIdx, -1);
-    if (prevIdx < 0) return;
-    const prevPos = rhNoteSequence[prevIdx];
-    // When multiple syllables share a position, only move the earliest (min word_order)
-    const moveWO = wordOrders.length > 1 ? Math.min(...wordOrders) : wordOrders[0];
-    setLyricPlacements(lyricPlacements.map(lp =>
-      lp.word_order === moveWO
-        ? { ...lp, measure_num: prevPos.measureNum, rh_index: prevPos.rhIndex }
-        : lp
-    ));
-    setLyricsDirty(true);
-  }
-
-  function handleLyricPushForward(wordOrders) {
-    if (!lyricPlacements) return;
-    // When multiple syllables share a position, only move the latest (max word_order)
-    const moveWOs = wordOrders.length > 1 ? [Math.max(...wordOrders)] : [...wordOrders];
-    const first = lyricPlacements.find(lp => lp.word_order === moveWOs[0]);
-    if (!first || first.measure_num == null) return;
-    const seqIdx = findRhSeqIdx(first.measure_num, first.rh_index);
-    const targetIdx = nextNavIdx(seqIdx, 1);
-    if (targetIdx >= rhNoteSequence.length) {
-      alert("Cannot push forward — already at the last note.");
-      return;
-    }
-
-    // Build seqIdx → [word_orders] map for collision detection
-    const posMap = {};
-    for (const lp of lyricPlacements) {
-      if (lp.measure_num == null) continue;
-      const si = findRhSeqIdx(lp.measure_num, lp.rh_index);
-      if (si >= 0) {
-        if (!posMap[si]) posMap[si] = [];
-        posMap[si].push(lp.word_order);
-      }
-    }
-
-    // Collect displacement chain: move clicked group forward, cascade until gap found
-    const moves = []; // [{wordOrders, toIdx}]
-    moves.push({ wordOrders: moveWOs, toIdx: targetIdx });
-    const alreadyMoving = new Set(moveWOs);
-
-    let checkIdx = targetIdx;
-    while (checkIdx < rhNoteSequence.length) {
-      const occupants = (posMap[checkIdx] || []).filter(wo => !alreadyMoving.has(wo));
-      if (occupants.length === 0) break; // gap found
-      const nextIdx = nextNavIdx(checkIdx, 1);
-      if (nextIdx >= rhNoteSequence.length) {
-        alert("Cannot push forward — would exceed available notes.");
-        return;
-      }
-      moves.push({ wordOrders: occupants, toIdx: nextIdx });
-      for (const wo of occupants) alreadyMoving.add(wo);
-      checkIdx = nextIdx;
-    }
-
-    // Apply moves
-    const moveMap = {};
-    for (const move of moves) {
-      const targetPos = rhNoteSequence[move.toIdx];
-      for (const wo of move.wordOrders) {
-        moveMap[wo] = targetPos;
-      }
-    }
-    setLyricPlacements(lyricPlacements.map(lp => {
-      const target = moveMap[lp.word_order];
-      return target ? { ...lp, measure_num: target.measureNum, rh_index: target.rhIndex } : lp;
-    }));
-    setLyricsDirty(true);
-  }
-
-  function handleLyricCascadePullBack(wordOrders) {
-    if (!lyricPlacements) return;
-    const minWO = Math.min(...wordOrders);
-    const toMove = lyricPlacements.filter(lp =>
-      lp.word_order >= minWO && lp.measure_num != null
-    );
-    const toMoveWOs = new Set(toMove.map(lp => lp.word_order));
-    const nonMoving = lyricPlacements.filter(lp =>
-      !toMoveWOs.has(lp.word_order) && lp.measure_num != null
-    );
-
-    // Check all moving syllables: can they go back without collision?
-    const moveTargets = {};
-    for (const lp of toMove) {
-      const seqIdx = findRhSeqIdx(lp.measure_num, lp.rh_index);
-      const prevIdx = nextNavIdx(seqIdx, -1);
-      if (prevIdx < 0) return;
-      const prevPos = rhNoteSequence[prevIdx];
-      if (nonMoving.some(nm => nm.measure_num === prevPos.measureNum && nm.rh_index === prevPos.rhIndex)) {
-        return; // would create multiples
-      }
-      moveTargets[lp.word_order] = prevPos;
-    }
-
-    setLyricPlacements(lyricPlacements.map(lp => {
-      const target = moveTargets[lp.word_order];
-      return target ? { ...lp, measure_num: target.measureNum, rh_index: target.rhIndex } : lp;
-    }));
-    setLyricsDirty(true);
-  }
-
-  function handleLyricCascadePushForward(wordOrders) {
-    if (!lyricPlacements) return;
-    const minWO = Math.min(...wordOrders);
-    const toMove = lyricPlacements.filter(lp =>
-      lp.word_order >= minWO && lp.measure_num != null
-    );
-
-    // Check none would exceed bounds and compute targets
-    const moveTargets = {};
-    for (const lp of toMove) {
-      const seqIdx = findRhSeqIdx(lp.measure_num, lp.rh_index);
-      const nextIdx = nextNavIdx(seqIdx, 1);
-      if (nextIdx >= rhNoteSequence.length) {
-        alert("Cannot push forward — would exceed available notes.");
-        return;
-      }
-      moveTargets[lp.word_order] = rhNoteSequence[nextIdx];
-    }
-
-    setLyricPlacements(lyricPlacements.map(lp => {
-      const target = moveTargets[lp.word_order];
-      return target ? { ...lp, measure_num: target.measureNum, rh_index: target.rhIndex } : lp;
-    }));
-    setLyricsDirty(true);
-  }
-
-  const lyricEditHandlers = useMemo(() => ({
-    onPullBack: handleLyricPullBack,
-    onPushForward: handleLyricPushForward,
-    onCascadePullBack: handleLyricCascadePullBack,
-    onCascadePushForward: handleLyricCascadePushForward,
-  }), [lyricPlacements, rhNoteSequence, rhSeqIdxMap, skipTiedNotes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const {
+    audioAnchors,
+    getSeekForMeasure,
+    getSnippetAudioEndMs,
+    scheduleAudioStartOnScroll,
+    prepareAudioSeek,
+    clearTimers,
+  } = useAudioSync({
+    song,
+    snippet,
+    activeMeasures,
+    bpm: bpm.value,
+    playbackSpeed: playbackSpeed.value,
+    audioElement,
+    scrollContainerRef,
+    measureWidth: measureWidth.value,
+  });
 
   const handleChord = useCallback((played) => {
     if (playbackState !== "playing") return;
@@ -374,9 +168,9 @@ export default function SamPlayer({ onBack }) {
     // Hand mode filtering: only match notes from the active hand
     const hm = snippet?.handMode || "both";
 
-    const match = findClosestBeat(beatEventsRef.current, scrollState, timingWindowMs, hm);
+    const match = findClosestBeat(beatEventsRef.current, scrollState, timingWindowMs.value, hm);
     if (!match) {
-      console.log(`[PLAY] No pending beat found within ±${timingWindowMs}ms`);
+      console.log(`[PLAY] No pending beat found within ±${timingWindowMs.value}ms`);
       const names = played.map((m) => midiDisplayName(m)).join(", ");
       setLastResult({ result: "none", timingMs: 0, noteName: names });
       return;
@@ -441,11 +235,11 @@ export default function SamPlayer({ onBack }) {
       timingMs: Math.round(timingDeltaMs),
       noteName: `${sign}${Math.round(timingDeltaMs)}ms`,
     });
-  }, [playbackState, recordEvent, timingWindowMs, snippet?.handMode]);
+  }, [playbackState, recordEvent, timingWindowMs.value, snippet?.handMode]);
 
   const { connected: midiConnected, deviceName: midiDevice, lastNote } = useMIDI({
     onChord: handleChord,
-    chordGroupMs: chordMs,
+    chordGroupMs: chordMs.value,
   });
 
   const handleBeatEvents = useCallback((events) => {
@@ -467,28 +261,8 @@ export default function SamPlayer({ onBack }) {
   }, [recordEvent]);
 
   async function handleSaveLyrics() {
-    if (!songDbId || !lyricPlacements || !lyricsDirty) return;
-    setLyricsSaving(true);
-    try {
-      for (const lp of lyricPlacements) {
-        const { error } = await supabase
-          .from("sam_song_lyrics")
-          .update({ measure_num: lp.measure_num, rh_index: lp.rh_index })
-          .eq("song_id", songDbId)
-          .eq("word_order", lp.word_order);
-        if (error) throw new Error("Failed to save: " + error.message);
-      }
-      // Recompile so playback blob has updated lyrics
-      const newMeasures = await recompileMeasures(songDbId, supabase);
-      setSong(prev => ({ ...prev, measures: newMeasures }));
-      setLyricsDirty(false);
-      console.log("[Sam] Lyrics saved and recompiled.");
-    } catch (err) {
-      console.error("[Sam] Save lyrics failed:", err);
-      alert("Save lyrics failed: " + err.message);
-    } finally {
-      setLyricsSaving(false);
-    }
+    const newMeasures = await saveLyrics();
+    if (newMeasures) setSong((prev) => ({ ...prev, measures: newMeasures }));
   }
 
   function handleSongLoaded(loadedSong) {
@@ -496,21 +270,11 @@ export default function SamPlayer({ onBack }) {
     setSongDbId(null);
     setSnippet(null);
     setAudioFilePath(loadedSong.audioFilePath || null);
-    const activeBpm = loadedSong.defaultBpm || 68;
-    setBpm(activeBpm);
-    setBpmInput(String(activeBpm));
-    const tw = loadedSong.defaultTimingWindowMs ?? 300;
-    setTimingWindowMs(tw);
-    setTimingWindowMsInput(String(tw));
-    const cm = loadedSong.defaultChordMs ?? 80;
-    setChordMs(cm);
-    setChordMsInput(String(cm));
-    const mw = loadedSong.defaultMeasureWidth ?? 300;
-    setMeasureWidth(mw);
-    setMeasureWidthInput(String(mw));
-    const ps = loadedSong.playbackSpeed ?? 100;
-    setPlaybackSpeed(ps);
-    setPlaybackSpeedInput(String(ps));
+    bpm.reset(loadedSong.defaultBpm || 68);
+    timingWindowMs.reset(loadedSong.defaultTimingWindowMs ?? 300);
+    chordMs.reset(loadedSong.defaultChordMs ?? 80);
+    measureWidth.reset(loadedSong.defaultMeasureWidth ?? 300);
+    playbackSpeed.reset(loadedSong.playbackSpeed ?? 100);
     setPlaybackState("stopped");
     setPausedMeasure(null);
     setLoopCount(0);
@@ -543,9 +307,9 @@ export default function SamPlayer({ onBack }) {
   // Sync audio playback rate: playbackSpeed / 100
   useEffect(() => {
     if (!audioElement) return;
-    audioElement.playbackRate = playbackSpeed / 100;
+    audioElement.playbackRate = playbackSpeed.value / 100;
     audioElement.preservesPitch = true;
-  }, [audioElement, playbackSpeed]);
+  }, [audioElement, playbackSpeed.value]);
 
   // Sync mute state to audio element
   useEffect(() => {
@@ -592,22 +356,10 @@ export default function SamPlayer({ onBack }) {
   }
 
   function handleSettingsOverride(settings) {
-    if (settings.bpm) {
-      setBpm(settings.bpm);
-      setBpmInput(String(settings.bpm));
-    }
-    if (settings.windowMs) {
-      setTimingWindowMs(settings.windowMs);
-      setTimingWindowMsInput(String(settings.windowMs));
-    }
-    if (settings.chordGroupMs) {
-      setChordMs(settings.chordGroupMs);
-      setChordMsInput(String(settings.chordGroupMs));
-    }
-    if (settings.measureWidth) {
-      setMeasureWidth(settings.measureWidth);
-      setMeasureWidthInput(String(settings.measureWidth));
-    }
+    if (settings.bpm) bpm.set(settings.bpm);
+    if (settings.windowMs) timingWindowMs.set(settings.windowMs);
+    if (settings.chordGroupMs) chordMs.set(settings.chordGroupMs);
+    if (settings.measureWidth) measureWidth.set(settings.measureWidth);
   }
 
   function resetCounters() {
@@ -622,7 +374,7 @@ export default function SamPlayer({ onBack }) {
     startSession({
       songId: songDbId,
       snippetId: snippet?.dbId || null,
-      settings: { bpm, windowMs: timingWindowMs, chordGroupMs: chordMs, measureWidth },
+      settings: { bpm: bpm.value, windowMs: timingWindowMs.value, chordGroupMs: chordMs.value, measureWidth: measureWidth.value },
     });
   }
 
@@ -652,112 +404,22 @@ export default function SamPlayer({ onBack }) {
     return audioCtxRef.current;
   }
 
-  // Calculate audio file timestamp (ms) for a given measure number.
-  // Uses audio_offset_ms if set on the target measure, else derives from BPM.
-  function getAudioSeekMsForMeasure(measNum) {
-    if (!song || !measNum) return 0;
-    const targetMeas = song.measures[measNum - 1];
-    if (targetMeas?.audioOffsetMs != null) return targetMeas.audioOffsetMs;
-    const defBpm = song.defaultBpm || bpm;
-    const msPerBeat = 60000 / defBpm;
-    const audioOffsetMs1 = song.measures[0]?.audioOffsetMs ?? 0;
-    let totalBeats = 0;
-    for (let i = 0; i < measNum - 1; i++) {
-      totalBeats += getMeasDurationQ(song.measures[i]);
-    }
-    return audioOffsetMs1 + totalBeats * msPerBeat;
-  }
-
-  function getSnippetAudioSeekMs() {
-    if (!snippet || !song) return 0;
-    return getAudioSeekMsForMeasure(snippet.startMeasure);
-  }
-
-  // Audio file timestamp (ms) where the snippet's real measures end.
-  // Audio should be silent during rest measures that follow.
-  function getSnippetAudioEndMs() {
-    if (!snippet || !song) return null;
-    const startMs = getSnippetAudioSeekMs();
-    const defBpm = song.defaultBpm || bpm;
-    const msPerBeat = 60000 / defBpm;
-    let totalBeats = 0;
-    for (let i = snippet.startMeasure - 1; i < snippet.endMeasure; i++) {
-      totalBeats += getMeasDurationQ(song.measures[i]);
-    }
-    return startMs + totalBeats * msPerBeat;
-  }
-
-  function clearDelayTimers() {
-    if (audioDelayTimerRef.current) {
-      clearTimeout(audioDelayTimerRef.current);
-      audioDelayTimerRef.current = null;
-    }
-    if (scrollDelayTimerRef.current) {
-      clearTimeout(scrollDelayTimerRef.current);
-      scrollDelayTimerRef.current = null;
-    }
-    pendingAudioSeekRef.current = null;
-  }
-
-  // Calculate the visual approach time (ms) for the first note to reach the target line.
-  // Must match ScrollEngine's approach calculation: leadInPx = viewportWidth * 0.25.
-  function getApproachMs() {
-    const viewportWidth = scrollContainerRef.current?.clientWidth || 800;
-    const leadInPx = viewportWidth * 0.25;
-    const msPerBeat = 60000 / bpm;
-    const firstMeas = activeMeasures[0];
-    if (!firstMeas) return 0;
-    const firstDurationQ = getMeasDurationQ(firstMeas);
-    const firstMeasWidth = getMeasureWidth(firstMeas.timeSignature, false, measureWidth);
-    const pxPerBeat = firstMeasWidth / firstDurationQ;
-    const pxPerMs = pxPerBeat / msPerBeat;
-    return leadInPx / pxPerMs;
-  }
-
-  // Called by ScrollEngine when it initializes and sets scrollStartT.
-  // Starts the audio delay timer synchronized with the scroll's start time.
-  function handleScrollStart(scrollStartT) {
-    const pending = pendingAudioSeekRef.current;
-    if (!pending || !audioElement) return;
-    pendingAudioSeekRef.current = null;
-
-    const approach = getApproachMs();
-    const rate = playbackSpeed / 100 || 1;
-    const audioDelay = approach / rate;
-
-    // Adjust for any time already elapsed since ScrollEngine started
-    const alreadyElapsed = performance.now() - scrollStartT;
-    const remainingDelay = Math.max(0, audioDelay - alreadyElapsed);
-
-    if (remainingDelay > 0) {
-      audioDelayTimerRef.current = setTimeout(() => {
-        audioElement.currentTime = pending.seekMs / 1000;
-        audioElement.play();
-        audioDelayTimerRef.current = null;
-      }, remainingDelay);
-    } else {
-      audioElement.currentTime = pending.seekMs / 1000;
-      audioElement.play();
-    }
-  }
-
   function handlePlay() {
     ensureAudioContext();
     resetCounters();
     setPausedMeasure(null);
     beginSession();
-    clearDelayTimers();
+    clearTimers();
 
     const audioOffsetMs1 = activeMeasures[0]?.audioOffsetMs ?? 0;
-    const seekMs = snippet ? getSnippetAudioSeekMs() : audioOffsetMs1;
-
-    pendingAudioSeekRef.current = audioElement ? { seekMs } : null;
+    const seekMs = snippet ? getSeekForMeasure(snippet.startMeasure) : audioOffsetMs1;
+    prepareAudioSeek(seekMs);
 
     setPlaybackState("playing");
   }
 
   function handlePause() {
-    clearDelayTimers();
+    clearTimers();
     const meas = getCurrentMeasure();
     setPausedMeasure(meas);
     endSession();
@@ -769,12 +431,12 @@ export default function SamPlayer({ onBack }) {
     ensureAudioContext();
     resetCounters();
     beginSession();
-    clearDelayTimers();
+    clearTimers();
 
     if (audioElement) {
       // Seek to the beginning of the paused measure so audio aligns with scroll
-      const seekMs = pausedMeasure ? getAudioSeekMsForMeasure(pausedMeasure) : audioElement.currentTime * 1000;
-      pendingAudioSeekRef.current = { seekMs };
+      const seekMs = pausedMeasure ? getSeekForMeasure(pausedMeasure) : audioElement.currentTime * 1000;
+      prepareAudioSeek(seekMs);
     }
 
     setPlaybackState("playing");
@@ -785,18 +447,17 @@ export default function SamPlayer({ onBack }) {
     resetCounters();
     setPausedMeasure(null);
     beginSession();
-    clearDelayTimers();
+    clearTimers();
 
     const audioOffsetMs1 = activeMeasures[0]?.audioOffsetMs ?? 0;
-    const seekMs = snippet ? getSnippetAudioSeekMs() : audioOffsetMs1;
-
-    pendingAudioSeekRef.current = audioElement ? { seekMs } : null;
+    const seekMs = snippet ? getSeekForMeasure(snippet.startMeasure) : audioOffsetMs1;
+    prepareAudioSeek(seekMs);
 
     setPlaybackState("playing");
   }
 
   function handleStop() {
-    clearDelayTimers();
+    clearTimers();
     setPlaybackState("stopped");
     endSession();
     if (audioElement) {
@@ -806,7 +467,7 @@ export default function SamPlayer({ onBack }) {
   }
 
   function handleFullStop() {
-    clearDelayTimers();
+    clearTimers();
     endSession();
     resetCounters();
     setPausedMeasure(null);
@@ -824,7 +485,7 @@ export default function SamPlayer({ onBack }) {
   }
 
   function handleChangeSong() {
-    clearDelayTimers();
+    clearTimers();
     if (playbackState === "playing") endSession();
     if (audioElement) audioElement.pause();
     setAudioElement(null);
@@ -840,7 +501,7 @@ export default function SamPlayer({ onBack }) {
     const exportData = {
       title: song.title,
       artist: song.artist,
-      defaultBpm: song.defaultBpm || bpm,
+      defaultBpm: song.defaultBpm || bpm.value,
       measures: song.measures,
     };
 
@@ -882,11 +543,11 @@ export default function SamPlayer({ onBack }) {
           <>
             <SettingsBar
               song={song} snippet={snippet}
-              bpm={bpm} bpmInput={bpmInput} setBpm={setBpm} setBpmInput={setBpmInput}
-              timingWindowMs={timingWindowMs} timingWindowMsInput={timingWindowMsInput} setTimingWindowMs={setTimingWindowMs} setTimingWindowMsInput={setTimingWindowMsInput}
-              chordMs={chordMs} chordMsInput={chordMsInput} setChordMs={setChordMs} setChordMsInput={setChordMsInput}
-              measureWidth={measureWidth} measureWidthInput={measureWidthInput} setMeasureWidth={setMeasureWidth} setMeasureWidthInput={setMeasureWidthInput}
-              playbackSpeed={playbackSpeed} playbackSpeedInput={playbackSpeedInput} setPlaybackSpeed={setPlaybackSpeed} setPlaybackSpeedInput={setPlaybackSpeedInput}
+              bpm={bpm}
+              timingWindowMs={timingWindowMs}
+              chordMs={chordMs}
+              measureWidth={measureWidth}
+              playbackSpeed={playbackSpeed}
               playbackState={playbackState} songDbId={songDbId}
               onPlay={handlePlay} onPause={handlePause} onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
               onChangeSong={handleChangeSong}
@@ -896,9 +557,8 @@ export default function SamPlayer({ onBack }) {
               onSongUpdate={setSong}
               onAudioUploaded={handleAudioUploaded}
               onFullSong={() => setSnippet(null)}
-              onLyricsChanged={(placements) => { setLyricPlacements(placements); setLyricsDirty(false); }}
+              onLyricsChanged={setLyricPlacements}
               skipTiedNotes={skipTiedNotes}
-              audioElement={audioElement}
             />
 
             <AudioControls audioElement={audioElement} playbackState={playbackState} />
@@ -937,9 +597,9 @@ export default function SamPlayer({ onBack }) {
                 totalMeasures={song.measures.length}
                 snippet={snippet}
                 onSnippetChange={setSnippet}
-                bpm={bpm}
-                timingWindowMs={timingWindowMs}
-                chordMs={chordMs}
+                bpm={bpm.value}
+                timingWindowMs={timingWindowMs.value}
+                chordMs={chordMs.value}
                 onSettingsOverride={handleSettingsOverride}
               />
             )}
@@ -950,7 +610,7 @@ export default function SamPlayer({ onBack }) {
                   measures={activeMeasures}
                   onBeatEvents={handleBeatEvents}
                   onTap={handleScoreTap}
-                  measureWidth={measureWidth}
+                  measureWidth={measureWidth.value}
                   lyricPlacements={lyricPlacements}
                   onLyricEdit={lyricEditHandlers}
                   showAudioOffset={!!song?.audioFilePath}
@@ -982,14 +642,14 @@ export default function SamPlayer({ onBack }) {
             ) : (
               <ScrollEngine
                 measures={activeMeasures}
-                bpm={bpm}
+                bpm={bpm.value}
                 playbackState={playbackState}
                 onBeatEvents={handleBeatEvents}
                 onLoopCount={handleLoopCount}
                 onBeatMiss={handleBeatMiss}
                 scrollStateExtRef={scrollStateExtRef}
                 onTap={handleScoreTap}
-                measureWidth={measureWidth}
+                measureWidth={measureWidth.value}
                 metronome={metronome}
                 audioCtx={audioCtxRef.current}
                 firstPassStart={
@@ -999,12 +659,12 @@ export default function SamPlayer({ onBack }) {
                 }
                 loop={!!snippet}
                 onEnded={handleStop}
-                timingWindowMs={timingWindowMs}
+                timingWindowMs={timingWindowMs.value}
                 audioElement={audioElement}
                 audioAnchors={audioAnchors}
                 audioEndMs={snippet && audioElement ? getSnippetAudioEndMs() : null}
                 handMode={snippet?.handMode || "both"}
-                onScrollStart={handleScrollStart}
+                onScrollStart={scheduleAudioStartOnScroll}
               />
             )}
           </>
