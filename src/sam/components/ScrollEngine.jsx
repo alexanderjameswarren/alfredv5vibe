@@ -2,9 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { colorBeatEls, getMeasureWidth } from "../lib/vexflowHelpers";
 import { getMeasDurationQ } from "../lib/measureUtils";
 import { renderCopy, playClick } from "../lib/scoreRender";
-
-const TARGET_LINE_PCT = 0.15; // 15% from left edge
-const STAFF_H = 350;
+import { SCROLL_GEOMETRY, METRONOME_GAIN } from "../lib/samConstants";
 
 
 export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioAnchors = [], audioEndMs = null, handMode = "both", onScrollStart = null }) {
@@ -48,7 +46,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     copyWidthRef.current = singleCopyWidth;
 
     const renderer = new VF.Renderer(scrollLayer, VF.Renderer.Backends.SVG);
-    renderer.resize(totalWidth, STAFF_H);
+    renderer.resize(totalWidth, SCROLL_GEOMETRY.staffHeight);
     const ctx = renderer.getContext();
 
     // Render copies (1 for non-looping, 3 for looping)
@@ -125,7 +123,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     if (!viewport || !scrollLayer) return;
 
     const viewportWidth = viewport.clientWidth;
-    const targetX = viewportWidth * TARGET_LINE_PCT;
+    const targetX = viewportWidth * SCROLL_GEOMETRY.targetLinePct;
     const msPerBeat = 60000 / bpm;
     const firstDurationQ = getMeasDurationQ(measures[0]);
     const firstMeasWidth = getMeasureWidth(measures[0].timeSignature, false, measureWidth);
@@ -173,7 +171,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     // Origin: position so that the startEvtIdx beat starts 25% of viewport width
     // to the right of the target line (short lead-in before first note arrives).
     const startBeatX = events[startEvtIdx]?.xPx || events[0]?.xPx || 0;
-    const leadInPx = viewportWidth * 0.25;
+    const leadInPx = viewportWidth * SCROLL_GEOMETRY.leadInPct;
     const originPx = startBeatX - targetX - leadInPx;
 
     // Approach time adjusted for the start offset so that
@@ -409,7 +407,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
             // Determine if this tick lands on a beat (for gain adjustment)
             const isOnBeat = metronome === "beat" ||
               (nextMetroBeatIdx % (msPerBeat / subdivisionMs) === 0);
-            const gainValue = isOnBeat ? 0.3 : 0.15;
+            const gainValue = isOnBeat ? METRONOME_GAIN.onBeat : METRONOME_GAIN.offBeat;
 
             // delayS is in content-time; convert to wall-time for audioCtx scheduling
             playClick(audioCtx, audioCtx.currentTime + delayS / rate, gainValue);
@@ -477,14 +475,14 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         ref={viewportRef}
         onClick={onTap}
         className="relative overflow-hidden bg-white rounded-lg border border-border cursor-pointer"
-        style={{ height: STAFF_H + 4 }}
+        style={{ height: SCROLL_GEOMETRY.staffHeight + 4 }}
       >
         {/* Target zone (subtle blue tint) */}
         <div
           className="absolute top-0 bottom-0 pointer-events-none"
           style={{
             left: 0,
-            width: `${TARGET_LINE_PCT * 100}%`,
+            width: `${SCROLL_GEOMETRY.targetLinePct * 100}%`,
             backgroundColor: "rgba(37, 99, 235, 0.04)",
           }}
         />
@@ -493,7 +491,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         <div
           className="absolute top-0 bottom-0 pointer-events-none z-10"
           style={{
-            left: `${TARGET_LINE_PCT * 100}%`,
+            left: `${SCROLL_GEOMETRY.targetLinePct * 100}%`,
             width: 2,
             backgroundColor: "#2563eb",
           }}

@@ -33,7 +33,9 @@ export default function useNumericInput(initial) {
 
   function commit({ min, max, fallback } = {}) {
     let n = Number(input);
-    if (!n || (min != null && n < min)) {
+    // NaN catches "" and non-numeric strings; the explicit check lets a
+    // legitimate 0 survive when no min (or min <= 0) is set.
+    if (Number.isNaN(n) || (min != null && n < min)) {
       n = fallback;
     } else if (max != null && n > max) {
       n = max;

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Pencil, AudioWaveform } from "lucide-react";
 import { supabase } from "../../supabaseClient";
+import { DEFAULTS } from "../lib/samConstants";
 
 // Renders the pencil trigger button + the song-edit modal. Owns all
 // modal-local form state. On save, writes to sam_songs and applies the new
@@ -42,7 +43,7 @@ export default function SongMetadataEditor({
   }
 
   function handleEditEnableBpm() {
-    setEditPlaybackSpeed("100");
+    setEditPlaybackSpeed(String(DEFAULTS.playbackSpeed));
     setEditShowBpm(true);
   }
 
@@ -59,7 +60,7 @@ export default function SongMetadataEditor({
 
   async function handleSaveEdit() {
     const bpmNum = Number(editBpm);
-    const psNum = Number(editPlaybackSpeed) || 100;
+    const psNum = Number(editPlaybackSpeed) || DEFAULTS.playbackSpeed;
     if (!editTitle.trim() || !bpmNum || bpmNum <= 0) {
       alert("Please provide a valid title and BPM");
       return;
@@ -112,9 +113,9 @@ export default function SongMetadataEditor({
 
     // Apply settings immediately
     bpm.set(bpmNum);
-    timingWindowMs.set(timingNum ?? 300);
-    chordMs.set(chordNum ?? 80);
-    measureWidth.set(widthNum ?? 300);
+    timingWindowMs.set(timingNum ?? DEFAULTS.timingWindowMs);
+    chordMs.set(chordNum ?? DEFAULTS.chordMs);
+    measureWidth.set(widthNum ?? DEFAULTS.measureWidth);
     playbackSpeed.set(psNum);
 
     setSaving(false);
@@ -201,7 +202,7 @@ export default function SongMetadataEditor({
                         onChange={(e) => {
                           const v = e.target.value;
                           setEditPlaybackSpeed(v);
-                          if (Number(v) !== 100) setEditShowBpm(false);
+                          if (Number(v) !== DEFAULTS.playbackSpeed) setEditShowBpm(false);
                         }}
                         className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
                         placeholder="100"

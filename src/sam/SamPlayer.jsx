@@ -12,6 +12,7 @@ import usePracticeSession from "./lib/usePracticeSession";
 import useLyricEditor from "./lib/useLyricEditor";
 import useAudioSync from "./lib/useAudioSync";
 import useNumericInput from "./lib/useNumericInput";
+import { DEFAULTS } from "./lib/samConstants";
 import { matchChord, findClosestBeat } from "./lib/noteMatching";
 import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
 import { normalizeMeasure } from "./lib/measureUtils";
@@ -42,22 +43,22 @@ function AudioMsCounter({ audioElement }) {
 export default function SamPlayer({ onBack }) {
   const [song, setSong] = useState(null);
   const [songDbId, setSongDbId] = useState(null);
-  const bpm = useNumericInput(68);
+  const bpm = useNumericInput(DEFAULTS.bpm);
   const [playbackState, setPlaybackState] = useState("stopped"); // 'stopped' | 'playing' | 'paused'
   const [pausedMeasure, setPausedMeasure] = useState(null);
   const [loopCount, setLoopCount] = useState(0);
   const [missCount, setMissCount] = useState(0);
-  const timingWindowMs = useNumericInput(300);
-  const chordMs = useNumericInput(80);
+  const timingWindowMs = useNumericInput(DEFAULTS.timingWindowMs);
+  const chordMs = useNumericInput(DEFAULTS.chordMs);
   const [hitCount, setHitCount] = useState(0);
-  const measureWidth = useNumericInput(300);
+  const measureWidth = useNumericInput(DEFAULTS.measureWidth);
   const [lastResult, setLastResult] = useState(null);
   const [snippet, setSnippet] = useState(null); // { startMeasure, endMeasure, restMeasures, dbId }
   const [metronome, setMetronome] = useState("off"); // "off" | "beat" | "halfbeat" | "quarterbeat"
   const [audioElement, setAudioElement] = useState(null);
   const [audioFilePath, setAudioFilePath] = useState(null);
   const [audioMuted, setAudioMuted] = useState(false);
-  const playbackSpeed = useNumericInput(100);
+  const playbackSpeed = useNumericInput(DEFAULTS.playbackSpeed);
   const beatEventsRef = useRef([]);
   const scrollStateExtRef = useRef(null);
   const hitCountRef = useRef(0);
@@ -270,11 +271,11 @@ export default function SamPlayer({ onBack }) {
     setSongDbId(null);
     setSnippet(null);
     setAudioFilePath(loadedSong.audioFilePath || null);
-    bpm.reset(loadedSong.defaultBpm || 68);
-    timingWindowMs.reset(loadedSong.defaultTimingWindowMs ?? 300);
-    chordMs.reset(loadedSong.defaultChordMs ?? 80);
-    measureWidth.reset(loadedSong.defaultMeasureWidth ?? 300);
-    playbackSpeed.reset(loadedSong.playbackSpeed ?? 100);
+    bpm.reset(loadedSong.defaultBpm || DEFAULTS.bpm);
+    timingWindowMs.reset(loadedSong.defaultTimingWindowMs ?? DEFAULTS.timingWindowMs);
+    chordMs.reset(loadedSong.defaultChordMs ?? DEFAULTS.chordMs);
+    measureWidth.reset(loadedSong.defaultMeasureWidth ?? DEFAULTS.measureWidth);
+    playbackSpeed.reset(loadedSong.playbackSpeed ?? DEFAULTS.playbackSpeed);
     setPlaybackState("stopped");
     setPausedMeasure(null);
     setLoopCount(0);

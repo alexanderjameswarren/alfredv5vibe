@@ -73,12 +73,13 @@ export default function useLyricEditor({ song, songDbId, skipTiedNotes, supabase
     return map;
   }, [rhNoteSequence]);
 
-  function findRhSeqIdx(measureNum, rhIndex) {
-    return rhSeqIdxMap[`${measureNum}-${rhIndex}`] ?? -1;
-  }
+  const findRhSeqIdx = useCallback(
+    (measureNum, rhIndex) => rhSeqIdxMap[`${measureNum}-${rhIndex}`] ?? -1,
+    [rhSeqIdxMap]
+  );
 
   // Navigate to next/prev position, skipping tied continuations when skipTiedNotes is on
-  function nextNavIdx(fromSeqIdx, direction) {
+  const nextNavIdx = useCallback((fromSeqIdx, direction) => {
     let idx = fromSeqIdx + direction;
     if (!skipTiedNotes) return idx;
     while (idx >= 0 && idx < rhNoteSequence.length) {
@@ -86,17 +87,17 @@ export default function useLyricEditor({ song, songDbId, skipTiedNotes, supabase
       idx += direction;
     }
     return idx; // out of bounds
-  }
+  }, [rhNoteSequence, skipTiedNotes]);
 
-  function applyPlacementChange(newPlacements) {
+  const applyPlacementChange = useCallback((newPlacements) => {
     setLyricPlacementsState(newPlacements);
     setLyricsDirty(true);
-  }
+  }, []);
 
   // --- Lyric editing handlers ---
   // wordOrders: array of word_orders at the clicked position (group moves together)
 
-  function handleLyricPullBack(wordOrders) {
+  const handleLyricPullBack = useCallback((wordOrders) => {
     if (!lyricPlacements) return;
     const first = lyricPlacements.find((lp) => lp.word_order === wordOrders[0]);
     if (!first || first.measure_num == null) return;
@@ -113,9 +114,9 @@ export default function useLyricEditor({ song, songDbId, skipTiedNotes, supabase
           : lp
       )
     );
-  }
+  }, [lyricPlacements, rhNoteSequence, findRhSeqIdx, nextNavIdx, applyPlacementChange]);
 
-  function handleLyricPushForward(wordOrders) {
+  const handleLyricPushForward = useCallback((wordOrders) => {
     if (!lyricPlacements) return;
     // When multiple syllables share a position, only move the latest (max word_order)
     const moveWOs = wordOrders.length > 1 ? [Math.max(...wordOrders)] : [...wordOrders];
@@ -172,9 +173,9 @@ export default function useLyricEditor({ song, songDbId, skipTiedNotes, supabase
         return target ? { ...lp, measure_num: target.measureNum, rh_index: target.rhIndex } : lp;
       })
     );
-  }
+  }, [lyricPlacements, rhNoteSequence, findRhSeqIdx, nextNavIdx, applyPlacementChange]);
 
-  function handleLyricCascadePullBack(wordOrders) {
+  const handleLyricCascadePullBack = useCallback((wordOrders) => {
     if (!lyricPlacements) return;
     const minWO = Math.min(...wordOrders);
     const toMove = lyricPlacements.filter(
@@ -208,9 +209,9 @@ export default function useLyricEditor({ song, songDbId, skipTiedNotes, supabase
         return target ? { ...lp, measure_num: target.measureNum, rh_index: target.rhIndex } : lp;
       })
     );
-  }
+  }, [lyricPlacements, findRhSeqIdx, nextNavIdx, rhNoteSequence, applyPlacementChange]);
 
-  function handleLyricCascadePushForward(wordOrders) {
+  const handleLyricCascadePushForward = useCallback((wordOrders) => {
     if (!lyricPlacements) return;
     const minWO = Math.min(...wordOrders);
     const toMove = lyricPlacements.filter(
@@ -235,7 +236,7 @@ export default function useLyricEditor({ song, songDbId, skipTiedNotes, supabase
         return target ? { ...lp, measure_num: target.measureNum, rh_index: target.rhIndex } : lp;
       })
     );
-  }
+  }, [lyricPlacements, findRhSeqIdx, nextNavIdx, rhNoteSequence, applyPlacementChange]);
 
   const lyricEditHandlers = useMemo(
     () => ({
@@ -244,22 +245,37 @@ export default function useLyricEditor({ song, songDbId, skipTiedNotes, supabase
       onCascadePullBack: handleLyricCascadePullBack,
       onCascadePushForward: handleLyricCascadePushForward,
     }),
-    [lyricPlacements, rhNoteSequence, rhSeqIdxMap, skipTiedNotes] // eslint-disable-line react-hooks/exhaustive-deps
+    [
+      handleLyricPullBack,
+      handleLyricPushForward,
+      handleLyricCascadePullBack,
+      handleLyricCascadePushForward,
+    ]
   );
 
   async function saveLyrics() {
     if (!songDbId || !lyricPlacements || !lyricsDirty) return null;
     setLyricsSaving(true);
     try {
-      for (const lp of lyricPlacements) {
-        const { error } = await supabase
-          .from("sam_song_lyrics")
-          .update({ measure_num: lp.measure_num, rh_index: lp.rh_index })
-          .eq("song_id", songDbId)
-          .eq("word_order", lp.word_order);
-        if (error) throw new Error("Failed to save: " + error.message);
-      }
-      // Recompile so the playback blob has updated lyrics
+      // Single batch upsert keyed on the (song_id, word_order) unique
+      // constraint. One round-trip means partial-failure can't leave half
+      // the rows updated and the measures blob out of sync. `syllable` is
+      // included because it's NOT NULL — on conflict it's re-written to
+      // its existing value (no-op).
+      const rows = lyricPlacements.map((lp) => ({
+        song_id: songDbId,
+        word_order: lp.word_order,
+        syllable: lp.syllable,
+        measure_num: lp.measure_num,
+        rh_index: lp.rh_index,
+      }));
+      const { error } = await supabase
+        .from("sam_song_lyrics")
+        .upsert(rows, { onConflict: "song_id,word_order" });
+      if (error) throw new Error("Failed to save: " + error.message);
+
+      // Recompile only after the batch succeeds so the blob never
+      // diverges from the rows on partial failure.
       const newMeasures = await recompileMeasures(songDbId, supabase);
       setLyricsDirty(false);
       console.log("[Sam] Lyrics saved and recompiled.");

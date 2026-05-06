@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { AudioWaveform, Save } from "lucide-react";
 import { supabase } from "../../supabaseClient";
+import { DEFAULTS } from "../lib/samConstants";
 
 // Settings row hidden during playback. Visibility rules for BPM vs Speed %:
 //   no audio          → BPM only
@@ -32,14 +33,14 @@ export default function NumericSettings({
   const hasAudio = !!song?.audioFilePath;
 
   const isDirty =
-    bpm.value !== (song?.defaultBpm ?? 68) ||
-    timingWindowMs.value !== (song?.defaultTimingWindowMs ?? 300) ||
-    chordMs.value !== (song?.defaultChordMs ?? 80) ||
-    measureWidth.value !== (song?.defaultMeasureWidth ?? 300) ||
-    playbackSpeed.value !== (song?.playbackSpeed ?? 100);
+    bpm.value !== (song?.defaultBpm ?? DEFAULTS.bpm) ||
+    timingWindowMs.value !== (song?.defaultTimingWindowMs ?? DEFAULTS.timingWindowMs) ||
+    chordMs.value !== (song?.defaultChordMs ?? DEFAULTS.chordMs) ||
+    measureWidth.value !== (song?.defaultMeasureWidth ?? DEFAULTS.measureWidth) ||
+    playbackSpeed.value !== (song?.playbackSpeed ?? DEFAULTS.playbackSpeed);
 
   function handleEnableBpmEdit() {
-    playbackSpeed.set(100);
+    playbackSpeed.set(DEFAULTS.playbackSpeed);
     setShowBpmEdit(true);
   }
 
@@ -82,7 +83,7 @@ export default function NumericSettings({
             value={bpm.input}
             onFocus={(e) => e.target.select()}
             onChange={(e) => bpm.setInput(e.target.value)}
-            onBlur={() => bpm.commit({ min: 1, fallback: 68 })}
+            onBlur={() => bpm.commit({ min: 1, fallback: DEFAULTS.bpm })}
             className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
             min={20} max={300}
           />
@@ -95,7 +96,7 @@ export default function NumericSettings({
           value={timingWindowMs.input}
           onFocus={(e) => e.target.select()}
           onChange={(e) => timingWindowMs.setInput(e.target.value)}
-          onBlur={() => timingWindowMs.commit({ min: 100, fallback: 300 })}
+          onBlur={() => timingWindowMs.commit({ min: 100, fallback: DEFAULTS.timingWindowMs })}
           className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
           min={100} max={2000}
         />
@@ -107,7 +108,7 @@ export default function NumericSettings({
           value={chordMs.input}
           onFocus={(e) => e.target.select()}
           onChange={(e) => chordMs.setInput(e.target.value)}
-          onBlur={() => chordMs.commit({ min: 1, fallback: 80 })}
+          onBlur={() => chordMs.commit({ min: 1, fallback: DEFAULTS.chordMs })}
           className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
           min={10} max={500}
         />
@@ -134,8 +135,8 @@ export default function NumericSettings({
               onFocus={(e) => e.target.select()}
               onChange={(e) => playbackSpeed.setInput(e.target.value)}
               onBlur={() => {
-                const n = playbackSpeed.commit({ min: 1, max: 200, fallback: 100 });
-                if (n !== 100) setShowBpmEdit(false);
+                const n = playbackSpeed.commit({ min: 1, max: 200, fallback: DEFAULTS.playbackSpeed });
+                if (n !== DEFAULTS.playbackSpeed) setShowBpmEdit(false);
               }}
               className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
               min={10} max={200}
@@ -149,7 +150,7 @@ export default function NumericSettings({
                 value={bpm.input}
                 onFocus={(e) => e.target.select()}
                 onChange={(e) => bpm.setInput(e.target.value)}
-                onBlur={() => bpm.commit({ min: 1, fallback: 68 })}
+                onBlur={() => bpm.commit({ min: 1, fallback: DEFAULTS.bpm })}
                 className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
                 min={20} max={300}
               />
