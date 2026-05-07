@@ -26,27 +26,16 @@ export default function useAudioSync({
   const scrollDelayTimerRef = useRef(null);
   const pendingAudioSeekRef = useRef(null);
 
-  // Audio anchors derived from `activeMeasures` (snippet-sliced) — consumed
-  // by ScrollEngine for runtime audioMs ↔ beatPos mapping during playback.
-  // beatPos is in beats from `activeMeasures[0]`.
-  const audioAnchors = useMemo(() => {
-    if (!activeMeasures.length) return [];
-    const anchors = [];
-    let cumulativeBeats = 0;
-    for (const m of activeMeasures) {
-      if (m.audioOffsetMs != null) {
-        anchors.push({ beatPos: cumulativeBeats, audioMs: m.audioOffsetMs });
-      }
-      cumulativeBeats += getMeasDurationQ(m);
-    }
-    return anchors;
-  }, [activeMeasures]);
-
   // Audio anchors derived from the FULL `song.measures` — consumed by
   // `getSeekForMeasure` / `getSnippetAudioEndMs`. We need song-relative
   // anchors here so a snippet that doesn't start at measure 1 still gets
   // accurate seeks: the seek functions reason in terms of measure numbers
   // from the full song, not the snippet slice.
+  //
+  // Declared before `audioAnchors` because the snippet-virtual-anchor
+  // injection in `audioAnchors` calls `getSeekForMeasure`, which closes
+  // over `songAudioAnchors`. If `songAudioAnchors` were declared after,
+  // accessing it during `audioAnchors`'s memo would hit the TDZ.
   const songAudioAnchors = useMemo(() => {
     if (!song?.measures?.length) return [];
     const anchors = [];
@@ -119,6 +108,30 @@ export default function useAudioSync({
     }
     return beatPosToAudioMs(totalBeats, songAudioAnchors);
   }
+
+  // Audio anchors derived from `activeMeasures` (snippet-sliced) — consumed
+  // by ScrollEngine for runtime audioMs ↔ beatPos mapping during playback.
+  // beatPos is in beats from `activeMeasures[0]`.
+  const audioAnchors = useMemo(() => {
+    if (!activeMeasures.length) return [];
+    const anchors = [];
+    let cumulativeBeats = 0;
+    for (const m of activeMeasures) {
+      if (m.audioOffsetMs != null) {
+        anchors.push({ beatPos: cumulativeBeats, audioMs: m.audioOffsetMs });
+      }
+      cumulativeBeats += getMeasDurationQ(m);
+    }
+    // Snippet must have an anchor at beatPos 0 so ScrollEngine's
+    // audioMsToBeatPos has a correct origin for the snippet's first
+    // measure. Without this, audio↔beat mapping is wrong whenever the
+    // snippet's first measure lacks an explicit audioOffsetMs.
+    if (snippet && (anchors.length === 0 || anchors[0].beatPos !== 0)) {
+      const startAudioMs = getSeekForMeasure(snippet.startMeasure);
+      anchors.unshift({ beatPos: 0, audioMs: startAudioMs });
+    }
+    return anchors;
+  }, [activeMeasures, snippet, song]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function clearTimers() {
     if (audioDelayTimerRef.current) {

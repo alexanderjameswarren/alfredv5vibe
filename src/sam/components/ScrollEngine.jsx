@@ -92,6 +92,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     });
 
     beatEventsRef.current = events;
+    console.log(beatEventsRef.current.slice(0, 8).map(e => ({meas: e.meas, beat: e.beat})));
     if (onBeatEvents) onBeatEvents(events);
     setSvgReady(true);
 
@@ -173,6 +174,19 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     const startBeatX = events[startEvtIdx]?.xPx || events[0]?.xPx || 0;
     const leadInPx = viewportWidth * SCROLL_GEOMETRY.leadInPct;
     const originPx = startBeatX - targetX - leadInPx;
+
+console.log("[DEBUG resume]", {
+  firstPassStart,
+  measuresLength: measures.length,
+  measureAtStart: measures[firstPassStart] ? { number: measures[firstPassStart].number, idx: firstPassStart } : null,
+  startEvtIdx,
+  startBeatXPx: startBeatX,
+  originPx,
+  totalEvents: events.length,
+  numCopies,
+  firstFewEventsMeas: events.slice(0, 5).map(e => e.meas),
+  eventsNearStart: events.slice(Math.max(0, startEvtIdx - 2), startEvtIdx + 5).map((e, i) => ({ idx: Math.max(0, startEvtIdx - 2) + i, meas: e.meas, beat: e.beat, xPx: Math.round(e.xPx) }))
+});
 
     // Approach time adjusted for the start offset so that
     // targetTimeMs = approachMs + musicalBeat * msPerBeat matches the geometric scroll position.
