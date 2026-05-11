@@ -175,19 +175,6 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     const leadInPx = viewportWidth * SCROLL_GEOMETRY.leadInPct;
     const originPx = startBeatX - targetX - leadInPx;
 
-console.log("[DEBUG resume]", {
-  firstPassStart,
-  measuresLength: measures.length,
-  measureAtStart: measures[firstPassStart] ? { number: measures[firstPassStart].number, idx: firstPassStart } : null,
-  startEvtIdx,
-  startBeatXPx: startBeatX,
-  originPx,
-  totalEvents: events.length,
-  numCopies,
-  firstFewEventsMeas: events.slice(0, 5).map(e => e.meas),
-  eventsNearStart: events.slice(Math.max(0, startEvtIdx - 2), startEvtIdx + 5).map((e, i) => ({ idx: Math.max(0, startEvtIdx - 2) + i, meas: e.meas, beat: e.beat, xPx: Math.round(e.xPx) }))
-});
-
     // Approach time adjusted for the start offset so that
     // targetTimeMs = approachMs + musicalBeat * msPerBeat matches the geometric scroll position.
     // The start beat (musicalBeat = S) reaches targetX at elapsed = baseApproach,
@@ -260,6 +247,7 @@ console.log("[DEBUG resume]", {
       targetX,
       copyWidth,
       audioSyncOffset: null, // set on first frame where audio is playing
+      lastAudioMs: null,     // tracks audioElement.currentTime across frames; gates audioSyncOffset commit
       audioEndMs,            // audio file timestamp where snippet's real measures end
       audioRestPaused: false, // true when audio paused for rest measures
       playbackRate: audioElement ? (audioElement.playbackRate || 1) : 1,
@@ -272,7 +260,6 @@ console.log("[DEBUG resume]", {
     function frame() {
       const state = scrollStateRef.current;
       if (!state) return;
-
       const now = performance.now();
 
       // Audio sync: derive elapsed from audioElement.currentTime via anchor interpolation.
@@ -284,12 +271,29 @@ console.log("[DEBUG resume]", {
       let elapsed;
       if (audioElement && !audioElement.paused) {
         const audioMs = audioElement.currentTime * 1000;
-        const contentElapsed = audioMsToBeatPos(audioMs) * msPerBeat;
-        if (state.audioSyncOffset === null) {
-          state.audioSyncOffset = (now - state.scrollStartT) * rate - contentElapsed;
+
+        // HTMLMediaElement's `paused` flips synchronously on play(), but
+        // `currentTime` only advances once the audio engine starts producing
+        // samples (~20-100ms after play()). Locking audioSyncOffset using a
+        // pre-advance currentTime value freezes elapsed for the spin-up window
+        // — the visible "scroll stall" at the target-line crossing. Wait for
+        // currentTime to actually move before committing the offset; until
+        // then, fall through to wall-clock elapsed (same formula as lead-in).
+        const audioAdvancing =
+          state.lastAudioMs != null && audioMs > state.lastAudioMs;
+        state.lastAudioMs = audioMs;
+
+        if (state.audioSyncOffset === null && !audioAdvancing) {
+          elapsed = (now - state.scrollStartT) * rate;
+        } else {
+          const contentElapsed = audioMsToBeatPos(audioMs) * msPerBeat;
+          if (state.audioSyncOffset === null) {
+            state.audioSyncOffset =
+              (now - state.scrollStartT) * rate - contentElapsed;
+          }
+          elapsed = state.audioSyncOffset + contentElapsed;
+          if (elapsed < 0) elapsed = 0;
         }
-        elapsed = state.audioSyncOffset + contentElapsed;
-        if (elapsed < 0) elapsed = 0;
 
         // Pause audio when snippet's real measures end (rest measures follow)
         if (state.audioEndMs != null && audioMs >= state.audioEndMs) {
