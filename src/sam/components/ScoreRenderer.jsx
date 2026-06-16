@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { noteToVexKey, noteAccidental, getBeamGroups, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
 import { measureDurationQ } from "../lib/measureUtils";
+import { parseDuration } from "../lib/scoreRender";
+import { SCORE_SCALE } from "../lib/samConstants";
 
 // Layout constants
 const TREBLE_Y = 40;
@@ -82,10 +84,13 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
     const measureWidths = measures.map((m, i) => getMeasureWidth(m.timeSignature, i === 0, measureWidth));
     const totalWidth = measureWidths.reduce((a, b) => a + b, 0) + 20;
 
-    // Create renderer
+    // Create renderer. The SVG is sized to display pixels (× SCORE_SCALE) and
+    // ctx is pre-scaled so every VexFlow draw call lands at the right display
+    // position. Internal/render-space coordinates stay unchanged.
     const renderer = new VF.Renderer(container, VF.Renderer.Backends.SVG);
-    renderer.resize(totalWidth, STAFF_H);
+    renderer.resize(totalWidth * SCORE_SCALE, STAFF_H * SCORE_SCALE);
     const ctx = renderer.getContext();
+    ctx.scale(SCORE_SCALE, SCORE_SCALE);
 
     const svg = container.querySelector("svg");
 
@@ -217,7 +222,9 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
           const notes = evt.notes || [];
           if (notes.length > 0) {
             const keys = notes.map((n) => noteToVexKey(n));
-            const sn = new VF.StaveNote({ clef: "treble", keys, duration: evt.duration });
+            const { base, dots } = parseDuration(evt.duration);
+            const sn = new VF.StaveNote({ clef: "treble", keys, duration: base });
+            for (let i = 0; i < dots; i++) VF.Dot.buildAndAttach([sn]);
             notes.forEach((n, ki) => {
               const acc = noteAccidental(n);
               if (acc) sn.addModifier(new VF.Accidental(acc), ki);
@@ -241,9 +248,12 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
               tieTracker.treble.push({ vexNote: sn, starts, ends });
             }
           } else {
-            trebleNotes.push(new VF.StaveNote({
-              clef: "treble", keys: ["b/4"], duration: evt.duration + "r",
-            }));
+            const { base, dots } = parseDuration(evt.duration);
+            const rest = new VF.StaveNote({
+              clef: "treble", keys: ["b/4"], duration: base + "r",
+            });
+            for (let i = 0; i < dots; i++) VF.Dot.buildAndAttach([rest]);
+            trebleNotes.push(rest);
           }
         }
 
@@ -252,7 +262,9 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
           const notes = evt.notes || [];
           if (notes.length > 0) {
             const keys = notes.map((n) => noteToVexKey(n));
-            const sn = new VF.StaveNote({ clef: "bass", keys, duration: evt.duration });
+            const { base, dots } = parseDuration(evt.duration);
+            const sn = new VF.StaveNote({ clef: "bass", keys, duration: base });
+            for (let i = 0; i < dots; i++) VF.Dot.buildAndAttach([sn]);
             notes.forEach((n, ki) => {
               const acc = noteAccidental(n);
               if (acc) sn.addModifier(new VF.Accidental(acc), ki);
@@ -269,9 +281,12 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
               tieTracker.bass.push({ vexNote: sn, starts, ends });
             }
           } else {
-            bassNotes.push(new VF.StaveNote({
-              clef: "bass", keys: ["d/3"], duration: evt.duration + "r",
-            }));
+            const { base, dots } = parseDuration(evt.duration);
+            const rest = new VF.StaveNote({
+              clef: "bass", keys: ["d/3"], duration: base + "r",
+            });
+            for (let i = 0; i < dots; i++) VF.Dot.buildAndAttach([rest]);
+            bassNotes.push(rest);
           }
         }
 
@@ -338,33 +353,35 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
             ...bassGroup.map((n) => n.midi),
           ].sort((a, b) => a - b);
 
+          const { base: beatBase, dots: beatDots } = parseDuration(beat.duration || "q");
+
           let trebleNote;
           if (trebleGroup.length > 0) {
             const keys = trebleGroup.map((n) => noteToVexKey(n));
-            const dur = beat.duration || "q";
-            trebleNote = new VF.StaveNote({ clef: "treble", keys, duration: dur });
+            trebleNote = new VF.StaveNote({ clef: "treble", keys, duration: beatBase });
+            for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([trebleNote]);
             trebleGroup.forEach((n, ki) => {
               const acc = noteAccidental(n);
               if (acc) trebleNote.addModifier(new VF.Accidental(acc), ki);
             });
           } else {
-            const dur = (beat.duration || "q") + "r";
-            trebleNote = new VF.StaveNote({ clef: "treble", keys: ["b/4"], duration: dur });
+            trebleNote = new VF.StaveNote({ clef: "treble", keys: ["b/4"], duration: beatBase + "r" });
+            for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([trebleNote]);
           }
           trebleNotes.push(trebleNote);
 
           let bassNote;
           if (bassGroup.length > 0) {
             const keys = bassGroup.map((n) => noteToVexKey(n));
-            const dur = beat.duration || "q";
-            bassNote = new VF.StaveNote({ clef: "bass", keys, duration: dur });
+            bassNote = new VF.StaveNote({ clef: "bass", keys, duration: beatBase });
+            for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([bassNote]);
             bassGroup.forEach((n, ki) => {
               const acc = noteAccidental(n);
               if (acc) bassNote.addModifier(new VF.Accidental(acc), ki);
             });
           } else {
-            const dur = (beat.duration || "q") + "r";
-            bassNote = new VF.StaveNote({ clef: "bass", keys: ["d/3"], duration: dur });
+            bassNote = new VF.StaveNote({ clef: "bass", keys: ["d/3"], duration: beatBase + "r" });
+            for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([bassNote]);
           }
           bassNotes.push(bassNote);
 
@@ -543,7 +560,9 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
     // Extract beat positions and SVG elements
     const beatEvents = beatMeta.map((meta, globalIdx) => {
       const refNote = meta.trebleNote || meta.bassNote;
-      const xPx = refNote ? refNote.getAbsoluteX() : 0;
+      // VexFlow's getAbsoluteX is render-space; downstream consumers (e.g.
+      // ScrollEngine's loop teleport via xPx) treat this as display pixels.
+      const xPx = refNote ? refNote.getAbsoluteX() * SCORE_SCALE : 0;
 
       const svgEls = [];
       if (meta.trebleSvgEl) svgEls.push(meta.trebleSvgEl);

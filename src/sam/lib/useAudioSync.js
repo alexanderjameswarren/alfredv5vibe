@@ -1,7 +1,7 @@
 import { useMemo, useRef } from "react";
 import { getMeasDurationQ } from "./measureUtils";
 import { getMeasureWidth } from "./vexflowHelpers";
-import { SCROLL_GEOMETRY } from "./samConstants";
+import { SCROLL_GEOMETRY, SCORE_SCALE } from "./samConstants";
 
 // Audio-sync subsystem: anchor derivation, seek-time math for arbitrary
 // measures and snippet endpoints, and the delay-timer dance that fires
@@ -147,6 +147,10 @@ export default function useAudioSync({
 
   // Calculate the visual approach time (ms) for the first note to reach the target line.
   // Must match ScrollEngine's approach calculation: leadInPx = viewportWidth * 0.25.
+  // viewportWidth (clientWidth) is display pixels, so firstMeasWidth must also be
+  // display pixels — apply SCORE_SCALE at the getMeasureWidth boundary. Without
+  // this, the audio-start delay timer would fire 1/SCORE_SCALE too early relative
+  // to the visual lead-in.
   function getApproachMs() {
     const viewportWidth = scrollContainerRef.current?.clientWidth || SCROLL_GEOMETRY.fallbackViewportWidth;
     const leadInPx = viewportWidth * SCROLL_GEOMETRY.leadInPct;
@@ -154,7 +158,7 @@ export default function useAudioSync({
     const firstMeas = activeMeasures[0];
     if (!firstMeas) return 0;
     const firstDurationQ = getMeasDurationQ(firstMeas);
-    const firstMeasWidth = getMeasureWidth(firstMeas.timeSignature, false, measureWidth);
+    const firstMeasWidth = getMeasureWidth(firstMeas.timeSignature, false, measureWidth) * SCORE_SCALE;
     const pxPerBeat = firstMeasWidth / firstDurationQ;
     const pxPerMs = pxPerBeat / msPerBeat;
     return leadInPx / pxPerMs;

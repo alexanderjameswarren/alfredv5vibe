@@ -15,6 +15,27 @@ export const DURATION_BEATS = {
   w: 4, hd: 3, h: 2, qd: 1.5, q: 1, "8d": 0.75, "8": 0.5, "16": 0.25, "32": 0.125,
 };
 
+// VexFlow's StaveNote constructor does not parse the "d" suffix for dotted
+// durations — it must be attached as a separate Dot modifier. SAM's beat
+// math (see DURATION_BEATS) handles dotted durations natively; this helper
+// bridges the two layers for rendering.
+//
+// Supports multi-dot durations (e.g., "hdd" = double-dotted half = 3.5 beats),
+// though SAM doesn't currently produce these. Future-proof.
+//
+// For rest sites that append "r" to the duration, callers MUST pass the
+// pre-suffix duration (e.g., "qd", not "qdr") — otherwise the trailing "r"
+// hides the dot from this parser.
+export function parseDuration(d) {
+  let base = d;
+  let dots = 0;
+  while (base.endsWith("d")) {
+    dots++;
+    base = base.slice(0, -1);
+  }
+  return { base, dots };
+}
+
 // Pad a voice event array with rests so durations sum to targetBeats
 export function padVoice(events, targetBeats = 4) {
   let total = 0;
@@ -119,7 +140,9 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
         const notes = evt.notes || [];
         if (notes.length > 0) {
           const keys = notes.map((n) => noteToVexKey(n));
-          const sn = new VF.StaveNote({ clef: "treble", keys, duration: evt.duration });
+          const { base, dots } = parseDuration(evt.duration);
+          const sn = new VF.StaveNote({ clef: "treble", keys, duration: base });
+          for (let i = 0; i < dots; i++) VF.Dot.buildAndAttach([sn]);
           notes.forEach((n, ki) => {
             const acc = noteAccidental(n);
             if (acc) sn.addModifier(new VF.Accidental(acc), ki);
@@ -143,9 +166,12 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
             tieTracker.treble.push({ vexNote: sn, starts, ends });
           }
         } else {
-          trebleNotes.push(new VF.StaveNote({
-            clef: "treble", keys: ["b/4"], duration: evt.duration + "r",
-          }));
+          const { base, dots } = parseDuration(evt.duration);
+          const rest = new VF.StaveNote({
+            clef: "treble", keys: ["b/4"], duration: base + "r",
+          });
+          for (let i = 0; i < dots; i++) VF.Dot.buildAndAttach([rest]);
+          trebleNotes.push(rest);
         }
       }
 
@@ -154,7 +180,9 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
         const notes = evt.notes || [];
         if (notes.length > 0) {
           const keys = notes.map((n) => noteToVexKey(n));
-          const sn = new VF.StaveNote({ clef: "bass", keys, duration: evt.duration });
+          const { base, dots } = parseDuration(evt.duration);
+          const sn = new VF.StaveNote({ clef: "bass", keys, duration: base });
+          for (let i = 0; i < dots; i++) VF.Dot.buildAndAttach([sn]);
           notes.forEach((n, ki) => {
             const acc = noteAccidental(n);
             if (acc) sn.addModifier(new VF.Accidental(acc), ki);
@@ -171,9 +199,12 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
             tieTracker.bass.push({ vexNote: sn, starts, ends });
           }
         } else {
-          bassNotes.push(new VF.StaveNote({
-            clef: "bass", keys: ["d/3"], duration: evt.duration + "r",
-          }));
+          const { base, dots } = parseDuration(evt.duration);
+          const rest = new VF.StaveNote({
+            clef: "bass", keys: ["d/3"], duration: base + "r",
+          });
+          for (let i = 0; i < dots; i++) VF.Dot.buildAndAttach([rest]);
+          bassNotes.push(rest);
         }
       }
 
@@ -251,29 +282,35 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
         const rhMidi = (beat.rh || []).map((n) => n.midi).sort((a, b) => a - b);
         const lhMidi = (beat.lh || []).map((n) => n.midi).sort((a, b) => a - b);
 
+        const { base: beatBase, dots: beatDots } = parseDuration(beat.duration || "q");
+
         let trebleNote;
         if (trebleGroup.length > 0) {
           const keys = trebleGroup.map((n) => noteToVexKey(n));
-          trebleNote = new VF.StaveNote({ clef: "treble", keys, duration: beat.duration || "q" });
+          trebleNote = new VF.StaveNote({ clef: "treble", keys, duration: beatBase });
+          for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([trebleNote]);
           trebleGroup.forEach((n, ki) => {
             const acc = noteAccidental(n);
             if (acc) trebleNote.addModifier(new VF.Accidental(acc), ki);
           });
         } else {
-          trebleNote = new VF.StaveNote({ clef: "treble", keys: ["b/4"], duration: (beat.duration || "q") + "r" });
+          trebleNote = new VF.StaveNote({ clef: "treble", keys: ["b/4"], duration: beatBase + "r" });
+          for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([trebleNote]);
         }
         trebleNotes.push(trebleNote);
 
         let bassNote;
         if (bassGroup.length > 0) {
           const keys = bassGroup.map((n) => noteToVexKey(n));
-          bassNote = new VF.StaveNote({ clef: "bass", keys, duration: beat.duration || "q" });
+          bassNote = new VF.StaveNote({ clef: "bass", keys, duration: beatBase });
+          for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([bassNote]);
           bassGroup.forEach((n, ki) => {
             const acc = noteAccidental(n);
             if (acc) bassNote.addModifier(new VF.Accidental(acc), ki);
           });
         } else {
-          bassNote = new VF.StaveNote({ clef: "bass", keys: ["d/3"], duration: (beat.duration || "q") + "r" });
+          bassNote = new VF.StaveNote({ clef: "bass", keys: ["d/3"], duration: beatBase + "r" });
+          for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([bassNote]);
         }
         bassNotes.push(bassNote);
 

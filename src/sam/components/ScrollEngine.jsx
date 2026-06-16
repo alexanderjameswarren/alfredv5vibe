@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { colorBeatEls, getMeasureWidth } from "../lib/vexflowHelpers";
 import { getMeasDurationQ } from "../lib/measureUtils";
 import { renderCopy, playClick } from "../lib/scoreRender";
-import { SCROLL_GEOMETRY, METRONOME_GAIN } from "../lib/samConstants";
+import { SCROLL_GEOMETRY, METRONOME_GAIN, SCORE_SCALE } from "../lib/samConstants";
 
 
 export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioAnchors = [], audioEndMs = null, handMode = "both", onScrollStart = null }) {
@@ -43,11 +43,15 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     const singleCopyWidth = singleMeasureWidths.reduce((a, b) => a + b, 0);
     const totalWidth = singleCopyWidth * numCopies + 20;
 
-    copyWidthRef.current = singleCopyWidth;
+    // copyWidth crosses into display-pixel space because the scroll layer's
+    // CSS translateX consumes display pixels. singleCopyWidth is render-space
+    // (sum of getMeasureWidth outputs), so apply SCORE_SCALE at this boundary.
+    copyWidthRef.current = singleCopyWidth * SCORE_SCALE;
 
     const renderer = new VF.Renderer(scrollLayer, VF.Renderer.Backends.SVG);
-    renderer.resize(totalWidth, SCROLL_GEOMETRY.staffHeight);
+    renderer.resize(totalWidth * SCORE_SCALE, SCROLL_GEOMETRY.staffHeight * SCORE_SCALE);
     const ctx = renderer.getContext();
+    ctx.scale(SCORE_SCALE, SCORE_SCALE);
 
     // Render copies (1 for non-looping, 3 for looping)
     const allBeatMeta = [];
@@ -70,7 +74,10 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         copyIdx++;
       }
       const refNote = meta.trebleNote || meta.bassNote;
-      const xPx = refNote ? refNote.getAbsoluteX() + refNote.getXShift() : 0;
+      // VexFlow's positions are render-space; scroll math operates in display
+      // pixels. Cross the boundary here so downstream originPx/targetX math
+      // stays uniform.
+      const xPx = refNote ? (refNote.getAbsoluteX() + refNote.getXShift()) * SCORE_SCALE : 0;
       const svgEls = [];
       if (meta.trebleSvgEl) svgEls.push(meta.trebleSvgEl);
       if (meta.bassSvgEl) svgEls.push(meta.bassSvgEl);
@@ -127,7 +134,10 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     const targetX = viewportWidth * SCROLL_GEOMETRY.targetLinePct;
     const msPerBeat = 60000 / bpm;
     const firstDurationQ = getMeasDurationQ(measures[0]);
-    const firstMeasWidth = getMeasureWidth(measures[0].timeSignature, false, measureWidth);
+    // firstMeasWidth must be display pixels so pxPerMs comes out as
+    // display-px-per-ms — that's the rate the scroll's translateX consumes.
+    // getMeasureWidth returns render-space, so apply SCORE_SCALE at the boundary.
+    const firstMeasWidth = getMeasureWidth(measures[0].timeSignature, false, measureWidth) * SCORE_SCALE;
     const pxPerBeat = firstMeasWidth / firstDurationQ;
     const pxPerMs = pxPerBeat / msPerBeat;
     const copyWidth = copyWidthRef.current;

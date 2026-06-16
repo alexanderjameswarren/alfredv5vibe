@@ -28,3 +28,11 @@ export const METRONOME_GAIN = {
   onBeat: 0.3,
   offBeat: 0.15,
 };
+
+// Visual scale factor for rendered score output. Multiplies every VexFlow-drawn
+// dimension (notehead, stave height, clef, lyrics) without affecting SAM's
+// measure-width logic, which operates in render-space pre-scale. The scroll
+// layer and audio-sync also need to cross from render-space to display pixels
+// using this factor at their consumer-side boundaries (see ScrollEngine's
+// animation effect, useAudioSync.getApproachMs).
+export const SCORE_SCALE = 1.25;
