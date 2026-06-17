@@ -1,39 +1,24 @@
 import React, { useEffect, useRef, useState } from "react";
 import { noteToVexKey, noteAccidental, getBeamGroups, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
 import { measureDurationQ } from "../lib/measureUtils";
-import { parseDuration } from "../lib/scoreRender";
+import {
+  parseDuration,
+  padVoice,
+  drawStaveTies,
+  applyTimeProportionalLayout,
+  DURATION_BEATS,
+} from "../lib/scoreRender";
+import { CLEF_EXTRA } from "../lib/vexflowHelpers";
 import { SCORE_SCALE } from "../lib/samConstants";
 
 // Layout constants
+// Stopped view leaves extra room between the staves for lyrics + the lyric-edit
+// arrow controls (←→ above, ⇐⇒ below). ScrollEngine/playback uses a tighter
+// layout because it doesn't render the arrow controls.
 const TREBLE_Y = 40;
-const BASS_Y = 210;
-const STAFF_H = 350;
-const LYRIC_Y = TREBLE_Y + 115; // Fixed y position for all lyrics
-
-// Duration → quarter-note beat values (for voice format tick tracking)
-const DURATION_BEATS = {
-  w: 4, hd: 3, h: 2, qd: 1.5, q: 1, "8d": 0.75, "8": 0.5, "16": 0.25, "32": 0.125,
-};
-
-// Pad a voice event array with rests so durations sum to targetBeats
-function padVoice(events, targetBeats = 4) {
-  let total = 0;
-  for (const evt of events) total += DURATION_BEATS[evt.duration] || 1;
-  const result = [...events];
-  let remaining = targetBeats - total;
-  const restDurs = ["w", "h", "q", "8", "16"];
-  const restVals = [4, 2, 1, 0.5, 0.25];
-  while (remaining > 0.001) {
-    for (let j = 0; j < restDurs.length; j++) {
-      if (remaining >= restVals[j] - 0.001) {
-        result.push({ duration: restDurs[j], notes: [] });
-        remaining -= restVals[j];
-        break;
-      }
-    }
-  }
-  return result;
-}
+const BASS_Y = 290;                // was 210; +80 of inter-stave room
+const STAFF_H = 430;                // was 350; matches BASS_Y bump
+const LYRIC_Y = TREBLE_Y + 145;     // centered between staves with the new gap
 
 export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWidth, lyricPlacements, onLyricEdit, onAudioOffsetChange, showAudioOffset = false }) {
   const containerRef = useRef(null);
@@ -210,6 +195,8 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
       let trebleIdxMap = null; // null = 1:1 mapping (legacy)
       let bassIdxMap = null;
       let measBeatCount = 0;
+      let trebleTicks = [];
+      let bassTicks = [];
 
       if (measure.rh || measure.lh) {
         // === Voice format: independent RH/LH voices ===
@@ -337,6 +324,13 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         });
 
         measBeatCount = sortedTicks.length;
+
+        // Tick onset positions for time-proportional repositioning (mirrors
+        // the per-voice tick stream that drove the build loops above).
+        let tt = 0;
+        for (const evt of rhEvents) { trebleTicks.push(tt); tt += DURATION_BEATS[evt.duration] || 1; }
+        tt = 0;
+        for (const evt of lhEvents) { bassTicks.push(tt); tt += DURATION_BEATS[evt.duration] || 1; }
       } else {
         // === Legacy beats format ===
         measure.beats.forEach((beat) => {
@@ -397,6 +391,8 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         });
 
         measBeatCount = measure.beats.length;
+        trebleTicks = measure.beats.map((b) => b.beat - 1);
+        bassTicks = trebleTicks;
       }
 
       // 1. Set staves before formatting so VexFlow can compute note head
@@ -423,6 +419,27 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         .joinVoices([bassVoice])
         .format([trebleVoice, bassVoice], getFormatWidth(measWidth, isFirst));
 
+      // 4.5/4.6. Time-proportional layout + position-query patches so the
+      // stopped view matches scrollEngine playback exactly (consistent notehead
+      // positions and correct tie attachment).
+      //
+      // On the first measure the stave occupies the leading CLEF_EXTRA pixels
+      // with the clef + time signature; shift the note region right by that
+      // amount and shrink the available width so notes don't overlap the
+      // 4/4. (ScrollEngine doesn't hit this because it renders staves without
+      // clefs / time-signatures.)
+      const layoutDurationQ = measureDurationQ(measure.timeSignature);
+      const layoutXOffset = xOffset + (isFirst ? CLEF_EXTRA : 0);
+      const layoutMeasWidth = measWidth - (isFirst ? CLEF_EXTRA : 0);
+      applyTimeProportionalLayout({
+        notes: trebleNotes, ticks: trebleTicks, durationQ: layoutDurationQ,
+        xOffset: layoutXOffset, measWidth: layoutMeasWidth, stave: treble,
+      });
+      applyTimeProportionalLayout({
+        notes: bassNotes, ticks: bassTicks, durationQ: layoutDurationQ,
+        xOffset: layoutXOffset, measWidth: layoutMeasWidth, stave: bass,
+      });
+
       // 5. Draw treble notes individually, each wrapped in an SVG <g> group
       trebleNotes.forEach((note, i) => {
         const groupEl = ctx.openGroup("sam-note", `t-${measIdx}-${i}`);
@@ -447,10 +464,13 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
           }
         }
 
-        // Collect lyric positions for editing controls
+        // Collect lyric positions for editing controls. Use the visual X
+        // (formatter + time-proportional xShift), not the bare formatter X —
+        // otherwise the arrows hang at the pre-repositioned spot instead of
+        // tracking the syllable.
         if (rhEvt && rhEvt.lyric) {
           lyricPositions.push({
-            x: note.getAbsoluteX(),
+            x: note.getAbsoluteX() + note.getXShift(),
             measureNum: measure.number,
             rhIndex: i,
           });
@@ -483,36 +503,11 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
       xOffset += measWidth;
     });
 
-    // Draw ties between consecutive notes with matching tie:start → tie:end
-    function drawStaveTies(tieInfos) {
-      for (let i = 0; i < tieInfos.length - 1; i++) {
-        const first = tieInfos[i];
-        const second = tieInfos[i + 1];
-        if (first.starts.length === 0 || second.ends.length === 0) continue;
-
-        const firstIndices = [];
-        const lastIndices = [];
-        for (const s of first.starts) {
-          for (const e of second.ends) {
-            if (s.midi === e.midi) {
-              firstIndices.push(s.keyIdx);
-              lastIndices.push(e.keyIdx);
-            }
-          }
-        }
-
-        if (firstIndices.length > 0) {
-          new VF.StaveTie({
-            first_note: first.vexNote,
-            last_note: second.vexNote,
-            first_indices: firstIndices,
-            last_indices: lastIndices,
-          }).setContext(ctx).draw();
-        }
-      }
-    }
-    drawStaveTies(tieTracker.treble);
-    drawStaveTies(tieTracker.bass);
+    // Tie rendering (with narrow-tie widening for sixteenth-density ties)
+    // is shared with scoreRender.js — single source of truth so the stopped
+    // view and the scroll engine produce identical output.
+    drawStaveTies(VF, ctx, tieTracker.treble);
+    drawStaveTies(VF, ctx, tieTracker.bass);
 
     // Lyric editing arrow controls (stopped mode only)
     if (lyricPlacements && lyricEditRef.current && lyricPositions.length > 0) {

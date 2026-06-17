@@ -56,8 +56,25 @@ export function padVoice(events, targetBeats = 4) {
   return result;
 }
 
+// Minimum tie span (render-space px) so that very-tight back-to-back notes
+// (e.g., consecutive 16ths whose noteheads sit ~one notehead-width apart) still
+// produce a readable arc rather than a degenerate near-zero-width bezier. This
+// is cosmetic widening: the tie's endpoints no longer attach strictly to the
+// notehead edges for narrow ties. The alternative is invisible ties, which is
+// worse. Wider ties (anything ≥ this span naturally) are unaffected.
+//
+// 25 render-space px ≈ 31 display px at SCORE_SCALE = 1.25 — visible as an
+// unambiguous arc rather than a tiny chevron. Empirically, several "should-be-
+// wide" cross-barline ties were also coming out with natural span ≤ 0 (likely
+// because VexFlow's getTieRightX/getTieLeftX include the note's `width` term
+// in a way that overlaps with the next note's left bound), so this also covers
+// those cases.
+const MIN_TIE_SPAN_PX = 25;
+
 // Draw ties between consecutive notes with matching tie:start → tie:end.
 // Hoisted from inside renderCopy so the dependencies on VF/ctx are explicit.
+// For narrow ties, expand symmetrically via render_options.{first,last}_x_shift
+// so the apex stays centered between the noteheads while the arc is readable.
 export function drawStaveTies(VF, ctx, tieInfos) {
   for (let i = 0; i < tieInfos.length - 1; i++) {
     const first = tieInfos[i];
@@ -76,14 +93,105 @@ export function drawStaveTies(VF, ctx, tieInfos) {
     }
 
     if (firstIndices.length > 0) {
-      new VF.StaveTie({
+      const tie = new VF.StaveTie({
         first_note: first.vexNote,
         last_note: second.vexNote,
         first_indices: firstIndices,
         last_indices: lastIndices,
-      }).setContext(ctx).draw();
+      });
+
+      // VexFlow's getTieRightX/getTieLeftX add `width/2` to the position,
+      // where `width` is the formatter's allocated tickable width — often
+      // much larger than the visible notehead (e.g., the last note in a
+      // voice gets the remaining measure space). That pushes the tie
+      // endpoints well past the actual noteheads. Anchor directly to the
+      // visual notehead edges via VexFlow's own getNoteHeadBeginX /
+      // getNoteHeadEndX helpers, which use `getAbsoluteX() + x_shift` and
+      // therefore land at the actual rendered notehead bounds.
+      const firstNote = first.vexNote;
+      const lastNote = second.vexNote;
+      const visualFirstX = firstNote.getNoteHeadEndX();
+      const visualLastX = lastNote.getNoteHeadBeginX();
+      const span = visualLastX - visualFirstX;
+
+      // VexFlow's renderTie will still call getTieRightX/getTieLeftX
+      // internally for first_x_px / last_x_px. Use first_x_shift /
+      // last_x_shift to shove the rendered endpoints back to where we want.
+      const builtinFirstX = firstNote.getTieRightX();
+      const builtinLastX = lastNote.getTieLeftX();
+      let firstShift = visualFirstX - builtinFirstX;
+      let lastShift = visualLastX - builtinLastX;
+
+      // Cosmetic widening for narrow ties (consecutive 16ths, etc.) so the
+      // arc remains readable rather than collapsing to a near-zero-width
+      // bezier. Push both endpoints outward symmetrically from the now-
+      // correct midpoint between the actual noteheads.
+      if (span < MIN_TIE_SPAN_PX) {
+        const extra = MIN_TIE_SPAN_PX - span;
+        firstShift -= extra / 2;
+        lastShift += extra / 2;
+      }
+
+      tie.render_options.first_x_shift = firstShift;
+      tie.render_options.last_x_shift = lastShift;
+
+      tie.setContext(ctx).draw();
     }
   }
+}
+
+// Time-proportional layout helper for one staff's notes. Repositions each
+// note via setXShift so its X reflects the tick onset within the measure
+// rather than the formatter's packed positions, then patches the position-
+// query methods (getModifierStartXY, getTieRightX, getTieLeftX) to include
+// the resulting x_shift. VexFlow's defaults DON'T include x_shift for
+// LEFT/ABOVE/BELOW modifier positions (accidentals end up at the wrong X)
+// and don't include it for getTieRightX/getTieLeftX (ties attach at the
+// clustered formatter positions instead of the visual noteheads).
+//
+// IMPORTANT: VexFlow's getModifierStartXY for POSITION.RIGHT ALREADY
+// includes `this.x_shift` (see stavenote.ts:826). We must NOT add it again
+// or modifiers like Dot (which uses POSITION.RIGHT) end up double-shifted.
+// The conditional below excludes RIGHT from the patch for that reason.
+//
+// MODIFIER_POSITION_RIGHT = 2 is the value of VF.Modifier.Position.RIGHT in
+// VexFlow 4.x's Position enum. Hardcoded to avoid passing VF through this
+// helper; cross-check if the VexFlow major version changes.
+const MODIFIER_POSITION_RIGHT = 2;
+export function applyTimeProportionalLayout({ notes, ticks, durationQ, xOffset, measWidth, stave }) {
+  const BARLINE_PAD = 0;
+  const ACC_W = { '#': 11, 'b': 9, 'n': 8, '##': 14, 'bb': 14 };
+  const accPad = (note) => {
+    let w = 0;
+    for (const mod of note.getModifiers()) {
+      if (mod.type in ACC_W) w = Math.max(w, ACC_W[mod.type]);
+    }
+    return w > 0 ? w + 3 : 0;
+  };
+
+  notes.forEach((note, i) => {
+    note.setStave(stave);
+    let correctX = xOffset + BARLINE_PAD + (ticks[i] / durationQ) * measWidth;
+    if (ticks[i] === 0) correctX += accPad(note);
+    note.setXShift(correctX - note.getAbsoluteX());
+  });
+
+  notes.forEach((note) => {
+    const _origMod = note.getModifierStartXY;
+    note.getModifierStartXY = function(pos, idx, opts) {
+      const pt = _origMod.call(this, pos, idx, opts);
+      if (pos !== MODIFIER_POSITION_RIGHT) pt.x += this.getXShift();
+      return pt;
+    };
+    const _origTieRight = note.getTieRightX;
+    note.getTieRightX = function() {
+      return _origTieRight.call(this) + this.getXShift();
+    };
+    const _origTieLeft = note.getTieLeftX;
+    note.getTieLeftX = function() {
+      return _origTieLeft.call(this) + this.getXShift();
+    };
+  });
 }
 
 // Renders a single copy of the score into the given VexFlow context.
@@ -357,47 +465,18 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
       .joinVoices([bassVoice])
       .format([trebleVoice, bassVoice], getFormatWidth(measWidth, false));
 
-    // 4.5. Reposition notes to time-proportional X across the FULL measure width.
-    // Using the full measure width (not just usableWidth) ensures that the visual
-    // note spacing exactly matches the scroll speed. This is critical because
-    // targetTimeMs is computed from the note's visual position (xPx), so the
-    // pixel spacing must be proportional to time.
-    const BARLINE_PAD = 0;
-    const repositionWidth = measWidth;
-    const ACC_W = { '#': 11, 'b': 9, 'n': 8, '##': 14, 'bb': 14 };
-    const accPad = (note) => {
-      let w = 0;
-      for (const mod of note.getModifiers()) {
-        if (mod.type in ACC_W) w = Math.max(w, ACC_W[mod.type]);
-      }
-      return w > 0 ? w + 3 : 0;
-    };
-    trebleNotes.forEach((note, i) => {
-      note.setStave(treble);
-      let correctX = xOffset + BARLINE_PAD + (trebleTicks[i] / durationQ) * repositionWidth;
-      if (trebleTicks[i] === 0) correctX += accPad(note);
-      note.setXShift(correctX - note.getAbsoluteX());
+    // 4.5/4.6. Reposition notes to time-proportional X across the FULL measure
+    // width AND patch position-query methods so accidentals/ties read the
+    // visual position rather than the formatter's clustered X. Using the full
+    // measure width (not just usableWidth) keeps visual note spacing in step
+    // with scroll speed — targetTimeMs is computed from xPx, so pixel spacing
+    // must be proportional to time.
+    applyTimeProportionalLayout({
+      notes: trebleNotes, ticks: trebleTicks, durationQ, xOffset, measWidth, stave: treble,
     });
-    bassNotes.forEach((note, i) => {
-      note.setStave(bass);
-      let correctX = xOffset + BARLINE_PAD + (bassTicks[i] / durationQ) * repositionWidth;
-      if (bassTicks[i] === 0) correctX += accPad(note);
-      note.setXShift(correctX - note.getAbsoluteX());
+    applyTimeProportionalLayout({
+      notes: bassNotes, ticks: bassTicks, durationQ, xOffset, measWidth, stave: bass,
     });
-
-    // 4.6. Patch getModifierStartXY to include note's time-proportional x_shift.
-    // VexFlow's default returns getAbsoluteX() (formatter position) without x_shift,
-    // so accidentals would render at the pre-repositioned X instead of next to the notehead.
-    const patchModXY = (note) => {
-      const _orig = note.getModifierStartXY;
-      note.getModifierStartXY = function(pos, idx, opts) {
-        const pt = _orig.call(this, pos, idx, opts);
-        pt.x += this.getXShift();
-        return pt;
-      };
-    };
-    trebleNotes.forEach(patchModXY);
-    bassNotes.forEach(patchModXY);
 
     // 5. Draw treble notes individually, each wrapped in SVG <g> group
     const LYRIC_Y = TREBLE_Y + 115; // Fixed y position for all lyrics
