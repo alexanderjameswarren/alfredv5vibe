@@ -503,7 +503,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         ref={viewportRef}
         onClick={onTap}
         className="relative overflow-hidden bg-white rounded-lg border border-border cursor-pointer"
-        style={{ height: SCROLL_GEOMETRY.staffHeight + 4 }}
+        style={{ height: SCROLL_GEOMETRY.staffHeight * SCORE_SCALE + 4 }}
       >
         {/* Target zone (subtle blue tint) */}
         <div
