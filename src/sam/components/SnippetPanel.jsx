@@ -2,6 +2,20 @@ import { useState, useEffect } from "react";
 import { ChevronDown, ChevronRight, Save, Scissors, Archive, ArchiveRestore } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 
+// Snippet display label derived from the snippet's properties. Used at every
+// title rendering site so saved-snippet titles always reflect current state
+// (hand mode, rest count) rather than a stale stored string. The stored
+// `title` column still gets this value written on Save/Save New, but display
+// is computed from properties for backward compatibility with rows whose
+// stored title doesn't match the new format.
+function formatSnippetTitle({ startMeasure, endMeasure, handMode, restMeasures }) {
+  const handLabel =
+    handMode === "lh" ? "LH" :
+    handMode === "rh" ? "RH" : "Both";
+  const restLabel = restMeasures > 0 ? `Rest: ${restMeasures}` : "No Rest";
+  return `Measures ${startMeasure}-${endMeasure} ${handLabel} ${restLabel}`;
+}
+
 export default function SnippetPanel({
   songDbId, totalMeasures, snippet, onSnippetChange,
   bpm, timingWindowMs, chordMs, onSettingsOverride,
@@ -107,8 +121,11 @@ export default function SnippetPanel({
   async function handleSaveUpdate() {
     if (!snippet?.dbId) return;
 
-    const title = prompt("Snippet title:", snippet.title || `Measures ${startMeas}–${endMeas}`);
-    if (!title) return;
+    // Title is recomputed from CURRENT state (not the stored snippet.title)
+    // so a snippet renamed via handMode / rest change reflects the new mode.
+    const title = formatSnippetTitle({
+      startMeasure: startMeas, endMeasure: endMeas, handMode, restMeasures,
+    });
 
     setSaving(true);
     const updates = {
@@ -148,8 +165,9 @@ export default function SnippetPanel({
   }
 
   async function handleSaveNew() {
-    const title = prompt("Snippet title:", `Measures ${startMeas}–${endMeas}`);
-    if (!title) return;
+    const title = formatSnippetTitle({
+      startMeasure: startMeas, endMeasure: endMeas, handMode, restMeasures,
+    });
 
     setSaving(true);
     const row = {
@@ -320,11 +338,13 @@ export default function SnippetPanel({
                       onClick={() => handleLoadSnippet(s)}
                       className="flex-1 text-left px-3 py-2"
                     >
-                      <span className="font-medium">{s.title}</span>
-                      <span className="text-muted-foreground ml-2">
-                        m.{s.start_measure}–{s.end_measure}
-                        {s.settings?.bpm && ` · ${s.settings.bpm} BPM`}
-                        {s.rest_measures > 0 && ` · ${s.rest_measures} rest`}
+                      <span className="font-medium">
+                        {formatSnippetTitle({
+                          startMeasure: s.start_measure,
+                          endMeasure: s.end_measure,
+                          handMode: s.settings?.handMode || "both",
+                          restMeasures: s.rest_measures ?? 0,
+                        })}
                       </span>
                     </button>
                     <button
@@ -360,9 +380,13 @@ export default function SnippetPanel({
                         className="flex items-center gap-1 rounded text-sm min-h-[44px] opacity-60"
                       >
                         <div className="flex-1 px-3 py-2">
-                          <span className="font-medium">{s.title}</span>
-                          <span className="text-muted-foreground ml-2">
-                            m.{s.start_measure}–{s.end_measure}
+                          <span className="font-medium">
+                            {formatSnippetTitle({
+                              startMeasure: s.start_measure,
+                              endMeasure: s.end_measure,
+                              handMode: s.settings?.handMode || "both",
+                              restMeasures: s.rest_measures ?? 0,
+                            })}
                           </span>
                         </div>
                         <button
