@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import { noteToVexKey, noteAccidental, getBeamGroups, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
-import { measureDurationQ } from "../lib/measureUtils";
+import { measureDurationQ, getEventBeats, formatTimeSignature } from "../lib/measureUtils";
 import {
   parseDuration,
   padVoice,
   drawStaveTies,
   applyTimeProportionalLayout,
-  DURATION_BEATS,
+  buildTuplets,
 } from "../lib/scoreRender";
 import { CLEF_EXTRA } from "../lib/vexflowHelpers";
 import { SCORE_SCALE } from "../lib/samConstants";
@@ -104,8 +104,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
       const bass = new VF.Stave(xOffset, BASS_Y, measWidth);
 
       if (isFirst) {
-        const firstTs = measures[0]?.timeSignature || { beats: 4, beatType: 4 };
-        const tsStr = `${firstTs.beats}/${firstTs.beatType}`;
+        const tsStr = formatTimeSignature(measures[0]?.timeSignature);
         treble.addClef("treble").addTimeSignature(tsStr);
         bass.addClef("bass").addTimeSignature(tsStr);
       }
@@ -197,12 +196,17 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
       let measBeatCount = 0;
       let trebleTicks = [];
       let bassTicks = [];
+      let voiceTuplets = []; // VF.Tuplet objects (drawn after notes/beams)
+      let trebleBeamEvents = null; // parallel events for tuplet-aware beam breaks
+      let bassBeamEvents = null;
 
       if (measure.rh || measure.lh) {
         // === Voice format: independent RH/LH voices ===
         const durationQ = measureDurationQ(measure.timeSignature);
         const rhEvents = padVoice(measure.rh || [], durationQ);
         const lhEvents = padVoice(measure.lh || [], durationQ);
+        trebleBeamEvents = rhEvents;
+        bassBeamEvents = lhEvents;
 
         // Build treble StaveNotes from RH voice events
         for (const evt of rhEvents) {
@@ -291,7 +295,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
           const notes = evt.notes || [];
           const allTieEnd = notes.length > 0 && notes.every((n) => n.tie === "end");
           if (!allTieEnd) notes.forEach((n) => entry.allMidi.push(n.midi));
-          tick += DURATION_BEATS[evt.duration] || 1;
+          tick += getEventBeats(evt) || 1;
         });
 
         tick = 0;
@@ -303,7 +307,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
           const notes = evt.notes || [];
           const allTieEnd = notes.length > 0 && notes.every((n) => n.tie === "end");
           if (!allTieEnd) notes.forEach((n) => entry.allMidi.push(n.midi));
-          tick += DURATION_BEATS[evt.duration] || 1;
+          tick += getEventBeats(evt) || 1;
         });
 
         const sortedTicks = [...tickMap.keys()].sort((a, b) => a - b);
@@ -328,9 +332,16 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         // Tick onset positions for time-proportional repositioning (mirrors
         // the per-voice tick stream that drove the build loops above).
         let tt = 0;
-        for (const evt of rhEvents) { trebleTicks.push(tt); tt += DURATION_BEATS[evt.duration] || 1; }
+        for (const evt of rhEvents) { trebleTicks.push(tt); tt += getEventBeats(evt) || 1; }
         tt = 0;
-        for (const evt of lhEvents) { bassTicks.push(tt); tt += DURATION_BEATS[evt.duration] || 1; }
+        for (const evt of lhEvents) { bassTicks.push(tt); tt += getEventBeats(evt) || 1; }
+
+        // Collect tuplet groups from rhEvents/lhEvents (each parallel to its
+        // StaveNote array). Drawing happens after format + note draw below.
+        voiceTuplets = [
+          ...buildTuplets(VF, rhEvents, trebleNotes),
+          ...buildTuplets(VF, lhEvents, bassNotes),
+        ];
       } else {
         // === Legacy beats format ===
         measure.beats.forEach((beat) => {
@@ -410,8 +421,8 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         .addTickables(bassNotes);
 
       // 3. Create beams (after addTickables, before draw — suppresses flags)
-      const trebleBeams = getBeamGroups(trebleNotes).map((g) => new VF.Beam(g));
-      const bassBeams = getBeamGroups(bassNotes).map((g) => new VF.Beam(g));
+      const trebleBeams = getBeamGroups(trebleNotes, trebleBeamEvents).map((g) => new VF.Beam(g));
+      const bassBeams = getBeamGroups(bassNotes, bassBeamEvents).map((g) => new VF.Beam(g));
 
       // 4. Format — align rhythmic positions across both staves
       new VF.Formatter()
@@ -498,6 +509,11 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
       // 6. Draw beams after notes
       trebleBeams.forEach((b) => b.setContext(ctx).draw());
       bassBeams.forEach((b) => b.setContext(ctx).draw());
+
+      // 7. Draw tuplet brackets + labels. Mirrors scoreRender.js: tuplets
+      // observe their notes' final positions at draw time, so this runs
+      // after format + note draw.
+      voiceTuplets.forEach((t) => t.setContext(ctx).draw());
 
       beatMetaOffset += measBeatCount;
       xOffset += measWidth;

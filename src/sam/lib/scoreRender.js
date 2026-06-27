@@ -9,6 +9,7 @@ import {
   getMeasureWidth,
   getFormatWidth,
 } from "./vexflowHelpers";
+import { getEventBeats } from "./measureUtils";
 
 // Duration → quarter-note beat values (for voice format tick tracking)
 export const DURATION_BEATS = {
@@ -39,19 +40,30 @@ export function parseDuration(d) {
 // Pad a voice event array with rests so durations sum to targetBeats
 export function padVoice(events, targetBeats = 4) {
   let total = 0;
-  for (const evt of events) total += DURATION_BEATS[evt.duration] || 1;
+  for (const evt of events) total += getEventBeats(evt) || 1;
+  // Tuplet members contribute 1/3 (or 1/5, etc.) beats each, and 1/3 has no
+  // exact float representation. Round the running total to a sensible
+  // precision so the residual doesn't end up as e.g. 3.9999999 or 0.0001.
+  total = Math.round(total * 1000) / 1000;
   const result = [...events];
   let remaining = targetBeats - total;
   const restDurs = ["w", "h", "q", "8", "16"];
   const restVals = [4, 2, 1, 0.5, 0.25];
   while (remaining > 0.001) {
+    let pushed = false;
     for (let j = 0; j < restDurs.length; j++) {
       if (remaining >= restVals[j] - 0.001) {
         result.push({ duration: restDurs[j], notes: [] });
         remaining -= restVals[j];
+        pushed = true;
         break;
       }
     }
+    // Safety break: a residual smaller than the smallest rest duration
+    // (e.g., a stray triplet fragment) can't be padded with any available
+    // rest. Drop out rather than spinning forever; the leftover beat
+    // accounts for < 1/16 of a quarter and is visually negligible.
+    if (!pushed) break;
   }
   return result;
 }
@@ -158,6 +170,68 @@ export function drawStaveTies(VF, ctx, tieInfos) {
 // VexFlow 4.x's Position enum. Hardcoded to avoid passing VF through this
 // helper; cross-check if the VexFlow major version changes.
 const MODIFIER_POSITION_RIGHT = 2;
+// Walk a voice's events + their parallel StaveNotes, group consecutive
+// tuplet members (start → middle... → end), and wrap each complete group
+// in a VF.Tuplet object. Returns an array of Tuplets ready to be drawn.
+//
+// Robustness: a "start" position closes any previously-open group; a group
+// auto-finalizes once it reaches `actual` members (handles the case where
+// the importer assigned a stop+start note's position to "start" of the new
+// group, leaving the previous group's explicit "end" marker missing).
+// Stray middle/end events without an open group are ignored — malformed
+// data should not crash the renderer.
+//
+// The returned tuplets observe their notes' final positions at draw time,
+// so they can be constructed before or after formatting — drawing must
+// happen after format() so the underlying notes are positioned.
+export function buildTuplets(VF, events, notes) {
+  const tuplets = [];
+  let group = null;
+  let meta = null;
+
+  const finalize = () => {
+    if (group && meta && group.length >= meta.actual) {
+      // Drop the bracket when every member is beamable ('8' / '16') — the
+      // beam already groups them visually, and VexFlow's bracket tip pokes
+      // left of the first note, bleeding past the barline when a tuplet
+      // starts at the leading edge of a measure. Mirrors `getBeamGroups`'
+      // beamable set; longer durations (q, h) keep the bracket.
+      const beamed = group.every((n) => {
+        const d = n.getDuration();
+        return d === "8" || d === "16";
+      });
+      tuplets.push(new VF.Tuplet(group, {
+        num_notes: meta.actual,
+        notes_occupied: meta.normal,
+        bracketed: !beamed,
+      }));
+    }
+    group = null;
+    meta = null;
+  };
+
+  for (let i = 0; i < events.length; i++) {
+    const evt = events[i];
+    const note = notes[i];
+    if (!evt?.tuplet) {
+      finalize();
+      continue;
+    }
+    if (evt.tuplet.position === "start") {
+      finalize();
+      group = [note];
+      meta = evt.tuplet;
+    } else if (group) {
+      group.push(note);
+      if (evt.tuplet.position === "end" || group.length >= meta.actual) {
+        finalize();
+      }
+    }
+  }
+  finalize();
+  return tuplets;
+}
+
 export function applyTimeProportionalLayout({ notes, ticks, durationQ, xOffset, measWidth, stave }) {
   const BARLINE_PAD = 0;
   const ACC_W = { '#': 11, 'b': 9, 'n': 8, '##': 14, 'bb': 14 };
@@ -236,12 +310,17 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
     let measBeatCount = 0;
     let trebleTicks = [];
     let bassTicks = [];
+    let voiceTuplets = []; // VF.Tuplet objects (drawn after notes/beams)
+    let trebleBeamEvents = null; // parallel events for tuplet-aware beam breaks
+    let bassBeamEvents = null;
     const durationQ = measDurations[measIdx];
 
     if (measure.rh || measure.lh) {
       // === Voice format: independent RH/LH voices ===
       const rhEvents = padVoice(measure.rh || [], durationQ);
       const lhEvents = padVoice(measure.lh || [], durationQ);
+      trebleBeamEvents = rhEvents;
+      bassBeamEvents = lhEvents;
 
       // Build treble StaveNotes from RH voice events
       for (const evt of rhEvents) {
@@ -330,7 +409,7 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
         const notes = evt.notes || [];
         const allTieEnd = notes.length > 0 && notes.every((n) => n.tie === "end");
         if (!allTieEnd) notes.forEach((n) => { entry.allMidi.push(n.midi); entry.rhMidi.push(n.midi); });
-        tick += DURATION_BEATS[evt.duration] || 1;
+        tick += getEventBeats(evt) || 1;
       });
 
       tick = 0;
@@ -342,7 +421,7 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
         const notes = evt.notes || [];
         const allTieEnd = notes.length > 0 && notes.every((n) => n.tie === "end");
         if (!allTieEnd) notes.forEach((n) => { entry.allMidi.push(n.midi); entry.lhMidi.push(n.midi); });
-        tick += DURATION_BEATS[evt.duration] || 1;
+        tick += getEventBeats(evt) || 1;
       });
 
       const sortedTicks = [...tickMap.keys()].sort((a, b) => a - b);
@@ -369,9 +448,16 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
 
       // Tick onset positions for time-proportional repositioning
       let tt = 0;
-      for (const evt of rhEvents) { trebleTicks.push(tt); tt += DURATION_BEATS[evt.duration] || 1; }
+      for (const evt of rhEvents) { trebleTicks.push(tt); tt += getEventBeats(evt) || 1; }
       tt = 0;
-      for (const evt of lhEvents) { bassTicks.push(tt); tt += DURATION_BEATS[evt.duration] || 1; }
+      for (const evt of lhEvents) { bassTicks.push(tt); tt += getEventBeats(evt) || 1; }
+
+      // Collect tuplet groups from rhEvents/lhEvents (each parallel to its
+      // StaveNote array). Drawing happens after format + note draw below.
+      voiceTuplets = [
+        ...buildTuplets(VF, rhEvents, trebleNotes),
+        ...buildTuplets(VF, lhEvents, bassNotes),
+      ];
     } else {
       // === Legacy beats format ===
       measure.beats.forEach((beat) => {
@@ -455,9 +541,11 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
       .setStrict(false)
       .addTickables(bassNotes);
 
-    // 3. Create beams (after addTickables, before draw — suppresses flags)
-    const trebleBeams = getBeamGroups(trebleNotes).map((g) => new VF.Beam(g));
-    const bassBeams = getBeamGroups(bassNotes).map((g) => new VF.Beam(g));
+    // 3. Create beams (after addTickables, before draw — suppresses flags).
+    //    Parallel events (voice format only) let getBeamGroups break the beam
+    //    at tuplet boundaries so adjacent triplets render as separate beams.
+    const trebleBeams = getBeamGroups(trebleNotes, trebleBeamEvents).map((g) => new VF.Beam(g));
+    const bassBeams = getBeamGroups(bassNotes, bassBeamEvents).map((g) => new VF.Beam(g));
 
     // 4. Format — align rhythmic positions across both staves
     new VF.Formatter()
@@ -525,6 +613,12 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
     // 6. Draw beams after notes
     trebleBeams.forEach((b) => b.setContext(ctx).draw());
     bassBeams.forEach((b) => b.setContext(ctx).draw());
+
+    // 7. Draw tuplet brackets + labels. Tuplets observe their notes' final
+    // positions at draw time, so this must run after format + note draw.
+    // Drawn before measGroupEl wrapping so the SVG elements get captured
+    // into the measure's <g> alongside notes/beams.
+    voiceTuplets.forEach((t) => t.setContext(ctx).draw());
 
     // Wrap all SVG elements added during this measure into a single <g> group.
     // VexFlow appends stave lines directly to the SVG root, so ctx.openGroup

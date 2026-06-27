@@ -50,20 +50,34 @@ export function midiToClef(midi) {
   return midi < 60 ? 'bass' : 'treble';
 }
 
-// Group consecutive 8th/16th notes for beaming
-export function getBeamGroups(vexNotes) {
+// Group consecutive 8th/16th notes for beaming.
+// When parallel `events` are passed, tuplet boundaries break the beam:
+// every `position: "start"` opens a fresh group and every `position: "end"`
+// closes it. This keeps each tuplet visually distinct rather than fusing
+// adjacent triplets into one long beam.
+export function getBeamGroups(vexNotes, events = null) {
   const groups = [];
   let cur = [];
+  const flush = () => {
+    if (cur.length >= 2) groups.push(cur);
+    cur = [];
+  };
   for (let i = 0; i < vexNotes.length; i++) {
-    const d = vexNotes[i].getDuration();
-    if (d === '8' || d === '16') {
-      cur.push(vexNotes[i]);
+    const note = vexNotes[i];
+    const d = note.getDuration();
+    const isRest = note.getNoteType?.() === 'r';
+    const tupPos = events?.[i]?.tuplet?.position;
+    if (tupPos === 'start') flush();
+    // Beam only real notes — rests have getDuration() === '8'/'16' too but
+    // shouldn't extend the beam (standard engraving breaks the beam at a rest).
+    if (!isRest && (d === '8' || d === '16')) {
+      cur.push(note);
     } else {
-      if (cur.length >= 2) groups.push(cur);
-      cur = [];
+      flush();
     }
+    if (tupPos === 'end') flush();
   }
-  if (cur.length >= 2) groups.push(cur);
+  flush();
   return groups;
 }
 

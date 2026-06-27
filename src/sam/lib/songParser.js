@@ -32,7 +32,7 @@ function divisionsToVex(dur, divisions) {
 }
 
 // Parse note events from a single <measure> element
-function parseNoteEvents(measEl, divisions) {
+function parseNoteEvents(measEl, divisions, measureNumber) {
   const events = [];
   let position = 0;
 
@@ -54,6 +54,7 @@ function parseNoteEvents(measEl, divisions) {
       let name = "";
       let lyric = undefined;
       let tie = undefined;
+      let tuplet = undefined;
 
       if (!isRest) {
         const pitchEl = el.querySelector("pitch");
@@ -97,6 +98,43 @@ function parseNoteEvents(measEl, divisions) {
         tie = "end";
       }
 
+      // Extract tuplet (time-modification) info. MusicXML uses two layers:
+      //   <time-modification> on every member of a tuplet (actual + normal counts)
+      //   <notations><tuplet type="start|stop"/> on the group boundaries
+      // Members between start and stop have <time-modification> but no
+      // <tuplet> notation marker — they are "middle" notes.
+      const timeModEl = el.querySelector("time-modification");
+      if (timeModEl) {
+        const actual = parseInt(timeModEl.querySelector("actual-notes")?.textContent) || 0;
+        const normal = parseInt(timeModEl.querySelector("normal-notes")?.textContent) || 0;
+        if (actual > 0 && normal > 0) {
+          // Nested tuplets are encoded as multiple <tuplet> markers per note
+          // with DIFFERENT `number` attributes (different nesting levels).
+          // SAM doesn't support real nesting — fail loudly there. But the
+          // same-`number` case (typically a "stop" + "start" pair on one
+          // note marking adjacent same-level tuplets) is harmless: we pick
+          // the start position so the note begins the new group.
+          const tupletMarkers = el.querySelectorAll("notations > tuplet");
+          if (tupletMarkers.length > 1) {
+            const numbers = new Set(
+              Array.from(tupletMarkers).map((m) => m.getAttribute("number") || "1")
+            );
+            if (numbers.size > 1) {
+              throw new Error(
+                `Nested tuplets not supported (measure ${measureNumber}, position ${position}). ` +
+                `SAM only supports single-level tuplets.`
+              );
+            }
+          }
+          // Position priority: start wins (this note begins a new group);
+          // else stop (this note ends a group); else middle (interior member).
+          const tupletStart = el.querySelector('notations > tuplet[type="start"]');
+          const tupletStop = el.querySelector('notations > tuplet[type="stop"]');
+          const tPos = tupletStart ? "start" : tupletStop ? "end" : "middle";
+          tuplet = { actual, normal, position: tPos };
+        }
+      }
+
       const notePos = isChord
         ? (events.length > 0 ? events[events.length - 1].position : position)
         : position;
@@ -114,6 +152,7 @@ function parseNoteEvents(measEl, divisions) {
       // Add optional fields only if defined
       if (lyric !== undefined) event.lyric = lyric;
       if (tie !== undefined) event.tie = tie;
+      if (tuplet !== undefined) event.tuplet = tuplet;
 
       events.push(event);
 
@@ -170,6 +209,12 @@ function buildVoice(handEvents, divisions) {
 
     const voiceEvent = { duration: dur, notes };
     if (primary.lyric !== undefined) voiceEvent.lyric = primary.lyric;
+    // Tuplet info lives on the primary (first) note of any chord at this
+    // position — that's the one with the start/stop marker from MusicXML.
+    // Other chord members carry only <time-modification> and would otherwise
+    // default to "middle"; dropping them is fine because they share the
+    // primary's tuplet group.
+    if (primary.tuplet !== undefined) voiceEvent.tuplet = primary.tuplet;
 
     voice.push(voiceEvent);
     cursor = pos + primary.duration;
@@ -220,6 +265,7 @@ export function parseMusicXML(xmlString) {
   let keyFifths = 0;
   let timeBeats = 4;
   let beatType = 4;
+  let timeSymbol = null;
 
   const measureEls = firstPart.querySelectorAll("measure");
   const secondPartMeasures = useTwoParts ? parts[1].querySelectorAll("measure") : null;
@@ -236,13 +282,19 @@ export function parseMusicXML(xmlString) {
       if (t) {
         timeBeats = parseInt(t.querySelector("beats")?.textContent) || 4;
         beatType = parseInt(t.querySelector("beat-type")?.textContent) || 4;
+        // MusicXML `<time symbol="cut|common">` is purely visual — beats and
+        // beatType are already normalized (4/4 for both cut and common). The
+        // renderer uses this to draw the C / C| glyph instead of "4/4".
+        // Reset when a later `<time>` element omits the attribute.
+        const symAttr = t.getAttribute("symbol");
+        timeSymbol = symAttr === "cut" || symAttr === "common" ? symAttr : null;
       }
       const k = attrs.querySelector("key");
       if (k) keyFifths = parseInt(k.querySelector("fifths")?.textContent) || 0;
     }
 
     // Parse note events from this measure
-    const noteEvents = parseNoteEvents(measEl, divisions);
+    const noteEvents = parseNoteEvents(measEl, divisions, measIdx + 1);
 
     // If using two separate parts for RH/LH, merge second part as staff 2
     if (useTwoParts && secondPartMeasures && secondPartMeasures[measIdx]) {
@@ -253,7 +305,7 @@ export function parseMusicXML(xmlString) {
         const d2 = part2Attrs.querySelector("divisions");
         if (d2) div2 = parseInt(d2.textContent);
       }
-      const part2Events = parseNoteEvents(secondPartMeasures[measIdx], div2);
+      const part2Events = parseNoteEvents(secondPartMeasures[measIdx], div2, measIdx + 1);
       part2Events.forEach((evt) => { evt.staff = 2; });
       noteEvents.push(...part2Events);
     }
@@ -277,7 +329,9 @@ export function parseMusicXML(xmlString) {
     const rh = buildVoice(rhEvents, divisions);
     const lh = buildVoice(lhEvents, divisions);
 
-    measures.push({ number: measIdx + 1, rh, lh, timeSignature: { beats: timeBeats, beatType: beatType } });
+    const timeSignature = { beats: timeBeats, beatType: beatType };
+    if (timeSymbol) timeSignature.symbol = timeSymbol;
+    measures.push({ number: measIdx + 1, rh, lh, timeSignature });
   });
 
   return {

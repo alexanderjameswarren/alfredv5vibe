@@ -28,7 +28,11 @@ export async function fanOutMeasures(songId, measuresArray, supabase) {
     rh: m.rh || null,
     lh: m.lh || null,
     time_signature: m.timeSignature
-      ? { beats: m.timeSignature.beats, beatType: m.timeSignature.beatType }
+      ? {
+          beats: m.timeSignature.beats,
+          beatType: m.timeSignature.beatType,
+          ...(m.timeSignature.symbol ? { symbol: m.timeSignature.symbol } : {}),
+        }
       : null,
     ...(m.audioOffsetMs != null ? { audio_offset_ms: m.audioOffsetMs } : {}),
     ...(m.chord != null ? { chord: m.chord } : {}),

@@ -16,10 +16,47 @@ export function getMeasDurationQ(measure) {
   return measureDurationQ(measure?.timeSignature);
 }
 
+/**
+ * Format a timeSignature object for VexFlow's `Stave.addTimeSignature`.
+ * Honors an optional `symbol` field that the MusicXML importer populates
+ * from `<time symbol="cut|common">`. Beat math (which uses `beats` and
+ * `beatType` numerically) is unaffected — the symbol is purely visual.
+ *
+ * - `symbol: "cut"`   → "C|"  (cut time / alla breve)
+ * - `symbol: "common"`→ "C"   (common time)
+ * - otherwise         → "${beats}/${beatType}"
+ */
+export function formatTimeSignature(timeSig) {
+  if (!timeSig) return "4/4";
+  if (timeSig.symbol === "cut") return "C|";
+  if (timeSig.symbol === "common") return "C";
+  return `${timeSig.beats}/${timeSig.beatType}`;
+}
+
 // Beat values in quarter-note units
 const DURATION_BEATS = {
   w: 4, hd: 3, h: 2, qd: 1.5, q: 1, "8d": 0.75, "8": 0.5, "16": 0.25, "32": 0.125,
 };
+
+/**
+ * Effective beat value of an event, accounting for an optional tuplet
+ * time-modification. Tuplet shape mirrors MusicXML: `{ actual, normal,
+ * position }` where `actual` notes are played in the time of `normal`
+ * notes at the base duration. E.g. a triplet eighth is `{ actual: 3,
+ * normal: 2 }`, so each eighth member contributes 0.5 * (2/3) = 0.333
+ * beats; a triplet group of three sums to 1.0 beats.
+ *
+ * Use this helper at every site that sums event durations. Direct
+ * `DURATION_BEATS[evt.duration]` reads ignore tuplet info and cause
+ * measures with triplets to over-count.
+ */
+export function getEventBeats(evt) {
+  let beats = DURATION_BEATS[evt.duration] || 0;
+  if (evt.tuplet) {
+    beats *= evt.tuplet.normal / evt.tuplet.actual;
+  }
+  return beats;
+}
 
 /**
  * Convert a voice-format measure ({ lh[], rh[] }) to beats format ({ beats[] }).
@@ -33,7 +70,7 @@ function voiceToBeats(measure) {
     let pos = 0;
     for (const evt of events || []) {
       const dur = evt.duration || "q";
-      const beatVal = DURATION_BEATS[dur] || 1;
+      const beatVal = getEventBeats(evt) || 1;
       // Round to avoid floating-point drift
       const roundedPos = Math.round(pos * 1000) / 1000;
 
@@ -55,8 +92,11 @@ function voiceToBeats(measure) {
         entry.lh.push(...notes);
       }
 
-      // Use the shortest duration at this position for display
-      if ((DURATION_BEATS[dur] || 1) < (DURATION_BEATS[entry.duration] || 1)) {
+      // Use the shortest duration at this position for display. Compare
+      // by effective beats (tuplet-aware) so a triplet eighth correctly
+      // beats a regular eighth.
+      const entryBeats = DURATION_BEATS[entry.duration] || 1;
+      if (beatVal < entryBeats) {
         entry.duration = dur;
       }
 
