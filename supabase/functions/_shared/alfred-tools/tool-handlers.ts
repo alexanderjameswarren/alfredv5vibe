@@ -597,7 +597,7 @@ export async function getSamSongMeasures(
     // 1. Fetch song metadata
     const { data: song, error: songError } = await client
       .from("sam_songs")
-      .select("id, title, artist, default_bpm, audio_lead_in_ms, time_signature, key_signature")
+      .select("id, title, artist, default_bpm, time_signature, key_signature")
       .eq("id", params.song_id)
       .single();
 

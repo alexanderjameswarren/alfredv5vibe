@@ -1,7 +1,20 @@
 import React from "react";
 import { midiDisplayName } from "../lib/vexflowHelpers";
+import PracticeTimeIndicator from "./PracticeTimeIndicator";
 
-export default function StatsBar({ lastNote, loopCount, hitCount, missCount, sessionStats, lastResult, metronome, setMetronome }) {
+export default function StatsBar({
+  lastNote,
+  loopCount,
+  hitCount,
+  missCount,
+  sessionStats,
+  lastResult,
+  metronome,
+  setMetronome,
+  playbackState,
+  todayMinutes = 0,
+  perSongTotalSeconds = 0,
+}) {
   return (
     <div className="flex items-center gap-4 mb-2 px-1 text-sm text-muted-foreground flex-wrap">
       {lastNote != null && (
@@ -69,6 +82,13 @@ export default function StatsBar({ lastNote, loopCount, hitCount, missCount, ses
           <span>Quarter Beat (♬)</span>
         </label>
       </span>
+
+      {playbackState !== "playing" && (
+        <PracticeTimeIndicator
+          todayMinutes={todayMinutes}
+          perSongTotalSeconds={perSongTotalSeconds}
+        />
+      )}
 
       {lastResult && (
         <span className={

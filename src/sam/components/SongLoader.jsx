@@ -4,6 +4,7 @@ import { supabase } from "../../supabaseClient";
 import { parseMusicXML } from "../lib/songParser";
 import { fanOutMeasures, isMeasuresStale, recompileMeasures } from "../lib/measureCompiler";
 import JSZip from "jszip";
+import PracticeWeekSnapshot from "./PracticeWeekSnapshot";
 
 function validateSong(song) {
   if (!song || typeof song !== "object") return "Invalid JSON: not an object";
@@ -500,6 +501,9 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
           {error}
         </div>
       )}
+
+      {/* 7-day practice snapshot */}
+      <PracticeWeekSnapshot />
 
       {/* Song Library */}
       {loadingLibrary ? (

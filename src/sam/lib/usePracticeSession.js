@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import { supabase } from "../../supabaseClient";
 
-export default function usePracticeSession() {
+export default function usePracticeSession({ onSessionEnded } = {}) {
   const [stats, setStats] = useState({
     hits: 0,
     misses: 0,
@@ -17,6 +17,12 @@ export default function usePracticeSession() {
   const timingDeltasRef = useRef([]);
   const countersRef = useRef({ hits: 0, misses: 0, partials: 0, totalBeats: 0 });
   const loopCountRef = useRef(0);
+
+  // Fires after a session's ended_at update resolves in Supabase. Held in a
+  // ref so consumers can pass an inline arrow without retriggering the
+  // `useCallback` deps — same pattern as `lyricEditRef` in ScoreRenderer.
+  const onSessionEndedRef = useRef(onSessionEnded);
+  onSessionEndedRef.current = onSessionEnded;
 
   const startSession = useCallback(async ({ songId, snippetId, settings }) => {
     // Reset in-memory state
@@ -142,6 +148,15 @@ export default function usePracticeSession() {
           return;
         }
         console.log("[Sam] Session ended:", sessionId, summary);
+
+        // Fire the post-end hook (e.g. practice-stats refetch) as soon as the
+        // ended_at row update lands — the event fan-out below is independent
+        // and shouldn't block downstream consumers.
+        try {
+          onSessionEndedRef.current?.();
+        } catch (cbErr) {
+          console.error("[Sam] onSessionEnded callback threw:", cbErr);
+        }
 
         // Fan out events to sam_session_events
         if (!songId || events.length === 0) return;

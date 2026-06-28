@@ -7,8 +7,10 @@ import SettingsBar from "./components/SettingsBar";
 import StatsBar from "./components/StatsBar";
 import SnippetPanel from "./components/SnippetPanel";
 import AudioControls from "./components/AudioControls";
+import LiveSessionCounter from "./components/LiveSessionCounter";
 import useMIDI from "./lib/useMIDI";
 import usePracticeSession from "./lib/usePracticeSession";
+import usePracticeStats from "./lib/usePracticeStats";
 import useLyricEditor from "./lib/useLyricEditor";
 import useAudioSync from "./lib/useAudioSync";
 import useNumericInput from "./lib/useNumericInput";
@@ -67,7 +69,21 @@ export default function SamPlayer({ onBack }) {
   const scrollContainerRef = useRef(null);
   const [skipTiedNotes, setSkipTiedNotes] = useState(false);
 
-  const { startSession, endSession, recordEvent, setLoopIteration, stats: sessionStats } = usePracticeSession();
+  // Bumped each time a session's ended_at lands in the DB. Flows down to
+  // StatsBar's `usePracticeStats` so the Today/Total totals refetch the
+  // moment the just-ended session is committed.
+  const [practiceStatsRefetchSignal, setPracticeStatsRefetchSignal] = useState(0);
+
+  const { startSession, endSession, recordEvent, setLoopIteration, stats: sessionStats } = usePracticeSession({
+    onSessionEnded: () => setPracticeStatsRefetchSignal((n) => n + 1),
+  });
+
+  // Hoisted from StatsBar so the playback-row LiveSessionCounter and the
+  // stopped/paused PracticeTimeIndicator share one fetch.
+  const { todayMinutes, perSongTotalSeconds } = usePracticeStats({
+    currentSongId: songDbId,
+    refetchSignal: practiceStatsRefetchSignal,
+  });
 
   const {
     lyricPlacements,
@@ -564,9 +580,13 @@ export default function SamPlayer({ onBack }) {
 
             <AudioControls audioElement={audioElement} playbackState={playbackState} />
 
-            {audioElement && (
+            {(audioElement || playbackState === "playing") && (
               <div className="flex items-center gap-4 px-3 mb-3">
-                {playbackState !== "playing" && (
+                <LiveSessionCounter
+                  playbackState={playbackState}
+                  todayMinutes={todayMinutes}
+                />
+                {audioElement && playbackState !== "playing" && (
                   <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
                     <input
                       type="checkbox"
@@ -577,7 +597,7 @@ export default function SamPlayer({ onBack }) {
                     Mute audio
                   </label>
                 )}
-                <AudioMsCounter audioElement={audioElement} />
+                {audioElement && <AudioMsCounter audioElement={audioElement} />}
               </div>
             )}
 
@@ -590,6 +610,9 @@ export default function SamPlayer({ onBack }) {
               lastResult={lastResult}
               metronome={metronome}
               setMetronome={setMetronome}
+              playbackState={playbackState}
+              todayMinutes={todayMinutes}
+              perSongTotalSeconds={perSongTotalSeconds}
             />
 
             {playbackState !== "playing" && (
