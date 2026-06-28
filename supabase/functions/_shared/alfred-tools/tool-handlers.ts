@@ -643,6 +643,12 @@ export async function getSamSongMeasures(
         return `[${idx}] ${evt.duration} - ${noteNames}`;
       });
 
+      const lhEvents = (m.lh || []) as { duration: string; notes?: { name: string }[] }[];
+      const lhDisplay = lhEvents.map((evt, idx) => {
+        const noteNames = (evt.notes || []).map(n => n.name).join("+") || "rest";
+        return `[${idx}] ${evt.duration} - ${noteNames}`;
+      });
+
       const measLyrics = (lyrics || []).filter((l: { measure_num: number }) => l.measure_num === m.number);
 
       return {
@@ -653,7 +659,8 @@ export async function getSamSongMeasures(
         time_signature: m.time_signature,
         rh_events: rhDisplay,
         rh_event_count: rhEvents.length,
-        lh_event_count: (m.lh || []).length,
+        lh_events: lhDisplay,
+        lh_event_count: lhEvents.length,
         placed_lyrics: measLyrics.map((l: { rh_index: number; syllable: string; word_order: number }) => ({
           rh_index: l.rh_index,
           syllable: l.syllable,

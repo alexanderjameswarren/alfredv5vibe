@@ -83,6 +83,66 @@ export function padVoice(events, targetBeats = 4) {
 // those cases.
 const MIN_TIE_SPAN_PX = 25;
 
+// Section label engraving (Verse 1 / Chorus / Bridge / etc.). Drawn as raw
+// SVG <text> in render-space units — matches how measure numbers and chord
+// labels are rendered today; the outer viewBox scales everything together.
+const SECTION_FONT_SIZE = 12;
+const SECTION_LINE_HEIGHT = 14;
+const SECTION_OFFSET_ABOVE_STAFF = 16;
+const SECTION_X_INSET = 2;
+// Empirical char-width ratio for sans-serif at the section font size — used
+// for a greedy word-wrap that avoids the cost of per-substring SVG metrics.
+const SECTION_CHAR_WIDTH_RATIO = 0.55;
+
+function wrapSectionText(text, maxWidth, fontSize) {
+  const approxCharWidth = fontSize * SECTION_CHAR_WIDTH_RATIO;
+  const maxChars = Math.max(1, Math.floor(maxWidth / approxCharWidth));
+  if (text.length <= maxChars) return [text];
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [text];
+  const lines = [];
+  let current = "";
+  for (const word of words) {
+    if (!current) current = word;
+    else if (current.length + 1 + word.length <= maxChars) current += " " + word;
+    else { lines.push(current); current = word; }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+/**
+ * Draw a section label (e.g. "Verse 1") above one measure.
+ *
+ *   svgParent   — SVG element to append the <text> nodes into. In scoreRender
+ *                 this is the per-measure `<g>` wrapper; in ScoreRenderer it's
+ *                 the root `<svg>`. Both consume render-space coordinates.
+ *   xOffset     — left edge of the measure (render space)
+ *   measWidth   — width of the measure (render space) — used for wrap width
+ *   staffTopY   — Y of the top staff line (render space)
+ *   sectionText — string, or nullish to no-op
+ *
+ * Multiple wrapped lines stack upward so the bottom line sits closest to the
+ * staff and the label grows away from it — the staff-relative baseline stays
+ * stable regardless of label length.
+ */
+export function drawSectionLabel(svgParent, xOffset, measWidth, staffTopY, sectionText) {
+  if (!sectionText) return;
+  const lines = wrapSectionText(sectionText, measWidth, SECTION_FONT_SIZE);
+  const bottomBaselineY = staffTopY - SECTION_OFFSET_ABOVE_STAFF;
+  for (let i = 0; i < lines.length; i++) {
+    const lineY = bottomBaselineY - (lines.length - 1 - i) * SECTION_LINE_HEIGHT;
+    const textEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    textEl.setAttribute("x", xOffset + SECTION_X_INSET);
+    textEl.setAttribute("y", lineY);
+    textEl.setAttribute("font-size", SECTION_FONT_SIZE);
+    textEl.setAttribute("font-family", "sans-serif");
+    textEl.setAttribute("fill", "black");
+    textEl.textContent = lines[i];
+    svgParent.appendChild(textEl);
+  }
+}
+
 // Draw ties between consecutive notes with matching tie:start → tie:end.
 // Hoisted from inside renderCopy so the dependencies on VF/ctx are explicit.
 // For narrow ties, expand symmetrically via render_options.{first,last}_x_shift
@@ -652,6 +712,11 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
       chordEl.textContent = measure.chord;
       measGroupEl.appendChild(chordEl);
     }
+
+    // Section label (Verse 1 / Chorus / etc.) above measure number, wrapped
+    // to the measure width. Appended into the measure's <g> so it scrolls
+    // with the measure and lands in the same hide/show flow as notes/beams.
+    drawSectionLabel(measGroupEl, xOffset, measWidth, TREBLE_Y, measure.section);
 
     beatMetaOffset += measBeatCount;
     xOffset += measWidth;

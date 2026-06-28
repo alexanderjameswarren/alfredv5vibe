@@ -7,6 +7,7 @@ import {
   drawStaveTies,
   applyTimeProportionalLayout,
   buildTuplets,
+  drawSectionLabel,
 } from "../lib/scoreRender";
 import { CLEF_EXTRA } from "../lib/vexflowHelpers";
 import { SCORE_SCALE } from "../lib/samConstants";
@@ -187,6 +188,9 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         chordEl.textContent = measure.chord;
         svg.appendChild(chordEl);
       }
+
+      // Section label (Verse 1 / Chorus / etc.) above the staff
+      drawSectionLabel(svg, xOffset, measWidth, TREBLE_Y, measure.section);
 
       // Build VexFlow notes and beat metadata
       const trebleNotes = [];
