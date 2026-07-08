@@ -372,13 +372,6 @@ export default function SamPlayer({ onBack }) {
     }
   }
 
-  function handleSettingsOverride(settings) {
-    if (settings.bpm) bpm.set(settings.bpm);
-    if (settings.windowMs) timingWindowMs.set(settings.windowMs);
-    if (settings.chordGroupMs) chordMs.set(settings.chordGroupMs);
-    if (settings.measureWidth) measureWidth.set(settings.measureWidth);
-  }
-
   function resetCounters() {
     hitCountRef.current = 0;
     missCountRef.current = 0;
@@ -391,7 +384,13 @@ export default function SamPlayer({ onBack }) {
     startSession({
       songId: songDbId,
       snippetId: snippet?.dbId || null,
-      settings: { bpm: bpm.value, windowMs: timingWindowMs.value, chordGroupMs: chordMs.value, measureWidth: measureWidth.value },
+      settings: {
+        bpm: bpm.value,
+        windowMs: timingWindowMs.value,
+        chordGroupMs: chordMs.value,
+        measureWidth: measureWidth.value,
+        playbackSpeed: playbackSpeed.value,
+      },
     });
   }
 
@@ -625,10 +624,6 @@ export default function SamPlayer({ onBack }) {
                   totalMeasures={song.measures.length}
                   snippet={snippet}
                   onSnippetChange={setSnippet}
-                  bpm={bpm.value}
-                  timingWindowMs={timingWindowMs.value}
-                  chordMs={chordMs.value}
-                  onSettingsOverride={handleSettingsOverride}
                 />
               </>
             )}

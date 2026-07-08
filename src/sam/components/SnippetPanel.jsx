@@ -18,7 +18,6 @@ function formatSnippetTitle({ startMeasure, endMeasure, handMode, restMeasures }
 
 export default function SnippetPanel({
   songDbId, totalMeasures, snippet, onSnippetChange,
-  bpm, timingWindowMs, chordMs, onSettingsOverride,
 }) {
   const [open, setOpen] = useState(false);
   const [startMeas, setStartMeas] = useState(snippet?.startMeasure || 1);
@@ -80,11 +79,6 @@ export default function SnippetPanel({
       dbId: s.id,
       title: s.title,
     });
-
-    // Override settings if snippet has saved settings
-    if (s.settings && onSettingsOverride) {
-      onSettingsOverride(s.settings);
-    }
   }
 
   async function handleArchiveSnippet(e, s) {
@@ -133,7 +127,7 @@ export default function SnippetPanel({
       start_measure: startMeas,
       end_measure: endMeas,
       rest_measures: restMeasures,
-      settings: { bpm, windowMs: timingWindowMs, chordGroupMs: chordMs, handMode },
+      settings: { handMode },
     };
 
     try {
@@ -176,7 +170,7 @@ export default function SnippetPanel({
       start_measure: startMeas,
       end_measure: endMeas,
       rest_measures: restMeasures,
-      settings: { bpm, windowMs: timingWindowMs, chordGroupMs: chordMs, handMode },
+      settings: { handMode },
     };
 
     try {
