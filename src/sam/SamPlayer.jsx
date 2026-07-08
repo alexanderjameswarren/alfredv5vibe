@@ -7,7 +7,7 @@ import SettingsBar from "./components/SettingsBar";
 import StatsBar from "./components/StatsBar";
 import SnippetPanel from "./components/SnippetPanel";
 import AudioControls from "./components/AudioControls";
-import LiveSessionCounter from "./components/LiveSessionCounter";
+import FocusedPlaybackBar from "./components/FocusedPlaybackBar";
 import useMIDI from "./lib/useMIDI";
 import usePracticeSession from "./lib/usePracticeSession";
 import usePracticeStats from "./lib/usePracticeStats";
@@ -558,74 +558,79 @@ export default function SamPlayer({ onBack }) {
           <SongLoader onSongLoaded={handleSongLoaded} onSongSaved={setSongDbId} />
         ) : (
           <>
-            <SettingsBar
-              song={song} snippet={snippet}
-              bpm={bpm}
-              timingWindowMs={timingWindowMs}
-              chordMs={chordMs}
-              measureWidth={measureWidth}
-              playbackSpeed={playbackSpeed}
-              playbackState={playbackState} songDbId={songDbId}
-              onPlay={handlePlay} onPause={handlePause} onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
-              onChangeSong={handleChangeSong}
-              onExport={handleExport}
-              midiConnected={midiConnected} midiDevice={midiDevice}
-              pausedMeasure={pausedMeasure}
-              onSongUpdate={setSong}
-              onAudioUploaded={handleAudioUploaded}
-              onFullSong={() => setSnippet(null)}
-              onLyricsChanged={setLyricPlacements}
-              skipTiedNotes={skipTiedNotes}
-            />
+            {playbackState === "playing" ? (
+              <FocusedPlaybackBar
+                onPause={handlePause}
+                todayMinutes={todayMinutes}
+                loopCount={loopCount}
+                hitCount={hitCount}
+                missCount={missCount}
+                accuracyPercent={sessionStats.accuracyPercent}
+              />
+            ) : (
+              <>
+                <SettingsBar
+                  song={song} snippet={snippet}
+                  bpm={bpm}
+                  timingWindowMs={timingWindowMs}
+                  chordMs={chordMs}
+                  measureWidth={measureWidth}
+                  playbackSpeed={playbackSpeed}
+                  playbackState={playbackState} songDbId={songDbId}
+                  onPlay={handlePlay} onPause={handlePause} onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
+                  onChangeSong={handleChangeSong}
+                  onExport={handleExport}
+                  midiConnected={midiConnected} midiDevice={midiDevice}
+                  pausedMeasure={pausedMeasure}
+                  onSongUpdate={setSong}
+                  onAudioUploaded={handleAudioUploaded}
+                  onFullSong={() => setSnippet(null)}
+                  onLyricsChanged={setLyricPlacements}
+                  skipTiedNotes={skipTiedNotes}
+                />
 
-            <AudioControls audioElement={audioElement} playbackState={playbackState} />
+                <AudioControls audioElement={audioElement} playbackState={playbackState} />
 
-            {(audioElement || playbackState === "playing") && (
-              <div className="flex items-center gap-4 px-3 mb-3">
-                <LiveSessionCounter
+                {audioElement && (
+                  <div className="flex items-center gap-4 px-3 mb-3">
+                    <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={audioMuted}
+                        onChange={(e) => setAudioMuted(e.target.checked)}
+                        className="w-4 h-4 accent-primary"
+                      />
+                      Mute audio
+                    </label>
+                    <AudioMsCounter audioElement={audioElement} />
+                  </div>
+                )}
+
+                <StatsBar
+                  lastNote={lastNote}
+                  loopCount={loopCount}
+                  hitCount={hitCount}
+                  missCount={missCount}
+                  sessionStats={sessionStats}
+                  lastResult={lastResult}
+                  metronome={metronome}
+                  setMetronome={setMetronome}
                   playbackState={playbackState}
                   todayMinutes={todayMinutes}
+                  perSongTotalSeconds={perSongTotalSeconds}
                 />
-                {audioElement && playbackState !== "playing" && (
-                  <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={audioMuted}
-                      onChange={(e) => setAudioMuted(e.target.checked)}
-                      className="w-4 h-4 accent-primary"
-                    />
-                    Mute audio
-                  </label>
-                )}
-                {audioElement && <AudioMsCounter audioElement={audioElement} />}
-              </div>
-            )}
 
-            <StatsBar
-              lastNote={lastNote}
-              loopCount={loopCount}
-              hitCount={hitCount}
-              missCount={missCount}
-              sessionStats={sessionStats}
-              lastResult={lastResult}
-              metronome={metronome}
-              setMetronome={setMetronome}
-              playbackState={playbackState}
-              todayMinutes={todayMinutes}
-              perSongTotalSeconds={perSongTotalSeconds}
-            />
-
-            {playbackState !== "playing" && (
-              <SnippetPanel
-                songDbId={songDbId}
-                totalMeasures={song.measures.length}
-                snippet={snippet}
-                onSnippetChange={setSnippet}
-                bpm={bpm.value}
-                timingWindowMs={timingWindowMs.value}
-                chordMs={chordMs.value}
-                onSettingsOverride={handleSettingsOverride}
-              />
+                <SnippetPanel
+                  songDbId={songDbId}
+                  totalMeasures={song.measures.length}
+                  snippet={snippet}
+                  onSnippetChange={setSnippet}
+                  bpm={bpm.value}
+                  timingWindowMs={timingWindowMs.value}
+                  chordMs={chordMs.value}
+                  onSettingsOverride={handleSettingsOverride}
+                />
+              </>
             )}
 
             {playbackState === "stopped" ? (
