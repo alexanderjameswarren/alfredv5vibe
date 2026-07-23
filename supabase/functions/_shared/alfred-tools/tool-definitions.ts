@@ -88,6 +88,75 @@ export const toolDefinitions = [
     },
   },
   {
+    name: "get_intents",
+    description:
+      "List intentions and item-intents (GTD tasks/reusable actions). Use to see active intents for briefings, recurrence review, or context planning. Returns intent rows with resolved context name.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        context_id: {
+          type: "string",
+          description: "Filter intents to a specific context",
+        },
+        search_text: {
+          type: "string",
+          description: "Search text to match against intent text (ILIKE)",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Filter intents that have ANY of these tags",
+        },
+        include_archived: {
+          type: "boolean",
+          description: "Include archived intents (default false)",
+        },
+        recurring_only: {
+          type: "boolean",
+          description: "Only return intents with a recurrence_config (default false)",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of results (default 50)",
+        },
+      },
+    },
+  },
+  {
+    name: "get_events",
+    description:
+      "List scheduled events (an intent placed on a date). Use for 'what's on today / this week' briefings. Returns events with resolved intent text and context name.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        date_from: {
+          type: "string",
+          description: "Start date filter (YYYY-MM-DD, inclusive)",
+        },
+        date_to: {
+          type: "string",
+          description: "End date filter (YYYY-MM-DD, inclusive)",
+        },
+        context_id: {
+          type: "string",
+          description: "Filter events to a specific context",
+        },
+        intent_id: {
+          type: "string",
+          description: "Filter events to a specific intent",
+        },
+        include_archived: {
+          type: "boolean",
+          description: "Include archived events (default false)",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of results (default 50)",
+        },
+      },
+    },
+  },
+  {
     name: "get_collections",
     description:
       "List item collections, optionally filtered by context_id. Collections are named groups of items within a context.",

@@ -1,79 +1,107 @@
 # Project Context
 
-A previous analysis (from a prior Claude Code session) correctly
-diagnosed that SAM's dotted-duration note rendering is broken:
-VexFlow's `StaveNote` constructor does not accept the `"d"` suffix
-on duration strings (e.g., `"qd"`, `"8d"`, `"hd"`). The constructor
-silently falls back to treating the duration as the base type
-without a dot, and the Formatter pads the missing beats with an
-auto-generated rest.
+SAM tracks practice sessions via `sam_sessions` (one row per
+continuous play stretch). Pauses end sessions; resumes start
+new ones. Active-playing-time semantics fall out naturally from
+this lifecycle — paused intervals are simply not represented in
+the DB.
 
-The proposed fix (correct in principle) is to parse the duration
-shorthand into `(base, dots)` before constructing the StaveNote,
-then attach `Dot` modifiers via VexFlow's modern
-`VF.Dot.buildAndAttach` API.
+This project adds practice-time surface area in three UI
+locations:
 
-This is being formalized with four refinements over the original
-proposal:
+1. **Main SAM page:** 7-day snapshot of daily practice minutes
+   above "Your Songs"
+2. **StatsBar (stopped state):** all-songs today total +
+   per-song lifetime total
+3. **StatsBar (playing state):** live session counter (M:SS) +
+   live today counter (rolling, includes the running session)
 
-1. Extract the parse logic into a shared `parseDuration` helper
-   (one source of truth instead of six copy-pasted parse loops).
-2. Support multiple dots via a `while` loop, not a single `endsWith`
-   check (future-proofs against double-dotted notes).
-3. For rests, parse the duration BEFORE appending the `"r"` suffix
-   — otherwise the parser sees `"qdr"` and finds no trailing `d`.
-4. Use `VF.Dot.buildAndAttach` consistently — never the older
-   `addModifier(new Dot(), keyIdx)` API, which requires per-key
-   calls and is easy to get wrong for chords.
+No DB schema changes. No backfill. Data already exists in
+`sam_sessions.ended_at - started_at`. NULL-ended sessions
+(common, from lyric-checking without a piano connected) are
+filtered out as zero-contribution and never displayed.
 
-SAM's beat math (`DURATION_BEATS` in `measureUtils.js`) is correct
-and unrelated. Do not modify `measureUtils.js`.
+All times are Pacific (America/Los_Angeles). Day buckets are
+midnight-to-midnight PT. The "today" boundary is the started_at
+date in PT — a session crossing midnight counts entirely toward
+its start day.
 
 # Reference Documents
 
-- Technical spec: `docs/technical-spec-dots-patch.md`
-- Progress tracking: `docs/progress-dots-patch.md`
+- Technical spec: `docs/technical-spec-practice-time.md`
+- Progress tracking: `docs/progress-practice-time.md`
 
 # Your Task
 
-1. Read the technical specification end to end.
+1. Read the technical specification end to end before writing
+   any code.
 2. Review the progress tracking file.
-3. Apply the changes per the spec:
-   a. Add `parseDuration` helper in `lib/scoreRender.js` and export it.
-   b. Replace all four StaveNote construction sites in
-      `scoreRender.js` with the parse-then-attach-dots pattern.
-   c. Import `parseDuration` in `components/ScoreRenderer.jsx`.
-   d. Replace both StaveNote construction sites in
-      `ScoreRenderer.jsx` with the same pattern.
-4. Confirm no direct `evt.duration` is passed to any `StaveNote`
-   constructor anywhere in the codebase (grep to verify).
-5. Update the progress file's development checklist.
-6. Present the verification checklist verbatim and stop. Wait for
-   confirmation before declaring complete.
+3. Execute milestones **in the order documented in the spec**:
+   M1 (hook + formatters) → M2 (week snapshot) → M3
+   (PracticeTimeIndicator in StatsBar stopped) → M4
+   (LiveSessionCounter in StatsBar playing) → M5 (session-end
+   refetch plumbing).
+4. **Stop after each milestone.** Update the progress file's
+   checklist and Notes section, present the verification
+   checklist verbatim, and wait for me to reply "verified,
+   proceed" before starting the next milestone.
+
+# Verification Notes
+
+- **M1 is invisible.** It builds the shared hook and formatters.
+  Verify by adding a temporary console log in any consuming
+  component and checking the hook's output against ground-truth
+  SQL queries (provided in the progress file).
+- **M2 is the first visible milestone.** Cold reload the main
+  page, verify the 7-day snapshot appears with correct totals.
+- **M3 verifies via real practice.** Play a snippet for ~30
+  seconds, stop, watch the StatsBar update.
+- **M4 verifies the live counters.** Both the per-second
+  session counter and the per-30-second today update.
+- **M5 connects the dots.** Pause-end → refetch → display
+  updates immediately.
 
 # Important Constraints
 
-- **One helper, six call sites.** Do not inline the parse logic at
-  any call site. The point of the helper is to fix this in one
-  place. Six copies of `while (d.endsWith("d"))` is exactly how
-  the bug would silently regress later.
-- **Parse BEFORE adding `"r"` for rests.** The spec is explicit
-  about this. Reversing the order means `parseDuration("qdr")`
-  returns `{ base: "qdr", dots: 0 }` and the bug persists.
-- **Use `VF.Dot.buildAndAttach([note])` exclusively.** Do not mix
-  in the older `note.addModifier(new Dot(), keyIdx)` API at any
-  site. The modern API handles chords correctly in one call.
-- **Do not modify `measureUtils.js` or `DURATION_BEATS`.** The
-  beat-math layer is correct. Touching it is out of scope.
-- **Do not modify the MusicXML importer.** Triplets remain
-  unsupported; that is a separate concern.
-- **Do not "improve" the duration format itself.** Don't change
-  `"qd"` → `"q."` or anything similar. SAM's stored format is the
-  format; the helper adapts it for VexFlow.
-- **Multi-dot support is required.** Use `while (base.endsWith("d"))`
-  to handle `"hdd"` (double-dotted half). SAM doesn't produce
-  these today, but the parser should handle them.
-- **Stop and ask** if any of the six call sites has a structure
-  that differs from the spec's example (e.g., if a site mutates
-  the StaveNote between construction and voice insertion in a way
-  that would conflict with dot attachment).
+- **No DB schema changes.** No new columns, no new tables, no
+  views. Aggregation is purely client-side from existing data.
+- **No backfill.** Existing NULL-ended sessions stay NULL and
+  are excluded from displays.
+- **No timezone configuration.** Hardcode
+  `America/Los_Angeles` throughout. Do not read from browser
+  locale.
+- **No midnight rollover handling.** If the user keeps the tab
+  open across midnight, "Today" will be slightly stale until
+  next refetch. Acceptable.
+- **Single fetch serves both `PracticeWeekSnapshot` and
+  StatsBar.** Both consume the same `usePracticeStats` hook.
+  Do NOT issue duplicate queries from different components.
+- **NULL-ended sessions are filtered at the SQL level**
+  (`WHERE ended_at IS NOT NULL`). Do not write code that
+  handles NULL ended_at — it should never reach component
+  logic.
+- **Active-playing-time semantics are free.** Do NOT add
+  pause-tracking, do NOT modify `usePracticeSession.js`'s
+  session lifecycle. Pause already ends sessions; that's what
+  makes the math work.
+- **The session counter uses `Date.now() - startRef.current`**,
+  not a tick-incrementing counter. Avoids drift if the browser
+  throttles `setInterval` (e.g., backgrounded tab).
+- **All durations round to the nearest minute** for display,
+  except "Total" which is whole hours floored. Never display
+  seconds (except in the live `Session: M:SS` counter, where
+  seconds are the whole point).
+- **Singular/plural matters.** "1 minute" not "1 minutes"; "1
+  hour" not "1 hours". The formatters handle this — every
+  consumer must call through the formatters, not hand-roll
+  display strings.
+- **Stop and ask** if:
+  - The current StatsBar layout has no room for the new
+    indicators without major restructuring.
+  - `currentSongId` isn't accessible to `StatsBar` and would
+    require deep prop drilling — propose a context or
+    alternative plumbing.
+  - Any session in the DB has unexpected shape (e.g.,
+    `started_at > ended_at`).
+  - A milestone's verification turns up data that doesn't
+    match the ground-truth SQL queries in the progress file.

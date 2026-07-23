@@ -196,6 +196,190 @@ export async function getExecutionHistory(
   }
 }
 
+export async function getIntents(
+  client: SupabaseClient,
+  params: {
+    context_id?: string;
+    search_text?: string;
+    tags?: string[];
+    include_archived?: boolean;
+    recurring_only?: boolean;
+    limit?: number;
+  }
+): Promise<ToolResult> {
+  try {
+    const limit = params.limit || 50;
+
+    let query = client
+      .from("intents")
+      .select(
+        "id, text, is_intention, is_item, item_id, context_id, tags, collection_id, recurrence_config, target_start_date, end_date, created_at, updated_at"
+      )
+      .order("target_start_date", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (!params.include_archived) {
+      query = query.eq("archived", false);
+    }
+    if (params.context_id) {
+      query = query.eq("context_id", params.context_id);
+    }
+    if (params.search_text) {
+      query = query.ilike("text", `%${params.search_text}%`);
+    }
+    if (params.recurring_only) {
+      query = query.not("recurrence_config", "is", null);
+    }
+
+    const { data: intents, error } = await query;
+    if (error) return { error: error.message };
+    if (!intents || intents.length === 0) return { data: [] };
+
+    // Tag filter is client-side to match get_items — intents.tags is jsonb.
+    let filtered = intents;
+    if (params.tags && params.tags.length > 0) {
+      filtered = intents.filter((row: { tags: string[] | null }) =>
+        params.tags!.some((tag) => (row.tags || []).includes(tag))
+      );
+    }
+
+    // Resolve context names (same pattern as search_items).
+    const contextIds = [
+      ...new Set(
+        filtered
+          .map((r: { context_id: string | null }) => r.context_id)
+          .filter(Boolean)
+      ),
+    ];
+    let contextMap: Record<string, string> = {};
+    if (contextIds.length > 0) {
+      const { data: contexts } = await client
+        .from("contexts")
+        .select("id, name")
+        .in("id", contextIds);
+      if (contexts) {
+        contextMap = Object.fromEntries(
+          contexts.map((c: { id: string; name: string }) => [c.id, c.name])
+        );
+      }
+    }
+
+    const results = filtered.map(
+      (row: { context_id: string | null; [key: string]: unknown }) => ({
+        ...row,
+        context_name: row.context_id ? contextMap[row.context_id] || null : null,
+      })
+    );
+
+    return { data: results };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+export async function getEvents(
+  client: SupabaseClient,
+  params: {
+    date_from?: string;
+    date_to?: string;
+    context_id?: string;
+    intent_id?: string;
+    include_archived?: boolean;
+    limit?: number;
+  }
+): Promise<ToolResult> {
+  try {
+    const limit = params.limit || 50;
+
+    let query = client
+      .from("events")
+      .select(
+        "id, intent_id, time, item_ids, context_id, collection_id, text, created_at, updated_at"
+      )
+      .order("time", { ascending: true })
+      .limit(limit);
+
+    if (!params.include_archived) {
+      query = query.eq("archived", false);
+    }
+    if (params.date_from) {
+      query = query.gte("time", params.date_from);
+    }
+    if (params.date_to) {
+      query = query.lte("time", params.date_to);
+    }
+    if (params.context_id) {
+      query = query.eq("context_id", params.context_id);
+    }
+    if (params.intent_id) {
+      query = query.eq("intent_id", params.intent_id);
+    }
+
+    const { data: events, error } = await query;
+    if (error) return { error: error.message };
+    if (!events || events.length === 0) return { data: [] };
+
+    // Resolve intent text.
+    const intentIds = [
+      ...new Set(
+        events
+          .map((e: { intent_id: string | null }) => e.intent_id)
+          .filter(Boolean)
+      ),
+    ];
+    let intentMap: Record<string, string> = {};
+    if (intentIds.length > 0) {
+      const { data: intents } = await client
+        .from("intents")
+        .select("id, text")
+        .in("id", intentIds);
+      if (intents) {
+        intentMap = Object.fromEntries(
+          intents.map((i: { id: string; text: string }) => [i.id, i.text])
+        );
+      }
+    }
+
+    // Resolve context names.
+    const contextIds = [
+      ...new Set(
+        events
+          .map((e: { context_id: string | null }) => e.context_id)
+          .filter(Boolean)
+      ),
+    ];
+    let contextMap: Record<string, string> = {};
+    if (contextIds.length > 0) {
+      const { data: contexts } = await client
+        .from("contexts")
+        .select("id, name")
+        .in("id", contextIds);
+      if (contexts) {
+        contextMap = Object.fromEntries(
+          contexts.map((c: { id: string; name: string }) => [c.id, c.name])
+        );
+      }
+    }
+
+    const results = events.map(
+      (row: {
+        context_id: string | null;
+        intent_id: string | null;
+        [key: string]: unknown;
+      }) => ({
+        ...row,
+        intent_text: row.intent_id ? intentMap[row.intent_id] || null : null,
+        context_name: row.context_id ? contextMap[row.context_id] || null : null,
+      })
+    );
+
+    return { data: results };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
 export async function getCollections(
   client: SupabaseClient,
   params: { context_id?: string }

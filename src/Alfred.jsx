@@ -38,6 +38,7 @@ import { supabase, supabaseUrl } from "./supabaseClient";
 import { calculateNextEventDate, getRecurrenceConfig } from "./utils/recurrence";
 import { getRecurrenceDisplayString } from "./utils/recurrenceDisplay";
 import SamPlayer from "./sam/SamPlayer";
+import TimerPage from "./timer/TimerPage";
 
 const storage = {
   // Map key prefixes to table names
@@ -2617,6 +2618,14 @@ export default function Alfred() {
     );
   }
 
+  if (view === "timer") {
+    return (
+      <TimerPage
+        onBack={() => setView(previousView || "home")}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background">
       {isLoading && <LoadingOverlay message={loadingMessage} />}
@@ -2705,6 +2714,7 @@ export default function Alfred() {
                 { key: "intentions", label: "Intentions", icon: <Lightbulb className="w-4 h-4" /> },
                 { key: "memories", label: "Memories", icon: <Star className="w-4 h-4" /> },
                 { key: "collections", label: "Collections", icon: <ClipboardList className="w-4 h-4" /> },
+                { key: "timer", label: "Timer", icon: <Timer className="w-4 h-4" /> },
                 { key: "sam", label: "Sam", icon: <Music className="w-4 h-4" /> },
               ].map((item) => (
                 <button
@@ -2716,7 +2726,7 @@ export default function Alfred() {
                       unsavedChangesRef.current = false;
                       unsavedChangesLabelRef.current = "";
                     }
-                    if (item.key === "sam") setPreviousView(view);
+                    if (item.key === "sam" || item.key === "timer") setPreviousView(view);
                     setView(item.key);
                     setMenuOpen(false);
                   }}
@@ -2864,6 +2874,25 @@ export default function Alfred() {
               }`}
             >
               Collections
+            </button>
+            <button
+              onClick={() => {
+                if (unsavedChangesRef.current) {
+                  const label = unsavedChangesLabelRef.current || "this form";
+                  if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) return;
+                  unsavedChangesRef.current = false;
+                  unsavedChangesLabelRef.current = "";
+                }
+                setPreviousView(view);
+                setView("timer");
+              }}
+              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+                view === "timer"
+                  ? "bg-primary text-white shadow-sm"
+                  : "bg-white text-foreground border border-border hover:border-primary"
+              }`}
+            >
+              Timer
             </button>
             <button
               onClick={() => {

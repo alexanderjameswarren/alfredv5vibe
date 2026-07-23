@@ -12,6 +12,8 @@ import {
   getItems,
   searchItems,
   getExecutionHistory,
+  getIntents,
+  getEvents,
   getCollections,
   getInbox,
   getTags,
@@ -128,6 +130,68 @@ function createMcpServer(token: string) {
         context_id,
         date_from,
         date_to,
+        limit,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_intents",
+    {
+      title: "Get Intents",
+      description:
+        "List intentions and item-intents (GTD tasks/reusable actions). Use to see active intents for briefings, recurrence review, or context planning. Returns intent rows with resolved context name.",
+      inputSchema: {
+        context_id: z.string().optional().describe("Filter by context ID"),
+        search_text: z.string().optional().describe("Search text to match against intent text (ILIKE)"),
+        tags: z.array(z.string()).optional().describe("Filter intents that have ANY of these tags"),
+        include_archived: z.boolean().optional().describe("Include archived intents (default false)"),
+        recurring_only: z.boolean().optional().describe("Only return intents with a recurrence_config (default false)"),
+        limit: z.number().optional().describe("Max results to return (default 50)"),
+      },
+    },
+    async ({ context_id, search_text, tags, include_archived, recurring_only, limit }) => {
+      const client = createUserClient(token);
+      const result = await getIntents(client, {
+        context_id,
+        search_text,
+        tags,
+        include_archived,
+        recurring_only,
+        limit,
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "get_events",
+    {
+      title: "Get Events",
+      description:
+        "List scheduled events (an intent placed on a date). Use for 'what's on today / this week' briefings. Returns events with resolved intent text and context name.",
+      inputSchema: {
+        date_from: z.string().optional().describe("Start date filter (YYYY-MM-DD, inclusive)"),
+        date_to: z.string().optional().describe("End date filter (YYYY-MM-DD, inclusive)"),
+        context_id: z.string().optional().describe("Filter by context ID"),
+        intent_id: z.string().optional().describe("Filter by specific intent ID"),
+        include_archived: z.boolean().optional().describe("Include archived events (default false)"),
+        limit: z.number().optional().describe("Max results to return (default 50)"),
+      },
+    },
+    async ({ date_from, date_to, context_id, intent_id, include_archived, limit }) => {
+      const client = createUserClient(token);
+      const result = await getEvents(client, {
+        date_from,
+        date_to,
+        context_id,
+        intent_id,
+        include_archived,
         limit,
       });
       return {
