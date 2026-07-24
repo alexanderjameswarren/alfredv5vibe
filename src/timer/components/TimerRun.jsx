@@ -1,5 +1,5 @@
 import React from "react";
-import { Pause, Play, Square, Check } from "lucide-react";
+import { Pause, Play, Square, Check, Volume2, VolumeX } from "lucide-react";
 import useTimerEngine from "../lib/useTimerEngine";
 import usePhaseCues from "../lib/usePhaseCues";
 
@@ -25,44 +25,44 @@ function formatSeconds(ms) {
   return `${m}m ${r}s`;
 }
 
-// Very small classifier — presence check on the label after lowercasing.
-// "out" is checked before "in" because the "in" substring appears in most
-// out-labels ("out"/"exhale" don't overlap with "in", but simpler check
-// order avoids false positives if someone writes "in and out" etc.).
-// Anything not matching either falls through as "hold".
-function classifyPhase(label) {
-  const s = (label || "").toLowerCase();
-  if (s.includes("out") || s.includes("exhale")) return "out";
-  if (s.includes("in") || s.includes("inhale")) return "in";
-  return "hold";
-}
-
-// Circle scale for the pacing cue.
-// - "in" phases expand from CIRCLE_MIN → CIRCLE_MAX over the phase.
-// - "out" phases contract from CIRCLE_MAX → CIRCLE_MIN over the phase.
-// - "hold" phases hold at whatever size the most recent non-hold phase
-//   left us at (natural for breathing — "hold in" stays large, "hold out"
-//   stays small). If there's no prior non-hold phase, sit at the midpoint.
+// Circle scale is driven by the phase's explicit `animation` mode. Shared
+// MIN/MAX constants across all four modes guarantee continuity across
+// transitions: a `grow` ends at MAX == `hold-large` at MAX, `shrink` ends
+// at MIN == `hold-small` at MIN, so the circle never jumps.
 const CIRCLE_MIN = 0.4;
 const CIRCLE_MAX = 1.0;
 
-function computePacingScale(phases, currentPhaseIdx, phaseFraction) {
-  const kind = classifyPhase(phases[currentPhaseIdx]?.label);
-  if (kind === "in") {
-    return CIRCLE_MIN + (CIRCLE_MAX - CIRCLE_MIN) * phaseFraction;
-  }
-  if (kind === "out") {
-    return CIRCLE_MAX - (CIRCLE_MAX - CIRCLE_MIN) * phaseFraction;
-  }
-  for (let i = currentPhaseIdx - 1; i >= 0; i--) {
-    const prev = classifyPhase(phases[i].label);
-    if (prev === "in") return CIRCLE_MAX;
-    if (prev === "out") return CIRCLE_MIN;
-  }
-  return (CIRCLE_MIN + CIRCLE_MAX) / 2;
+// Smoothstep — symmetric ease-in-out with zero derivative at both ends.
+// Slow start, quick middle, slow finish — reads as breathing rather than
+// linear machine motion.
+function easeInOut(t) {
+  return t * t * (3 - 2 * t);
 }
 
-export default function TimerRun({ totalSeconds, phases, loop, muted, onStop }) {
+function computePacingScale(phase, phaseFraction) {
+  const mode = phase?.animation || "hold-large";
+  const t = easeInOut(Math.max(0, Math.min(1, phaseFraction)));
+  switch (mode) {
+    case "grow":
+      return CIRCLE_MIN + (CIRCLE_MAX - CIRCLE_MIN) * t;
+    case "shrink":
+      return CIRCLE_MAX - (CIRCLE_MAX - CIRCLE_MIN) * t;
+    case "hold-small":
+      return CIRCLE_MIN;
+    case "hold-large":
+    default:
+      return CIRCLE_MAX;
+  }
+}
+
+export default function TimerRun({
+  totalSeconds,
+  phases,
+  loop,
+  muted,
+  onMuteChange,
+  onStop,
+}) {
   const engine = useTimerEngine({ totalSeconds, phases, loop });
 
   const {
@@ -70,6 +70,7 @@ export default function TimerRun({ totalSeconds, phases, loop, muted, onStop }) 
     elapsedMs,
     effectiveEndMs,
     currentPhaseIdx,
+    absolutePhaseIdx,
     currentPhase,
     phaseElapsedMs,
     phaseRemainingMs,
@@ -78,7 +79,7 @@ export default function TimerRun({ totalSeconds, phases, loop, muted, onStop }) 
     resume,
   } = engine;
 
-  usePhaseCues({ currentPhaseIdx, status, muted });
+  usePhaseCues({ phaseKey: absolutePhaseIdx, status, muted });
 
   const paused = status === "paused";
   const ended = status === "ended";
@@ -87,7 +88,7 @@ export default function TimerRun({ totalSeconds, phases, loop, muted, onStop }) 
     phaseTotalMs > 0 ? Math.min(1, phaseElapsedMs / phaseTotalMs) : 0;
   const scale = ended
     ? (CIRCLE_MIN + CIRCLE_MAX) / 2
-    : computePacingScale(phases, currentPhaseIdx, phaseFraction);
+    : computePacingScale(currentPhase, phaseFraction);
 
   const overallPct =
     effectiveEndMs > 0 ? Math.min(100, (elapsedMs / effectiveEndMs) * 100) : 0;
@@ -174,6 +175,21 @@ export default function TimerRun({ totalSeconds, phases, loop, muted, onStop }) 
             className="flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm bg-amber-500 hover:bg-amber-600 text-white"
           >
             <Pause className="w-4 h-4" /> Pause
+          </button>
+        )}
+        {!ended && (
+          <button
+            onClick={() => onMuteChange(!muted)}
+            title={muted ? "Unmute" : "Mute"}
+            aria-label={muted ? "Unmute" : "Mute"}
+            aria-pressed={muted}
+            className={`p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded border transition-colors ${
+              muted
+                ? "border-primary bg-primary-light text-primary"
+                : "border-border text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
         )}
         <button

@@ -9,7 +9,25 @@ import {
   LayoutList,
   Repeat,
   VolumeX,
+  Expand,
+  Circle,
+  Shrink,
+  Dot,
 } from "lucide-react";
+
+// Position-cycling defaults: index 0 → grow, 1 → hold-large, 2 → shrink,
+// 3 → hold-small, 4 → grow, ... Applied only at add time; overrides and
+// reorders never re-derive.
+const ANIMATION_DEFAULTS = ["grow", "hold-large", "shrink", "hold-small"];
+
+// Order = display order in the segmented selector. Value is the canonical
+// mode string consumed by TimerRun's scale derivation.
+const ANIMATION_OPTIONS = [
+  { value: "grow", label: "Grow", Icon: Expand },
+  { value: "hold-large", label: "Hold large", Icon: Circle },
+  { value: "shrink", label: "Shrink", Icon: Shrink },
+  { value: "hold-small", label: "Hold small", Icon: Dot },
+];
 
 // Builder mode. Owns per-row draft strings inside each phase object
 // (`secondsInput`) rather than one useNumericInput per row — hooks can't
@@ -39,7 +57,13 @@ export default function TimerBuilder({
   function addPhase() {
     onPhasesChange([
       ...phases,
-      { id: crypto.randomUUID(), label: "", seconds: 0, secondsInput: "0" },
+      {
+        id: crypto.randomUUID(),
+        label: "",
+        seconds: 0,
+        secondsInput: "0",
+        animation: ANIMATION_DEFAULTS[phases.length % ANIMATION_DEFAULTS.length],
+      },
     ]);
   }
 
@@ -143,7 +167,7 @@ export default function TimerBuilder({
             {phases.map((p, i) => (
               <div
                 key={p.id}
-                className="flex items-center gap-2 p-2 bg-background border border-border rounded-lg"
+                className="flex items-center gap-2 p-2 bg-background border border-border rounded-lg flex-wrap"
               >
                 <span className="text-xs text-muted-foreground w-6 text-right tabular-nums">
                   {i + 1}.
@@ -170,6 +194,28 @@ export default function TimerBuilder({
                   />
                   s
                 </label>
+                <div className="flex items-center gap-1" role="group" aria-label="Animation">
+                  {ANIMATION_OPTIONS.map((opt) => {
+                    const active = p.animation === opt.value;
+                    const Icon = opt.Icon;
+                    return (
+                      <button
+                        key={opt.value}
+                        onClick={() => updatePhase(p.id, { animation: opt.value })}
+                        title={opt.label}
+                        aria-label={opt.label}
+                        aria-pressed={active}
+                        className={`p-2 border rounded flex items-center justify-center transition-colors ${
+                          active
+                            ? "border-primary bg-primary-light text-primary"
+                            : "border-border text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        <Icon className="w-4 h-4" />
+                      </button>
+                    );
+                  })}
+                </div>
                 <button
                   onClick={() => movePhase(p.id, -1)}
                   disabled={i === 0}

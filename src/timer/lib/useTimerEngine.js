@@ -118,6 +118,18 @@ export default function useTimerEngine({ totalSeconds, phases, loop }) {
     [elapsedMs, phases, loop]
   );
 
+  // Monotonic phase counter across loop wraps. `currentPhaseIdx` alone
+  // stays at 0 forever in a 1-phase loop, so consumers watching for
+  // transitions never see one. Absolute idx bumps by 1 on every phase
+  // boundary — cycle wraps included — so cues, telemetry, etc. can trip
+  // on it reliably.
+  const absolutePhaseIdx = useMemo(() => {
+    const cycleMs = phases.reduce((s, p) => s + p.seconds * 1000, 0);
+    if (cycleMs === 0 || phases.length === 0) return currentPhaseIdx;
+    const cycleIdx = loop ? Math.floor(elapsedMs / cycleMs) : 0;
+    return cycleIdx * phases.length + currentPhaseIdx;
+  }, [elapsedMs, phases, loop, currentPhaseIdx]);
+
   const currentPhase = phases[currentPhaseIdx] || null;
   const phaseTotalMs = (currentPhase?.seconds ?? 0) * 1000;
   const phaseRemainingMs = Math.max(0, phaseTotalMs - phaseElapsedMs);
@@ -146,6 +158,7 @@ export default function useTimerEngine({ totalSeconds, phases, loop }) {
     remainingMs,
     effectiveEndMs,
     currentPhaseIdx,
+    absolutePhaseIdx,
     currentPhase,
     phaseElapsedMs,
     phaseRemainingMs,

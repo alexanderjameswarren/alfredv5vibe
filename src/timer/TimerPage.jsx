@@ -56,6 +56,7 @@ export default function TimerPage({ onBack }) {
             phases={phases}
             loop={loop}
             muted={muted}
+            onMuteChange={setMuted}
             onStop={() => setMode("builder")}
           />
         )}

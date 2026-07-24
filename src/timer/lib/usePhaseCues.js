@@ -19,9 +19,14 @@ function classifyStatusChange(prev, next) {
   return null;
 }
 
-export default function usePhaseCues({ currentPhaseIdx, status, muted = false }) {
+// `phaseKey` is any monotonically-changing identifier that bumps on every
+// phase boundary — the engine's `absolutePhaseIdx` (which counts across
+// loop wraps, so a 1-phase loop still fires per cycle). Using the raw
+// `currentPhaseIdx` would miss loop wraps because that index stays 0
+// forever in a single-phase loop.
+export default function usePhaseCues({ phaseKey, status, muted = false }) {
   const ctxRef = useRef(null);
-  const prevIdxRef = useRef(null);
+  const prevKeyRef = useRef(null);
   const prevStatusRef = useRef(null);
 
   useEffect(() => {
@@ -72,7 +77,7 @@ export default function usePhaseCues({ currentPhaseIdx, status, muted = false })
     }
 
     const prevStatus = prevStatusRef.current;
-    const prevIdx = prevIdxRef.current;
+    const prevKey = prevKeyRef.current;
 
     const statusChange = classifyStatusChange(prevStatus, status);
     if (statusChange === "ended") {
@@ -80,12 +85,12 @@ export default function usePhaseCues({ currentPhaseIdx, status, muted = false })
       chime(660, 0.15);
       chime(990, 0.2, 0.18);
       vibrate([60, 40, 80]);
-    } else if (status === "running" && currentPhaseIdx !== prevIdx) {
+    } else if (status === "running" && phaseKey !== prevKey) {
       chime(880, 0.12);
       vibrate(40);
     }
 
-    prevIdxRef.current = currentPhaseIdx;
+    prevKeyRef.current = phaseKey;
     prevStatusRef.current = status;
-  }, [currentPhaseIdx, status, muted]);
+  }, [phaseKey, status, muted]);
 }
