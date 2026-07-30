@@ -1,0 +1,120 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://alfred-v5.local/schemas/sam-drill-format.schema.json",
+  "title": "SAM Song / Drill Document",
+  "description": "Shape of a hand-authored or MCP-authored SAM song / drill document. Consumed by React (SongLoader) and by the Edge Function (append_sam_measures). See docs/technical-spec-sam-drills-and-lineage.md § 4.",
+  "type": "object",
+  "required": ["title", "measures"],
+  "additionalProperties": true,
+  "properties": {
+    "title": { "type": "string", "minLength": 1 },
+    "artist": { "type": ["string", "null"] },
+    "songType": {
+      "type": "string",
+      "enum": ["original", "simplified", "drill"],
+      "description": "Optional. Absent means 'original' (preserves every pre-existing document)."
+    },
+    "parentSongId": {
+      "type": ["string", "null"],
+      "description": "UUID of a parent song. Optional. `simplified` requires it; `drill` may or may not."
+    },
+    "difficultyTier": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 9,
+      "description": "Optional. Only meaningful when songType='simplified'."
+    },
+    "generationNotes": {
+      "type": ["object", "null"],
+      "description": "Receipt for human reading. Not source for a build step; derivation is a historical fact, not a live dependency."
+    },
+    "key": { "type": ["string", "null"] },
+    "timeSignature": { "type": ["string", "null"], "description": "Song-level default, e.g. '4/4'. Per-measure timeSignature overrides." },
+    "defaultBpm": { "type": ["number", "null"] },
+    "measures": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/Measure" }
+    }
+  },
+  "definitions": {
+    "Measure": {
+      "type": "object",
+      "required": ["rh", "lh", "timeSignature"],
+      "additionalProperties": true,
+      "not": {
+        "required": ["beats"],
+        "description": "beats[] is legacy and unsupported by sam_song_measures. Use rh[]/lh[]."
+      },
+      "properties": {
+        "number": { "type": ["integer", "null"], "minimum": 1 },
+        "timeSignature": { "$ref": "#/definitions/TimeSignature" },
+        "chord": { "type": ["string", "null"] },
+        "section": { "type": ["string", "null"] },
+        "audioOffsetMs": { "type": ["number", "null"] },
+        "rh": { "type": "array", "items": { "$ref": "#/definitions/VoiceEvent" } },
+        "lh": { "type": "array", "items": { "$ref": "#/definitions/VoiceEvent" } }
+      }
+    },
+    "TimeSignature": {
+      "type": "object",
+      "required": ["beats", "beatType"],
+      "additionalProperties": false,
+      "properties": {
+        "beats": { "type": "integer", "minimum": 1 },
+        "beatType": { "type": "integer", "enum": [1, 2, 4, 8, 16, 32] },
+        "symbol": { "type": "string", "enum": ["common", "cut"] }
+      }
+    },
+    "VoiceEvent": {
+      "type": "object",
+      "required": ["duration", "notes"],
+      "additionalProperties": true,
+      "not": {
+        "required": ["lyric"],
+        "description": "Authored documents must not carry inline lyric — recompileMeasures strips inline lyrics and re-injects from sam_song_lyrics. An authored lyric would vanish on first recompile."
+      },
+      "properties": {
+        "duration": {
+          "type": "string",
+          "pattern": "^(w|h|q|8|16|32)d*$",
+          "description": "VexFlow token: base note w/h/q/8/16/32 with optional 'd' per augmentation dot (hd, qd, 8d)."
+        },
+        "notes": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Note" },
+          "description": "Simultaneous pitches at this event's onset. Empty array [] means a rest."
+        },
+        "tuplet": {
+          "type": "object",
+          "required": ["actual", "normal", "position"],
+          "additionalProperties": false,
+          "properties": {
+            "actual": { "type": "integer", "minimum": 1 },
+            "normal": { "type": "integer", "minimum": 1 },
+            "position": { "type": "string", "enum": ["start", "middle", "end"] }
+          }
+        }
+      }
+    },
+    "Note": {
+      "type": "object",
+      "required": ["midi", "name"],
+      "additionalProperties": true,
+      "properties": {
+        "midi": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127,
+          "description": "(octave + 1) × 12 + step + alter. C4=60, A4=69."
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-G](##|bb|#|b)?-?[0-9]$",
+          "description": "Display spelling: step, then optional accidental (# / b / ## / bb), then octave (-1..9). Examples: 'A4', 'Bb4', 'F#3', 'C-1'."
+        },
+        "tie": { "type": "string", "enum": ["start", "end", "both"] }
+      }
+    }
+  }
+}

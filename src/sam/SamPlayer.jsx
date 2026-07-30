@@ -45,6 +45,11 @@ function AudioMsCounter({ audioElement }) {
 export default function SamPlayer({ onBack }) {
   const [song, setSong] = useState(null);
   const [songDbId, setSongDbId] = useState(null);
+  // Import-error banner. SongLoader unmounts the moment `song` is set (a new
+  // song has loaded), so async failures inside its fan-out `.catch` land on
+  // a dead component. This state lives at the SamPlayer level so the banner
+  // survives the SongLoader unmount and reaches the user.
+  const [importError, setImportError] = useState(null);
   const bpm = useNumericInput(DEFAULTS.bpm);
   const [playbackState, setPlaybackState] = useState("stopped"); // 'stopped' | 'playing' | 'paused'
   const [pausedMeasure, setPausedMeasure] = useState(null);
@@ -283,6 +288,8 @@ export default function SamPlayer({ onBack }) {
   }
 
   function handleSongLoaded(loadedSong) {
+    // A new successful load clears any stale import-error banner.
+    setImportError(null);
     setSong(loadedSong);
     setSongDbId(null);
     setSnippet(null);
@@ -553,8 +560,24 @@ export default function SamPlayer({ onBack }) {
       </header>
 
       <div ref={scrollContainerRef} className="mx-auto px-3 sm:px-4 py-6">
+        {importError && (
+          <div className="mb-4 mx-3 sm:mx-4 p-3 bg-red-50 border border-red-200 rounded flex items-start justify-between gap-3 text-sm text-red-700">
+            <span className="whitespace-pre-wrap">{importError}</span>
+            <button
+              onClick={() => setImportError(null)}
+              className="text-red-500 hover:text-red-700 font-bold px-2"
+              title="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        )}
         {!song ? (
-          <SongLoader onSongLoaded={handleSongLoaded} onSongSaved={setSongDbId} />
+          <SongLoader
+            onSongLoaded={handleSongLoaded}
+            onSongSaved={setSongDbId}
+            onImportError={setImportError}
+          />
         ) : (
           <>
             {playbackState === "playing" ? (

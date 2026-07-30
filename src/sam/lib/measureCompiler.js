@@ -21,19 +21,22 @@ export async function fanOutMeasures(songId, measuresArray, supabase) {
     throw deleteError;
   }
 
-  // Build rows — one per measure, 1-indexed
+  // Build rows — one per measure, 1-indexed. rh/lh/time_signature are NOT
+  // NULL in sam_song_measures; an explicit null violates the constraint
+  // and a column default cannot rescue an explicit null. Use `??` (not
+  // `||`) so an intentional `[]` silent hand passes through unchanged.
   const rows = measuresArray.map((m, i) => ({
     song_id: songId,
     number: i + 1,
-    rh: m.rh || null,
-    lh: m.lh || null,
+    rh: m.rh ?? [],
+    lh: m.lh ?? [],
     time_signature: m.timeSignature
       ? {
           beats: m.timeSignature.beats,
           beatType: m.timeSignature.beatType,
           ...(m.timeSignature.symbol ? { symbol: m.timeSignature.symbol } : {}),
         }
-      : null,
+      : { beats: 4, beatType: 4 },
     ...(m.audioOffsetMs != null ? { audio_offset_ms: m.audioOffsetMs } : {}),
     ...(m.chord != null ? { chord: m.chord } : {}),
     ...(m.section != null ? { section: m.section } : {}),

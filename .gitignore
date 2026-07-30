@@ -25,3 +25,8 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Generated schema copies — master lives at repo root (sam-drill-format.schema.json).
+# scripts/prebuild.js regenerates these on every build/start so they cannot drift.
+/src/sam/lib/sam-drill-format.schema.json
+/supabase/functions/_shared/sam-drill-format.schema.json

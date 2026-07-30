@@ -109,9 +109,13 @@ Layered; no single one suffices.
 Twenty tools that behave identically are lighter than twelve with their own conventions.
 
 - **Params:** `limit`, `status`, `area_id` — consistent names across apps
-- **Envelope:** every response `{ data, meta: { count, truncated, limit_applied } }`
-- **Errors:** `{ error: { code, message } }` where `message` is written for the model that will read it
+- **Envelope (internal):** handlers return `{ data, meta: { count, truncated, limit_applied } }`. This is the *internal* contract between a handler and `defineTool` — it is not what the model sees.
+- **MCP payload (external):** emit `envelope.data` directly. The model sees a bare array or object, not a wrapper. `count` is derivable by counting; `limit_applied` only matters when something was cut.
+- **Truncation is the exception.** `truncated` is the one field the model cannot infer — a clamped 50-row result looks identical to a genuine 50-row result, and the model will form a false belief about the data. When `meta.truncated` is true, emit an additional text block: `NOTE: results truncated to N of M. Narrow the query or request a specific subset.`
+- **Errors:** set MCP `isError: true` and put the message in the text verbatim. Do not rely on the flag alone — clients format errors inconsistently.
+- **Two error classes, deliberately worded differently.** Guardrail denials (budget, loop) carry the terminal do-not-retry language and must not be softened. Operational failures (database error, timeout, network) are legitimately retryable and must NOT carry that wording — stamping "do not retry" on a transient error suppresses a retry that should happen.
 - **Naming:** `get_*` (read), `search_*` (text query), `create_*` / `update_*` (writes, tier declared)
+- **Bounded reads:** no list query returns unbounded rows. Applying the ceiling server-side and exposing a `limit` param are separate decisions — a tool over a small fixed collection (e.g. `get_contexts`, 8 rows) gets the internal cap without the knob.
 
 ---
 

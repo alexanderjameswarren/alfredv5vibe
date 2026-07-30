@@ -6,9 +6,12 @@ import { StreamableHTTPTransport } from "@hono/mcp";
 import { Hono } from "hono";
 import { z } from "zod";
 
-import { createUserClient } from "../_shared/alfred-tools/supabase-client.ts";
+import { clampLimit, defineTool, envelope } from "../_shared/platform.ts";
 import {
-  getContexts,
+  createSamSongTool,
+  appendSamMeasuresTool,
+} from "../_shared/tools/sam-authoring.ts";
+import {
   getItems,
   searchItems,
   getExecutionHistory,
@@ -17,7 +20,6 @@ import {
   getCollections,
   getInbox,
   getTags,
-  createInboxItem,
   updateInboxItem,
   getDatabaseSchema,
   getSamSongs,
@@ -29,6 +31,511 @@ import {
   updateSamSongMeasures,
   loadSamLyrics,
 } from "../_shared/alfred-tools/tool-handlers.ts";
+
+// ---------------------------------------------------------------------------
+// Platform-layer migrated tools (Block 2 — get_contexts + create_inbox_item)
+//
+// External payload contract per docs/technical-spec-platform-layer.md § Tool
+// house style: `envelope` is INTERNAL between handler and defineTool; the
+// model sees `envelope.data` directly (bare array / object). meta stays
+// internal except for `truncated`, which the wrapper surfaces as an extra
+// NOTE block above the data because the model can't infer it.
+// ---------------------------------------------------------------------------
+
+const getContextsTool = defineTool({
+  name: "get_contexts",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const shared = args.shared as boolean | undefined;
+    // get_contexts has no exposed limit knob — the manifest stays stable —
+    // but we apply the platform ceiling defensively per the invariant "no
+    // list query returns unbounded rows". clampLimit(50) resolves to 50
+    // (the hard cap). In practice contexts count is far below this.
+    const LIMIT = clampLimit(50);
+    let query = ctx.db
+      .from("contexts")
+      .select("id, name, description, keywords, shared, pinned, tags, created_at")
+      .order("pinned", { ascending: false })
+      .order("name")
+      .limit(LIMIT);
+    if (shared !== undefined) query = query.eq("shared", shared);
+    const { data, error } = await query;
+    if (error) throw new Error(`get_contexts: ${error.message}`);
+    const rows = data ?? [];
+    return envelope(rows, {
+      limit_applied: LIMIT,
+      truncated: rows.length >= LIMIT,
+    });
+  },
+});
+
+const checkPlatformConformanceTool = defineTool({
+  name: "check_platform_conformance",
+  // Read tool — no gate. Calls the public SECURITY DEFINER wrapper for
+  // platform.check_conformance() (the `platform` schema itself isn't
+  // reachable via PostgREST). Return shape is whatever the SQL function
+  // yields; we pass it through unchanged so the model sees the same text
+  // a psql user would see.
+  tier: 1,
+  handler: async (_args: Record<string, unknown>, ctx) => {
+    const { data, error } = await ctx.db.rpc("platform_check_conformance");
+    if (error) throw new Error(`check_platform_conformance: ${error.message}`);
+    return data;
+  },
+});
+
+const getPlatformContractTool = defineTool({
+  name: "get_platform_contract",
+  // Read tool — no gate. Public wrapper for the full contract snapshot:
+  // rules for new tables and tools, registry of platform-managed tables,
+  // and a live conformance report. Read this first when designing.
+  tier: 1,
+  handler: async (_args: Record<string, unknown>, ctx) => {
+    const { data, error } = await ctx.db.rpc("get_platform_contract");
+    if (error) throw new Error(`get_platform_contract: ${error.message}`);
+    return data;
+  },
+});
+
+const createInboxItemTool = defineTool({
+  name: "create_inbox_item",
+  // Tier 1: the inbox IS the human-approval gateway. This write appends to
+  // a staging table that affects nothing until triaged in the Alfred UI.
+  // Gating it would mean confirming a capture in order to queue it for
+  // confirmation.
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const record = {
+      id: crypto.randomUUID(),
+      archived: false,
+      triaged_at: null,
+      captured_text: args.captured_text as string,
+      // ctx.userId comes from a local JWT decode — unverified, but RLS is
+      // the real gate. Same value the old handler round-tripped auth.getUser()
+      // for; the DB also has DEFAULT auth.uid() on this column since 00b.
+      user_id: ctx.userId,
+      // Server-set for every MCP capture. NOT caller-provided — not in the
+      // input schema. Matches historical behavior from every version of
+      // this tool: MCP-sourced, opaque metadata, AI-enriched-at-creation.
+      source_type: "mcp",
+      source_metadata: {},
+      ai_status: "enriched",
+      suggested_context_id: (args.suggested_context_id as string) || null,
+      suggest_item: (args.suggest_item as boolean) || false,
+      suggested_item_text: (args.suggested_item_text as string) || null,
+      suggested_item_description: (args.suggested_item_description as string) || null,
+      suggested_item_elements: (args.suggested_item_elements as unknown[]) || null,
+      suggested_item_id: (args.suggested_item_id as string) || null,
+      suggest_intent: (args.suggest_intent as boolean) || false,
+      suggested_intent_text: (args.suggested_intent_text as string) || null,
+      suggested_intent_recurrence: (args.suggested_intent_recurrence as string) || null,
+      suggest_event: (args.suggest_event as boolean) || false,
+      suggested_event_date: (args.suggested_event_date as string) || null,
+      suggested_tags: (args.suggested_tags as string[]) || [],
+      suggested_collection_id: (args.suggested_collection_id as string) || null,
+      ai_confidence: (args.ai_confidence as number) ?? null,
+      ai_reasoning: (args.ai_reasoning as string) || null,
+    };
+    const { data, error } = await ctx.db
+      .from("inbox")
+      .insert(record)
+      .select()
+      .single();
+    if (error) throw new Error(`create_inbox_item: ${error.message}`);
+    return data; // defineTool wraps in envelope; MCP wrapper unwraps for the model.
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Block 6 — remaining Alfred + SAM tools routed through defineTool.
+// Reads are tier 1, writes are tier 2. Most handlers thin-delegate to the
+// existing tool-handlers.ts implementations (still exported for ai-enrich).
+// get_items and get_inbox rewrite inline to add exposed `limit` + real
+// truncation via a count query — the "N of M" NOTE relies on that count.
+// ---------------------------------------------------------------------------
+
+const getItemsTool = defineTool({
+  name: "get_items",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    // All filtering (including jsonb `?|` any-of-tags) runs in Postgres
+    // via public.platform_search_items — the RPC returns
+    // { rows, total } from a single snapshot, so the truncation NOTE
+    // math is atomic. `elements` is intentionally excluded from the
+    // list shape (heavy jsonb; loaded on demand through a single-item
+    // path). See supabase migration adding platform_search_items.
+    const contextId  = args.context_id  as string   | undefined;
+    const searchText = args.search_text as string   | undefined;
+    const tags       = args.tags        as string[] | undefined;
+    const LIMIT      = clampLimit(args.limit as number | undefined);
+
+    const { data, error } = await ctx.db.rpc("platform_search_items", {
+      p_context_id:  contextId  ?? null,
+      p_search_text: searchText ?? null,
+      p_tags:        tags && tags.length > 0 ? tags : null,
+      p_limit:       LIMIT,
+    });
+    if (error) throw new Error(`get_items: ${error.message}`);
+
+    const rows  = (data?.rows as unknown[]) ?? [];
+    const total = (data?.total as number) ?? rows.length;
+    return envelope(rows, {
+      limit_applied: LIMIT,
+      truncated: total > rows.length,
+      total,
+    });
+  },
+});
+
+const searchItemsTool = defineTool({
+  name: "search_items",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await searchItems(ctx.db, { query: args.query as string });
+    if (result.error) throw new Error(`search_items: ${result.error}`);
+    return result.data;
+  },
+});
+
+const getExecutionHistoryTool = defineTool({
+  name: "get_execution_history",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await getExecutionHistory(ctx.db, {
+      intent_id: args.intent_id as string | undefined,
+      context_id: args.context_id as string | undefined,
+      date_from: args.date_from as string | undefined,
+      date_to: args.date_to as string | undefined,
+      limit: clampLimit(args.limit as number | undefined),
+    });
+    if (result.error) throw new Error(`get_execution_history: ${result.error}`);
+    return result.data;
+  },
+});
+
+const getIntentsTool = defineTool({
+  name: "get_intents",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await getIntents(ctx.db, {
+      context_id: args.context_id as string | undefined,
+      search_text: args.search_text as string | undefined,
+      tags: args.tags as string[] | undefined,
+      include_archived: args.include_archived as boolean | undefined,
+      recurring_only: args.recurring_only as boolean | undefined,
+      limit: clampLimit(args.limit as number | undefined),
+    });
+    if (result.error) throw new Error(`get_intents: ${result.error}`);
+    return result.data;
+  },
+});
+
+const getEventsTool = defineTool({
+  name: "get_events",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await getEvents(ctx.db, {
+      date_from: args.date_from as string | undefined,
+      date_to: args.date_to as string | undefined,
+      context_id: args.context_id as string | undefined,
+      intent_id: args.intent_id as string | undefined,
+      include_archived: args.include_archived as boolean | undefined,
+      limit: clampLimit(args.limit as number | undefined),
+    });
+    if (result.error) throw new Error(`get_events: ${result.error}`);
+    return result.data;
+  },
+});
+
+const getCollectionsTool = defineTool({
+  name: "get_collections",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await getCollections(ctx.db, {
+      context_id: args.context_id as string | undefined,
+    });
+    if (result.error) throw new Error(`get_collections: ${result.error}`);
+    return result.data;
+  },
+});
+
+const getInboxTool = defineTool({
+  name: "get_inbox",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const aiStatus = args.ai_status as string | undefined;
+    const LIMIT = clampLimit(args.limit as number | undefined);
+
+    let q = ctx.db.from("inbox")
+      .select(
+        "id, captured_text, source_type, source_metadata, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id, ai_status, ai_confidence, ai_reasoning, created_at"
+      )
+      .eq("archived", false)
+      .is("triaged_at", null)
+      .order("created_at", { ascending: false });
+    if (aiStatus) q = q.eq("ai_status", aiStatus);
+
+    const { data, error } = await q.limit(LIMIT);
+    if (error) throw new Error(`get_inbox: ${error.message}`);
+    const rows = data ?? [];
+
+    let truncated = false;
+    let total: number | undefined;
+    if (rows.length >= LIMIT) {
+      let cq = ctx.db.from("inbox")
+        .select("id", { count: "exact", head: true })
+        .eq("archived", false)
+        .is("triaged_at", null);
+      if (aiStatus) cq = cq.eq("ai_status", aiStatus);
+      const { count, error: countErr } = await cq;
+      if (!countErr && typeof count === "number") {
+        total = count;
+        truncated = count > rows.length;
+      } else {
+        truncated = true;
+      }
+    }
+
+    return envelope(rows, {
+      limit_applied: LIMIT,
+      truncated,
+      total,
+    });
+  },
+});
+
+const getTagsTool = defineTool({
+  name: "get_tags",
+  tier: 1,
+  handler: async (_args: Record<string, unknown>, ctx) => {
+    const result = await getTags(ctx.db, {});
+    if (result.error) throw new Error(`get_tags: ${result.error}`);
+    return result.data;
+  },
+});
+
+const updateInboxItemTool = defineTool({
+  name: "update_inbox_item",
+  // Tier 2: updates existing rows. Audited via trigger. Rollback available
+  // through platform.rollback_audit_entry() if a bad enrichment lands.
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await updateInboxItem(ctx.db, {
+      inbox_id: args.inbox_id as string,
+      ai_confidence: args.ai_confidence as number,
+      ai_reasoning: args.ai_reasoning as string,
+      ai_status: args.ai_status as "enriched" | "re_enriched" | undefined,
+      suggested_context_id: args.suggested_context_id as string | undefined,
+      suggest_item: args.suggest_item as boolean | undefined,
+      suggested_item_text: args.suggested_item_text as string | undefined,
+      suggested_item_description: args.suggested_item_description as string | undefined,
+      suggested_item_elements: args.suggested_item_elements as unknown[] | undefined,
+      suggested_item_id: args.suggested_item_id as string | undefined,
+      suggest_intent: args.suggest_intent as boolean | undefined,
+      suggested_intent_text: args.suggested_intent_text as string | undefined,
+      suggested_intent_recurrence: args.suggested_intent_recurrence as
+        | "once" | "daily" | "weekly" | "monthly" | "yearly" | undefined,
+      suggest_event: args.suggest_event as boolean | undefined,
+      suggested_event_date: args.suggested_event_date as string | undefined,
+      suggested_tags: args.suggested_tags as string[] | undefined,
+      suggested_collection_id: args.suggested_collection_id as string | undefined,
+    });
+    if (result.error) throw new Error(`update_inbox_item: ${result.error}`);
+    return result.data;
+  },
+});
+
+const getDatabaseSchemaTool = defineTool({
+  name: "get_database_schema",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await getDatabaseSchema(ctx.db, {
+      table_name: args.table_name as string | undefined,
+    });
+    if (result.error) throw new Error(`get_database_schema: ${result.error}`);
+    return result.data;
+  },
+});
+
+const getSamSongsTool = defineTool({
+  name: "get_sam_songs",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await getSamSongs(ctx.db, {
+      search_text: args.search_text as string | undefined,
+    });
+    if (result.error) throw new Error(`get_sam_songs: ${result.error}`);
+    return result.data;
+  },
+});
+
+const getSamSessionsTool = defineTool({
+  name: "get_sam_sessions",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await getSamSessions(ctx.db, {
+      song_id: args.song_id as string | undefined,
+      snippet_id: args.snippet_id as string | undefined,
+      date_from: args.date_from as string | undefined,
+      date_to: args.date_to as string | undefined,
+      limit: clampLimit(args.limit as number | undefined),
+    });
+    if (result.error) throw new Error(`get_sam_sessions: ${result.error}`);
+    return result.data;
+  },
+});
+
+const getSamSnippetsTool = defineTool({
+  name: "get_sam_snippets",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await getSamSnippets(ctx.db, {
+      song_id: args.song_id as string | undefined,
+      search_text: args.search_text as string | undefined,
+    });
+    if (result.error) throw new Error(`get_sam_snippets: ${result.error}`);
+    return result.data;
+  },
+});
+
+const getSamSongMeasuresTool = defineTool({
+  name: "get_sam_song_measures",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await getSamSongMeasures(ctx.db, {
+      song_id: args.song_id as string,
+      start_measure: args.start_measure as number | undefined,
+      end_measure: args.end_measure as number | undefined,
+    });
+    if (result.error) throw new Error(`get_sam_song_measures: ${result.error}`);
+    return result.data;
+  },
+});
+
+const getSamLyricWorkspaceTool = defineTool({
+  name: "get_sam_lyric_workspace",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await getSamLyricWorkspace(ctx.db, {
+      song_id: args.song_id as string,
+      batch_size: args.batch_size as number | undefined,
+    });
+    if (result.error) throw new Error(`get_sam_lyric_workspace: ${result.error}`);
+    return result.data;
+  },
+});
+
+const placeSamLyricsTool = defineTool({
+  name: "place_sam_lyrics",
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await placeSamLyrics(ctx.db, {
+      song_id: args.song_id as string,
+      starting_word_order: args.starting_word_order as number,
+      placements: args.placements as number[][],
+    });
+    if (result.error) throw new Error(`place_sam_lyrics: ${result.error}`);
+    return result.data;
+  },
+});
+
+const updateSamSongMeasuresTool = defineTool({
+  name: "update_sam_song_measures",
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await updateSamSongMeasures(ctx.db, {
+      song_id: args.song_id as string,
+      updates: args.updates as { measure_num: number; chord?: string; section?: string; audio_offset_ms?: number }[],
+    });
+    if (result.error) throw new Error(`update_sam_song_measures: ${result.error}`);
+    return result.data;
+  },
+});
+
+const loadSamLyricsTool = defineTool({
+  name: "load_sam_lyrics",
+  // Tier 2: with replace=true this is destructive of prior workspace state.
+  // Audited via trigger; rollback via platform.rollback_audit_entry().
+  // Not tier 3 because forcing `confirmed: true` on every routine lyric load
+  // would break the workflow — audit-then-rollback is the safer default here.
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const result = await loadSamLyrics(ctx.db, {
+      song_id: args.song_id as string,
+      syllables: args.syllables as string[],
+      replace: args.replace as boolean | undefined,
+    });
+    if (result.error) throw new Error(`load_sam_lyrics: ${result.error}`);
+    return result.data;
+  },
+});
+
+// MCP-side glue: platform tools return `(args, Request) => envelope`. The MCP
+// SDK's registerTool callback gives us args and a closured token. Wrap the
+// token in a synthetic Request so createContext's header extraction still
+// works, then unwrap the envelope for the model per the "external = bare"
+// rule. Two error classes reach the model verbatim: guardrail denials
+// (terminal, do-not-retry — from enforceBudget) and operational failures
+// (retryable — from the handler's own throws). Neither is rewritten.
+
+function tokenAsRequest(token: string): Request {
+  return new Request("https://mcp.local/", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+type PlatformResult = {
+  data: unknown;
+  meta: {
+    count?: number;
+    truncated?: boolean;
+    limit_applied?: number;
+    total?: number;
+  };
+};
+
+async function runToolForMcp(
+  fn: (args: Record<string, unknown>, req: Request) => Promise<PlatformResult>,
+  args: Record<string, unknown>,
+  token: string,
+): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
+  try {
+    const result = await fn(args, tokenAsRequest(token));
+    const blocks: Array<{ type: "text"; text: string }> = [];
+    if (result.meta?.truncated) {
+      const shown = Array.isArray(result.data)
+        ? result.data.length
+        : (result.meta.limit_applied ?? "?");
+      // "N of M" per the spec's "Tool house style" — M is the true row
+      // count the handler measured with a separate count query. If the
+      // handler couldn't compute it, fall back to a shape that still
+      // signals the cut without claiming a false total.
+      const total = result.meta.total;
+      const ofClause = total !== undefined ? `of ${total}` : "(more available)";
+      blocks.push({
+        type: "text" as const,
+        text:
+          `NOTE: results truncated to ${shown} ${ofClause}. ` +
+          `Narrow the query or request a specific subset.`,
+      });
+    }
+    blocks.push({
+      type: "text" as const,
+      text: JSON.stringify(result.data, null, 2),
+    });
+    return { content: blocks };
+  } catch (e) {
+    // Verbatim message — do not decorate. Guardrail denials keep their
+    // terminal wording; operational errors keep theirs. The client can
+    // tell them apart from the text; we surface isError either way.
+    return {
+      isError: true,
+      content: [
+        { type: "text" as const, text: (e as Error).message },
+      ],
+    };
+  }
+}
 
 const app = new Hono().basePath("/mcp");
 
@@ -60,13 +567,7 @@ function createMcpServer(token: string) {
         shared: z.boolean().optional().describe("Filter by shared status"),
       },
     },
-    async ({ shared }) => {
-      const client = createUserClient(token);
-      const result = await getContexts(client, { shared });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
-      };
-    }
+    async ({ shared }) => runToolForMcp(getContextsTool, { shared }, token),
   );
 
   server.registerTool(
@@ -74,20 +575,15 @@ function createMcpServer(token: string) {
     {
       title: "Get Items",
       description:
-        "Get items (reusable reference material like recipes, checklists, project notes). Can filter by context and tags. Items have elements (steps, ingredients, etc.).",
+        "Get items (reusable reference material like recipes, checklists, project notes). Can filter by context and tags. Items have elements (steps, ingredients, etc.). Results are capped (default 20, max 50) — the response NOTE tells you when there's more. [v22]",
       inputSchema: {
         context_id: z.string().optional().describe("Filter by context ID"),
         tags: z.array(z.string()).optional().describe("Filter by tags (items matching ANY of these tags)"),
         search_text: z.string().optional().describe("Search item names and descriptions"),
+        limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
       },
     },
-    async ({ context_id, tags, search_text }) => {
-      const client = createUserClient(token);
-      const result = await getItems(client, { context_id, tags, search_text });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
-      };
-    }
+    async (args) => runToolForMcp(getItemsTool, args, token),
   );
 
   server.registerTool(
@@ -100,13 +596,7 @@ function createMcpServer(token: string) {
         query: z.string().describe("Search query to match against item names and descriptions"),
       },
     },
-    async ({ query }) => {
-      const client = createUserClient(token);
-      const result = await searchItems(client, { query });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
-      };
-    }
+    async (args) => runToolForMcp(searchItemsTool, args, token),
   );
 
   server.registerTool(
@@ -123,19 +613,7 @@ function createMcpServer(token: string) {
         limit: z.number().optional().describe("Max results to return (default 20)"),
       },
     },
-    async ({ intent_id, context_id, date_from, date_to, limit }) => {
-      const client = createUserClient(token);
-      const result = await getExecutionHistory(client, {
-        intent_id,
-        context_id,
-        date_from,
-        date_to,
-        limit,
-      });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
-      };
-    }
+    async (args) => runToolForMcp(getExecutionHistoryTool, args, token),
   );
 
   server.registerTool(
@@ -153,20 +631,7 @@ function createMcpServer(token: string) {
         limit: z.number().optional().describe("Max results to return (default 50)"),
       },
     },
-    async ({ context_id, search_text, tags, include_archived, recurring_only, limit }) => {
-      const client = createUserClient(token);
-      const result = await getIntents(client, {
-        context_id,
-        search_text,
-        tags,
-        include_archived,
-        recurring_only,
-        limit,
-      });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
-      };
-    }
+    async (args) => runToolForMcp(getIntentsTool, args, token),
   );
 
   server.registerTool(
@@ -184,20 +649,7 @@ function createMcpServer(token: string) {
         limit: z.number().optional().describe("Max results to return (default 50)"),
       },
     },
-    async ({ date_from, date_to, context_id, intent_id, include_archived, limit }) => {
-      const client = createUserClient(token);
-      const result = await getEvents(client, {
-        date_from,
-        date_to,
-        context_id,
-        intent_id,
-        include_archived,
-        limit,
-      });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
-      };
-    }
+    async (args) => runToolForMcp(getEventsTool, args, token),
   );
 
   server.registerTool(
@@ -210,13 +662,7 @@ function createMcpServer(token: string) {
         context_id: z.string().optional().describe("Filter by context ID"),
       },
     },
-    async ({ context_id }) => {
-      const client = createUserClient(token);
-      const result = await getCollections(client, { context_id });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
-      };
-    }
+    async (args) => runToolForMcp(getCollectionsTool, args, token),
   );
 
   server.registerTool(
@@ -224,21 +670,16 @@ function createMcpServer(token: string) {
     {
       title: "Get Inbox",
       description:
-        "Get pending inbox items that haven't been triaged yet. The inbox is a universal capture bucket where thoughts, emails, and tasks land before being organized into contexts.",
+        "Get pending inbox items that haven't been triaged yet. The inbox is a universal capture bucket where thoughts, emails, and tasks land before being organized into contexts. Results are capped (default 20, max 50) — the response NOTE tells you when there's more.",
       inputSchema: {
         ai_status: z
           .string()
           .optional()
           .describe("Filter by AI enrichment status: 'not_started', 'in_progress', or 'enriched'"),
+        limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
       },
     },
-    async ({ ai_status }) => {
-      const client = createUserClient(token);
-      const result = await getInbox(client, { ai_status });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
-      };
-    }
+    async (args) => runToolForMcp(getInboxTool, args, token),
   );
 
   server.registerTool(
@@ -249,13 +690,7 @@ function createMcpServer(token: string) {
         "Get all unique tags used across items and intents, with usage counts. Useful for understanding the user's taxonomy and suggesting consistent tags.",
       inputSchema: {},
     },
-    async () => {
-      const client = createUserClient(token);
-      const result = await getTags(client, {});
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
-      };
-    }
+    async () => runToolForMcp(getTagsTool, {}, token),
   );
 
   server.registerTool(
@@ -283,57 +718,7 @@ function createMcpServer(token: string) {
         ai_reasoning: z.string().optional().describe("Brief explanation of why you made these suggestions"),
       },
     },
-    async ({ captured_text, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id, ai_confidence, ai_reasoning }: {
-      captured_text: string;
-      suggested_context_id?: string;
-      suggest_item?: boolean;
-      suggested_item_text?: string;
-      suggested_item_description?: string;
-      suggested_item_elements?: unknown[];
-      suggested_item_id?: string;
-      suggest_intent?: boolean;
-      suggested_intent_text?: string;
-      suggested_intent_recurrence?: string;
-      suggest_event?: boolean;
-      suggested_event_date?: string;
-      suggested_tags?: string[];
-      suggested_collection_id?: string;
-      ai_confidence?: number;
-      ai_reasoning?: string;
-    }) => {
-      const client = createUserClient(token);
-      const result = await createInboxItem(client, {
-        captured_text,
-        suggested_context_id,
-        suggest_item,
-        suggested_item_text,
-        suggested_item_description,
-        suggested_item_elements,
-        suggested_item_id,
-        suggest_intent,
-        suggested_intent_text,
-        suggested_intent_recurrence,
-        suggest_event,
-        suggested_event_date,
-        suggested_tags,
-        suggested_collection_id,
-        ai_confidence,
-        ai_reasoning,
-        source_type: "mcp",
-        ai_status: "enriched",
-      });
-
-      if (result.error) {
-        return {
-          content: [{ type: "text" as const, text: `Error creating inbox item: ${result.error}` }],
-          isError: true,
-        };
-      }
-
-      return {
-        content: [{ type: "text" as const, text: `Inbox item created successfully. The user can review and approve it in Alfred.\n\n${JSON.stringify(result.data, null, 2)}` }],
-      };
-    }
+    async (args) => runToolForMcp(createInboxItemTool, args, token),
   );
 
   server.registerTool(
@@ -362,57 +747,7 @@ function createMcpServer(token: string) {
         suggested_collection_id: z.string().optional().describe("ID of an existing collection (use get_collections to find it)"),
       },
     },
-    async ({ inbox_id, ai_confidence, ai_reasoning, ai_status, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id }: {
-      inbox_id: string;
-      ai_confidence: number;
-      ai_reasoning: string;
-      ai_status?: "enriched" | "re_enriched";
-      suggested_context_id?: string;
-      suggest_item?: boolean;
-      suggested_item_text?: string;
-      suggested_item_description?: string;
-      suggested_item_elements?: unknown[];
-      suggested_item_id?: string;
-      suggest_intent?: boolean;
-      suggested_intent_text?: string;
-      suggested_intent_recurrence?: "once" | "daily" | "weekly" | "monthly" | "yearly";
-      suggest_event?: boolean;
-      suggested_event_date?: string;
-      suggested_tags?: string[];
-      suggested_collection_id?: string;
-    }) => {
-      const client = createUserClient(token);
-      const result = await updateInboxItem(client, {
-        inbox_id,
-        ai_confidence,
-        ai_reasoning,
-        ai_status,
-        suggested_context_id,
-        suggest_item,
-        suggested_item_text,
-        suggested_item_description,
-        suggested_item_elements,
-        suggested_item_id,
-        suggest_intent,
-        suggested_intent_text,
-        suggested_intent_recurrence,
-        suggest_event,
-        suggested_event_date,
-        suggested_tags,
-        suggested_collection_id,
-      });
-
-      if (result.error) {
-        return {
-          content: [{ type: "text" as const, text: `Error updating inbox item: ${result.error}` }],
-          isError: true,
-        };
-      }
-
-      return {
-        content: [{ type: "text" as const, text: `Inbox item updated successfully.\n\n${JSON.stringify(result.data, null, 2)}` }],
-      };
-    }
+    async (args) => runToolForMcp(updateInboxItemTool, args, token),
   );
 
   server.registerTool(
@@ -428,18 +763,29 @@ function createMcpServer(token: string) {
           .describe("Specific table name (e.g., 'items', 'intents', 'inbox') or omit for all public tables"),
       },
     },
-    async ({ table_name }: { table_name?: string }) => {
-      const client = createUserClient(token);
-      const result = await getDatabaseSchema(client, { table_name });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result.data || result.error, null, 2),
-          },
-        ],
-      };
-    }
+    async (args) => runToolForMcp(getDatabaseSchemaTool, args, token),
+  );
+
+  server.registerTool(
+    "check_platform_conformance",
+    {
+      title: "Check Platform Conformance",
+      description:
+        "Return the platform-layer conformance status — every registered public table checked against its declared platform contract (RLS enabled, correct grants, audit trigger attached, register_table entry present, etc.). Runs the platform.check_conformance() function via a public SECURITY DEFINER wrapper. Use this as the final step of any schema migration to confirm no drift was introduced.",
+      inputSchema: {},
+    },
+    async () => runToolForMcp(checkPlatformConformanceTool, {}, token),
+  );
+
+  server.registerTool(
+    "get_platform_contract",
+    {
+      title: "Get Platform Contract",
+      description:
+        "Returns the platform contract (rules for new tables and tools), the registry of platform-managed tables, and a live conformance report. Read this first before designing new tables or tools.",
+      inputSchema: {},
+    },
+    async () => runToolForMcp(getPlatformContractTool, {}, token),
   );
 
   server.registerTool(
@@ -452,18 +798,7 @@ function createMcpServer(token: string) {
         search_text: z.string().optional().describe("Search song titles and artists"),
       },
     },
-    async ({ search_text }: { search_text?: string }) => {
-      const client = createUserClient(token);
-      const result = await getSamSongs(client, { search_text });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result.data || result.error, null, 2),
-          },
-        ],
-      };
-    }
+    async (args) => runToolForMcp(getSamSongsTool, args, token),
   );
 
   server.registerTool(
@@ -483,36 +818,7 @@ function createMcpServer(token: string) {
         limit: z.number().optional().describe("Max results to return (default 20)"),
       },
     },
-    async ({
-      song_id,
-      snippet_id,
-      date_from,
-      date_to,
-      limit,
-    }: {
-      song_id?: string;
-      snippet_id?: string;
-      date_from?: string;
-      date_to?: string;
-      limit?: number;
-    }) => {
-      const client = createUserClient(token);
-      const result = await getSamSessions(client, {
-        song_id,
-        snippet_id,
-        date_from,
-        date_to,
-        limit,
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result.data || result.error, null, 2),
-          },
-        ],
-      };
-    }
+    async (args) => runToolForMcp(getSamSessionsTool, args, token),
   );
 
   server.registerTool(
@@ -526,18 +832,7 @@ function createMcpServer(token: string) {
         search_text: z.string().optional().describe("Search snippet titles and notes"),
       },
     },
-    async ({ song_id, search_text }: { song_id?: string; search_text?: string }) => {
-      const client = createUserClient(token);
-      const result = await getSamSnippets(client, { song_id, search_text });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result.data || result.error, null, 2),
-          },
-        ],
-      };
-    }
+    async (args) => runToolForMcp(getSamSnippetsTool, args, token),
   );
 
   server.registerTool(
@@ -552,13 +847,7 @@ function createMcpServer(token: string) {
         end_measure: z.number().optional().describe("Last measure number to return (inclusive)"),
       },
     },
-    async ({ song_id, start_measure, end_measure }: { song_id: string; start_measure?: number; end_measure?: number }) => {
-      const client = createUserClient(token);
-      const result = await getSamSongMeasures(client, { song_id, start_measure, end_measure });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
-      };
-    }
+    async (args) => runToolForMcp(getSamSongMeasuresTool, args, token),
   );
 
   server.registerTool(
@@ -572,13 +861,7 @@ function createMcpServer(token: string) {
         batch_size: z.number().optional().describe("Number of measures to return (default 8)"),
       },
     },
-    async ({ song_id, batch_size }: { song_id: string; batch_size?: number }) => {
-      const client = createUserClient(token);
-      const result = await getSamLyricWorkspace(client, { song_id, batch_size });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data || result.error, null, 2) }],
-      };
-    }
+    async (args) => runToolForMcp(getSamLyricWorkspaceTool, args, token),
   );
 
   server.registerTool(
@@ -593,19 +876,7 @@ function createMcpServer(token: string) {
         placements: z.array(z.array(z.number()).length(2)).describe("Array of [measure_num, rh_index] pairs"),
       },
     },
-    async ({ song_id, starting_word_order, placements }: { song_id: string; starting_word_order: number; placements: number[][] }) => {
-      const client = createUserClient(token);
-      const result = await placeSamLyrics(client, { song_id, starting_word_order, placements });
-      if (result.error) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${result.error}` }],
-          isError: true,
-        };
-      }
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data, null, 2) }],
-      };
-    }
+    async (args) => runToolForMcp(placeSamLyricsTool, args, token),
   );
 
   server.registerTool(
@@ -624,19 +895,7 @@ function createMcpServer(token: string) {
         })).describe("Array of measure updates"),
       },
     },
-    async ({ song_id, updates }: { song_id: string; updates: { measure_num: number; chord?: string; section?: string; audio_offset_ms?: number }[] }) => {
-      const client = createUserClient(token);
-      const result = await updateSamSongMeasures(client, { song_id, updates });
-      if (result.error) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${result.error}` }],
-          isError: true,
-        };
-      }
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data, null, 2) }],
-      };
-    }
+    async (args) => runToolForMcp(updateSamSongMeasuresTool, args, token),
   );
 
   server.registerTool(
@@ -651,19 +910,77 @@ function createMcpServer(token: string) {
         replace: z.boolean().optional().describe("If true, delete existing lyrics first (default false)"),
       },
     },
-    async ({ song_id, syllables, replace }: { song_id: string; syllables: string[]; replace?: boolean }) => {
-      const client = createUserClient(token);
-      const result = await loadSamLyrics(client, { song_id, syllables, replace });
-      if (result.error) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${result.error}` }],
-          isError: true,
-        };
-      }
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result.data, null, 2) }],
-      };
-    }
+    async (args) => runToolForMcp(loadSamLyricsTool, args, token),
+  );
+
+  server.registerTool(
+    "create_sam_song",
+    {
+      title: "Create SAM Song",
+      description:
+        "Create an empty SAM song row (no notation). Use this before append_sam_measures to lay down a song shell — title, artist, key, time signature, default BPM, and lineage (song_type, parent_song_id, difficulty_tier, generation_notes). This tool does NOT write any measures; call append_sam_measures afterward. Tier 3 — requires `confirmed: true` in args to actually write.",
+      inputSchema: {
+        title: z.string().describe("Song title (required)"),
+        songType: z
+          .enum(["original", "simplified", "drill"])
+          .describe(
+            "Kind of song. 'original' = standalone piece. 'simplified' = easier variant of a parent (parentSongId required). 'drill' = practice exercise; parent optional."
+          ),
+        artist: z.string().optional().describe("Composer or arranger. Optional."),
+        parentSongId: z
+          .string()
+          .optional()
+          .describe(
+            "UUID of the parent song. Required when songType='simplified'; allowed for 'drill'; ignored for 'original'."
+          ),
+        difficultyTier: z
+          .number()
+          .int()
+          .min(1)
+          .max(9)
+          .optional()
+          .describe("1-9. Only meaningful when songType='simplified'."),
+        generationNotes: z
+          .record(z.unknown())
+          .optional()
+          .describe(
+            "Free-form JSON receipt of how / why this song was generated. For human reading; not source for a build step."
+          ),
+        key: z.string().optional().describe("Key signature, e.g. 'C major', 'A minor'."),
+        timeSignature: z
+          .string()
+          .optional()
+          .describe("Song-level default in 'N/M' form, e.g. '4/4'. Per-measure timeSignature overrides."),
+        defaultBpm: z.number().optional().describe("Default tempo. Defaults to 68."),
+        confirmed: z
+          .boolean()
+          .optional()
+          .describe("Tier-3 gate. Set to true on the second call to actually write. Omit / false on the first call to see a proposal."),
+      },
+    },
+    async (args) => runToolForMcp(createSamSongTool, args, token),
+  );
+
+  server.registerTool(
+    "append_sam_measures",
+    {
+      title: "Append SAM Measures",
+      description:
+        "Append validated measures to an existing SAM song's sam_song_measures rows. Continues numbering from max(number) for that song; sets measures_edited_at (leaves measures_compiled_at NULL so the React app recompiles the blob from rows on next open). This is the ONLY MCP tool that writes rh/lh notation — update_sam_song_measures is metadata-only (chord, section, audio offset) and cannot touch notation. Each measure is validated against the shared JSON Schema (structural) plus midi/name agreement and duration-sum-per-hand (semantic); the entire batch is rejected on any failure. Per-call cap: 100 measures — larger batches are truncated with a NOTE. Tier 3 — requires `confirmed: true` in args to actually write.",
+      inputSchema: {
+        songId: z.string().describe("UUID of the song to append to."),
+        measures: z
+          .array(z.record(z.unknown()))
+          .describe(
+            "Array of Measure objects per docs/technical-spec-sam-drills-and-lineage.md §4: each has rh[], lh[], timeSignature {beats, beatType}, plus optional number, chord, section, audioOffsetMs. Voice events use VexFlow duration tokens (w/h/q/8/16/32 + optional 'd' per dot); notes have midi + name that must agree; [] on notes means a rest. No `beats[]` (legacy); no inline `lyric` (lyrics live in sam_song_lyrics)."
+          ),
+        confirmed: z
+          .boolean()
+          .optional()
+          .describe("Tier-3 gate. Set to true on the second call to actually write. Omit / false on the first call to see a proposal."),
+      },
+    },
+    async (args) => runToolForMcp(appendSamMeasuresTool, args, token),
   );
 
   return server;

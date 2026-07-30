@@ -3,24 +3,80 @@ import { Archive, ArchiveRestore, Music, Pencil } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 import { parseMusicXML } from "../lib/songParser";
 import { fanOutMeasures, isMeasuresStale, recompileMeasures } from "../lib/measureCompiler";
+import { validateSongDocument } from "../lib/songSchema";
 import JSZip from "jszip";
 import PracticeWeekSnapshot from "./PracticeWeekSnapshot";
 
-function validateSong(song) {
-  if (!song || typeof song !== "object") return "Invalid JSON: not an object";
+// Legacy MusicXML output — the parseMusicXML path emits voice events that
+// may carry inline `lyric` fields (extracted from <lyric> in the source
+// document). The strict schema validator (validateSongDocument) rejects
+// inline lyrics per spec §4. Route MusicXML output through this lightweight
+// sanity check instead; the strict schema gates hand-authored JSON only.
+function validateMusicXmlSong(song) {
+  if (!song || typeof song !== "object") return "Invalid MusicXML: parse produced no object";
   if (!Array.isArray(song.measures) || song.measures.length === 0)
-    return "Invalid song: must have a non-empty measures array";
-  for (let i = 0; i < song.measures.length; i++) {
-    const m = song.measures[i];
-    const hasBeats = Array.isArray(m.beats) && m.beats.length > 0;
-    const hasVoices = Array.isArray(m.rh) || Array.isArray(m.lh);
-    if (!hasBeats && !hasVoices)
-      return `Invalid song: measure ${i + 1} must have beats[] or rh[]/lh[] arrays`;
-  }
+    return "Invalid MusicXML: parse produced no measures";
   return null;
 }
 
-export default function SongLoader({ onSongLoaded, onSongSaved }) {
+// Format schema/semantic errors as a single multi-line string for the red
+// banner. Cap at 5 so a document with dozens of issues doesn't wall of
+// text; spec §Step 2 says "shows first ~5 errors".
+function formatValidationErrors(errors) {
+  const shown = errors.slice(0, 5);
+  const more = errors.length - shown.length;
+  const suffix = more > 0 ? `\n(+${more} more)` : "";
+  return `Document invalid — fix and re-import:\n• ${shown.join("\n• ")}${suffix}`;
+}
+
+// Fields added by the lineage migration. Every insert path pulls the same
+// shape from the doc; centralize so file/paste paths can't drift.
+function lineageFields(doc) {
+  return {
+    song_type: doc.songType || "original",
+    parent_song_id: doc.parentSongId || null,
+    difficulty_tier: doc.difficultyTier ?? null,
+    generation_notes: doc.generationNotes || null,
+  };
+}
+
+// Group the (visible, non-archived) library into a tree per spec §Step 5:
+//   roots            — songs shown at the top level of "Your songs":
+//                        · original / simplified / drill with no VISIBLE parent
+//                          (parent_song_id null, OR parent archived/deleted)
+//                        · MINUS parentless drills, which go to their own section
+//   childrenByParent — map from parent id → child songs, one visible level
+//                      deep (spec: tree depth arbitrary in data, flat in UI)
+//   parentlessDrills — song_type='drill' AND no visible parent → own section
+// "Orphan" here means parent_song_id is set but points at a song that's
+// archived or deleted (FK ON DELETE SET NULL makes deletes look like
+// parent=null; archived parents are filtered out of `visibleSongs`). Both
+// cases render as roots rather than being hidden.
+function buildLibraryTree(visibleSongs) {
+  const byId = new Map(visibleSongs.map((s) => [s.id, s]));
+  const childrenByParent = new Map();
+  for (const s of visibleSongs) {
+    if (s.parent_song_id && byId.has(s.parent_song_id)) {
+      const arr = childrenByParent.get(s.parent_song_id) || [];
+      arr.push(s);
+      childrenByParent.set(s.parent_song_id, arr);
+    }
+  }
+  const roots = [];
+  const parentlessDrills = [];
+  for (const s of visibleSongs) {
+    const hasVisibleParent = s.parent_song_id && byId.has(s.parent_song_id);
+    if (hasVisibleParent) continue; // rendered under its parent
+    if (s.song_type === "drill") {
+      parentlessDrills.push(s);
+    } else {
+      roots.push(s);
+    }
+  }
+  return { roots, childrenByParent, parentlessDrills };
+}
+
+export default function SongLoader({ onSongLoaded, onSongSaved, onImportError }) {
   const [error, setError] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [library, setLibrary] = useState([]);
@@ -40,6 +96,16 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef(null);
 
+  // `report` surfaces errors that fire AFTER onSongLoaded — by then this
+  // component has unmounted and setError targets a dead node, so we also
+  // fire onImportError which lives at the SamPlayer level and survives
+  // the swap. Keep the local setError call for the pre-load window when
+  // SongLoader is still mounted.
+  const report = (msg) => {
+    setError(msg);
+    if (onImportError) onImportError(msg);
+  };
+
   function formatLastPlayed(dateStr) {
     if (!dateStr) return null;
     const date = new Date(dateStr);
@@ -54,7 +120,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
     Promise.all([
       supabase
         .from("sam_songs")
-        .select("id, title, artist, default_bpm, playback_speed, default_timing_window_ms, default_chord_ms, default_measure_width, created_at, archived")
+        .select("id, title, artist, song_type, parent_song_id, difficulty_tier, default_bpm, playback_speed, default_timing_window_ms, default_chord_ms, default_measure_width, created_at, archived")
         .order("updated_at", { ascending: false }),
       supabase
         .from("sam_sessions")
@@ -298,9 +364,10 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
         setError("Invalid JSON — could not parse file");
         return;
       }
-      const validationError = validateSong(song);
-      if (validationError) {
-        setError(validationError);
+      // Strict schema for hand-authored / MCP-authored JSON.
+      const { valid, errors } = validateSongDocument(song);
+      if (!valid) {
+        setError(formatValidationErrors(errors));
         return;
       }
     } else {
@@ -310,7 +377,9 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
         setError("MusicXML parse error: " + e.message);
         return;
       }
-      const validationError = validateSong(song);
+      // Loose sanity for MusicXML output — parseMusicXML is trusted and
+      // legitimately emits inline `lyric` fields the strict schema forbids.
+      const validationError = validateMusicXmlSong(song);
       if (validationError) {
         setError(validationError);
         return;
@@ -333,23 +402,35 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
         time_signature: song.timeSignature || "4/4",
         default_bpm: song.defaultBpm || 68,
         measures: song.measures,
+        ...lineageFields(song),
       })
       .select("id")
       .single()
       .then(async ({ data, error: dbError }) => {
         if (dbError) {
           console.error("[Sam] Supabase save error:", dbError);
-        } else {
-          console.log("[Sam] Song saved to Supabase, id:", data.id);
-          if (onSongSaved) onSongSaved(data.id);
-          try {
-            await fanOutMeasures(data.id, song.measures, supabase);
-          } catch (e) {
-            console.error("[Sam] Measure fan-out failed:", e);
-          }
+          report(`Song save failed: ${dbError.message}`);
+          return;
+        }
+        console.log("[Sam] Song saved to Supabase, id:", data.id);
+        if (onSongSaved) onSongSaved(data.id);
+        try {
+          await fanOutMeasures(data.id, song.measures, supabase);
+        } catch (e) {
+          // Song row saved; blob playback works from memory, but no
+          // sam_song_measures rows exist. Any feature that reads rows
+          // (lyric placement, MCP tools, backfill) will misbehave.
+          console.error("[Sam] Measure fan-out failed:", e);
+          report(
+            `Song saved but measure fan-out failed: ${e.message}. ` +
+            `Try re-importing.`
+          );
         }
       })
-      .catch((e) => console.error("[Sam] Supabase save failed:", e));
+      .catch((e) => {
+        console.error("[Sam] Supabase save failed:", e);
+        report(`Song save failed: ${e.message}`);
+      });
   }
 
   function handleDrop(e) {
@@ -390,18 +471,19 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
       song = JSON.parse(pastedText);
       source = "json_paste";
 
-      const validationError = validateSong(song);
-      if (validationError) {
-        setError(validationError);
+      const { valid, errors } = validateSongDocument(song);
+      if (!valid) {
+        setError(formatValidationErrors(errors));
         return;
       }
     } catch {
-      // Not JSON, try MusicXML
+      // JSON.parse threw — treat as MusicXML. Schema failures don't reach
+      // here (they returned inside the try above).
       try {
         song = parseMusicXML(pastedText);
         source = "musicxml_paste";
 
-        const validationError = validateSong(song);
+        const validationError = validateMusicXmlSong(song);
         if (validationError) {
           setError(validationError);
           return;
@@ -428,23 +510,32 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
         time_signature: song.timeSignature || "4/4",
         default_bpm: song.defaultBpm || 68,
         measures: song.measures,
+        ...lineageFields(song),
       })
       .select("id")
       .single()
       .then(async ({ data, error: dbError }) => {
         if (dbError) {
           console.error("[Sam] Supabase save error:", dbError);
-        } else {
-          console.log("[Sam] Song saved to Supabase, id:", data.id);
-          if (onSongSaved) onSongSaved(data.id);
-          try {
-            await fanOutMeasures(data.id, song.measures, supabase);
-          } catch (e) {
-            console.error("[Sam] Measure fan-out failed:", e);
-          }
+          report(`Song save failed: ${dbError.message}`);
+          return;
+        }
+        console.log("[Sam] Song saved to Supabase, id:", data.id);
+        if (onSongSaved) onSongSaved(data.id);
+        try {
+          await fanOutMeasures(data.id, song.measures, supabase);
+        } catch (e) {
+          console.error("[Sam] Measure fan-out failed:", e);
+          report(
+            `Song saved but measure fan-out failed: ${e.message}. ` +
+            `Try re-importing.`
+          );
         }
       })
-      .catch((e) => console.error("[Sam] Supabase save failed:", e));
+      .catch((e) => {
+        console.error("[Sam] Supabase save failed:", e);
+        report(`Song save failed: ${e.message}`);
+      });
   }
 
   return (
@@ -481,6 +572,11 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
         <label className="block text-sm font-medium text-foreground mb-2">
           Or paste JSON / MusicXML directly
         </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          To author a drill, include <code className="font-mono">"songType": "drill"</code> in
+          the JSON. Optional <code className="font-mono">"parentSongId"</code> nests it under
+          an existing song; omit to file it under the standalone Drills section.
+        </p>
         <textarea
           value={pastedText}
           onChange={(e) => setPastedText(e.target.value)}
@@ -497,7 +593,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
       </div>
 
       {error && (
-        <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+        <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700 whitespace-pre-wrap">
           {error}
         </div>
       )}
@@ -508,53 +604,97 @@ export default function SongLoader({ onSongLoaded, onSongSaved }) {
       {/* Song Library */}
       {loadingLibrary ? (
         <div className="mt-6 text-center text-sm text-muted-foreground">Loading library...</div>
-      ) : library.length > 0 && (
-        <div className="mt-6">
-          <h3 className="text-sm font-medium text-muted-foregroundmb-2">Your songs</h3>
-          <div className="flex flex-col gap-1">
-            {library.map((row) => (
-              <div
-                key={row.id}
-                onClick={() => handleLoadFromLibrary(row)}
-                className="flex items-center gap-3 w-full text-left px-4 py-3 bg-card border border-border rounded-lg hover:bg-secondary transition-colors min-h-[44px] group cursor-pointer"
-              >
-                <Music className="w-4 h-4 text-muted-foregroundflex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <span className="font-medium text-dark">{row.title}</span>
-                  {row.artist && (
-                    <span className="text-muted-foregroundml-1">— {row.artist}</span>
-                  )}
-                  {(() => {
-                    const stats = sessionStats[row.id];
-                    if (!stats || stats.count === 0) {
-                      return <span className="text-xs text-muted-foreground mt-0.5 block">never played</span>;
-                    }
-                    return (
-                      <span className="text-xs text-muted-foreground mt-0.5 block">
-                        last played {formatLastPlayed(stats.lastPlayed)} • {stats.count} {stats.count === 1 ? "session" : "sessions"}
-                      </span>
-                    );
-                  })()}
-                </div>
-                <button
-                  onClick={(e) => handleEditClick(e, row)}
-                  className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="Edit song"
-                >
-                  <Pencil className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={(e) => handleArchive(e, row)}
-                  className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-warning opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="Archive song"
-                >
-                  <Archive className="w-4 h-4" />
-                </button>
+      ) : library.length > 0 && (() => {
+        const { roots, childrenByParent, parentlessDrills } = buildLibraryTree(library);
+
+        // Row renderer — shared by root/child/drill. `indent` shifts children
+        // right by one level; spec says "flat in UI" so grandchildren never
+        // stack past level 1 in practice. `badge` is a small "variant, tier N"
+        // / "drill" label for children so the type is obvious out of context.
+        function renderSongRow(row, { indent = 0, badge = null } = {}) {
+          const stats = sessionStats[row.id];
+          return (
+            <div
+              key={row.id}
+              onClick={() => handleLoadFromLibrary(row)}
+              className={`flex items-center gap-3 w-full text-left px-4 py-3 bg-card border border-border rounded-lg hover:bg-secondary transition-colors min-h-[44px] group cursor-pointer ${indent > 0 ? "ml-6" : ""}`}
+            >
+              <Music className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <span className="font-medium text-dark">{row.title}</span>
+                {row.artist && (
+                  <span className="text-muted-foreground ml-1">— {row.artist}</span>
+                )}
+                {badge && (
+                  <span className="ml-2 inline-block text-xs px-1.5 py-0.5 rounded bg-secondary text-muted-foreground align-middle">
+                    {badge}
+                  </span>
+                )}
+                {!stats || stats.count === 0 ? (
+                  <span className="text-xs text-muted-foreground mt-0.5 block">never played</span>
+                ) : (
+                  <span className="text-xs text-muted-foreground mt-0.5 block">
+                    last played {formatLastPlayed(stats.lastPlayed)} • {stats.count} {stats.count === 1 ? "session" : "sessions"}
+                  </span>
+                )}
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+              <button
+                onClick={(e) => handleEditClick(e, row)}
+                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Edit song"
+              >
+                <Pencil className="w-4 h-4" />
+              </button>
+              <button
+                onClick={(e) => handleArchive(e, row)}
+                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-warning opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Archive song"
+              >
+                <Archive className="w-4 h-4" />
+              </button>
+            </div>
+          );
+        }
+
+        // Small badge string for children of a parent. Originals never appear
+        // as children (only as roots) so they don't need a badge.
+        function badgeFor(child) {
+          if (child.song_type === "simplified") {
+            return child.difficulty_tier ? `variant · tier ${child.difficulty_tier}` : "variant";
+          }
+          if (child.song_type === "drill") return "drill";
+          return null;
+        }
+
+        return (
+          <>
+            {roots.length > 0 && (
+              <div className="mt-6">
+                <h3 className="text-sm font-medium text-muted-foreground mb-2">Your songs</h3>
+                <div className="flex flex-col gap-1">
+                  {roots.map((root) => (
+                    <React.Fragment key={root.id}>
+                      {renderSongRow(root)}
+                      {(childrenByParent.get(root.id) || []).map((child) =>
+                        renderSongRow(child, { indent: 1, badge: badgeFor(child) })
+                      )}
+                    </React.Fragment>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {parentlessDrills.length > 0 && (
+              <div className="mt-6">
+                <h3 className="text-sm font-medium text-muted-foreground mb-2">Drills</h3>
+                <div className="flex flex-col gap-1">
+                  {parentlessDrills.map((d) => renderSongRow(d))}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {/* Archived songs toggle + list */}
       {!loadingLibrary && archived.length > 0 && (
