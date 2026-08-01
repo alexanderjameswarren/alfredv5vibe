@@ -1,11 +1,28 @@
-import React, { useState, useRef, useEffect } from "react";
-import { Archive, ArchiveRestore, Music, Pencil } from "lucide-react";
+import React, { useState, useEffect } from "react";
 import { supabase } from "../../supabaseClient";
 import { parseMusicXML } from "../lib/songParser";
 import { fanOutMeasures, isMeasuresStale, recompileMeasures } from "../lib/measureCompiler";
 import { validateSongDocument } from "../lib/songSchema";
+import usePracticeStats from "../lib/usePracticeStats";
+import useSongLibrary from "../lib/useSongLibrary";
 import JSZip from "jszip";
 import PracticeWeekSnapshot from "./PracticeWeekSnapshot";
+import ContinueSection from "./ContinueSection";
+import FamilySheet from "./FamilySheet";
+import BrowseTabs from "./BrowseTabs";
+import AddImportSheet from "./AddImportSheet";
+import StatsPage from "./StatsPage";
+
+// Very small path-based dispatch for the /stats stub. The app doesn't use
+// react-router; App.js does one hard-coded pathname check for /oauth/consent
+// and delegates everything else to Alfred. To satisfy the M6 requirement
+// that /stats be a real URL (browser Back should return to the landing
+// page), we manage it inside the landing subtree with pushState + popstate.
+// Constraint: SamPlayer.jsx must not be touched — routing lives here.
+function readSamPath() {
+  if (typeof window === "undefined") return "landing";
+  return window.location.pathname === "/stats" ? "stats" : "landing";
+}
 
 // Legacy MusicXML output — the parseMusicXML path emits voice events that
 // may carry inline `lyric` fields (extracted from <lyric> in the source
@@ -40,50 +57,14 @@ function lineageFields(doc) {
   };
 }
 
-// Group the (visible, non-archived) library into a tree per spec §Step 5:
-//   roots            — songs shown at the top level of "Your songs":
-//                        · original / simplified / drill with no VISIBLE parent
-//                          (parent_song_id null, OR parent archived/deleted)
-//                        · MINUS parentless drills, which go to their own section
-//   childrenByParent — map from parent id → child songs, one visible level
-//                      deep (spec: tree depth arbitrary in data, flat in UI)
-//   parentlessDrills — song_type='drill' AND no visible parent → own section
-// "Orphan" here means parent_song_id is set but points at a song that's
-// archived or deleted (FK ON DELETE SET NULL makes deletes look like
-// parent=null; archived parents are filtered out of `visibleSongs`). Both
-// cases render as roots rather than being hidden.
-function buildLibraryTree(visibleSongs) {
-  const byId = new Map(visibleSongs.map((s) => [s.id, s]));
-  const childrenByParent = new Map();
-  for (const s of visibleSongs) {
-    if (s.parent_song_id && byId.has(s.parent_song_id)) {
-      const arr = childrenByParent.get(s.parent_song_id) || [];
-      arr.push(s);
-      childrenByParent.set(s.parent_song_id, arr);
-    }
-  }
-  const roots = [];
-  const parentlessDrills = [];
-  for (const s of visibleSongs) {
-    const hasVisibleParent = s.parent_song_id && byId.has(s.parent_song_id);
-    if (hasVisibleParent) continue; // rendered under its parent
-    if (s.song_type === "drill") {
-      parentlessDrills.push(s);
-    } else {
-      roots.push(s);
-    }
-  }
-  return { roots, childrenByParent, parentlessDrills };
-}
+// Extended settings columns needed only by the edit modal. useSongLibrary
+// keeps its list query lean (never the measures blob, and no per-song
+// timing knobs either); we fetch these on-demand when the pencil is tapped.
+const EDIT_COLUMNS =
+  "id, title, artist, default_bpm, playback_speed, default_timing_window_ms, default_chord_ms, default_measure_width, archived";
 
 export default function SongLoader({ onSongLoaded, onSongSaved, onImportError }) {
   const [error, setError] = useState(null);
-  const [dragging, setDragging] = useState(false);
-  const [library, setLibrary] = useState([]);
-  const [archived, setArchived] = useState([]);
-  const [loadingLibrary, setLoadingLibrary] = useState(true);
-  const [showArchived, setShowArchived] = useState(false);
-  const [pastedText, setPastedText] = useState("");
   const [editingSong, setEditingSong] = useState(null);
   const [editTitle, setEditTitle] = useState("");
   const [editArtist, setEditArtist] = useState("");
@@ -92,9 +73,76 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
   const [editTimingWindow, setEditTimingWindow] = useState("");
   const [editChordMs, setEditChordMs] = useState("");
   const [editMeasureWidth, setEditMeasureWidth] = useState("");
-  const [sessionStats, setSessionStats] = useState({}); // { [songId]: { count, lastPlayed } }
   const [saving, setSaving] = useState(false);
-  const fileInputRef = useRef(null);
+  const [addSheetOpen, setAddSheetOpen] = useState(false);
+  const [samView, setSamView] = useState(readSamPath);
+
+  // Browser Back / Forward buttons emit popstate; keep our view in sync
+  // with the URL so back-from-stats lands on the landing page.
+  useEffect(() => {
+    function onPop() {
+      setSamView(readSamPath());
+    }
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  function openStats() {
+    if (window.location.pathname !== "/stats") {
+      window.history.pushState({ samView: "stats" }, "", "/stats");
+    }
+    setSamView("stats");
+  }
+
+  function closeStats() {
+    // history.back() reverses the pushState above. Our popstate listener
+    // then flips samView back to "landing", so we don't setState here.
+    window.history.back();
+  }
+
+  // Single practice-stats fetch for the whole landing page. `PracticeWeekSnapshot`
+  // and `useSongLibrary` both consume this shape via props — they no longer
+  // call the hook themselves, so landing loads exactly one sam_sessions
+  // request (spec § 6 success criterion). Named `practiceStats` (not `stats`)
+  // so it doesn't shadow anything.
+  const practiceStats = usePracticeStats({ currentSongId: null });
+  const lib = useSongLibrary({
+    perSongTotals: practiceStats.perSongTotals,
+    lastPracticedBySong: practiceStats.lastPracticedBySong,
+    statsLoading: practiceStats.loading,
+  });
+
+  // Family sheet modal state (Milestone 4). Setting a family opens the
+  // sheet; setting null closes it. The sheet is a modal overlay, not a
+  // route change, so landing-page scroll position survives naturally.
+  const [familyForSheet, setFamilyForSheet] = useState(null);
+  function handleOpenFamily(family) {
+    setFamilyForSheet(family);
+  }
+  function handleCloseFamilySheet() {
+    setFamilyForSheet(null);
+  }
+  function handleLoadFromFamilySheet(member) {
+    setFamilyForSheet(null);
+    handleLoadFromLibrary(member);
+  }
+  function handleStatsForFamily(family) {
+    // Close the sheet first so React unmounts it cleanly, then open stats.
+    // Family id isn't threaded to the stub page yet — a later milestone
+    // that fleshes StatsPage out can accept it via history.state or a
+    // query param. For now the button simply lands the user on /stats.
+    // eslint-disable-next-line no-unused-vars
+    void family;
+    setFamilyForSheet(null);
+    openStats();
+  }
+  function handleNewDrillFromFamily(family) {
+    // "New drill from this" — spec §FamilySheet just names the button;
+    // the drill-authoring flow isn't defined for this project pass. Log
+    // for now; a later milestone or follow-up can define the flow.
+    // eslint-disable-next-line no-console
+    console.log("[SongLoader] new drill from family:", family.root.title, family.root.id);
+  }
 
   // `report` surfaces errors that fire AFTER onSongLoaded — by then this
   // component has unmounted and setError targets a dead node, so we also
@@ -106,60 +154,14 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
     if (onImportError) onImportError(msg);
   };
 
-  function formatLastPlayed(dateStr) {
-    if (!dateStr) return null;
-    const date = new Date(dateStr);
-    const now = new Date();
-    const opts = { month: "long", day: "numeric" };
-    if (date.getFullYear() !== now.getFullYear()) opts.year = "numeric";
-    return date.toLocaleDateString("en-US", opts);
-  }
-
-  // Fetch song library and session stats on mount
-  useEffect(() => {
-    Promise.all([
-      supabase
-        .from("sam_songs")
-        .select("id, title, artist, song_type, parent_song_id, difficulty_tier, default_bpm, playback_speed, default_timing_window_ms, default_chord_ms, default_measure_width, created_at, archived")
-        .order("updated_at", { ascending: false }),
-      supabase
-        .from("sam_sessions")
-        .select("song_id, started_at")
-        .order("started_at", { ascending: false }),
-    ]).then(([{ data: songsData, error: songsError }, { data: sessData }]) => {
-      setLoadingLibrary(false);
-      if (songsError) {
-        console.error("[Sam] Failed to load song library:", songsError);
-      } else {
-        const all = songsData || [];
-        setLibrary(all.filter((s) => !s.archived));
-        setArchived(all.filter((s) => s.archived));
-      }
-      const stats = {};
-      for (const sess of (sessData || [])) {
-        if (!stats[sess.song_id]) {
-          stats[sess.song_id] = { count: 0, lastPlayed: null };
-        }
-        stats[sess.song_id].count++;
-        if (!stats[sess.song_id].lastPlayed) {
-          stats[sess.song_id].lastPlayed = sess.started_at;
-        }
-      }
-      setSessionStats(stats);
-    });
-  }, []);
-
   async function handleLoadFromLibrary(row) {
     setError(null);
-    setLoadingLibrary(true);
 
     const { data, error: dbError } = await supabase
       .from("sam_songs")
       .select("*")
       .eq("id", row.id)
       .single();
-
-    setLoadingLibrary(false);
 
     if (dbError || !data) {
       console.error("[Sam] Failed to load song:", dbError);
@@ -194,8 +196,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
     if (onSongSaved) onSongSaved(data.id);
   }
 
-  async function handleArchive(e, row) {
-    e.stopPropagation();
+  async function handleArchive(row) {
     const { error: dbError } = await supabase
       .from("sam_songs")
       .update({ archived: true })
@@ -203,14 +204,13 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
 
     if (dbError) {
       console.error("[Sam] Archive failed:", dbError);
+      setError(`Archive failed: ${dbError.message}`);
     } else {
-      setLibrary((prev) => prev.filter((s) => s.id !== row.id));
-      setArchived((prev) => [{ ...row, archived: true }, ...prev]);
+      lib.refresh();
     }
   }
 
-  async function handleRestore(e, row) {
-    e.stopPropagation();
+  async function handleRestore(row) {
     const { error: dbError } = await supabase
       .from("sam_songs")
       .update({ archived: false })
@@ -218,22 +218,42 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
 
     if (dbError) {
       console.error("[Sam] Restore failed:", dbError);
+      setError(`Restore failed: ${dbError.message}`);
     } else {
-      setArchived((prev) => prev.filter((s) => s.id !== row.id));
-      setLibrary((prev) => [{ ...row, archived: false }, ...prev]);
+      lib.refresh();
     }
   }
 
-  function handleEditClick(e, row) {
-    e.stopPropagation();
-    setEditingSong(row);
-    setEditTitle(row.title || "");
-    setEditArtist(row.artist || "");
-    setEditBpm(String(row.default_bpm || 68));
-    setEditPlaybackSpeed(String(row.playback_speed ?? 100));
-    setEditTimingWindow(row.default_timing_window_ms != null ? String(row.default_timing_window_ms) : "");
-    setEditChordMs(row.default_chord_ms != null ? String(row.default_chord_ms) : "");
-    setEditMeasureWidth(row.default_measure_width != null ? String(row.default_measure_width) : "");
+  async function handleEditClick(row) {
+    // useSongLibrary doesn't carry per-song timing knobs (spec: list query
+    // stays lean). Fetch the extended shape on demand so the modal has
+    // everything it needs to render + save.
+    const { data, error: dbError } = await supabase
+      .from("sam_songs")
+      .select(EDIT_COLUMNS)
+      .eq("id", row.id)
+      .single();
+
+    if (dbError || !data) {
+      console.error("[Sam] Failed to fetch song for edit:", dbError);
+      setError("Failed to load song settings");
+      return;
+    }
+
+    setEditingSong(data);
+    setEditTitle(data.title || "");
+    setEditArtist(data.artist || "");
+    setEditBpm(String(data.default_bpm || 68));
+    setEditPlaybackSpeed(String(data.playback_speed ?? 100));
+    setEditTimingWindow(
+      data.default_timing_window_ms != null ? String(data.default_timing_window_ms) : ""
+    );
+    setEditChordMs(
+      data.default_chord_ms != null ? String(data.default_chord_ms) : ""
+    );
+    setEditMeasureWidth(
+      data.default_measure_width != null ? String(data.default_measure_width) : ""
+    );
   }
 
   function handleCancelEdit() {
@@ -280,27 +300,11 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
     if (dbError) {
       console.error("[Sam] Song update failed:", dbError);
       alert("Failed to update song");
-    } else {
-      // Update local state
-      const updatedSong = {
-        ...editingSong,
-        title: editTitle.trim(),
-        artist: editArtist.trim() || null,
-        default_bpm: bpmNum,
-        playback_speed: psNum,
-        default_timing_window_ms: timingNum,
-        default_chord_ms: chordNum,
-        default_measure_width: widthNum,
-      };
-
-      if (editingSong.archived) {
-        setArchived((prev) => prev.map((s) => (s.id === editingSong.id ? updatedSong : s)));
-      } else {
-        setLibrary((prev) => prev.map((s) => (s.id === editingSong.id ? updatedSong : s)));
-      }
-
-      handleCancelEdit();
+      return;
     }
+
+    lib.refresh();
+    handleCancelEdit();
   }
 
   async function handleFile(file) {
@@ -433,32 +437,10 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
       });
   }
 
-  function handleDrop(e) {
-    e.preventDefault();
-    setDragging(false);
-    const file = e.dataTransfer?.files?.[0];
-    if (file) handleFile(file);
-  }
-
-  function handleDragOver(e) {
-    e.preventDefault();
-    setDragging(true);
-  }
-
-  function handleDragLeave(e) {
-    e.preventDefault();
-    setDragging(false);
-  }
-
-  function handleFileInput(e) {
-    const file = e.target.files?.[0];
-    if (file) handleFile(file);
-  }
-
-  function handlePastedText() {
+  function handlePastedText(text) {
     setError(null);
 
-    if (!pastedText.trim()) {
+    if (!text.trim()) {
       setError("Please paste JSON or MusicXML content");
       return;
     }
@@ -468,7 +450,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
 
     // Try parsing as JSON first
     try {
-      song = JSON.parse(pastedText);
+      song = JSON.parse(text);
       source = "json_paste";
 
       const { valid, errors } = validateSongDocument(song);
@@ -480,7 +462,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
       // JSON.parse threw — treat as MusicXML. Schema failures don't reach
       // here (they returned inside the try above).
       try {
-        song = parseMusicXML(pastedText);
+        song = parseMusicXML(text);
         source = "musicxml_paste";
 
         const validationError = validateMusicXmlSong(song);
@@ -496,7 +478,6 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
 
     // Load song immediately
     onSongLoaded(song);
-    setPastedText(""); // Clear the text area
 
     // Save to Supabase in the background
     supabase
@@ -538,59 +519,30 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
       });
   }
 
+  if (samView === "stats") {
+    return <StatsPage onBack={closeStats} />;
+  }
+
   return (
     <div className="max-w-lg mx-auto">
-      <div
-        onClick={() => fileInputRef.current?.click()}
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors ${
-          dragging
-            ? "border-primary bg-primary-light"
-            : "border-border hover:border-primary-light bg-card"
-        }`}
-      >
-        <div className="text-4xl mb-3">🎵</div>
-        <p className="text-dark font-medium mb-1">
-          Drop a song file here
-        </p>
-        <p className="text-sm text-muted-foreground">
-          .json, .musicxml, or .mxl — or click to browse
-        </p>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".json,.musicxml,.xml,.mxl"
-          onChange={handleFileInput}
-          className="hidden"
-        />
-      </div>
+      {/* 7-day practice snapshot — compact bar strip at the top of the
+          landing view (Milestone 6). Tapping opens /stats. Driven by the
+          shared usePracticeStats call above so landing stays at one
+          sam_sessions fetch. */}
+      <PracticeWeekSnapshot
+        sevenDayTotals={practiceStats.sevenDayTotals}
+        loading={practiceStats.loading}
+        onTap={openStats}
+      />
 
-      {/* Text paste section */}
-      <div className="mt-6">
-        <label className="block text-sm font-medium text-foreground mb-2">
-          Or paste JSON / MusicXML directly
-        </label>
-        <p className="text-xs text-muted-foreground mb-2">
-          To author a drill, include <code className="font-mono">"songType": "drill"</code> in
-          the JSON. Optional <code className="font-mono">"parentSongId"</code> nests it under
-          an existing song; omit to file it under the standalone Drills section.
-        </p>
-        <textarea
-          value={pastedText}
-          onChange={(e) => setPastedText(e.target.value)}
-          placeholder="Paste your JSON or MusicXML content here..."
-          className="w-full p-3 border border-border rounded-lg text-sm font-mono resize-y min-h-[120px] focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-        />
-        <button
-          onClick={handlePastedText}
-          disabled={!pastedText.trim()}
-          className="mt-2 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-sm font-medium min-h-[44px] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          Load from Paste
-        </button>
-      </div>
+      {/* Continue section — two cards, side-by-side above 900px viewport,
+          stacked below. Renders nothing when the user has no practice
+          history at all. */}
+      <ContinueSection
+        recentFamilies={lib.recentFamilies}
+        onLoad={handleLoadFromLibrary}
+        onOpenFamily={handleOpenFamily}
+      />
 
       {error && (
         <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700 whitespace-pre-wrap">
@@ -598,143 +550,41 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
         </div>
       )}
 
-      {/* 7-day practice snapshot */}
-      <PracticeWeekSnapshot />
+      {/* Browse tabs — Recent / All songs / Drills + Add button. Replaces
+          the pre-M5 flat "Your songs" + "Drills" + "Archived" sections. */}
+      <BrowseTabs
+        families={lib.families}
+        familiesByRootId={lib.familiesByRootId}
+        allSongsFlat={lib.allSongsFlat}
+        drillsFlat={lib.drillsFlat}
+        archivedFamilies={lib.archivedFamilies}
+        archivedCount={lib.archivedCount}
+        loading={lib.loading}
+        onLoad={handleLoadFromLibrary}
+        onEdit={handleEditClick}
+        onArchive={handleArchive}
+        onRestore={handleRestore}
+        onAddClick={() => setAddSheetOpen(true)}
+      />
 
-      {/* Song Library */}
-      {loadingLibrary ? (
-        <div className="mt-6 text-center text-sm text-muted-foreground">Loading library...</div>
-      ) : library.length > 0 && (() => {
-        const { roots, childrenByParent, parentlessDrills } = buildLibraryTree(library);
+      {/* Family sheet — opened by ContinueSection card heading or
+          "All N versions →" link. Renders nothing when familyForSheet
+          is null. */}
+      <FamilySheet
+        family={familyForSheet}
+        onClose={handleCloseFamilySheet}
+        onLoad={handleLoadFromFamilySheet}
+        onStats={handleStatsForFamily}
+        onNewDrill={handleNewDrillFromFamily}
+      />
 
-        // Row renderer — shared by root/child/drill. `indent` shifts children
-        // right by one level; spec says "flat in UI" so grandchildren never
-        // stack past level 1 in practice. `badge` is a small "variant, tier N"
-        // / "drill" label for children so the type is obvious out of context.
-        function renderSongRow(row, { indent = 0, badge = null } = {}) {
-          const stats = sessionStats[row.id];
-          return (
-            <div
-              key={row.id}
-              onClick={() => handleLoadFromLibrary(row)}
-              className={`flex items-center gap-3 w-full text-left px-4 py-3 bg-card border border-border rounded-lg hover:bg-secondary transition-colors min-h-[44px] group cursor-pointer ${indent > 0 ? "ml-6" : ""}`}
-            >
-              <Music className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-              <div className="flex-1 min-w-0">
-                <span className="font-medium text-dark">{row.title}</span>
-                {row.artist && (
-                  <span className="text-muted-foreground ml-1">— {row.artist}</span>
-                )}
-                {badge && (
-                  <span className="ml-2 inline-block text-xs px-1.5 py-0.5 rounded bg-secondary text-muted-foreground align-middle">
-                    {badge}
-                  </span>
-                )}
-                {!stats || stats.count === 0 ? (
-                  <span className="text-xs text-muted-foreground mt-0.5 block">never played</span>
-                ) : (
-                  <span className="text-xs text-muted-foreground mt-0.5 block">
-                    last played {formatLastPlayed(stats.lastPlayed)} • {stats.count} {stats.count === 1 ? "session" : "sessions"}
-                  </span>
-                )}
-              </div>
-              <button
-                onClick={(e) => handleEditClick(e, row)}
-                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity"
-                title="Edit song"
-              >
-                <Pencil className="w-4 h-4" />
-              </button>
-              <button
-                onClick={(e) => handleArchive(e, row)}
-                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-warning opacity-0 group-hover:opacity-100 transition-opacity"
-                title="Archive song"
-              >
-                <Archive className="w-4 h-4" />
-              </button>
-            </div>
-          );
-        }
-
-        // Small badge string for children of a parent. Originals never appear
-        // as children (only as roots) so they don't need a badge.
-        function badgeFor(child) {
-          if (child.song_type === "simplified") {
-            return child.difficulty_tier ? `variant · tier ${child.difficulty_tier}` : "variant";
-          }
-          if (child.song_type === "drill") return "drill";
-          return null;
-        }
-
-        return (
-          <>
-            {roots.length > 0 && (
-              <div className="mt-6">
-                <h3 className="text-sm font-medium text-muted-foreground mb-2">Your songs</h3>
-                <div className="flex flex-col gap-1">
-                  {roots.map((root) => (
-                    <React.Fragment key={root.id}>
-                      {renderSongRow(root)}
-                      {(childrenByParent.get(root.id) || []).map((child) =>
-                        renderSongRow(child, { indent: 1, badge: badgeFor(child) })
-                      )}
-                    </React.Fragment>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {parentlessDrills.length > 0 && (
-              <div className="mt-6">
-                <h3 className="text-sm font-medium text-muted-foreground mb-2">Drills</h3>
-                <div className="flex flex-col gap-1">
-                  {parentlessDrills.map((d) => renderSongRow(d))}
-                </div>
-              </div>
-            )}
-          </>
-        );
-      })()}
-
-      {/* Archived songs toggle + list */}
-      {!loadingLibrary && archived.length > 0 && (
-        <div className="mt-6 text-center">
-          <button
-            onClick={() => setShowArchived(!showArchived)}
-            className="text-sm text-muted-foregroundhover:text-dark min-h-[44px] px-2"
-          >
-            {showArchived ? "Hide archived songs" : `View archived songs (${archived.length})`}
-          </button>
-
-          {showArchived && (
-            <div className="mt-3 text-left">
-              <div className="flex flex-col gap-1">
-                {archived.map((row) => (
-                  <div
-                    key={row.id}
-                    className="flex items-center gap-3 w-full px-4 py-3 bg-secondary border border-border rounded-lg min-h-[44px] opacity-60"
-                  >
-                    <Music className="w-4 h-4 text-muted-foregroundflex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <span className="font-medium text-dark">{row.title}</span>
-                      {row.artist && (
-                        <span className="text-muted-foregroundml-1">— {row.artist}</span>
-                      )}
-                    </div>
-                    <button
-                      onClick={(e) => handleRestore(e, row)}
-                      className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foregroundhover:text-success transition-colors"
-                      title="Restore song"
-                    >
-                      <ArchiveRestore className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      {/* Add sheet — file drop + paste box behind the + Add button. */}
+      <AddImportSheet
+        open={addSheetOpen}
+        onClose={() => setAddSheetOpen(false)}
+        onDropFile={handleFile}
+        onPaste={handlePastedText}
+      />
 
       {/* Edit Modal */}
       {editingSong && (

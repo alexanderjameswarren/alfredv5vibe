@@ -806,7 +806,7 @@ function createMcpServer(token: string) {
     {
       title: "Get SAM Practice Sessions",
       description:
-        "Get practice sessions from the SAM music app. Sessions track when the user practiced a song or snippet, how long, and performance summary. Returns most recent sessions first. Use date_from/date_to to filter by time period. Includes song and snippet titles in results.",
+        "Get practice sessions from the SAM music app. Sessions record when the user started and ended practicing a song or snippet plus a performance summary; elapsed time is derived from started_at and ended_at (there is no stored duration column). A session with ended_at NULL was abandoned mid-way and should not be counted toward practice totals. Returns most recent sessions first. Use date_from/date_to to filter by time period. Includes song and snippet titles in results.",
       inputSchema: {
         song_id: z.string().optional().describe("Filter by song ID"),
         snippet_id: z.string().optional().describe("Filter by snippet ID"),

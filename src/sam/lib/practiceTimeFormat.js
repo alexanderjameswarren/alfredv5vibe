@@ -36,6 +36,44 @@ export function ptDayName(dateInput) {
 }
 
 /**
+ * Subtract `daysBack` calendar days from a YYYY-MM-DD key, returning a new
+ * YYYY-MM-DD key. Uses UTC calendar-component arithmetic, so DST transitions
+ * don't shift the result. The output is a canonical PT-date key when the
+ * input is one.
+ */
+export function dateKeyMinusDays(key, daysBack) {
+  const [y, m, d] = key.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d - daysBack));
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+/**
+ * Long-form English weekday for a YYYY-MM-DD PT date key. Asks `ptDayName`
+ * about UTC noon on that calendar date — noon UTC is mid-morning PT (PDT
+ * or PST), comfortably away from the midnight boundary in either direction.
+ */
+export function ptDayNameFromKey(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return ptDayName(new Date(Date.UTC(y, m - 1, d, 12, 0, 0)));
+}
+
+/**
+ * Integer calendar days between two YYYY-MM-DD keys (later minus earlier).
+ * Uses UTC-anchored timestamps of the calendar components, so DST doesn't
+ * distort the count. `daysBetween("2026-07-30", "2026-07-31")` → 1.
+ */
+export function daysBetween(earlierKey, laterKey) {
+  const [ya, ma, da] = earlierKey.split("-").map(Number);
+  const [yb, mb, db] = laterKey.split("-").map(Number);
+  const ta = Date.UTC(ya, ma - 1, da);
+  const tb = Date.UTC(yb, mb - 1, db);
+  return Math.round((tb - ta) / 86400000);
+}
+
+/**
  * Compact "Xh Ym" / "X minutes" form. Used in the 7-day snapshot and the
  * live "Today" counter.
  *

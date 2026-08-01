@@ -656,7 +656,7 @@ export async function getSamSessions(
   try {
     let query = client
       .from("sam_sessions")
-      .select("id, song_id, snippet_id, started_at, ended_at, duration_seconds, settings, summary")
+      .select("id, song_id, snippet_id, started_at, ended_at, settings, summary")
       .order("started_at", { ascending: false })
       .limit(params.limit || 20);
 
