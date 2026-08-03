@@ -1,3 +1,6 @@
+
+
+
 # Technical Spec — SAM Landing Page Redesign
 
 ## Overview
