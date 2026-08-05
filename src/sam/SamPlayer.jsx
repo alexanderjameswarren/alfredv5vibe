@@ -12,6 +12,8 @@ import useMIDI from "./lib/useMIDI";
 import usePracticeSession from "./lib/usePracticeSession";
 import usePracticeStats from "./lib/usePracticeStats";
 import useLyricEditor from "./lib/useLyricEditor";
+import useFingeringEditor from "./lib/useFingeringEditor";
+import FingeringBar from "./components/FingeringBar";
 import useAudioSync from "./lib/useAudioSync";
 import useNumericInput from "./lib/useNumericInput";
 import { DEFAULTS } from "./lib/samConstants";
@@ -19,6 +21,7 @@ import { matchChord, findClosestBeat } from "./lib/noteMatching";
 import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
 import { normalizeMeasure } from "./lib/measureUtils";
 import { loadAudio } from "./lib/audioPlayer";
+import * as fingeringsApi from "./lib/fingeringsApi";
 import { supabase } from "../supabaseClient";
 
 function AudioMsCounter({ audioElement }) {
@@ -45,6 +48,10 @@ function AudioMsCounter({ audioElement }) {
 export default function SamPlayer({ onBack }) {
   const [song, setSong] = useState(null);
   const [songDbId, setSongDbId] = useState(null);
+  // Fingering entry mode (edit view). Off by default. When on, the tap-zone layer
+  // is active, other score gestures are suppressed, and the number bar docks.
+  const [fingeringMode, setFingeringMode] = useState(false);
+  const [fingeringSelection, setFingeringSelection] = useState(null); // { measureNum, rhIndex, noteIndex }
   // Import-error banner. SongLoader unmounts the moment `song` is set (a new
   // song has loaded), so async failures inside its fan-out `.catch` land on
   // a dead component. This state lives at the SamPlayer level so the banner
@@ -98,6 +105,30 @@ export default function SamPlayer({ onBack }) {
     lyricEditHandlers,
     saveLyrics,
   } = useLyricEditor({ song, songDbId, skipTiedNotes, supabase });
+
+  // Step 2 verification handle (fingerings data layer). Exposes the API bound to
+  // the authenticated client, plus the current song's id, so it can be exercised
+  // from the browser console. Remove once FingeringBar imports the API directly.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__samFingerings = { ...fingeringsApi, songId: songDbId };
+  }, [songDbId]);
+
+  // Fingering writes + resolved render map (load, optimistic set/clear, undo).
+  // show_imported_fingerings gates only musicxml rows (none until Step 6), so
+  // manual fingerings render regardless of its value.
+  const {
+    fingerings,
+    setFinger,
+    clearFinger,
+    undo: undoFingering,
+    canUndo: canUndoFingering,
+    error: fingeringError,
+    dismissError: dismissFingeringError,
+  } = useFingeringEditor({ songId: songDbId, showImported: song?.show_imported_fingerings ?? false });
+
+  // A selection can't survive a song change (its coordinate references old measures).
+  useEffect(() => { setFingeringSelection(null); }, [songDbId]);
 
   // Derive active measures from snippet range, appending rest measures.
   // normalizeMeasure ensures both voice format (lh[]/rh[]) and legacy beats[]
@@ -157,6 +188,49 @@ export default function SamPlayer({ onBack }) {
 
     return allMeasures.map(normalizeMeasure);
   }, [song, snippet, lyricPlacements]);
+
+  // Flat ordered sequence of non-rest RH events, for the number bar's "next" (›)
+  // advance. Rests are skipped — you can't finger a rest.
+  const rhNoteSeq = useMemo(() => {
+    const seq = [];
+    for (const m of activeMeasures) {
+      (m.rh || []).forEach((evt, i) => {
+        if ((evt.notes?.length || 0) > 0) {
+          seq.push({ measureNum: m.number, rhIndex: i, noteheadCount: evt.notes.length });
+        }
+      });
+    }
+    return seq;
+  }, [activeMeasures]);
+
+  // Details of the currently selected event (for the number bar).
+  const selectedSeqIndex = useMemo(() => {
+    if (!fingeringSelection) return -1;
+    return rhNoteSeq.findIndex(
+      (e) => e.measureNum === fingeringSelection.measureNum && e.rhIndex === fingeringSelection.rhIndex
+    );
+  }, [rhNoteSeq, fingeringSelection]);
+  const selectedNoteheadCount =
+    selectedSeqIndex >= 0 ? rhNoteSeq[selectedSeqIndex].noteheadCount : 0;
+  const selectedCurrentFinger = fingeringSelection
+    ? fingerings[`${fingeringSelection.measureNum}:${fingeringSelection.rhIndex}:${fingeringSelection.noteIndex}`] ?? null
+    : null;
+
+  const handleFingeringNumber = useCallback((n) => {
+    if (fingeringSelection) setFinger(fingeringSelection, n);
+  }, [fingeringSelection, setFinger]);
+  const handleFingeringClear = useCallback(() => {
+    if (fingeringSelection) clearFinger(fingeringSelection);
+  }, [fingeringSelection, clearFinger]);
+  const handleFingeringAdvance = useCallback(() => {
+    if (selectedSeqIndex < 0 || selectedSeqIndex >= rhNoteSeq.length - 1) return;
+    const next = rhNoteSeq[selectedSeqIndex + 1];
+    // Default to the top notehead (melody note) on the new event.
+    setFingeringSelection({ measureNum: next.measureNum, rhIndex: next.rhIndex, noteIndex: Math.max(0, next.noteheadCount - 1) });
+  }, [selectedSeqIndex, rhNoteSeq]);
+  const handlePickNotehead = useCallback((ni) => {
+    setFingeringSelection((sel) => (sel ? { ...sel, noteIndex: ni } : sel));
+  }, []);
 
   const {
     audioAnchors,
@@ -518,6 +592,14 @@ export default function SamPlayer({ onBack }) {
     setSong(null);
   }
 
+  const handleSelectFingering = useCallback((coord) => setFingeringSelection(coord), []);
+  const toggleFingeringMode = useCallback(() => {
+    setFingeringMode((on) => {
+      if (on) setFingeringSelection(null); // leaving the mode clears the selection
+      return !on;
+    });
+  }, []);
+
   function handleExport() {
     if (!song) return;
 
@@ -653,9 +735,57 @@ export default function SamPlayer({ onBack }) {
 
             {playbackState === "stopped" ? (
               <>
+                <div className="flex items-center gap-2 px-1 mb-2">
+                  {fingeringMode && (
+                    <FingeringBar
+                      hasSelection={!!fingeringSelection}
+                      currentFinger={selectedCurrentFinger}
+                      noteheadCount={selectedNoteheadCount}
+                      selectedNoteIndex={fingeringSelection?.noteIndex ?? 0}
+                      canAdvance={selectedSeqIndex >= 0 && selectedSeqIndex < rhNoteSeq.length - 1}
+                      onNumber={handleFingeringNumber}
+                      onClear={handleFingeringClear}
+                      onAdvance={handleFingeringAdvance}
+                      onPickNotehead={handlePickNotehead}
+                    />
+                  )}
+                  <div className="flex items-center gap-2 ml-auto">
+                    {fingeringMode && (
+                      <button
+                        onClick={undoFingering}
+                        disabled={!canUndoFingering}
+                        className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        ↺ Undo
+                      </button>
+                    )}
+                    <button
+                      onClick={toggleFingeringMode}
+                      aria-pressed={fingeringMode}
+                      className={`min-h-[44px] px-4 rounded-lg text-sm font-medium border transition-colors ${
+                        fingeringMode
+                          ? "text-white border-transparent"
+                          : "bg-card text-foreground border-border hover:bg-muted"
+                      }`}
+                      style={fingeringMode ? { backgroundColor: "var(--fingering-accent)" } : undefined}
+                    >
+                      {fingeringMode ? "Fingering mode: on" : "Fingering mode"}
+                    </button>
+                  </div>
+                </div>
+                {fingeringMode && fingeringError && (
+                  <div className="mb-2 mx-1 p-2 bg-red-50 border border-red-200 rounded flex items-center justify-between gap-3 text-sm text-red-700">
+                    <span>{fingeringError}</span>
+                    <button onClick={dismissFingeringError} className="text-red-700 font-bold px-2" aria-label="Dismiss">×</button>
+                  </div>
+                )}
                 <ScoreRenderer
                   measures={activeMeasures}
                   onBeatEvents={handleBeatEvents}
+                  fingerings={fingerings}
+                  fingeringMode={fingeringMode}
+                  fingeringSelection={fingeringSelection}
+                  onSelectFingering={handleSelectFingering}
                   onTap={handleScoreTap}
                   measureWidth={measureWidth.value}
                   lyricPlacements={lyricPlacements}
@@ -691,6 +821,7 @@ export default function SamPlayer({ onBack }) {
                 measures={activeMeasures}
                 bpm={bpm.value}
                 playbackState={playbackState}
+                fingerings={fingerings}
                 onBeatEvents={handleBeatEvents}
                 onLoopCount={handleLoopCount}
                 onBeatMiss={handleBeatMiss}

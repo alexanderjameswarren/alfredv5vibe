@@ -8,7 +8,10 @@ import {
   applyTimeProportionalLayout,
   buildTuplets,
   drawSectionLabel,
+  buildGeometry,
 } from "../lib/scoreRender";
+import { drawFingeringOverlay } from "../lib/fingeringOverlay";
+import { syncZoneLayer, drawSelectionRing } from "../lib/fingeringZones";
 import { CLEF_EXTRA } from "../lib/vexflowHelpers";
 import { SCORE_SCALE } from "../lib/samConstants";
 
@@ -21,13 +24,23 @@ const BASS_Y = 290;                // was 210; +80 of inter-stave room
 const STAFF_H = 430;                // was 350; matches BASS_Y bump
 const LYRIC_Y = TREBLE_Y + 145;     // centered between staves with the new gap
 
-export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWidth, lyricPlacements, onLyricEdit, onAudioOffsetChange, showAudioOffset = false }) {
+export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fingerings, fingeringMode = false, fingeringSelection = null, onSelectFingering, onTap, measureWidth, lyricPlacements, onLyricEdit, onAudioOffsetChange, showAudioOffset = false }) {
   const containerRef = useRef(null);
+  const geometryRef = useRef([]);
+  const labelElsRef = useRef([]);
   const pointerRef = useRef(null);
   const lyricEditRef = useRef(null);
   const offsetEditorRef = useRef(null);
   const showEditorRef = useRef(null);
+  const fingeringsRef = useRef(fingerings);
+  const fingeringModeRef = useRef(fingeringMode);
+  const fingeringSelectionRef = useRef(fingeringSelection);
+  const onSelectFingeringRef = useRef(onSelectFingering);
   lyricEditRef.current = onLyricEdit; // always fresh
+  fingeringsRef.current = fingerings; // read by the render effect's overlay draw
+  fingeringModeRef.current = fingeringMode;
+  fingeringSelectionRef.current = fingeringSelection;
+  onSelectFingeringRef.current = onSelectFingering;
 
   const [editor, setEditor] = useState({ visible: false, x: 0, measureNum: null, value: "" });
 
@@ -89,6 +102,11 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
     // Track beat metadata for position extraction
     const beatMeta = [];
     let beatMetaOffset = 0;
+
+    // Per-event fingering geometry map (spec §5), accumulated across measures.
+    const geometry = [];
+    // Measure-number / chord <text> nodes — collision targets for badge nudging.
+    const fingeringLabelEls = [];
 
     let xOffset = 10;
 
@@ -176,6 +194,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
       } else {
         svg.appendChild(measNumEl);
       }
+      fingeringLabelEls.push(measNumEl); // collision target for fingering badges
 
       // Chord label underneath measure number
       if (measure.chord) {
@@ -187,6 +206,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
         chordEl.setAttribute("fill", "var(--foreground)");
         chordEl.textContent = measure.chord;
         svg.appendChild(chordEl);
+        fingeringLabelEls.push(chordEl); // collision target for fingering badges
       }
 
       // Section label (Verse 1 / Chorus / etc.) above the staff
@@ -519,6 +539,14 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
       // after format + note draw.
       voiceTuplets.forEach((t) => t.setContext(ctx).draw());
 
+      // Fingering geometry (spec §5). Read after the note draw loops so notehead
+      // positions are final. treble = rh, bass = lh; each note array is 1:1 with
+      // its hand's event array, so the array index carries through as rh/lh index.
+      geometry.push(
+        ...buildGeometry({ measureNum: measure.number, hand: "rh", stave: treble, notes: trebleNotes }),
+        ...buildGeometry({ measureNum: measure.number, hand: "lh", stave: bass, notes: bassNotes }),
+      );
+
       beatMetaOffset += measBeatCount;
       xOffset += measWidth;
     });
@@ -597,7 +625,58 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
     if (onBeatEvents) {
       onBeatEvents(beatEvents);
     }
-  }, [measures, onBeatEvents, measureWidth, lyricPlacements, showAudioOffset]);
+
+    // Publish the fingering geometry map (spec §5). The overlay + tap-zone layers
+    // (later steps) consume this; renderCopy will emit the same shape for the
+    // playback view when badges render there. `window.__samGeometry` is a Step 1
+    // verification handle — remove once the overlay consumes onGeometry directly.
+    if (onGeometry) onGeometry(geometry);
+    if (typeof window !== "undefined") window.__samGeometry = geometry;
+
+    // Fingering overlay (spec §5 / Step 3): badges + notehead rings, drawn from
+    // the geometry map and the resolved fingerings. Separate SVG layer — never
+    // mutates VexFlow noteheads. Redraws with the score here; a fingering-only
+    // change also redraws it via the effect below without a full score rebuild.
+    drawFingeringOverlay(svg, geometry, fingeringsRef.current || {}, { collisionEls: fingeringLabelEls });
+    geometryRef.current = geometry;
+    labelElsRef.current = fingeringLabelEls;
+
+    // Tap zones + selection ring (Step 4). Rebuilt here so a score rebuild
+    // (measures/width change) restores them; live toggles are handled below.
+    syncZoneLayer(svg, geometry, {
+      active: fingeringModeRef.current,
+      onSelect: (coord) => onSelectFingeringRef.current?.(coord),
+    });
+    drawSelectionRing(svg, geometry, fingeringModeRef.current ? fingeringSelectionRef.current : null);
+  }, [measures, onBeatEvents, onGeometry, measureWidth, lyricPlacements, showAudioOffset]);
+
+  // Redraw only the fingering overlay when fingerings change, reusing the last
+  // render's geometry + label nodes — avoids a full score rebuild on each edit
+  // (Step 5 optimistic writes rely on this staying cheap).
+  useEffect(() => {
+    const svg = containerRef.current?.querySelector("svg");
+    if (!svg) return;
+    drawFingeringOverlay(svg, geometryRef.current, fingerings || {}, { collisionEls: labelElsRef.current });
+  }, [fingerings]);
+
+  // Toggle the tap-zone layer on/off without rebuilding the score. Clearing the
+  // layer (mode off) restores normal score gestures; selection is cleared too.
+  useEffect(() => {
+    const svg = containerRef.current?.querySelector("svg");
+    if (!svg) return;
+    syncZoneLayer(svg, geometryRef.current, {
+      active: fingeringMode,
+      onSelect: (coord) => onSelectFingeringRef.current?.(coord),
+    });
+    // Selection ring is handled by the effect below (it also re-runs on mode change).
+  }, [fingeringMode]);
+
+  // Redraw the selection ring when the selection changes (mode on).
+  useEffect(() => {
+    const svg = containerRef.current?.querySelector("svg");
+    if (!svg) return;
+    drawSelectionRing(svg, geometryRef.current, fingeringMode ? fingeringSelection : null);
+  }, [fingeringSelection, fingeringMode]);
 
   function handlePointerDown(e) {
     pointerRef.current = { x: e.clientX, y: e.clientY, t: Date.now() };
@@ -605,6 +684,9 @@ export default function ScoreRenderer({ measures, onBeatEvents, onTap, measureWi
 
   function handlePointerUp(e) {
     if (!pointerRef.current || !onTap) return;
+    // While fingering mode is on, taps belong to the zone layer, not the score's
+    // normal tap gesture (spec: other score gestures are suppressed).
+    if (fingeringMode) { pointerRef.current = null; return; }
     const dt = Date.now() - pointerRef.current.t;
     const dx = Math.abs(e.clientX - pointerRef.current.x);
     const dy = Math.abs(e.clientY - pointerRef.current.y);

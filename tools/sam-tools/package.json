@@ -1,0 +1,22 @@
+{
+  "name": "sam-tools",
+  "version": "0.1.0",
+  "description": "Local CLI for SAM song data: MusicXML parser validation, difficulty analysis, simplification.",
+  "scripts": {
+    "validate": "node bin/sam.js validate fixtures",
+    "sync": "node -e \"const fs=require('fs'); fs.copyFileSync('../../src/sam/lib/songParser.js','vendor/songParser.js'); fs.copyFileSync('../../src/sam/lib/durations.js','vendor/durations.js')\"",
+    "check": "npm run sync && npm run validate",
+    "baseline": "node bin/sam.js validate fixtures --json > baseline-report.json"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "jsdom": "^30.0.1"
+  },
+  "type": "module",
+  "bin": {
+    "sam": "./bin/sam.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

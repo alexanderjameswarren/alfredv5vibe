@@ -2,10 +2,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { colorBeatEls, getMeasureWidth } from "../lib/vexflowHelpers";
 import { getMeasDurationQ } from "../lib/measureUtils";
 import { renderCopy, playClick } from "../lib/scoreRender";
+import { drawFingeringOverlay } from "../lib/fingeringOverlay";
 import { SCROLL_GEOMETRY, METRONOME_GAIN, SCORE_SCALE } from "../lib/samConstants";
 
 
-export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioAnchors = [], audioEndMs = null, handMode = "both", onScrollStart = null }) {
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioAnchors = [], audioEndMs = null, handMode = "both", onScrollStart = null, fingerings = {} }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -14,6 +15,8 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
   const copyWidthRef = useRef(0);
   const nextCheckRef = useRef(0);
   const hasLoopedRef = useRef(false);
+  const geometryRef = useRef([]);
+  const labelElsRef = useRef([]);
   const [svgReady, setSvgReady] = useState(false);
 
   // Render copies of the score SVG into the scroll layer (1 copy for non-looping, 3 for looping)
@@ -56,12 +59,20 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     // Render copies (1 for non-looping, 3 for looping)
     const allBeatMeta = [];
     const copyBeatCounts = [];
+    const allGeometry = [];
+    const allLabelEls = [];
     for (let c = 0; c < numCopies; c++) {
       const xStart = 10 + c * singleCopyWidth;
-      const { beatMeta } = renderCopy(VF, ctx, measures, c, xStart, measureWidth, measDurations, measStartBeats);
+      const { beatMeta, geometry, labelEls } = renderCopy(VF, ctx, measures, c, xStart, measureWidth, measDurations, measStartBeats);
       copyBeatCounts.push(beatMeta.length);
       allBeatMeta.push(...beatMeta);
+      allGeometry.push(...geometry);
+      allLabelEls.push(...labelEls);
     }
+    // Store for the fingering-overlay effect (drawn per copy so badges/rings
+    // ride along as each copy scrolls through the target line).
+    geometryRef.current = allGeometry;
+    labelElsRef.current = allLabelEls;
 
     // Build beat events from all copies
     const totalMusicalBeatsPerCopy = cumBeat; // sum of all measure durationQ values
@@ -107,6 +118,17 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       setSvgReady(false);
     };
   }, [measures, measureWidth, loop]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fingering overlay (spec §5 / Step 3). Drawn as a separate SVG layer inside
+  // the scroll layer, so it scrolls with the notes and is immune to the note
+  // recoloring the animation loop performs (the ring never flickers). Runs after
+  // each SVG rebuild (svgReady) and whenever the resolved fingerings change.
+  useEffect(() => {
+    if (!svgReady) return;
+    const svg = scrollLayerRef.current?.querySelector("svg");
+    if (!svg) return;
+    drawFingeringOverlay(svg, geometryRef.current, fingerings || {}, { collisionEls: labelElsRef.current });
+  }, [fingerings, svgReady]);
 
   // Animation loop with seamless looping
   useEffect(() => {

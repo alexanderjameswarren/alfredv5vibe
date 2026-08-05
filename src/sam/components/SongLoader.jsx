@@ -556,6 +556,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
         families={lib.families}
         familiesByRootId={lib.familiesByRootId}
         allSongsFlat={lib.allSongsFlat}
+        newSongsFlat={lib.newSongsFlat}
         drillsFlat={lib.drillsFlat}
         archivedFamilies={lib.archivedFamilies}
         archivedCount={lib.archivedCount}

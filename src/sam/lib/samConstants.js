@@ -8,7 +8,7 @@ export const DEFAULTS = {
   bpm: 68,
   timingWindowMs: 300,
   chordMs: 80,
-  measureWidth: 300,
+  measureWidth: 500,
   playbackSpeed: 100,
 };
 

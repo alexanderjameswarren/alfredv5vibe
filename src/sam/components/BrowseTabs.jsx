@@ -18,6 +18,8 @@ import {
 // Tabs (spec §BrowseTabs):
 //   Recent    flat, allSongsFlat, muted family prefix when child ≠ root
 //             (e.g. "Someone Like You · Arpeggios")
+//   New       flat, newSongsFlat, every non-archived song that has never
+//             been played (lastPracticedAt === null); title-sorted
 //   All songs grouped by family — root then indented children with type
 //             pills; created_at right-aligned via formatCreated. Footer
 //             link toggles the same layout scoped to archivedFamilies.
@@ -288,6 +290,7 @@ export default function BrowseTabs({
   families,
   familiesByRootId,
   allSongsFlat,
+  newSongsFlat,
   drillsFlat,
   archivedFamilies,
   archivedCount,
@@ -298,7 +301,7 @@ export default function BrowseTabs({
   onRestore,
   onAddClick,
 }) {
-  const [tab, setTab] = useState("recent"); // 'recent' | 'all' | 'drills'
+  const [tab, setTab] = useState("recent"); // 'recent' | 'new' | 'all' | 'drills'
   const [showArchived, setShowArchived] = useState(false);
 
   return (
@@ -311,6 +314,12 @@ export default function BrowseTabs({
             className={tabClass(tab === "recent")}
           >
             Recent
+          </button>
+          <button
+            onClick={() => setTab("new")}
+            className={tabClass(tab === "new")}
+          >
+            New
           </button>
           <button
             onClick={() => {
@@ -347,6 +356,16 @@ export default function BrowseTabs({
           {tab === "recent" && (
             <FlatList
               items={allSongsFlat}
+              familiesByRootId={familiesByRootId}
+              onLoad={onLoad}
+              onEdit={onEdit}
+              onArchive={onArchive}
+            />
+          )}
+
+          {tab === "new" && (
+            <FlatList
+              items={newSongsFlat}
               familiesByRootId={familiesByRootId}
               onLoad={onLoad}
               onEdit={onEdit}

@@ -328,8 +328,78 @@ export function applyTimeProportionalLayout({ notes, ticks, durationQ, xOffset, 
   });
 }
 
+// ── Fingering geometry contract ──────────────────────────────────────────
+// Pure extraction of per-event render geometry from already-formatted VexFlow
+// StaveNotes. NO drawing, NO layout decisions, NO side effects — it only reads
+// positions the formatter (and the time-proportional pass) have already set.
+//
+// Both renderers call this against their OWN formatted output: ScoreRenderer.jsx
+// (edit/stopped view, where fingering entry happens) and renderCopy (playback
+// view). They format at different widths, so the x/y values differ between
+// views; what is stable is the STRUCTURE — one entry per event, in event order,
+// carrying (measureNum, hand, index). Fingerings render in BOTH views (entry in
+// the edit screen, cueing at the piano during playback), which is why this is a
+// shared helper rather than logic inside either renderer.
+//
+// Entry shape (the contract the multi-voice rewrite must preserve; adding a
+// `voice` field later is expected and fine):
+//   { measureNum, hand, index, x, staveTop, staveBottom, noteheadYs[], isRest }
+//   index      — position in `notes`; for voice-format events this equals the
+//                rh_index / lh_index (padding rests occupy the tail indices)
+//   x          — notehead center x, render-space, including the time-
+//                proportional x_shift
+//   noteheadYs — one y per notehead, ordered LOW pitch → HIGH pitch, so
+//                note_index 0 is the lowest notehead; empty for rests
+//
+// `notes` must be 1:1 with the hand's event array (as both renderers build it),
+// so the array index carries straight through to `index`.
+export function buildGeometry({ measureNum, hand, stave, notes }) {
+  // 5-line staff: line 0 is the top line, line 4 the bottom. These bound the
+  // badge placement and tap-zone vertical extent in later steps.
+  const staveTop = stave.getYForLine(0);
+  const staveBottom = stave.getYForLine(4);
+
+  return notes.map((note, index) => {
+    const isRest = note.isRest();
+
+    // Notehead center x. getNoteHeadBeginX/EndX already fold in getAbsoluteX() +
+    // x_shift (see drawStaveTies), so they track the visually-rendered notehead
+    // rather than the formatter's clustered position. Rests have no notehead —
+    // use the tickable's shifted x.
+    const x = isRest
+      ? note.getAbsoluteX() + note.getXShift()
+      : (note.getNoteHeadBeginX() + note.getNoteHeadEndX()) / 2;
+
+    // One y per notehead, low pitch → high pitch. SVG y grows downward, so a
+    // lower pitch sits at a LARGER y: sort descending to put the lowest notehead
+    // first (note_index 0).
+    const noteheadYs = isRest
+      ? []
+      : noteheadYsFor(note, stave).slice().sort((a, b) => b - a);
+
+    return { measureNum, hand, index, x, staveTop, staveBottom, noteheadYs, isRest };
+  });
+}
+
+// Per-notehead Y values for a StaveNote. Prefer VexFlow's own getYs() (populated
+// once the note has been drawn / preformatted); fall back to deriving each y
+// from its key line via the stave when getYs() isn't ready. The fallback keeps
+// buildGeometry safe to call straight after format(), without a draw pass.
+function noteheadYsFor(note, stave) {
+  try {
+    const ys = note.getYs();
+    if (ys && ys.length) return ys;
+  } catch {
+    // getYs() throws when ys haven't been computed yet — fall through.
+  }
+  return note.getKeyProps().map((kp) => stave.getYForNote(kp.line));
+}
+
 // Renders a single copy of the score into the given VexFlow context.
-// Returns { beatMeta[], copyWidth } for that copy.
+// Returns { beatMeta[], copyWidth, geometry[], labelEls[] } for that copy.
+// `geometry` is this copy's fingering geometry (buildGeometry entries, with this
+// copy's x offsets); `labelEls` are the measure-number/chord <text> nodes used by
+// the overlay for badge collision. ScrollEngine concatenates them across copies.
 export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurations, measStartBeats) {
   const TREBLE_Y = 40;
   const BASS_Y = 210;
@@ -338,6 +408,8 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
   const copyWidth = measureWidths.reduce((a, b) => a + b, 0);
 
   const beatMeta = [];
+  const geometry = [];
+  const labelEls = [];
   let beatMetaOffset = 0;
   let xOffset = xStart;
 
@@ -680,6 +752,13 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
     // into the measure's <g> alongside notes/beams.
     voiceTuplets.forEach((t) => t.setContext(ctx).draw());
 
+    // Fingering geometry (spec §5) — same shared helper the edit view uses, read
+    // after the note draw so notehead positions are final. treble = rh, bass = lh.
+    geometry.push(
+      ...buildGeometry({ measureNum: measure.number, hand: "rh", stave: treble, notes: trebleNotes }),
+      ...buildGeometry({ measureNum: measure.number, hand: "lh", stave: bass, notes: bassNotes }),
+    );
+
     // Wrap all SVG elements added during this measure into a single <g> group.
     // VexFlow appends stave lines directly to the SVG root, so ctx.openGroup
     // doesn't capture them. This manual approach grabs everything.
@@ -700,6 +779,7 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
     measNumEl.setAttribute("fill", "var(--muted-foreground)");
     measNumEl.textContent = measure.number;
     measGroupEl.appendChild(measNumEl);
+    labelEls.push(measNumEl); // collision target for fingering badges
 
     // Chord label underneath measure number
     if (measure.chord) {
@@ -711,6 +791,7 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
       chordEl.setAttribute("fill", "var(--foreground)");
       chordEl.textContent = measure.chord;
       measGroupEl.appendChild(chordEl);
+      labelEls.push(chordEl); // collision target for fingering badges
     }
 
     // Section label (Verse 1 / Chorus / etc.) above measure number, wrapped
@@ -725,7 +806,7 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
   drawStaveTies(VF, ctx, tieTracker.treble);
   drawStaveTies(VF, ctx, tieTracker.bass);
 
-  return { beatMeta, copyWidth };
+  return { beatMeta, copyWidth, geometry, labelEls };
 }
 
 // Play a short click sound at the given audioContext time

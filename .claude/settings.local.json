@@ -29,5 +29,29 @@
       "Bash(ls c:/Users/Alex/projects/alfred-v5/*.config.* c:/Users/Alex/projects/alfred-v5/package.json)",
       "Bash(node src/utils/recurrence.test.js)"
     ]
+  },
+  "preferredNotifChannel": "terminal_bell",
+  
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [{
+          "type": "command",
+          "command": "powershell.exe -c \"[System.Media.SystemSounds]::Exclamation.Play()\""
+        }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{
+          "type": "command",
+          "command": "powershell.exe -c \"[System.Media.SystemSounds]::Asterisk.Play()\""
+        }]
+      }
+    ]
   }
+
+
 }
+  

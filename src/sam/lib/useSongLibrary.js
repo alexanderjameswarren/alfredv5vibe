@@ -36,6 +36,8 @@ import { supabase } from "../../supabaseClient";
 //                       familyRootId / familyRootTitle / lastPracticedAt /
 //                       totalSeconds; sorted by lastPracticedAt desc, then
 //                       title (never-practiced sort to the end)
+//   newSongsFlat        same shape, filtered to never-practiced songs
+//                       (lastPracticedAt === null); title-sorted
 //   drillsFlat          same shape, filtered to song_type='drill'
 //   archivedFamilies    SongFamily[] — same shape as families, but derived
 //                       from the archived pool (parents resolved within
@@ -240,12 +242,18 @@ export default function useSongLibrary({
     const drillsFlat = flatBase
       .filter((s) => s.song_type === "drill")
       .sort(bySortedRecency);
+    // newSongsFlat: visible songs that have never been practiced. With no
+    // lastPracticedAt on any row, bySortedRecency collapses to a title sort.
+    const newSongsFlat = flatBase
+      .filter((s) => !s.lastPracticedAt)
+      .sort(bySortedRecency);
 
     return {
       families,
       familiesByRootId,
       recentFamilies,
       allSongsFlat,
+      newSongsFlat,
       drillsFlat,
       archivedFamilies,
       archivedCount: archived.length,

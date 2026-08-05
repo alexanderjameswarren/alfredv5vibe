@@ -37,6 +37,13 @@
   --input-background: #ffffff;
   --ring: #7A4E37;
   --radius: 0.5rem;
+
+  /* RH fingering cues (SAM). Violet — deliberately OUTSIDE the score's live
+     highlight palette (green hit #16a34a / amber partial #d97706 / red miss
+     #dc2626 / blue target line #2563eb) so a fingering badge or ring can never
+     be misread as a playback state. High-contrast white numeral. */
+  --fingering-accent: #7c3aed;
+  --fingering-accent-fg: #ffffff;
 }
 
 @layer base {
