@@ -25,8 +25,6 @@
 // splits don't produce orphan `end`s.
 
 import {
-  tokenToBeats,
-  beatsToToken,
   beatsToTokens,
   fromTimeline,
   sumEvents,

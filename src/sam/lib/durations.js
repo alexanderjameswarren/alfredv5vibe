@@ -60,10 +60,13 @@ export function beatsToTokens(beats) {
   const desc = [...ALL_TOKENS].reverse();
   let guard = 0;
   while (remaining > 1e-9 && guard++ < 64) {
-    const t = desc.find((tok) => tokenToBeats(tok) <= remaining + 1e-9);
-    if (!t) return null;
-    out.push(t);
-    remaining -= tokenToBeats(t);
+    let picked = null;
+    for (const tok of desc) {
+      if (tokenToBeats(tok) <= remaining + 1e-9) { picked = tok; break; }
+    }
+    if (!picked) return null;
+    out.push(picked);
+    remaining -= tokenToBeats(picked);
   }
   return remaining > 1e-9 ? null : out;
 }
