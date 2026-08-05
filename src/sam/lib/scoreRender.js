@@ -777,7 +777,15 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
     measNumEl.setAttribute("font-size", "10");
     measNumEl.setAttribute("font-family", "monospace");
     measNumEl.setAttribute("fill", "var(--muted-foreground)");
-    measNumEl.textContent = measure.number;
+    // Stopped UI: show source measure in parens when playback flattening
+    // has renumbered it (spec §M4). Für Elise m1 pickup is source "0",
+    // Entertainer's second half renumbers after repeats. When they match
+    // (a normal-form measure) or sourceMeasure is absent (pre-M4 stored
+    // song), show the bare number.
+    measNumEl.textContent =
+      measure.sourceMeasure != null && String(measure.sourceMeasure) !== String(measure.number)
+        ? `${measure.number} (${measure.sourceMeasure})`
+        : String(measure.number);
     measGroupEl.appendChild(measNumEl);
     labelEls.push(measNumEl); // collision target for fingering badges
 

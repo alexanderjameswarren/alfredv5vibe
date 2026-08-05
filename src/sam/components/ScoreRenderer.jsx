@@ -166,10 +166,19 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
       measNumEl.setAttribute("font-size", "10");
       measNumEl.setAttribute("font-family", "monospace");
       measNumEl.setAttribute("fill", showAudioOffset ? "var(--primary)" : "var(--muted-foreground)");
+      // Stopped UI: show source measure in parens when playback flattening
+      // has renumbered it (spec §M4). Für Elise m1 pickup is source "0",
+      // Entertainer's second half renumbers after repeats. When they match
+      // or sourceMeasure is absent (pre-M4 stored song), show the bare
+      // number. audioOffset badge takes priority when active.
+      const numberLabel =
+        measure.sourceMeasure != null && String(measure.sourceMeasure) !== String(measure.number)
+          ? `${measure.number} (${measure.sourceMeasure})`
+          : String(measure.number);
       measNumEl.textContent =
         showAudioOffset && measure.audioOffsetMs != null
-          ? `${measure.number} ⚓${measure.audioOffsetMs}`
-          : String(measure.number);
+          ? `${numberLabel} ⚓${measure.audioOffsetMs}`
+          : numberLabel;
 
       if (showAudioOffset) {
         // Wrap in a group with a subtle button-style background rect.

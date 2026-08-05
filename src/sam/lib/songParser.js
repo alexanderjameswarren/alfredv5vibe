@@ -32,6 +32,7 @@ import {
   sumEvents,
   ONSET_EPS,
 } from "./durations.js";
+import { resolvePlaybackOrder } from "./playbackOrder.js";
 
 const EPS = ONSET_EPS;
 
@@ -562,10 +563,33 @@ export function parseMusicXML(xmlString) {
       }
     }
 
+    // source_measure: preserve the raw <measure number="…"> attribute so
+    // playback flattening and the Stopped UI can distinguish source
+    // numbering from play-order numbering (spec §M4). Für Elise's pickup
+    // is m0, Entertainer's flattened body renumbers the second half —
+    // the attribute is the only stable pointer back to the printed score.
+    // Attribute may be non-numeric in some exports; store what we can
+    // parse, FLAG what we can't (per Alex's M4 note).
+    const sourceRaw = measEl.getAttribute("number");
+    let sourceMeasure = null;
+    if (sourceRaw !== null && sourceRaw !== "") {
+      const parsed = parseInt(sourceRaw, 10);
+      if (Number.isFinite(parsed) && String(parsed) === sourceRaw.trim()) {
+        sourceMeasure = parsed;
+      } else {
+        sourceMeasure = sourceRaw;
+        parseWarnings.push(
+          `m${measureNumber}: non-numeric <measure number="${sourceRaw}"> — ` +
+          `stored as string; downstream renumbering may be off (spec §M4)`
+        );
+      }
+    }
+
     measureIntermediates.push({
       voices,
       measureLen,
       number: measureNumber,
+      sourceMeasure,
       isImplicit: flags.isImplicit,
       timeSignature: {
         beats: state.beats,
@@ -615,6 +639,7 @@ export function parseMusicXML(xmlString) {
 
     return {
       number: mi.number,
+      sourceMeasure: mi.sourceMeasure,
       rh,
       lh,
       measureLen: mi.measureLen,
@@ -646,10 +671,18 @@ export function parseMusicXML(xmlString) {
   // -------------------------------------------------------------------------
   // PHASE C2 — classify each hand and pad the ones that are genuinely
   // incomplete. Never pad anacrusis (m1 pickup or borrowed partner). See
-  // classifyShortMeasure above for the rule table.
+  // classifyShortMeasure above for the rule table. Runs BEFORE playback
+  // flattening so a source measure that gets played twice is padded once
+  // and the padded events are reused on every play-pass.
   // -------------------------------------------------------------------------
-  const measures = rawMeasures.map((m) => {
-    const out = { number: m.number, rh: m.rh, lh: m.lh, timeSignature: m.timeSignature };
+  const sourceMeasures = rawMeasures.map((m) => {
+    const out = {
+      number: m.number,
+      sourceMeasure: m.sourceMeasure,
+      rh: m.rh,
+      lh: m.lh,
+      timeSignature: m.timeSignature,
+    };
     for (const hand of ["rh", "lh"]) {
       const sum = sumEvents(out[hand]);
       if (sum === null) continue;
@@ -673,6 +706,30 @@ export function parseMusicXML(xmlString) {
       // "full", "anacrusis-pickup", "anacrusis-borrowed": leave as-is
     }
     return out;
+  });
+
+  // -------------------------------------------------------------------------
+  // PHASE D — flatten repeats, voltas, and D.S./coda navigation into
+  // playback order (spec §M4). `number` becomes 1-indexed play order;
+  // `sourceMeasure` remains the raw <measure number> attribute value from
+  // the source, so any consumer can distinguish "48th played measure" from
+  // "printed measure 48". A source measure that plays twice appears twice
+  // in `measures` — its events are the same object references both times
+  // (Phase C2 output shared), so downstream mutations must not assume
+  // uniqueness. Idempotent by construction: a workshop-produced pre-flat
+  // score has no repeat/ending markers, so resolvePlaybackOrder returns
+  // the identity order and this pass is a straight remap.
+  // -------------------------------------------------------------------------
+  const playback = resolvePlaybackOrder([...measureEls]);
+  const measures = playback.order.map((sourceIdx, playIdx) => {
+    const src = sourceMeasures[sourceIdx];
+    return {
+      number: playIdx + 1,
+      sourceMeasure: src.sourceMeasure,
+      rh: src.rh,
+      lh: src.lh,
+      timeSignature: src.timeSignature,
+    };
   });
 
   return {

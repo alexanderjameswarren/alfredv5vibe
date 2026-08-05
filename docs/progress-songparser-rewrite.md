@@ -1,5 +1,7 @@
 # Progress: songParser.js Rewrite
 
+## Status: M4 PARSER SIDE LANDED, VALIDATOR PATCH PROPOSED (awaiting approval). All six flattened measure counts exact (Entertainer 152, Für Elise 127, Arabesque 55, La Candeur 38, Pastorale 37, Auld Lang Syne 33). `unflattened_repeat` at 0. `anacrusis` at 4 (m1 pickup, m9 borrowed — unchanged shape). New parser module `src/sam/lib/playbackOrder.js` with 10 unit tests. `source_measure` captured from the XML attribute (never derived). Stopped UI shows `${number} (${sourceMeasure})` on renumbered measures. **Blocking: validator compares parsed[i] vs truth.measures[i] by index; flattening breaks that mapping at every repeat seam, spurious `content_divergence 439`, `incomplete_measure 2`, `voice_collision 12`, `tuplet_scaling 5` — all attributable to the routing gap, not parser bugs. Proposed validator patch in M4 section, split-turn per standing rule.**
+
 ## Status: M3 CLOSED. `incomplete_measure`, `measure_overflow`, `content_divergence` all at 0; `anacrusis` remains 4 (Für Elise m1, m9 both hands). Prelude m43 now pads to full with a trailing half rest via an explicit post-mergeStaff pass (not bounds reseeding). Truth deliberately does NOT mirror §3.7 padding — it models sounding content and hand assignment only. `firstDivergence` has an explicit trailing-silence exception commented with the rule. 24 unit tests cover the classify + pad rule table; a mutation test confirms the narrowed divergence still fires 2 `incomplete_measure` on Prelude m43 against the pre-M3 parser.
 
 ## Status: M2 CLOSED. All four target blocking classes at 0 (voice_collision, tuplet_scaling, content_divergence, notes_unsorted). Entertainer m1/m3 cross-staff artifacts cleared. Prelude m43 incomplete + Für Elise anacrusis preserved for M3/M7. Independent §3.6 in truth, mergeStaff no-implicit-padding on both sides, hand_assignment_mismatch class added, per-song assignment map in the report header. Mutation test rose by 17 findings on the pre-M2 parser as predicted.
@@ -205,17 +207,50 @@ after M3 landed + narrowing.**
 
 ## M4 — Repeat and volta flattening
 
-- [ ] `resolvePlaybackOrder()` ported from `tools/sam-tools/lib/xmlTruth.js`
-- [ ] Forward/backward repeats and `<ending>` voltas resolved to a linear order
-- [ ] Flattener is idempotent — `flatten(flatten(x)) === flatten(x)`, with a test
-- [ ] Borrowed pairs not treated as two separate measures in the playback order
-- [ ] Measures emitted in playback order; `number` is sequential play order
-- [ ] `source_measure` read from the `<measure number>` **attribute**, not the index
-- [ ] Repeat structure written to `sam_songs.generation_notes`
-- [ ] **Stopped UI** shows `m75 (48)` when they differ, bare `m12` when they don't
+**Status 2026-08-05: PARSER SIDE LANDED. All six measure counts exact. Blocked on a validator patch (proposed below) before the other exit criteria can hold. Split-turn per standing rule.**
 
-**Exit:** `unflattened_repeat` → 0. Counts: Entertainer 152, Für Elise 127,
-Arabesque 55, La Candeur 38, Pastorale 37, Auld Lang Syne 33.
+- [x] `resolvePlaybackOrder()` ported to `src/sam/lib/playbackOrder.js` — a
+      parser-owned copy; truth keeps its own independent copy (spec §M4
+      comment in xmlTruth) so a design error inside the resolver isn't
+      invisible.
+- [x] Forward/backward repeats and `<ending>` voltas resolved to a linear order
+- [x] Flattener is idempotent — no-repeat XML returns identity;
+      re-running the resolver on the same input returns the same order
+      (unit test)
+- [x] Borrowed pairs handled: mini-Für-Elise fixture in the unit test
+      confirms the pickup replays and the first ending is skipped on pass 2
+- [x] Measures emitted in playback order; `number` is 1-indexed sequential
+      play order (spec §M4)
+- [x] `source_measure` read from the `<measure number>` **attribute**,
+      never derived from an offset. Numeric attributes stored as int;
+      non-numeric attributes stored as string with a `parseWarnings` entry
+      so downstream can decide whether to trust the display.
+- [ ] Repeat structure written to `sam_songs.generation_notes` (deferred
+      to a later DB-touching pass; parser exposes `sourceMeasure` on every
+      played measure, which is the only field consumers need for
+      "which printed bar am I on?" — the aggregate repeat map can be
+      reconstructed from that if needed)
+- [x] **Stopped UI** shows `${number} (${sourceMeasure})` when they differ,
+      bare `${number}` when they match or when `sourceMeasure` is absent
+      (pre-M4 stored songs read the same). Updated at both render sites:
+      `src/sam/lib/scoreRender.js:780` and `src/sam/components/ScoreRenderer.jsx:169`.
+
+**Corpus counts (exit criterion — verified):**
+
+| Song            | written | played (target) | played (actual) |
+|-----------------|--------:|----------------:|----------------:|
+| Entertainer     |      92 |             152 |         **152** |
+| Für Elise       |     106 |             127 |         **127** |
+| Arabesque       |      33 |              55 |          **55** |
+| La Candeur      |      23 |              38 |          **38** |
+| Pastorale       |      29 |              37 |          **37** |
+| Auld Lang Syne  |      21 |              33 |          **33** |
+
+**Exit:** `unflattened_repeat` → 0 **(✓ 0)**. Counts above **(✓ all six)**.
+`anacrusis` stays at 4 **(✓ 4 — m1 rh+lh, m9 rh+lh)**.
+`voice_collision`, `notes_unsorted`, `content_divergence`, `tuplet_scaling`,
+`hand_assignment_mismatch`, `incomplete_measure`, `measure_overflow` all
+stay at 0 — **BLOCKED. See "Validator patch required" below.**
 
 **Verify (human, required):**
 - **Arabesque:** 55 measures, repeats where the printed score repeats, Stopped UI
@@ -223,6 +258,105 @@ Arabesque 55, La Candeur 38, Pastorale 37, Auld Lang Syne 33.
 - **Für Elise:** 127 measures. Printed order must be
   `0..8, 0..7, 9, 10..23, 10..22, 24, 25..105` — the pickup is replayed on the
   repeat and the first ending is skipped on the second pass.
+
+**Validator patch required (proposal — awaiting approval):**
+
+The current validator loops `for (let i = 0; i < nCompare; i++)` and
+compares `parsed.measures[i]` against `truth.measures[i]` by index. Now
+that the parser flattens, this comparison breaks the moment the play
+order diverges from the source order — for Für Elise that's at play
+index 9 (parser has source 0 again, validator expects source 9). Result
+on this run: `content_divergence 439` and `incomplete_measure 2`, both
+spurious.
+
+Proposed patch (validator only, no parser change):
+1. Loop `for (let i = 0; i < parsed.measures.length; i++)`, and route
+   the truth side via `truth.measures[truth.playback.order[i]]`.
+2. Add a length-mismatch check: if `parsed.measures.length !==
+   truth.playback.order.length`, that's a real M4 finding (a new
+   `PLAYBACK_ORDER_MISMATCH` class or reuse `UNFLATTENED_REPEAT` with
+   a reworded detail). Fires cleanly when parser and truth disagree on
+   flattening.
+3. Rewrite the anacrusis check to fire once per source measure, not
+   once per play. Simplest form: at each i, only fire the anacrusis
+   branches when `truth.playback.order[i]` has not been seen before
+   (or equivalently, when i is the FIRST occurrence of that source
+   index in `playback.order`). Keeps count invariant to how many times
+   a pickup replays.
+4. Same first-play dedup for `truth.flags.graceNotes` and
+   `truth.flags.crossStaffVoices` (each fires per source measure today).
+
+**Mutation-test plan for the approved validator change:**
+
+With M4 parser stashed and pre-M4 (M3-complete) parser restored:
+- `unflattened_repeat` must return to 6 (Entertainer, Für Elise, Arabesque,
+  La Candeur, Pastorale, Auld Lang Syne).
+- Per-measure findings should match M3-close totals (`content_divergence 0`,
+  `incomplete_measure 0`, all others unchanged).
+- Any deviation means the routing logic doesn't fall back cleanly to
+  identity when parser and truth both report the same length.
+
+**Anacrusis shape change (Alex, before-you-judge report):**
+
+Under the current validator (no patch yet), anacrusis stays at 4 with
+the same labels (`m1 pickup`, `m9 borrowed`) it had pre-M4. Why:
+- `parsed[0]` is still source 0 (pickup on first play), sum 0.5 → fires
+  `anacrusis pickup` at m1 rh + lh.
+- `parsed[8]` is still source 8 (borrowed partner, sum 1.0) → fires
+  `anacrusis borrowed` at m9 rh + lh.
+- `parsed[9]` is source 0 REPLAYED (pickup, sum 0.5). Its mNum is 10,
+  so the validator's `mNum === 1` guard on the pickup branch fails. Its
+  sum + pickup = 1.0 ≠ 1.5 = mLen, so the borrowed branch also fails.
+  Falls through to `INCOMPLETE_MEASURE m10` — a spurious finding that
+  the validator patch (step 3 above) will suppress.
+- `parsed[17]` is source 9 (second ending, sum 1.5 = full). Doesn't
+  fire either branch. No anacrusis for m18.
+
+Under the patched validator, the count remains 4 by construction:
+- Anacrusis fires only on first play of a source measure, so the
+  pickup replay at parsed[9] and any future replays don't multiply the
+  count.
+- If Alex prefers per-play counting (each replay = a distinct finding),
+  the anacrusis total would become 6 — the two pickup plays (parsed[0]
+  and parsed[9]) plus the two hands of m9. That's easy to switch in
+  the patched validator; the first-play dedup is the more informative
+  default.
+
+**Regression cost of the current parser without the validator patch:**
+
+- `content_divergence 439` — Entertainer 138, Auld Lang Syne 6,
+  Arabesque 41, Pastorale 33, La Candeur 29, Für Elise 182,
+  Someone Like You 10. Every one is a spurious index-mismatch, not a
+  real parser bug — same music, wrong truth measure it's being
+  compared against.
+- `incomplete_measure 2` — Für Elise m10 (pickup replay, described
+  above). Spurious.
+- `voice_collision 12` — Entertainer 6, Pastorale 5, La Candeur 1.
+  Spurious: sum-fails branch enters via the wrong truth measure,
+  triggers the multivoice-labelled variant.
+- `tuplet_scaling 5` — Für Elise m80-84. Spurious: same mechanism
+  for tuplet-truth measures.
+- `orphan_tie 3` — Entertainer. GENUINE new behaviour: ties that
+  span a repeat seam get orphaned when the "next measure" is the
+  repeat start rather than the source successor. Flattening exposes
+  what non-flattening was hiding. Not in the M4 exit list; report and
+  defer.
+
+**Files changed this turn (parser side only):**
+
+- `src/sam/lib/playbackOrder.js` — new, ported resolver.
+- `src/sam/lib/playbackOrder.test.js` — new, 10 unit tests (identity,
+  single/nested repeats, voltas, borrowed pair, idempotence,
+  navigation detection). All pass.
+- `src/sam/lib/songParser.js` — captures `sourceMeasure` in Phase A,
+  adds Phase D flatten pass after Phase C2 padding. `number` is now
+  play-order; `sourceMeasure` is the raw attribute.
+- `src/sam/lib/scoreRender.js:780` — Stopped UI renders
+  `${number} (${sourceMeasure})` when they differ.
+- `src/sam/components/ScoreRenderer.jsx:169-172` — same for the
+  audio-offset-aware Stopped renderer.
+- `tools/sam-tools/package.json` — `sync` script now copies
+  `playbackOrder.js` into vendor/ (not validator logic — script only).
 
 ---
 

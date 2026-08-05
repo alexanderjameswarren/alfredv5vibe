@@ -4,7 +4,7 @@
   "description": "Local CLI for SAM song data: MusicXML parser validation, difficulty analysis, simplification.",
   "scripts": {
     "validate": "node bin/sam.js validate fixtures",
-    "sync": "node -e \"const fs=require('fs'); fs.copyFileSync('../../src/sam/lib/songParser.js','vendor/songParser.js'); fs.copyFileSync('../../src/sam/lib/durations.js','vendor/durations.js')\"",
+    "sync": "node -e \"const fs=require('fs'); fs.copyFileSync('../../src/sam/lib/songParser.js','vendor/songParser.js'); fs.copyFileSync('../../src/sam/lib/durations.js','vendor/durations.js'); fs.copyFileSync('../../src/sam/lib/playbackOrder.js','vendor/playbackOrder.js')\"",
     "check": "npm run sync && npm run validate",
     "baseline": "node bin/sam.js validate fixtures --json > baseline-report.json"
   },
