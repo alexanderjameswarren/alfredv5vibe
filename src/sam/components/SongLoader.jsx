@@ -48,13 +48,103 @@ function formatValidationErrors(errors) {
 
 // Fields added by the lineage migration. Every insert path pulls the same
 // shape from the doc; centralize so file/paste paths can't drift.
+//
+// M8 — generation_notes now merges the drill's original generationNotes
+// (if any) with an `importer` namespace holding the parser's
+// parseWarnings + parseWarningsStructured. Written raw so a taxonomy
+// change doesn't require re-import; the UI classifies on render.
 function lineageFields(doc) {
+  const existingNotes =
+    doc.generationNotes && typeof doc.generationNotes === "object"
+      ? doc.generationNotes
+      : null;
+  const hasParserWarnings =
+    (doc.parseWarnings && doc.parseWarnings.length > 0) ||
+    (doc.parseWarningsStructured && doc.parseWarningsStructured.length > 0);
+  const importerNote = hasParserWarnings
+    ? {
+        importer: {
+          parseWarnings: doc.parseWarnings || [],
+          parseWarningsStructured: doc.parseWarningsStructured || [],
+          importedAt: new Date().toISOString(),
+        },
+      }
+    : null;
+  // M4 open item, landed 2026-08-05. Persist the repeat/navigation
+  // structure resolved at parse time so consumers can regenerate an
+  // unflattened variant of the song without re-parsing the source.
+  // Spec §3.4: recordings frequently skip the repeats. The `playback`
+  // key is separate from `importer` — different concerns, different
+  // lifetimes; drill authors get neither, imported MusicXML gets both.
+  const playbackNote = doc.playback ? { playback: doc.playback } : null;
+  const merged =
+    existingNotes || importerNote || playbackNote
+      ? {
+          ...(existingNotes || {}),
+          ...(importerNote || {}),
+          ...(playbackNote || {}),
+        }
+      : null;
   return {
     song_type: doc.songType || "original",
     parent_song_id: doc.parentSongId || null,
     difficulty_tier: doc.difficultyTier ?? null,
-    generation_notes: doc.generationNotes || null,
+    generation_notes: merged,
   };
+}
+
+// M8 — severity split for the import dialog.
+//
+// BLOCK kinds mean playback differs from the score in a way the user
+// should approve before committing: ornaments not applied (pitches
+// shown ≠ performed), grace notes dropped (silently missing), truncated
+// tuplet (measure actually short), low-majority hand assignment
+// (§3.6 boundary case suggesting a weird source).
+//
+// FYI kinds are CARRIED — the parser stored the tag's presence for a
+// future renderer but nothing is missing from playback. No approval
+// needed; shown as a dismissible toast on import success.
+//
+// Classification lives here (in the UI), not in the parser, because
+// changing the taxonomy shouldn't require re-parsing every stored song.
+// Raw parseWarnings strings and parseWarningsStructured both go into
+// generation_notes.importer verbatim; classify-on-render.
+const BLOCK_KINDS = new Set([
+  "ornament", "grace", "truncated", "overflow", "hand-assignment",
+]);
+
+function classifyWarnings(structured) {
+  const block = [];
+  const fyi = [];
+  for (const w of structured || []) {
+    (BLOCK_KINDS.has(w.kind) ? block : fyi).push(w);
+  }
+  return { block, fyi };
+}
+
+// M8 — compose a human sentence from a structured warning. Uses
+// PRINTED source measure numbers (spec §M8: warnings reference the
+// engraved score, not the parser's internal 1-based array position).
+function composeBlockSentence(w) {
+  const measPreview = w.measures.slice(0, 8).join(", ");
+  const more = w.measures.length > 8 ? `, +${w.measures.length - 8} more` : "";
+  const at = w.measures.length > 0 ? ` at printed m${measPreview}${more}` : "";
+  if (w.kind === "ornament") {
+    return `${w.tag} ×${w.count}${at}`;
+  }
+  if (w.kind === "grace") {
+    return `${w.count} grace note${w.count > 1 ? "s" : ""} dropped — silently missing from playback`;
+  }
+  if (w.kind === "truncated") {
+    return `Measure${w.count > 1 ? "s" : ""}${at} left short — parser could not decompose the gap into rest tokens`;
+  }
+  if (w.kind === "overflow") {
+    return `Measure${w.count > 1 ? "s" : ""}${at} overflow — sum exceeds the time signature`;
+  }
+  if (w.kind === "hand-assignment") {
+    return `Hand assignment used a low-majority fallback in ${w.count} measure${w.count > 1 ? "s" : ""} — score is unusual`;
+  }
+  return `${w.tag} ×${w.count}${at}`;
 }
 
 // Extended settings columns needed only by the edit modal. useSongLibrary
@@ -76,6 +166,21 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
   const [saving, setSaving] = useState(false);
   const [addSheetOpen, setAddSheetOpen] = useState(false);
   const [samView, setSamView] = useState(readSamPath);
+  // M8 — import-time warning gate. When set, a modal blocks the
+  // commit until user picks Import or Cancel. Contains everything
+  // needed to complete the import (song, source, meta, warnings)
+  // so Cancel just clears state — no side effects to reverse.
+  const [pendingImport, setPendingImport] = useState(null);
+  const [fyiExpanded, setFyiExpanded] = useState(false);
+  // Dismissible toast for the FYI-only case. Auto-clears; the user
+  // does not need to be reminded about a carried metronome mark on
+  // every single import.
+  const [importToast, setImportToast] = useState(null);
+  useEffect(() => {
+    if (!importToast) return;
+    const t = setTimeout(() => setImportToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [importToast]);
 
   // Browser Back / Forward buttons emit popstate; keep our view in sync
   // with the URL so back-from-stats lands on the landing page.
@@ -307,6 +412,104 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
     handleCancelEdit();
   }
 
+  // M8 — shared commit path. Both handleFile and handlePastedText
+  // parse + validate, then hand off here. Splits into two steps so
+  // the dialog gate can inspect warnings BEFORE any side effect
+  // (onSongLoaded, DB insert). Cancel just clears pendingImport;
+  // nothing to reverse.
+  function commitImport({ song, source, sourceFile, defaultTitle, rawXml }) {
+    // Load into memory (this is the "commit" from the user's POV)
+    onSongLoaded(song);
+
+    // Fire-and-forget DB insert
+    supabase
+      .from("sam_songs")
+      .insert({
+        title: song.title || defaultTitle,
+        artist: song.artist || null,
+        source,
+        source_file: sourceFile,
+        key_signature: song.key || null,
+        time_signature: song.timeSignature || "4/4",
+        default_bpm: song.defaultBpm || 68,
+        measures: song.measures,
+        ...lineageFields(song),
+      })
+      .select("id, user_id")
+      .single()
+      .then(async ({ data, error: dbError }) => {
+        if (dbError) {
+          console.error("[Sam] Supabase save error:", dbError);
+          report(`Song save failed: ${dbError.message}`);
+          return;
+        }
+        console.log("[Sam] Song saved to Supabase, id:", data.id);
+        if (onSongSaved) onSongSaved(data.id);
+        try {
+          await fanOutMeasures(data.id, song.measures, supabase);
+        } catch (e) {
+          console.error("[Sam] Measure fan-out failed:", e);
+          report(
+            `Song saved but measure fan-out failed: ${e.message}. ` +
+            `Try re-importing.`
+          );
+        }
+        // Upload the raw MusicXML to sam-scores/{userId}/{songId}.musicxml
+        // and populate sam_songs.source_xml_path. MusicXML paths only —
+        // JSON imports don't have a source XML to store. Fire-and-forget
+        // per the same pattern as fan-out; song is already saved and
+        // playable from the compiled blob if this step fails.
+        if (rawXml) {
+          try {
+            const path = `${data.user_id}/${data.id}.musicxml`;
+            const blob = new Blob([rawXml], { type: "application/vnd.recordare.musicxml+xml" });
+            const { error: upErr } = await supabase.storage
+              .from("sam-scores")
+              .upload(path, blob, { contentType: "application/vnd.recordare.musicxml+xml", upsert: true });
+            if (upErr) throw upErr;
+            const { error: pathErr } = await supabase
+              .from("sam_songs")
+              .update({ source_xml_path: path })
+              .eq("id", data.id);
+            if (pathErr) throw pathErr;
+            console.log("[Sam] Source XML uploaded:", path);
+          } catch (e) {
+            console.error("[Sam] Source XML upload failed:", e);
+            // Don't user-report — song is fully functional without the
+            // stored source XML; source_xml_path stays null on this row
+            // and can be backfilled by re-importing later.
+          }
+        }
+      })
+      .catch((e) => {
+        console.error("[Sam] Supabase save failed:", e);
+        report(`Song save failed: ${e.message}`);
+      });
+  }
+
+  // M8 — Tier A gate. BLOCK warnings → dialog with Cancel/Import.
+  // FYI-only → auto-dismissing toast on import success. No warnings
+  // → silent import. Same commit path all three cases; the gate only
+  // controls whether the user gets a proceed/cancel choice first.
+  function gateAndCommit(commitPayload) {
+    const { song } = commitPayload;
+    const { block, fyi } = classifyWarnings(song.parseWarningsStructured);
+    if (block.length > 0) {
+      setPendingImport({ commitPayload, block, fyi });
+      setFyiExpanded(false);
+      return;
+    }
+    // No BLOCK warnings — proceed immediately.
+    commitImport(commitPayload);
+    if (fyi.length > 0) {
+      setImportToast(
+        `Imported ${commitPayload.defaultTitle}. ` +
+        `${fyi.reduce((s, w) => s + w.count, 0)} notation${fyi.length > 1 ? "s" : ""} ` +
+        `carried for the renderer (${fyi.map((w) => w.tag).join(", ")}).`
+      );
+    }
+  }
+
   async function handleFile(file) {
     setError(null);
 
@@ -390,51 +593,21 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
       }
     }
 
-    // Load song immediately — don't block on Supabase save
-    onSongLoaded(song);
-
-    // Save to Supabase in the background (fire-and-forget)
+    // M8 — gate on warnings before any side effect (onSongLoaded, DB
+    // insert). Cancel from the dialog just clears state, no rollback.
     const source = isJson ? "json_import" : "musicxml_import";
-    supabase
-      .from("sam_songs")
-      .insert({
-        title: song.title || file.name.replace(/\.(json|musicxml|xml|mxl)$/i, ""),
-        artist: song.artist || null,
-        source,
-        source_file: file.name,
-        key_signature: song.key || null,
-        time_signature: song.timeSignature || "4/4",
-        default_bpm: song.defaultBpm || 68,
-        measures: song.measures,
-        ...lineageFields(song),
-      })
-      .select("id")
-      .single()
-      .then(async ({ data, error: dbError }) => {
-        if (dbError) {
-          console.error("[Sam] Supabase save error:", dbError);
-          report(`Song save failed: ${dbError.message}`);
-          return;
-        }
-        console.log("[Sam] Song saved to Supabase, id:", data.id);
-        if (onSongSaved) onSongSaved(data.id);
-        try {
-          await fanOutMeasures(data.id, song.measures, supabase);
-        } catch (e) {
-          // Song row saved; blob playback works from memory, but no
-          // sam_song_measures rows exist. Any feature that reads rows
-          // (lyric placement, MCP tools, backfill) will misbehave.
-          console.error("[Sam] Measure fan-out failed:", e);
-          report(
-            `Song saved but measure fan-out failed: ${e.message}. ` +
-            `Try re-importing.`
-          );
-        }
-      })
-      .catch((e) => {
-        console.error("[Sam] Supabase save failed:", e);
-        report(`Song save failed: ${e.message}`);
-      });
+    gateAndCommit({
+      song,
+      source,
+      sourceFile: file.name,
+      defaultTitle: file.name.replace(/\.(json|musicxml|xml|mxl)$/i, ""),
+      // Pass the extracted MusicXML text to commitImport for upload
+      // to sam-scores (spec §6 last outstanding manual prereq). For
+      // .mxl files, `text` is what we unzipped, not the .mxl blob —
+      // we store the unpacked XML so downstream (music21 difficulty
+      // analysis, etc.) doesn't have to redo zip extraction.
+      rawXml: isJson ? null : text,
+    });
   }
 
   function handlePastedText(text) {
@@ -476,47 +649,16 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
       }
     }
 
-    // Load song immediately
-    onSongLoaded(song);
-
-    // Save to Supabase in the background
-    supabase
-      .from("sam_songs")
-      .insert({
-        title: song.title || "Pasted Song",
-        artist: song.artist || null,
-        source,
-        source_file: null,
-        key_signature: song.key || null,
-        time_signature: song.timeSignature || "4/4",
-        default_bpm: song.defaultBpm || 68,
-        measures: song.measures,
-        ...lineageFields(song),
-      })
-      .select("id")
-      .single()
-      .then(async ({ data, error: dbError }) => {
-        if (dbError) {
-          console.error("[Sam] Supabase save error:", dbError);
-          report(`Song save failed: ${dbError.message}`);
-          return;
-        }
-        console.log("[Sam] Song saved to Supabase, id:", data.id);
-        if (onSongSaved) onSongSaved(data.id);
-        try {
-          await fanOutMeasures(data.id, song.measures, supabase);
-        } catch (e) {
-          console.error("[Sam] Measure fan-out failed:", e);
-          report(
-            `Song saved but measure fan-out failed: ${e.message}. ` +
-            `Try re-importing.`
-          );
-        }
-      })
-      .catch((e) => {
-        console.error("[Sam] Supabase save failed:", e);
-        report(`Song save failed: ${e.message}`);
-      });
+    // M8 — same gate as file import.
+    gateAndCommit({
+      song,
+      source,
+      sourceFile: null,
+      defaultTitle: "Pasted Song",
+      // Same rawXml pass-through as handleFile for the MusicXML branch;
+      // JSON pastes don't have a source XML to store.
+      rawXml: source === "musicxml_paste" ? text : null,
+    });
   }
 
   if (samView === "stats") {
@@ -586,6 +728,135 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
         onDropFile={handleFile}
         onPaste={handlePastedText}
       />
+
+      {/* M8 — Import warning gate. Fires only when BLOCK-severity
+          warnings exist. Cancel just clears state (no partial rows,
+          no orphaned storage — commitImport hasn't been called yet).
+          Import calls the shared commit path and clears state. FYI
+          section collapsed by default per Alex's rule ("CARRIED is
+          not something to approve"); revealed by clicking. */}
+      {pendingImport && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+             role="dialog" aria-modal="true">
+          <div className="bg-background text-foreground rounded-lg shadow-lg max-w-lg w-full max-h-[80vh] overflow-y-auto p-6">
+            <h2 className="text-lg font-semibold mb-1">
+              {pendingImport.commitPayload.defaultTitle}
+            </h2>
+            <p className="text-sm text-muted-foreground mb-4">
+              {(() => {
+                // Header count matches the bullets — occurrences, not
+                // structured entries. Bach Invention: 3 inverted-mordent +
+                // 2 mordent = 5 warnings (was 2 with the entries count).
+                const occurrences = pendingImport.block.reduce((s, w) => s + w.count, 0);
+                return `${occurrences} warning${occurrences !== 1 ? "s" : ""} you should see before import`;
+              })()}
+            </p>
+
+            {/* BLOCK group — always visible. Grouped by kind so 5
+                ornaments across 2 tags read as a coherent finding
+                rather than a raw list. */}
+            <div className="space-y-3 mb-4">
+              {(() => {
+                const ornaments = pendingImport.block.filter((w) => w.kind === "ornament");
+                const others = pendingImport.block.filter((w) => w.kind !== "ornament");
+                const sections = [];
+                if (ornaments.length > 0) {
+                  const total = ornaments.reduce((s, w) => s + w.count, 0);
+                  sections.push(
+                    <div key="orn" className="border-l-2 border-yellow-500 pl-3">
+                      <div className="font-medium text-sm">
+                        ⚠ {total} ornament{total !== 1 ? "s" : ""} not applied
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Pitches shown are as-written; performed audio will differ.
+                      </div>
+                      <ul className="text-sm mt-1 space-y-0.5">
+                        {ornaments.map((w) => (
+                          <li key={w.tag}>• {composeBlockSentence(w)}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                }
+                for (const w of others) {
+                  sections.push(
+                    <div key={w.kind + "-" + w.tag} className="border-l-2 border-yellow-500 pl-3">
+                      <div className="text-sm">⚠ {composeBlockSentence(w)}</div>
+                    </div>
+                  );
+                }
+                return sections;
+              })()}
+            </div>
+
+            {/* FYI group — collapsed by default. Never gates. */}
+            {pendingImport.fyi.length > 0 && (
+              <div className="mb-4 border-t pt-3">
+                <button
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => setFyiExpanded((v) => !v)}
+                >
+                  {fyiExpanded ? "▾" : "▸"} {pendingImport.fyi.length} carried notation{pendingImport.fyi.length !== 1 ? "s" : ""}
+                  {" "}({pendingImport.fyi.map((w) => w.tag).join(", ")}) — stored for the renderer
+                </button>
+                {fyiExpanded && (
+                  <ul className="text-xs text-muted-foreground mt-2 space-y-0.5">
+                    {pendingImport.fyi.map((w) => (
+                      <li key={w.tag}>• {composeBlockSentence(w)}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                className="px-4 py-2 text-sm border rounded hover:bg-muted"
+                onClick={() => setPendingImport(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded hover:opacity-90"
+                onClick={() => {
+                  const payload = pendingImport.commitPayload;
+                  const fyi = pendingImport.fyi;
+                  setPendingImport(null);
+                  commitImport(payload);
+                  if (fyi.length > 0) {
+                    setImportToast(
+                      `Imported ${payload.defaultTitle}. ` +
+                      `${fyi.reduce((s, w) => s + w.count, 0)} notation${fyi.length > 1 ? "s" : ""} ` +
+                      `carried for the renderer.`
+                    );
+                  }
+                }}
+              >
+                Import
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* M8 — dismissible toast for the FYI-only import case. Alex's
+          rule: "dismissible-and-forgettable — I don't need to be told
+          about a carried metronome mark on every single import."
+          Auto-clears after 6s via the useEffect above. */}
+      {importToast && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 max-w-md">
+          <div className="bg-background border border-border shadow-lg rounded px-4 py-2 text-sm flex items-center gap-3">
+            <span className="text-muted-foreground">{importToast}</span>
+            <button
+              className="text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setImportToast(null)}
+              aria-label="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Edit Modal */}
       {editingSong && (

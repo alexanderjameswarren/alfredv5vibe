@@ -25,8 +25,6 @@
 // splits don't produce orphan `end`s.
 
 import {
-  tokenToBeats,
-  beatsToToken,
   beatsToTokens,
   fromTimeline,
   sumEvents,
@@ -54,6 +52,76 @@ const KEY_NAMES = {
   "1": "G major", "2": "D major", "3": "A major", "4": "E major",
   "5": "B major", "6": "F# major", "7": "C# major",
 };
+
+// M6 — tier-A pitch-affecting notations the parser does not currently
+// implement. Their presence is detected per measure in Phase A; Phase B
+// emits a single parseWarning per tag per song naming which measures
+// contained it. Only <mordent> and <inverted-mordent> are corpus-
+// reachable today (Bach Invention); the rest are defensive so future
+// fixtures don't produce silent drops.
+//
+// Kept in sync with tools/sam-tools/lib/xmlTruth.js NOTATION_TIERS.A
+// (post spec §5 amendment 2026-08-05: octave-shift and arpeggiate
+// removed from tier A after empirical verification).
+const UNHANDLED_PITCH_TAGS = [
+  "transpose", "trill-mark", "mordent", "inverted-mordent",
+  "turn", "inverted-turn", "tremolo", "glissando", "slide", "cue",
+];
+
+// M7 — CARRIED notations. Parser stores per-measure presence + position
+// (measure.notations list) and emits a parseWarning per tag naming
+// each so validate.js's Group B check clears the tier-B/C finding.
+// Full data extraction (pedal on/off state, dynamic value, articulation
+// per note) is deferred to when a renderer needs it — spec §5 says
+// CARRY = "store on the measure/event", presence records that we saw
+// the tag and know its beat position, which is enough for the tag
+// itself not to be silently lost. Excludes <arpeggiate>/<non-arpeggiate>
+// (tier B, timing but no CARRY store yet — those still fire Group B
+// unless a warning is emitted; M8 wires arpeggiate onset staggering).
+const CARRIED_NOTATION_TAGS = [
+  // Tier B (timing) — fermata is the corpus-reachable one
+  "fermata", "metronome", "measure-style",
+  "arpeggiate", "non-arpeggiate",
+  // Tier C (tone/articulation)
+  "pedal", "staccato", "staccatissimo", "accent", "strong-accent",
+  "tenuto", "detached-legato", "dynamics", "wedge", "slur",
+];
+
+// M7 — <kind> textContent → chord-symbol suffix. music21 export uses
+// full words ("major", "minor", "seventh"); MuseScore export sets the
+// short suffix on the `text` attribute of <kind>. Prefer the attribute
+// when present (that's the composer's intended display); otherwise
+// derive from the textContent via this map.
+const KIND_TEXT_TO_SUFFIX = {
+  major: "", minor: "m", "augmented": "aug", "diminished": "dim",
+  "dominant": "7", "major-seventh": "maj7", "minor-seventh": "m7",
+  "diminished-seventh": "dim7", "augmented-seventh": "aug7",
+  "half-diminished": "m7b5", "major-minor": "mM7",
+  "suspended-fourth": "sus4", "suspended-second": "sus2",
+  "major-sixth": "6", "minor-sixth": "m6",
+  "dominant-ninth": "9", "major-ninth": "maj9", "minor-ninth": "m9",
+  "power": "5", "none": "",
+};
+
+function buildChordSymbol(harmonyEl) {
+  const rootStep = harmonyEl.querySelector("root root-step")?.textContent;
+  if (!rootStep) return null;
+  const alter = parseInt(harmonyEl.querySelector("root root-alter")?.textContent, 10) || 0;
+  const accid = alter === 1 ? "#" : alter === -1 ? "b" : alter === 2 ? "##" : alter === -2 ? "bb" : "";
+  const kindEl = harmonyEl.querySelector("kind");
+  const kindAttr = kindEl?.getAttribute("text");
+  // Attribute wins when present, even if it's "" (an explicit blank
+  // means "no suffix", i.e., a major chord). null/undefined means
+  // "attribute not set" — fall through to text-content map.
+  const suffix = kindAttr != null
+    ? kindAttr
+    : (KIND_TEXT_TO_SUFFIX[kindEl?.textContent ?? "major"] ?? "");
+  const bassStep = harmonyEl.querySelector("bass bass-step")?.textContent;
+  const bassAlter = parseInt(harmonyEl.querySelector("bass bass-alter")?.textContent, 10) || 0;
+  const bassAccid = bassAlter === 1 ? "#" : bassAlter === -1 ? "b" : "";
+  const bass = bassStep ? `/${bassStep}${bassAccid}` : "";
+  return `${rootStep}${accid}${suffix}${bass}`;
+}
 
 // ---------------------------------------------------------------------------
 // M3 — short-measure classification + rest padding.
@@ -253,8 +321,37 @@ function parseMeasureIntermediate(measEl, state, options) {
     // anacrusis. Captured here so the M3 padding pass can distinguish
     // anacrusis (never pad) from an incomplete final measure (pad).
     isImplicit: measEl.getAttribute("implicit") === "yes",
+    // M6 — tier-A pitch-affecting notations we don't currently handle.
+    // Detect their presence per measure so the song-level Phase B step
+    // can emit a parseWarning mentioning each tag it saw. Validator's
+    // Group B gate reads parseWarnings for `<${tag}>` substrings, so
+    // the warning tag must be emitted literally with the angle brackets.
+    unhandledPitchTags: new Set(),
+    // M7 — <harmony>, <rehearsal>, <sound tempo>, CARRIED notations.
+    // Extracted with beat offsets (in quarter-note beats) so a future
+    // renderer/playback engine has full positional context. Under
+    // playback flattening, each play position gets a copy of these
+    // (spec §3.4).
+    chord: null,      // first <harmony> chord symbol in this source measure (dedup by content)
+    section: null,    // first <rehearsal> text in this source measure
+    tempos: [],       // [{beatOffset, bpm}] — sampled playback tempo track (see §5 amendment: NOT notated markings)
+    carriedTags: new Set(), // tag names present in this measure (from CARRIED_NOTATION_TAGS)
   };
+  for (const tag of UNHANDLED_PITCH_TAGS) {
+    if (measEl.querySelector(tag)) flags.unhandledPitchTags.add(tag);
+  }
+  // M7 CARRIED tags — one presence scan for the whole measure subtree.
+  // These attach to notes (<note><notations><fermata>, <slur>, articulations)
+  // or directions (<direction-type><pedal>, <dynamics>, <wedge>). Whichever
+  // scope they appear in, presence is what CARRY records; beat-position and
+  // per-note attachment are deferred until a renderer needs them.
+  for (const tag of CARRIED_NOTATION_TAGS) {
+    if (measEl.querySelector(tag)) flags.carriedTags.add(tag);
+  }
 
+  // M7 chord dedup: track chord strings already recorded in this measure.
+  // Handles music21 round-trips that double every <harmony> element.
+  const seenChords = new Set();
   let cursor = 0;
   let lastKey = null;
 
@@ -265,6 +362,48 @@ function parseMeasureIntermediate(measEl, state, options) {
     }
     if (el.tagName === "forward") {
       cursor += (parseInt(el.querySelector("duration")?.textContent, 10) || 0) / div;
+      continue;
+    }
+    // M7 — <harmony> at its position in the child stream. Dedup by
+    // built symbol string per measure so two identical <harmony>
+    // elements (music21 round-trip) collapse to one; two DISTINCT
+    // chords in one measure both record but only the first becomes
+    // measure.chord (single-field per spec §M7; per-beat chord
+    // changes within a measure are a future feature).
+    if (el.tagName === "harmony") {
+      const sym = buildChordSymbol(el);
+      if (sym && !seenChords.has(sym)) {
+        seenChords.add(sym);
+        if (flags.chord == null) flags.chord = sym;
+      }
+      continue;
+    }
+    // M7 — <direction> can contain <rehearsal>, <sound tempo>,
+    // <pedal>, <dynamics>, <wedge>, etc. Extract each into the
+    // appropriate field. beatOffset is the current cursor (already
+    // in quarter-note beats since dur was pre-divided by div).
+    if (el.tagName === "direction") {
+      const dt = el.querySelector("direction-type");
+      // <rehearsal> — first per measure
+      const reh = dt?.querySelector("rehearsal");
+      if (reh && flags.section == null) flags.section = reh.textContent;
+      // <sound tempo> — recorded with beat offset. Also handles the
+      // less-common bare <sound tempo> outside <direction> (below).
+      const sound = el.querySelector("sound[tempo]");
+      if (sound) {
+        const bpm = parseFloat(sound.getAttribute("tempo"));
+        if (!isNaN(bpm) && bpm > 0) {
+          flags.tempos.push({ beatOffset: cursor, bpm });
+        }
+      }
+      // CARRIED tags at direction scope already caught by the top-level
+      // querySelector loop above (line ~334).
+      continue;
+    }
+    // Bare <sound tempo> outside a <direction> — rare but possible.
+    if (el.tagName === "sound" && el.getAttribute("tempo")) {
+      const bpm = parseFloat(el.getAttribute("tempo"));
+      if (!isNaN(bpm) && bpm > 0) flags.tempos.push({ beatOffset: cursor, bpm });
       continue;
     }
     if (el.tagName !== "note") continue;
@@ -517,6 +656,15 @@ export function parseMusicXML(xmlString) {
     fallbackFiredMeasures: 0,
     graceTotal: 0,
     tupletMeasures: 0,
+    // M6 — per-tag list of source measure numbers where each tier-A
+    // pitch-affecting notation was seen. Aggregated per song by Phase B
+    // into a single parseWarning per tag.
+    unhandledPitchTagMeasures: new Map(),
+    // M7 — per-tag list of source measure numbers for each CARRIED
+    // tag (tier-B/C notations we store the presence of, without full
+    // data extraction). Phase B emits one parseWarning per tag mentioning
+    // the tag literally so validate.js's Group B check clears the finding.
+    carriedTagMeasures: new Map(),
   };
 
   measureEls.forEach((measEl, measIdx) => {
@@ -544,9 +692,47 @@ export function parseMusicXML(xmlString) {
       }
     }
 
+    // source_measure: preserve the raw <measure number="…"> attribute
+    // verbatim. MusicXML defines the attribute as CDATA (any string),
+    // and non-numeric values are standard: MuseScore emits X1..X4 for
+    // ending brackets, other editions use 12a/12b. The DB column is
+    // TEXT (spec §4.1 amended 2026-08-05 after Alex caught the
+    // integer-column error), so the raw attribute round-trips
+    // faithfully through fanOut → recompile. The Stopped UI already
+    // uses `String(sourceMeasure) !== String(number)` so it renders
+    // "m91 (X2)" for non-numeric values without special casing.
+    //
+    // Computed BEFORE the songFlags aggregation below so warning
+    // measure lists can reference printed numbers (spec §M8).
+    const sourceRaw = measEl.getAttribute("number");
+    const sourceMeasure = sourceRaw !== null && sourceRaw !== "" ? sourceRaw : null;
+
     if (flags.fallbackFired) songFlags.fallbackFiredMeasures += 1;
     songFlags.graceTotal += flags.graceCount;
     if (flags.tupletsPresent) songFlags.tupletMeasures += 1;
+    // M8 — aggregate warnings by SOURCE measure number (the raw
+    // `<measure number>` attribute value), NOT by Phase A's 1-based
+    // array index. For songs where the two coincide (any score whose
+    // source measures start at "1" — every corpus fixture except Für
+    // Elise), no observable change. For Für Elise (pickup source
+    // starts at "0"), the pre-M8 warnings were off by one from the
+    // printed number throughout ("<pedal> at m3" pointed at a bar
+    // labeled "2" in MuseScore). Fall back to array index when
+    // sourceMeasure is null (missing attribute — never seen in
+    // corpus, but defensive).
+    const reportNum = sourceMeasure != null ? sourceMeasure : measureNumber;
+    for (const tag of flags.unhandledPitchTags) {
+      if (!songFlags.unhandledPitchTagMeasures.has(tag)) {
+        songFlags.unhandledPitchTagMeasures.set(tag, []);
+      }
+      songFlags.unhandledPitchTagMeasures.get(tag).push(reportNum);
+    }
+    for (const tag of flags.carriedTags) {
+      if (!songFlags.carriedTagMeasures.has(tag)) {
+        songFlags.carriedTagMeasures.set(tag, []);
+      }
+      songFlags.carriedTagMeasures.get(tag).push(reportNum);
+    }
 
     // Tally only in the multi-staff single-part case, where cross-staff
     // voices genuinely need song-level assignment. usePerNoteFallback and
@@ -563,28 +749,6 @@ export function parseMusicXML(xmlString) {
       }
     }
 
-    // source_measure: preserve the raw <measure number="…"> attribute so
-    // playback flattening and the Stopped UI can distinguish source
-    // numbering from play-order numbering (spec §M4). Für Elise's pickup
-    // is m0, Entertainer's flattened body renumbers the second half —
-    // the attribute is the only stable pointer back to the printed score.
-    // Attribute may be non-numeric in some exports; store what we can
-    // parse, FLAG what we can't (per Alex's M4 note).
-    const sourceRaw = measEl.getAttribute("number");
-    let sourceMeasure = null;
-    if (sourceRaw !== null && sourceRaw !== "") {
-      const parsed = parseInt(sourceRaw, 10);
-      if (Number.isFinite(parsed) && String(parsed) === sourceRaw.trim()) {
-        sourceMeasure = parsed;
-      } else {
-        sourceMeasure = sourceRaw;
-        parseWarnings.push(
-          `m${measureNumber}: non-numeric <measure number="${sourceRaw}"> — ` +
-          `stored as string; downstream renumbering may be off (spec §M4)`
-        );
-      }
-    }
-
     measureIntermediates.push({
       voices,
       measureLen,
@@ -596,6 +760,13 @@ export function parseMusicXML(xmlString) {
         beatType: state.beatType,
         ...(state.symbol ? { symbol: state.symbol } : {}),
       },
+      // M7 — carried through to the final measure object per playback.
+      // chord/section: single fields, first-in-source per measure.
+      // tempos: full list with beat offsets. carriedTags: presence set.
+      chord: flags.chord,
+      section: flags.section,
+      tempos: flags.tempos,
+      carriedTags: [...flags.carriedTags].sort(),
     });
   });
 
@@ -620,6 +791,76 @@ export function parseMusicXML(xmlString) {
       `(M6 will retain and FLAG these; for now they carry no beat)`
     );
   }
+  // M6 — one parseWarning per tier-A pitch-affecting tag seen. The
+  // literal `<${tag}>` substring in each message is what validate.js's
+  // Group B check reads to recognise "acknowledged" (see validate.js
+  // notation loop comment). Bach Invention emits mordent + inverted-
+  // mordent under the current corpus; the rest are defensive.
+  // M8 — "printed m" prefix names the numbering scheme (source
+  // attribute), so a Für Elise reader knows m0 = the pickup.
+  for (const [tag, measureList] of songFlags.unhandledPitchTagMeasures) {
+    const preview = measureList.slice(0, 8).join(", ");
+    const more = measureList.length > 8 ? `, +${measureList.length - 8} more` : "";
+    parseWarnings.push(
+      `<${tag}>: ${measureList.length} occurrence(s) at printed m${preview}${more} — ` +
+      `parser does not apply this ornament; pitches shown are the written ` +
+      `notes only. Sounding pitches may differ from performed audio.`
+    );
+  }
+  // M7 — one parseWarning per CARRIED tag seen. Distinct message from
+  // M6's UNHANDLED warnings: these tags ARE preserved (as presence on
+  // measure.carriedTags), just without full data extraction. The
+  // literal `<${tag}>` substring in each message is what validate.js's
+  // Group B check reads. Corpus-reachable: fermata, pedal, dynamics,
+  // wedge, slur, staccato, accent, tenuto (varies per song).
+  for (const [tag, measureList] of songFlags.carriedTagMeasures) {
+    const preview = measureList.slice(0, 8).join(", ");
+    const more = measureList.length > 8 ? `, +${measureList.length - 8} more` : "";
+    parseWarnings.push(
+      `<${tag}>: ${measureList.length} occurrence(s) at printed m${preview}${more} — ` +
+      `carried on measure.carriedTags (presence recorded; full data ` +
+      `extraction deferred until a renderer needs it, spec §M7).`
+    );
+  }
+
+  // M8 — parseWarningsStructured mirrors parseWarnings in structured
+  // form so the import UI can compose its own sentences without
+  // substring-matching on prose. Emitted alongside (not replacing) the
+  // raw strings: validator's Group B check reads the strings, DB
+  // storage keeps both. Kinds: 'ornament' (M6 tier-A), 'carried'
+  // (M7 tier-B/C), 'grace' (aggregated song-level), 'hand-assignment'
+  // (§3.6 low-majority), 'truncated' (padWithRests null),
+  // 'overflow' (measure sum > mLen), 'single-staff-fallback'
+  // (§3.6 no <staff>). (The old 'non-numeric-source' warning was
+  // removed 2026-08-05 when source_measure column became TEXT — the
+  // raw attribute now round-trips faithfully so the warning was noise.)
+  // measures[] carries PRINTED source measure numbers; empty when the
+  // warning is song-level rather than per-measure.
+  const parseWarningsStructured = [];
+  if (songFlags.graceTotal > 0) {
+    parseWarningsStructured.push({
+      tag: "grace", kind: "grace", count: songFlags.graceTotal, measures: [],
+    });
+  }
+  if (songFlags.fallbackFiredMeasures > 0) {
+    parseWarningsStructured.push({
+      tag: "single-staff-fallback", kind: "hand-assignment",
+      count: songFlags.fallbackFiredMeasures, measures: [],
+    });
+  }
+  for (const [tag, measureList] of songFlags.unhandledPitchTagMeasures) {
+    parseWarningsStructured.push({
+      tag, kind: "ornament", count: measureList.length, measures: [...measureList],
+    });
+  }
+  for (const [tag, measureList] of songFlags.carriedTagMeasures) {
+    parseWarningsStructured.push({
+      tag, kind: "carried", count: measureList.length, measures: [...measureList],
+    });
+  }
+  // Note: 'truncated' / 'overflow' entries would be pushed from Phase
+  // C2 when it emits those warnings. Corpus doesn't hit either path
+  // today; adding here would just be dead code.
 
   // -------------------------------------------------------------------------
   // PHASE C1 — apply assignment, mergeStaff per hand, lower to voice format.
@@ -645,6 +886,11 @@ export function parseMusicXML(xmlString) {
       measureLen: mi.measureLen,
       isImplicit: mi.isImplicit,
       timeSignature: mi.timeSignature,
+      // M7 fields — carried through Phase C untouched.
+      chord: mi.chord,
+      section: mi.section,
+      tempos: mi.tempos,
+      carriedTags: mi.carriedTags,
     };
   });
 
@@ -682,6 +928,12 @@ export function parseMusicXML(xmlString) {
       rh: m.rh,
       lh: m.lh,
       timeSignature: m.timeSignature,
+      // M7 fields carried through Phase C2 unchanged; Phase D will
+      // then copy them into every play position.
+      chord: m.chord,
+      section: m.section,
+      tempos: m.tempos,
+      carriedTags: m.carriedTags,
     };
     for (const hand of ["rh", "lh"]) {
       const sum = sumEvents(out[hand]);
@@ -729,16 +981,79 @@ export function parseMusicXML(xmlString) {
       rh: src.rh,
       lh: src.lh,
       timeSignature: src.timeSignature,
+      // Under repeat/D.S., the same source measure plays multiple
+      // times and each play gets the same chord/section (spec §3.4).
+      chord: src.chord,
+      section: src.section,
+      // tempos and carriedTags REMOVED from per-measure output
+      // (Alex, 2026-08-06). tempos now lives at song.playback.tempos
+      // as a flat playback-ordered timeline (built below from the
+      // per-source tempo lists + playback.order); no per-measure
+      // consumer needed the array copy, and sam_song_measures has
+      // no column, so persisting per-row would need a schema change
+      // for no reader. carriedTags is parse-time-only — Phase B's
+      // parseWarnings already carries per-tag presence at song
+      // level, and no per-measure consumer reads the array.
     };
   });
+
+  // Song-level flat tempo timeline (spec §5 amendment: SAMPLED
+  // PLAYBACK tempo track, NOT notated markings — MuseScore's
+  // interpolated rall./rit. samples with words="S" are included
+  // verbatim). Each entry: {playIndex (0-based), beatOffset (from
+  // measure start, in quarter-note beats), bpm}. Under flattening,
+  // tempo marks on a repeated source measure appear multiple times —
+  // once per play position — matching what the audio would do.
+  // Built from sourceMeasures (which still holds per-source tempo
+  // lists) + playback.order rather than measures[i] (which no longer
+  // carries `tempos`).
+  const flatTempos = [];
+  for (let playIdx = 0; playIdx < playback.order.length; playIdx++) {
+    const src = sourceMeasures[playback.order[playIdx]];
+    for (const t of src.tempos || []) {
+      flatTempos.push({ playIndex: playIdx, beatOffset: t.beatOffset, bpm: t.bpm });
+    }
+  }
 
   return {
     title,
     artist,
     defaultBpm,
+    // M7 — fifths is the integer ground truth (-7..+7). key is the
+    // derived display string kept for backward compat with the six
+    // existing consumers (SongLoader.jsx writes, MCP create_sam_song,
+    // tool-handlers reads). No consumer today wants the integer, so
+    // the sam_songs.fifths INTEGER column is deferred until one
+    // appears — see progress-doc "Deferred stored-state changes".
+    // Simplification pipeline's accidentals metric is the likely
+    // first reader.
+    fifths: keyFifths,
     key: KEY_NAMES[String(keyFifths)] || "C major",
     timeSignature: `${state.beats}/${state.beatType}`,
     measures,
+    // M4 open item, landed 2026-08-05. Repeat/navigation structure
+    // resolved at parse time and exposed on the song so SongLoader can
+    // persist it to sam_songs.generation_notes.playback. Consumers can
+    // reconstruct the authored source's structural shape (repeats,
+    // ending brackets, D.S./coda/segno positions) without re-parsing
+    // the MusicXML. Spec §3.4 rationale: recordings frequently skip
+    // the repeats — an unflattened variant needs the structure the
+    // measures array can't carry.
+    //
+    // 2026-08-06 addition: `tempos` moved here from top-level
+    // `song.tempos`. Same content (SAMPLED PLAYBACK track per §5
+    // amendment, NOT notated markings) — it now co-lives with the
+    // other "record of what the source said" fields inside the
+    // playback slot, so a single spread into
+    // generation_notes.playback carries the full playback context.
+    playback: {
+      sourceCount: measureEls.length,
+      implicitFirst: measureEls[0]?.getAttribute("implicit") === "yes",
+      playOrder: playback.order,
+      structure: playback.structure,
+      tempos: flatTempos,
+    },
     ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
+    ...(parseWarningsStructured.length > 0 ? { parseWarningsStructured } : {}),
   };
 }

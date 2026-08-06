@@ -11,14 +11,15 @@ import {
 } from "./vexflowHelpers";
 import { getEventBeats } from "./measureUtils";
 
-// Duration → quarter-note beat values (for voice format tick tracking)
-export const DURATION_BEATS = {
-  w: 4, hd: 3, h: 2, qd: 1.5, q: 1, "8d": 0.75, "8": 0.5, "16": 0.25, "32": 0.125,
-};
+// The exported DURATION_BEATS table was removed 2026-08-06 (spec §M9).
+// It duplicated durations.js's mapping, silently missing qdd/hdd/8dd/64,
+// and had no external consumers — dead export. All duration math routes
+// through `durations.tokenToBeats` (via measureUtils.getEventBeats) so
+// this file no longer redeclares the vocabulary.
 
 // VexFlow's StaveNote constructor does not parse the "d" suffix for dotted
 // durations — it must be attached as a separate Dot modifier. SAM's beat
-// math (see DURATION_BEATS) handles dotted durations natively; this helper
+// math (durations.js) handles dotted durations natively; this helper
 // bridges the two layers for rendering.
 //
 // Supports multi-dot durations (e.g., "hdd" = double-dotted half = 3.5 beats),

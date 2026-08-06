@@ -251,3 +251,64 @@ describe("toTimeline / fromTimeline round-trip", () => {
     expect(warnings[0]).toMatch(/tuplet-boundary/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Deno-copy BASE parity — spec §M9
+//
+// supabase/functions/_shared/durations.ts is a Deno/TS port of this file for
+// the sam-authoring Edge Function tool (Alex, 2026-08-06: opted for a
+// duplicate + parity-test over build-time codegen). Both files must agree
+// on the BASE mapping token-for-token; a divergence here means one side
+// gained a token the other doesn't know about, and duration math on that
+// token will silently disagree between the app and the Edge Function.
+//
+// The Deno file marks its BASE object with `PARITY-MARKER-START` /
+// `PARITY-MARKER-END` comment lines. This test reads the file, extracts
+// the entries between the markers, and asserts every token's beat value
+// matches this file's tokenToBeats result.
+// ---------------------------------------------------------------------------
+describe("Deno-copy BASE parity (spec §M9)", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const denoFile = path.resolve(
+    __dirname,
+    "../../../supabase/functions/_shared/durations.ts"
+  );
+
+  test("supabase/functions/_shared/durations.ts BASE matches this file", () => {
+    let denoText;
+    try {
+      denoText = fs.readFileSync(denoFile, "utf8");
+    } catch (e) {
+      throw new Error(
+        `Could not read Deno durations copy at ${denoFile}: ${e.message}. ` +
+        `Both files are expected to exist per spec §M9.`
+      );
+    }
+    const m = denoText.match(/PARITY-MARKER-START[\s\S]*?BASE[^{]*{([^}]+)}[\s\S]*?PARITY-MARKER-END/);
+    if (!m) {
+      throw new Error(
+        `Could not locate PARITY-MARKER-START/END block or BASE object ` +
+        `inside it in the Deno durations file. If you edited that file, ` +
+        `keep the marker comments and the BASE literal between them.`
+      );
+    }
+    const denoEntries = [...m[1].matchAll(/["']?([A-Za-z0-9]+)["']?\s*:\s*([0-9.]+)/g)]
+      .map(([, token, val]) => [token, Number(val)]);
+    expect(denoEntries.length).toBeGreaterThan(0);
+
+    // Every Deno BASE token must resolve to the same beat value in this file.
+    for (const [token, denoBeats] of denoEntries) {
+      const jsBeats = tokenToBeats(token);
+      expect({ token, jsBeats, denoBeats }).toEqual({ token, jsBeats: denoBeats, denoBeats });
+    }
+    // And every undotted base token in this file must appear in the Deno
+    // BASE — asymmetry the other way is just as bad (a new token added
+    // here but forgotten in Deno = Edge Function rejects it as unknown).
+    const undottedHere = ALL_TOKENS.filter((t) => !t.endsWith("d"));
+    const denoTokens = new Set(denoEntries.map(([t]) => t));
+    for (const t of undottedHere) {
+      expect({ token: t, inDeno: denoTokens.has(t) }).toEqual({ token: t, inDeno: true });
+    }
+  });
+});

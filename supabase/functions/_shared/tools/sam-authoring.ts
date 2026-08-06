@@ -50,10 +50,12 @@ const ACCIDENTAL_ALTER: Record<string, number> = {
   "": 0, "#": 1, "b": -1, "##": 2, "bb": -2,
 };
 const NAME_RE = /^([A-G])(##|bb|#|b)?(-)?(\d)$/;
-const DURATION_RE = /^(w|h|q|8|16|32)(d*)$/;
-const BASE_BEATS: Record<string, number> = {
-  w: 4, h: 2, q: 1, "8": 0.5, "16": 0.25, "32": 0.125,
-};
+// Duration parsing routes through the shared Deno port (spec §M9). The
+// browser-side src/sam/lib/durations.js and this Edge Function copy at
+// supabase/functions/_shared/durations.ts are kept in sync by the
+// "Deno-copy BASE parity" test in durations.test.js — any drift on
+// tokens or beat values fails there before it can ship.
+import { tokenToBeats } from "../durations.ts";
 
 function nameToMidi(name: string): number | null {
   const m = NAME_RE.exec(name);
@@ -65,20 +67,9 @@ function nameToMidi(name: string): number | null {
 }
 
 function eventBeats(evt: { duration?: string; tuplet?: { actual: number; normal: number } }): number | null {
-  const m = DURATION_RE.exec(evt.duration || "");
-  if (!m) return null;
-  const base = BASE_BEATS[m[1]];
-  const dots = m[2].length;
-  let value = base;
-  let add = base;
-  for (let i = 0; i < dots; i++) {
-    add /= 2;
-    value += add;
-  }
-  if (evt.tuplet) {
-    value *= evt.tuplet.normal / evt.tuplet.actual;
-  }
-  return value;
+  const base = tokenToBeats(evt?.duration);
+  if (base === null) return null;
+  return evt.tuplet ? (base * evt.tuplet.normal) / evt.tuplet.actual : base;
 }
 
 // ---------------------------------------------------------------------------

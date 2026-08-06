@@ -11,7 +11,6 @@ const SEVERITY = {
   content_divergence: 1,
   hand_assignment_mismatch: 1,
   measure_overflow: 1,
-  measure_underflow: 1,
   incomplete_measure: 1,
   anacrusis: 5,
   unresolved_navigation: 2,
@@ -19,6 +18,11 @@ const SEVERITY = {
   gap_fill_inexact: 3,
   unknown_duration: 3,
   orphan_tie: 3,
+  // Narrowed volta-seam sibling of orphan_tie. Informational
+  // (severity 5) — the source composer's second-ending choice, not a
+  // parser defect. See validate.js's tie-integrity walk for the
+  // triangulation criteria.
+  volta_seam_tie: 5,
   // cross_staff is INFORMATIONAL under spec §3.6 (cross-staff engraving is
   // expected input, not a defect). Actual routing mistakes on a cross-staff
   // measure surface as content_divergence, tuplet_scaling, or a sum-side
@@ -27,6 +31,10 @@ const SEVERITY = {
   cross_staff: 5,
   notes_unsorted: 5,
   grace_dropped: 5,
+  // key_mode_wrong: demoted to 5 (informational) 2026-08-05 (M6 audit).
+  // Source-quality signal — parser uses fifths and correctly ignores
+  // <mode>, so no parser change clears this. Dropped from M7 exit
+  // criteria; kept in the report so score-quality issues remain visible.
   key_mode_wrong: 5,
   unhandled_notation_pitch: 1,
   tempo_changes_lost: 2,
@@ -42,7 +50,6 @@ const LABEL = {
   content_divergence: "content divergence",
   hand_assignment_mismatch: "hand assignment mismatch",
   measure_overflow: "measure overflow",
-  measure_underflow: "measure underflow",
   incomplete_measure: "incomplete measure",
   anacrusis: "anacrusis (expected)",
   unresolved_navigation: "unresolved navigation",
@@ -50,6 +57,7 @@ const LABEL = {
   gap_fill_inexact: "inexact rest gap-fill",
   unknown_duration: "unknown duration token",
   orphan_tie: "orphan tie",
+  volta_seam_tie: "volta-seam tie (informational)",
   cross_staff: "cross-staff voice",
   notes_unsorted: "notes[] not pitch-sorted",
   grace_dropped: "grace note dropped",

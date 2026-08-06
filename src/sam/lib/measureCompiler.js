@@ -25,6 +25,14 @@ export async function fanOutMeasures(songId, measuresArray, supabase) {
   // NULL in sam_song_measures; an explicit null violates the constraint
   // and a column default cannot rescue an explicit null. Use `??` (not
   // `||`) so an intentional `[]` silent hand passes through unchanged.
+  //
+  // source_measure (spec §4.1) — printed measure number from the source
+  // `<measure number>` attribute. Column is TEXT (Alex, 2026-08-05:
+  // MusicXML defines `number` as CDATA; MuseScore emits X1..X4 for
+  // ending brackets and other editions use 12a/12b — all valid). Store
+  // the raw attribute string verbatim so the Stopped UI can print
+  // "m91 (X2)" faithfully. Null when the attribute is missing; column
+  // comment: "Null = same as `number`".
   const rows = measuresArray.map((m, i) => ({
     song_id: songId,
     number: i + 1,
@@ -40,6 +48,7 @@ export async function fanOutMeasures(songId, measuresArray, supabase) {
     ...(m.audioOffsetMs != null ? { audio_offset_ms: m.audioOffsetMs } : {}),
     ...(m.chord != null ? { chord: m.chord } : {}),
     ...(m.section != null ? { section: m.section } : {}),
+    ...(m.sourceMeasure != null ? { source_measure: String(m.sourceMeasure) } : {}),
   }));
 
   // Insert in batches of 500 to avoid payload limits
@@ -84,7 +93,7 @@ export async function fanOutMeasures(songId, measuresArray, supabase) {
 export async function recompileMeasures(songId, supabase) {
   const { data: rows, error: fetchError } = await supabase
     .from("sam_song_measures")
-    .select("number, rh, lh, time_signature, audio_offset_ms, chord, section")
+    .select("number, rh, lh, time_signature, audio_offset_ms, chord, section, source_measure")
     .eq("song_id", songId)
     .order("number", { ascending: true });
 
@@ -140,6 +149,12 @@ export async function recompileMeasures(songId, supabase) {
       ...(row.audio_offset_ms != null ? { audioOffsetMs: row.audio_offset_ms } : {}),
       ...(row.chord != null ? { chord: row.chord } : {}),
       ...(row.section != null ? { section: row.section } : {}),
+      // sourceMeasure — printed measure number from source XML.
+      // Recompile mirrors the parser field name; null means "same as
+      // number" per the column comment. Column is TEXT so non-numeric
+      // attributes (Entertainer X1..X4, 12a/12b, etc.) round-trip
+      // verbatim.
+      ...(row.source_measure != null ? { sourceMeasure: row.source_measure } : {}),
     };
   });
 

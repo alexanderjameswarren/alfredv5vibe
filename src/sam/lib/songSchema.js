@@ -18,6 +18,7 @@ import Ajv from "ajv";
 // on every build/start so CRA (which blocks imports outside src/) can pick
 // it up. Regenerated file — do not edit this copy.
 import schema from "./sam-drill-format.schema.json";
+import { tokenToBeats } from "./durations";
 
 // `verbose: true` populates `error.schema` on each error object — required
 // for `formatStructuralError` to detect and reword the `not: { required:
@@ -35,8 +36,9 @@ const STEP_SEMITONES = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 const ACCIDENTAL_ALTER = { "": 0, "#": 1, "b": -1, "##": 2, "bb": -2 };
 
 const NAME_RE = /^([A-G])(##|bb|#|b)?(-)?(\d)$/;
-const DURATION_RE = /^(w|h|q|8|16|32)(d*)$/;
-const BASE_BEATS = { w: 4, h: 2, q: 1, "8": 0.5, "16": 0.25, "32": 0.125 };
+// DURATION_RE and BASE_BEATS removed 2026-08-06 (spec §M9). Duration
+// parsing routes through durations.tokenToBeats so the vocabulary
+// (including 64th notes) doesn't have to be re-declared here.
 
 /**
  * Convert a name like "Bb4" / "F#3" / "C-1" to its canonical MIDI number.
@@ -57,20 +59,9 @@ function nameToMidi(name) {
  * duration token doesn't parse.
  */
 function eventBeats(evt) {
-  const m = DURATION_RE.exec(evt.duration || "");
-  if (!m) return null;
-  const base = BASE_BEATS[m[1]];
-  const dots = m[2].length;
-  let value = base;
-  let add = base;
-  for (let i = 0; i < dots; i++) {
-    add /= 2;
-    value += add;
-  }
-  if (evt.tuplet) {
-    value *= evt.tuplet.normal / evt.tuplet.actual;
-  }
-  return value;
+  const base = tokenToBeats(evt?.duration);
+  if (base === null) return null;
+  return evt.tuplet ? (base * evt.tuplet.normal) / evt.tuplet.actual : base;
 }
 
 /**

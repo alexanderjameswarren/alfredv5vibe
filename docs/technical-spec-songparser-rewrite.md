@@ -279,7 +279,7 @@ From an actual scan of the 13 fixtures. Anything not listed and not handled FLAG
 | `<time-modification>` | Someone Like You, Für Elise, Moonlight | **HANDLE** — scale by `normal/actual` |
 | repeats / `<ending>` | six songs | **HANDLE** — flatten, idempotently |
 | segno / coda / D.S. | Someone Like You | **HANDLE** — flatten |
-| `<octave-shift>` | Entertainer m37, Für Elise m82–83 | **HANDLE** — transposes pitch |
+| `<octave-shift>` | Entertainer m37, Für Elise m82–83 | **CARRY** — display element, does NOT alter sounding pitch (see amendment below) |
 | `implicit` / pickup | Für Elise m1 | **HANDLE** — never pad; see §3.7 |
 | short final measure | Prelude m43 | **HANDLE** — pad with trailing rest |
 | multiple `<sound tempo>` | Auld Lang Syne, Für Elise | **HANDLE** — tempo map |
@@ -292,6 +292,122 @@ From an actual scan of the 13 fixtures. Anything not listed and not handled FLAG
 | `<fermata>` | many | **CARRY + FLAG** |
 | `<pedal>` | Für Elise, Someone Like You | **CARRY** |
 | articulations, dynamics, wedges, slurs | many | **CARRY** |
+
+### §5 amendment (Alex, 2026-08-05) — NOTATION_TIERS were unverified
+
+The tier assignments in `tools/sam-tools/lib/xmlTruth.js:NOTATION_TIERS`
+were originally made from tag names during the initial notation scan
+and were NOT verified against actual behaviour. Two turned out to be
+wrong:
+
+- `<octave-shift>` was tier A ("alters pitch"). Empirical evidence
+  (below) shows MusicXML `<pitch>` already encodes sounding pitch;
+  the bracket is a display element. **Reclassified to tier C** (same
+  bucket as pedal / dynamics / articulations). Also promoted to a
+  CARRY item for a future milestone (renderer draws the 8va bracket).
+- `<arpeggiate>` was tier A. A rolled chord has the same PITCHES as
+  a block chord — the notation just staggers the ONSETS. That's a
+  timing change, not a pitch change. **Reclassified to tier B** along
+  with its explicit-no-roll counterpart `<non-arpeggiate>`.
+
+**If a future milestone touches a tier-A tag, verify what it actually
+does to sounding pitch before implementing anything.** The tier
+declares the taxonomic bucket the finding lands in; it does not by
+itself prove the notation behaves the way the name suggests.
+
+Tier A after reclass — genuinely pitch-affecting:
+`transpose`, `trill-mark`, `mordent`, `inverted-mordent`, `turn`,
+`inverted-turn`, `tremolo`, `glissando`, `slide`, `cue`.
+Only `mordent` and `inverted-mordent` are corpus-reachable today
+(Bach Invention).
+
+### §5 amendment (Alex, 2026-08-05) — `song.tempos` is SAMPLED PLAYBACK tempo
+
+Verified empirically for Auld Lang Syne and Für Elise. Only three of
+Auld Lang Syne's 19 `<sound tempo>` marks carry a notated `<words>`
+label:
+- m1: "Andante" (opening tempo)
+- m18: "Rallentando" (start of rit.)
+- All 16 others: `words="S"` — MuseScore's sampled playback tempo
+  interpolation of the rall. bracket into per-position samples
+
+Für Elise's 4 marks:
+- m0: "Poco moto"
+- m104: three marks with `words="66"`, `"60"`, `"48"` — literal BPM
+  numbers, either MuseScore-sampled or hand-typed to notate the final
+  ritardando as discrete steps
+
+**Field semantics.** `song.tempos: [{playIndex, beatOffset, bpm}]` holds
+every `<sound tempo>` mark in the source, positioned by measure + beat
+offset. Under playback flattening, marks on a repeated source measure
+appear at each play position (Für Elise's `Poco moto` at m0 shows at
+both play0 and play9 because the pickup replays). This is MuseScore's
+sampled playback tempo TRACK — the audio playback engine can feed it
+straight into a bpm envelope.
+
+**What it is NOT.** Notated markings — "Andante", "Rallentando",
+"rit.", "a tempo", "molto rall.", metronome equations — live in
+`<words>` and `<metronome>` elements. The parser does not read those
+today. A future feature that needs "which measures have a notated
+tempo instruction, and what does it say" must go through `<words>`,
+NOT `song.tempos`. The sampled track will always overcount: 19 tempo
+marks vs 2 notated ones for Auld Lang Syne.
+
+Same class of misinterpretation risk as `<octave-shift>` (below):
+inferring behaviour from the tag name. Verified 2026-08-05 to avoid
+downstream features building on the wrong assumption.
+
+### §5 amendment (Alex, 2026-08-05) — `<octave-shift>` is CARRY, not HANDLE
+
+The table originally listed `<octave-shift>` as HANDLE with "transposes
+pitch". That was wrong and truth was briefly patched to apply the
+transformation before it got caught. Corrected empirically against the
+corpus:
+
+**Evidence.** MusicXML `<pitch>` already encodes the SOUNDING pitch.
+`<octave-shift>` describes how the passage is DRAWN (engraved an
+octave lower or higher, under an 8va/8vb bracket, to avoid many ledger
+lines). It is a display element in the same family as
+`<time symbol="cut">`.
+
+Für Elise source pitches (verified 2026-08-05):
+
+```
+idx80  A3 C4 E4 A4 C5 E5        (no shift active)
+idx81  A4 C5 E5 A5 C6 E6        (no shift active — one octave above idx80 already)
+idx82  A5 C6 E6 A6 C7 E7        octave-shift type="down" size="8" active
+idx83  B6 A6 G6 ...             stop; continues from idx82's E7 naturally
+```
+
+The line already climbs A3→A4→A5 across three measures at written
+pitch. Idx83's B6 sits one step down from idx82's E7. Transposing
+idx82 UP by an octave would yield A6 C7 E7 A7 C8 E8 — above the top of
+an 88-key piano — and would create a 2-octave discontinuity between
+idx82 and idx83 at the bracket's stop. Not musical, not what the
+score sounds like.
+
+Entertainer m36-37 shows the same shape: the octave-shift-bracketed
+figure `E5 C6 E6 F5 D6 F6 F5 D6 F6` sits in the same register as m35's
+`F4-C5-D5-E5` context and m37's `E4 C5 E4 C5`. Transposing UP would
+break the continuous line across the barline.
+
+**Corrected disposition.** `<octave-shift>` is CARRY:
+- Truth: leave `<pitch>` values alone. `<octave-shift>` is not applied
+  to computed midi.
+- Parser: store the bracket per-measure so the renderer can draw an
+  8va line later. Do not transform pitches.
+
+**Truth does not model unverified pitch transformations.** If a
+`<transpose>` fixture ever arrives (none in corpus today), truth
+should emit a distinct "cannot verify" finding rather than guess at a
+transformation. Group A's mechanism (truth models it → content_divergence
+fires on parser miss) remains in the validator for a future notation
+that genuinely alters sounding pitch, but Group A is EMPTY for this
+corpus.
+
+Do not re-fix this: the empirical evidence above is the authority. Any
+future proposal to move `<octave-shift>` back to HANDLE must first
+account for the pitch sequences above.
 
 ---
 
@@ -336,7 +452,7 @@ npm run check        # syncs vendor/ then validates
 | **M3** | Anacrusis detection; trailing-rest padding; exact gap-fill | `incomplete_measure`, `measure_overflow`, `gap_fill_inexact` → 0. `anacrusis` stays non-zero. |
 | **M4** | `resolvePlaybackOrder` port; `source_measure` from the `number` attribute; Stopped UI | `unflattened_repeat` → 0 |
 | **M5** | D.S. / segno / coda / Fine | `unresolved_navigation` → 0 |
-| **M6** | `<octave-shift>` handled; ornaments/arpeggiate/grace/transpose FLAG | `unhandled_notation_pitch` → 0; `parseWarnings` non-empty |
+| **M6** | ornaments/arpeggiate/transpose FLAG (grace already FLAGged as of M2). Scope shrunk 2026-08-05 — no `<octave-shift>` implementation this milestone; the tag is now CARRY (display element), tracked separately | `unhandled_notation_pitch` → 0; `parseWarnings` non-empty for Bach Invention |
 | **M7** | `<harmony>` → `chord` (de-duped), `<rehearsal>` → `section`, tempo map | `discarded_metadata`, `tempo_changes_lost`, `key_mode_wrong` → 0 |
 | **M8** | `parseWarnings[]` surfaced in the import UI | User sees the list before committing |
 

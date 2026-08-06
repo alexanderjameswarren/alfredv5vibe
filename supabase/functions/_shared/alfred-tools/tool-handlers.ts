@@ -625,7 +625,12 @@ export async function getSamSongs(
   try {
     let query = client
       .from("sam_songs")
-      .select("id, title, artist, source, key_signature, time_signature, default_bpm, created_at, updated_at")
+      // source_xml_path (M8 upload wiring) — populated by SongLoader
+      // when a MusicXML import succeeds; null for JSON imports, drills,
+      // or MusicXML imports whose Storage upload failed. Exposed here
+      // so Alex can verify post-re-import coverage over MCP instead of
+      // eyeballing the dashboard.
+      .select("id, title, artist, source, key_signature, time_signature, default_bpm, source_xml_path, created_at, updated_at")
       .eq("archived", false)
       .order("title");
 
@@ -796,7 +801,7 @@ export async function getSamSongMeasures(
     // 3. Fetch measures with optional range filter
     let query = client
       .from("sam_song_measures")
-      .select("number, rh, lh, time_signature, audio_offset_ms, chord, section")
+      .select("number, rh, lh, time_signature, audio_offset_ms, chord, section, source_measure")
       .eq("song_id", params.song_id)
       .order("number", { ascending: true });
 
@@ -820,7 +825,7 @@ export async function getSamSongMeasures(
     const { data: lyrics } = await lyricsQuery;
 
     // 5. Format measures for readability
-    const formatted = (measures || []).map((m: { number: number; rh: unknown[] | null; lh: unknown[] | null; time_signature: unknown; audio_offset_ms: number | null; chord: string | null; section: string | null }) => {
+    const formatted = (measures || []).map((m: { number: number; rh: unknown[] | null; lh: unknown[] | null; time_signature: unknown; audio_offset_ms: number | null; chord: string | null; section: string | null; source_measure: number | null }) => {
       const rhEvents = (m.rh || []) as { duration: string; notes?: { name: string }[] }[];
       const rhDisplay = rhEvents.map((evt, idx) => {
         const noteNames = (evt.notes || []).map(n => n.name).join("+") || "rest";
@@ -837,6 +842,11 @@ export async function getSamSongMeasures(
 
       return {
         number: m.number,
+        // source_measure: printed number from the source XML. Populated
+        // by M4 parser when it differs from `number` (repeat/D.S. plays
+        // renumber; Für Elise pickup starts at "0"). Null = same as
+        // `number` per the column comment.
+        source_measure: m.source_measure,
         chord: m.chord || null,
         section: m.section || null,
         audio_offset_ms: m.audio_offset_ms,

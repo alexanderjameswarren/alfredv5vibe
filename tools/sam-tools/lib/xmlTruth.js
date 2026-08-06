@@ -51,6 +51,15 @@ function parseMeasure(measEl, state) {
       state.fifths = parseInt(text(k, "fifths"), 10) || 0;
       state.mode = text(k, "mode");
     }
+    // <transpose>: NOT modeled here. Empirical evidence from Für Elise
+    // and Entertainer (Alex, 2026-08-05) shows MusicXML <pitch> already
+    // encodes the SOUNDING pitch — the transformation is a display /
+    // engraving concern, and applying it here double-transposes. See
+    // spec §5 amendment: transpose is CARRY, not HANDLE. When a
+    // corpus fixture with <transpose> arrives, truth should emit a
+    // distinct "cannot verify" finding rather than guess at a
+    // transformation; never apply an unverified pitch shift to the
+    // reference.
   }
 
   const div = state.divisions;
@@ -76,6 +85,19 @@ function parseMeasure(measEl, state) {
       cursor += (parseInt(text(el, "duration"), 10) || 0) / div;
       continue;
     }
+    // <direction> with <octave-shift>: NOT modeled here. Empirical
+    // evidence (Alex, 2026-08-05):
+    //   Für Elise idx82 <pitch> values are A5 C6 E6 A6 C7 E7 — under
+    //   an octave-shift down/8 bracket. Applying +12 yields A6 C7 E7
+    //   A7 C8 E8, which runs off the top of an 88-key piano and
+    //   creates a 2-octave discontinuity at the bracket's stop.
+    //   The <pitch> values ALREADY encode the sounding pitch;
+    //   <octave-shift> describes how the passage is DRAWN (engraved an
+    //   octave lower under an 8va bracket to avoid ledger lines),
+    //   same family as <time symbol="cut">. See spec §5 amendment.
+    //   Applying it double-transposes. If M6/M7 CARRIES the shift for
+    //   the renderer, that's a parser output field, not a truth
+    //   transformation.
     if (el.tagName !== "note") continue;
 
     const isGrace = el.querySelector("grace") !== null;
@@ -373,12 +395,30 @@ export function resolvePlaybackOrder(measEls) {
  * Notations that affect how a piano score actually sounds, tiered by severity.
  * A: changes which pitches sound. B: changes timing. C: changes tone/articulation.
  * D: metadata SAM already has a home for and is currently throwing away.
+ *
+ * Tier reclassifications (Alex, 2026-08-05, spec §5 amendment):
+ *   octave-shift   A → C   display element (bracket over already-correct
+ *                          pitches); MusicXML <pitch> is sounding pitch.
+ *                          Empirical evidence: Für Elise idx82's
+ *                          A5-C6-E6-A6-C7-E7 would double-transpose off
+ *                          the piano if treated as A. Same family as
+ *                          <time symbol="cut">.
+ *   arpeggiate     A → B   rolled chord — same pitches, staggered onsets.
+ *                          Timing change, not pitch change.
+ *   non-arpeggiate A → B   same reasoning (explicit-no-roll marker also
+ *                          affects the temporal placement expectation).
+ *
+ * Original tier assignments were made from tag names during the initial
+ * notation scan and NOT verified against behaviour. Two were wrong (see
+ * above). If a future milestone touches a tier-A tag, verify what it
+ * actually does to sounding pitch before implementing anything.
  */
 export const NOTATION_TIERS = {
-  A: ["octave-shift", "transpose", "arpeggiate", "non-arpeggiate", "trill-mark", "mordent",
-      "inverted-mordent", "turn", "inverted-turn", "tremolo", "glissando", "slide", "cue"],
-  B: ["fermata", "metronome", "measure-style"],
-  C: ["pedal", "staccato", "staccatissimo", "accent", "strong-accent", "tenuto", "detached-legato",
+  A: ["transpose", "trill-mark", "mordent", "inverted-mordent",
+      "turn", "inverted-turn", "tremolo", "glissando", "slide", "cue"],
+  B: ["fermata", "metronome", "measure-style", "arpeggiate", "non-arpeggiate"],
+  C: ["octave-shift",
+      "pedal", "staccato", "staccatissimo", "accent", "strong-accent", "tenuto", "detached-legato",
       "dynamics", "wedge", "slur"],
   D: ["harmony", "rehearsal"],
 };
@@ -534,7 +574,12 @@ export function buildTruth(xmlString) {
       const [s] = k.split(":");
       if (staffVoices[s]) staffVoices[s].push(k);
     }
-    return { number: idx + 1, ...parsed, staffVoices };
+    // sourceAttribute is the raw <measure number="…"> string from the
+    // XML. Mirror parser.measures[i].sourceMeasure so validate.js can
+    // compare playback shape by a key stable across pickup-bearing
+    // scores (Für Elise's source starts at "0"; truth's `number` is
+    // 1-based array position, which drifts from the raw attribute).
+    return { number: idx + 1, sourceAttribute: el.getAttribute("number"), ...parsed, staffVoices };
   });
 
   // Phase 2: compute the song-level assignment (independent of the parser's

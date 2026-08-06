@@ -1,5 +1,7 @@
 // Voice format ↔ beats format conversion utilities
 
+import { tokenToBeats } from "./durations";
+
 /**
  * Calculate measure duration in quarter-note equivalents.
  * e.g., 4/4 → 4, 3/4 → 3, 6/8 → 3, 7/8 → 3.5, 5/4 → 5
@@ -33,11 +35,6 @@ export function formatTimeSignature(timeSig) {
   return `${timeSig.beats}/${timeSig.beatType}`;
 }
 
-// Beat values in quarter-note units
-const DURATION_BEATS = {
-  w: 4, hd: 3, h: 2, qd: 1.5, q: 1, "8d": 0.75, "8": 0.5, "16": 0.25, "32": 0.125,
-};
-
 /**
  * Effective beat value of an event, accounting for an optional tuplet
  * time-modification. Tuplet shape mirrors MusicXML: `{ actual, normal,
@@ -46,16 +43,16 @@ const DURATION_BEATS = {
  * normal: 2 }`, so each eighth member contributes 0.5 * (2/3) = 0.333
  * beats; a triplet group of three sums to 1.0 beats.
  *
- * Use this helper at every site that sums event durations. Direct
- * `DURATION_BEATS[evt.duration]` reads ignore tuplet info and cause
- * measures with triplets to over-count.
+ * Use this helper at every site that sums event durations. Delegates
+ * to `durations.tokenToBeats` (spec §M9 — single source of truth for
+ * the token → beats mapping; the pre-M9 hardcoded map here was
+ * missing qdd/hdd/8dd/64 and returned 0 for Someone Like You m70's
+ * qdd, misaligning voiceToBeats, padVoice, and scroll ticks).
  */
 export function getEventBeats(evt) {
-  let beats = DURATION_BEATS[evt.duration] || 0;
-  if (evt.tuplet) {
-    beats *= evt.tuplet.normal / evt.tuplet.actual;
-  }
-  return beats;
+  const beats = tokenToBeats(evt?.duration);
+  if (beats === null) return 0;
+  return evt.tuplet ? (beats * evt.tuplet.normal) / evt.tuplet.actual : beats;
 }
 
 /**
@@ -94,8 +91,11 @@ function voiceToBeats(measure) {
 
       // Use the shortest duration at this position for display. Compare
       // by effective beats (tuplet-aware) so a triplet eighth correctly
-      // beats a regular eighth.
-      const entryBeats = DURATION_BEATS[entry.duration] || 1;
+      // beats a regular eighth. Uses tokenToBeats (spec §M9) — pre-M9
+      // DURATION_BEATS lookup returned undefined for qdd, causing
+      // dotted-dotted-durations to lose the shortest-wins comparison.
+      const entryTokBeats = tokenToBeats(entry.duration);
+      const entryBeats = entryTokBeats == null ? 1 : entryTokBeats;
       if (beatVal < entryBeats) {
         entry.duration = dur;
       }

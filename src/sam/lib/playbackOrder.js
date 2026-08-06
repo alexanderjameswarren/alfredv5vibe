@@ -108,6 +108,34 @@ export function resolvePlaybackOrder(measEls) {
     i++;
   }
 
+  // Sparse per-source-measure structure (M4 open item, landed 2026-08-05).
+  // One entry per source measure that carries a non-default marker —
+  // repeat barline, ending bracket, or navigation mark. Consumers can
+  // reconstruct the authored score's structural shape from this without
+  // re-parsing the source XML; measures alone give play-order but not
+  // repeat/ending/navigation context, so `songs where source m46-54 play
+  // twice` can be told apart between "repeated block" and "D.S. return".
+  // Field names mirror MusicXML directly for straight-back reconstruction.
+  const structure = [];
+  for (let i = 0; i < n; i++) {
+    const x = info[i];
+    const repeats = [];
+    if (x.forwardRepeat) repeats.push({ direction: "forward" });
+    if (x.backwardRepeat) repeats.push({ direction: "backward", times: x.repeatTimes });
+    const endings = x.endings.length
+      ? x.endings.map((e) => ({ numbers: e.numbers, type: e.type }))
+      : null;
+    const marks = ["segno", "coda", "toCoda", "dalSegno", "daCapo", "fine"].filter((k) => x[k]);
+    if (repeats.length === 0 && !endings && marks.length === 0) continue;
+    structure.push({
+      sourceIdx: i,
+      sourceAttr: measEls[i].getAttribute("number"),
+      ...(repeats.length ? { repeats } : {}),
+      ...(endings ? { endings } : {}),
+      ...(marks.length ? { navMarks: marks } : {}),
+    });
+  }
+
   return {
     order,
     hasRepeats: info.some((x) => x.forwardRepeat || x.backwardRepeat),
@@ -121,5 +149,6 @@ export function resolvePlaybackOrder(measEls) {
         measure: x.idx,
         marks: ["segno", "coda", "toCoda", "dalSegno", "daCapo", "fine"].filter((k) => x[k]),
       })),
+    structure,
   };
 }

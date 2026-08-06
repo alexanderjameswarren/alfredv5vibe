@@ -15,12 +15,25 @@ export const DEFECTS = {
   VOICE_COLLISION: "voice_collision",
   TUPLET_SCALING: "tuplet_scaling",
   MEASURE_OVERFLOW: "measure_overflow",
-  MEASURE_UNDERFLOW: "measure_underflow",
+  // MEASURE_UNDERFLOW removed 2026-08-05 — dead entry, never `add`-ed.
+  // Superseded by ANACRUSIS (spec §3.7-legitimate short) and
+  // INCOMPLETE_MEASURE (parser bug — hand actually short). Leaving the
+  // name in the enum invites accidental reuse.
   UNFLATTENED_REPEAT: "unflattened_repeat",
   UNRESOLVED_NAVIGATION: "unresolved_navigation",
   GAP_FILL_INEXACT: "gap_fill_inexact",
   UNKNOWN_DURATION: "unknown_duration",
   ORPHAN_TIE: "orphan_tie",
+  // Narrowed volta-seam sibling of ORPHAN_TIE (Alex, 2026-08-05).
+  // Fires ONLY when the orphaned tie start satisfies all three:
+  //   (1) it's on the FINAL EVENT of the source measure,
+  //   (2) the source measure plays multiple times, and
+  //   (3) the next-played source measure differs across plays.
+  // That triangulates the exact "second ending doesn't close the tie
+  // held into the first ending" pattern (Entertainer m35→mX2, m87→mX4).
+  // Anything else stays ORPHAN_TIE at higher severity — a genuine
+  // mid-measure drop or a real tie authoring bug still blocks.
+  VOLTA_SEAM_TIE: "volta_seam_tie",
   NOTES_UNSORTED: "notes_unsorted",
   GRACE_DROPPED: "grace_dropped",
   CROSS_STAFF: "cross_staff",
@@ -53,45 +66,224 @@ export function validate(xmlString, label) {
   }
 
   // ---- Song-level ----------------------------------------------------------
-  if (truth.playback.hasRepeats && parsed.measures.length === truth.measureCount) {
+  //
+  // M4 playback-order routing (Alex, 2026-08-05):
+  //   Truth has always computed `truth.playback.order` (0-based indices
+  //   into truth.measures, one per playback measure). Pre-M4 the parser
+  //   didn't flatten, so the validator compared parsed[i] to
+  //   truth.measures[i] by source index. Post-M4 the parser emits
+  //   playback order; we route the truth side through playback.order so
+  //   parsed[i] compares against the source measure it's actually
+  //   playing.
+  //
+  //   When parsed.length !== truth.playback.order.length, parser and
+  //   truth disagree on flattening — that IS a real M4 finding, not a
+  //   bug to reconcile. In that case fall back to identity indexing so
+  //   the mutation-test path (pre-M4 parser + this validator) still
+  //   validates per-measure content correctly against the source
+  //   measures it emitted.
+  const flatteningMismatch = parsed.measures.length !== truth.playback.order.length;
+
+  if (parsed.measures.length === truth.measureCount && truth.playback.hasRepeats) {
+    // Parser emitted the source measures as-is; expected N played
+    // measures but got the source count. Pre-M4 semantics.
     add(
       DEFECTS.UNFLATTENED_REPEAT, null, null,
       `${truth.measureCount} written measures parsed as-is; playback order is ${truth.playback.order.length} measures`
     );
-  }
-  if (truth.playback.hasNavigation) {
+  } else if (flatteningMismatch) {
+    // Both flatten but the counts disagree — parser and truth resolve
+    // playback differently. One side has a repeat/volta/D.S. handling
+    // bug the other doesn't.
     add(
-      DEFECTS.UNRESOLVED_NAVIGATION, null, null,
-      truth.playback.navMarks.map((n) => `m${n.measure}:${n.marks.join("+")}`).join(" ")
+      DEFECTS.UNFLATTENED_REPEAT, null, null,
+      `parser emitted ${parsed.measures.length} measures; truth playback order has ${truth.playback.order.length} — parser and truth disagree on flattening`
     );
   }
-  // fifths is trustworthy; <mode> is not. Flag only when the source contradicts itself.
+  // M5 (Alex, 2026-08-05): unresolved_navigation fires ONLY when parser
+  // and truth resolve navigation to a different playback shape. The
+  // pre-M5 check fired unconditionally on truth.hasNavigation and was
+  // parser-independent — unsatisfiable by any parser change, same
+  // failure mode as the pre-M2 cross_staff check. This is a correctness
+  // check, not an informational demote: it catches implementation
+  // DRIFT between the parser's playbackOrder.js and truth's
+  // xmlTruth.js copy of the same algorithm. It does not catch design
+  // error in the navigation rule itself — that requires a human read of
+  // the flattened sequence against the source. Same caveat as §3.6's
+  // truth mirror.
+  //
+  // Skip when parser and truth already disagree on length —
+  // unflattened_repeat's second branch reported that at the song level.
+  // Also skip when there's no navigation to worry about (repeats-only
+  // scores get their shape verified by unflattened_repeat's length
+  // check and the per-measure content walk).
+  if (!flatteningMismatch && truth.playback.hasNavigation) {
+    for (let i = 0; i < parsed.measures.length; i++) {
+      const parserSrc = String(parsed.measures[i].sourceMeasure);
+      const truthIdx = truth.playback.order[i];
+      const truthSrc = String(truth.measures[truthIdx].sourceAttribute);
+      if (parserSrc !== truthSrc) {
+        add(DEFECTS.UNRESOLVED_NAVIGATION, i + 1, null,
+          `play position ${i + 1}: parser plays source ${parserSrc}, ` +
+          `truth expects ${truthSrc} — navigation resolved differently ` +
+          `(marks: ${truth.playback.navMarks.map((n) => `m${n.measure}:${n.marks.join("+")}`).join(" ")})`);
+        break;
+      }
+    }
+  }
+  // fifths is trustworthy; <mode> is not. Flag only when the source
+  // contradicts itself. Purely a source-quality signal — parser design
+  // uses fifths only, ignores mode (KEY_NAMES table in songParser.js:51
+  // always emits "major"). Severity 5 (informational) as of M6; not
+  // clearable by parser change.
   if (truth.mode && truth.fifths < 0 && truth.mode === "major") {
     add(DEFECTS.KEY_MODE_WRONG, null, null,
-      `source declares mode=${truth.mode} at fifths=${truth.fifths}; label may be the relative major`);
+      `source declares mode=${truth.mode} at fifths=${truth.fifths}; ` +
+      `parser correctly uses fifths only, so display name may not match ` +
+      `the composer's intent. Source-quality signal, not a parser defect.`);
   }
 
-  // ---- Unhandled notations -------------------------------------------------
-  // songParser.js reads none of these. Nothing that affects playback should be
-  // dropped silently, so each is reported at the severity of its impact.
+  // ---- Unhandled notations (Alex M6 redesign, 2026-08-05) --------------
+  //
+  // The pre-M6 check fired one finding per truth-side notation occurrence,
+  // parser-independent — unsatisfiable by any parser change. Redesigned
+  // by evidence type into three groups (no self-certification manifest):
+  //
+  //   GROUP A — alters sounding content. Truth models the transformation
+  //     so parser divergence surfaces as content_divergence on real
+  //     evidence. No tier finding needed for these tags.
+  //
+  //     EMPTY for this corpus as of 2026-08-05 (Alex). Attempted
+  //     to include <octave-shift> and <transpose> here, but empirical
+  //     pitch inspection of Für Elise m80-83 and Entertainer m36-37
+  //     showed MusicXML <pitch> already encodes sounding pitch —
+  //     <octave-shift> is a DISPLAY element (engraved-lower-under-
+  //     8va-bracket), same family as <time symbol="cut">. Applying
+  //     the transformation double-transposes and runs off the piano.
+  //     Spec §5 amended: octave-shift is CARRY (renderer stores it),
+  //     not HANDLE. Mechanism kept for a future notation that
+  //     genuinely alters sounding pitch; nothing currently uses it.
+  //     If a <transpose> song appears, truth should emit a distinct
+  //     "cannot verify" finding rather than guess — never apply an
+  //     unverified pitch shift to the reference.
+  //
+  //   GROUP C — handled, doesn't alter pitch. Parser exposes an
+  //     output field (measure.chord for <harmony>, measure.section for
+  //     <rehearsal>, parsed.tempos for <sound tempo>). Check the field
+  //     is populated on every source measure where the notation
+  //     appears. Field-presence, not warning-presence — no way for a
+  //     parser to self-certify by lying.
+  //
+  //   GROUP B — not implemented. Everything else. Parser adds a
+  //     parseWarnings[] entry naming the tag when it encounters one.
+  //     No warning + notation in truth → silent drop, fire the tier
+  //     finding. Correctly-handled tags never enter this group (they
+  //     move to A or C), so no false positives from lack of warning.
+  //     <octave-shift> and <transpose> currently fall through to
+  //     Group B — parser must warn (or CARRY the marker to move
+  //     them to Group C later).
+  const GROUP_A_TAGS = new Set();
+  const GROUP_C_TAGS = new Set(["harmony", "rehearsal"]);
+  const GROUP_C_FIELDS = { harmony: "chord", rehearsal: "section" };
   const TIER_DEFECT = {
     A: DEFECTS.UNHANDLED_PITCH,
     B: DEFECTS.UNHANDLED_TIMING,
     C: DEFECTS.UNHANDLED_TONE,
     D: DEFECTS.DISCARDED_METADATA,
   };
-  for (const [tag, list] of truth.notations.perMeasure) {
-    const defect = TIER_DEFECT[TIER_OF[tag]];
-    add(defect, null, null, `<${tag}> x${list.length} — m${list.slice(0, 8).join(", ")}${list.length > 8 ? ", +" + (list.length - 8) : ""}`);
+  // First-play lookup: find the first play position that plays a given
+  // source index (0-based). Used by Group C to attribute the metadata
+  // finding to a specific parser measure without double-reporting when
+  // the same source plays twice via a repeat.
+  const firstPlayOfSource = (sourceIdx0Based) => {
+    const i = truth.playback.order.indexOf(sourceIdx0Based);
+    return i === -1 ? null : i;
+  };
+  for (const [tag, sourceMeasureList] of truth.notations.perMeasure) {
+    if (GROUP_A_TAGS.has(tag)) {
+      // Truth applies the transformation; parser divergence surfaces via
+      // content_divergence. No standalone finding here.
+      continue;
+    }
+    if (GROUP_C_TAGS.has(tag)) {
+      const field = GROUP_C_FIELDS[tag];
+      const defect = TIER_DEFECT[TIER_OF[tag]] || DEFECTS.DISCARDED_METADATA;
+      for (const sourceNumOneBased of sourceMeasureList) {
+        const playIdx = firstPlayOfSource(sourceNumOneBased - 1);
+        if (playIdx == null) continue; // volta-skipped, never played
+        const pm = parsed.measures[playIdx];
+        if (pm && pm[field] == null) {
+          add(defect, sourceNumOneBased, null,
+            `<${tag}> in source m${sourceNumOneBased} not preserved as ` +
+            `measure.${field} (parser dropped source metadata)`);
+        }
+      }
+      continue;
+    }
+    // Group B: parseWarnings gate. Fires when notation present in truth
+    // AND parser did not emit a parseWarning naming the tag.
+    const warnings = parsed.parseWarnings || [];
+    const warned = warnings.some((w) => w.includes(`<${tag}>`));
+    if (!warned) {
+      const defect = TIER_DEFECT[TIER_OF[tag]];
+      add(defect, null, null,
+        `<${tag}> x${sourceMeasureList.length} — ` +
+        `m${sourceMeasureList.slice(0, 8).join(", ")}` +
+        `${sourceMeasureList.length > 8 ? ", +" + (sourceMeasureList.length - 8) + " more" : ""} ` +
+        `(no parseWarning acknowledging this tag)`);
+    }
   }
+
+  // ---- Tempo (Alex M6 redesign, 2026-08-05) -----------------------------
+  //
+  // Compare the SET of distinct tempo values (sorted, stringified) between
+  // truth and parser — not just counts. A parser that emits the correct
+  // number of wrong tempos must still fail. Falls back to counting
+  // parsed.defaultBpm as the single tempo when parser hasn't upgraded to
+  // per-measure tempos (spec §M7), so the check stays lenient during
+  // parser migration.
   if (truth.notations.distinctTempos.length > 1) {
-    add(DEFECTS.TEMPO_CHANGES_LOST, null, null,
-      `${truth.notations.tempos.length} tempo marks (${truth.notations.distinctTempos.length} distinct: ` +
-      `${truth.notations.distinctTempos.slice(0, 8).join(", ")}); parser keeps only the first`);
+    const truthTempoSet = [...truth.notations.distinctTempos]
+      .map((t) => Number(t))
+      .sort((a, b) => a - b)
+      .join(",");
+    // Parser exposes the flat tempo timeline at parsed.playback.tempos
+    // (moved there 2026-08-06 to co-live with the other playback-record
+    // fields; the pre-move top-level `parsed.tempos` no longer exists).
+    // Fall back to defaultBpm-as-single-tempo when the parser hasn't
+    // emitted a tempo list yet — keeps this check lenient for older
+    // parser versions during migration.
+    const parsedTempos = parsed.playback?.tempos;
+    const parsedTempoList = parsedTempos && parsedTempos.length > 0
+      ? parsedTempos.map((t) => Number(t.bpm ?? t))
+      : [Number(parsed.defaultBpm)];
+    const parsedTempoSet = [...new Set(parsedTempoList)]
+      .sort((a, b) => a - b)
+      .join(",");
+    if (truthTempoSet !== parsedTempoSet) {
+      add(DEFECTS.TEMPO_CHANGES_LOST, null, null,
+        `truth distinct tempos [${truthTempoSet}]; ` +
+        `parser distinct tempos [${parsedTempoSet}] — parser ` +
+        `${parsedTempos ? "emitted the wrong set" : "keeps only defaultBpm"}`);
+    }
   }
 
   // ---- Per measure ---------------------------------------------------------
-  const nCompare = Math.min(parsed.measures.length, truth.measures.length);
+  //
+  // Routing (M4): route truth via playback.order when lengths agree;
+  // fall back to source-index identity when they don't (parser hasn't
+  // flattened, or parser and truth disagree — the length-mismatch
+  // finding above surfaced that; the fallback keeps per-measure content
+  // validation meaningful against the source measures parser emitted).
+  const truthAt = flatteningMismatch
+    ? (i) => truth.measures[i]
+    : (i) => truth.measures[truth.playback.order[i]];
+  const sourceIdxAt = flatteningMismatch
+    ? (i) => i
+    : (i) => truth.playback.order[i];
+  const nCompare = flatteningMismatch
+    ? Math.min(parsed.measures.length, truth.measures.length)
+    : Math.min(parsed.measures.length, truth.playback.order.length);
 
   // Anacrusis: MuseScore marks it implicit="yes"; otherwise infer from a short m1.
   // A later short measure whose length + pickup = one bar is the borrowed partner
@@ -102,15 +294,46 @@ export function validate(xmlString, label) {
     const s0 = sumEvents(parsed.measures[0]?.rh ?? []);
     if (truth.implicitFirst || (s0 !== null && s0 < m0.measureLen - 1e-6)) pickup = s0;
   }
+  const pickupSourceIdx = truth.playback.order[0] ?? 0;
+
+  // First-play dedup for INFORMATIONAL classes only (Alex, 2026-08-05):
+  //   Anacrusis, grace_dropped, cross_staff are properties of the WRITTEN
+  //   score — one finding per source measure. Being a pickup is a source
+  //   attribute; replaying the pickup doesn't create a new pickup.
+  //   Deduping by source keeps "anacrusis stays at 4" a stable invariant
+  //   across every later milestone; per-play counting would make it a
+  //   function of repeat structure instead.
+  //
+  //   CONTENT checks (firstDivergence, per-hand sums / tuplet_scaling /
+  //   voice_collision / measure_overflow / incomplete_measure, tie
+  //   integrity, unknown_duration, gap_fill_inexact, notes_unsorted) DO
+  //   run on every playback — a flattener bug that corrupts the second
+  //   pass but not the first has to be visible.
+  const seenSourceForInfo = new Set();
 
   for (let i = 0; i < nCompare; i++) {
     const pm = parsed.measures[i];
-    const tm = truth.measures[i];
+    const tm = truthAt(i);
     const mNum = i + 1;
+    const sourceIdx = sourceIdxAt(i);
+    const firstPlay = !seenSourceForInfo.has(sourceIdx);
+    if (firstPlay) seenSourceForInfo.add(sourceIdx);
     const mLen = measureBeats(pm.timeSignature);
 
-    if (tm.flags.graceNotes > 0) {
-      add(DEFECTS.GRACE_DROPPED, mNum, null, `${tm.flags.graceNotes} grace note(s) silently dropped`);
+    // grace_dropped is Group B (Alex M6 redesign): fire only when
+    // truth has grace notes AND parser did not warn about them.
+    // Correctly-handled grace notes (post-M6, if parser preserves)
+    // would clear the warning gate by emitting a parseWarning; a
+    // parser that fully renders grace notes (no drop) can either
+    // still warn (informational) or emit a new tag we'd add to Group A.
+    if (tm.flags.graceNotes > 0 && firstPlay) {
+      const warnings = parsed.parseWarnings || [];
+      const warnedGrace = warnings.some((w) => w.includes("<grace>") || w.includes("grace note"));
+      if (!warnedGrace) {
+        add(DEFECTS.GRACE_DROPPED, mNum, null,
+          `${tm.flags.graceNotes} grace note(s) silently dropped ` +
+          `(no parseWarning acknowledging grace notes)`);
+      }
     }
     // Informational only — cross-staff engraving is expected input under
     // spec §3.6 (Moonlight's arpeggio convention, Beethoven's cross-staff
@@ -118,9 +341,11 @@ export function validate(xmlString, label) {
     // per-voice hand assignment. Any actual routing mistake surfaces below
     // as CROSS_STAFF-labeled content_divergence (sum matches) or as
     // MEASURE_OVERFLOW / INCOMPLETE_MEASURE (sum fails). Kept at severity 5.
-    for (const key of tm.flags.crossStaffVoices) {
-      add(DEFECTS.CROSS_STAFF, mNum, null,
-        `${key} — cross-staff engraving present (§3.6: expected input, informational only)`);
+    if (firstPlay) {
+      for (const key of tm.flags.crossStaffVoices) {
+        add(DEFECTS.CROSS_STAFF, mNum, null,
+          `${key} — cross-staff engraving present (§3.6: expected input, informational only)`);
+      }
     }
 
     for (const [hand, staff] of [["rh", "1"], ["lh", "2"]]) {
@@ -175,16 +400,37 @@ export function validate(xmlString, label) {
             const src = [...tm.voices.entries()].filter(([k]) => k.startsWith(`${staff}:`));
             const srcSum = src.reduce((s, [, evs]) => s + evs.reduce((a, e) => a + e.dur, 0), 0);
             const short = mLen - sum;
-            if (pickup !== null && mNum === 1 && Math.abs(short - (mLen - pickup)) < 1e-6) {
-              add(DEFECTS.ANACRUSIS, mNum, hand, `pickup of ${round(sum)} of ${mLen} — keep short, do NOT pad`);
+            // Classify by SOURCE property, not play-order (M4). The
+            // pickup branch used to gate on `mNum === 1`; under
+            // flattening the pickup replays at other mNums (Für Elise
+            // parsed[9] = source 0 replay). Route the pickup check
+            // through sourceIdx so the classification survives repeats,
+            // then use firstPlay to dedup the anacrusis finding
+            // (informational — one per source measure).
+            //
+            // INCOMPLETE_MEASURE is a content check and does NOT
+            // dedup — a genuinely short measure inside a repeat fires
+            // on every play, so a flattener bug that broke the sum
+            // only on the second pass would still be visible.
+            const isPickupSource = sourceIdx === pickupSourceIdx;
+            let kind = "incomplete";
+            if (pickup !== null && isPickupSource && Math.abs(short - (mLen - pickup)) < 1e-6) {
+              kind = "pickup";
             } else if (pickup !== null && Math.abs(sum + pickup - mLen) < 1e-6) {
+              kind = "borrowed";
+            }
+            if (kind === "pickup" && firstPlay) {
+              add(DEFECTS.ANACRUSIS, mNum, hand, `pickup of ${round(sum)} of ${mLen} — keep short, do NOT pad`);
+            } else if (kind === "borrowed" && firstPlay) {
               add(DEFECTS.ANACRUSIS, mNum, hand,
                 `${round(sum)} of ${mLen}; + pickup ${round(pickup)} = one full bar — borrowed partner, do NOT pad`);
-            } else {
+            } else if (kind === "incomplete") {
               add(DEFECTS.INCOMPLETE_MEASURE, mNum, hand,
                 `sums to ${round(sum)} of ${mLen}` +
                 (Math.abs(srcSum - sum) < 1e-6 ? " — source is short; pad with trailing rest" : ""));
             }
+            // pickup/borrowed on non-first-play: informational dedup —
+            // silently skip so the count is source-stable.
           }
         }
       } else {
@@ -250,10 +496,43 @@ export function validate(xmlString, label) {
   }
 
   // ---- Tie integrity across the whole song --------------------------------
+  //
+  // Tracks per-midi start context (stack of {playIdx, sourceIdx,
+  // isLastEvent}) so end-of-song orphans can be classified. The stack
+  // handles the rare case of a midi opened, opened again, then closed
+  // once — pop the most recent start. Dedup at classification time (one
+  // finding per (midi, hand)) matches the pre-narrowing behaviour so
+  // Entertainer's 5 raw orphans still surface as 3 findings.
+  //
+  // Narrowed volta-seam classifier (Alex, 2026-08-05): a tie start
+  // orphaned at end-of-song classifies as VOLTA_SEAM_TIE (informational)
+  // iff EVERY open instance of that midi was in a source measure that
+  //   (1) has multiple play positions in playback.order, AND
+  //   (2) whose next-played source differs across those plays, AND
+  //   (3) the start itself was the FINAL event of its measure's hand.
+  // Otherwise it stays ORPHAN_TIE (severity 3 — still capable of
+  // blocking). A single genuine mid-measure orphan on ANY midi keeps
+  // that midi at ORPHAN_TIE even if other instances of the same midi
+  // are seams.
+  const sourceNextsByPlay = new Map(); // sourceIdx -> [nextSourceIdx per play]
+  for (let i = 0; i < parsed.measures.length; i++) {
+    const src = parsed.measures[i].sourceMeasure;
+    const next = i + 1 < parsed.measures.length ? parsed.measures[i + 1].sourceMeasure : null;
+    if (!sourceNextsByPlay.has(src)) sourceNextsByPlay.set(src, []);
+    sourceNextsByPlay.get(src).push(next);
+  }
+  const hasVoltaSeam = (src) => {
+    const nexts = sourceNextsByPlay.get(src) || [];
+    if (nexts.length < 2) return false;
+    return new Set(nexts).size > 1;
+  };
   for (const hand of ["rh", "lh"]) {
-    let open = new Set();
-    for (const m of parsed.measures) {
-      for (const e of m[hand]) {
+    const open = new Map(); // midi -> [{playIdx, sourceIdx, isLastEvent, nextSource}]
+    for (let pi = 0; pi < parsed.measures.length; pi++) {
+      const m = parsed.measures[pi];
+      const events = m[hand] || [];
+      for (let ei = 0; ei < events.length; ei++) {
+        const e = events[ei];
         const starts = new Set();
         const ends = new Set();
         for (const n of e.notes) {
@@ -261,16 +540,42 @@ export function validate(xmlString, label) {
           if (n.tie === "end" || n.tie === "both") ends.add(n.midi);
         }
         for (const midi of ends) {
-          if (!open.has(midi)) {
+          const stack = open.get(midi);
+          if (!stack || stack.length === 0) {
             add(DEFECTS.ORPHAN_TIE, m.number, hand, `tie end with no start (midi ${midi})`);
+          } else {
+            stack.pop();
           }
         }
-        open = new Set([...open].filter((x) => !ends.has(x)));
-        for (const s of starts) open.add(s);
+        for (const s of starts) {
+          if (!open.has(s)) open.set(s, []);
+          open.get(s).push({
+            playIdx: pi,
+            sourceIdx: m.sourceMeasure,
+            isLastEvent: ei === events.length - 1,
+            nextSource: pi + 1 < parsed.measures.length ? parsed.measures[pi + 1].sourceMeasure : null,
+          });
+        }
       }
     }
-    for (const midi of open) {
-      add(DEFECTS.ORPHAN_TIE, null, hand, `tie start never closed (midi ${midi})`);
+    for (const [midi, stack] of open) {
+      if (stack.length === 0) continue;
+      const allSeams = stack.every(
+        (ctx) => ctx.isLastEvent && hasVoltaSeam(ctx.sourceIdx)
+      );
+      if (allSeams) {
+        // Every open instance of this midi is a volta seam — report
+        // as informational with the specific seams named.
+        const seamNotes = stack.map(
+          (ctx) => `printed m${ctx.sourceIdx}→m${ctx.nextSource ?? "(end)"}`
+        );
+        add(DEFECTS.VOLTA_SEAM_TIE, null, hand,
+          `tie start (midi ${midi}) not closed at volta seam${seamNotes.length > 1 ? "s" : ""}: ` +
+          `${seamNotes.join(", ")} — second ending does not close the tie held into the ` +
+          `first ending; source-authoring choice, not a parser defect`);
+      } else {
+        add(DEFECTS.ORPHAN_TIE, null, hand, `tie start never closed (midi ${midi})`);
+      }
     }
   }
 

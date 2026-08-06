@@ -38,7 +38,7 @@
         "matcher": "",
         "hooks": [{
           "type": "command",
-          "command": "powershell.exe -c \"[System.Media.SystemSounds]::Exclamation.Play()\""
+         "command": "powershell.exe -NoProfile -c \"(New-Object Media.SoundPlayer 'C:\\Windows\\Media\\Windows Ringout.wav').PlaySync()\""
         }]
       }
     ],
@@ -46,7 +46,7 @@
       {
         "hooks": [{
           "type": "command",
-          "command": "powershell.exe -c \"[System.Media.SystemSounds]::Asterisk.Play()\""
+          "command": "powershell.exe -NoProfile -c \"(New-Object Media.SoundPlayer 'C:\\Windows\\Media\\Windows Ringout.wav').PlaySync()\""
         }]
       }
     ]
