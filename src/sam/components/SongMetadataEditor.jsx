@@ -16,6 +16,7 @@ export default function SongMetadataEditor({
   measureWidth,
   playbackSpeed,
   onSongUpdate,
+  hasImportedFingerings = false,
 }) {
   const [editingSong, setEditingSong] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -26,6 +27,7 @@ export default function SongMetadataEditor({
   const [editChordMs, setEditChordMs] = useState("");
   const [editMeasureWidth, setEditMeasureWidth] = useState("");
   const [editShowBpm, setEditShowBpm] = useState(false);
+  const [editShowImported, setEditShowImported] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const hasAudio = !!song?.audioFilePath;
@@ -40,6 +42,9 @@ export default function SongMetadataEditor({
     setEditChordMs(song.defaultChordMs != null ? String(song.defaultChordMs) : "");
     setEditMeasureWidth(song.defaultMeasureWidth != null ? String(song.defaultMeasureWidth) : "");
     setEditShowBpm(false);
+    // Default true (matches the app-wide "imported shown by default" behavior)
+    // so saving an unchanged fresh import doesn't silently hide them.
+    setEditShowImported(song.showImportedFingerings ?? true);
   }
 
   function handleEditEnableBpm() {
@@ -84,6 +89,7 @@ export default function SongMetadataEditor({
           default_timing_window_ms: timingNum,
           default_chord_ms: chordNum,
           default_measure_width: widthNum,
+          show_imported_fingerings: editShowImported,
         })
         .eq("id", songDbId);
 
@@ -105,6 +111,7 @@ export default function SongMetadataEditor({
       defaultTimingWindowMs: timingNum,
       defaultChordMs: chordNum,
       defaultMeasureWidth: widthNum,
+      showImportedFingerings: editShowImported,
     };
 
     if (onSongUpdate) {
@@ -277,6 +284,21 @@ export default function SongMetadataEditor({
                 </div>
               </div>
               <p className="text-xs text-muted-foreground -mt-1">Leave blank to use app defaults (300ms / 80ms / 300px)</p>
+
+              {hasImportedFingerings && (
+                <>
+                  <label className="flex items-center gap-2 text-sm font-medium text-foreground cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={editShowImported}
+                      onChange={(e) => setEditShowImported(e.target.checked)}
+                      className="w-4 h-4 accent-primary"
+                    />
+                    Show imported fingerings
+                  </label>
+                  <p className="text-xs text-muted-foreground -mt-3">Fingering numbers from the MusicXML source. Manual fingerings always show.</p>
+                </>
+              )}
             </div>
 
             <div className="flex gap-3 mt-6">

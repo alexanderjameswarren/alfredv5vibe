@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { supabase } from "../../supabaseClient";
 import { parseMusicXML } from "../lib/songParser";
 import { fanOutMeasures, isMeasuresStale, recompileMeasures } from "../lib/measureCompiler";
+import { importMusicxmlFingerings } from "../lib/fingeringsApi";
 import { validateSongDocument } from "../lib/songSchema";
 import usePracticeStats from "../lib/usePracticeStats";
 import useSongLibrary from "../lib/useSongLibrary";
@@ -295,6 +296,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
       defaultChordMs: data.default_chord_ms ?? null,
       defaultMeasureWidth: data.default_measure_width ?? null,
       audioFilePath: data.audio_file_path || null,
+      showImportedFingerings: data.show_imported_fingerings ?? false,
       measures,
     };
     onSongLoaded(song);
@@ -433,6 +435,10 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
         time_signature: song.timeSignature || "4/4",
         default_bpm: song.defaultBpm || 68,
         measures: song.measures,
+        // Imported fingerings shown by default (the DB column defaults to
+        // false; override on import so editorial fingering is visible without
+        // a toggle). No-op for imports that carry none.
+        show_imported_fingerings: true,
         ...lineageFields(song),
       })
       .select("id, user_id")
@@ -444,7 +450,6 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
           return;
         }
         console.log("[Sam] Song saved to Supabase, id:", data.id);
-        if (onSongSaved) onSongSaved(data.id);
         try {
           await fanOutMeasures(data.id, song.measures, supabase);
         } catch (e) {
@@ -454,6 +459,19 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
             `Try re-importing.`
           );
         }
+        // Imported RH fingerings (spec §6). Non-fatal on failure. Written
+        // BEFORE onSongSaved so useFingeringEditor's load (keyed on the id
+        // this signals) sees the musicxml rows on first render — otherwise
+        // toggling "show imported fingerings" would find an empty set.
+        try {
+          if (song.fingerings?.length) {
+            await importMusicxmlFingerings(data.id, song.fingerings);
+          }
+        } catch (e) {
+          console.error("[Sam] Imported fingering write failed:", e);
+        }
+        // Signal saved AFTER measures + fingerings exist.
+        if (onSongSaved) onSongSaved(data.id);
         // Upload the raw MusicXML to sam-scores/{userId}/{songId}.musicxml
         // and populate sam_songs.source_xml_path. MusicXML paths only —
         // JSON imports don't have a source XML to store. Fire-and-forget

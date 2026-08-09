@@ -47,6 +47,13 @@ export default function useFingeringEditor({ songId, showImported }) {
     [byCoord, showImported]
   );
 
+  // Whether this song has any imported (musicxml) fingerings at all — gates
+  // the "Show/Hide Imported" control and the settings checkbox.
+  const hasImported = useMemo(
+    () => Object.values(byCoord).some((e) => e && e.musicxml),
+    [byCoord]
+  );
+
   const flashError = useCallback((msg) => {
     setError(msg);
     if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
@@ -115,6 +122,7 @@ export default function useFingeringEditor({ songId, showImported }) {
 
   return {
     fingerings,
+    hasImported,
     setFinger,
     clearFinger,
     undo,

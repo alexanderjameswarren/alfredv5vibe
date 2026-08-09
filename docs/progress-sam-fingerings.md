@@ -1,6 +1,6 @@
 # Progress: RH Fingering Cues
 
-## Status: Steps 1–4 verified. Step 5 complete (number bar + writes/undo) — awaiting verification
+## Status: ✅ COMPLETE — all steps (0–7) implemented and verified. MCP deployed. Debug handle removed.
 
 Spec: `docs/technical-spec-sam-fingerings.md`
 Migration: `docs/migration-sam-fingerings.sql`
@@ -231,27 +231,95 @@ the score matches. Reload and confirm what remains is what you expect.
 
 ---
 
-## Step 6 — MusicXML import
+## Step 6 — MusicXML import — ✅ COMPLETE
 
-- [ ] `songParser.js` reads `<notations><technical><fingering>` on RH notes
-- [ ] Emits a parallel `fingerings[]`, NOT inside event objects
-- [ ] Import path writes rows with `source: 'musicxml'`
-- [ ] `show_imported_fingerings` checkbox in song settings
+- [x] `songParser.js` reads `<notations><technical><fingering>` on RH notes
+- [x] Emits a parallel `fingerings[]`, NOT inside event objects (stripped before return)
+- [x] Import path writes rows with `source: 'musicxml'` (`importMusicxmlFingerings`)
+- [x] `show_imported_fingerings` checkbox in song settings (`SongMetadataEditor`)
 
 **Verify:** re-import a Burgmüller MXL that carries editorial fingering. With the toggle
 off, no imported badges appear. Turn it on, they appear. Set a manual fingering over one of
 them and confirm the manual value wins. Clear the manual one and confirm the imported value
 returns.
 
+**Use `burgmuller-arabesque-op-100-no-2.mxl`** — verified to carry 10 editorial fingerings.
+La Candeur, Pastorale, and Für Elise fixtures carry **none**, so they won't show imported
+badges regardless of the toggle.
+
+### Step 6 decisions
+
+- **Parser (three-phase rewrite, 2026-08-06):** `<notations><technical><fingering>` (1–5) is
+  read onto each note in `parseMeasureIntermediate`, rides through `mergeStaff` +
+  `fromTimeline` (both spread note fields), then `parseMusicXML` lifts it into a parallel
+  `song.fingerings[]` and **deletes the inline field** before returning (spec §1). No change
+  to the ported `mergeStaff`: a tie-split note repeats its fingering on every fragment, so
+  extraction takes only the **onset** fragment (skips `tie` `'end'`/`'both'`) — one press,
+  one row. `noteIndex` is the low→high pitch rank (notes are pitch-sorted in
+  `mergeAndConvert`), matching the overlay.
+- **Play-order keying (spec §2):** fingerings key on the flattened play-order `measureNum`,
+  so a repeated source measure yields an independent row at each play position (confirmed:
+  Arabesque m23–26 fingerings reappear at m39–42). Note objects are shared across play
+  positions, so extraction collects fully before stripping.
+- **Import write path:** `importMusicxmlFingerings(songId, fingerings)` in `fingeringsApi`
+  replaces the song's `musicxml` rows (never touches `manual`). Called from `commitImport`
+  after fan-out; **`onSongSaved` moved to the end** so `songDbId` is set only after the rows
+  exist — otherwise `useFingeringEditor`'s load races the write and the toggle would reveal
+  nothing.
+- **Settings toggle in `SongMetadataEditor`** (the in-player pencil), not the library modal —
+  it calls `onSongUpdate`, so flipping it updates the live `song` and the resolved fingerings
+  recompute immediately, no reload. DB column `show_imported_fingerings` (snake); in-memory
+  song field `showImportedFingerings` (camel, matching `defaultBpm` etc.). `handleLoadFromLibrary`
+  maps the column onto the song object; `SamPlayer` reads the camel field.
+- **Verified** via a throwaway jsdom test over the Burgmüller/Für Elise fixtures: extraction
+  well-formed, finger ∈ 1–5, and zero inline leak into `measures`.
+
+### Step 6 follow-up (2026-08-06, per request): default show + toolbar toggle
+
+- **Imported fingerings now default to SHOWN.** DB column default stays `false` (no
+  migration), but `commitImport` inserts `show_imported_fingerings: true` and the app reads
+  `song.showImportedFingerings ?? true`. So a freshly imported score shows editorial
+  fingering with no toggle. (Songs stored `false` before this change keep that value until
+  toggled or re-imported.)
+- **Toolbar toggle button** next to "Fingering mode": label **"Show Imported" ↔ "Hide
+  Imported"**, toggles immediately and persists (`toggleShowImported` in `SamPlayer`). Same
+  effect as the settings checkbox.
+- **Both controls are gated on the song actually having imported fingerings.**
+  `useFingeringEditor` exposes `hasImported` (any coord has a `musicxml` row). The toolbar
+  button renders only when `hasImported`; `hasImported` is threaded `SamPlayer → SettingsBar
+  → SongMetadataEditor` so the checkbox appears only then too.
+- `SongMetadataEditor` checkbox initializes `?? true` so saving an unchanged fresh import
+  doesn't silently hide imported fingerings.
+
 ---
 
-## Step 7 — MCP read (optional, do last)
+## Step 7 — MCP read (optional, do last) — ✅ COMPLETE (needs deploy to verify)
 
-- [ ] `get_sam_song_measures` returns `placed_fingerings` alongside `placed_lyrics`
-- [ ] Tier 1, `ctx.db` only, bare-data payload
+- [x] `get_sam_song_measures` returns `placed_fingerings` alongside `placed_lyrics`
+- [x] Tier 1, `ctx.db` only, bare-data payload
 
-**Verify:** call `get_sam_song_measures` on a song with fingerings and confirm they appear
-in the response.
+**Verify:** deploy the MCP function, then call `get_sam_song_measures` on the imported
+Burgmüller Arabesque and confirm each fingered measure carries a `placed_fingerings` array.
+
+### Step 7 decisions
+
+- **Handler:** `getSamSongMeasures` in `_shared/alfred-tools/tool-handlers.ts` gains a
+  `sam_song_fingerings` fetch (same range-filter shape as the lyrics fetch) and a
+  per-measure `placed_fingerings` array on each formatted measure. Wired through the existing
+  tier-1 `getSamSongMeasuresTool` `defineTool` in `mcp/index.ts` (uses `ctx.db`, RLS-scoped,
+  bare-data payload — no envelope). No schema change → no migration / conformance step.
+- **Raw rows, not render-resolved:** each entry is `{ rh_index, note_index, finger, source }`
+  with `source` `'manual'|'musicxml'`. An authoring reader wants both source layers visible;
+  precedence (manual-wins) is a render concern, deliberately not applied here.
+- **Deploy required to verify:** `npx supabase functions deploy mcp --no-verify-jwt`
+  (the live MCP tool runs the deployed code; the local edit isn't exercised until deploy).
+  Deployed 2026-08-09; verified against the imported Arabesque.
+
+### Cleanup (2026-08-09)
+
+- Removed the `window.__samFingerings` debug handle and its `import * as fingeringsApi`
+  from `SamPlayer` (Step 2 verification aid; the real consumers import the API directly).
+  Build clean.
 
 ---
 

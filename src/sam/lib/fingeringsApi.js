@@ -89,6 +89,37 @@ export async function clearFingering(songId, coord) {
   if (error) throw new Error("Failed to clear fingering: " + error.message);
 }
 
+// Write imported fingerings for a song (spec §6). Replaces this song's
+// 'musicxml' rows and never touches 'manual' rows, so a re-import refreshes
+// the source cues while manual overrides survive. `fingerings` is the parser's
+// parallel array: [{ measureNum, rhIndex, noteIndex, finger }]. Returns the
+// number of rows written.
+export async function importMusicxmlFingerings(songId, fingerings) {
+  const { error: delErr } = await supabase
+    .from("sam_song_fingerings")
+    .delete()
+    .eq("song_id", songId)
+    .eq("source", "musicxml");
+  if (delErr) throw new Error("Failed to clear imported fingerings: " + delErr.message);
+
+  if (!fingerings || fingerings.length === 0) return 0;
+
+  const rows = fingerings.map((f) => ({
+    song_id: songId,
+    measure_num: f.measureNum,
+    rh_index: f.rhIndex,
+    note_index: f.noteIndex ?? 0,
+    finger: f.finger,
+    source: "musicxml",
+    updated_at: new Date().toISOString(),
+  }));
+  const { error: insErr } = await supabase
+    .from("sam_song_fingerings")
+    .insert(rows);
+  if (insErr) throw new Error("Failed to write imported fingerings: " + insErr.message);
+  return rows.length;
+}
+
 // Render precedence for one coordinate entry (spec §3):
 //   - a manual row always wins, regardless of the toggle;
 //   - a musicxml row shows only when show_imported_fingerings is on AND no manual

@@ -23,6 +23,7 @@ export default function SettingsBar({
   onFullSong,
   onLyricsChanged,
   skipTiedNotes,
+  hasImportedFingerings,
 }) {
   const isPaused = playbackState === "paused";
 
@@ -65,6 +66,7 @@ export default function SettingsBar({
               measureWidth={measureWidth}
               playbackSpeed={playbackSpeed}
               onSongUpdate={onSongUpdate}
+              hasImportedFingerings={hasImportedFingerings}
             />
           </div>
 

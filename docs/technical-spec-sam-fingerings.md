@@ -208,8 +208,15 @@ The `songParser.js` rewrite reads `<notations><technical><fingering>` on RH note
 a parallel `fingerings[]` array alongside the measure data — **not** inside the event
 objects. The import path writes those rows with `source: 'musicxml'`.
 
-`sam_songs.show_imported_fingerings` defaults to `false`. A checkbox in song settings turns
-it on per song.
+`sam_songs.show_imported_fingerings` gates imported display per song. **Imported fingerings
+are shown by default** (changed 2026-08-06 per request): the DB column still defaults to
+`false`, but the import path stores `true`, and the app treats a nullish value as `true`.
+Two controls flip it, both with identical effect and both shown **only when the score
+actually has imported fingerings**:
+- a **"Show Imported" / "Hide Imported"** button in the score toolbar next to "Fingering
+  mode" (immediate toggle, persists);
+- a **"Show imported fingerings"** checkbox in the song-settings modal.
+Manual fingerings always render regardless.
 
 ## Components affected
 

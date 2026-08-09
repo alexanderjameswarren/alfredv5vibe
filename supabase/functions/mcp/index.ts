@@ -840,7 +840,7 @@ function createMcpServer(token: string) {
     {
       title: "Get SAM Song Measures",
       description:
-        "Read measures for a SAM song, with optional range filter. Returns measure notation (RH/LH events), metadata, and any placed lyrics.",
+        "Read measures for a SAM song, with optional range filter. Returns measure notation (RH/LH events), metadata, any placed lyrics, and any placed RH fingerings (each with note_index, finger 1-5, and source 'manual'|'musicxml').",
       inputSchema: {
         song_id: z.string().describe("UUID of the song"),
         start_measure: z.number().optional().describe("First measure number to return (inclusive)"),

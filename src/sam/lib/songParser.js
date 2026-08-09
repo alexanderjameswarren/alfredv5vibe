@@ -437,6 +437,15 @@ function parseMeasureIntermediate(measEl, state, options) {
         else if (tieStop) tie = "end";
         noteObj = { midi, name };
         if (tie) noteObj.tie = tie;
+        // M/spec §6 — RH fingering cue. Rides on the note object through
+        // mergeStaff + fromTimeline; parseMusicXML lifts it into a parallel
+        // fingerings[] array and strips it before emitting (never inline in
+        // the measure objects, spec §1). 1–5 only.
+        const fingeringEl = el.querySelector("notations > technical > fingering");
+        if (fingeringEl) {
+          const fv = parseInt(fingeringEl.textContent, 10);
+          if (fv >= 1 && fv <= 5) noteObj.fingering = fv;
+        }
       }
     }
 
@@ -1015,6 +1024,42 @@ export function parseMusicXML(xmlString) {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // RH fingering cues (spec §6). Each note carried its <fingering> through the
+  // pipeline; lift them into a parallel array keyed by PLAY-ORDER
+  // (measureNum, rhIndex, noteIndex), then strip the inline field so emitted
+  // measures carry no fingering (spec §1). Notes are pitch-sorted by
+  // mergeAndConvert, so noteIndex is the low→high pitch rank the overlay uses.
+  //
+  //   - RH only: the table is rh_index-keyed; LH cues are dropped (but still
+  //     stripped from the output below).
+  //   - Onset only: a tie-split note repeats its fingering on every fragment;
+  //     take just the onset (skip tie 'end'/'both') so one press = one row.
+  //   - Play order: under flattening a repeated source measure yields an
+  //     independent row at each play position (spec §2).
+  // Collect fully before stripping (note objects are shared across play
+  // positions, so a repeated measure must be read at each `number` first).
+  // -------------------------------------------------------------------------
+  const fingerings = [];
+  for (const m of measures) {
+    (m.rh || []).forEach((evt, rhIndex) => {
+      (evt.notes || []).forEach((n, noteIndex) => {
+        if (n.fingering == null) return;
+        if (n.tie === "end" || n.tie === "both") return; // tie continuation, not the onset
+        fingerings.push({ measureNum: m.number, rhIndex, noteIndex, finger: n.fingering });
+      });
+    });
+  }
+  for (const m of measures) {
+    for (const hand of ["rh", "lh"]) {
+      for (const evt of (m[hand] || [])) {
+        for (const n of (evt.notes || [])) {
+          if ("fingering" in n) delete n.fingering;
+        }
+      }
+    }
+  }
+
   return {
     title,
     artist,
@@ -1055,5 +1100,6 @@ export function parseMusicXML(xmlString) {
     },
     ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
     ...(parseWarningsStructured.length > 0 ? { parseWarningsStructured } : {}),
+    ...(fingerings.length > 0 ? { fingerings } : {}),
   };
 }

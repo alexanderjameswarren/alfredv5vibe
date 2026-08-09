@@ -21,7 +21,6 @@ import { matchChord, findClosestBeat } from "./lib/noteMatching";
 import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
 import { normalizeMeasure } from "./lib/measureUtils";
 import { loadAudio } from "./lib/audioPlayer";
-import * as fingeringsApi from "./lib/fingeringsApi";
 import { supabase } from "../supabaseClient";
 
 function AudioMsCounter({ audioElement }) {
@@ -106,26 +105,37 @@ export default function SamPlayer({ onBack }) {
     saveLyrics,
   } = useLyricEditor({ song, songDbId, skipTiedNotes, supabase });
 
-  // Step 2 verification handle (fingerings data layer). Exposes the API bound to
-  // the authenticated client, plus the current song's id, so it can be exercised
-  // from the browser console. Remove once FingeringBar imports the API directly.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.__samFingerings = { ...fingeringsApi, songId: songDbId };
-  }, [songDbId]);
-
   // Fingering writes + resolved render map (load, optimistic set/clear, undo).
-  // show_imported_fingerings gates only musicxml rows (none until Step 6), so
-  // manual fingerings render regardless of its value.
+  // Imported (musicxml) fingerings default to SHOWN — `?? true` — so a
+  // freshly imported score displays its editorial fingering without a toggle.
+  const showImportedFingerings = song?.showImportedFingerings ?? true;
   const {
     fingerings,
+    hasImported,
     setFinger,
     clearFinger,
     undo: undoFingering,
     canUndo: canUndoFingering,
     error: fingeringError,
     dismissError: dismissFingeringError,
-  } = useFingeringEditor({ songId: songDbId, showImported: song?.show_imported_fingerings ?? false });
+  } = useFingeringEditor({ songId: songDbId, showImported: showImportedFingerings });
+
+  // Toggle "show imported fingerings" from the score toolbar. Updates the live
+  // song immediately (the hook re-resolves) and persists to sam_songs. Same
+  // effect as the settings-modal checkbox.
+  const toggleShowImported = useCallback(() => {
+    const next = !showImportedFingerings;
+    setSong((s) => (s ? { ...s, showImportedFingerings: next } : s));
+    if (songDbId) {
+      supabase
+        .from("sam_songs")
+        .update({ show_imported_fingerings: next })
+        .eq("id", songDbId)
+        .then(({ error }) => {
+          if (error) console.error("[Sam] Failed to toggle imported fingerings:", error);
+        });
+    }
+  }, [showImportedFingerings, songDbId]);
 
   // A selection can't survive a song change (its coordinate references old measures).
   useEffect(() => { setFingeringSelection(null); }, [songDbId]);
@@ -691,6 +701,7 @@ export default function SamPlayer({ onBack }) {
                   onFullSong={() => setSnippet(null)}
                   onLyricsChanged={setLyricPlacements}
                   skipTiedNotes={skipTiedNotes}
+                  hasImportedFingerings={hasImported}
                 />
 
                 <AudioControls audioElement={audioElement} playbackState={playbackState} />
@@ -757,6 +768,15 @@ export default function SamPlayer({ onBack }) {
                         className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         ↺ Undo
+                      </button>
+                    )}
+                    {hasImported && (
+                      <button
+                        onClick={toggleShowImported}
+                        aria-pressed={showImportedFingerings}
+                        className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors"
+                      >
+                        {showImportedFingerings ? "Hide Imported" : "Show Imported"}
                       </button>
                     )}
                     <button

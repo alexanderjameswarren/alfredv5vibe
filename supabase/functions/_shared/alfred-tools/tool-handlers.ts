@@ -824,6 +824,22 @@ export async function getSamSongMeasures(
 
     const { data: lyrics } = await lyricsQuery;
 
+    // 4b. Fetch placed RH fingerings for the same range. Raw rows (both
+    // 'manual' and 'musicxml' with their source), not render-resolved — an
+    // authoring reader wants the full picture, and precedence is a render
+    // concern. Coordinate is (measure_num, rh_index, note_index).
+    let fingeringsQuery = client
+      .from("sam_song_fingerings")
+      .select("measure_num, rh_index, note_index, finger, source")
+      .eq("song_id", params.song_id)
+      .order("measure_num", { ascending: true })
+      .order("rh_index", { ascending: true });
+
+    if (params.start_measure) fingeringsQuery = fingeringsQuery.gte("measure_num", params.start_measure);
+    if (params.end_measure) fingeringsQuery = fingeringsQuery.lte("measure_num", params.end_measure);
+
+    const { data: fingerings } = await fingeringsQuery;
+
     // 5. Format measures for readability
     const formatted = (measures || []).map((m: { number: number; rh: unknown[] | null; lh: unknown[] | null; time_signature: unknown; audio_offset_ms: number | null; chord: string | null; section: string | null; source_measure: number | null }) => {
       const rhEvents = (m.rh || []) as { duration: string; notes?: { name: string }[] }[];
@@ -839,6 +855,7 @@ export async function getSamSongMeasures(
       });
 
       const measLyrics = (lyrics || []).filter((l: { measure_num: number }) => l.measure_num === m.number);
+      const measFingerings = (fingerings || []).filter((f: { measure_num: number }) => f.measure_num === m.number);
 
       return {
         number: m.number,
@@ -859,6 +876,12 @@ export async function getSamSongMeasures(
           rh_index: l.rh_index,
           syllable: l.syllable,
           word_order: l.word_order,
+        })),
+        placed_fingerings: measFingerings.map((f: { rh_index: number; note_index: number; finger: number; source: string }) => ({
+          rh_index: f.rh_index,
+          note_index: f.note_index,
+          finger: f.finger,
+          source: f.source,
         })),
       };
     });
