@@ -10,6 +10,7 @@ import {
   getFormatWidth,
 } from "./vexflowHelpers";
 import { getEventBeats } from "./measureUtils";
+import { getMasterBus } from "./synthVoice";
 
 // The exported DURATION_BEATS table was removed 2026-08-06 (spec §M9).
 // It duplicated durations.js's mapping, silently missing qdd/hdd/8dd/64,
@@ -567,6 +568,15 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
           meas: measure.number,
           beat: t + 1,
           musicalBeatInCopy: measStartBeats[measIdx] + t,
+          // Beat position from measures[0], in quarter-note beats — the join
+          // key the note timeline uses to resolve each onset to a targetTimeMs
+          // (full-playback spec D2). Same value as musicalBeatInCopy, carried
+          // under a name that means "position in the score" rather than
+          // "scroll bookkeeping"; musicalBeatInCopy feeds the teleport reset
+          // and shouldn't acquire a second consumer with different semantics.
+          // NOTE: `t` is rounded to 3dp above, so this is too — any join
+          // against it must round identically or triplets miss by ~3e-5.
+          beatPos: measStartBeats[measIdx] + t,
           allMidi: entry.allMidi.sort((a, b) => a - b),
           rhMidi: entry.rhMidi.sort((a, b) => a - b),
           lhMidi: entry.lhMidi.sort((a, b) => a - b),
@@ -645,6 +655,10 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
           meas: measure.number,
           beat: beat.beat,
           musicalBeatInCopy: measStartBeats[measIdx] + (beat.beat - 1),
+          // See the voice-format branch. Legacy beats[] measures carry no
+          // rh/lh, so buildNoteTimeline emits nothing for them and this field
+          // goes unused — kept so the shape is uniform across both branches.
+          beatPos: measStartBeats[measIdx] + (beat.beat - 1),
           allMidi,
           rhMidi,
           lhMidi,
@@ -818,7 +832,13 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
   return { beatMeta, copyWidth, geometry, labelEls };
 }
 
-// Play a short click sound at the given audioContext time
+// Play a short click sound at the given audioContext time.
+//
+// Routed through the shared master bus rather than straight to destination so
+// click and synth share one master level (full-playback spec, synthVoice §D2).
+// The bus is unity gain with a hard-knee limiter above -6 dBFS, and this click
+// peaks at 0.3 / 0.15 (-10.5 / -16.5 dBFS), so the migration leaves its level
+// untouched — it simply now sums with the synth instead of bypassing it.
 export function playClick(audioCtx, when, gainValue = 0.3) {
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
@@ -826,7 +846,7 @@ export function playClick(audioCtx, when, gainValue = 0.3) {
   osc.frequency.value = 800;
   gain.gain.setValueAtTime(gainValue, when);
   gain.gain.exponentialRampToValueAtTime(0.001, when + 0.04);
-  osc.connect(gain).connect(audioCtx.destination);
+  osc.connect(gain).connect(getMasterBus(audioCtx) || audioCtx.destination);
   osc.start(when);
   osc.stop(when + 0.04);
 }

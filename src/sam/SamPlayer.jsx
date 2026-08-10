@@ -68,6 +68,14 @@ export default function SamPlayer({ onBack }) {
   const [lastResult, setLastResult] = useState(null);
   const [snippet, setSnippet] = useState(null); // { startMeasure, endMeasure, restMeasures, dbId }
   const [metronome, setMetronome] = useState("off"); // "off" | "beat" | "halfbeat" | "quarterbeat"
+  // Full score playback (spec D4). A separate dimension from `metronome`, not a
+  // fifth value on it: the user may plausibly want the synth and a click at the
+  // same time. Not persisted, not in DEFAULTS, not reset by handleSongLoaded —
+  // matches how `metronome` is handled.
+  // "off" | "lh" | "rh" | "full" — "full" is both hands. Independent of a
+  // snippet's handMode: that picks the hand the player is SCORED on, this
+  // picks the hand the synth SOUNDS, so "practise RH against a synth LH" works.
+  const [scorePlayback, setScorePlayback] = useState("off");
   const [audioElement, setAudioElement] = useState(null);
   const [audioFilePath, setAudioFilePath] = useState(null);
   const [audioMuted, setAudioMuted] = useState(false);
@@ -419,10 +427,26 @@ export default function SamPlayer({ onBack }) {
     audioElement.preservesPitch = true;
   }, [audioElement, playbackSpeed.value]);
 
-  // Sync mute state to audio element
+  // Sync mute state to the audio element.
+  //
+  // Any active score-playback mode silences the MP3 for the duration of a run
+  // (spec D6) — the synth IS the audio then. This includes the LH/RH modes:
+  // the MP3 is the full recording, so letting it through would drown the single
+  // hand the user asked to isolate and defeat the point of the mode.
+  // It must be MUTED rather than paused:
+  // ScrollEngine derives `elapsed` from audioElement.currentTime via anchor
+  // interpolation, so pausing the element would take the scroll's clock away
+  // with it. Only the output is silenced.
+  //
+  // Gated on "playing" so the mode doesn't leave the MP3 muted once stopped,
+  // where AudioControls' scrubber is the only way to preview it. That also
+  // gives the "restored on stop / on mode change" behaviour for free — this
+  // effect re-runs on both.
   useEffect(() => {
-    if (audioElement) audioElement.muted = audioMuted;
-  }, [audioElement, audioMuted]);
+    if (!audioElement) return;
+    const mutedForScorePlayback = scorePlayback !== "off" && playbackState === "playing";
+    audioElement.muted = audioMuted || mutedForScorePlayback;
+  }, [audioElement, audioMuted, scorePlayback, playbackState]);
 
   // Snippet ↔ full-song transitions (and snippet → different snippet) reset
   // playback to the stopped state, mirroring the Stop button so the score is
@@ -730,6 +754,8 @@ export default function SamPlayer({ onBack }) {
                   lastResult={lastResult}
                   metronome={metronome}
                   setMetronome={setMetronome}
+                  scorePlayback={scorePlayback}
+                  setScorePlayback={setScorePlayback}
                   playbackState={playbackState}
                   todayMinutes={todayMinutes}
                   perSongTotalSeconds={perSongTotalSeconds}
@@ -849,6 +875,7 @@ export default function SamPlayer({ onBack }) {
                 onTap={handleScoreTap}
                 measureWidth={measureWidth.value}
                 metronome={metronome}
+                scorePlayback={scorePlayback}
                 audioCtx={audioCtxRef.current}
                 firstPassStart={
                   pausedMeasure != null

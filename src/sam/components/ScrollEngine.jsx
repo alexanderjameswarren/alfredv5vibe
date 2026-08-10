@@ -2,11 +2,13 @@ import React, { useEffect, useRef, useState } from "react";
 import { colorBeatEls, getMeasureWidth } from "../lib/vexflowHelpers";
 import { getMeasDurationQ } from "../lib/measureUtils";
 import { renderCopy, playClick } from "../lib/scoreRender";
+import { buildNoteTimeline } from "../lib/noteTimeline";
+import { playNote, midiToFreq, getMasterBus } from "../lib/synthVoice";
 import { drawFingeringOverlay } from "../lib/fingeringOverlay";
 import { SCROLL_GEOMETRY, METRONOME_GAIN, SCORE_SCALE } from "../lib/samConstants";
 
 
-export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioAnchors = [], audioEndMs = null, handMode = "both", onScrollStart = null, fingerings = {} }) {
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioAnchors = [], audioEndMs = null, handMode = "both", onScrollStart = null, fingerings = {}, scorePlayback = "off" }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -98,6 +100,10 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         beat: meta.beat,
         baseBeat: meta.musicalBeatInCopy,
         musicalBeat: copyIdx * totalMusicalBeatsPerCopy + meta.musicalBeatInCopy,
+        // Copy-relative score position (full-playback spec D2). Unlike
+        // musicalBeat, this is never rewritten by the loop teleport, so it
+        // stays a valid join key for the note timeline on every pass.
+        beatPos: meta.beatPos,
         allMidi: meta.allMidi,
         rhMidi: meta.rhMidi || [],
         lhMidi: meta.lhMidi || [],
@@ -220,6 +226,161 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     // eliminating the offset caused by stave padding (noteStartX vs measWidth).
     for (let i = 0; i < events.length; i++) {
       events[i].targetTimeMs = (events[i].xPx - originPx - targetX) / pxPerMs;
+    }
+
+    // Score-playback mode, captured once for this run (spec D5). NOT a dep of
+    // this effect — adding it would restart playback from the top on toggle,
+    // and StatsBar is unmounted while playing so it cannot change mid-run
+    // anyway. Same capture treatment as audioCtx.
+    //
+    // "lh" / "rh" supersede spec D7 ("v1 ignores handMode") at the user's
+    // request. This is deliberately INDEPENDENT of the snippet's handMode:
+    // that one selects which hand the player is scored on, this one selects
+    // which hand the synth sounds. Keeping them separate is what makes the
+    // useful combination possible — practise RH against a synth LH.
+    const SCORE_MODES = ["full", "lh", "rh"];
+    const scoreMode = SCORE_MODES.includes(scorePlayback) ? scorePlayback : "off";
+    const scoreOn = scoreMode !== "off";
+    // "full" means both hands; otherwise the mode names the hand to sound.
+    const handSounds = (hand) => scoreMode === "full" || scoreMode === hand;
+
+    // --- Full playback: resolve the note timeline against the beat events ---
+    // Spec D2: onsets are NEVER computed from msPerBeat. Each note's onset is
+    // the targetTimeMs of the beat event sharing its beat position, so the
+    // synth is pinned to the same geometry the scroll uses and cannot drift.
+    // Only durations are new information.
+    let schedule = [];
+    let nextNoteIdx = 0;
+    let pendingNotes = [];
+
+    // The tick map rounds within-measure onsets to 3dp (scoreRender.js
+    // `Math.round(tick * 1000) / 1000`), so beatPos carries that rounding while
+    // the timeline's onsetBeats does not. Join on the SAME rounding — exact
+    // equality misses every triplet onset by ~3.3e-5 (966 notes across the
+    // fixture corpus: all of Moonlight, Für Elise, Someone Like You).
+    const joinKey = (b) => Math.round(b * 1000) / 1000;
+
+    const timeline = scoreOn ? buildNoteTimeline(measures) : null;
+
+    // Hand filter applied once here rather than inside rebuildSchedule: the
+    // schedule is rebuilt on every loop teleport, and re-filtering the same
+    // notes three times per wrap is wasted work. Every timeline note already
+    // carries `hand`, so this is the whole of the LH/RH implementation —
+    // onsets, durations and tie resolution are hand-agnostic and unchanged.
+    const soundingNotes = timeline
+      ? timeline.notes.filter((n) => handSounds(n.hand))
+      : [];
+
+    // Rebuilt rather than shifted at each loop teleport: the teleport
+    // recomputes every event's targetTimeMs, and re-reading those values is
+    // what guarantees the schedule can never drift away from the beat events
+    // it was derived from.
+    function rebuildSchedule() {
+      if (!timeline) return;
+      const beatsPerCopyLocal = events.length / numCopies;
+      const out = [];
+      // Every copy is joined separately: beatPos is copy-RELATIVE and therefore
+      // identical across copies, but each copy's targetTimeMs is a different
+      // pass. One shared map would collide and collapse all three onto copy 0.
+      for (let c = 0; c < numCopies; c++) {
+        const byBeatPos = new Map();
+        for (let i = 0; i < beatsPerCopyLocal; i++) {
+          const evt = events[c * beatsPerCopyLocal + i];
+          if (!evt) continue;
+          const k = joinKey(evt.beatPos);
+          if (!byBeatPos.has(k)) byBeatPos.set(k, evt);
+        }
+        for (const n of soundingNotes) {
+          const evt = byBeatPos.get(joinKey(n.onsetBeats));
+          if (!evt) continue; // unmatched onsets are reported below, not played
+          out.push({
+            onsetMs: evt.targetTimeMs,
+            durationMs: n.durationBeats * msPerBeat,
+            midi: n.midi,
+            hand: n.hand,
+            meas: evt.meas,
+          });
+        }
+      }
+      out.sort((a, b) => a.onsetMs - b.onsetMs);
+      schedule = out;
+      nextNoteIdx = 0;
+    }
+
+    // Fade-then-stop rather than a bare stop(0): cutting a ringing oscillator
+    // dead puts a step discontinuity through the bus and clicks audibly. 15ms
+    // is inaudible as a fade and far inside the "silent within ~100ms" budget.
+    const STOP_FADE_S = 0.015;
+    function stopPendingNotes() {
+      if (!pendingNotes.length) return;
+      const now = audioCtx ? audioCtx.currentTime : 0;
+      for (const n of pendingNotes) {
+        try {
+          const g = n.gain.gain;
+          if (typeof g.cancelAndHoldAtTime === "function") g.cancelAndHoldAtTime(now);
+          else {
+            g.cancelScheduledValues(now);
+            g.setValueAtTime(g.value, now);
+          }
+          g.linearRampToValueAtTime(0, now + STOP_FADE_S);
+          // A note still inside the lookahead has not started yet; stopping
+          // before its start time means it never sounds at all, which is what
+          // we want on a pause.
+          n.osc.stop(now + STOP_FADE_S + 0.005);
+        } catch {
+          // already stopped or the context went away — nothing to unwind
+        }
+      }
+      pendingNotes = [];
+    }
+
+    if (scoreOn) {
+      rebuildSchedule();
+
+      // Each copy contributes the same set of matched notes, so the per-copy
+      // count against the SOUNDING note count is the unmatched tally. Compared
+      // against soundingNotes, not timeline.notes — otherwise every hand-
+      // filtered run would report the other hand as unmatched.
+      const perCopy = schedule.length / numCopies;
+      console.log("[ScorePlayback] scheduled", {
+        mode: scoreMode,
+        timelineNotes: timeline.notes.length,
+        soundingNotes: soundingNotes.length,
+        scheduledPerCopy: perCopy,
+        copies: numCopies,
+        unmatchedOnsets: soundingNotes.length - perCopy,
+        firstOnsetMs: schedule.length ? Math.round(schedule[0].onsetMs) : null,
+        lastOnsetMs: schedule.length ? Math.round(schedule[schedule.length - 1].onsetMs) : null,
+        warnings: timeline.warnings,
+      });
+      if (soundingNotes.length !== perCopy) {
+        console.warn(
+          "[ScorePlayback] some onsets did not join to a beat event and will not sound:",
+          soundingNotes.length - perCopy
+        );
+      }
+      window.samNoteTimeline = timeline.notes;
+      window.samSchedule = schedule;
+    }
+
+    // Console handle for interactive checks. Installed regardless of mode: it
+    // needs only the AudioContext, which exists by now because the transport
+    // handlers call ensureAudioContext() before flipping to "playing".
+    if (audioCtx) {
+      window.samSynth = {
+        audioCtx,
+        playNote,
+        midiToFreq,
+        masterBus: getMasterBus(audioCtx),
+        /** One note, now. `samSynth.note(60)` → middle C for 1s. */
+        note: (midi, durationS = 1, velocity = 1) =>
+          playNote(audioCtx, audioCtx.currentTime + 0.05, midi, durationS, velocity),
+        /** Simultaneous stack. `samSynth.chord([60,64,67,72])`. */
+        chord: (midis, durationS = 1, velocity = 1) => {
+          const at = audioCtx.currentTime + 0.05;
+          return midis.map((m) => playNote(audioCtx, at, m, durationS, velocity));
+        },
+      };
     }
 
     // Mark beats before the start as skipped (not checked for miss or MIDI match).
@@ -423,6 +584,18 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
           })));
         // Copy 0 is back at the target line after teleport — scan from its start
         nextCheckRef.current = 0;
+
+        // Mirror that reset for the note schedule. Unlike nextMetroBeatIdx —
+        // which is deliberately NOT reset, because its grid is a function of
+        // continuous `elapsed` — the note cursor indexes score content, which
+        // has just wrapped. Every targetTimeMs was recomputed above, so the
+        // schedule is rebuilt from the new values and the cursor returns to 0.
+        // Pending notes are stopped first: a whole note from the tail of the
+        // outgoing pass would otherwise ring across the loop point.
+        if (scoreOn) {
+          stopPendingNotes();
+          rebuildSchedule();
+        }
         // Unhide any hidden measures from the first-pass resume
         const svg = scrollLayer.querySelector("svg");
         if (svg) {
@@ -463,6 +636,47 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
             playClick(audioCtx, audioCtx.currentTime + delayS / rate, gainValue);
           }
           nextMetroBeatIdx++;
+        }
+      }
+
+      // --- Score playback: schedule notes via the same lookahead ------------
+      // Structurally identical to the metronome above: compare in content-time,
+      // convert to wall-time at the audioCtx boundary with `/ rate`. The only
+      // difference is that the tick grid is replaced by the onset-sorted
+      // schedule, so a single monotonic cursor walks it (spec D3).
+      // The hand filter is already baked into `schedule` — nothing to do here.
+      if (scoreOn && audioCtx) {
+        const LOOKAHEAD_MS = 100;
+
+        while (nextNoteIdx < schedule.length) {
+          const n = schedule[nextNoteIdx];
+          if (n.onsetMs > elapsed + LOOKAHEAD_MS) break;
+          if (n.onsetMs >= elapsed) {
+            const delayS = (n.onsetMs - elapsed) / 1000;
+            // BOTH the delay and the duration take the `/ rate` divisor. Without
+            // it on the duration, held notes run long at reduced speed and the
+            // piece turns into a smear instead of stretching.
+            const nodes = playNote(
+              audioCtx,
+              audioCtx.currentTime + delayS / rate,
+              n.midi,
+              n.durationMs / 1000 / rate
+            );
+            if (nodes) {
+              pendingNotes.push({
+                osc: nodes.osc,
+                gain: nodes.gain,
+                endMs: n.onsetMs + n.durationMs,
+              });
+            }
+          }
+          nextNoteIdx++;
+        }
+
+        // Drop finished notes so a long piece doesn't accumulate thousands of
+        // entries. endMs is content-time, the same clock `elapsed` is on.
+        if (pendingNotes.length) {
+          pendingNotes = pendingNotes.filter((p) => p.endMs > elapsed);
         }
       }
 
@@ -515,6 +729,11 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
+      // Cancelling the rAF stops SCHEDULING, but notes already handed to the
+      // audio clock keep sounding on their own — a whole note scheduled 2s out
+      // would ring straight through a pause. The metronome needed no such
+      // teardown because a 40ms click cannot outlive the gesture that made it.
+      stopPendingNotes();
     };
   }, [playbackState, svgReady, bpm, timingWindowMs, audioElement, firstPassStart]); // eslint-disable-line react-hooks/exhaustive-deps
 

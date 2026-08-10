@@ -11,6 +11,8 @@ export default function StatsBar({
   lastResult,
   metronome,
   setMetronome,
+  scorePlayback,
+  setScorePlayback,
   playbackState,
   todayMinutes = 0,
   perSongTotalSeconds = 0,
@@ -81,6 +83,37 @@ export default function StatsBar({
           />
           <span>Quarter Beat (♬)</span>
         </label>
+      </span>
+
+      {/* Score playback radio group — a separate dimension from the metronome
+          (spec D4), so synth and click can be on at once. Like the metronome,
+          this row is unmounted during playback, which is why the mode is fixed
+          for the duration of a run (D5).
+
+          LH / RH sound one hand only. This is independent of a snippet's
+          handMode (which selects the hand the PLAYER is scored on), so the two
+          compose: practise RH while the synth plays LH. LH/RH labels match
+          SnippetPanel's vocabulary; "Full" is both hands. */}
+      <span className="flex items-center gap-2">
+        <span>Score playback:</span>
+        {[
+          ["off", "Off"],
+          ["lh", "LH"],
+          ["rh", "RH"],
+          ["full", "Full (♫)"],
+        ].map(([value, label]) => (
+          <label key={value} className="flex items-center gap-1 cursor-pointer">
+            <input
+              type="radio"
+              name="scorePlayback"
+              value={value}
+              checked={scorePlayback === value}
+              onChange={(e) => setScorePlayback(e.target.value)}
+              className="w-3 h-3"
+            />
+            <span>{label}</span>
+          </label>
+        ))}
       </span>
 
       {playbackState !== "playing" && (
