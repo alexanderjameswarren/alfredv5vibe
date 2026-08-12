@@ -139,6 +139,16 @@ function validateOneMeasure(m: Measure, prefix: string): string[] {
       if (b != null) handBeats += b;
     }
 
+    // DELIBERATE ASYMMETRY — do not "fix" this to match the app.
+    //
+    // src/sam/lib/songSchema.js demotes a duration-sum mismatch to a WARNING,
+    // because the UI routes it through the M8 dialog where a human approves or
+    // cancels. That was needed to re-import songs an older parser had already
+    // mangled (OLD Someone Like You has 15 overlong measures).
+    //
+    // There is no human on THIS path. append_sam_measures is what the score
+    // simplifier writes through, so a bar that doesn't add up must fail loudly
+    // here rather than land silently in sam_song_measures. Alex, 2026-08-12.
     if (!measureHasTuplet) {
       const ts = m.timeSignature!;
       const expected = (ts.beats / ts.beatType) * 4;

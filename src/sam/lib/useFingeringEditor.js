@@ -122,6 +122,11 @@ export default function useFingeringEditor({ songId, showImported }) {
 
   return {
     fingerings,
+    // Raw coordinate map, both sources per coordinate. The resolved
+    // `fingerings` map above is lossy by design (it drops `source` and hides
+    // musicxml rows when the toggle is off), so the exporter — which must
+    // reproduce the table exactly — reads this instead.
+    byCoord,
     hasImported,
     setFinger,
     clearFinger,

@@ -3,6 +3,7 @@ import { supabase } from "../../supabaseClient";
 import { parseMusicXML } from "../lib/songParser";
 import { fanOutMeasures, isMeasuresStale, recompileMeasures } from "../lib/measureCompiler";
 import { importMusicxmlFingerings } from "../lib/fingeringsApi";
+import { importLyrics } from "../lib/lyricsApi";
 import { validateSongDocument } from "../lib/songSchema";
 import usePracticeStats from "../lib/usePracticeStats";
 import useSongLibrary from "../lib/useSongLibrary";
@@ -113,6 +114,31 @@ function lineageFields(doc) {
 const BLOCK_KINDS = new Set([
   "ornament", "grace", "truncated", "overflow", "hand-assignment",
 ]);
+
+// Fold validateSongDocument's duration-sum warnings into the same structured
+// shape the parser emits, so the M8 gate renders them with no special-casing.
+// `overflow` and `truncated` are already BLOCK kinds with sentences written for
+// them — a bar that doesn't add up is the same finding whether the parser
+// noticed it on the way in or the validator noticed it on the way back.
+//
+// `count` is distinct MEASURES, not occurrences: composeBlockSentence's
+// overflow/truncated wording is "Measure(s) ... at printed m…", so a measure
+// where both hands run long must not read as two.
+export function durationWarningsToStructured(warnings, measures) {
+  const byKind = new Map();
+  for (const w of warnings || []) {
+    if (!byKind.has(w.kind)) {
+      byKind.set(w.kind, { kind: w.kind, tag: w.kind, count: 0, measures: [] });
+    }
+    const entry = byKind.get(w.kind);
+    // Printed number where the document has one — the M8 convention is that
+    // warnings reference the engraved score, not the array position.
+    const printed = measures?.[w.measureIndex]?.sourceMeasure ?? w.measureNumber;
+    if (!entry.measures.includes(printed)) entry.measures.push(printed);
+  }
+  for (const entry of byKind.values()) entry.count = entry.measures.length;
+  return [...byKind.values()];
+}
 
 function classifyWarnings(structured) {
   const block = [];
@@ -297,6 +323,17 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
       defaultMeasureWidth: data.default_measure_width ?? null,
       audioFilePath: data.audio_file_path || null,
       showImportedFingerings: data.show_imported_fingerings ?? false,
+      // Carried for the exporter, which must be able to reproduce the whole
+      // song row. The `select("*")` above already fetched these — they were
+      // simply being dropped on the floor, so this costs no extra query.
+      // `fifths` has no column; songExport recovers it from the label.
+      key: data.key_signature ?? null,
+      timeSignature: data.time_signature ?? null,
+      sourceXmlPath: data.source_xml_path ?? null,
+      songType: data.song_type ?? null,
+      parentSongId: data.parent_song_id ?? null,
+      difficultyTier: data.difficulty_tier ?? null,
+      generationNotes: data.generation_notes ?? null,
       measures,
     };
     onSongLoaded(song);
@@ -433,6 +470,12 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
         source_file: sourceFile,
         key_signature: song.key || null,
         time_signature: song.timeSignature || "4/4",
+        // Inherited from the document when it carries one. A simplified song
+        // must point at the same score its parent came from, or the lineage
+        // leads to a row that can no longer be traced back to a source
+        // document. Overwritten below for MusicXML imports, which upload
+        // their own copy and know the new path.
+        source_xml_path: song.sourceXmlPath || null,
         default_bpm: song.defaultBpm || 68,
         measures: song.measures,
         // Imported fingerings shown by default (the DB column defaults to
@@ -469,6 +512,26 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
           }
         } catch (e) {
           console.error("[Sam] Imported fingering write failed:", e);
+        }
+        // Placed lyrics (sam_song_lyrics). Same fire-and-forget, non-fatal
+        // treatment as fingerings. An exported document carries these
+        // top-level in the table's own shape — including word_order, the
+        // stable syllable identity — because an inline `lyric` on an rh event
+        // is rejected by the schema and would be stripped by the next
+        // recompile anyway.
+        //
+        // recompileMeasures afterwards so the compiled blob carries the
+        // syllables inline for renderers that read it, exactly as the lyric
+        // editor's save path does. fanOutMeasures has just set
+        // measures_compiled_at, so nothing would otherwise rebuild the blob
+        // and the lyrics would not appear until an unrelated edit.
+        try {
+          if (song.lyrics?.length) {
+            await importLyrics(data.id, song.lyrics);
+            await recompileMeasures(data.id, supabase);
+          }
+        } catch (e) {
+          console.error("[Sam] Lyric import failed:", e);
         }
         // Signal saved AFTER measures + fingerings exist.
         if (onSongSaved) onSongSaved(data.id);
@@ -509,9 +572,12 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
   // FYI-only → auto-dismissing toast on import success. No warnings
   // → silent import. Same commit path all three cases; the gate only
   // controls whether the user gets a proceed/cancel choice first.
-  function gateAndCommit(commitPayload) {
+  function gateAndCommit(commitPayload, extraStructured = []) {
     const { song } = commitPayload;
-    const { block, fyi } = classifyWarnings(song.parseWarningsStructured);
+    const { block, fyi } = classifyWarnings([
+      ...(song.parseWarningsStructured || []),
+      ...extraStructured,
+    ]);
     if (block.length > 0) {
       setPendingImport({ commitPayload, block, fyi });
       setFyiExpanded(false);
@@ -581,6 +647,10 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
     }
 
     let song;
+    // Duration-sum findings from the JSON path, surfaced through the M8 gate
+    // rather than blocking. Empty for MusicXML, whose equivalent warnings the
+    // parser already put on the song.
+    let durationStructured = [];
 
     if (isJson) {
       try {
@@ -590,11 +660,12 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
         return;
       }
       // Strict schema for hand-authored / MCP-authored JSON.
-      const { valid, errors } = validateSongDocument(song);
+      const { valid, errors, warnings } = validateSongDocument(song);
       if (!valid) {
         setError(formatValidationErrors(errors));
         return;
       }
+      durationStructured = durationWarningsToStructured(warnings, song.measures);
     } else {
       try {
         song = parseMusicXML(text);
@@ -625,7 +696,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
       // we store the unpacked XML so downstream (music21 difficulty
       // analysis, etc.) doesn't have to redo zip extraction.
       rawXml: isJson ? null : text,
-    });
+    }, durationStructured);
   }
 
   function handlePastedText(text) {
@@ -638,17 +709,19 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
 
     let song;
     let source;
+    let durationStructured = [];
 
     // Try parsing as JSON first
     try {
       song = JSON.parse(text);
       source = "json_paste";
 
-      const { valid, errors } = validateSongDocument(song);
+      const { valid, errors, warnings } = validateSongDocument(song);
       if (!valid) {
         setError(formatValidationErrors(errors));
         return;
       }
+      durationStructured = durationWarningsToStructured(warnings, song.measures);
     } catch {
       // JSON.parse threw — treat as MusicXML. Schema failures don't reach
       // here (they returned inside the try above).
@@ -676,7 +749,7 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
       // Same rawXml pass-through as handleFile for the MusicXML branch;
       // JSON pastes don't have a source XML to store.
       rawXml: source === "musicxml_paste" ? text : null,
-    });
+    }, durationStructured);
   }
 
   if (samView === "stats") {

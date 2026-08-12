@@ -21,6 +21,7 @@ import { matchChord, findClosestBeat } from "./lib/noteMatching";
 import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
 import { normalizeMeasure } from "./lib/measureUtils";
 import { loadAudio } from "./lib/audioPlayer";
+import { buildSongExport } from "./lib/songExport";
 import { supabase } from "../supabaseClient";
 
 function AudioMsCounter({ audioElement }) {
@@ -119,6 +120,7 @@ export default function SamPlayer({ onBack }) {
   const showImportedFingerings = song?.showImportedFingerings ?? true;
   const {
     fingerings,
+    byCoord: fingeringsByCoord,
     hasImported,
     setFinger,
     clearFinger,
@@ -637,12 +639,16 @@ export default function SamPlayer({ onBack }) {
   function handleExport() {
     if (!song) return;
 
-    const exportData = {
-      title: song.title,
-      artist: song.artist,
-      defaultBpm: song.defaultBpm || bpm.value,
-      measures: song.measures,
-    };
+    // buildSongExport is the whole format — see songExport.js for why lyrics
+    // come out top-level rather than inline, and why every measure carries an
+    // explicit audioOffsetMs. `song.measures` is passed untouched; the builder
+    // copies before editing, so export never mutates player state.
+    const exportData = buildSongExport({
+      song,
+      lyricPlacements,
+      fingeringsByCoord,
+      fallbackBpm: bpm.value,
+    });
 
     const blob = new Blob([JSON.stringify(exportData, null, 2)], {
       type: "application/json",

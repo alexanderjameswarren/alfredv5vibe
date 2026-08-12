@@ -10,9 +10,9 @@
     "title": { "type": "string", "minLength": 1 },
     "artist": { "type": ["string", "null"] },
     "songType": {
-      "type": "string",
-      "enum": ["original", "simplified", "drill"],
-      "description": "Optional. Absent means 'original' (preserves every pre-existing document)."
+      "type": ["string", "null"],
+      "enum": ["original", "simplified", "drill", null],
+      "description": "Optional. Absent OR null means 'original' (preserves every pre-existing document). Null is accepted because an export emits every field it knows about, using null for 'this song has no value', rather than omitting keys."
     },
     "parentSongId": {
       "type": ["string", "null"],
@@ -29,8 +29,32 @@
       "description": "Receipt for human reading. Not source for a build step; derivation is a historical fact, not a live dependency."
     },
     "key": { "type": ["string", "null"] },
+    "fifths": {
+      "type": ["integer", "null"],
+      "minimum": -7,
+      "maximum": 7,
+      "description": "MusicXML <fifths>. Authoritative key signature — `key` is a display label whose mode is unreliable (the parser derives it from a major-only table). Null when it could not be established without guessing."
+    },
     "timeSignature": { "type": ["string", "null"], "description": "Song-level default, e.g. '4/4'. Per-measure timeSignature overrides." },
     "defaultBpm": { "type": ["number", "null"] },
+    "formatVersion": {
+      "type": ["integer", "null"],
+      "description": "Export format version. Absent / null == the original unversioned {title, artist, defaultBpm, measures} export. 2 adds key/fifths, lineage, sourceXmlPath, lyrics, fingerings, and an always-present per-measure audioOffsetMs."
+    },
+    "sourceXmlPath": {
+      "type": ["string", "null"],
+      "description": "Path into the sam-scores Storage bucket holding the original MusicXML. Informational on import — no import path writes it; only a MusicXML upload populates the column."
+    },
+    "lyrics": {
+      "type": "array",
+      "description": "Placed (and unplaced) syllables, in sam_song_lyrics's own shape. Written back verbatim on import. word_order is the stable identity of a syllable and must be preserved across a round trip. measure_num null = not yet placed.",
+      "items": { "$ref": "#/definitions/Lyric" }
+    },
+    "fingerings": {
+      "type": "array",
+      "description": "RH fingering cues for sam_song_fingerings. The parser emits these without `source` (all editorial); an export includes it so manual fingerings survive a round trip as manual.",
+      "items": { "$ref": "#/definitions/Fingering" }
+    },
     "measures": {
       "type": "array",
       "minItems": 1,
@@ -38,6 +62,29 @@
     }
   },
   "definitions": {
+    "Lyric": {
+      "type": "object",
+      "required": ["word_order", "syllable"],
+      "additionalProperties": false,
+      "properties": {
+        "word_order": { "type": "integer", "minimum": 0, "description": "Global syllable sequence within the song. Unique per song." },
+        "syllable": { "type": "string" },
+        "measure_num": { "type": ["integer", "null"], "minimum": 1 },
+        "rh_index": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "Fingering": {
+      "type": "object",
+      "required": ["measureNum", "rhIndex", "finger"],
+      "additionalProperties": false,
+      "properties": {
+        "measureNum": { "type": "integer", "minimum": 1 },
+        "rhIndex": { "type": "integer", "minimum": 0 },
+        "noteIndex": { "type": ["integer", "null"], "minimum": 0, "description": "Which notehead within a chord event. Defaults to 0." },
+        "finger": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "source": { "type": "string", "enum": ["manual", "musicxml"], "description": "Defaults to 'musicxml' when absent (parser output)." }
+      }
+    },
     "Measure": {
       "type": "object",
       "required": ["rh", "lh", "timeSignature"],
@@ -87,12 +134,16 @@
         },
         "tuplet": {
           "type": "object",
-          "required": ["actual", "normal", "position"],
+          "required": ["actual", "normal"],
           "additionalProperties": false,
           "properties": {
             "actual": { "type": "integer", "minimum": 1 },
             "normal": { "type": "integer", "minimum": 1 },
-            "position": { "type": "string", "enum": ["start", "middle", "end"] }
+            "position": {
+              "type": "string",
+              "enum": ["start", "middle", "end"],
+              "description": "OPTIONAL. Spec §3.3 keeps storage token-based — 'position stays implied in storage' — and durations.fromTimeline deliberately emits {actual, normal} only. Requiring it meant no parser-produced score containing a tuplet could pass this schema, so no such song could be exported and re-imported. Renderers derive position from a run of consecutive tuplet events."
+            }
           }
         }
       }

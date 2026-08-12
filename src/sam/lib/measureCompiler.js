@@ -143,8 +143,17 @@ export async function recompileMeasures(songId, supabase) {
       number: row.number,
       rh,
       lh: row.lh || [],
+      // `symbol` ("common" / "cut") is read back out of the column. fanOut has
+      // always stored it; the rebuild used to drop it, so a common-time score
+      // lost its 𝄴 the first time the blob was recompiled and every export
+      // after that was missing it. Spread-when-present mirrors fanOut so the
+      // blob keeps its "absent, not null" convention.
       timeSignature: row.time_signature
-        ? { beats: row.time_signature.beats, beatType: row.time_signature.beatType }
+        ? {
+            beats: row.time_signature.beats,
+            beatType: row.time_signature.beatType,
+            ...(row.time_signature.symbol ? { symbol: row.time_signature.symbol } : {}),
+          }
         : undefined,
       ...(row.audio_offset_ms != null ? { audioOffsetMs: row.audio_offset_ms } : {}),
       ...(row.chord != null ? { chord: row.chord } : {}),

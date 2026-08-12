@@ -1,8 +1,18 @@
 /**
  * Quick validation script for calculateNextEventDate.
  *
- * Run with: node --experimental-vm-modules src/utils/recurrence.test.js
- * Or via the inline CJS wrapper below (no flag needed).
+ * Run with: node src/utils/recurrence.manual-check.js
+ *
+ * NOT a jest test, despite what it used to be called. It is a standalone
+ * harness that ends in process.exit(), which aborts the whole jest worker —
+ * so while it was named *.test.js, `npm test` collected it and no other suite
+ * could complete. Renamed so jest ignores it and a full test run works.
+ *
+ * CAVEAT worth fixing separately: everything below operates on an INLINE COPY
+ * of the helpers, not on ../utils/recurrence.js. It therefore proves nothing
+ * about the shipped module — the copy and the real thing can drift silently.
+ * Converting these ~12 spec cases into real jest tests that import
+ * recurrence.js is the actual fix.
  */
 
 // CJS-compatible inline import for react-scripts / Node without ESM flags

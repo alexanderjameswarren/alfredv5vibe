@@ -9,6 +9,25 @@
 //        (b) durations in a measure must sum to `(beats/beatType)*4` beats
 //            (skipped when the measure contains a tuplet, per spec §4)
 //
+// ERRORS vs WARNINGS. Structural failures and midi/name disagreement are
+// ERRORS: they describe a document that cannot be stored, or whose notes mean
+// two different things at once. A duration-sum mismatch is a WARNING — the
+// measure is storable and playable, it just does not fill its bar.
+//
+// That split exists because a hard reject made "export a song, re-import it"
+// impossible for any song the parser had already mangled. OLD Someone Like You
+// has 15 measures whose hands run 4.25–7 beats long in 4/4; the export
+// reproduces them faithfully, and refusing the import meant the round trip
+// could never be verified on the one row that carries real lyrics and audio
+// offsets. Callers surface warnings through the M8 import gate instead, which
+// already exists for exactly this class of "playback will differ from the
+// score, approve before committing" finding.
+//
+// Note: the MCP `append_sam_measures` tool keeps its own strict duration check
+// (supabase/functions/_shared/tools/sam-authoring.ts). Authored measures
+// arriving over the wire SHOULD be well-formed; this relaxation is about
+// re-admitting documents the app itself produced.
+//
 // The schema JSON is the single source of truth for structure — the Edge
 // Function will load the same file for `append_sam_measures` in Step 4.
 // Duplicating the shape as JS constants is prohibited.
@@ -91,12 +110,18 @@ function formatStructuralError(e) {
 /**
  * Validate a SAM song / drill document.
  * @param {unknown} doc - Parsed JSON document (top level {title, measures, ...}).
- * @returns {{valid: boolean, errors: string[]}} — errors are human-readable
- *   strings; order is structural first, then semantic. Callers typically
- *   show only the first few (SongLoader shows 5).
+ * @returns {{valid: boolean, errors: string[], warnings: object[]}} —
+ *   `errors` are human-readable strings and block the import; order is
+ *   structural first, then semantic. Callers typically show only the first few
+ *   (SongLoader shows 5). `warnings` are machine-readable duration-sum
+ *   findings, `[]` when the document fills every bar:
+ *     { kind: "overflow"|"truncated", measureIndex, measureNumber, hand,
+ *       beats, expected, message }
+ *   `valid` reflects errors only — a document can be valid AND carry warnings.
  */
 export function validateSongDocument(doc) {
   const errors = [];
+  const warnings = [];
 
   // Layer 1 — structure
   const ok = validateStructure(doc);
@@ -107,7 +132,7 @@ export function validateSongDocument(doc) {
     // If structural checks failed, semantic checks may throw on malformed
     // inputs — bail early with the structural errors, which are actionable
     // and usually the root cause.
-    return { valid: false, errors };
+    return { valid: false, errors, warnings };
   }
 
   // Layer 2 — semantics
@@ -152,20 +177,29 @@ export function validateSongDocument(doc) {
         if (b != null) handBeats += b;
       }
 
-      // 2b — duration sum per hand per measure
+      // 2b — duration sum per hand per measure. A WARNING, not an error: the
+      // measure stores and plays, it just doesn't fill its bar. See the header
+      // note for why this stopped being a hard reject.
       if (!measureHasTuplet) {
         const ts = m.timeSignature;
         const expected = (ts.beats / ts.beatType) * 4;
         // 0.001 tolerance absorbs any legit floating-point drift from
         // dotted-note math (q + qd = 1 + 0.5 = 1.5, exact in IEEE 754).
         if (Math.abs(handBeats - expected) > 0.001) {
-          errors.push(
-            `measure ${mi + 1} ${hand}: durations sum to ${handBeats} beats but time signature ${ts.beats}/${ts.beatType} expects ${expected} beats.`
-          );
+          warnings.push({
+            kind: handBeats > expected ? "overflow" : "truncated",
+            measureIndex: mi,
+            measureNumber: m.number ?? mi + 1,
+            hand,
+            beats: handBeats,
+            expected,
+            message:
+              `measure ${mi + 1} ${hand}: durations sum to ${handBeats} beats but time signature ${ts.beats}/${ts.beatType} expects ${expected} beats.`,
+          });
         }
       }
     }
   }
 
-  return { valid: errors.length === 0, errors };
+  return { valid: errors.length === 0, errors, warnings };
 }

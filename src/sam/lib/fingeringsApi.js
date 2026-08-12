@@ -94,6 +94,13 @@ export async function clearFingering(songId, coord) {
 // the source cues while manual overrides survive. `fingerings` is the parser's
 // parallel array: [{ measureNum, rhIndex, noteIndex, finger }]. Returns the
 // number of rows written.
+//
+// A row MAY additionally carry `source`, which is then honoured. Parser output
+// never does, so MusicXML import is unchanged; a JSON export does, so a
+// round-tripped song keeps its manual fingerings manual instead of having them
+// silently relabelled as editorial. Note the delete above only clears
+// 'musicxml' — a document carrying manual rows is by definition an import into
+// a fresh song, which has no rows to collide with.
 export async function importMusicxmlFingerings(songId, fingerings) {
   const { error: delErr } = await supabase
     .from("sam_song_fingerings")
@@ -110,7 +117,7 @@ export async function importMusicxmlFingerings(songId, fingerings) {
     rh_index: f.rhIndex,
     note_index: f.noteIndex ?? 0,
     finger: f.finger,
-    source: "musicxml",
+    source: f.source === "manual" ? "manual" : "musicxml",
     updated_at: new Date().toISOString(),
   }));
   const { error: insErr } = await supabase
