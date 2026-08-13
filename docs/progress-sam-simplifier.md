@@ -135,19 +135,28 @@ Files: `tools/sam-tools/lib/verify.js`, `tools/sam-tools/lib/simplify.js`,
 
 #### M1
 
-**BLOCKING QUESTION for M2 — what does an omitted setting key mean?**
-Spec §4 gives a default per setting (`lhGrid: quarter`, `rhStack: melody-only`,
-…), but M2's exit criteria expect `default: {}` to produce an identity
-transform. Those disagree: filling omissions from the §4 table would make `{}`
-mean quarter-grid + melody-only, which is the opposite of identity. The two
-readings are (a) absent ⇒ take the §4 default, so identity must be written
-explicitly as `{lhGrid: "none", rhStack: "all"}`; or (b) absent ⇒ no-op, and
-the §4 column documents what the reference plan uses rather than what the
-loader fills in.
+**RESOLVED 2026-08-13 — what an omitted setting key means.** Spec §4 gave a
+default per setting while M2 expected `default: {}` to be an identity
+transform; those disagreed. Settled in favour of the **gating/modifier split**,
+and §4 has been amended to match:
 
-The loader does not decide. It merges partials only — range settings over plan
-default, key by key — and never invents a value, so M1 is complete under either
-reading. Needs answering before M3 writes a transform.
+- *Gating* (`lhGrid`, `rhStack`) decide WHETHER a transform runs. Absent means
+  OFF — `none` and `all` respectively.
+- *Modifier* (`lhFill`, `lhCap`, `lhKeep`) decide HOW an active transform
+  behaves, keep their §4 defaults, and take effect only when their parent
+  gating setting is active. A modifier without its parent is **inert, not an
+  error**.
+
+So `default: {}` is a true identity transform and M2's exit criterion stands as
+written. The reason is asymmetry of failure: under the other reading, a plan
+that omitted `rhStack` would strip the right hand to melody-only without being
+asked — silently applying the one transform that touches the melody. This way
+the failure mode is a version that is not simplified enough, which shows up
+immediately in the metrics and costs one edit. Under-transforming is visible;
+over-transforming silently is not.
+
+Implemented in `plan.js` as `SETTING_DEFAULTS`, `GATING_OFF`,
+`effectiveSettings()`, `lhActive()`, `rhActive()` and `inertSettings()`.
 
 **Decisions taken**
 
