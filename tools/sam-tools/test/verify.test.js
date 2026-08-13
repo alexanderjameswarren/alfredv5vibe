@@ -152,10 +152,13 @@ test("`settings: null` measures come through untouched and are reported", () => 
 });
 
 test("asking for an unimplemented transform is loud, never a silent no-op", () => {
-  const plan = loadPlan({ planVersion: 1, default: { lhGrid: "quarter" } }, { measureCount: 38 });
-  assert.throws(() => simplifyMeasures(LA_CANDEUR, plan), NotImplementedYet);
-  const plan2 = loadPlan({ planVersion: 1, default: { rhStack: "melody-only" } }, { measureCount: 38 });
-  assert.throws(() => simplifyMeasures(LA_CANDEUR, plan2), /M4/);
+  // lhGrid landed in M3. rhStack is still unbuilt, and until M4 lands a plan
+  // requesting it must fail rather than quietly returning an unchanged song.
+  for (const rhStack of ["melody-only", "melody-plus-one"]) {
+    const plan = loadPlan({ planVersion: 1, default: { rhStack } }, { measureCount: 38 });
+    assert.throws(() => simplifyMeasures(LA_CANDEUR, plan), NotImplementedYet);
+    assert.throws(() => simplifyMeasures(LA_CANDEUR, plan), /M4/);
+  }
 });
 
 test("assertVerified throws on a bad output and passes a good one", () => {
@@ -304,4 +307,37 @@ test("formatViolations names the invariant and the measure", () => {
   const broken = mutate(LA_CANDEUR, 2, (m) => { m.lh[0].duration = "h"; });
   const text = formatViolations(verify(LA_CANDEUR, broken));
   assert.match(text, /\[4: per-hand duration sum\] m3/);
+});
+
+// --- the clone guarantee --------------------------------------------------
+
+test("mutating an OUTPUT measure leaves the INPUT measure untouched", () => {
+  // Clone-per-measure is load-bearing, not incidental. The parser aliases event
+  // arrays across flattened repeats, so a transform that returned the input's
+  // own objects would let a later edit reach back into the source — and on a
+  // repeated measure, into a DIFFERENT measure as well. Nothing else in the
+  // suite fails if a refactor drops the clone, so this does.
+  for (const doc of [LA_CANDEUR, SLY]) {
+    const out = runIdentity(doc);
+    const before = JSON.stringify(doc);
+
+    out.measures.forEach((m) => {
+      m.timeSignature.beats = 99;
+      m.audioOffsetMs = 12345;
+      if (m.rh?.[0]?.notes?.[0]) m.rh[0].notes[0].midi = 0;
+      if (m.lh?.[0]) m.lh[0].duration = "w";
+      m.chord = "MUTATED";
+    });
+
+    assert.equal(JSON.stringify(doc), before, "the input document was written through");
+  }
+});
+
+test("output measures do not alias each other across repeats", () => {
+  // La Candeur m9 is a flattened repeat of m1. In the parser's own output those
+  // two share an `rh` array; after the transform they must not.
+  const out = runIdentity(LA_CANDEUR);
+  assert.notEqual(out.measures[0].rh, out.measures[8].rh, "m1 and m9 share an rh array");
+  out.measures[8].rh[0].notes[0].midi = 0;
+  assert.notEqual(out.measures[0].rh[0].notes[0].midi, 0, "editing m9 reached m1");
 });

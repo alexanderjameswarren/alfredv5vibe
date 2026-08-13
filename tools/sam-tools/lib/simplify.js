@@ -8,6 +8,7 @@
 // Every output measure is a deep clone. The input document is never mutated.
 
 import { lhActive, rhActive } from "./plan.js";
+import { quantizeHand } from "./lhGrid.js";
 
 class NotImplementedYet extends Error {
   constructor(what, milestone) {
@@ -21,12 +22,13 @@ class NotImplementedYet extends Error {
  *
  * @param {object} doc - source song document (never mutated)
  * @param {object} plan - a plan from loadPlan()
- * @returns {{measures: object[], untouched: number[], skipped: object[]}}
+ * @returns {{measures: object[], untouched: number[], skipped: object[], notes: object[]}}
  */
 export function simplifyMeasures(doc, plan) {
   const measures = [];
   const untouched = [];
   const skipped = [];
+  const notes = [];
 
   doc.measures.forEach((m, i) => {
     const number = m.number ?? i + 1;
@@ -43,7 +45,15 @@ export function simplifyMeasures(doc, plan) {
     const out = structuredClone(m);
 
     if (lhActive(settings)) {
-      throw new NotImplementedYet(`lhGrid: "${settings.lhGrid}"`, "M3");
+      const r = quantizeHand(out.lh || [], settings, out.timeSignature);
+      if (r.changed) {
+        out.lh = r.events;
+      } else if (r.reason) {
+        // Skip-and-flag (§7): the measure stays at original difficulty and the
+        // reason is recorded. Never a silent skip, never a failed run.
+        skipped.push({ measure: number, hand: "lh", reason: r.reason });
+      }
+      if (r.note) notes.push({ measure: number, hand: "lh", note: r.note });
     }
     if (rhActive(settings)) {
       throw new NotImplementedYet(`rhStack: "${settings.rhStack}"`, "M4");
@@ -52,7 +62,7 @@ export function simplifyMeasures(doc, plan) {
     measures.push(out);
   });
 
-  return { measures, untouched, skipped };
+  return { measures, untouched, skipped, notes };
 }
 
 export { NotImplementedYet };

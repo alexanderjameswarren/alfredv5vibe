@@ -1,6 +1,6 @@
 # Progress: SAM Song Simplifier (Phase 2)
 
-## Status: M2 complete, awaiting verification
+## Status: M3 complete, awaiting verification
 
 Branch: `phase-2-simplifier`
 
@@ -53,21 +53,28 @@ Files: `tools/sam-tools/lib/verify.js`, `tools/sam-tools/lib/simplify.js`,
 
 ---
 
-### M3 — LH grid quantization
+### M3 — LH grid quantization ✅ (one exit criterion disputed)
 
-- [ ] `lhGrid` cell division for `whole`/`half`/`quarter`/`eighth`; `none` is a no-op
-- [ ] `lhFill: onset` including the fallback rule (spec §4.2)
-- [ ] `lhFill: union`
-- [ ] `lhCap` with `lhKeep: root-third` and `root-fifth`
-- [ ] Density floor: grid never increases LH event count for a measure
-- [ ] Tuplet guard: a cell boundary falling inside a tuplet group leaves that group alone
+Files: `tools/sam-tools/lib/lhGrid.js`, `tools/sam-tools/test/lhGrid.test.js`
+
+- [x] `lhGrid` cell division for `whole`/`half`/`quarter`/`eighth`; `none` is a no-op
+- [x] `lhFill: onset` including the fallback rule (spec §4.2)
+- [x] `lhFill: union`
+- [x] `lhCap` with `lhKeep: root-third` and `root-fifth`
+- [x] Density floor: grid never increases LH event count for a measure
+- [x] Tuplet guard: a cell boundary falling inside a tuplet group leaves that group alone
 
 **Exit criteria**
-- [ ] Someone Like You m1 LH at quarter/onset/cap 2/root-third yields four A3+C#4 quarter events
-- [ ] The same measure at `union` yields A3+C#4 (bottom two of A3,C#4,E4) — demonstrating the two fills differ
-- [ ] A sustained whole-note LH measure (e.g. m79) is UNCHANGED at quarter grid — density floor holds
-- [ ] Every §5 invariant passes on a full-song grid run
-- [ ] Unit test per grid size asserting per-hand duration sum is preserved
+- [⚠] Someone Like You m1 LH at quarter/onset/cap 2/root-third yields four A3+C#4 quarter events
+      — **produces four `A3` events, not `A3+C#4`.** See Notes; needs a decision.
+- [x] The same measure at `union` yields A3+C#4 (bottom two of A3,C#4,E4)
+- [x] A measure where the two fills DIFFER — m1 itself differs (`A3` vs `A3+C#4`);
+      also covered at half grid, cap 3 (`h:A3` vs `h:A3+C#4+E4`)
+- [x] A sustained whole-note LH measure (m79) is UNCHANGED at quarter grid — density floor holds
+- [x] Every §5 invariant passes on a full-song grid run — all four grid sizes × both fills
+- [x] Unit test per grid size asserting per-hand duration sum is preserved
+
+83 tests across M1–M3, all passing.
 
 ---
 
@@ -219,3 +226,59 @@ removed whole — so the stricter check stands until a transform needs otherwise
 `simplifyMeasures` throws `NotImplementedYet` for any active transform rather
 than silently returning an unchanged song — a plan asking for `lhGrid:
 quarter` today is an error, not a no-op.
+
+#### M3
+
+**DISPUTED EXIT CRITERION — `onset` on Someone Like You m1.** The tracker says
+quarter/onset/cap 2/root-third yields four `A3+C#4` events. It yields four
+`A3` events.
+
+m1's LH is sixteen single sixteenths — `A3 C#4 E4 C#4` repeated four times. At
+beat 0 the only pitch sounding is `A3`. Spec §4.2 defines `onset` as "the
+pitches sounding at the START of the cell", so one note is the correct reading
+of the spec as written. `A3+C#4` is what `union` produces, by gathering the
+whole arpeggio in the cell and capping to the bottom two.
+
+Implemented per §4.2. Three ways this could go:
+
+1. **Spec is right, tracker's criterion is a slip** — the likeliest reading,
+   since it also names the union result on the very next line. Nothing to
+   change but the tracker.
+2. **`onset` is meant to mean "the harmony being arpeggiated at the cell
+   start"** — i.e. gather pitches from the cell but voice them from the
+   downbeat. That is a different algorithm and a spec change, not a bug fix.
+3. **The reference plan should use `union`** — but §4.2 warns union made LH
+   jump worse in prototyping, which is exactly what M6 exists to catch.
+
+Everything else in M3 is unaffected either way, and M6's regression check will
+have an opinion on which fill is actually better on this song.
+
+**Decisions taken**
+
+- *Gridding uses the hand's OWN span, not the time signature.* Several
+  Someone Like You measures have an LH running 4.5–7 beats in a 4/4 bar
+  (old-parser damage the export faithfully reproduces). Gridding to the
+  signature would silently rewrite the sum and trip invariant 4; gridding to
+  what is actually there preserves it and still quantizes. Tested.
+- *A ragged final cell decomposes* via `beatsToTokens` rather than being
+  rounded, so an odd time signature cannot produce an unwritable duration.
+- *Quantization drops ties*, per §5.1 — cell fill discards the old events
+  entirely, so a chain cannot survive half-removed.
+
+**The density floor does real work.** A full-song quarter grid skips **23 of 82
+measures**, every one because the LH already had ≤4 events. That is 28%, above
+§7's 25% confirmation threshold, so the reference plan will prompt in M5 —
+worth knowing now rather than discovering it as a surprise.
+
+**The tuplet guard fires, but not at quarter grid.** Someone Like You has LH
+triplets at m51, 53, 74 and 76, each spanning beats 3–4. At quarter grid the
+boundary at beat 3 is the group's *edge*, not a point inside it, so the group
+grids normally. At **eighth** grid the boundary at 3.5 falls inside and the
+guard protects the group verbatim. Both branches are tested; without the
+eighth-grid case the guard would have looked untested-but-passing.
+
+**LH ties survive by accident, not by design.** The only LH chains in Someone
+Like You are m79→m80→m81, all sustained whole notes that the density floor
+refuses to touch, so both ends come through intact. A song with a tie crossing
+out of a quantized measure into an untouched one would orphan it — invariant 7
+catches that, and it becomes a skip-and-flag case in M5.
