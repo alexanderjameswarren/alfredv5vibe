@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://alfred-v5.local/schemas/sam-simplifier-plan.schema.json",
+  "title": "SAM Simplifier Plan",
+  "description": "A complete description of a desired simplified version. Every version is generated from the ORIGINAL song, never from a previous version, so plans compose without cumulative degradation. See docs/technical-spec-sam-simplifier.md §3.\n\nThis schema is the primary defence against vocabulary drift: `additionalProperties: false` everywhere means an unknown setting key is a hard error rather than a silently ignored one, and every setting is a closed enum. A language model selects from these values; it never emits notation.",
+  "type": "object",
+  "required": ["planVersion", "default"],
+  "additionalProperties": false,
+  "properties": {
+    "planVersion": {
+      "type": "integer",
+      "enum": [1],
+      "description": "Currently 1. Bump only for a breaking change to plan semantics."
+    },
+    "sourceSongId": {
+      "type": "string",
+      "description": "Provenance only. Nothing is fetched with it — the simplifier never touches the database."
+    },
+    "label": {
+      "type": "string",
+      "description": "Free text. Appended to the output song title in parentheses when present."
+    },
+    "default": {
+      "$ref": "#/definitions/Settings",
+      "description": "Settings applied to every measure not covered by a range."
+    },
+    "ranges": {
+      "type": "array",
+      "description": "Overrides. A measure may appear in at most one range; overlaps are rejected rather than resolved by order.",
+      "items": { "$ref": "#/definitions/Range" }
+    }
+  },
+  "definitions": {
+    "Settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The fixed settings vocabulary (spec §4). Adding a value later is additive and safe; anything not listed here is rejected.",
+      "properties": {
+        "lhGrid": {
+          "enum": ["none", "whole", "half", "quarter", "eighth"],
+          "description": "Cell size for LH quantization. `none` is a no-op. Grid quantization, not event merging — the duration vocabulary is not closed under addition, so merging can produce unwritable durations."
+        },
+        "lhFill": {
+          "enum": ["onset", "union"],
+          "description": "Which pitches fill a cell. `onset` = pitches sounding at the cell start. `union` = all distinct pitches sounding anywhere in the cell; it can emit chords that never occurred in the original and made LH jump WORSE in prototyping."
+        },
+        "lhCap": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4,
+          "description": "Max notes per LH event after fill."
+        },
+        "lhKeep": {
+          "enum": ["root-third", "root-fifth"],
+          "description": "Which notes survive the cap. `root-third` keeps the lowest lhCap notes; `root-fifth` keeps lowest and highest."
+        },
+        "rhStack": {
+          "enum": ["all", "melody-plus-one", "melody-only"],
+          "description": "RH thinning. Removes notes from within an event; never removes an event, which is what keeps rh_index stable and lyrics intact."
+        }
+      }
+    },
+    "Range": {
+      "type": "object",
+      "required": ["measures", "settings"],
+      "additionalProperties": false,
+      "properties": {
+        "measures": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Comma-separated PLAYED measure numbers (SAM's `number`) and inclusive ranges, e.g. \"37,57-61,68\". Not printed numbers (`sourceMeasure`)."
+        },
+        "settings": {
+          "description": "`null` means leave these measures untouched. Otherwise a partial settings object overriding `default` for these measures only. Required — an omitted key would make \"untouched\" happen by accident.",
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/definitions/Settings" }
+          ]
+        }
+      }
+    }
+  }
+}

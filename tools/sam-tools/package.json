@@ -7,10 +7,12 @@
     "sync": "node -e \"const fs=require('fs'); fs.copyFileSync('../../src/sam/lib/songParser.js','vendor/songParser.js'); fs.copyFileSync('../../src/sam/lib/durations.js','vendor/durations.js'); fs.copyFileSync('../../src/sam/lib/playbackOrder.js','vendor/playbackOrder.js')\"",
     "check": "npm run sync && npm run validate",
     "baseline": "node bin/sam.js validate fixtures --json > baseline-report.json",
-    "analyze": "node bin/analyze.js"
+    "analyze": "node bin/analyze.js",
+    "test": "node --test test/*.test.js"
   },
   "license": "ISC",
   "dependencies": {
+    "ajv": "^8.20.0",
     "jsdom": "^30.0.1"
   },
   "type": "module",
