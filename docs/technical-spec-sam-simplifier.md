@@ -179,7 +179,13 @@ Assert all of these on output. A violation is a hard error, not a warning.
 
 ### 5.1 Ties
 
-Where a transform removes a note from an event, and that note participates in a tie chain, **the whole chain is removed**. Never half a chain. Quantized hands do not have this problem — cell-fill discards old events entirely — so in practice this applies to RH thinning only.
+Where a transform removes a note that participates in a tie chain, **the whole chain is removed** — never half a chain. Quantized hands do not have this problem: cell-fill discards old events entirely, so in practice this applies to RH thinning only.
+
+**Mixed chains: the melody rule wins.** Where a chain is *mixed* — the tied pitch is the top note of one event and an inner voice of another — keep the note and drop the **tie marker**, producing a re-articulation. A tie is a rendering instruction, "hold rather than re-strike", not a note. Dropping the marker means the pitch still sounds, just articulated again; dropping the note would remove melody, which violates the invariant that actually matters. Every stripped tie is reported in `strippedTies`.
+
+> This was a genuine conflict between §4.4 (the melody rule: the highest note of every RH event is always retained) and §5.1 as originally written (a chain is removed whole). Both cannot hold when a chain is mixed. **Resolved in favour of §4.4** — settled 2026-08-13, and recorded here so it is not re-litigated. Someone Like You has four such chains, at m22, m27, m46 and m69.
+
+Ties are handled as **links** rather than whole chains: a note marked `both` is the end of one link and the start of the next, so breaking one side leaves the other intact (`both` becomes `start` or `end`). This is what makes a dangling marker structurally impossible, which is the property this section is really asking for.
 
 ### 5.2 Lyrics and fingerings
 

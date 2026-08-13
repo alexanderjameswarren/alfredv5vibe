@@ -60,9 +60,9 @@ export function simplifyMeasures(doc, plan) {
         // Skip-and-flag (§7): the measure stays at original difficulty and the
         // reason is recorded. Never a silent skip, never a failed run.
         const bucket = r.kind === "unneeded" ? unneeded : unable;
-        bucket.push({ measure: number, hand: "lh", reason: r.reason });
+        bucket.push({ measure: number, hand: "lh", code: r.code, reason: r.reason });
       }
-      if (r.note) notes.push({ measure: number, hand: "lh", note: r.note });
+      if (r.note) notes.push({ measure: number, hand: "lh", ...r.note });
     }
 
     measures.push(out);

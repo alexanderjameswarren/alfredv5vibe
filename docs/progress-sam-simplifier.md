@@ -1,6 +1,6 @@
 # Progress: SAM Song Simplifier (Phase 2)
 
-## Status: M4 complete, awaiting verification
+## Status: M5 complete, awaiting verification
 
 Branch: `phase-2-simplifier`
 
@@ -96,23 +96,33 @@ Files: `tools/sam-tools/lib/rhThin.js`, `tools/sam-tools/test/rhThin.test.js`
 - [x] Lyrics and fingerings survive a full-song RH thin unchanged
 - [x] All 18 melody blips appear in the run report
 
-105 tests across M1–M4, all passing.
+105 tests at M4. 123 after M5.
 
 ---
 
-### M5 — Ranges, skip-and-flag, reporting
+### M5 — Ranges, skip-and-flag, reporting ✅ (one exit criterion corrected)
 
-- [ ] Range overrides applied; `settings: null` leaves measures bit-identical
-- [ ] Skip-and-flag on any measure a transform cannot handle; never a silent skip
-- [ ] Confirmation prompt above 25% skipped; `--yes` bypasses; never a hard fail
-- [ ] Structured run report written to `generationNotes` per spec §8
-- [ ] Advisory reports: short untouched runs, repeated ranges, melody blips
+Files: `tools/sam-tools/lib/report.js`, `tools/sam-tools/bin/simplify.js`,
+`tools/sam-tools/test/report.test.js`
+
+- [x] Range overrides applied; `settings: null` leaves measures bit-identical
+- [x] Skip-and-flag on any measure a transform cannot handle; never a silent skip
+- [x] Confirmation above 25% **unable**; `--yes` bypasses; never a hard fail
+- [x] Structured run report written to `generationNotes` per spec §8
+- [x] Advisory reports: short untouched runs, repeated ranges, melody blips
+- [x] §9 output-document assembly (deferred from M2)
 
 **Exit criteria**
-- [ ] The ten untouched measures in the reference plan are bit-identical to the original
-- [ ] m37 appears in `shortUntouchedRuns` (length 1)
-- [ ] A plan range covering m22–32 reports `alsoAppearsAt` m46–55 and m69–78
-- [ ] Run report is valid JSON and round-trips through the export document
+- [x] The untouched measures in the reference plan are bit-identical — **eleven**,
+      not ten: the range string `57-61` includes m58, which §10's list omits
+- [x] m37 appears in `shortUntouchedRuns` (length 1); m68 does too
+- [x] A plan range reports `alsoAppearsAt` — **corrected**: m46–54 ↔ m69–77, not
+      22–32 → 46–55/69–78. Played 22–32 map to printed 22–32, which occur once.
+      See Notes.
+- [x] Run report is valid JSON and round-trips through the export document
+- [x] The written document validates against `sam-drill-format.schema.json`
+
+123 tests across M1–M5, all passing.
 
 ---
 
@@ -319,3 +329,54 @@ records a reason. That property outlives the milestone window.
 top note at each blip position is bit-identical to the input. Tested
 explicitly rather than assumed, since "we did not correct it" is the sort of
 claim that quietly stops being true.
+
+#### M5
+
+**Exit-criterion correction — repeated ranges.** The tracker said a range over
+m22–32 would report `alsoAppearsAt` m46–55 and m69–78. The data does not
+support it: played 22–32 map to printed 22–32, which occur exactly once.
+Someone Like You's only repeat is printed **46–54**, played at 46–54 and again
+at **69–77** (the D.S.); played 78 is printed 69. Implemented per §8.1's
+definition — "measures whose `sourceMeasure` values also appear elsewhere" —
+and tested in both directions, plus a negative test that 22–32 reports nothing.
+
+**The untouched count is eleven, not ten.** §10 lists ten already-comfortable
+measures and omits m58, but the reference plan's range string `57-61` includes
+it. m58 flagged VAR in the Phase 1 digest, so it is not one of the comfortable
+ten. Either the range should be `57,59-61` or §10's list should include m58 —
+a plan question, not a code one. Left as-is; the tests assert eleven.
+
+**`--bpm` is required and is not in §2's flag list.** §8's report carries
+`analyzerTempo` and §6 requires analysing input and output at the same tempo,
+so a tempo has to come from somewhere. Reading `defaultBpm` is ruled out by
+song-export-format §7 (stored tempos are unreliable). Added as a required flag,
+matching the analyzer. §2 should be updated to list it.
+
+**`sourceSongId` is effectively required to WRITE output**, though §3.1 marks
+it optional. `songType: "simplified"` demands a parent in §9 and in the
+database (`sam_songs_lineage_check`), so a plan without one would produce a
+document the UI rejects. `buildOutputDoc` refuses with a clear message rather
+than writing something unimportable.
+
+**Non-interactive confirmation.** Over the threshold with no TTY and no
+`--yes`, the CLI prints the list and exits 2 without writing, telling the user
+to re-run with `--yes`. That is not "hard-failing on skip count" — the run is
+never rejected for being too skippy; it just cannot ask permission it needs.
+
+**Reference-plan result (Someone Like You @67):** 57 transformed, 11 untouched,
+14 unneeded, **0 unable** — so no prompt, which is the whole point of the
+counter split. Flagged 72/82 → 44/82.
+
+**TWO REGRESSIONS ALREADY VISIBLE, both for M6 to catch:**
+
+1. **`rhythmVariety` worse on 21 measures.** Quantizing the LH to quarters
+   introduces a `q` token into measures whose RH never used one, so the count
+   of distinct duration tokens goes UP. VAR flags rise from 29 to 38. This is
+   the single biggest contributor to the residual 44.
+2. **`lhJump` worse on m32: 7 → 16 semitones.** §4.2 documents this as a
+   `union` problem — it happens with `onset` too, in this measure.
+
+Everything else improved: n/s median 5.58 → 3.63, LH/beat median 3.75 → 1.00,
+RH stack median 2 → 1. `NS` now flags exactly m17, 18, 19, 41, 42, 43 — the six
+§10 predicts as irreducible melody. RH stack above 1 survives only at m57–60
+and m68, all untouched by the plan.

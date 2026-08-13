@@ -127,7 +127,7 @@ export function quantizeHand(events, settings, timeSignature) {
   const span = sumEvents(events);
   if (span == null) {
     return {
-      events, changed: false, kind: "unable",
+      events, changed: false, kind: "unable", code: "unparseable-duration",
       reason: "unparseable duration token in LH",
     };
   }
@@ -189,7 +189,7 @@ export function quantizeHand(events, settings, timeSignature) {
     const tokens = single ? [single] : beatsToTokens(len);
     if (!tokens) {
       return {
-        events, changed: false, kind: "unable",
+        events, changed: false, kind: "unable", code: "no-duration-token",
         reason: `cell of ${len} beats has no duration token`,
       };
     }
@@ -202,7 +202,7 @@ export function quantizeHand(events, settings, timeSignature) {
   // global default rather than something that has to be scoped by hand.
   if (out.length >= events.length) {
     return {
-      events, changed: false, kind: "unneeded",
+      events, changed: false, kind: "unneeded", code: "density-floor",
       reason: "density floor: grid would not reduce LH event count",
     };
   }
@@ -212,6 +212,8 @@ export function quantizeHand(events, settings, timeSignature) {
     changed: true,
     reason: null,
     kind: null,
-    ...(overrun ? { note: `LH spans ${span} beats against a ${nominal}-beat signature; gridded to the span` } : {}),
+    ...(overrun
+      ? { note: { code: "lh-span-overrun", spanBeats: span, signatureBeats: nominal } }
+      : {}),
   };
 }

@@ -110,6 +110,7 @@ export function thinRightHand(measures, settingsFor) {
                 if (bGone) keep[mi][ei].add(ni);
                 retainedForTies.push({
                   measure: num(measures[mi], mi), midi: n.midi,
+                  code: "tie-reaches-untouched",
                   reason: "tie link reaches an untouched measure; note retained to keep the chain whole",
                 });
               } else {
