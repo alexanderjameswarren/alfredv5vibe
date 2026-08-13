@@ -19,7 +19,7 @@ const SLY = JSON.parse(
 
 const plan = (settings, ranges) =>
   loadPlan(
-    { planVersion: 1, default: settings, ...(ranges ? { ranges } : {}) },
+    { planVersion: 1, sourceSongId: "test-source", default: settings, ...(ranges ? { ranges } : {}) },
     { measureCount: SLY.measures.length }
   );
 const run = (settings, ranges) => simplifyMeasures(SLY, plan(settings, ranges));

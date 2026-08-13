@@ -122,12 +122,19 @@ function analyzeMeasure(measure, index, { bpm, scale }) {
   const rh = handMetrics(measure.rh, "rh");
   const lh = handMetrics(measure.lh, "lh");
 
-  // Distinct duration tokens across both hands — the measure's rhythmic
-  // vocabulary, which is what makes it hard to read.
-  const tokens = new Set();
-  for (const e of [...(measure.rh || []), ...(measure.lh || [])]) {
-    if (e?.duration) tokens.add(e.duration);
-  }
+  // Distinct duration tokens PER HAND, reported as the max of the two.
+  //
+  // Pooling both hands was wrong. Quantizing an LH of sixteen 16ths down to
+  // four quarters genuinely reduces rhythmic complexity, but the pooled count
+  // RISES if `q` is a token that bar did not already contain — so the metric
+  // punished the transform for simplifying. What a player actually deals with
+  // is the vocabulary in one hand at a time: four LH quarters against eight RH
+  // eighths is two values per hand, not two pooled.
+  const varietyOf = (events) => {
+    const t = new Set();
+    for (const e of events || []) if (e?.duration) t.add(e.duration);
+    return t.size;
+  };
 
   // Accidentals: note occurrences outside the key, not distinct classes — six
   // chromatic notes are harder than one repeated six times.
@@ -156,7 +163,7 @@ function analyzeMeasure(measure, index, { bpm, scale }) {
     lhStretch: lh.stretch,
     rhJump: rh.jump,
     lhJump: lh.jump,
-    rhythmVariety: tokens.size,
+    rhythmVariety: Math.max(varietyOf(measure.rh), varietyOf(measure.lh)),
     accidentals,
   };
   m.flags = FLAG_SPECS.filter((f) => m[f.metric] > f.limit).map((f) => f.code);

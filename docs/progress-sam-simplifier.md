@@ -1,6 +1,6 @@
 # Progress: SAM Song Simplifier (Phase 2)
 
-## Status: M5 complete, awaiting verification
+## Status: M6 complete, awaiting verification
 
 Branch: `phase-2-simplifier`
 
@@ -122,19 +122,29 @@ Files: `tools/sam-tools/lib/report.js`, `tools/sam-tools/bin/simplify.js`,
 - [x] Run report is valid JSON and round-trips through the export document
 - [x] The written document validates against `sam-drill-format.schema.json`
 
-123 tests across M1–M5, all passing.
+123 tests at M5. 137 after M6.
 
 ---
 
-### M6 — Regression check
+### M6 — Regression check ✅
 
-- [ ] Post-transform analysis run at the same tempo as the pre-transform analysis
-- [ ] Per-measure, per-metric comparison
-- [ ] Any metric worse in output than input is an ERROR naming measure, metric, and both values
+Files: `tools/sam-tools/lib/regression.js`, `tools/sam-tools/test/regression.test.js`,
+metric fix in `tools/sam-tools/lib/analyze.js`
+
+- [x] Post-transform analysis run at the same tempo as the pre-transform analysis
+- [x] Per-measure, per-metric comparison across all 11 metrics
+- [x] Any metric worse in output than input is an ERROR naming measure, metric, and both values
+- [x] `rhythmVariety` fixed to count tokens PER HAND and report the max
+- [x] Phase 1.5 calibration re-run; VAR>3 still separates, no retune needed
 
 **Exit criteria**
-- [ ] Reference plan on Someone Like You passes the regression check clean
-- [ ] **Mutation test:** run the same plan with `lhFill: union` and confirm the check FIRES on LH jump (this regression was observed in prototyping — 16 semitones vs 12). If it does not fire, the check is not working.
+- [x] Reference plan passes clean — **after** narrowing m32 to a half grid, which
+      is a plan change, not a code change
+- [x] **Mutation test:** `lhFill: union` FIRES — 95 regressions. Plus two
+      hand-made mutations (an added LH note, an added RH note) and a
+      "better is not a regression" negative test.
+
+137 tests across M1–M6, all passing.
 
 ---
 
@@ -380,3 +390,63 @@ Everything else improved: n/s median 5.58 → 3.63, LH/beat median 3.75 → 1.00
 RH stack median 2 → 1. `NS` now flags exactly m17, 18, 19, 41, 42, 43 — the six
 §10 predicts as irreducible melody. RH stack above 1 survives only at m57–60
 and m68, all untouched by the plan.
+
+#### M6
+
+**m32 investigation — cause found, no code change needed.**
+
+The original LH is a D2–A2–D3 arpeggio whose bottom notes step 38 → 45 → 50 →
+54; the largest single step is 7. At quarter grid the cells land on beats 0, 1,
+2 and 3, giving bottoms 38, 38, 38, **54** — the tied F#3 that occupies beat 3.
+
+Not the guessed cause. The cell start does NOT land on a passing note: F#3 is
+genuinely the pitch sounding at beat 3, tied over from 2.75, and cells 1–3
+correctly land on the root D2. What happens is that thinning removes the
+INTERMEDIATE rungs of the arpeggio ladder. The original reaches F#3 via D3, so
+no single step exceeds 7; with only four events left, the remaining line steps
+straight from D2 to F#3 — 16 semitones.
+
+So reducing event count can mechanically raise max jump even where the music
+gets easier, and the metric is being honest. Union does not help (its cell 4 is
+also just F#3).
+
+**The vocabulary already contains the fix.** At `half` grid m32 becomes two
+cells, both D2, so `lhJump` is 0 and the measure still drops 13 events to 2.
+One extra range in the plan — `{"measures":"32","settings":{"lhGrid":"half"}}` —
+and the reference plan passes clean. This is precisely what §11 says the answer
+to a one-measure problem should be: a setting, not a notation escape hatch.
+
+**rhythmVariety metric fix.** Pooling duration tokens across both hands
+punished the transform for simplifying: sixteen LH 16ths becoming four quarters
+is less rhythmic complexity, but the pooled count ROSE whenever `q` was new to
+that bar. Now counted per hand, max of the two.
+
+Recalibration against the Phase 1.5 corpus — **VAR>3 still separates, no
+retune needed**:
+
+| song | VAR>3 | var med/p90/max | total flagged |
+|---|---|---|---|
+| La Candeur @60 | 0 | 1/2/3 | 1 |
+| Arabesque @60 | 0 | 2/2/2 | 0 |
+| Pastorale @60 | 0 | 2/2/3 | 0 |
+| Someone Like You @67 | 19 (was 29) | 3/4/5 | 69 (was 72) |
+
+The comfortable band tops out at exactly 3, so `>3` still sits just above the
+hardest comfortable measure — the calibration principle is intact.
+
+**THE FILL DEFAULT IS SETTLED BY NUMBERS: `onset` wins decisively.**
+
+| fill | regressions | breakdown |
+|---|---|---|
+| `onset` | **1** | LH jump m32 (7→16) |
+| `union` | **95** | LH stack ×47, LH stretch ×47, LH jump ×1 |
+
+§4.2 recorded union's harm as "LH jump WORSE (16 vs 12)". The real harm is
+larger and different in kind: union raises **LH stack from 1 to 2 on 47
+measures** and **LH stretch from 0 to 4–7 on 47 measures**, because it emits
+chords that never sounded together. Both fills share the m32 jump regression,
+so that one is not union's fault. §4.2's wording should be updated to match.
+
+**Reference plan result (with the m32 range): flagged 69/82 → 25/82, zero
+regressions.** n/s median 3.63, max 5.30; LH/beat median 1.00; RH stack max 2
+(only in untouched measures).

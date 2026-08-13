@@ -75,7 +75,7 @@ test("settings: null resolves to untouched, everything else to the default", () 
 });
 
 test("gating settings default to OFF, so `default: {}` is the identity transform", () => {
-  const p = load({ planVersion: 1, default: {} });
+  const p = load({ planVersion: 1, sourceSongId: "test-source", default: {} });
   const s = p.settingsFor(1);
   assert.equal(s.lhGrid, "none", "LH quantization must be off when unasked for");
   assert.equal(s.rhStack, "all", "RH thinning must be off when unasked for");
@@ -84,7 +84,7 @@ test("gating settings default to OFF, so `default: {}` is the identity transform
 });
 
 test("modifier settings keep their §4 defaults", () => {
-  const s = load({ planVersion: 1, default: {} }).settingsFor(1);
+  const s = load({ planVersion: 1, sourceSongId: "test-source", default: {} }).settingsFor(1);
   assert.equal(s.lhFill, "onset");
   assert.equal(s.lhCap, 2);
   assert.equal(s.lhKeep, "root-third");
@@ -92,7 +92,7 @@ test("modifier settings keep their §4 defaults", () => {
 
 test("a modifier without its parent active is inert, not an error", () => {
   // {"lhFill": "union"} with no lhGrid is accepted and does nothing.
-  const p = load({ planVersion: 1, default: { lhFill: "union", lhCap: 4 } });
+  const p = load({ planVersion: 1, sourceSongId: "test-source", default: { lhFill: "union", lhCap: 4 } });
   assert.equal(lhActive(p.settingsFor(1)), false);
   assert.deepEqual(inertSettings({ lhFill: "union", lhCap: 4 }).sort(), ["lhCap", "lhFill"]);
 });
@@ -108,7 +108,7 @@ test("effectiveSettings fills the whole vocabulary", () => {
 
 test("a range's partial settings override the default key by key", () => {
   const p = load({
-    planVersion: 1,
+    planVersion: 1, sourceSongId: "test-source",
     default: { lhGrid: "quarter", lhCap: 2, rhStack: "melody-only" },
     ranges: [{ measures: "5-6", settings: { lhCap: 4 } }],
   });
@@ -117,7 +117,7 @@ test("a range's partial settings override the default key by key", () => {
 });
 
 test("resolved settings always carry the whole vocabulary", () => {
-  const p = load({ planVersion: 1, default: {} });
+  const p = load({ planVersion: 1, sourceSongId: "test-source", default: {} });
   for (const k of SETTING_KEYS) {
     assert.ok(k in p.settingsFor(1), `${k} should be resolved`);
   }
@@ -125,7 +125,7 @@ test("resolved settings always carry the whole vocabulary", () => {
 });
 
 test("ranges are optional", () => {
-  const p = load({ planVersion: 1, default: { lhGrid: "none" } });
+  const p = load({ planVersion: 1, sourceSongId: "test-source", default: { lhGrid: "none" } });
   assert.deepEqual(p.ranges, []);
   assert.deepEqual(p.untouchedMeasures, []);
 });
@@ -142,7 +142,7 @@ test("every setting in the vocabulary is accepted at each of its values", () => 
   for (const [key, values] of Object.entries(vocab)) {
     for (const v of values) {
       assert.doesNotThrow(
-        () => load({ planVersion: 1, default: { [key]: v } }),
+        () => load({ planVersion: 1, sourceSongId: "test-source", default: { [key]: v } }),
         `${key}: ${JSON.stringify(v)} should be accepted`
       );
     }
@@ -162,7 +162,7 @@ test("a plan loads from a file path", () => {
 
 test("rejection 1: an unknown enum value fails, naming the key and the value", () => {
   const e = assertRejects(
-    () => load({ planVersion: 1, default: { lhFill: "banana" } }),
+    () => load({ planVersion: 1, sourceSongId: "test-source", default: { lhFill: "banana" } }),
     /lhFill/,
     /banana/,
     /allowed: "onset", "union"/
@@ -172,7 +172,7 @@ test("rejection 1: an unknown enum value fails, naming the key and the value", (
 
 test("rejection 2: an unknown setting key fails, naming the offending key", () => {
   assertRejects(
-    () => load({ planVersion: 1, default: { lhGrid: "quarter", lhWobble: 3 } }),
+    () => load({ planVersion: 1, sourceSongId: "test-source", default: { lhGrid: "quarter", lhWobble: 3 } }),
     /unknown key "lhWobble"/,
     /settings vocabulary/
   );
@@ -180,7 +180,7 @@ test("rejection 2: an unknown setting key fails, naming the offending key", () =
 
 test("rejection 2b: an unknown TOP-LEVEL key fails too", () => {
   assertRejects(
-    () => load({ planVersion: 1, default: {}, transpose: -2 }),
+    () => load({ planVersion: 1, sourceSongId: "test-source", default: {}, transpose: -2 }),
     /unknown key "transpose"/
   );
 });
@@ -188,7 +188,7 @@ test("rejection 2b: an unknown TOP-LEVEL key fails too", () => {
 test("rejection 3: overlapping ranges are rejected, not resolved by order", () => {
   assertRejects(
     () => load({
-      planVersion: 1,
+      planVersion: 1, sourceSongId: "test-source",
       default: {},
       ranges: [
         { measures: "10-20", settings: null },
@@ -202,7 +202,7 @@ test("rejection 3: overlapping ranges are rejected, not resolved by order", () =
 
 test("rejection 4: a measure outside the song is rejected", () => {
   assertRejects(
-    () => load({ planVersion: 1, default: {}, ranges: [{ measures: "80-90", settings: null }] }, 82),
+    () => load({ planVersion: 1, sourceSongId: "test-source", default: {}, ranges: [{ measures: "80-90", settings: null }] }, 82),
     /outside the song, which has 82 measures/,
     /83/
   );
@@ -210,7 +210,7 @@ test("rejection 4: a measure outside the song is rejected", () => {
 
 test("rejection 5: a malformed range string is rejected", () => {
   assertRejects(
-    () => load({ planVersion: 1, default: {}, ranges: [{ measures: "5..9", settings: null }] }),
+    () => load({ planVersion: 1, sourceSongId: "test-source", default: {}, ranges: [{ measures: "5..9", settings: null }] }),
     /malformed entry "5\.\.9"/
   );
 });
@@ -237,7 +237,7 @@ test("measure 0 is rejected", () => {
 
 test("an omitted `settings` key is rejected — untouched must be explicit", () => {
   assertRejects(
-    () => load({ planVersion: 1, default: {}, ranges: [{ measures: "5" }] }),
+    () => load({ planVersion: 1, sourceSongId: "test-source", default: {}, ranges: [{ measures: "5" }] }),
     /missing required key "settings"/
   );
 });
@@ -251,14 +251,14 @@ test("an unknown planVersion is rejected", () => {
 });
 
 test("lhCap outside 1-4 is rejected", () => {
-  assertRejects(() => load({ planVersion: 1, default: { lhCap: 0 } }), /lhCap/);
-  assertRejects(() => load({ planVersion: 1, default: { lhCap: 5 } }), /lhCap/);
+  assertRejects(() => load({ planVersion: 1, sourceSongId: "test-source", default: { lhCap: 0 } }), /lhCap/);
+  assertRejects(() => load({ planVersion: 1, sourceSongId: "test-source", default: { lhCap: 5 } }), /lhCap/);
 });
 
 test("every error is collected, not just the first", () => {
   const e = assertRejects(() =>
     load({
-      planVersion: 1,
+      planVersion: 1, sourceSongId: "test-source",
       default: { lhFill: "banana", lhGrid: "octuple" },
     })
   );

@@ -178,7 +178,9 @@ test("the report carries before/after metrics at the same tempo", () => {
   const { report } = runPlan();
   assert.equal(report.metrics.before.measureCount, 82);
   assert.equal(report.metrics.after.measureCount, 82);
-  assert.equal(report.metrics.before.flaggedCount, 72);
+  // 69, not 72: the rhythmVariety metric now counts tokens per hand rather
+  // than pooling both, so three measures that only flagged VAR no longer do.
+  assert.equal(report.metrics.before.flaggedCount, 69);
   assert.ok(report.metrics.after.flaggedCount < report.metrics.before.flaggedCount);
   assert.ok(report.metrics.after.summary.lhNotesPerBeat.median <
             report.metrics.before.summary.lhNotesPerBeat.median);
@@ -215,16 +217,27 @@ test("the title is unchanged when the plan has no label", () => {
   assert.equal(doc.title, "Someone Like You");
 });
 
-test("a plan with no sourceSongId cannot produce an importable document", () => {
-  // songType 'simplified' requires a parent, in §9 and in the database. Writing
-  // one without would produce a file the UI rejects.
-  const { plan, result, report } = runPlan({ ...REFERENCE, sourceSongId: undefined });
+test("a plan with no sourceSongId is rejected at load (§3.1)", () => {
+  // songType 'simplified' requires a parent, in §9 and in the database, so a
+  // plan without one could only produce a file the UI rejects. The schema now
+  // refuses it up front.
   assert.throws(
-    () => buildOutputDoc({ input: SLY, measures: result.measures, plan, report }),
+    () => load({ ...REFERENCE, sourceSongId: undefined }),
+    /missing required key "sourceSongId"/
+  );
+});
+
+test("buildOutputDoc refuses a parentless plan even if one reaches it", () => {
+  // Belt and braces: the schema is the first line of defence, but the writer
+  // must not emit an unimportable document if called directly.
+  const { result, report } = runPlan();
+  const parentless = { ...load(), sourceSongId: null };
+  assert.throws(
+    () => buildOutputDoc({ input: SLY, measures: result.measures, plan: parentless, report }),
     OutputDocError
   );
   assert.throws(
-    () => buildOutputDoc({ input: SLY, measures: result.measures, plan, report }),
+    () => buildOutputDoc({ input: SLY, measures: result.measures, plan: parentless, report }),
     /sourceSongId/
   );
 });

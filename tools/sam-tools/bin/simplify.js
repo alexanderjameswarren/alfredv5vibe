@@ -17,6 +17,7 @@ import { assertVerified, InvariantError } from "../lib/verify.js";
 import {
   buildRunReport, buildOutputDoc, OutputDocError, confirmationNeeded,
 } from "../lib/report.js";
+import { regressionCheck, formatRegressions } from "../lib/regression.js";
 
 function usage(msg) {
   if (msg) console.error(`error: ${msg}\n`);
@@ -106,7 +107,14 @@ try {
   throw e;
 }
 
+// Regression check (§6). A transform that fixes three metrics while degrading
+// a fourth is not acceptable silently, so this refuses to write rather than
+// warning. The fix is a plan change — a one-measure range with a different
+// setting — not a code change.
+const regressions = regressionCheck(song, output, { bpm });
+
 const report = buildRunReport({ plan, analyzerTempo: bpm, result, input: song, output });
+report.regressions = regressions;
 
 // --- human-readable summary ----------------------------------------------
 
@@ -157,6 +165,23 @@ if (report.melodyBlips.length) {
 console.log(
   `  flagged ${report.metrics.before.flaggedCount}/${total} -> ${report.metrics.after.flaggedCount}/${total}`
 );
+
+if (regressions.length) {
+  console.error(
+    `
+REFUSING TO WRITE — the transform made measures HARDER (§6):
+` +
+      `${formatRegressions(regressions)}
+
+` +
+      `Every one of these is a plan problem, not a code problem. Narrow the
+` +
+      `setting for the affected measures with a one-measure range, or leave
+` +
+      `them untouched with "settings": null.`
+  );
+  process.exit(1);
+}
 
 // --- confirmation (§7) ----------------------------------------------------
 //

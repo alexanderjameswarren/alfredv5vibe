@@ -29,6 +29,12 @@ The calibrated target band, derived from four real pieces at the user's working 
 npm run simplify -- <song.json> --plan <plan.json> -o <out.json>
 ```
 
+Required flags:
+
+- `--plan <file>` — the plan
+- `-o <file>` — the output document
+- `--bpm <n>` — quarter notes per minute, used for the before/after metrics (§8) and the regression check (§6). Deliberately NOT read from `defaultBpm`: stored tempos are unreliable (docs/song-export-format.md §7).
+
 Optional flags:
 
 - `--yes` — skip interactive confirmations (see §7)
@@ -67,7 +73,7 @@ A plan is a complete description of the desired output, not a patch. Every versi
 | field | required | meaning |
 |---|---|---|
 | `planVersion` | yes | integer, currently `1` |
-| `sourceSongId` | no | provenance only; not used to fetch anything |
+| `sourceSongId` | **yes** | the parent song's id. Nothing is fetched with it — the simplifier never touches the database — but §9 emits `songType: "simplified"`, which requires a parent both there and in the database (`sam_songs_lineage_check`). A plan without one can only produce a document the UI rejects, so it is refused at write time rather than written. |
 | `label` | no | free text. Used as the output song title suffix when present |
 | `default` | yes | settings applied to every measure not covered by a range |
 | `ranges` | no | array of overrides |
@@ -243,7 +249,7 @@ Written into the output document's `generationNotes` as **structured JSON**, not
 Three things are reported but never acted on automatically:
 
 - **Short untouched runs** — an untouched stretch shorter than 3 measures creates a texture jump. m37 in Someone Like You is the canonical case. Report it; the user decides.
-- **Repeated ranges** — when a plan range covers measures whose `sourceMeasure` values also appear elsewhere in the song, report the other locations. Ranges are applied LITERALLY; this is information, not expansion.
+- **Repeated ranges** — when a plan range covers measures whose `sourceMeasure` values also appear elsewhere in the song, report the other locations. Ranges are applied LITERALLY; this is information, not expansion. In Someone Like You the only repeat is printed 46–54, played at **46–54 and again at 69–77** (the D.S.; played 78 is printed 69). Note that identical *metric* rows are not evidence of repetition — only `sourceMeasure` is.
 - **Melody blips** — as §4.4.
 
 ---
@@ -271,7 +277,7 @@ Mechanical criteria for Someone Like You (`030333d9-1b9f-4f74-80fb-7fbed587fda6`
 - The regression check is clean
 - Post-transform metrics: notes/sec median around 3.4 and max around 5.6; LH notes/beat at 1.0 throughout; RH stack 1 throughout
 - Flag count drops from 72/82 to a small number
-- The ten already-comfortable measures (37, 57, 59, 60, 61, 68, 79, 80, 81, 82) are bit-identical to the original
+- The **eleven** measures the plan leaves untouched (37, 57, 58, 59, 60, 61, 68, 79, 80, 81, 82) are bit-identical to the original. m58 is in the set by range membership — `57-61` covers it — not because it is comfortable; it flags VAR. Harmless, and the plan is correct as written.
 
 **Expected residual:** measures 17, 18, 19, 41, 42, 43 will still flag on notes-per-second. Their LH is already at 1 note per beat and their RH is a fast single-note melody — that is the tune itself, and no transform in the vocabulary can reduce it without breaking the melody rule. This is correct behaviour, not a defect.
 

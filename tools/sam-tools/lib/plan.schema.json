@@ -4,7 +4,7 @@
   "title": "SAM Simplifier Plan",
   "description": "A complete description of a desired simplified version. Every version is generated from the ORIGINAL song, never from a previous version, so plans compose without cumulative degradation. See docs/technical-spec-sam-simplifier.md §3.\n\nThis schema is the primary defence against vocabulary drift: `additionalProperties: false` everywhere means an unknown setting key is a hard error rather than a silently ignored one, and every setting is a closed enum. A language model selects from these values; it never emits notation.",
   "type": "object",
-  "required": ["planVersion", "default"],
+  "required": ["planVersion", "sourceSongId", "default"],
   "additionalProperties": false,
   "properties": {
     "planVersion": {
@@ -14,7 +14,7 @@
     },
     "sourceSongId": {
       "type": "string",
-      "description": "Provenance only. Nothing is fetched with it — the simplifier never touches the database."
+      "description": "The parent song's id. REQUIRED. Nothing is fetched with it — the simplifier never touches the database — but the output document sets songType 'simplified', which needs a parent both in spec §9 and in the database (sam_songs_lineage_check). A plan without one could only produce a document the UI rejects."
     },
     "label": {
       "type": "string",

@@ -223,7 +223,7 @@ test("TUPLET GUARD: a boundary on the group EDGE is not inside it, so it grids",
 // --- full-song runs -------------------------------------------------------
 
 const gridPlan = (o) =>
-  loadPlan({ planVersion: 1, default: settings(o) }, { measureCount: SLY.measures.length });
+  loadPlan({ planVersion: 1, sourceSongId: "test-source", default: settings(o) }, { measureCount: SLY.measures.length });
 
 test("every §5 invariant passes on a full-song grid run, at every grid size and both fills", () => {
   for (const lhGrid of ["whole", "half", "quarter", "eighth"]) {
@@ -280,7 +280,7 @@ test("quantization does not write through into the input", () => {
 
 test("LH grid and RH thin compose without either undoing the other", () => {
   const plan = loadPlan(
-    { planVersion: 1, default: { ...settings(), rhStack: "melody-only" } },
+    { planVersion: 1, sourceSongId: "test-source", default: { ...settings(), rhStack: "melody-only" } },
     { measureCount: SLY.measures.length }
   );
   const r = simplifyMeasures(SLY, plan);

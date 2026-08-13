@@ -77,7 +77,7 @@ const LA_CANDEUR = song(FIXTURES.laCandeur);
 const SLY = song(FIXTURES.someoneLikeYou);
 
 const identityPlan = (doc) =>
-  loadPlan({ planVersion: 1, default: {} }, { measureCount: doc.measures.length });
+  loadPlan({ planVersion: 1, sourceSongId: "test-source", default: {} }, { measureCount: doc.measures.length });
 
 const runIdentity = (doc) => ({ ...doc, measures: simplifyMeasures(doc, identityPlan(doc)).measures });
 
@@ -143,7 +143,7 @@ test("identity does not mutate the input document", () => {
 
 test("`settings: null` measures come through untouched and are reported", () => {
   const plan = loadPlan(
-    { planVersion: 1, default: {}, ranges: [{ measures: "37,57-61", settings: null }] },
+    { planVersion: 1, sourceSongId: "test-source", default: {}, ranges: [{ measures: "37,57-61", settings: null }] },
     { measureCount: 82 }
   );
   const r = simplifyMeasures(SLY, plan);
@@ -159,14 +159,14 @@ test("no silent no-ops: every non-OFF setting value acts or says why", () => {
     a.some((m, i) => JSON.stringify(m[hand]) !== JSON.stringify(b[i][hand]));
 
   for (const lhGrid of ["whole", "half", "quarter", "eighth"]) {
-    const plan = loadPlan({ planVersion: 1, default: { lhGrid } }, { measureCount: 82 });
+    const plan = loadPlan({ planVersion: 1, sourceSongId: "test-source", default: { lhGrid } }, { measureCount: 82 });
     const r = simplifyMeasures(SLY, plan);
     const acted = differs(r.measures, SLY.measures, "lh");
     const recorded = r.unable.length + r.unneeded.length > 0;
     assert.ok(acted || recorded, `lhGrid "${lhGrid}" did nothing and reported nothing`);
   }
   for (const rhStack of ["melody-only", "melody-plus-one"]) {
-    const plan = loadPlan({ planVersion: 1, default: { rhStack } }, { measureCount: 82 });
+    const plan = loadPlan({ planVersion: 1, sourceSongId: "test-source", default: { rhStack } }, { measureCount: 82 });
     const r = simplifyMeasures(SLY, plan);
     assert.ok(differs(r.measures, SLY.measures, "rh"), `rhStack "${rhStack}" did nothing`);
   }
