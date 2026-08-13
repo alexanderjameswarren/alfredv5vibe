@@ -201,11 +201,17 @@ This is not theoretical — it was caught in prototyping, where `union` fill rai
 
 ## 7. Skip-and-flag, and confirmation
 
-If a transform cannot run cleanly on a measure — a tuplet in an awkward position, a tie that will not resolve, an unexpected shape — **skip that measure, leave it at original difficulty, and record why.**
+When a transform does not run on a measure, **leave that measure at original difficulty and record why.** Do not fail the run. Do not skip silently.
 
-Do not fail the run. Do not skip silently.
+There are two distinct reasons, tracked in two separate counters. Conflating them was a mistake in an earlier draft of this spec.
 
-**Confirmation threshold.** If more than 25% of measures are skipped, print the list and ask for confirmation before writing the output. The user explicitly wants to be able to hear a bad result rather than be blocked by it. `--yes` bypasses the prompt. Never hard-fail on skip count.
+**`unable`** — the transform could not run cleanly: a tuplet in an awkward position, a tie that will not resolve, an unexpected shape. The measure stays harder than the plan asked for. This is the counter that matters, because something the user wanted did not happen.
+
+**`unneeded`** — a guard correctly declined to act because the measure did not need the transform. The density floor (§4.1) refusing to turn a sustained whole-note bar into four repeated quarter chords is the canonical case. Nothing was left too hard and nothing went wrong.
+
+**Confirmation threshold.** If more than 25% of measures are **`unable`**, print the list and ask for confirmation before writing the output. The user explicitly wants to be able to hear a bad result rather than be blocked by it. `--yes` bypasses the prompt. Never hard-fail on either count.
+
+`unneeded` is reported and never gates anything. On the reference plan the density floor accounts for 23 of 82 measures — 28% — and prompting for that would be asking the user to confirm that the tool worked.
 
 ---
 
@@ -217,7 +223,8 @@ Written into the output document's `generationNotes` as **structured JSON**, not
 {
   "plan": { ...the full plan as applied... },
   "analyzerTempo": 67,
-  "skipped": [ { "measure": 44, "hand": "lh", "reason": "tuplet crosses cell boundary" } ],
+  "unable": [ { "measure": 44, "hand": "lh", "reason": "tuplet crosses cell boundary" } ],
+  "unneeded": [ { "measure": 79, "hand": "lh", "reason": "density floor: grid would not reduce LH event count" } ],
   "melodyBlips": [ { "measure": 47, "rhIndex": 6, "semitones": -11 } ],
   "shortUntouchedRuns": [ { "measures": [37], "length": 1 } ],
   "repeatedRanges": [ { "range": "22-32", "alsoAppearsAt": ["46-55", "69-78"] } ],

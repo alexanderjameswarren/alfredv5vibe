@@ -279,7 +279,7 @@ function analyzeTuplets(measures) {
  */
 const BLIP_DROP_SEMITONES = 5;
 
-function analyzeMelodyBlips(measures) {
+export function analyzeMelodyBlips(measures) {
   // One continuous RH stream — a blip can straddle a barline.
   const stream = [];
   measures.forEach((measure, mi) => {

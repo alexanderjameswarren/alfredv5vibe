@@ -107,13 +107,16 @@ export function applyCap(notes, cap, keep) {
 /**
  * Quantize one hand of one measure.
  *
- * @returns {{events: object[], changed: boolean, reason: ?string}}
- *   `changed: false` means the hand is returned untouched, with `reason`
- *   naming why when it was a deliberate refusal rather than a no-op.
+ * @returns {{events: object[], changed: boolean, reason: ?string, kind: ?string}}
+ *   `changed: false` means the hand is returned untouched. `kind` says which
+ *   sort of refusal it was (spec §7):
+ *     "unable"   — the transform could not run; the measure stays too hard
+ *     "unneeded" — a guard declined because the measure did not need it
+ *   Only "unable" gates the confirmation threshold.
  */
 export function quantizeHand(events, settings, timeSignature) {
   const cell = GRID_BEATS[settings.lhGrid];
-  if (cell == null) return { events, changed: false, reason: null };
+  if (cell == null) return { events, changed: false, reason: null, kind: null };
 
   const walked = withOnsets(events);
 
@@ -123,9 +126,12 @@ export function quantizeHand(events, settings, timeSignature) {
   // gridding to what is actually there preserves it and still quantizes.
   const span = sumEvents(events);
   if (span == null) {
-    return { events, changed: false, reason: "unparseable duration token in LH" };
+    return {
+      events, changed: false, kind: "unable",
+      reason: "unparseable duration token in LH",
+    };
   }
-  if (span <= EPS) return { events, changed: false, reason: null };
+  if (span <= EPS) return { events, changed: false, reason: null, kind: null };
 
   const nominal = measureBeats(timeSignature);
   const overrun = nominal != null && Math.abs(span - nominal) > EPS;
@@ -182,7 +188,10 @@ export function quantizeHand(events, settings, timeSignature) {
     const single = beatsToToken(len);
     const tokens = single ? [single] : beatsToTokens(len);
     if (!tokens) {
-      return { events, changed: false, reason: `cell of ${len} beats has no duration token` };
+      return {
+        events, changed: false, kind: "unable",
+        reason: `cell of ${len} beats has no duration token`,
+      };
     }
     for (const duration of tokens) out.push({ duration, notes: payload.map((n) => ({ ...n })) });
   }
@@ -192,13 +201,17 @@ export function quantizeHand(events, settings, timeSignature) {
   // quarter chords — which is also what makes `lhGrid: quarter` safe as a
   // global default rather than something that has to be scoped by hand.
   if (out.length >= events.length) {
-    return { events, changed: false, reason: "density floor: grid would not reduce LH event count" };
+    return {
+      events, changed: false, kind: "unneeded",
+      reason: "density floor: grid would not reduce LH event count",
+    };
   }
 
   return {
     events: out,
     changed: true,
     reason: null,
+    kind: null,
     ...(overrun ? { note: `LH spans ${span} beats against a ${nominal}-beat signature; gridded to the span` } : {}),
   };
 }

@@ -1,6 +1,6 @@
 # Progress: SAM Song Simplifier (Phase 2)
 
-## Status: M3 complete, awaiting verification
+## Status: M4 complete, awaiting verification
 
 Branch: `phase-2-simplifier`
 
@@ -53,7 +53,7 @@ Files: `tools/sam-tools/lib/verify.js`, `tools/sam-tools/lib/simplify.js`,
 
 ---
 
-### M3 — LH grid quantization ✅ (one exit criterion disputed)
+### M3 — LH grid quantization ✅
 
 Files: `tools/sam-tools/lib/lhGrid.js`, `tools/sam-tools/test/lhGrid.test.js`
 
@@ -65,8 +65,9 @@ Files: `tools/sam-tools/lib/lhGrid.js`, `tools/sam-tools/test/lhGrid.test.js`
 - [x] Tuplet guard: a cell boundary falling inside a tuplet group leaves that group alone
 
 **Exit criteria**
-- [⚠] Someone Like You m1 LH at quarter/onset/cap 2/root-third yields four A3+C#4 quarter events
-      — **produces four `A3` events, not `A3+C#4`.** See Notes; needs a decision.
+- [x] Someone Like You m1 LH at quarter/onset/cap 2/root-third yields four **`A3`** quarter events
+      *(corrected 2026-08-13: the original line said `A3+C#4`, which is the union result. m1's LH
+      is single sixteenths, so only `A3` sounds at beat 0 and §4.2 is right as written.)*
 - [x] The same measure at `union` yields A3+C#4 (bottom two of A3,C#4,E4)
 - [x] A measure where the two fills DIFFER — m1 itself differs (`A3` vs `A3+C#4`);
       also covered at half grid, cap 3 (`h:A3` vs `h:A3+C#4+E4`)
@@ -74,24 +75,28 @@ Files: `tools/sam-tools/lib/lhGrid.js`, `tools/sam-tools/test/lhGrid.test.js`
 - [x] Every §5 invariant passes on a full-song grid run — all four grid sizes × both fills
 - [x] Unit test per grid size asserting per-hand duration sum is preserved
 
-83 tests across M1–M3, all passing.
+83 tests at M3. 105 after M4.
 
 ---
 
-### M4 — RH thinning
+### M4 — RH thinning ✅
 
-- [ ] `rhStack: melody-only`, `melody-plus-one`, `all`
-- [ ] Top note determined by `max(midi)`; hard error if the notes array is not pitch-ascending
-- [ ] RH event count unchanged
-- [ ] Tie chains removed whole or not at all
-- [ ] Melody blips detected and reported, NOT corrected
+Files: `tools/sam-tools/lib/rhThin.js`, `tools/sam-tools/test/rhThin.test.js`
+
+- [x] `rhStack: melody-only`, `melody-plus-one`, `all`
+- [x] Top note determined by `max(midi)`; hard error if the notes array is not pitch-ascending
+- [x] RH event count unchanged
+- [x] Tie chains removed whole or not at all
+- [x] Melody blips detected and reported, NOT corrected
 
 **Exit criteria**
-- [ ] Someone Like You RH stack drops to 1 throughout at `melody-only`
-- [ ] RH event count per measure identical to original on all 82 measures
-- [ ] Highest note of every RH event identical to original (invariant 5)
-- [ ] Lyrics and fingerings survive a full-song RH thin unchanged
-- [ ] All 18 melody blips appear in the run report
+- [x] Someone Like You RH stack drops to 1 throughout at `melody-only`
+- [x] RH event count per measure identical to original on all 82 measures
+- [x] Highest note of every RH event identical to original (invariant 5)
+- [x] Lyrics and fingerings survive a full-song RH thin unchanged
+- [x] All 18 melody blips appear in the run report
+
+105 tests across M1–M4, all passing.
 
 ---
 
@@ -229,29 +234,17 @@ quarter` today is an error, not a no-op.
 
 #### M3
 
-**DISPUTED EXIT CRITERION — `onset` on Someone Like You m1.** The tracker says
-quarter/onset/cap 2/root-third yields four `A3+C#4` events. It yields four
-`A3` events.
+**RESOLVED 2026-08-13 — the `onset` exit criterion was a slip in the tracker.**
+It named the union result on the onset line. m1's LH is sixteen single
+sixteenths (`A3 C#4 E4 C#4` ×4), so the only pitch sounding at beat 0 is `A3`,
+and §4.2 — "the pitches sounding at the START of the cell" — is right as
+written. The tracker line is corrected; the code is unchanged.
 
-m1's LH is sixteen single sixteenths — `A3 C#4 E4 C#4` repeated four times. At
-beat 0 the only pitch sounding is `A3`. Spec §4.2 defines `onset` as "the
-pitches sounding at the START of the cell", so one note is the correct reading
-of the spec as written. `A3+C#4` is what `union` produces, by gathering the
-whole arpeggio in the cell and capping to the bottom two.
-
-Implemented per §4.2. Three ways this could go:
-
-1. **Spec is right, tracker's criterion is a slip** — the likeliest reading,
-   since it also names the union result on the very next line. Nothing to
-   change but the tracker.
-2. **`onset` is meant to mean "the harmony being arpeggiated at the cell
-   start"** — i.e. gather pitches from the cell but voice them from the
-   downbeat. That is a different algorithm and a spec change, not a bug fix.
-3. **The reference plan should use `union`** — but §4.2 warns union made LH
-   jump worse in prototyping, which is exactly what M6 exists to catch.
-
-Everything else in M3 is unaffected either way, and M6's regression check will
-have an opinion on which fill is actually better on this song.
+**The fill default is PROVISIONAL pending M6.** `onset` stays the default for
+now. `union`'s problem is documented in §4.2 — it can emit chords that never
+sounded, and it made LH jump worse than the original in prototyping. M6 will
+measure both fills on this song and the default gets ruled on with numbers
+rather than argument.
 
 **Decisions taken**
 
@@ -265,10 +258,14 @@ have an opinion on which fill is actually better on this song.
 - *Quantization drops ties*, per §5.1 — cell fill discards the old events
   entirely, so a chain cannot survive half-removed.
 
-**The density floor does real work.** A full-song quarter grid skips **23 of 82
-measures**, every one because the LH already had ≤4 events. That is 28%, above
-§7's 25% confirmation threshold, so the reference plan will prompt in M5 —
-worth knowing now rather than discovering it as a surprise.
+**The density floor does real work.** A full-song quarter grid leaves **23 of
+82 measures** alone, every one because the LH already had ≤4 events.
+
+Those are **`unneeded`, not `unable`** (ruling, 2026-08-13). The floor working
+as designed is not a failure: nothing was left too hard and there is nothing
+for a human to confirm. Spec §7 and §8 now split the two counters, and only
+`unable` gates the 25% confirmation prompt. Under the old single counter the
+reference plan would have prompted at 28% for no reason.
 
 **The tuplet guard fires, but not at quarter grid.** Someone Like You has LH
 triplets at m51, 53, 74 and 76, each spanning beats 3–4. At quarter grid the
@@ -282,3 +279,43 @@ Like You are m79→m80→m81, all sustained whole notes that the density floor
 refuses to touch, so both ends come through intact. A song with a tie crossing
 out of a quantized measure into an untouched one would orphan it — invariant 7
 catches that, and it becomes a skip-and-flag case in M5.
+
+#### M4
+
+**The melody rule and the whole-chain rule collide, and the collision is
+real.** Four RH tie chains in Someone Like You are *mixed*: the tied pitch is
+the top note of one event and an inner voice of the next (m22, m27, m46, m69).
+Under `melody-only`, §4.4 says the m22 top note must be retained and §5.1 says
+the chain must not survive half-removed. Both cannot hold if "removing the
+chain" means removing every note in it.
+
+Resolved by reading §5.1 as being about the LINK, not the notes: the tie
+marker is dropped and the note stays. That satisfies every stated invariant —
+the melody note survives (inv 5), no dangling marker exists (inv 7), and the
+event count is untouched (inv 6). The audible effect is a re-articulation
+where the score had a tie, in four places, all reported in `strippedTies`.
+The alternative — retaining the whole chain — would have left RH stack at 2 in
+those measures and failed the M4 exit criterion.
+
+**Ties are handled as LINKS, not chains.** A note marked `both` is the end of
+one link and the start of the next, so breaking one side leaves the other
+intact: `both` becomes `start` or `end` rather than being wiped. Handling
+links is what makes a dangling marker structurally impossible, which is the
+property §5.1 is actually asking for. Tested.
+
+**A chain reaching an untouched measure retains its note instead.** An
+untouched measure must stay bit-identical, so its tie marker cannot be
+stripped — the removable partner is kept instead and the chain survives whole.
+Less thinning, never a broken tie. This never fires on the reference plan
+(zero chains straddle the untouched boundary) but a different plan could, so
+it is built and tested synthetically.
+
+**`NotImplementedYet` retired.** Every setting in the vocabulary is now
+implemented, so nothing threw it. The lasting form of that guard is a test —
+"no silent no-ops" — asserting every non-OFF value either changes something or
+records a reason. That property outlives the milestone window.
+
+**Blips confirmed at 18, and untouched.** Every one is reported, and the output
+top note at each blip position is bit-identical to the input. Tested
+explicitly rather than assumed, since "we did not correct it" is the sort of
+claim that quietly stops being true.

@@ -18,7 +18,7 @@ globalThis.DOMParser = shim.window.DOMParser;
 const { parseMusicXML } = await import("../vendor/songParser.js");
 const { readScoreXml } = await import("../lib/mxl.js");
 const { loadPlan } = await import("../lib/plan.js");
-const { simplifyMeasures, NotImplementedYet } = await import("../lib/simplify.js");
+const { simplifyMeasures } = await import("../lib/simplify.js");
 const { verify, assertVerified, formatViolations, InvariantError } =
   await import("../lib/verify.js");
 
@@ -151,13 +151,24 @@ test("`settings: null` measures come through untouched and are reported", () => 
   assert.deepEqual(r.measures, SLY.measures);
 });
 
-test("asking for an unimplemented transform is loud, never a silent no-op", () => {
-  // lhGrid landed in M3. rhStack is still unbuilt, and until M4 lands a plan
-  // requesting it must fail rather than quietly returning an unchanged song.
+test("no silent no-ops: every non-OFF setting value acts or says why", () => {
+  // The guard that replaced NotImplementedYet once every setting was built. A
+  // plan asking for a transform must never come back with an unchanged song
+  // and nothing to explain it.
+  const differs = (a, b, hand) =>
+    a.some((m, i) => JSON.stringify(m[hand]) !== JSON.stringify(b[i][hand]));
+
+  for (const lhGrid of ["whole", "half", "quarter", "eighth"]) {
+    const plan = loadPlan({ planVersion: 1, default: { lhGrid } }, { measureCount: 82 });
+    const r = simplifyMeasures(SLY, plan);
+    const acted = differs(r.measures, SLY.measures, "lh");
+    const recorded = r.unable.length + r.unneeded.length > 0;
+    assert.ok(acted || recorded, `lhGrid "${lhGrid}" did nothing and reported nothing`);
+  }
   for (const rhStack of ["melody-only", "melody-plus-one"]) {
-    const plan = loadPlan({ planVersion: 1, default: { rhStack } }, { measureCount: 38 });
-    assert.throws(() => simplifyMeasures(LA_CANDEUR, plan), NotImplementedYet);
-    assert.throws(() => simplifyMeasures(LA_CANDEUR, plan), /M4/);
+    const plan = loadPlan({ planVersion: 1, default: { rhStack } }, { measureCount: 82 });
+    const r = simplifyMeasures(SLY, plan);
+    assert.ok(differs(r.measures, SLY.measures, "rh"), `rhStack "${rhStack}" did nothing`);
   }
 });
 

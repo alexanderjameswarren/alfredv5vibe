@@ -241,16 +241,22 @@ test("a full-song quarter grid reduces LH events and records every skip", () => 
   const after = r.measures.reduce((n, x) => n + (x.lh || []).length, 0);
   assert.ok(after < before, `LH events ${before} -> ${after}`);
 
-  // Skips are recorded with a reason — never silent (§7).
-  assert.ok(r.skipped.length > 0);
-  for (const s of r.skipped) {
+  // Every skip is recorded with a reason — never silent (§7).
+  for (const s of [...r.unable, ...r.unneeded]) {
     assert.equal(s.hand, "lh");
     assert.ok(s.reason && s.reason.length > 0, `m${s.measure} skipped with no reason`);
-  }
-  // Every skipped measure's LH is bit-identical to the original.
-  for (const s of r.skipped) {
+    // A skipped measure's LH is bit-identical to the original.
     assert.deepEqual(r.measures[s.measure - 1].lh, SLY.measures[s.measure - 1].lh);
   }
+});
+
+test("density-floor refusals are `unneeded`, and never `unable` (§7)", () => {
+  // 23 of 82 measures — 28%, above the confirmation threshold. Counting them
+  // as failures would ask the user to confirm that the tool worked.
+  const r = simplifyMeasures(SLY, gridPlan());
+  assert.equal(r.unable.length, 0, `unexpected unable: ${JSON.stringify(r.unable)}`);
+  assert.equal(r.unneeded.length, 23);
+  for (const s of r.unneeded) assert.match(s.reason, /density floor/);
 });
 
 test("LH ties do not survive quantization half-removed", () => {
@@ -272,12 +278,15 @@ test("quantization does not write through into the input", () => {
   assert.equal(JSON.stringify(SLY), before);
 });
 
-test("rhStack is still a loud error while M4 is unbuilt", () => {
+test("LH grid and RH thin compose without either undoing the other", () => {
   const plan = loadPlan(
-    { planVersion: 1, default: { lhGrid: "quarter", rhStack: "melody-only" } },
+    { planVersion: 1, default: { ...settings(), rhStack: "melody-only" } },
     { measureCount: SLY.measures.length }
   );
-  assert.throws(() => simplifyMeasures(SLY, plan), /M4/);
+  const r = simplifyMeasures(SLY, plan);
+  const v = verify(SLY, { ...SLY, measures: r.measures });
+  assert.deepEqual(v, [], formatViolations(v));
+  assert.equal(r.unneeded.length, 23, "the LH density floor still applies");
 });
 
 test("GRID_BEATS covers exactly the lhGrid vocabulary", () => {
