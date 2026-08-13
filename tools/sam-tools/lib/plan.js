@@ -10,13 +10,22 @@
 // the boundary between "a model chose from a list" and "a model wrote music",
 // and a typo that silently degrades to a default would erode it.
 //
-// OPEN QUESTION, deliberately not decided here — see the progress file Notes.
-// Spec §4 gives a default per setting, but progress M2 expects `default: {}` to
-// produce an identity transform. Those disagree: filling omissions from the §4
-// table would make `{}` mean quarter-grid + melody-only, which is not identity.
-// This loader therefore merges PARTIALS ONLY (range settings over plan default,
-// key by key) and never invents a value. What an absent key means at transform
-// time is M3's decision, not the loader's.
+// What an omitted setting means (spec §4, settled 2026-08-13):
+//
+//   GATING settings decide WHETHER a transform runs. Absent means OFF —
+//   lhGrid ⇒ "none", rhStack ⇒ "all".
+//
+//   MODIFIER settings decide HOW an active transform behaves. They keep their
+//   defaults but take effect only when their parent gating setting is active.
+//   A modifier present without its parent is INERT, not an error.
+//
+// So `default: {}` is a true identity transform. The reason for this rather
+// than "absent takes the table value" is asymmetry of failure: the other
+// reading makes a plan that omits rhStack strip the right hand to melody-only
+// without being asked — silently applying the one transform that touches the
+// melody. This way the failure mode is a version that is not simplified
+// enough, which shows up in the metrics immediately and costs one edit.
+// Under-transforming is visible; over-transforming silently is not.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -34,19 +43,53 @@ const validatePlanStructure = ajv.compile(schema);
 /** The settings vocabulary, in spec order. */
 export const SETTING_KEYS = ["lhGrid", "lhFill", "lhCap", "lhKeep", "rhStack"];
 
-/**
- * The per-setting defaults from spec §4, recorded for reference.
- *
- * NOT APPLIED by this loader — see the header note. Resolve the §4-vs-M2
- * conflict before wiring these into the transform.
- */
-export const SPEC_SETTING_DEFAULTS = Object.freeze({
-  lhGrid: "quarter",
+/** Which gating setting each modifier hangs off. Gating settings map to null. */
+export const SETTING_PARENT = Object.freeze({
+  lhGrid: null,
+  rhStack: null,
+  lhFill: "lhGrid",
+  lhCap: "lhGrid",
+  lhKeep: "lhGrid",
+});
+
+/** Spec §4 defaults. Gating settings default to their OFF value. */
+export const SETTING_DEFAULTS = Object.freeze({
+  lhGrid: "none",
   lhFill: "onset",
   lhCap: 2,
   lhKeep: "root-third",
-  rhStack: "melody-only",
+  rhStack: "all",
 });
+
+/** The OFF value of each gating setting — the value that means "do nothing". */
+export const GATING_OFF = Object.freeze({ lhGrid: "none", rhStack: "all" });
+
+/**
+ * Fill a partial settings object out to the full vocabulary.
+ * `effectiveSettings({})` is the identity transform.
+ */
+export function effectiveSettings(partial = {}) {
+  return { ...SETTING_DEFAULTS, ...partial };
+}
+
+/** Is the LH quantization transform active for these settings? */
+export const lhActive = (s) => !!s && s.lhGrid !== GATING_OFF.lhGrid;
+
+/** Is the RH thinning transform active for these settings? */
+export const rhActive = (s) => !!s && s.rhStack !== GATING_OFF.rhStack;
+
+/**
+ * True when a modifier is set but its parent transform is off, so the value
+ * has no effect. Inert, not an error — reported by the CLI as advice only.
+ */
+export function inertSettings(partial = {}) {
+  const eff = effectiveSettings(partial);
+  const active = { lhGrid: lhActive(eff), rhStack: rhActive(eff) };
+  return Object.keys(partial).filter((k) => {
+    const parent = SETTING_PARENT[k];
+    return parent && !active[parent];
+  });
+}
 
 /** Thrown for any plan problem. `errors` holds every message, not just the first. */
 export class PlanError extends Error {
@@ -259,12 +302,16 @@ export function loadPlan(planOrPath, { measureCount } = {}) {
   const defaultSettings = { ...plan.default };
 
   // Per-measure resolution. `null` means untouched; otherwise the range's
-  // partial settings override the plan default key by key. No key is invented.
+  // partial settings override the plan default key by key, and the result is
+  // filled out to the full vocabulary (gating settings default to OFF).
   const perMeasure = new Array(measureCount + 1).fill(undefined);
-  for (let m = 1; m <= measureCount; m++) perMeasure[m] = { ...defaultSettings };
+  for (let m = 1; m <= measureCount; m++) perMeasure[m] = effectiveSettings(defaultSettings);
   for (const r of ranges) {
     for (const m of r.measures) {
-      perMeasure[m] = r.settings === null ? null : { ...defaultSettings, ...r.settings };
+      perMeasure[m] =
+        r.settings === null
+          ? null
+          : effectiveSettings({ ...defaultSettings, ...r.settings });
     }
   }
 

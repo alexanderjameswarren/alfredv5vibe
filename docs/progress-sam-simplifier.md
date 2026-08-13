@@ -1,6 +1,6 @@
 # Progress: SAM Song Simplifier (Phase 2)
 
-## Status: M1 complete, awaiting verification
+## Status: M2 complete, awaiting verification
 
 Branch: `phase-2-simplifier`
 
@@ -31,19 +31,25 @@ Files: `tools/sam-tools/lib/plan.schema.json`, `tools/sam-tools/lib/plan.js`,
 
 ---
 
-### M2 — Identity transform and invariant harness
+### M2 — Identity transform and invariant harness ✅
 
-Build the invariant checks (spec §5) BEFORE any transform, and prove them
-against a plan that changes nothing.
+Files: `tools/sam-tools/lib/verify.js`, `tools/sam-tools/lib/simplify.js`,
+`tools/sam-tools/test/verify.test.js`
 
-- [ ] All eight §5 invariants implemented as a reusable `verify(input, output)`
-- [ ] Empty plan (`default: {}`, no ranges) produces output structurally identical to input
-- [ ] Seam-aware tie check: an unmatched tie at a `sourceMeasure` discontinuity passes; an orphan elsewhere fails
+- [x] All eight §5 invariants implemented as a reusable `verify(input, output)`
+- [x] Empty plan (`default: {}`, no ranges) produces output structurally identical to input
+- [x] Seam-aware tie check: an unmatched tie at a `sourceMeasure` discontinuity passes; an orphan elsewhere fails
 
 **Exit criteria**
-- [ ] Identity run on La Candeur (38 measures) — zero differences
-- [ ] Identity run on Someone Like You (82 measures, 16 tuplet measures, 229 tied events) — zero differences
-- [ ] **Mutation test:** deliberately corrupt one output measure's LH duration sum and confirm `verify` catches it. Same for a removed RH top note, a changed `audioOffsetMs`, and a dropped measure. Four mutations, four catches.
+- [x] Identity run on La Candeur (38 measures) — zero differences
+- [x] Identity run on Someone Like You (82 measures, 16 tuplet measures, 229 tied events) — zero differences
+- [x] **Mutation test:** four mutations, four catches — LH duration sum (inv 4),
+      removed RH top note (inv 5), changed `audioOffsetMs` (inv 3), dropped
+      measure (inv 1). Plus four more: tuplet marker stripped (inv 4 via
+      tuplet-scaled math), time signature and `symbol` (inv 2), removed RH
+      event (inv 6), changed `chord`/`sourceMeasure` (inv 8).
+
+55 tests across M1 + M2, all passing.
 
 ---
 
@@ -164,3 +170,43 @@ schema. No runtime network or database access.
 
 **Test runner:** `node --test` (built in). No framework dependency; the app's
 jest doesn't reach into `tools/`.
+
+#### M2
+
+**SURPRISE — the parser aliases measure content across repeats.** In
+flattened output, La Candeur's m9 `rh` array IS m1's `rh` array, the same
+object, because repeat flattening reuses the events rather than copying them.
+`structuredClone` preserves that aliasing faithfully, so mutating m9 silently
+mutated m1 — which is how two tie tests failed and how the aliasing was found.
+
+Consequences:
+- **Never mutate an input measure in place.** `simplifyMeasures` clones each
+  measure independently, which breaks the aliasing; M3/M4 must keep doing that.
+- Real exports are alias-free, because downloading serialises through JSON.
+  The parser-derived test fixtures now do a JSON round-trip for the same
+  reason, so tests see what the CLI will actually be handed.
+
+**Tie tests are synthetic, deliberately.** Tie matching is keyed by pitch
+within a hand, so corrupting a tie in a real song can be absorbed by another
+chain on the same pitch and the mutation proves nothing. The seam rule is
+tested on 3-measure fixtures with one pitch and explicit `sourceMeasure`
+values; the real songs are tested for the absence of false positives instead
+(229 tied events, 21 barline crossings, zero violations under identity).
+
+**Deliberate refinement to invariant 7.** Tie integrity is judged RELATIVE TO
+THE INPUT — only a problem the transform introduced counts. A song that
+arrives with a pre-existing orphan must not fail an identity run. Spec §5.7
+reads as an absolute check on the output; this is strictly safer and there is
+a test for it.
+
+**Known gap:** `analyzeTies` seam-labels unmatched tie ENDS but not unclosed
+STARTS, so a transform that legitimately left a start dangling at a seam would
+be reported. That cannot currently happen — §5.1 requires a chain to be
+removed whole — so the stricter check stands until a transform needs otherwise.
+
+**Deferred to M5:** the §9 output *document* assembly (title suffix,
+`songType`, `parentSongId`, `generationNotes`). M2 returns measures only, so
+"structurally identical to input" is literally true for the identity run.
+`simplifyMeasures` throws `NotImplementedYet` for any active transform rather
+than silently returning an unchanged song — a plan asking for `lhGrid:
+quarter` today is an error, not a no-op.

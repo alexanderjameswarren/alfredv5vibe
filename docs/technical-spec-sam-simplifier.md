@@ -93,13 +93,40 @@ Additional checks, all hard errors:
 
 This is the fixed enum. Adding a value later is additive and safe; the schema must reject anything not listed.
 
-| setting | values | default | meaning |
-|---|---|---|---|
-| `lhGrid` | `none`, `whole`, `half`, `quarter`, `eighth` | `quarter` | Cell size for LH quantization |
-| `lhFill` | `onset`, `union` | `onset` | Which pitches fill a cell |
-| `lhCap` | integer 1–4 | `2` | Max notes per LH event after fill |
-| `lhKeep` | `root-third`, `root-fifth` | `root-third` | Which notes survive the cap |
-| `rhStack` | `all`, `melody-plus-one`, `melody-only` | `melody-only` | RH thinning |
+| setting | values | default | kind | meaning |
+|---|---|---|---|---|
+| `lhGrid` | `none`, `whole`, `half`, `quarter`, `eighth` | `none` | gating | Cell size for LH quantization |
+| `lhFill` | `onset`, `union` | `onset` | modifier (`lhGrid`) | Which pitches fill a cell |
+| `lhCap` | integer 1–4 | `2` | modifier (`lhGrid`) | Max notes per LH event after fill |
+| `lhKeep` | `root-third`, `root-fifth` | `root-third` | modifier (`lhGrid`) | Which notes survive the cap |
+| `rhStack` | `all`, `melody-plus-one`, `melody-only` | `all` | gating | RH thinning |
+
+**Gating vs modifier settings.** The vocabulary splits in two, and the split
+determines what an omitted key means.
+
+*Gating* settings decide WHETHER a transform runs. **Absent means off** —
+`lhGrid` defaults to `none` and `rhStack` to `all`.
+
+*Modifier* settings decide HOW an already-active transform behaves. They keep
+their defaults, but take effect only when their parent gating setting is
+active. A modifier present without its parent active is **inert, not an
+error**: `{"lhFill": "union"}` with no `lhGrid` is accepted and simply does
+nothing.
+
+The consequence is that `default: {}` is a true identity transform.
+
+The reason to prefer this over "absent takes the value in the table" is
+asymmetry of failure. Under the other reading, a plan that omits `rhStack`
+would strip the right hand to melody-only without being asked — silently
+applying the one transform that touches the melody. Under this reading the
+failure mode is a version that is not simplified enough, which shows up
+immediately in the metrics and costs one edit to fix. Under-transforming is
+visible; over-transforming silently is not.
+
+This does not weaken §3's "a plan is a complete description" principle. That
+principle is about plans being regenerated from the original rather than
+chained onto a previous version; it is not a requirement that every key be
+spelled out.
 
 ### 4.1 `lhGrid` — quantization
 

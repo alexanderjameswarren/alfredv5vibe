@@ -13,7 +13,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { loadPlan, parseMeasureList, PlanError, SETTING_KEYS } from "../lib/plan.js";
+import {
+  loadPlan, parseMeasureList, PlanError, SETTING_KEYS,
+  effectiveSettings, SETTING_DEFAULTS, inertSettings, lhActive, rhActive,
+} from "../lib/plan.js";
 
 // The reference plan from spec §3.
 const REFERENCE_PLAN = {
@@ -67,8 +70,40 @@ test("settings: null resolves to untouched, everything else to the default", () 
   const p = load(REFERENCE_PLAN);
   assert.equal(p.settingsFor(37), null, "m37 is in a null range");
   assert.equal(p.settingsFor(59), null, "m59 is inside 57-61");
-  assert.deepEqual(p.settingsFor(1), REFERENCE_PLAN.default, "m1 is not in any range");
+  assert.deepEqual(p.settingsFor(1), effectiveSettings(REFERENCE_PLAN.default), "m1 is not in any range");
   assert.deepEqual(p.settingsFor(82), null, "m82 is the last measure of 79-82");
+});
+
+test("gating settings default to OFF, so `default: {}` is the identity transform", () => {
+  const p = load({ planVersion: 1, default: {} });
+  const s = p.settingsFor(1);
+  assert.equal(s.lhGrid, "none", "LH quantization must be off when unasked for");
+  assert.equal(s.rhStack, "all", "RH thinning must be off when unasked for");
+  assert.equal(lhActive(s), false);
+  assert.equal(rhActive(s), false);
+});
+
+test("modifier settings keep their §4 defaults", () => {
+  const s = load({ planVersion: 1, default: {} }).settingsFor(1);
+  assert.equal(s.lhFill, "onset");
+  assert.equal(s.lhCap, 2);
+  assert.equal(s.lhKeep, "root-third");
+});
+
+test("a modifier without its parent active is inert, not an error", () => {
+  // {"lhFill": "union"} with no lhGrid is accepted and does nothing.
+  const p = load({ planVersion: 1, default: { lhFill: "union", lhCap: 4 } });
+  assert.equal(lhActive(p.settingsFor(1)), false);
+  assert.deepEqual(inertSettings({ lhFill: "union", lhCap: 4 }).sort(), ["lhCap", "lhFill"]);
+});
+
+test("a modifier WITH its parent active is not inert", () => {
+  assert.deepEqual(inertSettings({ lhGrid: "quarter", lhFill: "union" }), []);
+});
+
+test("effectiveSettings fills the whole vocabulary", () => {
+  assert.deepEqual(effectiveSettings({}), SETTING_DEFAULTS);
+  assert.deepEqual(effectiveSettings({ lhGrid: "half" }), { ...SETTING_DEFAULTS, lhGrid: "half" });
 });
 
 test("a range's partial settings override the default key by key", () => {
@@ -77,18 +112,16 @@ test("a range's partial settings override the default key by key", () => {
     default: { lhGrid: "quarter", lhCap: 2, rhStack: "melody-only" },
     ranges: [{ measures: "5-6", settings: { lhCap: 4 } }],
   });
-  assert.deepEqual(p.settingsFor(5), { lhGrid: "quarter", lhCap: 4, rhStack: "melody-only" });
-  assert.deepEqual(p.settingsFor(4), { lhGrid: "quarter", lhCap: 2, rhStack: "melody-only" });
+  assert.deepEqual(p.settingsFor(5), effectiveSettings({ lhGrid: "quarter", lhCap: 4, rhStack: "melody-only" }));
+  assert.deepEqual(p.settingsFor(4), effectiveSettings({ lhGrid: "quarter", lhCap: 2, rhStack: "melody-only" }));
 });
 
-test("no key is invented — an omitted setting stays omitted", () => {
-  // The loader merges partials only. What an absent key MEANS is a transform
-  // decision (see the §4-vs-M2 note in lib/plan.js), not the loader's.
+test("resolved settings always carry the whole vocabulary", () => {
   const p = load({ planVersion: 1, default: {} });
-  assert.deepEqual(p.settingsFor(1), {});
   for (const k of SETTING_KEYS) {
-    assert.ok(!(k in p.settingsFor(1)), `${k} should not have been filled in`);
+    assert.ok(k in p.settingsFor(1), `${k} should be resolved`);
   }
+  assert.deepEqual(p.defaultSettings, {}, "the raw plan default is preserved unfilled");
 });
 
 test("ranges are optional", () => {

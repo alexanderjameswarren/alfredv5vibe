@@ -196,7 +196,7 @@ export function findSeams(measures) {
  * continued from lives in a measure the flattening skipped. Those are labelled
  * `seam`; the rest are `orphan`.
  */
-function analyzeTies(measures, seams) {
+export function analyzeTies(measures, seams) {
   const crossings = [];
   const unmatchedEnds = [];
   const unclosedStarts = [];
