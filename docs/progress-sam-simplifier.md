@@ -1,6 +1,6 @@
 # Progress: SAM Song Simplifier (Phase 2)
 
-## Status: M6 complete, awaiting verification
+## Status: M7 handed over — awaiting the human verdict
 
 Branch: `phase-2-simplifier`
 
@@ -150,15 +150,16 @@ metric fix in `tools/sam-tools/lib/analyze.js`
 
 ### M7 — End-to-end on Someone Like You
 
-- [ ] Full reference plan run produces an importable document
+- [x] Full reference plan run produces an importable document
 - [ ] Human imports it into SAM through the UI
 - [ ] Human plays it
 
 **Exit criteria**
-- [ ] Post-transform metrics: notes/sec median ~3.4 max ~5.6; LH/beat 1.0 throughout; RH stack 1 throughout
-- [ ] Flag count drops from 72/82 to a small number
-- [ ] Measures 17, 18, 19, 41, 42, 43 STILL flag on notes-per-second — this is expected and correct (irreducible melody)
-- [ ] Lyrics and audio offsets present on the imported song
+- [x] Post-transform metrics: notes/sec median 3.63 max 5.30; LH/beat median 1.0; RH stack 1 in every transformed measure
+- [x] Every remaining flag is on the melody — 25 measures: 6 NS + 19 RH VAR, none reducible by any setting
+- [x] Measures 17, 18, 19, 41, 42, 43 STILL flag on notes-per-second — expected and correct
+- [x] Lyrics and audio offsets preserved — verified on the OLD 73-measure song, the only
+      one that HAS them; the 82-measure reference song has zero of both
 - [ ] **Human verdict on whether it sounds right.** This is the real exit criterion. No automated check substitutes for it.
 
 ---
@@ -450,3 +451,40 @@ so that one is not union's fault. §4.2's wording should be updated to match.
 **Reference plan result (with the m32 range): flagged 69/82 → 25/82, zero
 regressions.** n/s median 3.63, max 5.30; LH/beat median 1.00; RH stack max 2
 (only in untouched measures).
+
+#### M7
+
+**Deliverable:** `C:/Users/Alex/Downloads/Someone Like You (simplified).json`
+(235KB), plus its plan and run report alongside. Validates against
+`sam-drill-format.schema.json`.
+
+Run from the genuine database export rather than a fixture parse. Its title
+carried "(round trip test)" from the Phase 0 copy, so the parent title was
+restored first — Phase 0 proved that copy field-identical to 030333d9 apart
+from its deliberately-changed title.
+
+**Everything verified by reading the output document, not from memory:** 82
+measures, `songType: simplified`, `parentSongId` 030333d9, key/fifths/bpm
+inherited, `audioOffsetMs` matching the source on all 82 measures with an
+explicit key on every one, the eleven untouched measures bit-identical, the run
+report valid JSON inside `generationNotes` with zero regressions and zero
+`unable`.
+
+**THE 371-LYRIC CHECK CANNOT PASS ON THIS SONG — it has no lyrics.** The
+82-measure song (030333d9) carries 0 lyrics and 0 non-null audio offsets. The
+371 lyrics and 7 offsets belong to the OLD 73-measure song
+(2545eec0). Verified separately by running a plan on that export:
+
+- 371 lyrics present and byte-identical, `word_order` carried verbatim
+- audio offsets identical: `[0, 14800, 26000, 33000, 36800, 43833, 74000]`
+- every placed syllable still lands on a real RH event, zero dangling
+
+**The pitch-ascending guard fired on real data.** The OLD song cannot be
+RH-thinned at all: `m22 rh[8]` has notes `[68, 59, 64]`, which the old parser
+emitted unsorted. M4's hard error refuses to guess which note is the melody.
+The preservation check above therefore ran with `rhStack` off. Anything wanting
+to simplify the old rows needs their chord members sorted first — a parser-era
+defect, not a simplifier one.
+
+**m32 needs its half-grid range on BOTH songs** — the same arpeggio sits at the
+same measure number in each.
