@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { noteToVexKey, noteAccidental, getBeamGroups, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
 import { measureDurationQ, getEventBeats, formatTimeSignature } from "../lib/measureUtils";
 import {
@@ -24,7 +24,19 @@ const BASS_Y = 290;                // was 210; +80 of inter-stave room
 const STAFF_H = 430;                // was 350; matches BASS_Y bump
 const LYRIC_Y = TREBLE_Y + 145;     // centered between staves with the new gap
 
-export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fingerings, fingeringMode = false, fingeringSelection = null, onSelectFingering, onTap, measureWidth, lyricPlacements, onLyricEdit, onAudioOffsetChange, showAudioOffset = false }) {
+export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fingerings, fingeringMode = false, fingeringSelection = null, onSelectFingering, onTap, measureWidth, lyricPlacements, onLyricEdit, onAudioOffsetChange, showAudioOffset = false, idPrefix }) {
+  // Note <g> ids used to be `t-{measIdx}-{i}` with nothing distinguishing one
+  // mounted score from another, so two on a page would put duplicate ids in the
+  // document. Nothing reads them by id today — ScrollEngine's only lookup is
+  // SVG-scoped and playback-only — but duplicates are invalid HTML and a trap
+  // for anything that later reaches for document.getElementById.
+  //
+  // useId gives a unique value per component instance; its colons are legal in
+  // an HTML id but not in a CSS selector, so they are stripped. An explicit
+  // `idPrefix` overrides it when a caller wants a stable, readable id.
+  const autoId = useId().replace(/:/g, "");
+  const notePrefix = idPrefix ?? autoId;
+
   const containerRef = useRef(null);
   const geometryRef = useRef([]);
   const labelElsRef = useRef([]);
@@ -486,7 +498,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
 
       // 5. Draw treble notes individually, each wrapped in an SVG <g> group
       trebleNotes.forEach((note, i) => {
-        const groupEl = ctx.openGroup("sam-note", `t-${measIdx}-${i}`);
+        const groupEl = ctx.openGroup("sam-note", `${notePrefix}-t-${measIdx}-${i}`);
         note.setStave(treble);
         note.setContext(ctx);
         note.draw();
@@ -528,7 +540,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
 
       // Draw bass notes individually
       bassNotes.forEach((note, i) => {
-        const groupEl = ctx.openGroup("sam-note", `b-${measIdx}-${i}`);
+        const groupEl = ctx.openGroup("sam-note", `${notePrefix}-b-${measIdx}-${i}`);
         note.setStave(bass);
         note.setContext(ctx);
         note.draw();
@@ -657,7 +669,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
       onSelect: (coord) => onSelectFingeringRef.current?.(coord),
     });
     drawSelectionRing(svg, geometry, fingeringModeRef.current ? fingeringSelectionRef.current : null);
-  }, [measures, onBeatEvents, onGeometry, measureWidth, lyricPlacements, showAudioOffset]);
+  }, [measures, onBeatEvents, onGeometry, measureWidth, lyricPlacements, showAudioOffset, notePrefix]);
 
   // Redraw only the fingering overlay when fingerings change, reusing the last
   // render's geometry + label nodes — avoids a full score rebuild on each edit

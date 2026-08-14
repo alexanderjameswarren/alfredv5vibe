@@ -5,6 +5,7 @@
 // paired with a machine-readable `code`, and nothing else is free text.
 
 import { analyzeSong, SUMMARY_METRICS } from "./analyze.js";
+import { effectiveSettings } from "./plan.js";
 
 /** Contiguous runs in an ascending list of measure numbers. */
 function runsOf(numbers) {
@@ -70,6 +71,56 @@ export function repeatedRanges(measures, ranges) {
   return out;
 }
 
+/**
+ * Per-measure effective settings and outcome — one entry for every measure.
+ *
+ * The report already carries the plan, but its ranges are STRINGS
+ * (`"37,57-61,68"`). Resolving those needs `parseMeasureList`, which lives here
+ * and is not in the app bundle, so a client wanting to know "what ran on m32?"
+ * would have to re-implement range parsing. This resolves it once, at write
+ * time, where the plan object is already in hand.
+ *
+ * `status` is derived from what actually happened, not from what was asked:
+ *
+ *   untouched   — the plan said `settings: null`
+ *   unable      — a transform could not run (§7); the measure stays too hard
+ *   transformed — the output measure differs from the input
+ *   unneeded    — nothing was refused and nothing changed
+ *
+ * A measure can be `unneeded` in one hand and transformed in the other — m18 of
+ * Someone Like You hits the LH density floor while its RH is still thinned — so
+ * the comparison is against the actual output rather than against the counters.
+ * The per-hand detail stays available in `unable` / `unneeded`.
+ *
+ * `nonDefault` means the measure was covered by a range, so its settings differ
+ * from the plan default. That is the flag a UI wants when highlighting "this
+ * measure ran something unusual"; untouched measures are non-default too.
+ */
+export function resolvedSettings({ plan, result, input, output }) {
+  const base = effectiveSettings(plan.defaultSettings);
+  const baseJson = JSON.stringify(base);
+
+  const unableAt = new Set(result.unable.map((u) => u.measure));
+
+  return input.measures.map((m, i) => {
+    const measure = m.number ?? i + 1;
+    const settings = plan.settingsFor(measure);
+
+    let status;
+    if (settings === null) status = "untouched";
+    else if (unableAt.has(measure)) status = "unable";
+    else if (JSON.stringify(output.measures[i]) !== JSON.stringify(m)) status = "transformed";
+    else status = "unneeded";
+
+    return {
+      measure,
+      status,
+      settings,
+      nonDefault: settings === null || JSON.stringify(settings) !== baseJson,
+    };
+  });
+}
+
 /** Compact metric block — summary plus which measures flag. */
 export function metricsBlock(doc, bpm) {
   const a = analyzeSong(doc, { bpm });
@@ -98,6 +149,9 @@ export function buildRunReport({ plan, analyzerTempo, result, input, output }) {
     unable: result.unable,
     unneeded: result.unneeded,
     untouched: result.untouched,
+    // One entry per measure: effective settings + what actually happened.
+    // Saves a client re-implementing range parsing to answer "what ran here?".
+    resolvedSettings: resolvedSettings({ plan, result, input, output }),
     // §5.1: a mixed tie chain keeps the note and loses the marker. Every one
     // is listed so the re-articulations can be listened for.
     strippedTies: result.strippedTies,

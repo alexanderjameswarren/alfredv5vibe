@@ -28,7 +28,12 @@ const REFERENCE = {
   default: {
     lhGrid: "quarter", lhFill: "onset", lhCap: 2, lhKeep: "root-third", rhStack: "melody-only",
   },
-  ranges: [{ measures: "37,57-61,68,79-82", settings: null }],
+  ranges: [
+    { measures: "37,57-61,68,79-82", settings: null },
+    // Added to the spec's §3 reference plan in Phase 2 M7: without it the run
+    // fails the §6 regression check on m32's LH jump.
+    { measures: "32", settings: { lhGrid: "half" } },
+  ],
 };
 
 const load = (p = REFERENCE) => loadPlan(p, { measureCount: SLY.measures.length });
@@ -249,4 +254,64 @@ test("the whole output document round-trips through JSON with the report inside"
   assert.deepEqual(round, doc);
   assert.deepEqual(round.generationNotes.plan, REFERENCE);
   assert.equal(round.generationNotes.melodyBlips.length, 18);
+});
+
+// --- M0: resolved per-measure settings (Phase 6 §3.1) --------------------
+
+test("resolvedSettings has one entry per measure, in order", () => {
+  const { report } = runPlan();
+  const rs = report.resolvedSettings;
+  assert.equal(rs.length, 82);
+  rs.forEach((e, i) => assert.equal(e.measure, i + 1));
+});
+
+test("status is derived from what HAPPENED, not from what was asked", () => {
+  const { report, result } = runPlan();
+  const rs = report.resolvedSettings;
+  const by = (s) => rs.filter((e) => e.status === s).map((e) => e.measure);
+
+  assert.deepEqual(by("untouched"), result.untouched, "untouched mirrors the null range");
+  assert.equal(by("unable").length, 0, "the reference plan has none");
+
+  // The nuance this exists for: 14 measures hit the LH density floor, but only
+  // 4 are `unneeded` overall — the other 10 still had their RH thinned, so the
+  // measure DID change and is reported as transformed.
+  const flooredMeasures = result.unneeded.map((u) => u.measure);
+  assert.equal(flooredMeasures.length, 14);
+  assert.equal(by("unneeded").length, 4);
+  for (const m of by("unneeded")) {
+    assert.ok(flooredMeasures.includes(m), `m${m} unneeded but not floored`);
+  }
+  assert.equal(by("transformed").length + by("unneeded").length + by("untouched").length, 82);
+});
+
+test("an `unneeded` measure really is bit-identical to its input", () => {
+  const { report, result } = runPlan();
+  for (const e of report.resolvedSettings.filter((x) => x.status === "unneeded")) {
+    assert.deepEqual(result.measures[e.measure - 1], SLY.measures[e.measure - 1], `m${e.measure}`);
+  }
+});
+
+test("settings carry the resolved vocabulary, and null when untouched", () => {
+  const { report } = runPlan();
+  const rs = report.resolvedSettings;
+  assert.equal(rs[36].settings, null, "m37 is untouched");
+  assert.deepEqual(rs[31].settings, {
+    lhGrid: "half", lhFill: "onset", lhCap: 2, lhKeep: "root-third", rhStack: "melody-only",
+  }, "m32 carries its half-grid override, fully resolved");
+  assert.deepEqual(rs[0].settings, REFERENCE.default, "m1 carries the plan default");
+});
+
+test("nonDefault flags exactly the measures a range covers", () => {
+  const { report } = runPlan();
+  const flagged = report.resolvedSettings.filter((e) => e.nonDefault).map((e) => e.measure);
+  assert.deepEqual(flagged, [32, 37, 57, 58, 59, 60, 61, 68, 79, 80, 81, 82]);
+});
+
+test("resolvedSettings survives the JSON round trip into generationNotes", () => {
+  const { plan, result, report } = runPlan();
+  const doc = buildOutputDoc({ input: SLY, measures: result.measures, plan, report });
+  const round = JSON.parse(JSON.stringify(doc));
+  assert.deepEqual(round.generationNotes.resolvedSettings, report.resolvedSettings);
+  assert.equal(round.generationNotes.resolvedSettings.length, 82);
 });

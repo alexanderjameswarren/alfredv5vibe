@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "../../supabaseClient";
 import { parseMusicXML } from "../lib/songParser";
-import { fanOutMeasures, isMeasuresStale, recompileMeasures } from "../lib/measureCompiler";
+import { fanOutMeasures, recompileMeasures } from "../lib/measureCompiler";
 import { importMusicxmlFingerings } from "../lib/fingeringsApi";
 import { importLyrics } from "../lib/lyricsApi";
+import { fetchSongById } from "../lib/songLoad";
 import { validateSongDocument } from "../lib/songSchema";
 import usePracticeStats from "../lib/usePracticeStats";
 import useSongLibrary from "../lib/useSongLibrary";
@@ -289,55 +290,18 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
   async function handleLoadFromLibrary(row) {
     setError(null);
 
-    const { data, error: dbError } = await supabase
-      .from("sam_songs")
-      .select("*")
-      .eq("id", row.id)
-      .single();
-
-    if (dbError || !data) {
-      console.error("[Sam] Failed to load song:", dbError);
+    // fetchSongById carries the staleness check with it — see lib/songLoad.js.
+    let loaded;
+    try {
+      loaded = await fetchSongById(row.id, supabase);
+    } catch (e) {
+      console.error("[Sam] Failed to load song:", e);
       setError("Failed to load song");
       return;
     }
 
-    let measures = data.measures;
-
-    // Stale check: if measure rows were edited since last compile, recompile from rows
-    if (isMeasuresStale(data)) {
-      try {
-        console.log("[Sam] Measures stale — recompiling from rows");
-        measures = await recompileMeasures(data.id, supabase);
-      } catch (e) {
-        console.error("[Sam] Recompile failed, using existing blob:", e);
-      }
-    }
-
-    const song = {
-      title: data.title,
-      artist: data.artist,
-      defaultBpm: data.default_bpm,
-      playbackSpeed: data.playback_speed ?? 100,
-      defaultTimingWindowMs: data.default_timing_window_ms ?? null,
-      defaultChordMs: data.default_chord_ms ?? null,
-      defaultMeasureWidth: data.default_measure_width ?? null,
-      audioFilePath: data.audio_file_path || null,
-      showImportedFingerings: data.show_imported_fingerings ?? false,
-      // Carried for the exporter, which must be able to reproduce the whole
-      // song row. The `select("*")` above already fetched these — they were
-      // simply being dropped on the floor, so this costs no extra query.
-      // `fifths` has no column; songExport recovers it from the label.
-      key: data.key_signature ?? null,
-      timeSignature: data.time_signature ?? null,
-      sourceXmlPath: data.source_xml_path ?? null,
-      songType: data.song_type ?? null,
-      parentSongId: data.parent_song_id ?? null,
-      difficultyTier: data.difficulty_tier ?? null,
-      generationNotes: data.generation_notes ?? null,
-      measures,
-    };
-    onSongLoaded(song);
-    if (onSongSaved) onSongSaved(data.id);
+    onSongLoaded(loaded.song);
+    if (onSongSaved) onSongSaved(loaded.row.id);
   }
 
   async function handleArchive(row) {
