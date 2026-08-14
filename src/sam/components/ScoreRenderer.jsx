@@ -25,7 +25,7 @@ const BASS_Y = 290;                // was 210; +80 of inter-stave room
 const STAFF_H = 430;                // was 350; matches BASS_Y bump
 const LYRIC_Y = TREBLE_Y + 145;     // centered between staves with the new gap
 
-export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fingerings, fingeringMode = false, fingeringSelection = null, onSelectFingering, onTap, measureWidth, lyricPlacements, onLyricEdit, onAudioOffsetChange, showAudioOffset = false, idPrefix, ghostMeasures = null }) {
+export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fingerings, fingeringMode = false, fingeringSelection = null, onSelectFingering, onTap, measureWidth, lyricPlacements, onLyricEdit, onAudioOffsetChange, showAudioOffset = false, idPrefix, ghostMeasures = null, ghostHands = "both", ghostOpacity }) {
   // Note <g> ids used to be `t-{measIdx}-{i}` with nothing distinguishing one
   // mounted score from another, so two on a page would put duplicate ids in the
   // document. Nothing reads them by id today — ScrollEngine's only lookup is
@@ -700,8 +700,16 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
   useEffect(() => {
     const svg = containerRef.current?.querySelector("svg");
     if (!svg) return;
-    drawGhostOverlay(svg, layoutRef.current, ghostMeasures, window.Vex?.Flow);
-  }, [ghostMeasures, measures, measureWidth]);
+    drawGhostOverlay(svg, {
+      layout: layoutRef.current,
+      geometry: geometryRef.current,
+      parentMeasures: ghostMeasures,
+      childMeasures: measures,
+      VF: window.Vex?.Flow,
+      hands: ghostHands,
+      opacity: ghostOpacity,
+    });
+  }, [ghostMeasures, ghostHands, ghostOpacity, measures, measureWidth]);
 
   // Redraw only the fingering overlay when fingerings change, reusing the last
   // render's geometry + label nodes — avoids a full score rebuild on each edit

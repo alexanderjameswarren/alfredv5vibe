@@ -1,6 +1,6 @@
 # Progress: SAM Diff Overlay (Phase 6)
 
-## Status: M1 built, awaiting screenshot
+## Status: M2 built, awaiting screenshots
 
 Branch: `phase-6-diff-overlay`
 
@@ -48,21 +48,21 @@ fixed opacity, no toggle.
       and pitch y
 
 **Exit criteria**
-- [ ] User screenshots m1–4
-- [ ] Ghosts trace the original sixteenth-note arpeggio under the four
-      simplified quarter chords at visibly correct beat positions
+- [x] User screenshots m1–4 — **passed.** Positions verified numerically: even
+      18.75px spacing, 16 cells to 300px, one measure exactly.
 
 ---
 
 ### M2 — Full ghost layer
 
-- [ ] Whole song, both hands
-- [ ] Drawn in an isolated `<g>`, never touching VexFlow elements
-- [ ] Bare noteheads only — no stems, beams, or flags
-- [ ] RH ghosts at the same x as their real event (index alignment is exact)
-- [ ] Opacity control in the stopped-state UI
-- [ ] Per-hand toggles: RH ghosts / LH ghosts / both
-- [ ] Overlay mode toggle following the `fingeringMode` pattern
+- [x] Whole song, both hands
+- [x] Drawn in an isolated `<g>`, never touching VexFlow elements
+- [x] Bare noteheads only — no stems, beams, or flags
+- [x] RH ghosts at the same x as their real event (index alignment is exact)
+- [x] Opacity control in the stopped-state UI (default 0.28)
+- [x] Per-hand toggles: RH ghosts / LH ghosts / both
+- [x] Overlay mode toggle following the `fingeringMode` pattern
+- [x] Coincident ghosts handled — halo, not offset. See Notes.
 
 **Exit criteria**
 - [ ] User screenshots at several opacity levels and hand combinations
@@ -103,6 +103,44 @@ fixed opacity, no toggle.
 ---
 
 ### Notes
+
+#### M2
+
+**Coincident ghosts: a halo, not an offset.** You offered vertical or
+horizontal; I went with neither, because both assert something false. A
+horizontal nudge implies an onset the note does not have; a vertical one
+implies a pitch it does not have. A halo — a ring drawn round the real
+notehead at the true position — keeps the contour geometrically exact and
+reads as dot, dot, halo, dot with no gap and no displacement. It also carries
+real information: at that beat and pitch, the note survived.
+
+Swapping to a horizontal nudge is a one-line change in `drawHalo` if the
+screenshot disagrees.
+
+**THE HALO RULE NEEDED A GUARD, and finding out why changed the design.**
+Measuring the four songs first: **The Scientist and Say It Ain't So never
+transform the LH at all** — 680 → 680 and 1127 → 1127 notes — so *every* LH
+ghost in them was coincident. The halo rule alone would have ringed all 1127
+noteheads to announce that nothing changed. Pure noise, on two of the four
+screenshots.
+
+So an LH whose (beat, pitch) sequence is unchanged now draws nothing:
+
+| song | LH notes | LH ghosts | halos | dots | RH removed |
+|---|---|---|---|---|---|
+| Someone Like You | 1051 → 443 | 862 | 254 | 608 | 429 |
+| The Entertainer | 1239 → 442 | 1227 | 426 | 801 | 837 |
+| The Scientist | 680 → 680 | **0** | 0 | 0 | 37 |
+| Say It Ain't So | 1127 → 1127 | **0** | 0 | 0 | 337 |
+
+The RH needs no equivalent guard: it only ever draws REMOVED notes, so an
+unchanged RH contributes none by construction.
+
+**RH and LH are drawn from different sources, per spec §4.2.** RH draws only
+notes the child dropped, positioned at the real event's own x from
+`buildGeometry` — index alignment is exact, so that is the truthful position.
+LH draws every parent note at its computed beat offset and claims nothing about
+provenance, because quantization replaced the array wholesale.
 
 #### M1 — the positioning question, answered
 

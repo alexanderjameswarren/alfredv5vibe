@@ -53,6 +53,11 @@ export default function SamPlayer({ onBack }) {
   // ghost overlay. Deliberately a separate piece of state: the fingering and
   // lyric hooks stay keyed on `songDbId` and must not be re-pointed at it.
   const [parentSong, setParentSong] = useState(null);
+  // Ghost overlay controls. Same shape as fingeringMode: plain local state,
+  // layer-only effects in ScoreRenderer, button in the stopped branch.
+  const [ghostMode, setGhostMode] = useState(false);
+  const [ghostHands, setGhostHands] = useState("both"); // "both" | "rh" | "lh"
+  const [ghostOpacity, setGhostOpacity] = useState(0.28);
   // Fingering entry mode (edit view). Off by default. When on, the tap-zone layer
   // is active, other score gestures are suppressed, and the number bar docks.
   const [fingeringMode, setFingeringMode] = useState(false);
@@ -239,6 +244,7 @@ export default function SamPlayer({ onBack }) {
   // measure numbers are therefore asserted to match before anything is drawn,
   // and a mismatch returns null rather than drawing something misleading.
   const ghostMeasures = useMemo(() => {
+    if (!ghostMode) return null;
     if (!parentSong?.measures || !song?.measures) return null;
 
     const sliced = !snippet
@@ -260,9 +266,8 @@ export default function SamPlayer({ onBack }) {
       }
     }
 
-    // M1 is a positioning proof on the first four measures only. M2 removes this.
-    return sliced.slice(0, 4);
-  }, [parentSong, song, snippet, activeMeasures]);
+    return sliced;
+  }, [ghostMode, parentSong, song, snippet, activeMeasures]);
 
   // Flat ordered sequence of non-rest RH events, for the number bar's "next" (›)
   // advance. Rests are skipped — you can't finger a rest.
@@ -866,6 +871,19 @@ export default function SamPlayer({ onBack }) {
                         {showImportedFingerings ? "Hide Imported" : "Show Imported"}
                       </button>
                     )}
+                    {parentSong && (
+                      <button
+                        onClick={() => setGhostMode((on) => !on)}
+                        aria-pressed={ghostMode}
+                        className={`min-h-[44px] px-4 rounded-lg text-sm font-medium border transition-colors ${
+                          ghostMode
+                            ? "bg-foreground text-background border-transparent"
+                            : "bg-card text-foreground border-border hover:bg-muted"
+                        }`}
+                      >
+                        {ghostMode ? "Diff: on" : "Diff"}
+                      </button>
+                    )}
                     <button
                       onClick={toggleFingeringMode}
                       aria-pressed={fingeringMode}
@@ -880,6 +898,44 @@ export default function SamPlayer({ onBack }) {
                     </button>
                   </div>
                 </div>
+                {ghostMode && parentSong && (
+                  <div className="flex flex-wrap items-center gap-4 mb-2 mx-1 p-2 rounded-lg border border-border bg-card text-sm">
+                    <span className="text-muted-foreground">
+                      Ghosts of <span className="text-foreground font-medium">{parentSong.title}</span>
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {[["both", "Both"], ["rh", "RH"], ["lh", "LH"]].map(([v, label]) => (
+                        <button
+                          key={v}
+                          onClick={() => setGhostHands(v)}
+                          aria-pressed={ghostHands === v}
+                          className={`min-h-[36px] px-3 rounded-md text-sm border transition-colors ${
+                            ghostHands === v
+                              ? "bg-foreground text-background border-transparent"
+                              : "bg-card text-foreground border-border hover:bg-muted"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <label className="flex items-center gap-2 text-muted-foreground">
+                      Opacity
+                      <input
+                        type="range"
+                        min={0.05}
+                        max={1}
+                        step={0.01}
+                        value={ghostOpacity}
+                        onChange={(e) => setGhostOpacity(Number(e.target.value))}
+                        className="w-40 accent-primary"
+                      />
+                      <span className="tabular-nums text-foreground w-10">
+                        {ghostOpacity.toFixed(2)}
+                      </span>
+                    </label>
+                  </div>
+                )}
                 {fingeringMode && fingeringError && (
                   <div className="mb-2 mx-1 p-2 bg-red-50 border border-red-200 rounded flex items-center justify-between gap-3 text-sm text-red-700">
                     <span>{fingeringError}</span>
@@ -900,6 +956,8 @@ export default function SamPlayer({ onBack }) {
                   showAudioOffset={!!song?.audioFilePath}
                   onAudioOffsetChange={handleAudioOffsetChange}
                   ghostMeasures={ghostMeasures}
+                  ghostHands={ghostHands}
+                  ghostOpacity={ghostOpacity}
                 />
                 {lyricPlacements && (
                   <div className="flex items-center justify-center gap-4 mt-2 mb-3">
