@@ -11,6 +11,7 @@ import {
   buildGeometry,
 } from "../lib/scoreRender";
 import { drawFingeringOverlay } from "../lib/fingeringOverlay";
+import { drawGhostOverlay } from "../lib/ghostOverlay";
 import { syncZoneLayer, drawSelectionRing } from "../lib/fingeringZones";
 import { CLEF_EXTRA } from "../lib/vexflowHelpers";
 import { SCORE_SCALE } from "../lib/samConstants";
@@ -24,7 +25,7 @@ const BASS_Y = 290;                // was 210; +80 of inter-stave room
 const STAFF_H = 430;                // was 350; matches BASS_Y bump
 const LYRIC_Y = TREBLE_Y + 145;     // centered between staves with the new gap
 
-export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fingerings, fingeringMode = false, fingeringSelection = null, onSelectFingering, onTap, measureWidth, lyricPlacements, onLyricEdit, onAudioOffsetChange, showAudioOffset = false, idPrefix }) {
+export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fingerings, fingeringMode = false, fingeringSelection = null, onSelectFingering, onTap, measureWidth, lyricPlacements, onLyricEdit, onAudioOffsetChange, showAudioOffset = false, idPrefix, ghostMeasures = null }) {
   // Note <g> ids used to be `t-{measIdx}-{i}` with nothing distinguishing one
   // mounted score from another, so two on a page would put duplicate ids in the
   // document. Nothing reads them by id today — ScrollEngine's only lookup is
@@ -39,6 +40,10 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
 
   const containerRef = useRef(null);
   const geometryRef = useRef([]);
+  // Per-measure layout, captured during the render pass. The ghost layer needs
+  // an x for beat offsets the child has no event at, which buildGeometry cannot
+  // report — so it needs the same inputs applyTimeProportionalLayout was given.
+  const layoutRef = useRef([]);
   const labelElsRef = useRef([]);
   const pointerRef = useRef(null);
   const lyricEditRef = useRef(null);
@@ -117,6 +122,8 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
 
     // Per-event fingering geometry map (spec §5), accumulated across measures.
     const geometry = [];
+    // Per-measure layout for the ghost overlay (Phase 6).
+    const layout = [];
     // Measure-number / chord <text> nodes — collision targets for badge nudging.
     const fingeringLabelEls = [];
 
@@ -496,6 +503,18 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
         xOffset: layoutXOffset, measWidth: layoutMeasWidth, stave: bass,
       });
 
+      // Exactly the inputs the layout pass just used, so a ghost placed with
+      // `xOffset + (beat / durationQ) * measWidth` lands on the same grid as
+      // every real note in this measure.
+      layout.push({
+        measureNum: measure.number,
+        xOffset: layoutXOffset,
+        measWidth: layoutMeasWidth,
+        durationQ: layoutDurationQ,
+        treble,
+        bass,
+      });
+
       // 5. Draw treble notes individually, each wrapped in an SVG <g> group
       trebleNotes.forEach((note, i) => {
         const groupEl = ctx.openGroup("sam-note", `${notePrefix}-t-${measIdx}-${i}`);
@@ -660,6 +679,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
     // change also redraws it via the effect below without a full score rebuild.
     drawFingeringOverlay(svg, geometry, fingeringsRef.current || {}, { collisionEls: fingeringLabelEls });
     geometryRef.current = geometry;
+    layoutRef.current = layout;
     labelElsRef.current = fingeringLabelEls;
 
     // Tap zones + selection ring (Step 4). Rebuilt here so a score rebuild
@@ -670,6 +690,18 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
     });
     drawSelectionRing(svg, geometry, fingeringModeRef.current ? fingeringSelectionRef.current : null);
   }, [measures, onBeatEvents, onGeometry, measureWidth, lyricPlacements, showAudioOffset, notePrefix]);
+
+  // Ghost overlay (Phase 6 M1). A layer-only effect, same shape as the
+  // fingering overlay: it reads the last render's layout from a ref and draws
+  // into its own <g>, so turning ghosts on or off never rebuilds the score.
+  //
+  // `measures` and `measureWidth` are dependencies because a re-layout moves
+  // every x — the layer must be redrawn against the new grid, not the old one.
+  useEffect(() => {
+    const svg = containerRef.current?.querySelector("svg");
+    if (!svg) return;
+    drawGhostOverlay(svg, layoutRef.current, ghostMeasures, window.Vex?.Flow);
+  }, [ghostMeasures, measures, measureWidth]);
 
   // Redraw only the fingering overlay when fingerings change, reusing the last
   // render's geometry + label nodes — avoids a full score rebuild on each edit

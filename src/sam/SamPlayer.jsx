@@ -22,6 +22,7 @@ import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
 import { normalizeMeasure } from "./lib/measureUtils";
 import { loadAudio } from "./lib/audioPlayer";
 import { buildSongExport } from "./lib/songExport";
+import { fetchSongById } from "./lib/songLoad";
 import { supabase } from "../supabaseClient";
 
 function AudioMsCounter({ audioElement }) {
@@ -48,6 +49,10 @@ function AudioMsCounter({ audioElement }) {
 export default function SamPlayer({ onBack }) {
   const [song, setSong] = useState(null);
   const [songDbId, setSongDbId] = useState(null);
+  // Phase 6 M1 — the parent of a simplified song, loaded READ-ONLY for the
+  // ghost overlay. Deliberately a separate piece of state: the fingering and
+  // lyric hooks stay keyed on `songDbId` and must not be re-pointed at it.
+  const [parentSong, setParentSong] = useState(null);
   // Fingering entry mode (edit view). Off by default. When on, the tap-zone layer
   // is active, other score gestures are suppressed, and the number bar docks.
   const [fingeringMode, setFingeringMode] = useState(false);
@@ -150,6 +155,22 @@ export default function SamPlayer({ onBack }) {
   // A selection can't survive a song change (its coordinate references old measures).
   useEffect(() => { setFingeringSelection(null); }, [songDbId]);
 
+  // Load the parent of a simplified song, read-only, for the ghost overlay.
+  // `cancelled` guards against a slow fetch resolving after the user has moved
+  // on to a different song.
+  useEffect(() => {
+    const parentId = song?.parentSongId;
+    if (!parentId) { setParentSong(null); return; }
+    let cancelled = false;
+    fetchSongById(parentId, supabase)
+      .then(({ song: parent }) => { if (!cancelled) setParentSong(parent); })
+      .catch((e) => {
+        console.error("[Sam] Failed to load parent song for the ghost overlay:", e);
+        if (!cancelled) setParentSong(null);
+      });
+    return () => { cancelled = true; };
+  }, [song?.parentSongId]);
+
   // Derive active measures from snippet range, appending rest measures.
   // normalizeMeasure ensures both voice format (lh[]/rh[]) and legacy beats[]
   // are converted to beats[] for the renderers.
@@ -208,6 +229,40 @@ export default function SamPlayer({ onBack }) {
 
     return allMeasures.map(normalizeMeasure);
   }, [song, snippet, lyricPlacements]);
+
+  // Parent measures for the ghost overlay, sliced IDENTICALLY to the child.
+  //
+  // This is the single most likely source of a wrong-looking diff. `activeMeasures`
+  // applies the snippet slice before rendering, so a parent sliced differently —
+  // or not at all — would draw ghosts under the wrong bars and the overlay would
+  // look broken for reasons that have nothing to do with the simplifier. The
+  // measure numbers are therefore asserted to match before anything is drawn,
+  // and a mismatch returns null rather than drawing something misleading.
+  const ghostMeasures = useMemo(() => {
+    if (!parentSong?.measures || !song?.measures) return null;
+
+    const sliced = !snippet
+      ? parentSong.measures
+      : parentSong.measures.slice(snippet.startMeasure - 1, snippet.endMeasure);
+
+    // Compare against the child's base slice — activeMeasures may have empty
+    // rest measures appended past the end, which the parent has no counterpart
+    // for and which carry no ghosts anyway.
+    for (let i = 0; i < sliced.length; i++) {
+      const childNum = activeMeasures[i]?.number;
+      if (childNum !== sliced[i].number) {
+        console.error(
+          "[Sam] Ghost overlay disabled: parent/child measures are misaligned at index " +
+            `${i} (child m${childNum} vs parent m${sliced[i].number}). ` +
+            "The two slices must match exactly or the diff is meaningless."
+        );
+        return null;
+      }
+    }
+
+    // M1 is a positioning proof on the first four measures only. M2 removes this.
+    return sliced.slice(0, 4);
+  }, [parentSong, song, snippet, activeMeasures]);
 
   // Flat ordered sequence of non-rest RH events, for the number bar's "next" (›)
   // advance. Rests are skipped — you can't finger a rest.
@@ -844,6 +899,7 @@ export default function SamPlayer({ onBack }) {
                   onLyricEdit={lyricEditHandlers}
                   showAudioOffset={!!song?.audioFilePath}
                   onAudioOffsetChange={handleAudioOffsetChange}
+                  ghostMeasures={ghostMeasures}
                 />
                 {lyricPlacements && (
                   <div className="flex items-center justify-center gap-4 mt-2 mb-3">
