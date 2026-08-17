@@ -17,7 +17,9 @@ const { analyzeSong, THRESHOLDS } = await import("../lib/analyze.js");
 const {
   regressionCheck, assertNoRegression, formatRegressions,
   RegressionError, REGRESSION_METRICS,
+  affectedMetrics, formatRegressionContext,
 } = await import("../lib/regression.js");
+const { buildRunReport } = await import("../lib/report.js");
 
 const song = (f) => JSON.parse(JSON.stringify(parseMusicXML(readScoreXml(`fixtures/${f}`))));
 const SLY = song("someone-like-you-easy-piano.mxl");
@@ -172,4 +174,69 @@ test("the reference plan passes clean once m32 is narrowed to a half grid", () =
 
 test("formatRegressions says nothing alarming when there is nothing wrong", () => {
   assert.match(formatRegressions([]), /no metric got worse/);
+});
+
+// --- the song-level context that accompanies the prompt --------------------
+//
+// The consequence of a regression is now a question, not an exit. Whoever
+// answers it needs the second number: the per-measure list alone cannot say
+// whether the song as a whole got easier.
+
+const contextFor = (def, ranges = NULL_RANGE) => {
+  const plan = loadPlan(
+    { planVersion: 1, sourceSongId: "030333d9", default: def, ranges },
+    { measureCount: SLY.measures.length }
+  );
+  const result = simplifyMeasures(SLY, plan);
+  const output = { ...SLY, measures: result.measures };
+  const worse = regressionCheck(SLY, output, { bpm: 67 });
+  const report = buildRunReport({ plan, analyzerTempo: 67, result, input: SLY, output });
+  return { worse, text: formatRegressionContext(worse, report.metrics) };
+};
+
+test("affectedMetrics lists each touched metric once, in SUMMARY_METRICS order", () => {
+  const worse = [
+    { metric: "lhJump" }, { metric: "lhStack" }, { metric: "lhJump" },
+  ];
+  assert.deepEqual(affectedMetrics(worse).map((m) => m.key), ["lhStack", "lhJump"]);
+});
+
+test("the context names only the metrics that regressed, with the measure count", () => {
+  const { worse, text } = contextFor({ ...BASE, lhFill: "onset" });
+  assert.equal(worse.length, 1, "expected the single m32 LH jump regression");
+  assert.match(text, /LH jump\s+median .* → .*/);
+  assert.match(text, /worse on 1 measure\b/, "singular for one measure");
+  assert.doesNotMatch(text, /LH stack/, "a metric that did not regress must not appear");
+});
+
+test("the context carries the global figure the per-measure list cannot show", () => {
+  // m32's LH jump went 7 → 16, but the song's LH jump median FELL. That second
+  // number is the whole reason this is a question rather than a refusal.
+  const { text } = contextFor({ ...BASE, lhFill: "onset" });
+  const before = analyzeSong(SLY, { bpm: 67 }).summary.lhJump.median;
+  const after = analyzeSong(run({ ...BASE, lhFill: "onset" }), { bpm: 67 }).summary.lhJump.median;
+  assert.ok(after < before, `the song-level median should have improved (${before} → ${after})`);
+  assert.match(text, new RegExp(`LH jump\\s+median ${before} → ${after}`));
+});
+
+test("plural agreement, and every regressed metric appears", () => {
+  const { worse, text } = contextFor({ ...BASE, lhFill: "union" });
+  const keys = new Set(worse.map((w) => w.metric));
+  assert.ok(keys.size > 1, "union should regress more than one metric");
+  for (const { key, label } of affectedMetrics(worse)) {
+    assert.ok(text.includes(label), `${key} regressed but is missing from the context`);
+  }
+  assert.match(text, /worse on \d\d+ measures\b/, "plural for many measures");
+});
+
+test("no regressions means no context block at all", () => {
+  assert.equal(formatRegressionContext([], { before: { summary: {} }, after: { summary: {} } }), "");
+});
+
+test("a missing metrics block degrades to empty rather than throwing", () => {
+  // The context is decoration on a prompt; it must never be the reason a run
+  // cannot be confirmed.
+  const worse = [{ metric: "lhJump", label: "LH jump", measure: 32, before: 7, after: 16 }];
+  assert.equal(formatRegressionContext(worse, undefined), "");
+  assert.equal(formatRegressionContext(worse, { before: {}, after: {} }), "");
 });

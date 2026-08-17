@@ -12,7 +12,7 @@ const { loadPlan } = await import("../lib/plan.js");
 const { simplifyMeasures } = await import("../lib/simplify.js");
 const {
   buildRunReport, buildOutputDoc, OutputDocError, confirmationNeeded,
-  shortUntouchedRuns, repeatedRanges,
+  shortUntouchedRuns, repeatedRanges, statusCounts,
 } = await import("../lib/report.js");
 
 const SLY = JSON.parse(
@@ -314,4 +314,53 @@ test("resolvedSettings survives the JSON round trip into generationNotes", () =>
   const round = JSON.parse(JSON.stringify(doc));
   assert.deepEqual(round.generationNotes.resolvedSettings, report.resolvedSettings);
   assert.equal(round.generationNotes.resolvedSettings.length, 82);
+});
+
+// --- statusCounts: the terminal summary's only accounting path -------------
+
+test("the four buckets are exclusive and sum to the measure count", () => {
+  const { report } = runPlan();
+  const c = statusCounts(report.resolvedSettings);
+  assert.equal(c.total, 82);
+  assert.equal(c.transformed + c.untouched + c.unneeded + c.unable, 82,
+    "a measure must land in exactly one bucket");
+  assert.equal(c.untouched, 11, "the reference plan's null range covers eleven measures");
+});
+
+test("REGRESSION: an empty default no longer reports every measure transformed", () => {
+  // The Scientist's shape: `default: {}` is a true identity everywhere, with a
+  // range doing the only work. The old counter derived `transformed` as
+  // `total − untouched − unable − unneeded`; an empty default populates none of
+  // those arrays, so it claimed all 82 measures were transformed.
+  const { result, report } = runPlan({
+    planVersion: 1,
+    sourceSongId: "030333d9-1b9f-4f74-80fb-7fbed587fda6",
+    default: {},
+    ranges: [{ measures: "1-5", settings: { rhStack: "melody-only" } }],
+  });
+
+  assert.deepEqual([result.untouched.length, result.unable.length, result.unneeded.length], [0, 0, 0],
+    "precondition: the counter arrays are all empty on this plan");
+  const derived = 82 - result.untouched.length - result.unable.length - result.unneeded.length;
+  assert.equal(derived, 82, "precondition: the old arithmetic claimed 82 transformed");
+
+  const c = statusCounts(report.resolvedSettings);
+  assert.ok(c.transformed <= 5, `only the range's measures may transform, got ${c.transformed}`);
+  assert.equal(c.unneeded, 82 - c.transformed, "every other measure is unneeded, not transformed");
+
+  // And the tally must agree with the documents themselves.
+  const changed = SLY.measures.filter(
+    (m, i) => JSON.stringify(m) !== JSON.stringify(result.measures[i])
+  ).length;
+  assert.equal(c.transformed, changed, "the tally must match the measures that actually differ");
+});
+
+test("statusCounts ignores unknown statuses rather than miscounting them", () => {
+  const c = statusCounts([{ status: "transformed" }, { status: "wat" }, { status: "unable" }]);
+  assert.deepEqual(c, { transformed: 1, untouched: 0, unneeded: 0, unable: 1, total: 3 });
+});
+
+test("statusCounts of nothing is zero, not a crash", () => {
+  assert.deepEqual(statusCounts(), { transformed: 0, untouched: 0, unneeded: 0, unable: 0, total: 0 });
+  assert.deepEqual(statusCounts([]), { transformed: 0, untouched: 0, unneeded: 0, unable: 0, total: 0 });
 });

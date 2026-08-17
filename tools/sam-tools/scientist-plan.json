@@ -1,0 +1,9 @@
+{
+  "planVersion": 1,
+  "sourceSongId": "f3bb321f-aa95-4c73-bfdc-bdf3d36f8096",
+  "label": "melody only, final phrase",
+  "default": {},
+  "ranges": [
+    { "measures": "69-73", "settings": { "rhStack": "melody-only" } }
+  ]
+}

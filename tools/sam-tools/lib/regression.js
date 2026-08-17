@@ -2,7 +2,7 @@
 //
 // After transforming, analyse input and output at the SAME tempo and compare
 // per measure. If any metric is worse in the output than in the input for any
-// measure, that is an ERROR — a transform that fixes three metrics while
+// measure, that is reported — a transform that fixes three metrics while
 // degrading a fourth is not acceptable silently.
 //
 // This is not theoretical. It was written because `union` fill was observed to
@@ -10,6 +10,14 @@
 // real engine turned up two more: a pooled-token rhythmVariety that punished
 // the transform for simplifying (since fixed in analyze.js), and a genuine LH
 // jump regression at Someone Like You m32.
+//
+// The DETECTION here is unchanged and deliberately absolute. What changed is
+// the consequence: bin/simplify.js now confirms rather than refuses, because
+// this check is per-measure and cannot see the song. On The Entertainer it
+// fired on fifteen bars for LH jump while the song's MEDIAN worst leap fell
+// from 12 to 5 — a result worth hearing, not a result worth blocking.
+// `formatRegressionContext` exists to put that second number in front of
+// whoever is answering the prompt.
 
 import { analyzeSong, SUMMARY_METRICS } from "./analyze.js";
 
@@ -57,6 +65,45 @@ export function formatRegressions(worse, { limit = 30 } = {}) {
   );
   if (worse.length > shown.length) lines.push(`  • …and ${worse.length - shown.length} more`);
   return `${worse.length} metric regression(s):\n${lines.join("\n")}`;
+}
+
+/** The distinct metrics a regression list touches, in SUMMARY_METRICS order. */
+export function affectedMetrics(worse) {
+  const hit = new Set(worse.map((w) => w.metric));
+  return REGRESSION_METRICS.filter((m) => hit.has(m.key));
+}
+
+/**
+ * Song-level before/after for every metric the regressions touch (§6).
+ *
+ * The per-measure list says what got worse; this says what happened to the
+ * song. Both are needed to answer the prompt honestly — fifteen bars worse on
+ * LH jump reads very differently next to a median that halved.
+ *
+ * Reads the summaries the run report already computed rather than analysing
+ * the document a third and fourth time.
+ *
+ * @param {Array} worse - from `regressionCheck`
+ * @param {{before:{summary:object}, after:{summary:object}}} metrics - report.metrics
+ * @returns {string} empty when there is nothing to add
+ */
+export function formatRegressionContext(worse, metrics) {
+  const n = (x) => (x == null ? "-" : Number.isInteger(x) ? String(x) : x.toFixed(2));
+  const rows = [];
+  for (const { key, label } of affectedMetrics(worse)) {
+    const b = metrics?.before?.summary?.[key];
+    const a = metrics?.after?.summary?.[key];
+    if (!b || !a) continue;
+    const count = worse.filter((w) => w.metric === key).length;
+    rows.push(
+      `  ${label.padEnd(14)} median ${n(b.median)} → ${n(a.median)}` +
+        `   p90 ${n(b.p90)} → ${n(a.p90)}` +
+        `   max ${n(b.max)} → ${n(a.max)}` +
+        `   (worse on ${count} measure${count === 1 ? "" : "s"})`
+    );
+  }
+  if (!rows.length) return "";
+  return `song-level, the same metrics:\n${rows.join("\n")}`;
 }
 
 export class RegressionError extends Error {

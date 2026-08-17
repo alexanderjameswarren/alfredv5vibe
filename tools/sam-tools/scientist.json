@@ -1,0 +1,8713 @@
+{
+  "formatVersion": 2,
+  "title": "The Scientist - Coldplay",
+  "artist": null,
+  "defaultBpm": 68,
+  "key": "F major",
+  "fifths": -1,
+  "timeSignature": "4/4",
+  "sourceXmlPath": "26f0707f-b586-4a3e-841c-8c313d6ab1e5/f3bb321f-aa95-4c73-bfdc-bdf3d36f8096.musicxml",
+  "songType": "original",
+  "parentSongId": null,
+  "difficultyTier": null,
+  "generationNotes": {
+    "importer": {
+      "importedAt": "2026-08-14T18:40:18.393Z",
+      "parseWarnings": [
+        "<metronome>: 5 occurrence(s) at printed m1, 21, 31, 51, 61 — carried on measure.carriedTags (presence recorded; full data extraction deferred until a renderer needs it, spec §M7).",
+        "<slur>: 8 occurrence(s) at printed m8, 12, 16, 20, 38, 42, 46, 50 — carried on measure.carriedTags (presence recorded; full data extraction deferred until a renderer needs it, spec §M7)."
+      ],
+      "parseWarningsStructured": [
+        {
+          "tag": "metronome",
+          "kind": "carried",
+          "count": 5,
+          "measures": [
+            "1",
+            "21",
+            "31",
+            "51",
+            "61"
+          ]
+        },
+        {
+          "tag": "slur",
+          "kind": "carried",
+          "count": 8,
+          "measures": [
+            "8",
+            "12",
+            "16",
+            "20",
+            "38",
+            "42",
+            "46",
+            "50"
+          ]
+        }
+      ]
+    },
+    "playback": {
+      "tempos": [
+        {
+          "bpm": 67.9998,
+          "playIndex": 0,
+          "beatOffset": 0
+        },
+        {
+          "bpm": 67.9998,
+          "playIndex": 4,
+          "beatOffset": 0
+        },
+        {
+          "bpm": 85.9998,
+          "playIndex": 24,
+          "beatOffset": 0
+        },
+        {
+          "bpm": 67.9998,
+          "playIndex": 34,
+          "beatOffset": 0
+        },
+        {
+          "bpm": 67.9998,
+          "playIndex": 38,
+          "beatOffset": 0
+        },
+        {
+          "bpm": 85.9998,
+          "playIndex": 58,
+          "beatOffset": 0
+        },
+        {
+          "bpm": 67.9998,
+          "playIndex": 68,
+          "beatOffset": 0
+        }
+      ],
+      "playOrder": [
+        0,
+        1,
+        2,
+        3,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64
+      ],
+      "structure": [
+        {
+          "repeats": [
+            {
+              "times": 2,
+              "direction": "backward"
+            }
+          ],
+          "sourceIdx": 3,
+          "sourceAttr": "4"
+        },
+        {
+          "repeats": [
+            {
+              "direction": "forward"
+            }
+          ],
+          "sourceIdx": 30,
+          "sourceAttr": "31"
+        },
+        {
+          "repeats": [
+            {
+              "times": 2,
+              "direction": "backward"
+            }
+          ],
+          "sourceIdx": 33,
+          "sourceAttr": "34"
+        }
+      ],
+      "sourceCount": 65,
+      "implicitFirst": false
+    }
+  },
+  "lyrics": [],
+  "fingerings": [],
+  "measures": [
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 1,
+      "section": null,
+      "sourceMeasure": "1",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            }
+          ],
+          "voice": "5",
+          "duration": "8"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 2,
+      "section": null,
+      "sourceMeasure": "2",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 3,
+      "section": null,
+      "sourceMeasure": "3",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 4,
+      "section": null,
+      "sourceMeasure": "4",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 5,
+      "section": null,
+      "sourceMeasure": "1",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            }
+          ],
+          "voice": "5",
+          "duration": "8"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 6,
+      "section": null,
+      "sourceMeasure": "2",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 7,
+      "section": null,
+      "sourceMeasure": "3",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 8,
+      "section": null,
+      "sourceMeasure": "4",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 9,
+      "section": null,
+      "sourceMeasure": "5",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 10,
+      "section": null,
+      "sourceMeasure": "6",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 11,
+      "section": null,
+      "sourceMeasure": "7",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 12,
+      "section": null,
+      "sourceMeasure": "8",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 13,
+      "section": null,
+      "sourceMeasure": "9",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 14,
+      "section": null,
+      "sourceMeasure": "10",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 15,
+      "section": null,
+      "sourceMeasure": "11",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 16,
+      "section": null,
+      "sourceMeasure": "12",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 17,
+      "section": null,
+      "sourceMeasure": "13",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 18,
+      "section": null,
+      "sourceMeasure": "14",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 19,
+      "section": null,
+      "sourceMeasure": "15",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 20,
+      "section": null,
+      "sourceMeasure": "16",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 21,
+      "section": null,
+      "sourceMeasure": "17",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 22,
+      "section": null,
+      "sourceMeasure": "18",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 23,
+      "section": null,
+      "sourceMeasure": "19",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 24,
+      "section": null,
+      "sourceMeasure": "20",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 77,
+              "name": "F5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 25,
+      "section": null,
+      "sourceMeasure": "21",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 77,
+              "name": "F5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 77,
+              "name": "F5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        }
+      ],
+      "chord": null,
+      "number": 26,
+      "section": null,
+      "sourceMeasure": "22",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 27,
+      "section": null,
+      "sourceMeasure": "23",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 28,
+      "section": null,
+      "sourceMeasure": "24",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 77,
+              "name": "F5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 29,
+      "section": null,
+      "sourceMeasure": "25",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 77,
+              "name": "F5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 77,
+              "name": "F5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        }
+      ],
+      "chord": null,
+      "number": 30,
+      "section": null,
+      "sourceMeasure": "26",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 31,
+      "section": null,
+      "sourceMeasure": "27",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 32,
+      "section": null,
+      "sourceMeasure": "28",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 64,
+              "name": "E4"
+            }
+          ],
+          "voice": "1",
+          "duration": "hdd"
+        }
+      ],
+      "chord": null,
+      "number": 33,
+      "section": null,
+      "sourceMeasure": "29",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8d"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "16"
+        }
+      ],
+      "chord": null,
+      "number": 34,
+      "section": null,
+      "sourceMeasure": "30",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [],
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "h"
+        }
+      ],
+      "chord": null,
+      "number": 35,
+      "section": null,
+      "sourceMeasure": "31",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            }
+          ],
+          "voice": "5",
+          "duration": "8"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 36,
+      "section": null,
+      "sourceMeasure": "32",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 37,
+      "section": null,
+      "sourceMeasure": "33",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 38,
+      "section": null,
+      "sourceMeasure": "34",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [],
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "h"
+        }
+      ],
+      "chord": null,
+      "number": 39,
+      "section": null,
+      "sourceMeasure": "31",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            }
+          ],
+          "voice": "5",
+          "duration": "8"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 40,
+      "section": null,
+      "sourceMeasure": "32",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 41,
+      "section": null,
+      "sourceMeasure": "33",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 42,
+      "section": null,
+      "sourceMeasure": "34",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 43,
+      "section": null,
+      "sourceMeasure": "35",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 44,
+      "section": null,
+      "sourceMeasure": "36",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 45,
+      "section": null,
+      "sourceMeasure": "37",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 46,
+      "section": null,
+      "sourceMeasure": "38",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 47,
+      "section": null,
+      "sourceMeasure": "39",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 48,
+      "section": null,
+      "sourceMeasure": "40",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 49,
+      "section": null,
+      "sourceMeasure": "41",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 50,
+      "section": null,
+      "sourceMeasure": "42",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 51,
+      "section": null,
+      "sourceMeasure": "43",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 52,
+      "section": null,
+      "sourceMeasure": "44",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 53,
+      "section": null,
+      "sourceMeasure": "45",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 54,
+      "section": null,
+      "sourceMeasure": "46",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 55,
+      "section": null,
+      "sourceMeasure": "47",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 56,
+      "section": null,
+      "sourceMeasure": "48",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [],
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 57,
+      "section": null,
+      "sourceMeasure": "49",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 58,
+      "section": null,
+      "sourceMeasure": "50",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 77,
+              "name": "F5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 59,
+      "section": null,
+      "sourceMeasure": "51",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 77,
+              "name": "F5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 77,
+              "name": "F5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        }
+      ],
+      "chord": null,
+      "number": 60,
+      "section": null,
+      "sourceMeasure": "52",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 61,
+      "section": null,
+      "sourceMeasure": "53",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 62,
+      "section": null,
+      "sourceMeasure": "54",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 77,
+              "name": "F5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 63,
+      "section": null,
+      "sourceMeasure": "55",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 77,
+              "name": "F5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 77,
+              "name": "F5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        }
+      ],
+      "chord": null,
+      "number": 64,
+      "section": null,
+      "sourceMeasure": "56",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [],
+          "duration": "h"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 65,
+      "section": null,
+      "sourceMeasure": "57",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 74,
+              "name": "D5"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 66,
+      "section": null,
+      "sourceMeasure": "58",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 65,
+              "name": "F4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 64,
+              "name": "E4"
+            }
+          ],
+          "voice": "1",
+          "duration": "hdd"
+        }
+      ],
+      "chord": null,
+      "number": 67,
+      "section": null,
+      "sourceMeasure": "59",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [],
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8d"
+        },
+        {
+          "notes": [
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "16"
+        }
+      ],
+      "chord": null,
+      "number": 68,
+      "section": null,
+      "sourceMeasure": "60",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "tie": "start",
+              "midi": 62,
+              "name": "D4"
+            },
+            {
+              "tie": "start",
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "tie": "start",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "tie": "end",
+              "midi": 62,
+              "name": "D4"
+            },
+            {
+              "tie": "end",
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "tie": "end",
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 62,
+              "name": "D4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 62,
+              "name": "D4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 62,
+              "name": "D4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        }
+      ],
+      "chord": null,
+      "number": 69,
+      "section": null,
+      "sourceMeasure": "61",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 58,
+              "name": "Bb3"
+            }
+          ],
+          "voice": "5",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            }
+          ],
+          "voice": "5",
+          "duration": "8"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 62,
+              "name": "D4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 62,
+              "name": "D4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 62,
+              "name": "D4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 62,
+              "name": "D4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 70,
+              "name": "Bb4"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        },
+        {
+          "notes": [
+            {
+              "midi": 72,
+              "name": "C5"
+            }
+          ],
+          "voice": "1",
+          "duration": "8"
+        }
+      ],
+      "chord": null,
+      "number": 70,
+      "section": null,
+      "sourceMeasure": "62",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        }
+      ],
+      "chord": null,
+      "number": 71,
+      "section": null,
+      "sourceMeasure": "63",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 48,
+              "name": "C3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 55,
+              "name": "G3"
+            }
+          ],
+          "voice": "5",
+          "duration": "q"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        },
+        {
+          "notes": [
+            {
+              "midi": 60,
+              "name": "C4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 67,
+              "name": "G4"
+            }
+          ],
+          "voice": "1",
+          "duration": "q"
+        }
+      ],
+      "chord": null,
+      "number": 72,
+      "section": null,
+      "sourceMeasure": "64",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    },
+    {
+      "lh": [
+        {
+          "notes": [
+            {
+              "midi": 50,
+              "name": "D3"
+            },
+            {
+              "midi": 53,
+              "name": "F3"
+            },
+            {
+              "midi": 57,
+              "name": "A3"
+            }
+          ],
+          "voice": "5",
+          "duration": "w"
+        }
+      ],
+      "rh": [
+        {
+          "notes": [
+            {
+              "midi": 62,
+              "name": "D4"
+            },
+            {
+              "midi": 65,
+              "name": "F4"
+            },
+            {
+              "midi": 69,
+              "name": "A4"
+            }
+          ],
+          "voice": "1",
+          "duration": "w"
+        }
+      ],
+      "chord": null,
+      "number": 73,
+      "section": null,
+      "sourceMeasure": "65",
+      "timeSignature": {
+        "beats": 4,
+        "beatType": 4
+      },
+      "audioOffsetMs": null
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "planVersion": 1,
+  "sourceSongId": "7a8d3645-c9b9-4518-a28a-5f9800bd02fa",
+  "label": "melody only",
+  "default": { "rhStack": "melody-only" }
+}

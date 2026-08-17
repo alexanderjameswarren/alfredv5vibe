@@ -121,6 +121,34 @@ export function resolvedSettings({ plan, result, input, output }) {
   });
 }
 
+/**
+ * Measure-level tally of `resolvedSettings` statuses.
+ *
+ * THE ONLY ACCOUNTING PATH. The terminal summary used to derive its
+ * `transformed` count arithmetically, as `total − untouched − unable −
+ * unneeded`, reading arrays that `simplifyMeasures` only populates when a
+ * transform actually declined. A plan with an empty default never reaches
+ * either branch, so a 73-measure run in which 68 measures did not change
+ * printed "transformed 73 · untouched 0 · unneeded 0" while
+ * `resolvedSettings` — which compares the real output — correctly said 68
+ * unneeded. Two accounting paths, and the wrong one was on screen.
+ *
+ * These four buckets are mutually exclusive and always sum to the measure
+ * count, because every measure gets exactly one status. The per-hand detail
+ * lives in `unable` / `unneeded`, where one measure may appear under one hand
+ * while the other hand transformed.
+ *
+ * @param {Array<{status:string}>} resolved - from `resolvedSettings`
+ * @returns {{transformed:number, untouched:number, unneeded:number, unable:number, total:number}}
+ */
+export function statusCounts(resolved = []) {
+  const counts = { transformed: 0, untouched: 0, unneeded: 0, unable: 0, total: resolved.length };
+  for (const r of resolved) {
+    if (r.status in counts) counts[r.status]++;
+  }
+  return counts;
+}
+
 /** Compact metric block — summary plus which measures flag. */
 export function metricsBlock(doc, bpm) {
   const a = analyzeSong(doc, { bpm });
