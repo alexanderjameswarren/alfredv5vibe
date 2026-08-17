@@ -150,6 +150,33 @@ The cause is NOT that the cell start lands on a passing note; cells 1–3 land c
 
 The metric is honest: that leap is real and the player has to make it. The remedy is a coarser grid on that measure, per §11 — a setting, not an escape hatch. At `half` grid m32 becomes two cells, both D2, so jump is 0 and the measure still drops from 13 events to 2.
 
+**Why the rung was lost decides the remedy, and the obvious symmetry is wrong.**
+
+**Coarser can fix it, when the surviving cells land on a repeated root.** Someone Like You m32: at `half` grid both cells are D2, so the leap disappears entirely and the measure still drops from 13 events to 2.
+
+**Finer usually cannot, even when the line is walking — and this is the case to read carefully, because it looks like it should work.** The Entertainer's stride bass steps downward every eighth; in 2/4 a `quarter` grid gives only two cells and drops every second eighth, so m36's `48 → 43 → 36` (max step 7) becomes `48 → 36` (12), and fifteen measures regressed this way. The diagnosis is right and the inference from it is not: **a finer grid only helps if the grid still has something to remove.** The stride bass is *already written in eighths*, so an `eighth` grid hits the density floor on **147 of 152 measures**, and every LH difficulty metric comes out identical to the original. The §6 confirmation prompt says so directly:
+
+```
+song-level, the same metrics:
+  LH jump        median 12 → 12   p90 17 → 17   max 24 → 24   (worse on 2 measures)
+```
+
+It cleared 11 of the 15 regressions by not transforming. LH sounding events fell only 592 → 580; five measures moved. Measured against `quarter` at 90 BPM:
+
+| grid | regressions | LH jump med/p90/max | LH notes/beat | flagged |
+|---|---|---|---|---|
+| original | — | 12/17/24 | 2/2/4 | 146/152 |
+| `quarter` | 15 | **5/12/15** | **1/1/1** | **122/152** |
+| `eighth` | 4 | 12/17/24 | 2/2/2 | 141/152 |
+
+**A low regression count is not the objective.** `quarter` is better on every LH metric and on flag count; it simply reports what it cost. `eighth` buys its clean-looking report by declining to act. Prefer the grid with the better metrics and read its regression list, over the grid with the shorter list and no effect.
+
+So: reaching for `half` on The Entertainer would be wrong, and reaching for `eighth` does nothing. When a walking line regresses on jump, the honest options are to accept it against the song-level figures, or to narrow that measure with a range — not to refine the grid.
+
+**`lhCap` and `lhKeep` do not apply when the density floor declines a measure.** They run on the output of fill, so a measure the grid left alone keeps its original stacks — that is why the `eighth` run left LH stack at **4** despite `lhCap: 2`. The cap is not an independent setting today; it is a stage of quantization.
+
+**Candidate setting, not built.** A plan that wants to cap chord size WITHOUT quantizing rhythm cannot express it. The Entertainer is the live case: its LH rhythm is fine and its chords are not. Recorded so the gap is known — do not add it without a song that needs it and a measurement showing the cap alone helps.
+
 **Tuplets.** If a cell boundary would fall inside a tuplet group, leave that group's span unquantized and grid around it. On the current corpus this never fires for LH — all 22 tuplet groups in Someone Like You are RH, one beat long, starting on a beat — but the guard must exist.
 
 ### 4.2 `lhFill` — which pitches go in a cell
@@ -222,9 +249,19 @@ If a future transform is added that changes RH event count, it must hard-error w
 
 After transforming, run `lib/analyze.js` on both input and output at the same tempo and compare per measure.
 
-**If any metric is worse in the output than in the input for any measure, that is an ERROR.** A transform that fixes three metrics while degrading a fourth is not acceptable silently. Report the measure, the metric, and both values.
+**If any metric is worse in the output than in the input for any measure, report the measure, the metric, and both values.** A transform that fixes three metrics while degrading a fourth is not acceptable silently.
 
 This is not theoretical — it was caught in prototyping, where `union` fill raised LH jump above the original.
+
+**The detection is absolute; the consequence is a confirmation, not a refusal.** An earlier draft made this a hard error that exited without writing. That was wrong for the same reason §7 settled the `unable` case: a bad result that can be heard and archived beats a result the tool refuses to produce. Print every regression, print the song-level context below, ask once, write on approval. `--yes` bypasses. The `unable` prompt and this one share a single question — being asked twice about one run is worse than being asked once about two things.
+
+Two findings forced the change, both from The Entertainer at `quarter` grid:
+
+**The check is per-measure and absolute, so it cannot see the song.** It fired on fifteen bars for LH jump while the song's LH jump median fell from 12 to 5, p90 from 17 to 12, and max from 24 to 15. The list said "fifteen measures got worse"; the truth was "the median measure's worst leap halved". **The summary printed alongside the regression list must therefore include before/after median, p90 and max for each affected metric**, so the local damage can be weighed against the global result. `formatRegressionContext` reads these from the run report's existing metrics block rather than re-analysing.
+
+**`lhJump` gates writes but has no flag threshold.** `THRESHOLDS` has no entry for it, so no measure is ever flagged for jump — yet a jump regression blocked an entire song. m1 going 4 → 5 is noise by any standard. A metric absolute enough to refuse a run should be one the analyzer is willing to call difficult in the first place; until jump has a threshold, it has no business being a hard error.
+
+The check itself is unchanged and stays deliberately sensitive — it is finding real things, and every regression is recorded in the run report as well as printed, so an approved-anyway run still carries its own evidence.
 
 ---
 
@@ -238,9 +275,20 @@ There are two distinct reasons, tracked in two separate counters. Conflating the
 
 **`unneeded`** — a guard correctly declined to act because the measure did not need the transform. The density floor (§4.1) refusing to turn a sustained whole-note bar into four repeated quarter chords is the canonical case. Nothing was left too hard and nothing went wrong.
 
-**Confirmation threshold.** If more than 25% of measures are **`unable`**, print the list and ask for confirmation before writing the output. The user explicitly wants to be able to hear a bad result rather than be blocked by it. `--yes` bypasses the prompt. Never hard-fail on either count.
+**Confirmation threshold.** If more than 25% of measures are **`unable`**, print the list and ask for confirmation before writing the output. The user explicitly wants to be able to hear a bad result rather than be blocked by it. `--yes` bypasses the prompt. Never hard-fail on either count. §6's regression check now shares this prompt on the same reasoning.
 
 `unneeded` is reported and never gates anything. On the reference plan the density floor accounts for 23 of 82 measures — 28% — and prompting for that would be asking the user to confirm that the tool worked.
+
+**`unable` and `unneeded` are PER-HAND lists; the terminal tally is PER-MEASURE, and there is only one place it is computed.** The two answer different questions and must not be derived from each other. A measure whose LH hits the density floor is `unneeded` in that list while the measure as a whole is `transformed`, because its RH was still thinned — on The Entertainer at `eighth` grid that is 147 LH declines against 119 measures that changed.
+
+Deriving the tally arithmetically, as `total − untouched − unable − unneeded`, was wrong in both directions and shipped that way:
+
+| run | derived (wrong) | actual |
+|---|---|---|
+| The Scientist, `default: {}` | transformed 73 | **transformed 5**, unneeded 68 |
+| The Entertainer, `eighth` | transformed 5 | **transformed 119**, unneeded 33 |
+
+The cause is that `simplifyMeasures` only pushes to those arrays when a transform actively declines. A plan with an empty default reaches neither branch, so nothing is recorded and the subtraction reports the whole song as transformed; conversely an LH-only decline was subtracted from a total that RH thinning had already changed. `statusCounts(resolvedSettings)` is now the only accounting path, and its four buckets are exclusive and sum to the measure count — because `resolvedSettings` decides each status by comparing the actual output rather than by inferring from counters. §6's confirmation threshold reads the same tally, so the number on screen and the number in the prompt cannot disagree.
 
 ---
 

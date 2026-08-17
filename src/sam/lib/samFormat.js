@@ -26,6 +26,20 @@ const PT_MMM_D_YYYY = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
 });
 
+// Clock time — "2:14 PM" / "11:05 AM".
+const PT_TIME = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Los_Angeles",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+});
+
+// Recent ICU builds emit U+202F (narrow no-break space) before AM/PM where
+// older ones emit U+0020. Both render almost identically but compare
+// unequal, which would make any assertion on these strings depend on the
+// Node build. Normalise once, here, so callers see one shape.
+const normalizeSpaces = (s) => s.replace(/\s/g, " ");
+
 /**
  * Format a total practice duration for display.
  *
@@ -81,20 +95,32 @@ export function formatLastPracticed(isoTs) {
 }
 
 /**
- * Format a song's `created_at` for the "added Mar 3" caption on the
- * All songs tab. Year is appended when the input's PT year differs from
+ * Format a song's `created_at` for the "added Mar 3, 2:14 PM" caption shown
+ * on every song row. Year is appended when the input's PT year differs from
  * the current PT year.
+ *
+ * The TIME is part of the caption, not decoration. Generating several
+ * simplified variants of one song in a single sitting produces rows that are
+ * identical on a date-only stamp; the clock time is the only thing on the
+ * card that tells them apart and orders them.
+ *
+ * Returns null for a null/undefined input so callers can omit the caption
+ * rather than render "added null".
  */
 export function formatCreated(isoTs) {
   if (!isoTs) return null;
+  // Checked BEFORE ptDateKey, which formats the Date and throws RangeError on
+  // an invalid one. This runs inside a row render, so a bad timestamp would
+  // take down the whole library list rather than one caption.
+  const input = new Date(isoTs);
+  if (Number.isNaN(input.getTime())) return null;
   const inputKey = ptDateKey(isoTs);
   const todayKey = ptDateKey(new Date());
   const inputYear = inputKey.split("-")[0];
   const todayYear = todayKey.split("-")[0];
-  const input = new Date(isoTs);
   const stamp =
     inputYear === todayYear
       ? PT_MMM_D.format(input)
       : PT_MMM_D_YYYY.format(input);
-  return `added ${stamp}`;
+  return normalizeSpaces(`added ${stamp}, ${PT_TIME.format(input)}`);
 }

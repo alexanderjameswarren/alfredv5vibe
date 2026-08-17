@@ -1,13 +1,22 @@
-import React, { useState } from "react";
-import { Play, Plus, Pencil, Archive, ArchiveRestore } from "lucide-react";
+import React, { useState, useMemo } from "react";
+import {
+  Play, Plus, Pencil, Archive, ArchiveRestore, ArrowUp, ArrowDown,
+} from "lucide-react";
 import {
   formatDuration,
   formatLastPracticed,
   formatCreated,
 } from "../lib/samFormat";
+import {
+  SORT_OPTIONS,
+  DEFAULT_SORT,
+  defaultDirectionFor,
+  sortSongs,
+  sortFamilies,
+} from "../lib/samSort";
 
-// Segmented browse control with three tabs — Recent / All songs / Drills —
-// plus a right-aligned "+ Add" button. Sits below the Continue section and
+// Segmented browse control with four tabs — Recent / New / All songs /
+// Drills — plus a right-aligned "+ Add" button. Sits below the Continue and
 // the WeekStrip. Replaces the pre-M5 flat "Your songs" + "Drills" +
 // "Archived songs" sections.
 //
@@ -21,10 +30,20 @@ import {
 //   New       flat, newSongsFlat, every non-archived song that has never
 //             been played (lastPracticedAt === null); title-sorted
 //   All songs grouped by family — root then indented children with type
-//             pills; created_at right-aligned via formatCreated. Footer
-//             link toggles the same layout scoped to archivedFamilies.
+//             pills. Footer link toggles the same layout scoped to
+//             archivedFamilies.
 //   Drills    flat, drillsFlat, every song_type='drill' regardless of
 //             whether it has a parent
+//
+// Every row on every tab carries the same metadata line — see SongMeta.
+// created_at used to be an All-songs-only right-aligned caption; it is now
+// part of that shared line, so all four tabs show the same three facts.
+//
+// SORTING (lib/samSort.js) is one field + direction shared by all four tabs,
+// applied at render time. Its default reproduces the order every tab already
+// had, so the control starts out invisible in effect. It sorts the list the
+// tab shows — on All songs that means the FAMILIES; members keep their
+// tier/recency grouping. Missing values sort last in BOTH directions.
 //
 // Row height ≥ 40px (touch target — Surface tablet); action buttons ≥ 44px.
 
@@ -35,6 +54,29 @@ function tabClass(active) {
       ? "bg-primary text-white"
       : "text-muted-foreground hover:text-dark hover:bg-secondary/60",
   ].join(" ");
+}
+
+// The one metadata line every song row shows, on every tab.
+//
+// Practice history first — that is what the eye scans for — then when the
+// song entered the library. Both row components render this and nothing
+// else, so Recent / New / All songs / Drills cannot drift apart.
+//
+// `created_at` was previously shown only on All songs, right-aligned and
+// `hidden sm:inline`, so it was invisible on narrow screens and absent from
+// three of the four tabs. Folding it into this line fixes both.
+function SongMeta({ song }) {
+  const created = formatCreated(song.created_at);
+  const practice = song.lastPracticedAt
+    ? `${formatLastPracticed(song.lastPracticedAt)} · ${formatDuration(
+        song.totalSeconds
+      )}`
+    : "never played";
+  return (
+    <div className="text-xs text-muted-foreground">
+      {created ? `${practice} · ${created}` : practice}
+    </div>
+  );
 }
 
 function pillFor(song) {
@@ -83,13 +125,7 @@ function FlatRow({ song, familyPrefix, onLoad, onEdit, onArchive }) {
             </span>
           )}
         </div>
-        <div className="text-xs text-muted-foreground">
-          {played
-            ? `${formatLastPracticed(song.lastPracticedAt)} · ${formatDuration(
-                song.totalSeconds
-              )}`
-            : "never played"}
-        </div>
+        <SongMeta song={song} />
       </div>
       <button
         onClick={(e) => {
@@ -129,7 +165,6 @@ function GroupedRow({
 }) {
   const played = !!song.lastPracticedAt;
   const pill = isChild ? pillFor(song) : null;
-  const createdCaption = formatCreated(song.created_at);
   const ActionIcon = actionKind === "restore" ? ArchiveRestore : Archive;
   const actionTitle = actionKind === "restore" ? "Restore song" : "Archive song";
   return (
@@ -158,19 +193,8 @@ function GroupedRow({
             </span>
           )}
         </div>
-        <div className="text-xs text-muted-foreground">
-          {played
-            ? `${formatLastPracticed(song.lastPracticedAt)} · ${formatDuration(
-                song.totalSeconds
-              )}`
-            : "never played"}
-        </div>
+        <SongMeta song={song} />
       </div>
-      {createdCaption && (
-        <span className="text-xs text-muted-foreground flex-shrink-0 hidden sm:inline">
-          {createdCaption}
-        </span>
-      )}
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -303,6 +327,35 @@ export default function BrowseTabs({
 }) {
   const [tab, setTab] = useState("recent"); // 'recent' | 'new' | 'all' | 'drills'
   const [showArchived, setShowArchived] = useState(false);
+  const [sort, setSort] = useState(DEFAULT_SORT);
+  const [dir, setDir] = useState(() => defaultDirectionFor(DEFAULT_SORT));
+
+  // Choosing a FIELD resets the direction to that field's natural one, rather
+  // than carrying over whatever the previous field was flipped to. Going from
+  // "Title, A→Z" to "Last played" should land on most-recent-first, not on
+  // the songs you have not opened since spring.
+  const chooseSort = (value) => {
+    setSort(value);
+    setDir(defaultDirectionFor(value));
+  };
+
+  // Every list is re-sorted from the hook's output rather than in place, so
+  // switching sort never mutates what `useSongLibrary` handed us — the same
+  // arrays back ContinueSection, which must stay recency-ordered.
+  const sorted = useMemo(
+    () => ({
+      recent: sortSongs(allSongsFlat, sort, dir),
+      new: sortSongs(newSongsFlat, sort, dir),
+      drills: sortSongs(drillsFlat, sort, dir),
+      families: sortFamilies(families, sort, dir),
+      archivedFamilies: sortFamilies(archivedFamilies, sort, dir),
+    }),
+    [allSongsFlat, newSongsFlat, drillsFlat, families, archivedFamilies, sort, dir]
+  );
+
+  const ascending = dir === "asc";
+  const DirIcon = ascending ? ArrowUp : ArrowDown;
+  const nextDirWord = ascending ? "descending" : "ascending";
 
   return (
     <div className="mt-6">
@@ -347,6 +400,41 @@ export default function BrowseTabs({
         </button>
       </div>
 
+      {/* Sort control. Its own row rather than beside the tabs, which are
+          already four-wide plus Add and would crowd on a narrow screen.
+
+          The direction button sits OUTSIDE the label — a <label> forwards
+          clicks to its control, so an interactive element nested inside it
+          would toggle the direction and then open the select. */}
+      <div className="flex items-center justify-end gap-2 mb-3">
+        <label htmlFor="sam-sort" className="text-xs text-muted-foreground">
+          Sort by
+        </label>
+        <select
+          id="sam-sort"
+          value={sort}
+          onChange={(e) => chooseSort(e.target.value)}
+          className="min-h-[36px] px-2 py-1 text-sm rounded-lg border border-border bg-card text-dark hover:bg-secondary transition-colors"
+        >
+          {SORT_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={() => setDir((d) => (d === "asc" ? "desc" : "asc"))}
+          className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:text-primary hover:bg-secondary transition-colors"
+          title={`Sort ${nextDirWord}`}
+          aria-label={`Sort ${nextDirWord} — currently ${
+            ascending ? "ascending" : "descending"
+          }`}
+        >
+          <DirIcon className="w-4 h-4" aria-hidden="true" />
+        </button>
+      </div>
+
       {loading ? (
         <div className="text-center text-sm text-muted-foreground py-8">
           Loading library…
@@ -355,7 +443,7 @@ export default function BrowseTabs({
         <>
           {tab === "recent" && (
             <FlatList
-              items={allSongsFlat}
+              items={sorted.recent}
               familiesByRootId={familiesByRootId}
               onLoad={onLoad}
               onEdit={onEdit}
@@ -365,7 +453,7 @@ export default function BrowseTabs({
 
           {tab === "new" && (
             <FlatList
-              items={newSongsFlat}
+              items={sorted.new}
               familiesByRootId={familiesByRootId}
               onLoad={onLoad}
               onEdit={onEdit}
@@ -376,7 +464,7 @@ export default function BrowseTabs({
           {tab === "all" && (
             <>
               <GroupedList
-                families={showArchived ? archivedFamilies : families}
+                families={showArchived ? sorted.archivedFamilies : sorted.families}
                 onLoad={onLoad}
                 onEdit={onEdit}
                 onAction={showArchived ? onRestore : onArchive}
@@ -399,7 +487,7 @@ export default function BrowseTabs({
 
           {tab === "drills" && (
             <FlatList
-              items={drillsFlat}
+              items={sorted.drills}
               familiesByRootId={familiesByRootId}
               onLoad={onLoad}
               onEdit={onEdit}
