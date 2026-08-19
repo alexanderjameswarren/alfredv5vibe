@@ -380,6 +380,27 @@ export async function getEvents(
   }
 }
 
+/**
+ * List collections with their current membership.
+ *
+ * Membership comes from `collection_items`, one row per member, ordered by
+ * `position` so it matches what the app shows. The `item_collections.items`
+ * jsonb column is a frozen pre-migration snapshot — it is deliberately NOT
+ * selected, because reading it reports membership as it stood before the
+ * cutover and the stale data looks entirely plausible.
+ *
+ * Item names are resolved in one batched lookup. RLS filters that lookup, so an
+ * id that comes back unmatched means the item was deleted OR is unreadable to
+ * this caller — an item is readable through ownership or a shared context, and
+ * collection membership grants nothing. The two are indistinguishable from here
+ * and neither is an error. Such a member is reported as
+ * `{ name: null, unavailable: true }` rather than falling back to its id, so
+ * nothing downstream presents an opaque id as though it were a product name.
+ *
+ * `client` is always a user-scoped client supplied by the caller (`ctx.db` from
+ * defineTool, `createUserClient` from ai-enrich). RLS is the access gate here;
+ * the service role must never be passed in.
+ */
 export async function getCollections(
   client: SupabaseClient,
   params: { context_id?: string }
@@ -387,16 +408,68 @@ export async function getCollections(
   try {
     let query = client
       .from("item_collections")
-      .select("id, name, context_id, items, shared, is_capture_target")
+      .select("id, name, context_id, shared, is_capture_target")
       .order("name");
 
     if (params.context_id) {
       query = query.eq("context_id", params.context_id);
     }
 
-    const { data, error } = await query;
+    const { data: collections, error } = await query;
     if (error) return { error: error.message };
-    return { data };
+
+    const rows = (collections ?? []) as Array<Record<string, unknown> & { id: string }>;
+    if (rows.length === 0) return { data: [] };
+
+    const { data: memberData, error: memberError } = await client
+      .from("collection_items")
+      .select("collection_id, item_id, quantity, position")
+      .in("collection_id", rows.map((c) => c.id))
+      .order("collection_id")
+      .order("position");
+
+    if (memberError) return { error: memberError.message };
+    const members = (memberData ?? []) as Array<{
+      collection_id: string;
+      item_id: string;
+      quantity: string | null;
+      position: number;
+    }>;
+
+    const names = new Map<string, string | null>();
+    const itemIds = [...new Set(members.map((m) => m.item_id))];
+    if (itemIds.length > 0) {
+      const { data: itemData, error: itemError } = await client
+        .from("items")
+        .select("id, name")
+        .in("id", itemIds);
+      if (itemError) return { error: itemError.message };
+      for (const item of (itemData ?? []) as Array<{ id: string; name: string | null }>) {
+        names.set(item.id, item.name ?? null);
+      }
+    }
+
+    const byCollection = new Map<string, Array<Record<string, unknown>>>();
+    for (const member of members) {
+      const name = names.get(member.item_id) ?? null;
+      const entry: Record<string, unknown> = {
+        item_id: member.item_id,
+        name,
+        quantity: member.quantity,
+      };
+      if (name === null) entry.unavailable = true;
+
+      const list = byCollection.get(member.collection_id);
+      if (list) list.push(entry);
+      else byCollection.set(member.collection_id, [entry]);
+    }
+
+    return {
+      data: rows.map((collection) => ({
+        ...collection,
+        items: byCollection.get(collection.id) ?? [],
+      })),
+    };
   } catch (e) {
     return { error: String(e) };
   }

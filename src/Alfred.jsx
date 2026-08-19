@@ -37,6 +37,19 @@ import {
 import { supabase, supabaseUrl } from "./supabaseClient";
 import { calculateNextEventDate, getRecurrenceConfig } from "./utils/recurrence";
 import { getRecurrenceDisplayString } from "./utils/recurrenceDisplay";
+import { toCamelCase, toSnakeCase } from "./utils/caseConvert";
+import {
+  loadMembers,
+  loadRemovals,
+  addMembers,
+  removeMember,
+  removeMembers,
+  reAddRemoval,
+  updateMemberQuantity,
+  reorderMembers,
+  REMOVAL_MANUAL,
+  REMOVAL_COMPLETED,
+} from "./utils/collectionMembers";
 import SamPlayer from "./sam/SamPlayer";
 import TimerPage from "./timer/TimerPage";
 
@@ -52,42 +65,12 @@ const storage = {
     item_collections: "item_collections",
   },
 
-  // Convert camelCase to snake_case for database
-  toSnakeCase(obj) {
-    if (!obj || typeof obj !== "object") return obj;
-    if (Array.isArray(obj)) return obj.map((item) => this.toSnakeCase(item));
-
-    const result = {};
-    for (const [key, value] of Object.entries(obj)) {
-      const snakeKey = key.replace(
-        /[A-Z]/g,
-        (letter) => `_${letter.toLowerCase()}`,
-      );
-      result[snakeKey] =
-        typeof value === "object" && value !== null
-          ? this.toSnakeCase(value)
-          : value;
-    }
-    return result;
-  },
-
-  // Convert snake_case to camelCase from database
-  toCamelCase(obj) {
-    if (!obj || typeof obj !== "object") return obj;
-    if (Array.isArray(obj)) return obj.map((item) => this.toCamelCase(item));
-
-    const result = {};
-    for (const [key, value] of Object.entries(obj)) {
-      const camelKey = key.replace(/_([a-z])/g, (_, letter) =>
-        letter.toUpperCase(),
-      );
-      result[camelKey] =
-        typeof value === "object" && value !== null
-          ? this.toCamelCase(value)
-          : value;
-    }
-    return result;
-  },
+  // Key-case conversion between camelCase React state and snake_case Postgres.
+  // The implementation lives in utils/caseConvert.js so that this file and the
+  // collection membership layer share one copy. Kept as storage properties
+  // because callers throughout this file go through storage.toCamelCase(...).
+  toSnakeCase,
+  toCamelCase,
 
   async get(key, shared = false) {
     try {
@@ -677,6 +660,19 @@ export default function Alfred() {
   const [pausedExecutions, setPausedExecutions] = useState([]);
   const [inboxItems, setInboxItems] = useState([]);
   const [collections, setCollections] = useState([]);
+  // Step 3b: collection membership is READ from the collection_items table,
+  // keyed by collection id. Writes still land in the item_collections.items
+  // jsonb until Step 3c, so the two sources can diverge in between.
+  const [collectionMembers, setCollectionMembers] = useState({});
+  const [collectionMembersError, setCollectionMembersError] = useState(null);
+  // Manual removal history, keyed by collection id — feeds the recently-removed
+  // panel on the collection detail view.
+  const [collectionRemovals, setCollectionRemovals] = useState({});
+  const [collectionRemovalsError, setCollectionRemovalsError] = useState(null);
+  const [reAddingRemovalId, setReAddingRemovalId] = useState(null);
+  // Full removal history — both kinds, unfiltered — for the history view.
+  const [collectionHistory, setCollectionHistory] = useState({});
+  const [collectionHistoryError, setCollectionHistoryError] = useState(null);
   const [filterTag, setFilterTag] = useState(null);
   const [selectedCollectionId, setSelectedCollectionId] = useState(null);
   const [collDragIdx, setCollDragIdx] = useState(null);
@@ -862,11 +858,34 @@ export default function Alfred() {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    // refreshData is intentionally omitted: it is recreated every render, so
+    // depending on it would tear down and re-attach this listener constantly.
+    // It closes over nothing render-scoped — only stable setters and module
+    // imports — so there is no staleness to guard against. Same reasoning as the
+    // suppression on the init effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   useEffect(() => {
     setFilterTag(null);
   }, [view]);
+
+  // Load removal history when a collection view is opened. One-shot fetches on
+  // open — deliberately not a poll or a realtime channel.
+  useEffect(() => {
+    if (!selectedCollectionId) return;
+    if (view === "collection-detail") {
+      // The detail view needs both: manual removals for the panel, and the full
+      // history so it knows whether the "view all" entry point should exist.
+      loadCollectionRemovals(selectedCollectionId);
+      loadCollectionHistory(selectedCollectionId);
+    } else if (view === "collection-history") {
+      loadCollectionHistory(selectedCollectionId);
+    }
+    // These loaders are recreated every render; depending on them would refetch
+    // in a loop. They close over nothing render-scoped.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, selectedCollectionId]);
 
   async function handleSignOut() {
     await supabase.auth.signOut();
@@ -906,6 +925,7 @@ export default function Alfred() {
           .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
       );
       setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
+      await loadCollectionMembers((collectionsData || []).map(d => d.id));
       setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
       setPausedExecutions((pausedExecData || []).map(d => storage.toCamelCase(d)));
 
@@ -956,6 +976,7 @@ export default function Alfred() {
           .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
       );
       setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
+      await loadCollectionMembers((collectionsData || []).map(d => d.id));
       setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
       setPausedExecutions((pausedExecData || []).map(d => storage.toCamelCase(d)));
 
@@ -1607,25 +1628,14 @@ export default function Alfred() {
       // Add to collection if Collection section was open
       if (triageData.addToCollection && triageData.collectionData) {
         const targetItemId = triageData.collectionData.itemId || createdItemId;
-        if (targetItemId && triageData.collectionData.collectionId) {
-          const collection = collections.find(
-            (c) => c.id === triageData.collectionData.collectionId
-          );
-          if (collection) {
-            const updatedItems = [
-              ...(collection.items || []),
-              {
-                itemId: targetItemId,
-                quantity: triageData.collectionData.quantity || '1',
-                addedAt: new Date().toISOString(),
-              },
-            ];
-            const updatedCollection = { ...collection, items: updatedItems };
-            await storage.set(`item_collections:${collection.id}`, updatedCollection);
-            setCollections((prev) =>
-              prev.map((c) => (c.id === collection.id ? updatedCollection : c))
-            );
-          }
+        const targetCollectionId = triageData.collectionData.collectionId;
+        if (targetItemId && targetCollectionId) {
+          await addItemsToCollection(targetCollectionId, [
+            {
+              itemId: targetItemId,
+              quantity: triageData.collectionData.quantity || '1',
+            },
+          ]);
         }
       }
 
@@ -2010,21 +2020,19 @@ export default function Alfred() {
         }
       }
 
-      // Remove completed items from collection
+      // Remove completed items from collection. Only an affirmative completion
+      // clears anything — cancel returns above, and pause never reaches here.
+      //
+      // We are already inside withLoading, which clears the overlay in its
+      // finally and never rethrows, so there is no nested withLoading here and
+      // the failure is read off the returned result rather than thrown.
       if (outcome === "done" && activeExecution.collectionId) {
         const completedIds = activeExecution.completedItemIds || [];
         if (completedIds.length > 0) {
-          const coll = collections.find((c) => c.id === activeExecution.collectionId);
-          if (coll) {
-            const remainingItems = (coll.items || []).filter(
-              (ci) => !completedIds.includes(ci.itemId)
-            );
-            const updatedColl = { ...coll, items: remainingItems };
-            await storage.set(`item_collections:${coll.id}`, updatedColl);
-            setCollections(collections.map((c) =>
-              c.id === coll.id ? updatedColl : c
-            ));
-          }
+          await clearCompletedFromCollection(
+            activeExecution.collectionId,
+            completedIds,
+          );
         }
       }
 
@@ -2155,15 +2163,212 @@ export default function Alfred() {
     );
   }
 
-  async function updateCollectionItemQty(collectionId, itemId, quantity) {
-    const coll = collections.find((c) => c.id === collectionId);
-    if (!coll) return;
-    const newItems = (coll.items || []).map((ci) =>
-      ci.itemId === itemId ? { ...ci, quantity } : ci
+  /**
+   * Load membership rows for the given collections from collection_items.
+   *
+   * loadMembers reports failure by returning an error rather than throwing,
+   * because withLoading swallows exceptions. A read failure must not look like
+   * an empty collection, so it is surfaced in the UI rather than logged only.
+   */
+  async function loadCollectionMembers(collectionIds) {
+    const ids = (collectionIds || []).filter(Boolean);
+    if (ids.length === 0) return;
+
+    const results = await Promise.all(
+      ids.map(async (id) => ({ id, ...(await loadMembers(id)) })),
     );
-    const updated = { ...coll, items: newItems };
-    await storage.set(`item_collections:${coll.id}`, updated);
-    setCollections(collections.map((c) => (c.id === collectionId ? updated : c)));
+
+    const failed = results.filter((r) => r.error);
+    setCollectionMembersError(
+      failed.length > 0 ? `Could not load collection contents: ${failed[0].error}` : null,
+    );
+
+    setCollectionMembers((prev) => {
+      const next = { ...prev };
+      for (const r of results) {
+        if (!r.error) next[r.id] = r.data;
+      }
+      return next;
+    });
+  }
+
+  function membersOf(collectionId) {
+    return collectionMembers[collectionId] || [];
+  }
+
+  function setMembersFor(collectionId, updater) {
+    setCollectionMembers((prev) => ({
+      ...prev,
+      [collectionId]: updater(prev[collectionId] || []),
+    }));
+  }
+
+  // ─── Collection membership writes ──────────────────────────────────────────
+  //
+  // These target collection_items. The item_collections.items jsonb is no longer
+  // written by any of them and is now a frozen rollback snapshot.
+  //
+  // The data layer reports failure by returning { data, error } rather than
+  // throwing, because withLoading catches and never rethrows — a thrown error
+  // would be swallowed and the person would believe their edit had saved. Every
+  // helper below inspects error and puts it in front of the user.
+
+  function reportMembershipError(action, message) {
+    console.error(`[collections] failed to ${action}:`, message);
+    window.alert(`Could not ${action}: ${message}`);
+  }
+
+  async function addItemsToCollection(collectionId, entries) {
+    const result = await addMembers(collectionId, entries, { userId: user.id });
+    if (result.error) {
+      reportMembershipError("add to this collection", result.error);
+      return false;
+    }
+    await loadCollectionMembers([collectionId]);
+    if (result.skipped.length > 0) {
+      window.alert(
+        result.skipped.length === 1
+          ? "That item is already in this collection."
+          : `${result.skipped.length} of those items were already in this collection.`,
+      );
+    }
+    return true;
+  }
+
+  async function removeItemFromCollection(collectionId, itemId) {
+    const result = await removeMember(collectionId, itemId, {
+      reason: REMOVAL_MANUAL,
+      userId: user.id,
+    });
+    // Reload either way: on failure the membership row may or may not have gone,
+    // and the list must show what is actually there rather than what we assumed.
+    await loadCollectionMembers([collectionId]);
+    await loadCollectionRemovals(collectionId);
+    await loadCollectionHistory(collectionId);
+    if (result.error) {
+      reportMembershipError("remove that item", result.error);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Load manual removal history for the recently-removed panel.
+   *
+   * Only reason='manual'. A single execution completion can clear a dozen items
+   * at once, and mixing those in would bury the accidental removal this panel
+   * exists to catch; they show up in the full history view instead.
+   *
+   * Fetches a wider window than the panel displays, because entries whose item
+   * is back in the collection are filtered out at render — fetching exactly five
+   * could leave the panel showing fewer than it could.
+   */
+  async function loadCollectionRemovals(collectionId) {
+    const result = await loadRemovals(collectionId, {
+      reason: REMOVAL_MANUAL,
+      limit: 25,
+    });
+    if (result.error) {
+      // Surfaced in the panel rather than as an alert: this is a background read
+      // on view open, and an alert on every visit would be intolerable.
+      console.error("[collections] failed to load removal history:", result.error);
+      setCollectionRemovalsError(`Could not load removal history: ${result.error}`);
+      return false;
+    }
+    setCollectionRemovalsError(null);
+    setCollectionRemovals((prev) => ({ ...prev, [collectionId]: result.data }));
+    return true;
+  }
+
+  /**
+   * Load the full removal history for the history view: both kinds, nothing
+   * filtered out, newest first, capped at 50.
+   *
+   * Kept as a separate fetch from loadCollectionRemovals rather than deriving
+   * both from one query. The panel wants the most recent *manual* removals, and
+   * a collection with heavy completion churn could push every manual row out of
+   * a mixed 50-row window while manual removals still exist.
+   */
+  async function loadCollectionHistory(collectionId) {
+    const result = await loadRemovals(collectionId, { limit: 50 });
+    if (result.error) {
+      console.error("[collections] failed to load full history:", result.error);
+      setCollectionHistoryError(`Could not load removal history: ${result.error}`);
+      return false;
+    }
+    setCollectionHistoryError(null);
+    setCollectionHistory((prev) => ({ ...prev, [collectionId]: result.data }));
+    return true;
+  }
+
+  /**
+   * Put a removed item back. The removal record is left in place — the table is
+   * append-only and the item genuinely was removed at that time. The entry drops
+   * out of the panel because the item is a member again, not because the history
+   * was rewritten.
+   */
+  async function putBackRemoval(removal) {
+    if (reAddingRemovalId) return false;
+    setReAddingRemovalId(removal.id);
+    try {
+      const result = await reAddRemoval(removal, { userId: user.id });
+      if (result.error) {
+        reportMembershipError("put that item back", result.error);
+        return false;
+      }
+      // alreadyPresent means a double tap, or the other person restored it first.
+      // That is the desired end state, so it is a quiet success, not a warning.
+      await loadCollectionMembers([removal.collectionId]);
+      await loadCollectionRemovals(removal.collectionId);
+      return true;
+    } finally {
+      setReAddingRemovalId(null);
+    }
+  }
+
+  async function saveMemberQuantity(collectionId, itemId, quantity) {
+    const result = await updateMemberQuantity(collectionId, itemId, quantity);
+    if (result.error) {
+      reportMembershipError("save that quantity", result.error);
+      await loadCollectionMembers([collectionId]);
+      return false;
+    }
+    setMembersFor(collectionId, (prev) =>
+      prev.map((m) => (m.itemId === itemId ? result.data : m)),
+    );
+    return true;
+  }
+
+  /**
+   * Clear the items checked off during an execution, recording each as a
+   * 'completed' removal.
+   *
+   * One removeMembers call rather than a loop over singular removals: every row
+   * must land in a single INSERT so they share the server's transaction
+   * timestamp exactly, which is what lets the history view group a bulk
+   * clear-out under one heading.
+   */
+  async function clearCompletedFromCollection(collectionId, itemIds) {
+    const result = await removeMembers(collectionId, itemIds, {
+      reason: REMOVAL_COMPLETED,
+      userId: user.id,
+    });
+    await loadCollectionMembers([collectionId]);
+    if (result.error) {
+      reportMembershipError("clear the completed items", result.error);
+      return false;
+    }
+    return true;
+  }
+
+  async function saveMemberOrder(collectionId, orderedMembers) {
+    const result = await reorderMembers(collectionId, orderedMembers);
+    if (result.error) {
+      reportMembershipError("save the new order", result.error);
+      await loadCollectionMembers([collectionId]);
+      return false;
+    }
+    return true;
   }
 
   async function refreshCollection(collectionId) {
@@ -2173,6 +2378,7 @@ export default function Alfred() {
         prev.map((c) => (c.id === collectionId ? coll : c))
       );
     }
+    await loadCollectionMembers([collectionId]);
   }
 
   async function saveContext(
@@ -2354,22 +2560,29 @@ export default function Alfred() {
         contextId: contextId || null,
         shared: false,
         isCaptureTarget: false,
-        items: [],
+        // No items seed: membership lives in collection_items now. The jsonb
+        // column keeps its own '[]' default and is never written again.
         createdAt: new Date().toISOString(),
       };
       await storage.set(`item_collections:${newColl.id}`, newColl);
-      setCollections([...collections, newColl]);
+      setCollections((prev) => [...prev, newColl]);
       return newColl.id;
     });
   }
 
+  // Collection metadata only — name, context, shared, pinned. Membership goes
+  // through the collection_items helpers above.
   async function updateCollection(collId, updates, silent = false) {
     const coll = collections.find((c) => c.id === collId);
     if (!coll) return;
     const doSave = async () => {
-      const updated = { ...coll, ...updates };
-      await storage.set(`item_collections:${coll.id}`, updated);
-      setCollections(collections.map((c) => (c.id === collId ? updated : c)));
+      await storage.set(`item_collections:${coll.id}`, { ...coll, ...updates });
+      // Functional updater: apply the patch to the freshest state rather than
+      // replacing the row with a snapshot captured at render time, which is an
+      // independent cause of lost concurrent edits.
+      setCollections((prev) =>
+        prev.map((c) => (c.id === collId ? { ...c, ...updates } : c)),
+      );
     };
     if (silent) {
       try { await doSave(); } catch (e) { console.error('Collection save error:', e); }
@@ -2380,8 +2593,15 @@ export default function Alfred() {
 
   async function deleteCollection(collId) {
     return withLoading('Deleting...', async () => {
+      // collection_items and collection_item_removals go with it via ON DELETE
+      // CASCADE — there is no application-side child cleanup to do.
       await storage.delete(`item_collections:${collId}`);
-      setCollections(collections.filter((c) => c.id !== collId));
+      setCollections((prev) => prev.filter((c) => c.id !== collId));
+      setCollectionMembers((prev) => {
+        const next = { ...prev };
+        delete next[collId];
+        return next;
+      });
     });
   }
 
@@ -3052,7 +3272,7 @@ export default function Alfred() {
                             </div>
                             <div className="flex items-center gap-2 mt-1">
                               <span className="text-sm text-muted-foreground">
-                                {coll.items ? coll.items.length : 0} {coll.items && coll.items.length === 1 ? "item" : "items"}
+                                {membersOf(coll.id).length} {membersOf(coll.id).length === 1 ? "item" : "items"}
                               </span>
                               {contextName && (
                                 <span className="text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
@@ -3215,6 +3435,7 @@ export default function Alfred() {
             onFilterTag={setFilterTag}
             allItems={items}
             collections={collections}
+            collectionMembers={collectionMembers}
             onViewCollection={(id) => {
               setPreviousView("context-detail");
               setSelectedCollectionId(id);
@@ -3297,10 +3518,11 @@ export default function Alfred() {
             items={items}
             contexts={contexts}
             collections={collections}
+            collectionMembers={collectionMembers}
             onToggleElement={toggleExecutionElement}
             onUpdateElement={updateExecutionElement}
             onToggleCollectionItem={toggleCollectionItem}
-            onUpdateCollectionItemQty={updateCollectionItemQty}
+            onUpdateCollectionItemQty={saveMemberQuantity}
             onRefreshCollection={refreshCollection}
             onUpdateNotes={updateExecutionNotes}
             onComplete={() => closeExecution("done")}
@@ -3545,7 +3767,7 @@ export default function Alfred() {
                           </div>
                           <div className="flex items-center gap-2 mt-1">
                             <span className="text-sm text-muted-foreground">
-                              {coll.items ? coll.items.length : 0} {coll.items && coll.items.length === 1 ? "item" : "items"}
+                              {membersOf(coll.id).length} {membersOf(coll.id).length === 1 ? "item" : "items"}
                             </span>
                             {contextName && (
                               <span className="text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
@@ -3574,6 +3796,15 @@ export default function Alfred() {
         {view === "collection-detail" && (() => {
           const coll = collections.find((c) => c.id === selectedCollectionId);
           if (!coll) return <p className="text-muted-foreground">Collection not found</p>;
+          const members = membersOf(coll.id);
+          // An item that has been put back is a resolved problem, so it drops out
+          // of a panel meant for unresolved ones. The removal record itself stays
+          // in the table — the history stays honest.
+          const memberItemIds = new Set(members.map((m) => m.itemId));
+          const recentRemovals = (collectionRemovals[coll.id] || [])
+            .filter((r) => !memberItemIds.has(r.itemId))
+            .slice(0, 5);
+          const history = collectionHistory[coll.id] || [];
           return (
             <div>
               <button
@@ -3637,9 +3868,10 @@ export default function Alfred() {
                 </label>
 
                 <div>
+                  {/* Membership — reads and writes both go to collection_items. */}
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-base font-medium">
-                      Items ({coll.items ? coll.items.length : 0})
+                      Items ({members.length})
                     </h3>
                     <button
                       onClick={() => setView("collection-add-items")}
@@ -3650,63 +3882,78 @@ export default function Alfred() {
                     </button>
                   </div>
 
-                  {coll.items && coll.items.length >= 50 && coll.items.length < 200 && (
-                    <p className="text-xs text-warning mb-2">Warning: {coll.items.length} items. Performance may degrade above 200.</p>
+                  {collectionMembersError && (
+                    <p className="text-xs text-destructive mb-2">{collectionMembersError}</p>
                   )}
-                  {coll.items && coll.items.length >= 200 && (
+
+                  {members.length >= 50 && members.length < 200 && (
+                    <p className="text-xs text-warning mb-2">Warning: {members.length} items. Performance may degrade above 200.</p>
+                  )}
+                  {members.length >= 200 && (
                     <p className="text-xs text-destructive mb-2">Maximum 200 items reached.</p>
                   )}
 
-                  {(!coll.items || coll.items.length === 0) ? (
+                  {members.length === 0 ? (
                     <p className="text-muted-foreground text-sm py-4 text-center">No items in this collection</p>
                   ) : (
                     <div className="space-y-2">
-                      {coll.items.map((collItem, index) => {
-                        const linkedItem = items.find((i) => i.id === collItem.itemId);
+                      {members.map((member, index) => {
+                        const linkedItem = items.find((i) => i.id === member.itemId);
                         return (
                           <div
-                            key={collItem.itemId || index}
+                            key={member.id || member.itemId || index}
                             className={`flex items-center gap-2 p-3 bg-card border border-border rounded-lg ${collDragIdx === index ? "opacity-50" : ""}`}
                             draggable
                             onDragStart={(e) => { setCollDragIdx(index); e.dataTransfer.effectAllowed = "move"; }}
                             onDragOver={(e) => {
                               e.preventDefault();
                               if (collDragIdx === null || collDragIdx === index) return;
-                              const newItems = [...coll.items];
-                              const dragged = newItems[collDragIdx];
-                              newItems.splice(collDragIdx, 1);
-                              newItems.splice(index, 0, dragged);
-                              setCollections(collections.map((c) => (c.id === coll.id ? { ...coll, items: newItems } : c)));
+                              setMembersFor(coll.id, (prev) => {
+                                const next = [...prev];
+                                const [dragged] = next.splice(collDragIdx, 1);
+                                next.splice(index, 0, dragged);
+                                return next;
+                              });
                               setCollDragIdx(index);
                             }}
                             onDragEnd={() => {
                               setCollDragIdx(null);
-                              updateCollection(coll.id, { items: coll.items }, true);
+                              saveMemberOrder(coll.id, members);
                             }}
                           >
                             <GripVertical className="w-4 h-4 text-muted-foreground cursor-move flex-shrink-0" title="Drag to reorder" />
                             <div className="flex-1 min-w-0">
                               <p className="font-medium text-sm truncate">
-                                {linkedItem ? linkedItem.name : collItem.itemId}
+                                <ItemNameLabel name={linkedItem?.name} />
                               </p>
                             </div>
+                            {/* Quantity is disabled when the item cannot be shown:
+                                setting an amount on something you cannot identify
+                                is a guess, and it would be a silent edit to data
+                                the owner can see and you cannot. Removing the row
+                                stays available — a member you cannot see is exactly
+                                the one you may need to get rid of. */}
                             <input
                               type="text"
-                              value={collItem.quantity || ""}
+                              value={member.quantity || ""}
+                              disabled={!linkedItem}
+                              title={linkedItem ? undefined : "This item cannot be shown, so its quantity cannot be edited"}
                               onChange={(e) => {
-                                const newItems = [...coll.items];
-                                newItems[index] = { ...newItems[index], quantity: e.target.value };
-                                setCollections(collections.map((c) => (c.id === coll.id ? { ...coll, items: newItems } : c)));
+                                const quantity = e.target.value;
+                                setMembersFor(coll.id, (prev) =>
+                                  prev.map((m) => (m.itemId === member.itemId ? { ...m, quantity } : m)),
+                                );
                               }}
-                              onBlur={() => updateCollection(coll.id, { items: coll.items }, true)}
+                              onBlur={() => saveMemberQuantity(coll.id, member.itemId, member.quantity)}
                               placeholder="Qty"
-                              className="w-20 sm:w-24 px-2 py-2 border border-border rounded text-base"
+                              className="w-20 sm:w-24 px-2 py-2 border border-border rounded text-base disabled:opacity-50 disabled:cursor-not-allowed"
                             />
                             <button
-                              onClick={() => {
-                                const newItems = coll.items.filter((_, i) => i !== index);
-                                updateCollection(coll.id, { items: newItems });
-                              }}
+                              onClick={() =>
+                                withLoading('Removing...', () =>
+                                  removeItemFromCollection(coll.id, member.itemId),
+                                )
+                              }
                               className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-destructive"
                             >
                               <X className="w-4 h-4" />
@@ -3717,6 +3964,82 @@ export default function Alfred() {
                     </div>
                   )}
                 </div>
+
+                {/* Recently removed — manual removals only, most recent first,
+                    plus the entry point to the full history. The whole region
+                    disappears when there is neither history nor an error to
+                    report; an empty panel on a fresh collection is noise. */}
+                {(recentRemovals.length > 0 ||
+                  collectionRemovalsError ||
+                  history.length > 0 ||
+                  collectionHistoryError) && (
+                  <div className="pt-4 border-t border-border">
+                    {(recentRemovals.length > 0 || collectionRemovalsError) && (
+                      <>
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="text-base font-medium">Recently removed</h3>
+                          {history.length > 0 && (
+                            <button
+                              onClick={() => setView("collection-history")}
+                              className="min-h-[44px] text-sm text-primary hover:text-primary-hover"
+                            >
+                              View all
+                            </button>
+                          )}
+                        </div>
+
+                        {collectionRemovalsError && (
+                          <p className="text-xs text-destructive mb-2">{collectionRemovalsError}</p>
+                        )}
+
+                        <div className="space-y-2">
+                          {recentRemovals.map((removal) => (
+                            <div
+                              key={removal.id}
+                              className="flex items-center gap-2 p-3 bg-card border border-border rounded-lg"
+                            >
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-sm truncate">
+                                  <ItemNameLabel name={removal.itemName} />
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {friendlyDate(removal.removedAt)}
+                                </p>
+                              </div>
+                              <button
+                                onClick={() =>
+                                  withLoading('Putting back...', () => putBackRemoval(removal))
+                                }
+                                disabled={reAddingRemovalId !== null}
+                                className="flex items-center gap-2 px-3 py-2 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm shrink-0 disabled:opacity-50"
+                              >
+                                <ArchiveRestore className="w-4 h-4" />
+                                Put back
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+
+                    {/* A collection can have history worth reading while the panel
+                        itself is empty — every removal was a completion, or every
+                        manual one has been put back. Keep the history reachable. */}
+                    {recentRemovals.length === 0 && !collectionRemovalsError && history.length > 0 && (
+                      <button
+                        onClick={() => setView("collection-history")}
+                        className="flex items-center gap-2 min-h-[44px] text-sm text-primary hover:text-primary-hover"
+                      >
+                        <Archive className="w-4 h-4" />
+                        View removal history
+                      </button>
+                    )}
+
+                    {collectionHistoryError && (
+                      <p className="text-xs text-destructive mt-2">{collectionHistoryError}</p>
+                    )}
+                  </div>
+                )}
 
                 <div className="pt-4 border-t border-border">
                   <button
@@ -3737,11 +4060,105 @@ export default function Alfred() {
           );
         })()}
 
+        {/* Collection Removal History View */}
+        {view === "collection-history" && (() => {
+          const coll = collections.find((c) => c.id === selectedCollectionId);
+          if (!coll) return <p className="text-muted-foreground">Collection not found</p>;
+          const history = collectionHistory[coll.id] || [];
+          const groups = groupRemovalsByAction(history);
+
+          return (
+            <div>
+              <button
+                onClick={() => setView("collection-detail")}
+                className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Back to Collection
+              </button>
+
+              <h2 className="text-lg font-medium mb-1">Removal history</h2>
+              <p className="text-sm text-muted-foreground mb-3">
+                {coll.name.trim()} — newest first
+                {history.length >= 50 ? ", most recent 50" : ""}
+              </p>
+
+              {collectionHistoryError && (
+                <p className="text-xs text-destructive mb-2">{collectionHistoryError}</p>
+              )}
+
+              {groups.length === 0 ? (
+                !collectionHistoryError && (
+                  <p className="text-muted-foreground text-sm py-4 text-center">
+                    Nothing has been removed from this collection.
+                  </p>
+                )
+              ) : (
+                <div className="space-y-3">
+                  {groups.map((group, groupIndex) =>
+                    // A single removal carries its own timestamp inline, the same
+                    // shape as the panel row. A heading over one item would be
+                    // ceremony for nothing. Bulk actions get the heading, so the
+                    // timestamp is stated once instead of on every row.
+                    group.rows.length === 1 ? (
+                      <div
+                        key={group.rows[0].id}
+                        className="flex items-start gap-2 p-3 bg-card border border-border rounded-lg"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-sm truncate">
+                            <ItemNameLabel name={group.rows[0].itemName} />
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {friendlyDate(group.removedAt)}
+                          </p>
+                        </div>
+                        <span className="text-xs text-muted-foreground shrink-0">
+                          {removalReasonLabel(group.reason)}
+                        </span>
+                      </div>
+                    ) : (
+                      <div
+                        key={`${group.removedAt}-${group.reason}-${groupIndex}`}
+                        className="p-3 bg-card border border-border rounded-lg"
+                      >
+                        {/* Same header shape as a single entry — count in the slot
+                            a lone item's name occupies, timestamp beneath, reason
+                            label on the right — so the two read as two shapes of
+                            one thing rather than two components. */}
+                        <div className="flex items-start gap-2 pb-2 mb-2 border-b border-border">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-sm">{group.rows.length} items</p>
+                            <p className="text-xs text-muted-foreground">
+                              {friendlyDate(group.removedAt)}
+                            </p>
+                          </div>
+                          <span className="text-xs text-muted-foreground shrink-0">
+                            {removalReasonLabel(group.reason)}
+                          </span>
+                        </div>
+                        <div className="space-y-1">
+                          {group.rows.map((removal) => (
+                            <p key={removal.id} className="text-sm truncate">
+                              <ItemNameLabel name={removal.itemName} />
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    ),
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Collection Add Items View */}
         {view === "collection-add-items" && (() => {
           const coll = collections.find((c) => c.id === selectedCollectionId);
           if (!coll) return <p className="text-muted-foreground">Collection not found</p>;
-          const existingItemIds = new Set((coll.items || []).map((ci) => ci.itemId));
+          const members = membersOf(coll.id);
+          const existingItemIds = new Set(members.map((m) => m.itemId));
           const availableItems = items.filter((i) => !i.archived && !existingItemIds.has(i.id) && (!coll.contextId || i.contextId === coll.contextId));
 
           return (
@@ -3749,10 +4166,15 @@ export default function Alfred() {
               availableItems={availableItems}
               contexts={contexts}
               collection={coll}
-              onAdd={(selectedItems) => {
-                const newItems = [...(coll.items || []), ...selectedItems];
-                updateCollection(coll.id, { items: newItems });
-                setView("collection-detail");
+              onAdd={async (selectedItems) => {
+                const added = await withLoading('Saving...', () =>
+                  addItemsToCollection(
+                    coll.id,
+                    selectedItems.map((s) => ({ itemId: s.itemId, quantity: s.quantity })),
+                  ),
+                );
+                // Stay on this screen if it failed, so the selection is not lost.
+                if (added) setView("collection-detail");
               }}
               onCreateItem={async (itemName) => {
                 // Create new item
@@ -3777,15 +4199,15 @@ export default function Alfred() {
                 setItems((prev) => [...prev, newItem]);
 
                 // Add to collection
-                const newCollectionItem = { itemId: newItem.id, quantity: '' };
-                const updatedItems = [...(coll.items || []), newCollectionItem];
-                updateCollection(coll.id, { items: updatedItems });
+                const added = await addItemsToCollection(coll.id, [
+                  { itemId: newItem.id, quantity: '' },
+                ]);
 
                 // Close dialog
-                setView("collection-detail");
+                if (added) setView("collection-detail");
               }}
               onCancel={() => setView("collection-detail")}
-              maxItems={200 - (coll.items ? coll.items.length : 0)}
+              maxItems={200 - members.length}
             />
           );
         })()}
@@ -4012,6 +4434,62 @@ export default function Alfred() {
 }
 
 // Helper functions for InboxCard
+/**
+ * An item's name, or an honest stand-in when there isn't one.
+ *
+ * Two situations produce a missing name and the client cannot tell them apart:
+ * the `items` row was deleted, or it is unreadable to whoever is looking. An
+ * item is readable through ownership or a shared context — collection
+ * membership grants nothing — so an item added without a context is invisible
+ * to the other person even inside a shared collection. The wording commits to
+ * neither cause.
+ *
+ * Four callers, two provenances: the recently-removed panel and the history
+ * view pass the removal record's `item_name` snapshot; the collection detail
+ * list and the execution checklist pass a live lookup that may find nothing.
+ * The reader should not have to care which.
+ */
+function ItemNameLabel({ name }) {
+  if (name) return <>{name}</>;
+  return <span className="italic text-muted-foreground">⚠ Item unavailable</span>;
+}
+
+/** "Removed" reads as deliberate; "Checked off" as the tail of a shopping trip. */
+function removalReasonLabel(reason) {
+  return reason === "completed" ? "Checked off" : "Removed";
+}
+
+/**
+ * Collapse removals into the actions that produced them.
+ *
+ * Rows written by one action share an exact `removed_at` — they go in a single
+ * INSERT, so Postgres gives them one transaction timestamp, confirmed to
+ * microsecond equality across a multi-item completion in Step 4. Grouping is
+ * therefore exact string equality, never a rounded or bucketed time window,
+ * which would fuse genuinely separate actions that happened to land close
+ * together. Input must already be sorted newest-first.
+ */
+function groupRemovalsByAction(removals) {
+  const groups = [];
+  for (const removal of removals) {
+    const current = groups[groups.length - 1];
+    if (
+      current &&
+      current.removedAt === removal.removedAt &&
+      current.reason === removal.reason
+    ) {
+      current.rows.push(removal);
+    } else {
+      groups.push({
+        removedAt: removal.removedAt,
+        reason: removal.reason,
+        rows: [removal],
+      });
+    }
+  }
+  return groups;
+}
+
 function friendlyDate(timestamp) {
   const date = new Date(timestamp);
   const now = new Date();
@@ -5463,6 +5941,7 @@ function ContextDetailView({
   onFilterTag,
   allItems = [],
   collections = [],
+  collectionMembers = {},
   onViewCollection,
   onDirtyChange,
 }) {
@@ -5721,7 +6200,7 @@ function ContextDetailView({
                         </div>
                         <div className="flex items-center gap-2 mt-1">
                           <span className="text-sm text-muted-foreground">
-                            {coll.items ? coll.items.length : 0} {coll.items && coll.items.length === 1 ? "item" : "items"}
+                            {(collectionMembers[coll.id] || []).length} {(collectionMembers[coll.id] || []).length === 1 ? "item" : "items"}
                           </span>
                           {coll.shared && (
                             <span className="text-xs text-primary flex items-center gap-1">
@@ -6383,6 +6862,7 @@ function ExecutionDetailView({
   items,
   contexts,
   collections,
+  collectionMembers = {},
   onToggleElement,
   onUpdateElement,
   onToggleCollectionItem,
@@ -6466,7 +6946,9 @@ function ExecutionDetailView({
       {/* Collection-based execution view */}
       {execution.collectionId && (() => {
         const coll = collections?.find((c) => c.id === execution.collectionId);
-        const collItems = coll?.items || [];
+        // Step 3b: checklist membership is read from collection_items. The
+        // completion handler still clears items out of the jsonb until Step 4.
+        const collItems = collectionMembers[execution.collectionId] || [];
         const completedIds = execution.completedItemIds || [];
         const completedCount = collItems.filter((ci) => completedIds.includes(ci.itemId)).length;
 
@@ -6504,17 +6986,24 @@ function ExecutionDetailView({
                         </span>
                         <div className="flex-1 min-w-0">
                           <span className={isChecked ? "line-through text-muted-foreground" : "text-foreground"}>
-                            {linkedItem ? linkedItem.name : collItem.itemId}
+                            <ItemNameLabel name={linkedItem?.name} />
                           </span>
                         </div>
+                        {/* Same call as the detail list: quantity disabled while
+                            the item cannot be shown, but the checkbox stays live.
+                            Ticking it is the first half of clearing the row on
+                            completion, which is the same legitimate act as the X
+                            button in the detail view. */}
                         <input
                           type="text"
                           value={collItem.quantity || ""}
+                          disabled={!linkedItem}
+                          title={linkedItem ? undefined : "This item cannot be shown, so its quantity cannot be edited"}
                           onChange={(e) => {
                             onUpdateCollectionItemQty(execution.collectionId, collItem.itemId, e.target.value);
                           }}
                           placeholder="Qty"
-                          className="w-20 sm:w-24 px-2 py-2 border border-border rounded text-base"
+                          className="w-20 sm:w-24 px-2 py-2 border border-border rounded text-base disabled:opacity-50 disabled:cursor-not-allowed"
                         />
                       </div>
                     );
