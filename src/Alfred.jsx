@@ -1,4 +1,14 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import {
+  pathToView,
+  viewToPath,
+  normalizePath,
+  isKnownPath,
+  parentPath,
+  DEFAULT_PATH,
+} from "./viewPaths";
+import AppLink from "./AppLink";
 import {
   Plus,
   Share2,
@@ -341,7 +351,17 @@ function LoginScreen() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: window.location.origin
+        // `href`, not `origin`. Step 9: `origin` is scheme+host+port by
+        // definition, so signing in from a deep link used to discard the
+        // destination and dump the user on the home screen. That is the
+        // difference between a URL you can share and a URL that only works
+        // for someone already signed in.
+        //
+        // Paths are known to be accepted by the project's redirect allow-list
+        // — OAuthConsent has always passed `window.location.href` with a query
+        // string. Under PKCE the callback appends `?code=`, which auth-js
+        // strips after the exchange, leaving the original address intact.
+        redirectTo: window.location.href
       }
     });
 
@@ -649,7 +669,29 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
 }
 
 export default function Alfred() {
-  const [view, setView] = useState("home");
+  // --- Navigation bridge (Step 4, docs/technical-spec-navigation-urls.md) ---
+  // `view` used to be `useState("home")`. It is now derived from the URL, and
+  // `setView` is a thin wrapper around the router's navigate(). The point of
+  // doing it this way round is that all 39 existing call sites keep working
+  // with no edits — the URL simply becomes the thing that backs them.
+  // See src/viewPaths.js for the 18-entry map.
+  //
+  // (Deliberately no literal call syntax in this comment: the call sites get
+  // counted by grep at every step, and a comment would inflate the count.)
+  const location = useLocation();
+  const navigate = useNavigate();
+  const currentPath = normalizePath(location.pathname);
+  const view = pathToView(location.pathname);
+  const setView = useCallback(
+    (nextView) => {
+      const path = viewToPath(nextView);
+      // Re-selecting the screen you are already on used to be an inert
+      // re-render. Pushing an identical entry would make the next Back press
+      // look broken, so same-path navigations replace instead of push.
+      navigate(path, { replace: path === currentPath });
+    },
+    [navigate, currentPath]
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [contexts, setContexts] = useState([]);
   const [items, setItems] = useState([]);
@@ -673,6 +715,13 @@ export default function Alfred() {
   // Full removal history — both kinds, unfiltered — for the history view.
   const [collectionHistory, setCollectionHistory] = useState({});
   const [collectionHistoryError, setCollectionHistoryError] = useState(null);
+  // Live-refresh support for the collection detail view. The poll must never
+  // land on top of an edit in progress, so these track what is being touched.
+  // Refs rather than state: the interval callback closes over the render that
+  // created it, and reading stale values here would defeat the guard.
+  const [editingQuantityItemId, setEditingQuantityItemId] = useState(null);
+  const pollPausedRef = useRef(false);
+  const memberWriteInFlight = useRef(0);
   const [filterTag, setFilterTag] = useState(null);
   const [selectedCollectionId, setSelectedCollectionId] = useState(null);
   const [collDragIdx, setCollDragIdx] = useState(null);
@@ -702,6 +751,49 @@ export default function Alfred() {
   const [recycleHasMore, setRecycleHasMore] = useState(false);
   const [recycleSelected, setRecycleSelected] = useState(new Set());
 
+  // --- Cold-load redirects (Step 9, docs/technical-spec-navigation-urls.md) --
+  //
+  // Two things can put Alfred on a path it cannot actually render:
+  //
+  //   1. An unknown path (/testing). It used to render home while the address
+  //      bar went on claiming otherwise. Now the address is corrected too.
+  //   2. A detail view opened cold. The seven detail views carry no id in the
+  //      URL this slice — their id is set by a separate React state call that
+  //      has not flushed when setView runs, so threading it into the URL would
+  //      mean editing the 39 call sites. Pasting /collections/detail into a
+  //      fresh tab therefore arrives with no id and would render "not found".
+  //      Falling back to the parent list is the honest answer.
+  //
+  // These fire only when the required state is genuinely absent. In normal
+  // navigation the id and the view are set in the same batch, so by the render
+  // where `view` becomes a detail view its id is already there and nothing
+  // redirects.
+  const DETAIL_VIEW_STATE = {
+    "context-detail": selectedContextId,
+    "intention-detail": selectedIntentionId,
+    "item-detail": selectedItemId,
+    "execution-detail": activeExecution,
+    "collection-detail": selectedCollectionId,
+    "collection-history": selectedCollectionId,
+    "collection-add-items": selectedCollectionId,
+  };
+  const detailStateMissing =
+    view in DETAIL_VIEW_STATE && !DETAIL_VIEW_STATE[view];
+
+  useEffect(() => {
+    if (!isKnownPath(currentPath)) {
+      navigate(DEFAULT_PATH, { replace: true });
+      return;
+    }
+    if (detailStateMissing) {
+      // parentPath() consults its override table first — the last-segment rule
+      // is a tiebreaker for naming, not a law.
+      navigate(parentPath(currentPath), { replace: true });
+    }
+    // `replace` in both cases: a path the app cannot render should not become
+    // a history entry the Back button can return the user to.
+  }, [currentPath, detailStateMissing, navigate]);
+
   // Unsaved changes guard
   const unsavedChangesRef = useRef(false);
   const unsavedChangesLabelRef = useRef("");
@@ -711,15 +803,30 @@ export default function Alfred() {
     unsavedChangesLabelRef.current = label;
   }
 
-  function guardedSetView(newView) {
-    if (unsavedChangesRef.current) {
-      const label = unsavedChangesLabelRef.current || "this form";
-      if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) {
-        return;
-      }
-      unsavedChangesRef.current = false;
-      unsavedChangesLabelRef.current = "";
+  // The single unsaved-changes guard (Step 5, docs/technical-spec-navigation-urls.md).
+  //
+  // This block used to be written out four times: here, plus hand-inlined
+  // copies in the Sam tab, the Timer tab, and the mobile drawer. Those three
+  // could not call `guardedSetView` because each needs to run its own side
+  // effects (setPreviousView, setMenuOpen) *after* the confirm passes but
+  // *before* navigating — so the reusable part is the question, not the
+  // navigation.
+  //
+  // Returns true if it is safe to navigate. Clears the dirty flag as a side
+  // effect when the user chooses to discard, exactly as the inline copies did.
+  function confirmDiscardIfDirty() {
+    if (!unsavedChangesRef.current) return true;
+    const label = unsavedChangesLabelRef.current || "this form";
+    if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) {
+      return false;
     }
+    unsavedChangesRef.current = false;
+    unsavedChangesLabelRef.current = "";
+    return true;
+  }
+
+  function guardedSetView(newView) {
+    if (!confirmDiscardIfDirty()) return;
     setView(newView);
   }
 
@@ -875,8 +982,10 @@ export default function Alfred() {
   useEffect(() => {
     if (!selectedCollectionId) return;
     if (view === "collection-detail") {
-      // The detail view needs both: manual removals for the panel, and the full
-      // history so it knows whether the "view all" entry point should exist.
+      // The detail view needs all three: membership, manual removals for the
+      // panel, and the full history so it knows whether the "view all" entry
+      // point should exist.
+      loadCollectionMembers([selectedCollectionId]);
       loadCollectionRemovals(selectedCollectionId);
       loadCollectionHistory(selectedCollectionId);
     } else if (view === "collection-history") {
@@ -884,6 +993,47 @@ export default function Alfred() {
     }
     // These loaders are recreated every render; depending on them would refetch
     // in a loop. They close over nothing render-scoped.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, selectedCollectionId]);
+
+  // Keep the poll's guard current. Read from a ref, not state, because the
+  // interval callback below closes over the render that created it.
+  useEffect(() => {
+    pollPausedRef.current =
+      collDragIdx !== null || editingQuantityItemId !== null || isLoading;
+  }, [collDragIdx, editingQuantityItemId, isLoading]);
+
+  /**
+   * Live refresh for the open collection: a five-second poll, the same cadence
+   * and shape as the execution view's. Deliberately a poll and not a realtime
+   * channel.
+   *
+   * Runs only while the collection detail view is open, and only for the
+   * collection being viewed — the interval is torn down on navigate away, so no
+   * other collection is ever polled.
+   *
+   * Membership and the manual-removal panel refresh; the full history does not.
+   * Seeing the other person's removal land in "Recently removed" is the point of
+   * that panel — without it an item would vanish from the list with no
+   * explanation and no way to put it back. The history view is a record rather
+   * than a live surface, costs a third query per tick, and reloads on entry
+   * anyway.
+   */
+  useEffect(() => {
+    if (view !== "collection-detail" || !selectedCollectionId) return;
+
+    const interval = setInterval(() => {
+      // Never land on top of an edit in progress. A skipped tick costs five
+      // seconds; overwriting a half-typed quantity or a drag mid-flight costs
+      // the user their work.
+      if (pollPausedRef.current || memberWriteInFlight.current > 0) return;
+      loadCollectionMembers([selectedCollectionId], { quiet: true });
+      loadCollectionRemovals(selectedCollectionId, { quiet: true });
+    }, 5000);
+
+    return () => clearInterval(interval);
+    // The loaders are recreated every render; depending on them would tear down
+    // and restart the interval continuously.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, selectedCollectionId]);
 
@@ -2170,7 +2320,7 @@ export default function Alfred() {
    * because withLoading swallows exceptions. A read failure must not look like
    * an empty collection, so it is surfaced in the UI rather than logged only.
    */
-  async function loadCollectionMembers(collectionIds) {
+  async function loadCollectionMembers(collectionIds, options = {}) {
     const ids = (collectionIds || []).filter(Boolean);
     if (ids.length === 0) return;
 
@@ -2179,9 +2329,18 @@ export default function Alfred() {
     );
 
     const failed = results.filter((r) => r.error);
-    setCollectionMembersError(
-      failed.length > 0 ? `Could not load collection contents: ${failed[0].error}` : null,
-    );
+    if (failed.length > 0) {
+      console.error("[collections] failed to load members:", failed[0].error);
+      // `quiet` is for the five-second poll. A failed tick means what is on
+      // screen is five seconds old, not that it is wrong, and a banner that
+      // flickers every five seconds would be worse than the staleness. A
+      // foreground load still raises it, and a later success still clears it.
+      if (!options.quiet) {
+        setCollectionMembersError(`Could not load collection contents: ${failed[0].error}`);
+      }
+    } else {
+      setCollectionMembersError(null);
+    }
 
     setCollectionMembers((prev) => {
       const next = { ...prev };
@@ -2263,16 +2422,20 @@ export default function Alfred() {
    * is back in the collection are filtered out at render — fetching exactly five
    * could leave the panel showing fewer than it could.
    */
-  async function loadCollectionRemovals(collectionId) {
+  async function loadCollectionRemovals(collectionId, options = {}) {
     const result = await loadRemovals(collectionId, {
       reason: REMOVAL_MANUAL,
       limit: 25,
     });
     if (result.error) {
       // Surfaced in the panel rather than as an alert: this is a background read
-      // on view open, and an alert on every visit would be intolerable.
+      // on view open, and an alert on every visit would be intolerable. Poll
+      // ticks pass `quiet` and do not raise the banner at all — see
+      // loadCollectionMembers.
       console.error("[collections] failed to load removal history:", result.error);
-      setCollectionRemovalsError(`Could not load removal history: ${result.error}`);
+      if (!options.quiet) {
+        setCollectionRemovalsError(`Could not load removal history: ${result.error}`);
+      }
       return false;
     }
     setCollectionRemovalsError(null);
@@ -2326,17 +2489,26 @@ export default function Alfred() {
     }
   }
 
+  // saveMemberQuantity and saveMemberOrder are the two writes that are NOT
+  // wrapped in withLoading, so nothing else stops a poll tick landing in the
+  // middle of one and reverting the change until the next tick. They hold the
+  // poll off for their own duration.
   async function saveMemberQuantity(collectionId, itemId, quantity) {
-    const result = await updateMemberQuantity(collectionId, itemId, quantity);
-    if (result.error) {
-      reportMembershipError("save that quantity", result.error);
-      await loadCollectionMembers([collectionId]);
-      return false;
+    memberWriteInFlight.current += 1;
+    try {
+      const result = await updateMemberQuantity(collectionId, itemId, quantity);
+      if (result.error) {
+        reportMembershipError("save that quantity", result.error);
+        await loadCollectionMembers([collectionId]);
+        return false;
+      }
+      setMembersFor(collectionId, (prev) =>
+        prev.map((m) => (m.itemId === itemId ? result.data : m)),
+      );
+      return true;
+    } finally {
+      memberWriteInFlight.current -= 1;
     }
-    setMembersFor(collectionId, (prev) =>
-      prev.map((m) => (m.itemId === itemId ? result.data : m)),
-    );
-    return true;
   }
 
   /**
@@ -2362,13 +2534,18 @@ export default function Alfred() {
   }
 
   async function saveMemberOrder(collectionId, orderedMembers) {
-    const result = await reorderMembers(collectionId, orderedMembers);
-    if (result.error) {
-      reportMembershipError("save the new order", result.error);
-      await loadCollectionMembers([collectionId]);
-      return false;
+    memberWriteInFlight.current += 1;
+    try {
+      const result = await reorderMembers(collectionId, orderedMembers);
+      if (result.error) {
+        reportMembershipError("save the new order", result.error);
+        await loadCollectionMembers([collectionId]);
+        return false;
+      }
+      return true;
+    } finally {
+      memberWriteInFlight.current -= 1;
     }
-    return true;
   }
 
   async function refreshCollection(collectionId) {
@@ -2940,12 +3117,7 @@ export default function Alfred() {
                 <button
                   key={item.key}
                   onClick={() => {
-                    if (unsavedChangesRef.current) {
-                      const label = unsavedChangesLabelRef.current || "this form";
-                      if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) return;
-                      unsavedChangesRef.current = false;
-                      unsavedChangesLabelRef.current = "";
-                    }
+                    if (!confirmDiscardIfDirty()) return;
                     if (item.key === "sam" || item.key === "timer") setPreviousView(view);
                     setView(item.key);
                     setMenuOpen(false);
@@ -3023,39 +3195,43 @@ export default function Alfred() {
 
           {/* Desktop navigation tabs */}
           <nav className="flex gap-2 mt-3 pb-1">
-            <button
-              onClick={() => guardedSetView("home")}
-              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+            <AppLink
+              view="home"
+              onNavigate={() => guardedSetView("home")}
+              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "home"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Home
-            </button>
-            <button
-              onClick={() => guardedSetView("inbox")}
-              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+            </AppLink>
+            <AppLink
+              view="inbox"
+              onNavigate={() => guardedSetView("inbox")}
+              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "inbox"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Inbox {inboxItems.length > 0 && `(${inboxItems.length})`}
-            </button>
-            <button
-              onClick={() => guardedSetView("contexts")}
-              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+            </AppLink>
+            <AppLink
+              view="contexts"
+              onNavigate={() => guardedSetView("contexts")}
+              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "contexts"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Contexts
-            </button>
-            <button
-              onClick={() => guardedSetView("schedule")}
-              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+            </AppLink>
+            <AppLink
+              view="schedule"
+              onNavigate={() => guardedSetView("schedule")}
+              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "schedule"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-foreground border border-border hover:border-primary"
@@ -3064,75 +3240,70 @@ export default function Alfred() {
               Schedule{" "}
               {allNonArchivedEvents.length > 0 &&
                 `(${allNonArchivedEvents.length})`}
-            </button>
-            <button
-              onClick={() => guardedSetView("intentions")}
-              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+            </AppLink>
+            <AppLink
+              view="intentions"
+              onNavigate={() => guardedSetView("intentions")}
+              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "intentions"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Intentions
-            </button>
-            <button
-              onClick={() => guardedSetView("memories")}
-              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+            </AppLink>
+            <AppLink
+              view="memories"
+              onNavigate={() => guardedSetView("memories")}
+              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "memories"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Memories
-            </button>
-            <button
-              onClick={() => guardedSetView("collections")}
-              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+            </AppLink>
+            <AppLink
+              view="collections"
+              onNavigate={() => guardedSetView("collections")}
+              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "collections"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Collections
-            </button>
-            <button
-              onClick={() => {
-                if (unsavedChangesRef.current) {
-                  const label = unsavedChangesLabelRef.current || "this form";
-                  if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) return;
-                  unsavedChangesRef.current = false;
-                  unsavedChangesLabelRef.current = "";
-                }
+            </AppLink>
+            <AppLink
+              view="timer"
+              onNavigate={() => {
+                if (!confirmDiscardIfDirty()) return;
                 setPreviousView(view);
                 setView("timer");
               }}
-              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "timer"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Timer
-            </button>
-            <button
-              onClick={() => {
-                if (unsavedChangesRef.current) {
-                  const label = unsavedChangesLabelRef.current || "this form";
-                  if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) return;
-                  unsavedChangesRef.current = false;
-                  unsavedChangesLabelRef.current = "";
-                }
+            </AppLink>
+            <AppLink
+              view="sam"
+              onNavigate={() => {
+                if (!confirmDiscardIfDirty()) return;
                 setPreviousView(view);
                 setView("sam");
               }}
-              className={`px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
                 view === "sam"
                   ? "bg-primary text-white shadow-sm"
                   : "bg-white text-foreground border border-border hover:border-primary"
               }`}
             >
               Sam
-            </button>
+            </AppLink>
           </nav>
         </div>
       </div>
@@ -3944,7 +4115,16 @@ export default function Alfred() {
                                   prev.map((m) => (m.itemId === member.itemId ? { ...m, quantity } : m)),
                                 );
                               }}
-                              onBlur={() => saveMemberQuantity(coll.id, member.itemId, member.quantity)}
+                              // The typed value lives in collectionMembers until
+                              // blur, which is exactly what the poll overwrites.
+                              // Focus pauses the poll; the pause is not lifted
+                              // until the save has settled, so a tick cannot land
+                              // between blur and the write completing.
+                              onFocus={() => setEditingQuantityItemId(member.itemId)}
+                              onBlur={async () => {
+                                await saveMemberQuantity(coll.id, member.itemId, member.quantity);
+                                setEditingQuantityItemId(null);
+                              }}
                               placeholder="Qty"
                               className="w-20 sm:w-24 px-2 py-2 border border-border rounded text-base disabled:opacity-50 disabled:cursor-not-allowed"
                             />
@@ -3978,7 +4158,12 @@ export default function Alfred() {
                       <>
                         <div className="flex items-center justify-between mb-2">
                           <h3 className="text-base font-medium">Recently removed</h3>
-                          {history.length > 0 && (
+                          {/* Also shown when the panel has rows but `history` is
+                              stale: the poll refreshes removals, not history, so
+                              a removal polled in from the other person would
+                              otherwise have no way through to the full view.
+                              The history view reloads on entry regardless. */}
+                          {(history.length > 0 || recentRemovals.length > 0) && (
                             <button
                               onClick={() => setView("collection-history")}
                               className="min-h-[44px] text-sm text-primary hover:text-primary-hover"

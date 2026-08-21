@@ -6,8 +6,8 @@ import { ArrowLeft } from "lucide-react";
 // will fill in the actual per-session and per-family analytics.
 //
 // Renders inside the SamPlayer sticky-header shell — no header of its
-// own; a light Back button links back to the landing view via
-// window.history.back(). The URL is /stats while this is showing.
+// own; a light Back button routes back to the SAM landing view. The URL is
+// /sam/stats while this is showing.
 
 export default function StatsPage({ onBack }) {
   return (

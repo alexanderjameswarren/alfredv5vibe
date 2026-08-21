@@ -1,4 +1,6 @@
 import React, { useState, useCallback, useRef, useMemo, useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { SAM_PATH, samSongPath, samSongIdFromPath } from "../viewPaths";
 import { ArrowLeft } from "lucide-react";
 import ScoreRenderer from "./components/ScoreRenderer";
 import ScrollEngine from "./components/ScrollEngine";
@@ -47,6 +49,11 @@ function AudioMsCounter({ audioElement }) {
 }
 
 export default function SamPlayer({ onBack }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Which song the URL says is open. null on /sam and /sam/stats.
+  const songIdFromUrl = samSongIdFromPath(location.pathname);
+
   const [song, setSong] = useState(null);
   const [songDbId, setSongDbId] = useState(null);
   // Phase 6 M1 — the parent of a simplified song, loaded READ-ONLY for the
@@ -678,6 +685,14 @@ export default function SamPlayer({ onBack }) {
   }
 
   function handleChangeSong() {
+    // Closing a song is a route change now — the URL drops back to /sam and
+    // the effect below does the teardown. Keeping the teardown in one place
+    // is what makes the Back button and this button behave identically.
+    navigate(SAM_PATH);
+  }
+
+  // The actual teardown, shared by the Change-song button and browser Back.
+  function closeOpenSong() {
     clearTimers();
     if (playbackState === "playing") endSession();
     if (audioElement) audioElement.pause();
@@ -686,7 +701,58 @@ export default function SamPlayer({ onBack }) {
     setPlaybackState("stopped");
     setPausedMeasure(null);
     setSong(null);
+    setSongDbId(null);
   }
+
+  // --- URL <-> open song, the two directions (Step 8) ------------------------
+  //
+  // Direction 1: URL -> state. Runs only when the id in the URL actually
+  // changes, which is what makes Back close the song: /sam/songs/x -> /sam is
+  // an id going from set to null, so we tear the song down. A cold load of
+  // /sam/songs/x is the same effect seeing an id with nothing loaded, so it
+  // fetches. Both fall out of one rule.
+  //
+  // The dependency list is deliberately just [songIdFromUrl]. Adding `song`
+  // or `songDbId` would re-run this while an import is mid-flight — an
+  // imported song is open for a moment *before* its insert returns an id, so
+  // the URL is legitimately /sam with a song loaded, and a re-run would read
+  // that as "no id in the URL" and close the song the user just imported.
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!songIdFromUrl) {
+      if (songDbId) closeOpenSong();
+      return;
+    }
+    if (songIdFromUrl === songDbId) return;
+
+    fetchSongById(songIdFromUrl, supabase)
+      .then(({ song: loaded, row }) => {
+        if (cancelled) return;
+        handleSongLoaded(loaded);
+        setSongDbId(row.id);
+      })
+      .catch((e) => {
+        console.error("[Sam] Failed to load song from the URL:", e);
+        if (cancelled) return;
+        // A bad or deleted id must not strand the user on a blank player.
+        setImportError("That song could not be loaded.");
+        navigate(SAM_PATH, { replace: true });
+      });
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [songIdFromUrl]);
+
+  // Direction 2: state -> URL. A song opened from the library or finished
+  // importing gets its address, pushed so Back closes it. Keyed on songDbId
+  // only, for the same reason as above.
+  useEffect(() => {
+    if (!songDbId) return;
+    if (samSongIdFromPath(location.pathname) === songDbId) return;
+    navigate(samSongPath(songDbId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [songDbId]);
 
   const handleSelectFingering = useCallback((coord) => setFingeringSelection(coord), []);
   const toggleFingeringMode = useCallback(() => {

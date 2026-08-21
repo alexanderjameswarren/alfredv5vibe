@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { SAM_PATH, SAM_STATS_PATH, isSamStatsPath } from "../../viewPaths";
 import { supabase } from "../../supabaseClient";
 import { parseMusicXML } from "../lib/songParser";
 import { fanOutMeasures, recompileMeasures } from "../lib/measureCompiler";
@@ -16,16 +18,11 @@ import BrowseTabs from "./BrowseTabs";
 import AddImportSheet from "./AddImportSheet";
 import StatsPage from "./StatsPage";
 
-// Very small path-based dispatch for the /stats stub. The app doesn't use
-// react-router; App.js does one hard-coded pathname check for /oauth/consent
-// and delegates everything else to Alfred. To satisfy the M6 requirement
-// that /stats be a real URL (browser Back should return to the landing
-// page), we manage it inside the landing subtree with pushState + popstate.
-// Constraint: SamPlayer.jsx must not be touched — routing lives here.
-function readSamPath() {
-  if (typeof window === "undefined") return "landing";
-  return window.location.pathname === "/stats" ? "stats" : "landing";
-}
+// Stats used to be a private history island here: pushState("/stats") plus a
+// popstate listener, because the app had no router to ask. Step 8 of
+// docs/technical-spec-navigation-urls.md deleted it. /sam/stats is a real
+// address now, so which page to show is read from the router, and Back is
+// ordinary route navigation rather than something this component simulates.
 
 // Legacy MusicXML output — the parseMusicXML path emits voice events that
 // may carry inline `lyric` fields (extracted from <lyric> in the source
@@ -193,7 +190,9 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
   const [editMeasureWidth, setEditMeasureWidth] = useState("");
   const [saving, setSaving] = useState(false);
   const [addSheetOpen, setAddSheetOpen] = useState(false);
-  const [samView, setSamView] = useState(readSamPath);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const samView = isSamStatsPath(location.pathname) ? "stats" : "landing";
   // M8 — import-time warning gate. When set, a modal blocks the
   // commit until user picks Import or Cancel. Contains everything
   // needed to complete the import (song, source, meta, warnings)
@@ -210,27 +209,16 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
     return () => clearTimeout(t);
   }, [importToast]);
 
-  // Browser Back / Forward buttons emit popstate; keep our view in sync
-  // with the URL so back-from-stats lands on the landing page.
-  useEffect(() => {
-    function onPop() {
-      setSamView(readSamPath());
-    }
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
-
   function openStats() {
-    if (window.location.pathname !== "/stats") {
-      window.history.pushState({ samView: "stats" }, "", "/stats");
-    }
-    setSamView("stats");
+    navigate(SAM_STATS_PATH);
   }
 
   function closeStats() {
-    // history.back() reverses the pushState above. Our popstate listener
-    // then flips samView back to "landing", so we don't setState here.
-    window.history.back();
+    // An explicit navigation, not history.back(). Back would have walked off
+    // the end of the stack for anyone who arrived on /sam/stats directly —
+    // the cold-load dead end recorded in the Step 1 findings, where the Back
+    // button dropped the user out of the app entirely.
+    navigate(SAM_PATH);
   }
 
   // Single practice-stats fetch for the whole landing page. `PracticeWeekSnapshot`

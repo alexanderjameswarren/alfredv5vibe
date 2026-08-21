@@ -101,12 +101,13 @@ modules share one implementation. `storage` keeps its own copy until Step 3.
 - Dropping the jsonb column.
 - Any MCP tool work. The MCP surface is read-only for collections (`get_collections`)
   and stays that way for now.
-- **Live cross-user refresh.** There is no realtime channel for `item_collections`
-  (six channels exist at `Alfred.jsx:1206-1310`; none covers collections) and no
-  polling on the collection detail view — the only poll is a 5-second one in the
-  execution view at `Alfred.jsx:6402-6410`. Two people will both keep their
-  additions, but will not see each other's without a reload. Accepted for now.
-  **Do not add a channel or a poll.**
+- ~~**Live cross-user refresh.**~~ **Amendment 4 is superseded (2026-08-19).** The
+  collection detail view now has a five-second poll refreshing membership and the
+  manual-removal panel, matching the execution view's cadence. It skips ticks while
+  a quantity field has focus, a drag is in progress, or a write is in flight, so a
+  poll cannot overwrite an unfinished edit. Poll failures are console-only.
+  **There is still no realtime channel, and none should be added.** See the
+  live-refresh follow-up in `docs/progress-collection-history.md`.
 
 ## Error handling
 

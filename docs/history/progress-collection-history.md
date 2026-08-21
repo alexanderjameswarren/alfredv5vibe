@@ -61,6 +61,119 @@ Spec: `docs/technical-spec-collection-history.md`
       two `201`s, member count `3 -> 3`, `ON CONFLICT DO NOTHING` honoured by
       PostgREST (2026-08-19)
 
+## Follow-up: live refresh on the collection detail view (2026-08-19)
+
+**Supersedes Amendment 4**, which banned both a channel and a poll. That existed to
+keep the migration steps focused, not because live refresh was unwanted. A poll is
+now in place; **still no realtime channel**.
+
+Status: code complete, builds clean (+242 B). Not exercised in a browser from here —
+two-window testing needs a logged-in session.
+
+### The poll
+
+`src/Alfred.jsx:911-936`. Five seconds, the same cadence and shape as the execution
+view's poll at `6971-6981`, which is untouched. The only other `setInterval` in the
+file is the execution view's element timer.
+
+Scoped exactly as required: the effect is keyed on `[view, selectedCollectionId]`
+and returns early unless `view === "collection-detail"`. The interval is created on
+entry and cleared on navigate away, so no collection other than the one on screen is
+ever polled.
+
+The on-open effect now also loads membership (it previously loaded only removals and
+history, with members arriving via the global load), so opening a collection gives a
+fresh read immediately rather than waiting up to five seconds.
+
+### What refreshes, and what does not
+
+**Membership and the manual-removal panel refresh. The full history does not.**
+
+Including the panel was the call worth making. Seeing the other person's removal
+land in *Recently removed* is the point of that panel — without it an item would
+simply vanish from the list with no explanation and no way to put it back, which is
+the accidental-removal case the panel exists for. That is worth the second query.
+
+History is excluded: it is a record rather than a live surface, it would be a third
+query every five seconds, and it reloads on entry to the history view anyway.
+
+One consequence needed a fix. The *View all* link was gated on `history.length > 0`,
+so a removal polled in while `history` was empty would show in the panel with no way
+through to the full view. The link is now shown when either `history` or the panel
+has rows (`src/Alfred.jsx:4067-4073`) — no extra query, and the history view reloads
+on entry regardless.
+
+### Not disturbing edits in progress
+
+Both hazards are real: the typed quantity and the dragged order live in
+`collectionMembers` until they are saved, and that is exactly the state a poll tick
+overwrites. **The poll skips rather than merges.** Reconciling server data against a
+half-finished edit is subtle and easy to get wrong; a skipped tick costs five
+seconds.
+
+The guard is a ref, not state — the interval callback closes over the render that
+created it, so reading state there would read stale values. `pollPausedRef` is kept
+current by its own effect (`src/Alfred.jsx:900-904`) and is true when:
+
+| Condition | Covers |
+|---|---|
+| `collDragIdx !== null` | a drag is in progress |
+| `editingQuantityItemId !== null` | a quantity field has focus |
+| `isLoading` | any `withLoading` write — add, remove, put back |
+
+Focus is the trigger for the quantity guard, and it is **not lifted until the save
+has settled**: `onBlur` awaits `saveMemberQuantity` before clearing
+`editingQuantityItemId`. Otherwise a tick could land in the window between blur and
+the write committing, and revert the value the user just typed.
+
+Drag needed a different fix, because `collDragIdx` is also what fades the dragged
+row — holding it past `dragEnd` would leave the row visibly stuck. Instead the two
+writes that are **not** wrapped in `withLoading` — `saveMemberQuantity` and
+`saveMemberOrder` — increment `memberWriteInFlight` for their own duration, in a
+`try/finally`. The poll checks that counter too. Every other membership write is
+already covered by `isLoading`.
+
+### Failure handling
+
+Both loaders take `{ quiet }`, passed only by the poll. A failed tick logs to the
+console and **does not raise the error banner**: it means what is on screen is five
+seconds old, not that it is wrong, and a banner flickering every five seconds would
+be worse than the staleness. A foreground load still raises it, and a later
+successful tick still clears one. No alert on any path — this fires 720 times an
+hour.
+
+Amendments 2 and 3 hold: every loader inspects `{ data, error }`, and all state goes
+through `setCollectionMembers((prev) => ...)` / `setCollectionRemovals((prev) => ...)`.
+
+### Verification — what to click
+
+Run the app (`npm start`) and open the same **shared** collection in a normal window
+and an incognito window, both signed in. Star Nursery works. Give each change up to
+five seconds.
+
+1. **Membership propagates.** In window A, add an item. Within five seconds it
+   appears in window B's list. Remove one in A; it disappears from B.
+2. **The panel propagates.** That removal should also appear in B's *Recently
+   removed* panel, with a relative timestamp — and, if the panel was previously
+   empty, the *View all* link should appear alongside it.
+3. **Typing is not clobbered.** In B, click into a quantity box, type a new value
+   and **do not click away**. Wait fifteen seconds — three ticks. The value must
+   stay exactly as typed. Then click away; it saves, and A picks it up within five
+   seconds.
+4. **Dragging is not clobbered.** In B, pick up a row and hold it mid-drag for ten
+   seconds before dropping. The order must not snap back. After the drop the new
+   order persists and reaches A.
+5. **The poll stops on navigate away.** Open DevTools → Network, filter on
+   `collection_items`. While the detail view is open you should see a request roughly
+   every five seconds. Go **Back to Collections** and the requests must stop
+   entirely. Open a *different* collection and only that one should be requested.
+6. **Failure is quiet.** In DevTools set the network to Offline for fifteen seconds
+   while the detail view is open. No alert, no red banner — just console errors.
+   Restore the network and the list catches up within five seconds.
+
+Point (5) is the one worth being fussy about: a leaked interval would keep polling
+after navigation and is invisible without the Network tab.
+
 ## Follow-up: `get_collections` repointed at `collection_items` (2026-08-19)
 
 **Status: code complete, type-checked and unit-tested. NOT deployed — see below.**
