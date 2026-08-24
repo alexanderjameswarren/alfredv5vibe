@@ -83,6 +83,12 @@ const flipDir = () => fireEvent.click(dirButton());
 const currentDir = () =>
   /currently ascending/.test(dirButton().getAttribute("aria-label")) ? "asc" : "desc";
 
+// The sort preference persists as of Step 9a, and jsdom's localStorage lives
+// for the whole file — so without this each test would inherit whatever the
+// previous one last chose. These cases were written when the control reset on
+// every mount; the reset is what changed, not them.
+beforeEach(() => window.localStorage.clear());
+
 describe("BrowseTabs — created-at caption", () => {
   test.each([
     ["Recent", "Someone Like You"],
@@ -345,5 +351,46 @@ describe("BrowseTabs — sort direction", () => {
     fireEvent.click(screen.getByRole("button", { name: "Drills" }));
     expect(currentDir()).toBe("asc");
     expect(visibleTitles()).toEqual(["Apple", "Zebra", "Mango"]);
+  });
+});
+
+describe("BrowseTabs — the sort preference persists", () => {
+  // SAM had none: the control reset to "Last played" every time the browser
+  // remounted, which is every time a song is opened and closed.
+  test("a chosen field survives a remount", () => {
+    const { unmount } = renderTabs({ allSongsFlat: TRIO });
+    setSort("title");
+    expect(visibleTitles()).toEqual(["Apple", "Mango", "Zebra"]);
+    unmount();
+
+    renderTabs({ allSongsFlat: TRIO });
+    expect(visibleTitles()).toEqual(["Apple", "Mango", "Zebra"]);
+    expect(currentDir()).toBe("asc");
+  });
+
+  test("a flipped direction survives a remount", () => {
+    const { unmount } = renderTabs({ allSongsFlat: TRIO });
+    flipDir();
+    const flipped = visibleTitles();
+    unmount();
+
+    renderTabs({ allSongsFlat: TRIO });
+    expect(visibleTitles()).toEqual(flipped);
+  });
+
+  test("a malformed stored value falls back to the default order", () => {
+    window.localStorage.setItem("alfred.sort.sam", "{not json");
+    renderTabs({ allSongsFlat: TRIO });
+    expect(visibleTitles()).toEqual(["Mango", "Zebra", "Apple"]);
+  });
+
+  test("a stored field this build no longer offers falls back too", () => {
+    window.localStorage.setItem(
+      "alfred.sort.sam",
+      JSON.stringify({ key: "composer", dir: "asc" })
+    );
+    renderTabs({ allSongsFlat: TRIO });
+    expect(visibleTitles()).toEqual(["Mango", "Zebra", "Apple"]);
+    expect(currentDir()).toBe("desc");
   });
 });

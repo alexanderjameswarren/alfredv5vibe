@@ -16,8 +16,8 @@ import {
 // on — above all "never crash, fall back to home".
 
 describe("the map itself", () => {
-  it("covers all 18 view values", () => {
-    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(18);
+  it("covers all 19 view values", () => {
+    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(19);
   });
 
   it("is a bijection — no two views share a path", () => {

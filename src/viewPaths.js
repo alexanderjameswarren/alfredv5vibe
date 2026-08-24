@@ -1,6 +1,6 @@
 // Two-way map between Alfred's `view` state-machine values and real URL paths.
 //
-// Step 3/4 of docs/technical-spec-navigation-urls.md. Alfred has 18
+// Step 3/4 of docs/technical-spec-navigation-urls.md. Alfred has 19
 // destinations that used to live in a single `useState` string. This module
 // is the whole vocabulary of that machine expressed as addresses, so `view`
 // can be derived from the URL instead of stored.
@@ -9,7 +9,7 @@
 // lookups, so it can be reasoned about (and unit-tested) without React or the
 // router in the picture.
 
-// The 18 view values, in the order they appear in the progress doc's table.
+// The 19 view values, in the order they appear in the progress doc's table.
 // Detail views carry no id this slice — the id-bearing navigations set their
 // id via a separate React state call that has not flushed by the time
 // `setView` runs, so threading an id into the URL would mean editing the
@@ -34,6 +34,7 @@ export const VIEW_TO_PATH = {
   recycle: "/recycle",
   timer: "/timer",
   sam: "/sam",
+  games: "/games",
 };
 
 export const DEFAULT_VIEW = "home";

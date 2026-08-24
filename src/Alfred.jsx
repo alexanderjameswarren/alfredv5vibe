@@ -9,6 +9,10 @@ import {
   DEFAULT_PATH,
 } from "./viewPaths";
 import AppLink from "./AppLink";
+import UndoMessage, { useUndo } from "./UndoMessage";
+import SortControl, { useSortPreference } from "./SortControl";
+import GamesPage from "./games/GamesPage";
+import { sortRows } from "./utils/sortOrders";
 import {
   Plus,
   Share2,
@@ -43,6 +47,7 @@ import {
   Pencil,
   RefreshCw,
   ArchiveRestore,
+  Gamepad2,
 } from "lucide-react";
 import { supabase, supabaseUrl } from "./supabaseClient";
 import { calculateNextEventDate, getRecurrenceConfig } from "./utils/recurrence";
@@ -322,8 +327,33 @@ window.testFlatten = async function () {
   return { passed, failed };
 };
 
+/**
+ * A Date rendered as the "YYYY-MM-DD" the app stores in `events.time`.
+ *
+ * Built from the LOCAL calendar fields, never `toISOString()`. That method
+ * converts to UTC first, which shifts the date across the day boundary by the
+ * zone offset:
+ *
+ *   now, at 18:30 in Pacific     -> UTC is already tomorrow  -> tomorrow's date
+ *   local midnight, in Berlin    -> UTC is still yesterday   -> yesterday's date
+ *
+ * The two directions bit in two different places. `getTodayDate` was wrong every
+ * evening in the Americas; `triggerRecurrence`'s serialisation was wrong all day
+ * east of Greenwich and only looked right here by accident. One helper, so a
+ * third caller cannot pick the broken idiom again.
+ *
+ * The counterpart for reading is `formatEventDate`, which appends "T00:00:00"
+ * before parsing for the same reason, and `parseLocalDate` in utils/recurrence.js.
+ */
+function toLocalDateString(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function getTodayDate() {
-  return new Date().toISOString().split("T")[0];
+  return toLocalDateString(new Date());
 }
 
 function formatEventDate(dateString) {
@@ -339,6 +369,60 @@ function formatEventDate(dateString) {
   }
   return eventDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 }
+
+// --- List sort options (Step 9b, docs/technical-spec-ui-standardization.md) --
+//
+// One list per page rather than one shared list, because the fields genuinely
+// differ: an event has a scheduled date, a capture has a suggested one, a
+// context has neither. The spec's rule is "show only applicable options; do not
+// render disabled ones".
+//
+// "Name" maps to the key `title` throughout. That is not cosmetic — the shared
+// comparator uses `get.title` as its tiebreaker for EVERY order, so the name
+// accessor has to live under that key whether or not the page offers Name as a
+// choice. See utils/sortOrders.js.
+
+const EVENT_SORT_OPTIONS = [
+  // "Scheduled date", never "Date" — an event also has a created date and a
+  // modified date, and this is the one the user thinks of as the event's own.
+  { value: "time", label: "Scheduled date", defaultDir: "asc" },
+  // On these two pages the row is an EVENT, so "Created" means when it was
+  // scheduled, not when the intention behind it was conceived.
+  { value: "created", label: "Created", defaultDir: "desc" },
+  { value: "updated", label: "Last modified", defaultDir: "desc" },
+  { value: "title", label: "Name", defaultDir: "asc" },
+];
+
+const INBOX_SORT_OPTIONS = [
+  { value: "created", label: "Created", defaultDir: "desc" },
+  { value: "updated", label: "Last modified", defaultDir: "desc" },
+  // Populated only by AI enrichment, so it is null on every un-enriched
+  // capture. Nulls sort last in both directions, which means an all-null inbox
+  // collapses to the title tiebreaker rather than shuffling — predictable, if
+  // not useful until enrichment has run.
+  { value: "suggested", label: "Suggested date", defaultDir: "asc" },
+  { value: "title", label: "Name", defaultDir: "asc" },
+];
+
+// Contexts and Collections carry the same three, and the same accessors.
+const NAMED_RECORD_SORT_OPTIONS = [
+  { value: "title", label: "Name", defaultDir: "asc" },
+  { value: "created", label: "Created", defaultDir: "desc" },
+  { value: "updated", label: "Last modified", defaultDir: "desc" },
+];
+
+const NAMED_RECORD_ACCESSORS = {
+  title: (r) => r.name,
+  created: (r) => r.createdAt,
+  updated: (r) => r.updatedAt,
+};
+
+const INBOX_ACCESSORS = {
+  title: (r) => r.capturedText,
+  created: (r) => r.createdAt,
+  updated: (r) => r.updatedAt,
+  suggested: (r) => r.suggestedEventDate,
+};
 
 function LoginScreen() {
   const [loading, setLoading] = useState(false);
@@ -649,7 +733,12 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
         )}
       </div>
 
-      <div className="flex gap-2">
+      {/* Same offsets as ContextForm's. Note this one will rarely engage: the
+          item list above is capped at 50vh with its own scrollbar, so the page
+          as a whole does not usually exceed the viewport. It is here for the
+          cases that do — a very short window, or if that cap is ever lifted —
+          rather than because it changes anything today. */}
+      <div className="flex gap-2 sticky bottom-28 sm:bottom-32 pt-2 pb-3 bg-background border-t border-border">
         <button
           onClick={() => onAdd(Object.values(selected))}
           disabled={Object.keys(selected).length === 0}
@@ -793,6 +882,41 @@ export default function Alfred() {
     // `replace` in both cases: a path the app cannot render should not become
     // a history entry the Back button can return the user to.
   }, [currentPath, detailStateMissing, navigate]);
+
+  // --- List sort preferences (Step 9b) --------------------------------------
+  //
+  // One key per page, each persisting independently — changing the Inbox order
+  // must not reorder Schedule. Called unconditionally at the top level: Alfred
+  // renders every screen from one component, so these are not conditional even
+  // though only one list is on screen at a time.
+  //
+  // Home's is named for the page but governs its **Today tab only**. Active and
+  // Paused render ExecutionBadge, are ordered by `started_at` descending from
+  // the database, and have none of these fields; the control is rendered inside
+  // the Today panel rather than above the tab bar so it cannot imply otherwise.
+  // Same reasoning that excluded those two tabs from the row strips in Step 8a.
+  const homeSort = useSortPreference("alfred.sort.home", EVENT_SORT_OPTIONS, "time");
+  const scheduleSort = useSortPreference("alfred.sort.schedule", EVENT_SORT_OPTIONS, "time");
+  const inboxSort = useSortPreference("alfred.sort.inbox", INBOX_SORT_OPTIONS, "created");
+  const contextsSort = useSortPreference("alfred.sort.contexts", NAMED_RECORD_SORT_OPTIONS, "title");
+  const collectionsSort = useSortPreference("alfred.sort.collections", NAMED_RECORD_SORT_OPTIONS, "title");
+
+  // --- Undo (Step 2, docs/technical-spec-ui-standardization.md) -------------
+  //
+  // Governing rule 3: destructive actions get no confirmation dialog, so this
+  // message is the safety net. Every handler that archives or deletes ends by
+  // offering an undo whose restore closure puts back exactly what it took.
+  //
+  // Restores go through `storage.set`, which UPDATEs by id and INSERTs only if
+  // that matched nothing — so the same call re-flags an archived row and
+  // re-inserts a deleted one with its original id. See UndoMessage.jsx.
+  const { pendingUndo, offerUndo, runUndo, dismissUndo } = useUndo();
+
+  // Undo restores are written where the state setters live, and they need the
+  // same "Saving…" overlay and error handling as the action they reverse.
+  function offerUndoFor(message, restore) {
+    offerUndo(message, () => withLoading("Restoring...", restore));
+  }
 
   // Unsaved changes guard
   const unsavedChangesRef = useRef(false);
@@ -1153,6 +1277,38 @@ export default function Alfred() {
 
   const RECYCLE_PAGE_SIZE = 30;
 
+  /**
+   * Wording for a permanent-delete confirmation.
+   *
+   * These two dialogs are the only confirmations left in the app, and they are
+   * kept on purpose: this is the terminal irreversible step, and the Recycle Bin
+   * is itself the undo for everything upstream of it. There is nothing behind
+   * this one, so it is the one place a confirm is doing real work.
+   *
+   * Collections get their own wording. For the other six tabs the cascade takes
+   * the record's own content, which is what "delete this song" already implies.
+   * Deleting a collection also destroys `collection_item_removals` — an
+   * append-only log of what was taken out of it and when, kept as the recovery
+   * path for accidental removals during shopping. That is a record of actions
+   * taken on OTHER things, and nothing in "delete this collection" hints at
+   * losing it. This dialog is the last place anyone finds out.
+   *
+   * `count` is null for the single-row path, which says "this record" rather
+   * than counting to one — preserving both existing strings verbatim.
+   */
+  function permanentDeleteWarning(tab, count = null) {
+    const isCollection = tab === "collections";
+    const noun = isCollection ? "collection" : "record";
+    const subject =
+      count === null ? `this ${noun}` : `${count} ${noun}${count > 1 ? "s" : ""}`;
+    const cascade = !isCollection
+      ? ""
+      : count === null || count === 1
+        ? " Its item list and removal history will be destroyed."
+        : " Their item lists and removal history will be destroyed.";
+    return `Permanently delete ${subject}?${cascade} This cannot be undone.`;
+  }
+
   async function loadRecycleBin(tab, append = false) {
     setRecycleLoading(true);
     try {
@@ -1181,6 +1337,16 @@ export default function Alfred() {
         case "executions":
           query = supabase.from("executions").select("id, intent_id, event_id, outcome, started_at, closed_at, updated_at")
             .eq("status", "closed")
+            .order("updated_at", { ascending: false, nullsFirst: false })
+            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          break;
+        case "collections":
+          // Only the columns the row actually renders. Membership is not read
+          // here: an archived collection's `collection_items` rows are untouched
+          // by the soft delete, so there is nothing to report and nothing to
+          // repair on restore.
+          query = supabase.from("item_collections").select("id, name, context_id, updated_at")
+            .eq("archived", true)
             .order("updated_at", { ascending: false, nullsFirst: false })
             .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
           break;
@@ -1227,6 +1393,7 @@ export default function Alfred() {
         case "intents": table = "intents"; updates = { archived: false }; break;
         case "events": table = "events"; updates = { archived: false }; break;
         case "executions": table = "executions"; updates = { status: "paused" }; break;
+        case "collections": table = "item_collections"; updates = { archived: false }; break;
         case "songs": table = "sam_songs"; updates = { archived: false }; break;
         case "snippets": table = "sam_snippets"; updates = { archived: false }; break;
         default: return;
@@ -1237,7 +1404,13 @@ export default function Alfred() {
 
       setRecycleData(prev => prev.filter(r => r.id !== id));
 
-      if (["items", "intents", "events"].includes(tab)) {
+      // Collections MUST be in this list. Items, intents and events each have a
+      // realtime channel that would eventually re-sync them anyway; there is no
+      // channel on `item_collections`, so without this a restored collection
+      // stays invisible until a manual refresh — a silent failure, not a delay.
+      // refreshData also re-runs loadCollectionMembers, so the member counts
+      // come back with it.
+      if (["items", "intents", "events", "collections"].includes(tab)) {
         refreshData();
       }
     } catch (e) {
@@ -1249,7 +1422,7 @@ export default function Alfred() {
   }
 
   async function recyclePermanentDelete(tab, id) {
-    if (!window.confirm("Permanently delete this record? This cannot be undone.")) return;
+    if (!window.confirm(permanentDeleteWarning(tab))) return;
     setRecycleLoading(true);
     try {
       let table;
@@ -1258,6 +1431,9 @@ export default function Alfred() {
         case "intents": table = "intents"; break;
         case "events": table = "events"; break;
         case "executions": table = "executions"; break;
+        // The one hard delete left in the app. Cascades to collection_items and
+        // collection_item_removals — deliberate, and named in the confirm.
+        case "collections": table = "item_collections"; break;
         case "songs": table = "sam_songs"; break;
         case "snippets": table = "sam_snippets"; break;
         default: return;
@@ -1302,6 +1478,7 @@ export default function Alfred() {
         case "intents": table = "intents"; updates = { archived: false }; break;
         case "events": table = "events"; updates = { archived: false }; break;
         case "executions": table = "executions"; updates = { status: "paused" }; break;
+        case "collections": table = "item_collections"; updates = { archived: false }; break;
         case "songs": table = "sam_songs"; updates = { archived: false }; break;
         case "snippets": table = "sam_snippets"; updates = { archived: false }; break;
         default: return;
@@ -1314,7 +1491,8 @@ export default function Alfred() {
       setRecycleData(prev => prev.filter(r => !recycleSelected.has(r.id)));
       setRecycleSelected(new Set());
 
-      if (["items", "intents", "events"].includes(recycleTab)) {
+      // See recycleRestore: no realtime channel on item_collections.
+      if (["items", "intents", "events", "collections"].includes(recycleTab)) {
         refreshData();
       }
     } catch (e) {
@@ -1327,7 +1505,7 @@ export default function Alfred() {
 
   async function recycleBulkDelete() {
     if (recycleSelected.size === 0) return;
-    if (!window.confirm(`Permanently delete ${recycleSelected.size} record${recycleSelected.size > 1 ? "s" : ""}? This cannot be undone.`)) return;
+    if (!window.confirm(permanentDeleteWarning(recycleTab, recycleSelected.size))) return;
     setRecycleLoading(true);
     try {
       let table;
@@ -1336,6 +1514,9 @@ export default function Alfred() {
         case "intents": table = "intents"; break;
         case "events": table = "events"; break;
         case "executions": table = "executions"; break;
+        // The one hard delete left in the app. Cascades to collection_items and
+        // collection_item_removals — deliberate, and named in the confirm.
+        case "collections": table = "item_collections"; break;
         case "songs": table = "sam_songs"; break;
         case "snippets": table = "sam_snippets"; break;
         default: return;
@@ -1681,6 +1862,20 @@ export default function Alfred() {
       const updated = { ...inboxItem, archived: true, triagedAt: new Date().toISOString() };
       await storage.set(`inbox:${inboxItem.id}`, updated);
       setInboxItems(inboxItems.filter((i) => i.id !== inboxItemId));
+
+      // Step 10 turns this into a hard delete. The restore closure does not
+      // change when it does — `storage.set` re-inserts a missing row under its
+      // original id — only the list re-insert below stays load-bearing, which
+      // it already is: the row leaves the array here rather than being flagged
+      // in place, so undo has to put it back in createdAt order.
+      offerUndoFor("Archived capture.", async () => {
+        await storage.set(`inbox:${inboxItem.id}`, inboxItem);
+        setInboxItems((prev) =>
+          [...prev.filter((i) => i.id !== inboxItemId), inboxItem].sort((a, b) =>
+            (a.createdAt || "").localeCompare(b.createdAt || ""),
+          ),
+        );
+      });
     });
   }
 
@@ -1827,9 +2022,29 @@ export default function Alfred() {
 
       await storage.set(`event:${event.id}`, event);
       setEvents([...events, event]);
-      if (scheduledDate === "today") {
-        setView("schedule");
-      }
+
+      // No navigation. This used to end by switching the view to the schedule
+      // whenever the date was today, which is what made "Do Today" throw you
+      // off whatever list you were working through. The message below is how
+      // you now know it worked, and it names the date so scheduling for today
+      // and scheduling for a Tuesday give the same feedback.
+      //
+      // (No literal call syntax in this comment — the navigation call sites are
+      // counted by grep at every step of the routing work, and a comment would
+      // inflate the count. Same convention as the bridge comment at the top.)
+      //
+      // Every caller loses the jump, not just the two surfaces Step 6 touches:
+      // the add-intention forms on Intentions, Context detail and Item detail
+      // all funnelled through here too. Staying put is right for all of them.
+      //
+      // Undo deletes rather than archives — the event was created seconds ago
+      // and never seen, so an archived ghost in the recycle bin would be a
+      // record of something that never happened. Same reasoning as the
+      // recurrence successor in Step 2.
+      offerUndoFor(`Scheduled for ${formatEventDate(eventDate)}.`, async () => {
+        await storage.delete(`event:${event.id}`);
+        setEvents((prev) => prev.filter((e) => e.id !== event.id));
+      });
     });
   }
 
@@ -1900,9 +2115,32 @@ export default function Alfred() {
         setEvents((prev) => prev.map((e) => (e.id === event.id ? archivedEvent : e)));
       }
 
-      // Navigate back to previous view
-      setSelectedIntentionId(null);
-      setView(previousView);
+      // Archiving an intention cascades to its events, so undoing it has to as
+      // well — restoring the intention alone would leave its schedule silently
+      // archived. `relatedEvents` holds only the ones this call actually
+      // touched, so an event archived earlier stays archived.
+      offerUndoFor(`Archived "${intent.text || "intention"}".`, async () => {
+        await storage.set(`intent:${intentId}`, intent);
+        setIntents((prev) => prev.map((i) => (i.id === intentId ? intent : i)));
+        for (const event of relatedEvents) {
+          await storage.set(`event:${event.id}`, event);
+          setEvents((prev) => prev.map((e) => (e.id === event.id ? event : e)));
+        }
+      });
+
+      // Only the detail page has to leave: it is showing the record that just
+      // got archived, so staying would render an archived intention. A list row
+      // simply disappears from its own list, and yanking the user to another
+      // screen for that was the defect.
+      //
+      // `view` is derived from the URL, so this reads the screen the click
+      // actually came from. The return address is `intentionReturnView` — the
+      // slot `viewIntentionDetail` wrote on the way in — not the globally
+      // shared `previousView`, which any intervening navigation can clobber.
+      if (view === "intention-detail") {
+        setSelectedIntentionId(null);
+        setView(intentionReturnView);
+      }
     });
   }
 
@@ -1942,6 +2180,16 @@ export default function Alfred() {
 
       await storage.set(`item:${item.id}`, updated, isShared);
       setItems(items.map((i) => (i.id === itemId ? updated : i)));
+
+      // `item` is the pre-archive snapshot, so restoring is a straight rewrite
+      // rather than a flag flip — it also puts back anything the archiving edit
+      // happened to change alongside `archived`.
+      if (updates.archived === true) {
+        offerUndoFor(`Archived "${item.name}".`, async () => {
+          await storage.set(`item:${item.id}`, item, isShared);
+          setItems((prev) => prev.map((i) => (i.id === itemId ? item : i)));
+        });
+      }
     });
   }
 
@@ -2008,8 +2256,26 @@ export default function Alfred() {
       setEvents(events.map((e) => (e.id === eventId ? updated : e)));
 
       // If archiving a recurring event, trigger recurrence to create next event
+      let successor = null;
       if (updates.archived === true && event.intentId) {
-        await triggerRecurrence(event.intentId, event);
+        successor = await triggerRecurrence(event.intentId, event);
+      }
+
+      if (updates.archived === true) {
+        const intent = intents.find((i) => i.id === event.intentId);
+        const label = event.text || intent?.text || "event";
+        offerUndoFor(`Archived "${label}".`, async () => {
+          await storage.set(`event:${event.id}`, event);
+          setEvents((prev) => prev.map((e) => (e.id === eventId ? event : e)));
+          // The successor only exists because of the archive being undone, so
+          // it goes with it. Deleting rather than archiving: it was never a
+          // real event the user saw, and an archived ghost would surface in the
+          // recycle bin as something they never scheduled.
+          if (successor) {
+            await storage.delete(`event:${successor.id}`);
+            setEvents((prev) => prev.filter((e) => e.id !== successor.id));
+          }
+        });
       }
     });
   }
@@ -2095,12 +2361,16 @@ export default function Alfred() {
    * Creates the next recurring event for an intent after an event is archived.
    * Shared by closeExecution (completion) and manual event archive (skip).
    */
+  // Returns the successor event it created, or null when it created none — so
+  // an undo of the archive that triggered it can take that successor back out.
+  // Without this, undoing left the successor behind and the intention ended up
+  // with two live events.
   async function triggerRecurrence(intentId, archivedEvent) {
     const intent = intents.find((i) => i.id === intentId);
-    if (!intent) return;
+    if (!intent) return null;
 
     const config = getRecurrenceConfig(intent);
-    if (config.type === "once") return;
+    if (config.type === "once") return null;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -2111,7 +2381,11 @@ export default function Alfred() {
         id: uid(),
         user_id: user.id,
         intentId: intent.id,
-        time: nextDate.toISOString().split("T")[0],
+        // Local fields, not toISOString: calculateNextEventDate returns a
+        // LOCAL-midnight Date (it normalises with setHours and parses via
+        // parseLocalDate), and converting that to UTC moves it back a day in
+        // any zone east of Greenwich.
+        time: toLocalDateString(nextDate),
         itemIds: archivedEvent?.itemIds || [],
         contextId: intent.contextId,
         collectionId: intent.collectionId || null,
@@ -2120,7 +2394,9 @@ export default function Alfred() {
       };
       await storage.set(`event:${newEvent.id}`, newEvent);
       setEvents((prev) => [...prev, newEvent]);
+      return newEvent;
     }
+    return null;
   }
 
   async function closeExecution(outcome) {
@@ -2558,7 +2834,12 @@ export default function Alfred() {
     await loadCollectionMembers([collectionId]);
   }
 
-  async function saveContext(
+  // The core save, with the target passed in rather than read from
+  // `editingContext`. Context detail edits in place now (Step 5) and has its own
+  // notion of what it is editing; making it set Alfred's modal state first would
+  // have meant two sources of truth for the same question.
+  async function saveContextRecord(
+    existing,
     name,
     shared = false,
     keywords = "",
@@ -2566,9 +2847,9 @@ export default function Alfred() {
     pinned = false,
   ) {
     return withLoading('Saving context...', async () => {
-      const context = editingContext
+      const context = existing
         ? {
-            ...editingContext,
+            ...existing,
             name,
             shared,
             keywords,
@@ -2588,15 +2869,36 @@ export default function Alfred() {
 
       await storage.set(`context:${context.id}`, context, shared);
 
-      if (editingContext) {
-        setContexts(contexts.map((c) => (c.id === context.id ? context : c)));
+      if (existing) {
+        setContexts((prev) =>
+          prev.map((c) => (c.id === context.id ? context : c)),
+        );
       } else {
-        setContexts([...contexts, context]);
+        setContexts((prev) => [...prev, context]);
       }
-
-      setShowContextForm(false);
-      setEditingContext(null);
     });
+  }
+
+  // The Contexts page's form, which is driven by the `editingContext` modal
+  // slot. Clearing that slot is a page concern, so it stays here rather than in
+  // the shared core.
+  async function saveContext(
+    name,
+    shared = false,
+    keywords = "",
+    description = "",
+    pinned = false,
+  ) {
+    await saveContextRecord(
+      editingContext,
+      name,
+      shared,
+      keywords,
+      description,
+      pinned,
+    );
+    setShowContextForm(false);
+    setEditingContext(null);
   }
 
   function getIntentDisplay(intent) {
@@ -2659,15 +2961,6 @@ export default function Alfred() {
     } else {
       setSelectedItemId(null);
       setView(previousView);
-    }
-  }
-
-  function handleEditContextFromDetail() {
-    const context = contexts.find((c) => c.id === selectedContextId);
-    if (context) {
-      setEditingContext(context);
-      setShowContextForm(true);
-      setView("contexts");
     }
   }
 
@@ -2737,6 +3030,11 @@ export default function Alfred() {
         contextId: contextId || null,
         shared: false,
         isCaptureTarget: false,
+        // Explicit rather than leaning on the column default, so the object in
+        // local state has the same shape as one read back from the database —
+        // `updateCollection` spreads the whole row, and `activeCollections`
+        // filters on this field.
+        archived: false,
         // No items seed: membership lives in collection_items now. The jsonb
         // column keeps its own '[]' default and is never written again.
         createdAt: new Date().toISOString(),
@@ -2768,16 +3066,28 @@ export default function Alfred() {
     }
   }
 
-  async function deleteCollection(collId) {
-    return withLoading('Deleting...', async () => {
-      // collection_items and collection_item_removals go with it via ON DELETE
-      // CASCADE — there is no application-side child cleanup to do.
-      await storage.delete(`item_collections:${collId}`);
-      setCollections((prev) => prev.filter((c) => c.id !== collId));
-      setCollectionMembers((prev) => {
-        const next = { ...prev };
-        delete next[collId];
-        return next;
+  // Archive, not delete. Hard-deleting a collection cascades to
+  // `collection_items` AND `collection_item_removals` — and the latter is an
+  // append-only log of what was taken out of the collection and when, which is
+  // the recovery path for accidental removals during shopping. Destroying that
+  // behind a 5-second Undo was not acceptable, so collections became
+  // soft-deletable like every other Alfred entity. See the spec's Undo section,
+  // exception 2. The only hard delete left is the Recycle Bin's terminal one.
+  //
+  // Membership is deliberately left in `collectionMembers`: a soft delete does
+  // not touch `collection_items`, so the cached rows stay correct and Undo has
+  // nothing to rebuild.
+  async function archiveCollection(collId) {
+    const coll = collections.find((c) => c.id === collId);
+    if (!coll) return;
+    return withLoading('Archiving...', async () => {
+      const archived = { ...coll, archived: true };
+      await storage.set(`item_collections:${collId}`, archived);
+      setCollections((prev) => prev.map((c) => (c.id === collId ? archived : c)));
+
+      offerUndoFor(`Archived "${coll.name}".`, async () => {
+        await storage.set(`item_collections:${collId}`, coll);
+        setCollections((prev) => prev.map((c) => (c.id === collId ? coll : c)));
       });
     });
   }
@@ -2789,16 +3099,56 @@ export default function Alfred() {
     return intent && !intent.archived;
   });
 
-  const todayEvents = validEvents
-    .filter((e) => {
-      const today = getTodayDate();
-      // Include all events that are today or in the past (validEvents already excludes archived)
-      return e.time <= today;
-    })
-    .sort((a, b) => a.time.localeCompare(b.time)); // Sort by oldest date first
+  const todayEvents = validEvents.filter((e) => {
+    const today = getTodayDate();
+    // Include all events that are today or in the past (validEvents already excludes archived)
+    return e.time <= today;
+  });
   const allNonArchivedEvents = validEvents;
   const pinnedContexts = contexts.filter((c) => c.pinned);
-  const pinnedCollections = collections.filter((c) => c.pinned);
+  // Collections are soft-deleted from Step 4b, so `collections` now holds
+  // archived rows too — the Recycle Bin reads them from there. Everything else
+  // wants the live ones, and "everything else" is about fifteen places: three
+  // lists plus a collection picker on IntentionCard, InboxCard, and three
+  // detail views. Filtering once here rather than at each use is the same move
+  // `validEvents` above makes, for the same reason — fifteen filter sites is
+  // fifteen places to forget one.
+  //
+  // Pass `activeCollections` to anything that offers a choice; keep raw
+  // `collections` for lookups by id, which must still resolve for a row that is
+  // archived (the detail view during an archive, and Undo restoring it).
+  // Needs `intents` and `getIntentDisplay` in scope, so unlike the other three
+  // accessor bags this one cannot be module-level. The name shown on an event
+  // row is its own text when it has one, and the intention's otherwise —
+  // exactly what the row renders, so sorting by Name matches what you can read.
+  const eventSortAccessors = {
+    title: (e) =>
+      e.text || getIntentDisplay(intents.find((i) => i.id === e.intentId) || {}),
+    time: (e) => e.time,
+    created: (e) => e.createdAt,
+    updated: (e) => e.updatedAt,
+  };
+
+  // Home's Today tab used to end with `.sort((a, b) => a.time.localeCompare(b.time))`
+  // and a "Sort by oldest date first" comment. That order is now the control's
+  // DEFAULT rather than a fixture, so day one looks identical and every other
+  // order becomes reachable.
+  //
+  // Schedule had no sort at all — `allNonArchivedEvents` is a bare alias, so its
+  // order was whatever Postgres returned from an unordered SELECT, further
+  // mutated by local appends and realtime inserts. That is why it could reshuffle
+  // between sessions. Sorting here fixes it by construction: the order is now a
+  // function of the rows and the preference, neither of which depends on the
+  // order they arrived in.
+  const sortedTodayEvents = sortRows(
+    todayEvents, homeSort.sortKey, eventSortAccessors, homeSort.sortDir,
+  );
+  const sortedScheduleEvents = sortRows(
+    allNonArchivedEvents, scheduleSort.sortKey, eventSortAccessors, scheduleSort.sortDir,
+  );
+
+  const activeCollections = collections.filter((c) => !c.archived);
+  const pinnedCollections = activeCollections.filter((c) => c.pinned);
   const allLiveExecutions = [...activeExecutions, ...pausedExecutions];
 
   function openExecution(exec) {
@@ -3036,7 +3386,17 @@ export default function Alfred() {
           >
             <Menu className="w-6 h-6" />
           </button>
-          <a href="/" className="text-lg font-bold text-foreground hover:text-foreground">Alfred v5</a>
+          {/* Was a raw <a href="/">, so a plain click did a full page reload and
+              never reached confirmDiscardIfDirty. AppLink keeps the same href
+              and the same middle-click behaviour, and routes the plain click
+              through the guard like the nav tabs. */}
+          <AppLink
+            view="home"
+            onNavigate={() => guardedSetView("home")}
+            className="text-lg font-bold text-foreground hover:text-foreground"
+          >
+            Alfred v5
+          </AppLink>
           <div className="flex gap-1 items-center">
             <button
               onClick={manualRefresh}
@@ -3113,6 +3473,7 @@ export default function Alfred() {
                 { key: "collections", label: "Collections", icon: <ClipboardList className="w-4 h-4" /> },
                 { key: "timer", label: "Timer", icon: <Timer className="w-4 h-4" /> },
                 { key: "sam", label: "Sam", icon: <Music className="w-4 h-4" /> },
+                { key: "games", label: "Games", icon: <Gamepad2 className="w-4 h-4" /> },
               ].map((item) => (
                 <button
                   key={item.key}
@@ -3143,7 +3504,14 @@ export default function Alfred() {
         <div className="max-w-4xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div>
-              <a href="/" className="text-2xl font-bold text-foreground hover:text-foreground">Alfred v5</a>
+              {/* See the mobile logo above — same reason. */}
+              <AppLink
+                view="home"
+                onNavigate={() => guardedSetView("home")}
+                className="text-2xl font-bold text-foreground hover:text-foreground"
+              >
+                Alfred v5
+              </AppLink>
               <p className="text-sm text-muted-foreground mt-1">
                 Capture decisions. Hold intent. Execute with focus.
               </p>
@@ -3304,6 +3672,17 @@ export default function Alfred() {
             >
               Sam
             </AppLink>
+            <AppLink
+              view="games"
+              onNavigate={() => guardedSetView("games")}
+              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
+                view === "games"
+                  ? "bg-primary text-white shadow-sm"
+                  : "bg-white text-foreground border border-border hover:border-primary"
+              }`}
+            >
+              Games
+            </AppLink>
           </nav>
         </div>
       </div>
@@ -3390,8 +3769,22 @@ export default function Alfred() {
 
               {executionTab === "today" && (
                 <div className="space-y-2">
-                  {todayEvents.length > 0 ? (
-                    todayEvents.map((event) => {
+                  {/* Inside the Today panel, not above the tab bar — Active and
+                      Paused are execution lists ordered by started_at and this
+                      does not govern them. */}
+                  {todayEvents.length > 0 && (
+                    <SortControl
+                      id="home-sort"
+                      options={EVENT_SORT_OPTIONS}
+                      sortKey={homeSort.sortKey}
+                      sortDir={homeSort.sortDir}
+                      onChooseKey={homeSort.chooseKey}
+                      onToggleDir={homeSort.toggleDir}
+                      className="mb-3"
+                    />
+                  )}
+                  {sortedTodayEvents.length > 0 ? (
+                    sortedTodayEvents.map((event) => {
                       const intent = intents.find((i) => i.id === event.intentId);
                       if (!intent) return null;
                       return (
@@ -3421,47 +3814,20 @@ export default function Alfred() {
               <div>
                 <h3 className="text-lg font-medium mb-3 text-foreground">Pinned Collections</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {pinnedCollections.map((coll) => {
-                    const contextName = coll.contextId && contexts
-                      ? contexts.find((c) => c.id === coll.contextId)?.name
-                      : null;
-                    return (
-                      <div
-                        key={coll.id}
-                        onClick={() => {
-                          setPreviousView("home");
-                          setSelectedCollectionId(coll.id);
-                          setView("collection-detail");
-                        }}
-                        className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <Pin className="w-4 h-4 text-muted-foreground" />
-                              <p className="font-medium">{coll.name}</p>
-                            </div>
-                            <div className="flex items-center gap-2 mt-1">
-                              <span className="text-sm text-muted-foreground">
-                                {membersOf(coll.id).length} {membersOf(coll.id).length === 1 ? "item" : "items"}
-                              </span>
-                              {contextName && (
-                                <span className="text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
-                                  {contextName}
-                                </span>
-                              )}
-                              {coll.shared && (
-                                <span className="text-xs text-primary flex items-center gap-1">
-                                  <Share2 className="w-3 h-3" />
-                                  Shared
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {pinnedCollections.map((coll) => (
+                    <CollectionCard
+                      key={coll.id}
+                      collection={coll}
+                      contexts={contexts}
+                      memberCount={membersOf(coll.id).length}
+                      onOpen={() => {
+                        setPreviousView("home");
+                        setSelectedCollectionId(coll.id);
+                        setView("collection-detail");
+                      }}
+                      onArchive={archiveCollection}
+                    />
+                  ))}
                 </div>
               </div>
             )}
@@ -3493,6 +3859,17 @@ export default function Alfred() {
         {view === "inbox" && (
           <div>
             <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Inbox</h2>
+            {inboxItems.length > 0 && (
+              <SortControl
+                id="inbox-sort"
+                options={INBOX_SORT_OPTIONS}
+                sortKey={inboxSort.sortKey}
+                sortDir={inboxSort.sortDir}
+                onChooseKey={inboxSort.chooseKey}
+                onToggleDir={inboxSort.toggleDir}
+                className="mb-3"
+              />
+            )}
             {inboxItems.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 <p>Empty inbox.</p>
@@ -3500,13 +3877,15 @@ export default function Alfred() {
               </div>
             ) : (
               <div className="space-y-3">
-                {inboxItems.map((inboxItem) => (
+                {sortRows(
+                  inboxItems, inboxSort.sortKey, INBOX_ACCESSORS, inboxSort.sortDir,
+                ).map((inboxItem) => (
                   <InboxCard
                     key={inboxItem.id}
                     inboxItem={inboxItem}
                     contexts={contexts}
                     items={items}
-                    collections={collections}
+                    collections={activeCollections}
                     onSave={handleInboxSave}
                     onArchive={archiveInboxItem}
                     onEnrich={handleInboxEnrich}
@@ -3538,6 +3917,7 @@ export default function Alfred() {
             {showContextForm ? (
               <ContextForm
                 editing={editingContext}
+                stickyFooter
                 onSave={saveContext}
                 onCancel={() => {
                   setShowContextForm(false);
@@ -3554,7 +3934,26 @@ export default function Alfred() {
               </div>
             ) : (
               <div className="space-y-3">
-                {[...contexts].sort((a, b) => a.name.localeCompare(b.name)).map((context) => (
+                <SortControl
+                  id="contexts-sort"
+                  options={NAMED_RECORD_SORT_OPTIONS}
+                  sortKey={contextsSort.sortKey}
+                  sortDir={contextsSort.sortDir}
+                  onChooseKey={contextsSort.chooseKey}
+                  onToggleDir={contextsSort.toggleDir}
+                  className="mb-1"
+                />
+                {/* Was a hardcoded `.sort(a.name.localeCompare(b.name))`. That
+                    order is now this page's DEFAULT rather than its only option.
+
+                    Context DETAIL's sub-lists are deliberately untouched — its
+                    Items still sort by updatedAt descending, and its Intentions
+                    and Collections keep their arrival order. The spec covers
+                    list pages; detail pages hold five such sub-lists between
+                    them, and giving each a control is a different decision. */}
+                {sortRows(
+                  contexts, contextsSort.sortKey, NAMED_RECORD_ACCESSORS, contextsSort.sortDir,
+                ).map((context) => (
                   <ContextCard
                     key={context.id}
                     context={context}
@@ -3587,7 +3986,7 @@ export default function Alfred() {
             onUpdateItem={updateItem}
             onUpdateIntent={updateIntent}
             onSchedule={moveToPlanner}
-            onEditContext={handleEditContextFromDetail}
+            onSaveContext={saveContextRecord}
             onAddItem={handleAddItemToContext}
             onAddIntention={handleAddIntentionToContext}
             onViewIntentionDetail={(id) =>
@@ -3605,13 +4004,14 @@ export default function Alfred() {
             filterTag={filterTag}
             onFilterTag={setFilterTag}
             allItems={items}
-            collections={collections}
+            collections={activeCollections}
             collectionMembers={collectionMembers}
             onViewCollection={(id) => {
               setPreviousView("context-detail");
               setSelectedCollectionId(id);
               setView("collection-detail");
             }}
+            onArchiveCollection={archiveCollection}
             onDirtyChange={setUnsavedChanges}
           />
         )}
@@ -3638,7 +4038,9 @@ export default function Alfred() {
             onOpenExecution={openExecution}
             onCancelExecution={cancelExecutionForEvent}
             onArchiveIntention={archiveIntention}
-            collections={collections}
+            onSchedule={moveToPlanner}
+            onStartNow={startNowFromIntention}
+            collections={activeCollections}
             onDirtyChange={setUnsavedChanges}
           />
         )}
@@ -3669,13 +4071,14 @@ export default function Alfred() {
             onStartNowIntention={startNowFromIntention}
             onArchiveIntention={archiveIntention}
             onViewItem={viewItemDetail}
+            onViewIntentionDetail={(id) => viewIntentionDetail(id, "item-detail")}
             onClone={async (itemId, newName) => {
               const cloned = await deepCloneItem(itemId, newName);
               if (cloned) {
                 viewItemDetail(cloned.id, "item-detail");
               }
             }}
-            collections={collections}
+            collections={activeCollections}
             onDirtyChange={setUnsavedChanges}
           />
         )}
@@ -3709,6 +4112,17 @@ export default function Alfred() {
         {view === "schedule" && (
           <div>
             <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Schedule</h2>
+            {allNonArchivedEvents.length > 0 && (
+              <SortControl
+                id="schedule-sort"
+                options={EVENT_SORT_OPTIONS}
+                sortKey={scheduleSort.sortKey}
+                sortDir={scheduleSort.sortDir}
+                onChooseKey={scheduleSort.chooseKey}
+                onToggleDir={scheduleSort.toggleDir}
+                className="mb-3"
+              />
+            )}
             {allNonArchivedEvents.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 <p>No scheduled events.</p>
@@ -3716,7 +4130,7 @@ export default function Alfred() {
               </div>
             ) : (
               <div className="space-y-3">
-                {allNonArchivedEvents.map((event) => {
+                {sortedScheduleEvents.map((event) => {
                   const intent = intents.find((i) => i.id === event.intentId);
                   if (!intent) return null;
 
@@ -3768,7 +4182,7 @@ export default function Alfred() {
                   }}
                   contexts={contexts}
                   items={items}
-                  collections={collections}
+                  collections={activeCollections}
                   onUpdate={async (_, updates, scheduledDate) => {
                     const newIntentId = await handleAddIntentionToContext(
                       updates.text,
@@ -3811,7 +4225,7 @@ export default function Alfred() {
                     intent={intent}
                     contexts={contexts}
                     items={items}
-                    collections={collections}
+                    collections={activeCollections}
                     onUpdate={updateIntent}
                     onSchedule={moveToPlanner}
                     onStartNow={startNowFromIntention}
@@ -3901,7 +4315,7 @@ export default function Alfred() {
             )}
 
             {(() => {
-              const filtered = collections.filter((coll) => {
+              const filtered = activeCollections.filter((coll) => {
                 if (!collectionContextFilter) return true;
                 if (collectionContextFilter === "__none__") return !coll.contextId;
                 return coll.contextId === collectionContextFilter;
@@ -3916,47 +4330,31 @@ export default function Alfred() {
 
               return (
               <div className="space-y-2">
-                {filtered.map((coll) => {
-                  const contextName = coll.contextId && contexts
-                    ? contexts.find((c) => c.id === coll.contextId)?.name
-                    : null;
-                  return (
-                    <div
-                      key={coll.id}
-                      onClick={() => {
-                        setPreviousView("collections");
-                        setSelectedCollectionId(coll.id);
-                        setView("collection-detail");
-                      }}
-                      className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            {coll.pinned && <Pin className="w-4 h-4 text-muted-foreground" />}
-                            <p className="font-medium">{coll.name}</p>
-                          </div>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-sm text-muted-foreground">
-                              {membersOf(coll.id).length} {membersOf(coll.id).length === 1 ? "item" : "items"}
-                            </span>
-                            {contextName && (
-                              <span className="text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
-                                {contextName}
-                              </span>
-                            )}
-                            {coll.shared && (
-                              <span className="text-xs text-primary flex items-center gap-1">
-                                <Share2 className="w-3 h-3" />
-                                Shared
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                <SortControl
+                  id="collections-sort"
+                  options={NAMED_RECORD_SORT_OPTIONS}
+                  sortKey={collectionsSort.sortKey}
+                  sortDir={collectionsSort.sortDir}
+                  onChooseKey={collectionsSort.chooseKey}
+                  onToggleDir={collectionsSort.toggleDir}
+                  className="mb-1"
+                />
+                {sortRows(
+                  filtered, collectionsSort.sortKey, NAMED_RECORD_ACCESSORS, collectionsSort.sortDir,
+                ).map((coll) => (
+                  <CollectionCard
+                    key={coll.id}
+                    collection={coll}
+                    contexts={contexts}
+                    memberCount={membersOf(coll.id).length}
+                    onOpen={() => {
+                      setPreviousView("collections");
+                      setSelectedCollectionId(coll.id);
+                      setView("collection-detail");
+                    }}
+                    onArchive={archiveCollection}
+                  />
+                ))}
               </div>
               );
             })()}
@@ -4227,17 +4625,20 @@ export default function Alfred() {
                 )}
 
                 <div className="pt-4 border-t border-border">
+                  {/* Relabelled with the behaviour: this archives now, and the
+                      row is recoverable from the Recycle Bin. The confirm is
+                      gone — safety is the 5-second Undo, per governing rule 3.
+                      Navigating away is unconditional because this page is
+                      showing the record being archived. */}
                   <button
                     onClick={() => {
-                      if (window.confirm("Delete this collection?")) {
-                        deleteCollection(coll.id);
-                        setSelectedCollectionId(null);
-                        setView("collections");
-                      }
+                      archiveCollection(coll.id);
+                      setSelectedCollectionId(null);
+                      setView("collections");
                     }}
                     className="px-4 py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg text-sm"
                   >
-                    Delete Collection
+                    Archive Collection
                   </button>
                 </div>
               </div>
@@ -4397,6 +4798,9 @@ export default function Alfred() {
           );
         })()}
 
+        {/* Games View */}
+        {view === "games" && <GamesPage />}
+
         {/* Settings View */}
         {view === "settings" && (
           <div>
@@ -4425,6 +4829,7 @@ export default function Alfred() {
                 { key: "intents", label: "Intents" },
                 { key: "events", label: "Events" },
                 { key: "executions", label: "Executions" },
+                { key: "collections", label: "Collections" },
                 { key: "songs", label: "Songs" },
                 { key: "snippets", label: "Snippets" },
               ].map((tab) => (
@@ -4514,6 +4919,10 @@ export default function Alfred() {
                       subtitle = [record.outcome, record.closedAt ? new Date(record.closedAt).toLocaleDateString() : null].filter(Boolean).join(" · ");
                       break;
                     }
+                    case "collections":
+                      title = record.name || "Untitled collection";
+                      subtitle = contextName || "";
+                      break;
                     case "songs":
                       title = record.title || "Untitled song";
                       subtitle = record.artist || "";
@@ -4583,34 +4992,47 @@ export default function Alfred() {
         )}
       </div>
 
-      {/* Capture bar - fixed at bottom */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border shadow-lg z-20">
-        <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2 sm:py-4">
-          <div className="flex gap-2 items-end">
-            <textarea
-              ref={captureRef}
-              value={captureText}
-              onChange={(e) => {
-                setCaptureText(e.target.value);
-                e.target.style.height = "auto";
-                e.target.style.height = Math.min(e.target.scrollHeight, window.innerHeight * 0.5) + "px";
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleCapture();
-                }
-              }}
-              placeholder="Capture anything..."
-              rows={1}
-              className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden min-h-[44px] max-h-[50vh] text-base"
-            />
-            <button
-              onClick={handleCapture}
-              className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-            >
-              Capture
-            </button>
+      {/* Bottom dock: the Undo message stacked directly on top of the Capture
+          bar. One bottom-anchored container rather than two, so the message is
+          above the bar by document order instead of by a hard-coded offset —
+          the bar's height changes as its textarea grows, and any offset would
+          be wrong the moment somebody types a long capture. */}
+      <div className="fixed bottom-0 left-0 right-0 z-20">
+        <UndoMessage
+          pendingUndo={pendingUndo}
+          onUndo={runUndo}
+          onDismiss={dismissUndo}
+        />
+
+        {/* Capture bar */}
+        <div className="bg-white border-t border-border shadow-lg">
+          <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2 sm:py-4">
+            <div className="flex gap-2 items-end">
+              <textarea
+                ref={captureRef}
+                value={captureText}
+                onChange={(e) => {
+                  setCaptureText(e.target.value);
+                  e.target.style.height = "auto";
+                  e.target.style.height = Math.min(e.target.scrollHeight, window.innerHeight * 0.5) + "px";
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleCapture();
+                  }
+                }}
+                placeholder="Capture anything..."
+                rows={1}
+                className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden min-h-[44px] max-h-[50vh] text-base"
+              />
+              <button
+                onClick={handleCapture}
+                className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              >
+                Capture
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -5240,6 +5662,31 @@ function InboxCard({
             <span className="flex items-center gap-1">
               source: <SourceIcon sourceType={inboxItem.sourceType} />
             </span>
+            {/* Every action on this card used to live behind expansion — the
+                collapsed row was a pure expand target. Disposing of a capture
+                you can already read in full should not require opening the
+                triage form first.
+
+                Behaviour is deliberately untouched: this is the SAME archive
+                call the expanded footer makes. Step 10 turns both into a hard
+                delete and relabels them "Delete".
+
+                stopPropagation because the whole card is the expand target. */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onDirtyChange) onDirtyChange(false);
+                onArchive(inboxItem.id);
+              }}
+              title="Archive this capture"
+              // ml-1 on top of the row's gap-2 = 12px. The badges stay tightly
+              // grouped as one informational cluster; the action separates from
+              // them. Its neighbour is the source icon, which LOOKS static but
+              // is card-click — tap it and the card expands instead.
+              className="ml-1 flex items-center justify-center p-2 min-h-[44px] min-w-[44px] rounded-lg text-muted-foreground hover:text-destructive hover:bg-secondary transition-colors shrink-0"
+            >
+              <Archive className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </div>
@@ -5948,7 +6395,24 @@ function InboxCard({
   );
 }
 
-function ContextForm({ editing, onSave, onCancel, onDirtyChange }) {
+/**
+ * @param {boolean} [stickyFooter] - Pin Save/Cancel above the Capture bar.
+ *
+ * Opt-in rather than always-on, because since Step 5 this form renders in two
+ * places that want different treatment:
+ *
+ *   Contexts list    the form REPLACES the list, so it owns the screen and a
+ *                    pinned footer is right — this is the "full-screen form"
+ *                    the spec means.
+ *   Context detail   the form is a panel with the context's items, intentions
+ *                    and collections below it. A pinned footer would hover over
+ *                    that content and imply it belonged to whatever you had
+ *                    scrolled to, which is worse than no pinning at all.
+ *
+ * Defaulting to false so a third render site gets the safe behaviour and has to
+ * ask for the other.
+ */
+function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = false }) {
   const [name, setName] = useState(editing?.name || "");
   const [shared, setShared] = useState(editing?.shared || false);
   const [keywords, setKeywords] = useState(editing?.keywords || "");
@@ -6037,7 +6501,17 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange }) {
           <span className="text-sm">Pin to home</span>
         </label>
 
-        <div className="flex gap-2 pt-2">
+        {/* bottom-28 / sm:bottom-32 mirrors the main content wrapper's
+            pb-28 sm:pb-32, which is the space the Capture bar is already
+            reserved. Same two numbers, same reason — if one moves the other
+            has to. */}
+        <div
+          className={`flex gap-2 pt-2 ${
+            stickyFooter
+              ? "sticky bottom-28 sm:bottom-32 -mx-4 sm:-mx-6 px-4 sm:px-6 pb-3 bg-white border-t border-border"
+              : ""
+          }`}
+        >
           <button
             onClick={() => {
               if (name.trim()) {
@@ -6063,9 +6537,19 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange }) {
 
 function ContextCard({ context, onClick, onEdit, showSettings = false }) {
   return (
-    <div className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow duration-200">
-      <div className="flex items-center justify-between">
-        <div className="flex-1 min-w-0" onClick={onClick}>
+    // The handler sits on the root, not on the title block. The card already
+    // advertised itself as clickable with cursor-pointer and hover:border-primary,
+    // but only the left column responded — so the right half, the padding, and
+    // the gap beside the gear were all dead. Matches ItemCard and IntentionCard.
+    <div
+      onClick={onClick}
+      className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow duration-200"
+    >
+      {/* See CollectionCard — same shape, same collapse. Not a strip 8b added,
+          but leaving it at 0 while the other three sit at 12 would recreate the
+          inconsistency this step exists to remove. */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             {context.pinned && <Pin className="w-4 h-4 text-muted-foreground" />}
             <h3 className="font-medium text-foreground">{context.name}</h3>
@@ -6083,6 +6567,12 @@ function ContextCard({ context, onClick, onEdit, showSettings = false }) {
           </div>
         </div>
         {showSettings && onEdit && (
+          // KEPT, and now load-bearing. The spec asked for this stopPropagation
+          // to go because the gear was a SIBLING of the clickable region and had
+          // nothing to stop. Moving the handler to the root above makes the gear
+          // a descendant of it, so without this a click here would open the
+          // context AND the edit form — defect 0.3 all over again. The premise
+          // for removing it was true only before this step's other half.
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -6091,6 +6581,114 @@ function ContextCard({ context, onClick, onEdit, showSettings = false }) {
             className="min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
           >
             <Settings className="w-5 h-5" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One collection row. Step 4a of docs/technical-spec-ui-standardization.md.
+ *
+ * Replaces three copy-pasted copies that had drifted on four axes with no two
+ * identical. Two of the four differences were adaptation and survive as props;
+ * two were drift and are gone:
+ *
+ *   Pin icon        DRIFT       Home rendered it unconditionally. Invisible,
+ *                               because every row in "Pinned Collections" is
+ *                               pinned by definition — but only by accident.
+ *                               Now conditional, and hardcoded rather than a
+ *                               prop: no caller wants it suppressed, and a
+ *                               never-varied prop is noise.
+ *   Member count    DRIFT       Home and Collections called Alfred's
+ *                               `membersOf`; Context detail inlined the same
+ *                               lookup because `membersOf` is out of its scope.
+ *                               The component takes the number, so neither
+ *                               caller needs the lookup shape.
+ *   Context badge   ADAPTATION  Context detail omits it: every row already
+ *                               shares that context, so the chip says nothing.
+ *                               Kept as `showContextBadge`.
+ *   Click handler   ADAPTATION  Each site returns to a different screen.
+ *                               Kept as `onOpen`.
+ *
+ * Anatomy matches the other five shared cards after Step 3: the whole card is
+ * the click target, not just the title block. There are no action buttons yet —
+ * Step 8 adds Edit and Archive — and when they arrive they go inside this root
+ * as descendants with `stopPropagation`, the way ContextCard's gear and
+ * EventCard's Start button already do.
+ *
+ * Not an anchor, deliberately: `/collections/detail` carries no record id, so a
+ * middle-click would open the wrong screen in a new tab. See the spec's "Row
+ * click targets — deferred".
+ */
+function CollectionCard({
+  collection,
+  contexts = [],
+  memberCount = 0,
+  showContextBadge = true,
+  onOpen,
+  onArchive,
+}) {
+  // Cards in this file take `contexts` and resolve the name themselves —
+  // ItemCard, IntentionCard and EventCard all do. Following that keeps the
+  // lookup out of two call sites rather than duplicating it in both.
+  const contextName =
+    showContextBadge && collection.contextId
+      ? contexts.find((c) => c.id === collection.contextId)?.name
+      : null;
+
+  return (
+    <div
+      onClick={onOpen}
+      className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow"
+    >
+      {/* gap-3 as a floor. justify-between leaves a generous gap on a wide row
+          but collapses to nothing once the collection name fills the width, and
+          what sits on the other side of that gap is the card's own onClick. */}
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            {collection.pinned && (
+              <Pin className="w-4 h-4 text-muted-foreground" />
+            )}
+            <p className="font-medium">{collection.name}</p>
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="text-sm text-muted-foreground">
+              {memberCount} {memberCount === 1 ? "item" : "items"}
+            </span>
+            {contextName && (
+              <span className="text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
+                {contextName}
+              </span>
+            )}
+            {collection.shared && (
+              <span className="text-xs text-primary flex items-center gap-1">
+                <Share2 className="w-3 h-3" />
+                Shared
+              </span>
+            )}
+          </div>
+        </div>
+        {/* Archive only — no Edit. Clicking the row opens collection detail,
+            which auto-saves each field on blur and has no Save button, so it
+            genuinely IS this record's edit surface. A row action never
+            duplicates the row click.
+
+            stopPropagation because this sits inside the card's own onClick.
+            No confirmation: `onArchive` routes to archiveCollection, which
+            offers the Undo. */}
+        {onArchive && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onArchive(collection.id);
+            }}
+            title="Archive this collection"
+            className="flex items-center justify-center p-2 min-h-[44px] min-w-[44px] rounded-lg text-muted-foreground hover:text-destructive hover:bg-secondary transition-colors shrink-0"
+          >
+            <Archive className="w-4 h-4" />
           </button>
         )}
       </div>
@@ -6109,7 +6707,7 @@ function ContextDetailView({
   onUpdateItem,
   onUpdateIntent,
   onSchedule,
-  onEditContext,
+  onSaveContext,
   onAddItem,
   onAddIntention,
   onViewIntentionDetail,
@@ -6128,12 +6726,18 @@ function ContextDetailView({
   collections = [],
   collectionMembers = {},
   onViewCollection,
+  onArchiveCollection,
   onDirtyChange,
 }) {
   const [showAddItemForm, setShowAddItemForm] = useState(false);
   const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
   const [itemsExpanded, setItemsExpanded] = useState(true);
   const [intentionsExpanded, setIntentionsExpanded] = useState(true);
+  // Editing happens here now. It used to set two pieces of Alfred state and
+  // then navigate to the Contexts list to render the form there, so "Edit" on
+  // this page silently moved you to a different screen — and browser Back left
+  // the form open on a page that had not asked for it.
+  const [isEditingContext, setIsEditingContext] = useState(false);
 
   if (!context) return null;
 
@@ -6199,17 +6803,38 @@ function ContextDetailView({
         Back
       </button>
 
+      {isEditingContext && (
+        <div className="mb-4 sm:mb-6">
+          <ContextForm
+            editing={context}
+            onSave={async (...args) => {
+              await onSaveContext(context, ...args);
+              setIsEditingContext(false);
+            }}
+            onCancel={() => setIsEditingContext(false)}
+            onDirtyChange={onDirtyChange}
+          />
+        </div>
+      )}
+
       <div className="mb-4 sm:mb-6">
         <div className="flex items-start justify-between gap-2 mb-2">
           <h2 className="text-xl sm:text-2xl font-bold">{context.name}</h2>
-          <button
-            onClick={onEditContext}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base shrink-0"
-          >
-            <Settings className="w-4 h-4" />
-            <span className="hidden sm:inline">Edit Context</span>
-            <span className="sm:hidden">Edit</span>
-          </button>
+          {/* Record actions, top right. The spec asks for Edit · Archive here;
+              Archive is absent because `contexts` has no `archived` column and
+              adding one is a migration. See the Step 5 findings. */}
+          <div className="flex flex-wrap justify-end gap-2 shrink-0">
+            <button
+              onClick={() => setIsEditingContext((v) => !v)}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+            >
+              <Settings className="w-4 h-4" />
+              <span className="hidden sm:inline">
+                {isEditingContext ? "Close Editor" : "Edit Context"}
+              </span>
+              <span className="sm:hidden">{isEditingContext ? "Close" : "Edit"}</span>
+            </button>
+          </div>
         </div>
         {context.description && (
           <p className="text-muted-foreground">{context.description}</p>
@@ -6372,31 +6997,17 @@ function ContextDetailView({
             return (
               <div className="space-y-2">
                 {contextCollections.map((coll) => (
-                  <div
+                  <CollectionCard
                     key={coll.id}
-                    onClick={() => onViewCollection && onViewCollection(coll.id)}
-                    className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          {coll.pinned && <Pin className="w-4 h-4 text-muted-foreground" />}
-                          <p className="font-medium">{coll.name}</p>
-                        </div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-sm text-muted-foreground">
-                            {(collectionMembers[coll.id] || []).length} {(collectionMembers[coll.id] || []).length === 1 ? "item" : "items"}
-                          </span>
-                          {coll.shared && (
-                            <span className="text-xs text-primary flex items-center gap-1">
-                              <Share2 className="w-3 h-3" />
-                              Shared
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                    collection={coll}
+                    memberCount={(collectionMembers[coll.id] || []).length}
+                    // Every row here already shares this context, so the chip
+                    // would repeat the page heading. This is the one difference
+                    // between the three sites that was adaptation, not drift.
+                    showContextBadge={false}
+                    onOpen={() => onViewCollection && onViewCollection(coll.id)}
+                    onArchive={onArchiveCollection}
+                  />
                 ))}
               </div>
             );
@@ -6424,6 +7035,8 @@ function IntentionDetailView({
   onOpenExecution,
   onCancelExecution,
   onArchiveIntention,
+  onSchedule,
+  onStartNow,
   collections = [],
   onDirtyChange,
 }) {
@@ -6434,6 +7047,13 @@ function IntentionDetailView({
   // Filter events for this intention that aren't archived
   const intentionEvents = events.filter(
     (e) => e.intentId === intention.id && !e.archived,
+  );
+
+  // `executions` is allLiveExecutions — active plus paused, which is exactly
+  // the set IntentionCard's own guard queries the database for. Same rule,
+  // no round trip.
+  const hasActiveExecutions = executions.some(
+    (ex) => ex.intentId === intention.id,
   );
 
   // Get context name for badge
@@ -6472,7 +7092,14 @@ function IntentionDetailView({
           isEditing={true}
           onCancel={() => setIsEditing(false)}
           onArchive={onArchiveIntention}
+          // Required as of Step 8a: the card's archive guard is derived from
+          // this prop now rather than from its own query, and this was the one
+          // onArchive site that did not pass it. Without it the guard silently
+          // reads "no executions" and Archive stays enabled mid-execution.
+          executions={executions}
           onDirtyChange={onDirtyChange}
+          // Same reasoning as item detail: alone on the page.
+          stickyFooter
         />
       </div>
     );
@@ -6498,14 +7125,73 @@ function IntentionDetailView({
               </span>
             )}
           </div>
-          <button
-            onClick={() => setIsEditing(true)}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base shrink-0"
-          >
-            <Settings className="w-4 h-4" />
-            <span className="hidden sm:inline">Edit Intention</span>
-            <span className="sm:hidden">Edit</span>
-          </button>
+          {/* Record actions, top right, in the spec's order:
+              Do Today · Schedule Later · Start Now · Edit · Archive.
+
+              Do Today and Start Now are gated on having no events, matching
+              IntentionCard: once something is scheduled, scheduling it again
+              from the same screen is not the action anyone wants. */}
+          <div className="flex flex-wrap justify-end gap-2 shrink-0">
+            {/* The slot Step 5 left open. No form to save here, so these commit
+                the schedule directly. Opening downward — this bar is at the top
+                of the page. */}
+            {onSchedule && intentionEvents.length === 0 && (
+              <>
+                <SchedulePopover
+                  label="Do Today"
+                  initialDate={getTodayDate()}
+                  onPick={(date) => onSchedule(intention.id, date)}
+                  className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+                />
+                <SchedulePopover
+                  label="Schedule Later"
+                  onPick={(date) => onSchedule(intention.id, date)}
+                  className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+                />
+              </>
+            )}
+            {onStartNow && intentionEvents.length === 0 && (
+              <button
+                onClick={() => onStartNow(intention.id)}
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              >
+                <Play className="w-4 h-4" />
+                Start Now
+              </button>
+            )}
+            <button
+              onClick={() => setIsEditing(true)}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+            >
+              <Settings className="w-4 h-4" />
+              <span className="hidden sm:inline">Edit Intention</span>
+              <span className="sm:hidden">Edit</span>
+            </button>
+            {/* Archive was previously reachable only from inside the edit form.
+                The same active-execution guard IntentionCard applies, but read
+                from the `executions` prop already in hand rather than with a
+                fresh query — the card does its own round trip, which this page
+                does not need. */}
+            {onArchiveIntention && (
+              <button
+                onClick={() => onArchiveIntention(intention.id)}
+                disabled={hasActiveExecutions}
+                title={
+                  hasActiveExecutions
+                    ? "Cannot archive: active execution in progress"
+                    : "Archive this intention and all related events"
+                }
+                className={`flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base ${
+                  hasActiveExecutions
+                    ? "bg-secondary text-muted-foreground cursor-not-allowed"
+                    : "bg-destructive hover:bg-destructive-hover text-white"
+                }`}
+              >
+                <Archive className="w-4 h-4" />
+                <span className="hidden sm:inline">Archive</span>
+              </button>
+            )}
+          </div>
         </div>
         <p className="text-sm text-muted-foreground">
           Recurrence: {getRecurrenceDisplayString(getRecurrenceConfig(intention), intention.endDate)}
@@ -6589,6 +7275,7 @@ function ItemDetailView({
   onStartNowIntention,
   onArchiveIntention,
   onViewItem,
+  onViewIntentionDetail,
   onClone,
   collections = [],
   onDirtyChange,
@@ -6647,6 +7334,11 @@ function ItemDetailView({
           onCancel={() => setIsEditing(false)}
           allItems={items}
           onDirtyChange={onDirtyChange}
+          // This card IS the page here — nothing else renders alongside it, so
+          // the objection to sticky footers inside lists does not apply. A long
+          // recipe puts Save thousands of pixels below the fold; this is the
+          // case the phase started from.
+          stickyFooter
         />
       </div>
     );
@@ -6672,11 +7364,24 @@ function ItemDetailView({
               </span>
             )}
           </div>
-          <div className="flex gap-2">
+          {/* Record actions, top right, in the spec's order:
+              Start Now · Clone · Edit · Archive. flex-wrap because four
+              buttons no longer fit one line on a narrow screen. */}
+          <div className="flex flex-wrap justify-end gap-2">
             {onStartNow && (
+              // bg-primary, not bg-success. Item detail was the only site using
+              // success for this verb; the other three — intention detail,
+              // IntentionCard's row, and EventCard's "Start" — are all primary,
+              // and EventCard's "Start" is literally the same action.
+              //
+              // The deciding argument is what success already means: it carries
+              // "Do Today" and "Complete". On intention detail Do Today sits two
+              // buttons from Start Now, so giving them the same fill would erase
+              // the only visual difference between "schedule it for later today"
+              // and "begin it right now" — the two actions most easily confused.
               <button
                 onClick={() => onStartNow(item.id)}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
               >
                 <Play className="w-4 h-4" />
                 Start Now
@@ -6701,6 +7406,21 @@ function ItemDetailView({
               <Settings className="w-4 h-4" />
               <span className="hidden sm:inline">Edit Item</span>
               <span className="sm:hidden">Edit</span>
+            </button>
+            {/* New here. Archiving was previously reachable only from inside the
+                edit form, which broke governing rule 4 — a state change hidden
+                behind a content-editing surface. `onUpdateItem` already offers
+                the Undo, so there is no confirmation and nothing to add.
+                Leaves the page because it is showing the record just archived. */}
+            <button
+              onClick={() => {
+                onUpdateItem(item.id, { archived: true });
+                onBack();
+              }}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+            >
+              <Archive className="w-4 h-4" />
+              <span className="hidden sm:inline">Archive</span>
             </button>
           </div>
         </div>
@@ -7024,6 +7744,11 @@ function ItemDetailView({
                 onStartNow={onStartNowIntention}
                 getIntentDisplay={getIntentDisplay}
                 showScheduling={true}
+                // Without onViewDetail this card fell through to inline edit —
+                // the only edit surface in the app with no dirty guard behind
+                // it. Navigating matches the other two list sites and removes
+                // the unguarded form rather than guarding it.
+                onViewDetail={onViewIntentionDetail}
                 events={events}
                 onUpdateEvent={onUpdateEvent}
                 onActivate={onActivate}
@@ -7437,6 +8162,10 @@ function ItemCard({
   getIntentDisplay,
   onOpenExecution,
   onDirtyChange,
+  // True only where this card IS the page — item detail's edit mode. Inside a
+  // list it must stay false: sibling cards can be open at once, and several
+  // footers each pinned to the same strip of viewport is nonsense.
+  stickyFooter = false,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(item.name);
@@ -7918,7 +8647,12 @@ function ItemCard({
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2 pt-2">
+          <div
+            className={"flex flex-wrap gap-2 pt-2 " +
+              (stickyFooter
+                ? "sticky bottom-28 sm:bottom-32 -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 bg-card border-t border-border"
+                : "")}
+          >
             <button
               onClick={handleSave}
               className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
@@ -7931,15 +8665,21 @@ function ItemCard({
             >
               Cancel
             </button>
-            <button
-              onClick={() => {
-                onUpdate(item.id, { archived: true });
-                setIsEditing(false);
-              }}
-              className="px-4 py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ml-auto"
-            >
-              Archive
-            </button>
+            {/* Add mode has no record to archive. Without this guard the click
+                reached onUpdate(null, …), which the add-form handlers treat as a
+                save and which created a real archived item named "New Item".
+                Same guard shape IntentionCard already uses for its Archive. */}
+            {item.id && (
+              <button
+                onClick={() => {
+                  onUpdate(item.id, { archived: true });
+                  setIsEditing(false);
+                }}
+                className="px-4 py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ml-auto"
+              >
+                Archive
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -8331,6 +9071,121 @@ function IntervalRecurrenceDialog({ initialConfig, onDone, onCancel }) {
 }
 
 /**
+ * A trigger button that opens a small date popover and schedules on confirm.
+ * Step 6 of docs/technical-spec-ui-standardization.md.
+ *
+ * This exists to make "Do Today" and "Schedule Later" the same kind of thing.
+ * They used to be opposites: Do Today wrote an event and threw you to the
+ * Schedule page, while Schedule Later wrote nothing at all — it toggled a date
+ * input whose value was only applied if you afterwards remembered to press
+ * Save. Two buttons side by side, one committing and one not, is the whole of
+ * the "feels off" complaint.
+ *
+ * Now both open this control and both commit. The only difference is where the
+ * date starts: `initialDate` is today for Do Today and empty for Schedule
+ * Later. A confirm button rather than committing on the input's change event —
+ * `<input type="date">` fires change per keystroke during keyboard entry in
+ * some browsers, so committing on change would write a half-typed year.
+ *
+ * `placement` because the two surfaces sit at opposite ends of the screen: the
+ * edit-form footer opens upward (downward would land under the fixed Capture
+ * bar), the detail-page header opens downward.
+ */
+function SchedulePopover({
+  label,
+  icon = null,
+  initialDate = "",
+  onPick,
+  className = "",
+  placement = "bottom",
+  disabled = false,
+  confirmLabel = "Schedule",
+}) {
+  const [open, setOpen] = useState(false);
+  const [date, setDate] = useState(initialDate);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  function toggle() {
+    setOpen((wasOpen) => {
+      // Reset on every open, so Do Today always offers today even after the
+      // popover was left holding some other date from a previous visit.
+      if (!wasOpen) setDate(initialDate);
+      return !wasOpen;
+    });
+  }
+
+  function commit() {
+    if (!date) return;
+    setOpen(false);
+    onPick(date);
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={toggle}
+        disabled={disabled}
+        className={className}
+      >
+        {icon}
+        {label}
+      </button>
+      {open && (
+        <div
+          className={`absolute right-0 z-30 w-60 p-3 bg-card border border-border rounded-lg shadow-lg ${
+            placement === "top" ? "bottom-full mb-2" : "top-full mt-2"
+          }`}
+        >
+          <label className="block text-xs font-medium text-muted-foreground mb-1">
+            Schedule for
+          </label>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commit();
+              }
+            }}
+            className="w-full px-3 py-2 min-h-[44px] border border-border rounded text-base mb-2"
+            autoFocus
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={commit}
+              disabled={!date}
+              className="flex-1 px-3 py-2 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {confirmLabel}
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="px-3 py-2 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Quick-select recurrence dropdown — replaces the old 4-option <select>.
  * Shows dynamic labels based on today's date (e.g., "Weekly on Friday").
  * "Custom..." opens the CustomRecurrenceDialog inline.
@@ -8506,14 +9361,14 @@ function IntentionCard({
   onArchive,
   collections = [],
   onDirtyChange,
+  // See ItemCard — true only on intention detail, where this card is the page.
+  stickyFooter = false,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(intent.text);
   const [recurrenceConfig, setRecurrenceConfig] = useState(intent.recurrenceConfig || null);
   const [intentEndDate, setIntentEndDate] = useState(intent.endDate || null);
   const [targetStartDate, setTargetStartDate] = useState(intent.targetStartDate || null);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [selectedDate, setSelectedDate] = useState("");
   const [itemSearch, setItemSearch] = useState("");
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState(intent.itemId || "");
@@ -8522,7 +9377,16 @@ function IntentionCard({
   const [selectedContextId, setSelectedContextId] = useState(intent.contextId || "");
   const [contextSearch, setContextSearch] = useState("");
   const [showContextPicker, setShowContextPicker] = useState(false);
-  const [hasActiveExecutions, setHasActiveExecutions] = useState(false);
+
+  // Was a per-card query on mount asking
+  // `intent_id = … AND closed_at IS NULL` — one round trip per row on the
+  // Intentions list. `executions` already carries allLiveExecutions, which is
+  // that exact set, so the answer was in hand the whole time. Every site that
+  // passes `onArchive` also passes `executions` (checked; intention detail's
+  // edit mode had to be given it).
+  const hasActiveExecutions = executions.some(
+    (ex) => ex.intentId === intent.id,
+  );
 
   useEffect(() => {
     if (!isEditing || !onDirtyChange) return;
@@ -8539,19 +9403,6 @@ function IntentionCard({
   useEffect(() => {
     return () => { if (onDirtyChange) onDirtyChange(false); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!intent.id || !onArchive) return;
-    async function checkActiveExecutions() {
-      const { data } = await supabase
-        .from('executions')
-        .select('id')
-        .eq('intent_id', intent.id)
-        .is('closed_at', null);
-      setHasActiveExecutions(data && data.length > 0);
-    }
-    checkActiveExecutions();
-  }, [intent.id, onArchive]);
 
   // Autocomplete search logic
   const filteredContexts =
@@ -8609,15 +9460,6 @@ function IntentionCard({
     }
   }
 
-  /**
-  function handleScheduleLater() {
-    if (selectedDate && onSchedule) {
-      onSchedule(intent.id, selectedDate);
-      setShowDatePicker(false);
-      setSelectedDate("");
-    }
-  }
- */
   // Get context name for badge
   const contextName =
     intent.contextId && contexts
@@ -8819,38 +9661,42 @@ function IntentionCard({
             </div>
           )}
 
-          <div className="flex gap-2 flex-wrap">
+          <div
+            className={
+              "flex gap-2 flex-wrap " +
+              (stickyFooter
+                ? "sticky bottom-28 sm:bottom-32 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-3 bg-card border-t border-border"
+                : "")
+            }
+          >
+            {/* Both go through handleSave, so each still saves the form AND
+                schedules in one action — which is what the old Do Today did and
+                the old Schedule Later did not. The popover only supplies the
+                date; the asymmetry being fixed is that one committed and the
+                other quietly waited for Save.
+
+                Opening upward: this footer sits at the bottom of the card, and
+                a downward popover would open under the fixed Capture bar. */}
             {showScheduling && onSchedule && relatedEvents.length === 0 && (
               <>
-                <button
-                  onClick={() => handleSave("today")}
+                <SchedulePopover
+                  label="Do Today"
+                  initialDate={getTodayDate()}
+                  onPick={(date) => handleSave(date)}
+                  placement="top"
                   className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-                >
-                  Do Today
-                </button>
-
-                <button
-                  onClick={() => setShowDatePicker(!showDatePicker)}
+                />
+                <SchedulePopover
+                  label="Schedule Later"
+                  onPick={(date) => handleSave(date)}
+                  placement="top"
                   className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-                >
-                  Schedule Later
-                </button>
-
-                {showDatePicker && (
-                  <input
-                    type="date"
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(e.target.value)}
-                    className="px-3 py-2 min-h-[44px] border border-border rounded"
-                  />
-                )}
+                />
               </>
             )}
 
             <button
-              onClick={() =>
-                handleSave(showDatePicker && selectedDate ? selectedDate : null)
-              }
+              onClick={() => handleSave(null)}
               className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
               Save Changes
@@ -8867,7 +9713,7 @@ function IntentionCard({
               <button
                 onClick={() => onArchive(intent.id)}
                 disabled={hasActiveExecutions}
-                className={`px-3 sm:px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base ${hasActiveExecutions ? 'bg-secondary text-muted-foreground cursor-not-allowed' : 'bg-destructive hover:bg-destructive-hover text-white'}`}
+                className={`px-3 sm:px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base ml-auto ${hasActiveExecutions ? 'bg-secondary text-muted-foreground cursor-not-allowed' : 'bg-destructive hover:bg-destructive-hover text-white'}`}
                 title={hasActiveExecutions ? 'Cannot archive: active execution in progress' : 'Archive this intention and all related events'}
               >
                 Archive
@@ -8916,6 +9762,13 @@ function IntentionCard({
             )}
           </div>
         </div>
+        {/* Display mode — a list row, not one of Step 6's two surfaces. This
+            stays a single-click commit rather than a popover: it is a quick
+            action sitting next to Start Now, there is no Schedule Later beside
+            it to be asymmetric with, and making the common case two clicks on
+            a row you are scanning past would be a worse trade. It does pick up
+            the rest of Step 6 for free — it no longer navigates, and it now
+            reports the date through the message. */}
         {showScheduling && relatedEvents.length === 0 && (
           <div className="flex gap-2 shrink-0">
             {onSchedule && (
@@ -8984,20 +9837,6 @@ function EventCard({
   const [isEditing, setIsEditing] = useState(false);
   const [scheduledDate, setScheduledDate] = useState(event.time);
   const [eventName, setEventName] = useState(event.text || intent?.text || "");
-  const [hasActiveExecution, setHasActiveExecution] = useState(false);
-
-  useEffect(() => {
-    if (!event.id) return;
-    async function checkActiveExecution() {
-      const { data } = await supabase
-        .from('executions')
-        .select('id')
-        .eq('event_id', event.id)
-        .is('closed_at', null);
-      setHasActiveExecution(data && data.length > 0);
-    }
-    checkActiveExecution();
-  }, [event.id]);
 
   function handleSave() {
     onUpdate(event.id, { time: scheduledDate, text: eventName });
@@ -9027,6 +9866,18 @@ function EventCard({
   }
 
   const execution = executions.find((ex) => ex.eventId === event.id);
+
+  // Was a per-row `supabase.from('executions')` query on mount, which on the
+  // Schedule page meant one round trip per event. It asked
+  // `event_id = … AND closed_at IS NULL` — which is precisely the set the
+  // `executions` prop already holds, because callers pass allLiveExecutions
+  // (active + paused, both closed_at null). So `execution` above had already
+  // answered the question the query was asking.
+  //
+  // `handleCancelEvent`'s own check stays: that one runs at the moment of the
+  // write and guards against a stale client, which is a different job from
+  // deciding whether to grey a button out.
+  const hasActiveExecution = Boolean(execution);
 
   // Show editable form when there's no execution
   if (isEditing) {
@@ -9058,20 +9909,19 @@ function EventCard({
             />
           </div>
 
+          {/* Standard footer order: primary, Cancel, gap, Archive pushed right.
+              This was Save · Archive · Close, with the destructive action sitting
+              between the two safe ones — the only footer in the app where a
+              mis-tap on the button next to Save archived the record. The third
+              button is also renamed: it resets the fields and leaves, which is
+              Cancel, and calling it Close made it read like a fourth kind of
+              thing next to three cards that all say Cancel. */}
           <div className="flex flex-wrap gap-2">
             <button
               onClick={handleSave}
               className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               Save
-            </button>
-            <button
-              onClick={handleCancelEvent}
-              disabled={hasActiveExecution}
-              className={`px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${hasActiveExecution ? 'bg-secondary text-muted-foreground cursor-not-allowed' : 'bg-destructive hover:bg-destructive-hover text-white'}`}
-              title={hasActiveExecution ? 'Cannot archive: active execution in progress' : 'Archive this event'}
-            >
-              Archive Event
             </button>
             <button
               onClick={() => {
@@ -9081,7 +9931,15 @@ function EventCard({
               }}
               className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
-              Close
+              Cancel
+            </button>
+            <button
+              onClick={handleCancelEvent}
+              disabled={hasActiveExecution}
+              className={`px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ml-auto ${hasActiveExecution ? 'bg-secondary text-muted-foreground cursor-not-allowed' : 'bg-destructive hover:bg-destructive-hover text-white'}`}
+              title={hasActiveExecution ? 'Cannot archive: active execution in progress' : 'Archive this event'}
+            >
+              Archive Event
             </button>
           </div>
         </div>
@@ -9090,16 +9948,45 @@ function EventCard({
   }
 
   return (
-    <div className="p-3 bg-card border border-border rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+    // Whole-card clickable, like ItemCard and IntentionCard. Previously only the
+    // title column responded, leaving the padding and the gap beside the
+    // Start/Continue button dead.
+    //
+    // The stopPropagation moved up here with the handler, and still matters for
+    // the same reason it did on the title block: IntentionCard renders its
+    // related events nested INSIDE its own onClick div, so without it a click
+    // runs this handler and the parent's together (defect 0.3). Inert at the
+    // four top-level sites, load-bearing at the nested one.
+    <div
+      onClick={(e) => {
+        e.stopPropagation();
+        if (execution && onOpenExecution) {
+          onOpenExecution(execution);
+        } else {
+          setIsEditing(true);
+        }
+      }}
+      className={`p-3 bg-card border border-border rounded-lg cursor-pointer shadow-sm hover:shadow-md transition-shadow duration-200 ${
+        // Deferred from Step 3, settled here. Every other whole-card-clickable
+        // card has hover:border-primary; EventCard could not take it because it
+        // also renders NESTED inside IntentionCard, whose own hover already
+        // fires on the nested child — a second border would light two cards for
+        // one click target that stopPropagation resolves to the inner one.
+        //
+        // Suppressing the parent's highlight instead would need a has-[…]
+        // variant (available in Tailwind 3.4) reaching into a child's hover
+        // state, which is a fragile selector to leave behind for one row type.
+        // Gating on `nested` is the same outcome in a prop that already exists.
+        //
+        // The nested row does not lose its affordance: as of Step 8a every
+        // EventCard carries always-visible Start/Continue and Archive buttons,
+        // so interactivity is advertised by controls rather than by hover.
+        nested ? "" : "hover:border-primary"
+      }`}
+    >
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <div className="flex-1 min-w-0" onClick={() => {
-          if (execution && onOpenExecution) {
-            onOpenExecution(execution);
-          } else {
-            setIsEditing(true);
-          }
-        }}>
-          <p className="font-medium text-foreground cursor-pointer hover:text-primary">
+        <div className="flex-1 min-w-0">
+          <p className="font-medium text-foreground hover:text-primary">
             {nested ? `Event: ${event.text || getIntentDisplay(intent)}` : (event.text || getIntentDisplay(intent))}
           </p>
           <p className="text-sm text-muted-foreground">
@@ -9111,7 +9998,25 @@ function EventCard({
             </span>
           )}
         </div>
-        {execution ? (
+        {/* Row action strip: Start/Continue then Archive, right-aligned and
+            always visible — never hover-revealed, because the primary device is
+            a touchscreen. No Edit button: clicking the row already opens the
+            edit form, and a row action never duplicates the row click.
+
+            Every button here stops propagation. They are descendants of the
+            card's own onClick as of Step 3, so without it each would fire its
+            action AND open the edit form. */}
+        {/* gap-3 not gap-2: 8px is Material's documented FLOOR for adjacent
+            targets, not a comfortable value, and the neighbour here is
+            destructive. On a touchscreen a thumb landing between Start and
+            Archive was a coin flip.
+
+            self-end because below the sm breakpoint the parent is `flex-col`,
+            where justify-between governs the VERTICAL axis and does nothing
+            horizontally — so the "right-aligned" strip was left-aligned on
+            exactly the device this app is built for. */}
+        <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
+          {execution ? (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -9147,6 +10052,31 @@ function EventCard({
             Start
           </button>
         )}
+        {/* Archive lived only inside the edit form, which governing rule 4
+            forbids: archiving changes the record's state, not its content, so
+            it belongs on the row. Disabled while an execution is open, the same
+            rule the form applies. `onUpdate` routes to updateEvent, which
+            already offers the Undo. */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            handleCancelEvent();
+          }}
+          disabled={hasActiveExecution}
+          title={
+            hasActiveExecution
+              ? "Cannot archive: active execution in progress"
+              : "Archive this event"
+          }
+          className={`flex items-center justify-center p-2 min-h-[44px] min-w-[44px] rounded-lg transition-colors shrink-0 ${
+            hasActiveExecution
+              ? "text-muted-foreground/40 cursor-not-allowed"
+              : "text-muted-foreground hover:text-destructive hover:bg-secondary"
+          }`}
+        >
+            <Archive className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     </div>
   );

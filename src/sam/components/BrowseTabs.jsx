@@ -1,16 +1,16 @@
 import React, { useState, useMemo } from "react";
 import {
-  Play, Plus, Pencil, Archive, ArchiveRestore, ArrowUp, ArrowDown,
+  Play, Plus, Pencil, Archive, ArchiveRestore,
 } from "lucide-react";
 import {
   formatDuration,
   formatLastPracticed,
   formatCreated,
 } from "../lib/samFormat";
+import SortControl, { useSortPreference } from "../../SortControl";
 import {
   SORT_OPTIONS,
   DEFAULT_SORT,
-  defaultDirectionFor,
   sortSongs,
   sortFamilies,
 } from "../lib/samSort";
@@ -327,35 +327,31 @@ export default function BrowseTabs({
 }) {
   const [tab, setTab] = useState("recent"); // 'recent' | 'new' | 'all' | 'drills'
   const [showArchived, setShowArchived] = useState(false);
-  const [sort, setSort] = useState(DEFAULT_SORT);
-  const [dir, setDir] = useState(() => defaultDirectionFor(DEFAULT_SORT));
-
-  // Choosing a FIELD resets the direction to that field's natural one, rather
-  // than carrying over whatever the previous field was flipped to. Going from
-  // "Title, A→Z" to "Last played" should land on most-recent-first, not on
-  // the songs you have not opened since spring.
-  const chooseSort = (value) => {
-    setSort(value);
-    setDir(defaultDirectionFor(value));
-  };
+  // SAM had no persistence: the sort reset to "Last played" every time the
+  // browser remounted, which is every time a song was opened and closed. It now
+  // survives, on its own key alongside Alfred's five pages.
+  //
+  // The direction-reset-on-field-change behaviour moved into the hook with the
+  // rest of it; it is unchanged.
+  const { sortKey, sortDir, chooseKey, toggleDir } = useSortPreference(
+    "alfred.sort.sam",
+    SORT_OPTIONS,
+    DEFAULT_SORT,
+  );
 
   // Every list is re-sorted from the hook's output rather than in place, so
   // switching sort never mutates what `useSongLibrary` handed us — the same
   // arrays back ContinueSection, which must stay recency-ordered.
   const sorted = useMemo(
     () => ({
-      recent: sortSongs(allSongsFlat, sort, dir),
-      new: sortSongs(newSongsFlat, sort, dir),
-      drills: sortSongs(drillsFlat, sort, dir),
-      families: sortFamilies(families, sort, dir),
-      archivedFamilies: sortFamilies(archivedFamilies, sort, dir),
+      recent: sortSongs(allSongsFlat, sortKey, sortDir),
+      new: sortSongs(newSongsFlat, sortKey, sortDir),
+      drills: sortSongs(drillsFlat, sortKey, sortDir),
+      families: sortFamilies(families, sortKey, sortDir),
+      archivedFamilies: sortFamilies(archivedFamilies, sortKey, sortDir),
     }),
-    [allSongsFlat, newSongsFlat, drillsFlat, families, archivedFamilies, sort, dir]
+    [allSongsFlat, newSongsFlat, drillsFlat, families, archivedFamilies, sortKey, sortDir]
   );
-
-  const ascending = dir === "asc";
-  const DirIcon = ascending ? ArrowUp : ArrowDown;
-  const nextDirWord = ascending ? "descending" : "ascending";
 
   return (
     <div className="mt-6">
@@ -400,40 +396,17 @@ export default function BrowseTabs({
         </button>
       </div>
 
-      {/* Sort control. Its own row rather than beside the tabs, which are
-          already four-wide plus Add and would crowd on a narrow screen.
-
-          The direction button sits OUTSIDE the label — a <label> forwards
-          clicks to its control, so an interactive element nested inside it
-          would toggle the direction and then open the select. */}
-      <div className="flex items-center justify-end gap-2 mb-3">
-        <label htmlFor="sam-sort" className="text-xs text-muted-foreground">
-          Sort by
-        </label>
-        <select
-          id="sam-sort"
-          value={sort}
-          onChange={(e) => chooseSort(e.target.value)}
-          className="min-h-[36px] px-2 py-1 text-sm rounded-lg border border-border bg-card text-dark hover:bg-secondary transition-colors"
-        >
-          {SORT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={() => setDir((d) => (d === "asc" ? "desc" : "asc"))}
-          className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:text-primary hover:bg-secondary transition-colors"
-          title={`Sort ${nextDirWord}`}
-          aria-label={`Sort ${nextDirWord} — currently ${
-            ascending ? "ascending" : "descending"
-          }`}
-        >
-          <DirIcon className="w-4 h-4" aria-hidden="true" />
-        </button>
-      </div>
+      {/* Its own row rather than beside the tabs, which are already four-wide
+          plus Add and would crowd on a narrow screen. */}
+      <SortControl
+        id="sam-sort"
+        options={SORT_OPTIONS}
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onChooseKey={chooseKey}
+        onToggleDir={toggleDir}
+        className="mb-3"
+      />
 
       {loading ? (
         <div className="text-center text-sm text-muted-foreground py-8">
