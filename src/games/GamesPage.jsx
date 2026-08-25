@@ -1,41 +1,64 @@
-import React from "react";
-import {
-  NotesBoard,
-  LOW_BOARD,
-  HIGH_BOARD,
-  TILE_SIZES,
-} from "./NotesBoard";
+import React, { useState } from "react";
+import { ArrowLeft, ChevronRight } from "lucide-react";
+import { VARIANTS, findVariant } from "./variants";
 
-// The Games view.
+// The Games tab: a variant harness.
 //
-// A game selection screen goes here later. For now Games renders the Notes
-// board directly — six read-only grids at three tile sizes, so a phone-sized
-// screen can be judged for legibility before any game logic exists.
+// Games is a list of rule experiments over the same shared tile, not a single
+// game. The tab's whole job is to list what exists and open one; everything
+// about how a variant plays lives in its own file.
 export default function GamesPage() {
+  const [openId, setOpenId] = useState(null);
+  const open = findVariant(openId);
+
+  if (open) {
+    const Variant = open.component;
+    return (
+      <div>
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            type="button"
+            onClick={() => setOpenId(null)}
+            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground rounded"
+            title="Back to Games"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <div>
+            <h2 className="text-lg sm:text-xl font-medium">{open.name}</h2>
+            <p className="text-sm text-muted-foreground">{open.description}</p>
+          </div>
+        </div>
+        {/* Remounts on reopen, which is the reset — no run survives leaving. */}
+        <Variant />
+      </div>
+    );
+  }
+
   return (
     <div>
-      <h2 className="text-lg font-semibold text-foreground mb-1">Notes</h2>
-      <p className="text-sm text-muted-foreground mb-6">
-        Six grids, three tile sizes. Which can you read at a glance?
-      </p>
-
-      {TILE_SIZES.map((size) => (
-        <NotesBoard
-          key={`low-${size}`}
-          rows={LOW_BOARD}
-          size={size}
-          label="Low board"
-        />
-      ))}
-
-      {TILE_SIZES.map((size) => (
-        <NotesBoard
-          key={`high-${size}`}
-          rows={HIGH_BOARD}
-          size={size}
-          label="High board"
-        />
-      ))}
+      <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Games</h2>
+      <div className="space-y-2">
+        {VARIANTS.map((variant) => (
+          <button
+            key={variant.id}
+            type="button"
+            onClick={() => setOpenId(variant.id)}
+            className="w-full text-left p-4 min-h-[44px] bg-card border border-border rounded-lg flex items-center justify-between gap-3"
+          >
+            <span>
+              <span className="block font-medium text-foreground">
+                {variant.name}
+              </span>
+              <span className="block text-sm text-muted-foreground">
+                {variant.description}
+              </span>
+            </span>
+            {/* Permanently visible, not revealed on hover — this is a phone. */}
+            <ChevronRight className="w-5 h-5 text-muted-foreground shrink-0" />
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
