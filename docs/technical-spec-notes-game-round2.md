@@ -32,7 +32,7 @@ Constants stay at the top of `drop.jsx` for tuning:
 ```
 SEED_RANGE      = [0, 6]
 STEP_TOLERANCE  = 1
-PROMOTION       = (chainLength) => Math.max(1, Math.floor(chainLength / 2))
+PROMOTION_STEPS = 1             // flat, regardless of chain length
 SHUFFLE_LIMIT   = null          // null means unlimited
 SHUFFLE_TRIES   = 200
 ```
@@ -49,16 +49,40 @@ empty cell.
 
 Then, in order:
 
-1. **Row clear test.** If the chain contains every occupied cell in that row, the
-   whole chain is removed — including the tapped tile. There is no promotion. This is
-   the only way a promoted tile can die, and the only way the board can reach zero
-   tiles. Note that because a chain cannot cross an empty cell, a row with a gap in it
-   can never trigger a row clear.
-2. **Otherwise.** The tapped tile rises by `PROMOTION(chainLength)`. Every other tile
-   in the chain becomes empty.
+1. Every tile in the chain except the tapped tile becomes empty.
+2. The tapped tile rises by `PROMOTION_STEPS` — flat, whatever the chain length. Chain
+   length buys reach and board space, never a bigger promotion.
 3. **Gravity.** Within each column independently, every tile falls as far as it can.
-   A cleared row leaves a hole in every column, so everything above drops by one row.
    After gravity, no tile may have an empty cell below it in its column.
+4. **Arm test.** If the chain covered every occupied cell in its row *before* step 1,
+   the promoted tile becomes **armed**. Otherwise nothing is armed. Because a chain
+   cannot cross an empty cell, a row with a gap in it can never arm anything.
+
+### Arm and destroy
+
+Arming is a property of a specific tile, not of a row. It persists through the gravity
+pass that created it: the armed tile keeps its state while other tiles fall in around
+it. In practice the armed tile does not move at all — the chain lay in one row, so
+nothing beneath the survivor was removed and it has nowhere to fall.
+
+Only one tile can be armed at a time.
+
+- **Destroy.** Tapping an armed tile destroys it. The cell empties, gravity runs,
+  nothing promotes. This is the only way a promoted tile can die, and the only way the
+  board can reach zero tiles. It is checked before chains, so an armed tile that has
+  since gained a neighbour still destroys rather than chaining.
+- **Disarm.** Any valid chain tap elsewhere clears the arm before resolving. Shuffle
+  clears it. Refill and New board clear it. A tap on a tile with no chain does nothing
+  and does **not** disarm.
+- **Chain count and shuffle.** The chain readout ignores arming entirely. If a tile is
+  armed and no chains exist, the count is zero and Shuffle appears as normal.
+- **Undo.** A destroy goes on the undo stack; undoing it restores the tile and its
+  armed state. A chain tap goes on the stack as before, including whether it armed the
+  survivor. Arming by itself is not a separate stack entry.
+- **Visual.** An armed tile is drawn with a ring in `--primary`, Alfred's action
+  colour, as a box-shadow so it costs no layout. Exactly one tile is ever armed and it
+  moves every time, so it cannot be read as encoding pitch. The staff and notehead are
+  untouched.
 
 ### Board cleared
 
@@ -68,11 +92,16 @@ Checked after gravity resolves.
 remaining tile sits on the bottom row. Zero tiles counts as cleared and is the best
 possible finish.
 
-Reaching a cleared board does not require a row clear to have happened. A board that
+Reaching a cleared board does not require a destroy to have happened. A board that
 grinds down to a single surviving tile also counts. This is rare and is accepted.
 
 On a cleared board: increment the boards-cleared counter, stop accepting taps, and
-show a **Refill** button.
+show a **Refill** button inline in the button row below the board, alongside Undo and
+Shuffle and following the same hide-when-irrelevant pattern. Clearing a board is the
+good outcome, so it is deliberately not a modal — no overlay, no interruption. Taps
+stay refused until Refill is pressed.
+
+**Boards cleared is the game's score.**
 
 ### Refill
 
@@ -107,12 +136,23 @@ the "out of shuffles" end cause.
 
 ### End of run
 
-Two terminal states, and they are different:
+Two terminal states, and they are handled quite differently:
 
-- **Board cleared** — the win. Refill button appears, session continues.
-- **True game over** — no chains and no shuffle can fix it. Show highest pitch reached,
-  taps taken, largest chain, tiles remaining, and boards cleared this session. Offer
-  "New board", which resets everything including the boards-cleared counter.
+- **Board cleared** — the win. An inline Refill button appears in the button row and
+  the session continues. No modal.
+- **True game over** — no chains and no shuffle can fix it. This one raises a modal,
+  since it is the end of the session. It shows boards cleared this session, tiles
+  remaining on the final board, taps taken, and largest chain. Offer "New board", which
+  resets everything including the boards-cleared counter.
+
+  The modal has a dismiss control — backdrop tap, Escape, or its close button — which
+  closes without acting, leaving the finished board visible and still refusing taps. A
+  "Show summary" button then appears below the board to reopen it, so the action is
+  never lost. Nothing else reopens it.
+
+**Highest pitch is not tracked.** It was reported in an earlier draft and has been
+removed everywhere — from the summary, from any inline readout, and from state. Boards
+cleared is the score.
 
 ## Cosmetics
 
@@ -152,7 +192,7 @@ must stay cheap.
 **Smoosh.** Columns collapsing sideways when one empties, to prevent geometric
 orphaning. Held back deliberately: the inability to reach across an empty column may
 turn out to be part of the strategy rather than a defect. Revisit after playing with
-row clears, which change the shape of the endgame considerably.
+arm-and-destroy, which changes the shape of the endgame considerably.
 
 ## Constraints
 
@@ -165,9 +205,13 @@ row clears, which change the shape of the endgame considerably.
 
 ## Success criteria
 
-- A full-row chain clears the row and kills the promoted tile
-- A cleared row drops everything above it by one row
-- Boards can be cleared, and clearing one shows a working Refill button
+- Every chain tap promotes the survivor exactly one step, whatever the chain length
+- A full-row chain arms the survivor, and tiles fall in around it
+- Tapping an armed tile destroys it and its column drops
+- A partial-row chain never arms anything, and an invalid tap never disarms
+- Boards can be cleared, and clearing one shows a working inline Refill button with no
+  modal and no layout shift
+- True game over raises the modal; board cleared never does
 - Refill preserves bottom-row survivors at their pitches
 - Shuffle only appears when stuck, and always produces a playable board
 - True game over fires when no arrangement can help, and only then

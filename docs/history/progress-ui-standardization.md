@@ -1,11 +1,10 @@
 # Progress: Alfred UI Action Standardization
 
-## Status: Steps 1–9a verified. Step 9b done, awaiting verification.
+## Status: Steps 1–10 verified. Step 11 done, awaiting verification. Spec complete after this.
 
-**Deferred to its own step:** Context Archive. `contexts.archived` does not exist yet;
-the migration is being run separately by Alex. When it lands, Context Archive arrives
-as its own step including the Recycle Bin Contexts tab and an empty-context guard.
-**Write no SQL.**
+Inbox purged by Alex 2026-08-25: **151 archived rows deleted, 10 live remain.** That
+closes the gap Step 10 recorded — the count is now zero and the column is no longer
+written.
 
 Confirmations: only the Recycle Bin's two permanent-delete dialogs remain, kept
 permanently by decision (spec Undo section, exception 1).
@@ -133,10 +132,16 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
       - **Home → Today already sorts by time ascending**, deliberately, with a
         comment. Default the control to the same thing so day-one behaviour is
         unchanged.
-- [ ] **Step 10 — Inbox delete.** Discard and successful triage both hard delete.
+- [x] **Step 10 — Inbox delete.** _(done 2026-08-25 — see "Step 10 findings"
+      below)_ Discard and successful triage both hard delete.
       Relabel to "Delete". Extend Undo to re-insert with the original id.
-- [ ] **Step 11 — Context archive.** _(added 2026-08-24; blocked until the
-      migration lands — write no SQL.)_ Split out of Step 5.
+      **Open:** Inbox's default order flipped from oldest-first to newest-first
+      in Step 9b. Alex is judging it in use; his lean is oldest-first — an inbox
+      is a queue being drained, and newest-first buries the item that has waited
+      longest. One line in `INBOX_SORT_OPTIONS`' default either way.
+- [x] **Step 11 — Context archive.** _(done 2026-08-25 — see "Step 11 findings"
+      below. `contexts.archived` applied by Alex; CONFORMANT across 16 tables.)_
+      Split out of Step 5.
       - Archive permitted **only when the context is empty**: no items, no
         intentions, no events, no collections. Contexts are taxonomy, not
         content, so nothing cascades and restore brings back only the context.
@@ -1698,6 +1703,257 @@ is invisible from the spec's option table, which lists Name as one choice among 
 and it would be an easy thing for a later page to omit — the symptom would be a
 `TypeError` inside the comparator rather than anything sort-shaped. Commented at the
 option lists.
+
+---
+
+## Step 10 findings — inbox hard delete (2026-08-25)
+
+**No SQL.** No MCP tool touched. `archived` and `triaged_at` still exist and are
+still not dropped.
+
+### What changed
+
+| File | Change |
+|---|---|
+| [Alfred.jsx:1866](src/Alfred.jsx#L1866) | `archiveInboxItem` → **`deleteInboxItem`**; hard delete, Undo re-inserts |
+| [Alfred.jsx:1896](src/Alfred.jsx#L1896) | `handleInboxSave` tracks write success |
+| [Alfred.jsx:2035](src/Alfred.jsx#L2035) | Triage disposes only on success; no Undo there |
+| [Alfred.jsx:5510](src/Alfred.jsx#L5510) | `InboxCard`'s `onArchive` prop → `onDelete` |
+| [:5737](src/Alfred.jsx#L5737), [:6385](src/Alfred.jsx#L6385) | Both buttons relabelled **Delete**, `Archive` icon → `Trash2` |
+
+### Checks run
+
+- Full suite — **15 suites, 289 tests, pass**
+- `CI=true npm run build` — **compiled successfully**
+- `git diff -- supabase/` — **empty**, so no MCP schema moved
+- Nothing writes `archived: true` or a `triagedAt` timestamp to `inbox` any more; the
+  only surviving reference is the `triagedAt: null` stamped at capture time
+
+### Check 1 — the Step 2 restore closure still holds. Confirmed, unchanged.
+
+Step 2 predicted this closure would need no edit at Step 10. Eight steps later it
+needed none:
+
+```js
+offerUndoFor("Capture deleted.", async () => {
+  await storage.set(`inbox:${inboxItem.id}`, inboxItem);   // ← unchanged
+  setInboxItems((prev) => [...].sort(byCreatedAt));
+});
+```
+
+`storage.set` still UPDATEs by id and INSERTs only when that matches nothing
+([:118](src/Alfred.jsx#L118)), so re-inserting a deleted row keeps its original id for
+free. Swapping the archive for a delete changed *what the closure reverses*, not how.
+
+One part of Step 2's reasoning **has expired**, though: it called the `createdAt`
+re-sort "load-bearing". It no longer is — Step 9b made the inbox's display order a
+function of the sort preference rather than of array order. Kept anyway so
+`inboxItems` stays in a canonical order, but the comment is corrected in place so it
+does not mislead later.
+
+### Check 2 — the archived rows: reachable by nothing, and I cannot count them
+
+**Nothing can reach them.** Three consumers, three exclusions:
+
+| Consumer | What it does with an archived inbox row |
+|---|---|
+| React client | `select("*")` then `.filter(item => !item.archived)` in JS ([:1198](src/Alfred.jsx#L1198), [:1249](src/Alfred.jsx#L1249)) — **fetched into the browser on every load and every refresh, then discarded** |
+| Recycle Bin | seven tabs, none of them Inbox |
+| MCP `get_inbox` | `.eq("archived", false).is("triaged_at", null)` ([tool-handlers.ts:486](supabase/functions/_shared/alfred-tools/tool-handlers.ts#L486)) |
+
+The client one is worth knowing: those rows are not merely invisible, they are
+**downloaded on every page load and thrown away**. Whatever the count is, it is paid
+for on each refresh.
+
+**I cannot give you the number.** `get_inbox` is the only inbox reader available to me
+and it filters archived rows out before returning; its one parameter is `ai_status`.
+There is no raw-SQL tool in this connector. Read-only query, writes nothing:
+
+```sql
+select count(*) as archived_rows,
+       min(created_at) as oldest,
+       max(created_at) as newest
+from   inbox
+where  archived = true;
+```
+
+For reference, **6 live rows** remain (`archived = false`, un-triaged), all
+`ai_status: "not_started"`.
+
+### The substantive finding: "delete only on success" needed a check that did not exist
+
+The spec asks for disposal "only on success". `handleInboxSave` had **no success check
+at all**, and none of its writers throw:
+
+- `storage.set` catches its own errors and returns `false` ([:155](src/Alfred.jsx#L155))
+- `addItemsToCollection` alerts and returns `false` ([:2656](src/Alfred.jsx#L2656))
+- `withLoading` catches and does not rethrow, so an exception would not reach the caller
+  either
+
+So a failed downstream write left execution running straight into the disposal line.
+That was survivable while disposal set a flag — the row stayed in the table and could
+be un-flagged. **With a hard delete it would destroy the capture and leave nothing
+downstream to show for it.** Every write is now checked through a small `wrote()`
+helper, and on any failure the row stays and the user is told.
+
+The message says *"check what was created before filing it again"* rather than *"try
+again"*, because partial success is possible: the item may be created and the intention
+not, and a blind retry would duplicate the half that worked. That partial-failure
+window is pre-existing and not closed here — closing it needs a transaction, which is
+a data-layer change.
+
+### Decision — successful triage offers no Undo
+
+Discard does; triage does not. Undo on a triage would re-insert the inbox row but could
+not remove the item, intention, event or collection membership it became — so it would
+restore a capture that had already been filed, leaving both. A button labelled Undo
+that half-undoes is worse than no button, and this is the same standard applied to
+Delete Collection in Step 4b.
+
+Discard has no such problem: nothing downstream exists to reverse, which is exactly why
+it gets the Undo.
+
+### Surprise
+
+**The two paths were byte-identical, and one of them was mislabelled the whole time.**
+Part C says discard and triage "run byte-identical code", which was true —
+`{ ...inboxItem, archived: true, triagedAt: now() }` in both places. What that hid is
+that a *successful triage* was being recorded as an *archive*, so `archived = true`
+never meant "the user discarded this". Any future attempt to review "past discarded
+captures" from that column would have been reading a mixture of both. Deleting both
+kinds removes the ambiguity going forward, but **the existing archived rows carry it**
+— which is worth knowing before anyone reviews them.
+
+---
+
+## Step 11 findings — context archive (2026-08-25)
+
+**No SQL written.** `contexts.archived` was applied by Alex before this step.
+
+### What changed
+
+| File | Change |
+|---|---|
+| [Alfred.jsx:3167](src/Alfred.jsx#L3167) | `activeContexts`; `pinnedContexts` derives from it |
+| [Alfred.jsx:3180](src/Alfred.jsx#L3180) | `contextChildCounts` + `contextArchiveBlockers` |
+| [Alfred.jsx:3213](src/Alfred.jsx#L3213) | `archiveContext`, guarded, wired to Undo |
+| Context detail | Guarded **Archive** beside Edit |
+| 6 picker sites | Archived contexts no longer offered |
+| Recycle Bin | **Contexts** tab; load, restore ×2, delete ×2, row rendering |
+
+### Checks run
+
+- Full suite — **15 suites, 289 tests, pass**
+- `CI=true npm run build` — **compiled successfully**
+
+### Check 1 — the empty rule: everything is in hand, and archived children count
+
+All four counts come from state already loaded. `loadData` selects every row of
+`items`, `intents`, `events` and `item_collections` with no filter, so
+`contextChildCounts` is four `.filter().length` calls and **no query**.
+
+**Archived children count as occupancy — agreed, and there is a concrete reason
+beyond principle.** The Recycle Bin labels every archived row with its context name,
+resolved through `contexts.find(...)`. If an archived item's context were itself
+archivable, restoring that item would place it in a context with no page to reach it
+from, and the recycle row would lose its label on the way. Emptiness means "no children
+at all", not "no live children".
+
+### Check 2 — permanent delete does NOT cascade. It orphans, which is worse.
+
+This is the opposite of Collections, and it is the finding of this step.
+
+Queried all four child tables. **None has a foreign key to `contexts`:**
+
+| Table | Foreign keys |
+|---|---|
+| `items` | `items_user_id_fkey` → `auth.users` only |
+| `intents` | `intents_user_id_fkey` → `auth.users` only |
+| `events` | `events_user_id_fkey` → `auth.users` only |
+| `item_collections` | `item_collections_user_id_fkey` → `auth.users` only |
+
+`context_id` is a plain nullable `text` column with an index and no referential
+constraint. So deleting a context destroys nothing — it leaves children pointing at a
+row that no longer exists.
+
+**An orphaned item is reachable from nowhere.** `memoriesWithoutContext` filters
+`!i.contextId`, and an orphan *has* a `contextId` — it just points at nothing. There is
+no context page to open. The item is in the database, owned, and invisible. Orphaned
+events and intentions fare better: they still list on Schedule and Intentions, but
+their context badge renders blank.
+
+Alex asked whether children could appear between archive and purge. They can — another
+device, an MCP tool, or Elise on a shared context. So **the empty rule is now enforced
+at both ends**: `recyclePermanentDelete` and `recycleBulkDelete` both re-check and
+refuse with a message naming what is in the way. A context reaching deletion is
+therefore empty by construction, which is why its confirm keeps the generic wording —
+unlike Collections, there is genuinely nothing to warn about destroying.
+
+### Check 3 — what Elise sees, and one thing she can do
+
+`contexts_access` is `USING (user_id = auth.uid() OR shared = true)`, and the child
+tables' RLS reads `context_id IN (SELECT id FROM contexts WHERE shared = true)`.
+
+- **Archiving a shared context leaves `shared = true`**, so RLS is untouched. Elise
+  keeps access to everything that was in it — though by the empty rule there is nothing
+  in it.
+- **It vanishes from her Contexts list immediately**, via the realtime channel, with no
+  notification. Since it must be empty to be archived, she loses a name and nothing else.
+- **She can restore it.** Her RLS grants `ALL` on shared contexts, so an archived shared
+  context appears in *her* Recycle Bin's Contexts tab and she can un-archive it. She can
+  equally archive one of Alex's shared contexts. Symmetric, consistent with the shared
+  -collection policy, and worth knowing rather than discovering.
+- **Permanent deletion is the sharp edge**, and only in theory: deleting a shared
+  context removes the row the child RLS subquery depends on, so every item, intent and
+  event that referenced it would become invisible to Elise while remaining visible to
+  Alex through `user_id = auth.uid()`. The empty rule plus the purge-time re-check means
+  no such children can exist.
+
+### Check 4 — six places offered a choice of context; five needed changing
+
+| Site | Kind | Action |
+|---|---|---|
+| Contexts list page | choice | now `activeContexts` |
+| Collection detail's Context select | choice | filtered inline |
+| `InboxCard`'s item Context select | choice | filtered inline |
+| `ItemCard`'s Context select | choice | filtered inline |
+| `InboxCard`'s intent context autocomplete | choice | filtered inline |
+| `IntentionCard`'s context autocomplete | choice | filtered inline |
+| Collections page context filter | choice | **already correct** — the no-op filter |
+
+**Filtered inline rather than by swapping the prop, which is the opposite of the
+`activeCollections` approach and deliberately so.** Contexts are referenced by *name*
+far more widely than collections are — roughly twenty `contexts.find(...)` lookups
+render a badge on an item, an intention, an event, an execution or a Recycle Bin row.
+Passing a filtered array to those cards would blank every badge belonging to an
+archived context. So the prop stays raw and only the pickers filter.
+
+**The no-op filter is now correct for free**, exactly as predicted at Step 5: it always
+read `contexts.filter(c => !c.archived)` against a column that did not exist, so it
+excluded nothing. It excludes something now, and needed no edit.
+
+### The realtime question — included, but as redundancy not necessity
+
+Alex asked whether contexts having a realtime channel changes the `refreshData` answer.
+**It does.** For collections it was load-bearing: no channel exists, so without it a
+restored collection stayed invisible until a manual refresh — a silent failure.
+Contexts have `contexts-changes` → `handleContextChange`, which maps the UPDATE into
+state, so a restore propagates without any refresh.
+
+Included anyway, for two reasons: realtime can be disconnected — the header has an
+indicator for exactly that state — and `items`, `intents` and `events` are all in that
+list despite having channels of their own. Consistent, and correct when the socket is
+down.
+
+### Surprise
+
+**The two soft-delete steps have opposite failure modes, and the safer-sounding one is
+the dangerous one.** Deleting a collection *cascades*: membership and removal history
+are destroyed, loudly and completely, which is why Step 4b gave it a confirm naming
+exactly that. Deleting a context *orphans*: nothing is destroyed, every row survives
+intact — and an orphaned item becomes unreachable from any screen while looking
+perfectly healthy in the database. "Nothing cascades" reads like reassurance and is the
+reason this step needed a guard at both ends rather than one.
 
 ---
 

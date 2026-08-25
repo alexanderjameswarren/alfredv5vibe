@@ -1,5 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
+import { X } from "lucide-react";
 import NoteTile, { TILE, GRID, GAP } from "../noteTile";
+import { readSave, writeSave, clearSave } from "../gameStorage";
 
 // Drop — horizontal chains only, survivors fall into the gaps.
 //
@@ -11,7 +13,9 @@ import NoteTile, { TILE, GRID, GAP } from "../noteTile";
 // alive longer or just drags the ending out.
 //
 // Board is a flat array of GRID * GRID cells; a cell is a pitch index or null
-// for an empty cell. In-memory only — nothing persists between sessions.
+// for an empty cell. The run is saved to localStorage under a per-variant key,
+// so navigating away and back resumes exactly where you left off; nothing
+// leaves the device.
 
 const CELLS = GRID * GRID;
 
@@ -21,13 +25,17 @@ const SEED_RANGE = [0, 6];
 // Two horizontally adjacent cells are linked when their pitches differ by at
 // most this.
 const STEP_TOLERANCE = 1;
-// How many steps the tapped tile rises, given the length of the chain cleared.
-const PROMOTION = (chainLength) => Math.max(1, Math.floor(chainLength / 2));
+// How many steps the tapped tile rises. Flat: chain length buys reach and
+// board space, never a bigger promotion.
+const PROMOTION_STEPS = 1;
 // Reroll budget per board. null means unlimited — shuffle is no longer a
 // strategic resource, only the way out of a stuck board.
 const SHUFFLE_LIMIT = null;
 // How many rearrangements to try before concluding that none is playable.
 const SHUFFLE_TRIES = 200;
+// How many moves can be taken back. Enforced everywhere, not just on save, so
+// undo depth is identical in-session and after navigating away and back.
+const UNDO_DEPTH = 5;
 // ---------------------------------------------------------------------------
 
 // --- row banding -----------------------------------------------------------
@@ -155,15 +163,16 @@ function rowChain(board, start) {
   return chain;
 }
 
-// Does this chain account for every occupied cell in its row? If so the row
-// goes entirely, tapped tile included, with no promotion.
+// Does this chain account for every occupied cell in its row? Judged on the
+// board as it stood BEFORE anything was cleared. A chain that does is what arms
+// the surviving tile.
 //
 // A chain cannot cross an empty cell, so a row with a gap between two occupied
 // cells can never satisfy this: the chain stops at the gap and leaves the far
 // side standing. Leading and trailing empties are not gaps — a row holding
-// three tiles in its last three columns can row-clear, which is what makes the
-// sparse upper rows worth clearing at all.
-function clearsRow(board, chain) {
+// three tiles in its last three columns can cover its row, which is what makes
+// the sparse upper rows worth clearing at all.
+function coversRow(board, chain) {
   const rowStart = Math.floor(chain[0] / GRID) * GRID;
   let occupied = 0;
   for (let col = 0; col < GRID; col++) {
@@ -218,6 +227,24 @@ function fallDistances(preGravity, postGravity) {
 }
 
 const NO_FALL = Object.freeze(new Array(CELLS).fill(0));
+
+// Where the tile at `index` in a pre-gravity board comes to rest. Its column
+// never changes and gravity packs downward, so its settled row is fixed by how
+// many tiles remain beneath it.
+//
+// For an arming tap this provably returns `index` unchanged — the chain lies in
+// one row, so nothing below the survivor was removed and it has nowhere to
+// fall; the tiles that move are the ones dropping in around it from above. It
+// is computed properly anyway, so a future change to how chains are shaped
+// cannot silently strand the arm on the wrong cell.
+function settledIndexOf(preGravity, index) {
+  const col = index % GRID;
+  let below = 0;
+  for (let row = Math.floor(index / GRID) + 1; row < GRID; row++) {
+    if (preGravity[row * GRID + col] != null) below += 1;
+  }
+  return (GRID - 1 - below) * GRID + col;
+}
 
 // Reassign the pitches already on the board among the cells already occupied.
 // Occupancy is deliberately untouched — the same cells stay filled, the same
@@ -365,8 +392,226 @@ function finishCause(board) {
 
 const filled = (board) => board.reduce((n, p) => (p == null ? n : n + 1), 0);
 
+// Push a move, dropping the oldest once the stack is full.
+const pushMove = (history, entry) => [...history, entry].slice(-UNDO_DEPTH);
+
+// --- persistence -----------------------------------------------------------
+//
+// This variant's save key. Per variant, so a future variant's save can never be
+// mistaken for this one's.
+const VARIANT_ID = "drop";
+
+// A saved board comes from an arbitrary past build and cannot be trusted. The
+// checks below are what stands between a corrupted save and a board that
+// renders wrong, so they are deliberately total: a save either passes every one
+// or is thrown away whole.
+//
+// Well above anything reachable — flat promotion tops out around 9 on a 5x5
+// board — but low enough to catch a number that has been mangled rather than
+// merely grown.
+const MAX_SANE_PITCH = 20;
+
+const isCount = (v) => Number.isInteger(v) && v >= 0;
+const isPitch = (v) => Number.isInteger(v) && v >= 0 && v <= MAX_SANE_PITCH;
+
+function isSaneBoard(b) {
+  if (!Array.isArray(b) || b.length !== CELLS) return false;
+  if (!b.every((v) => v === null || isPitch(v))) return false;
+
+  // Gravity's invariant: no tile may sit above an empty cell in its column. A
+  // save that breaks it would render a board this game could never produce.
+  for (let col = 0; col < GRID; col++) {
+    let seenEmpty = false;
+    for (let row = GRID - 1; row >= 0; row--) {
+      if (b[row * GRID + col] === null) seenEmpty = true;
+      else if (seenEmpty) return false;
+    }
+  }
+  return true;
+}
+
+// An arm must point at a real cell of its own board that actually holds a tile.
+const isSaneArm = (v, board) =>
+  v === null || (Number.isInteger(v) && v >= 0 && v < CELLS && board[v] !== null);
+
+function isSaneEntry(e) {
+  return (
+    e !== null &&
+    typeof e === "object" &&
+    (e.kind === "tap" || e.kind === "destroy" || e.kind === "shuffle") &&
+    isSaneBoard(e.board) &&
+    isSaneArm(e.armedBefore, e.board) &&
+    isCount(e.tapsBefore) &&
+    isCount(e.largestChainBefore) &&
+    (e.kind !== "tap" || isCount(e.chainLength))
+  );
+}
+
+function isSaneSave(s) {
+  return (
+    s !== null &&
+    typeof s === "object" &&
+    isSaneBoard(s.board) &&
+    isSaneArm(s.armed, s.board) &&
+    typeof s.searchExhausted === "boolean" &&
+    isCount(s.bankedClears) &&
+    isCount(s.taps) &&
+    isCount(s.largestChain) &&
+    Array.isArray(s.history) &&
+    s.history.length <= UNDO_DEPTH &&
+    s.history.every(isSaneEntry)
+  );
+}
+
+// A restored run, or a fresh one if there is nothing usable saved.
+function initialRun() {
+  return (
+    readSave(VARIANT_ID, isSaneSave) || {
+      board: newBoard(),
+      history: [],
+      armed: null,
+      taps: 0,
+      largestChain: 0,
+      bankedClears: 0,
+      searchExhausted: false,
+    }
+  );
+}
+
+// The game-over modal. Board cleared is deliberately NOT a modal — clearing a
+// board is the good outcome and interrupting it every time would wear out fast,
+// so that one is an inline Refill button instead. Only the end of a session
+// stops the player.
+//
+// Follows the modal pattern already used across Alfred and SAM (see
+// sam/components/FamilySheet.jsx): full-viewport backdrop, tap outside to
+// dismiss, Escape to dismiss, a bg-card panel with role="dialog". Position is
+// fixed, so opening and closing cannot move the board underneath.
+//
+// Copy is flat on purpose. A fidget game gets played hundreds of times and
+// anything congratulatory would wear out inside a day.
+function ResultModal({
+  title,
+  detail,
+  figures,
+  primaryLabel,
+  onPrimary,
+  onDismiss,
+  returnFocusTo,
+}) {
+  const panelRef = useRef(null);
+
+  // Handlers live in refs so the effect can run exactly once per open. With
+  // them in the dependency list a parent re-render would re-run it, stealing
+  // focus back to the panel and firing the focus-return cleanup mid-life.
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
+  const returnRef = useRef(returnFocusTo);
+  returnRef.current = returnFocusTo;
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    const previouslyFocused = document.activeElement;
+    panel.focus();
+
+    function onKey(e) {
+      if (e.key === "Escape") {
+        dismissRef.current();
+        return;
+      }
+      if (e.key !== "Tab") return;
+
+      // Focus trap: Tab off either end wraps to the other.
+      const focusable = panel.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      const target = returnRef.current?.current || previouslyFocused;
+      if (target && typeof target.focus === "function") target.focus();
+    };
+  }, []);
+
+  return (
+    <div
+      onClick={onDismiss}
+      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+    >
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="bg-card border border-border rounded-xl shadow-lg w-full max-w-sm"
+      >
+        <div className="flex items-start justify-between gap-3 p-4 border-b border-border">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-foreground">{title}</h2>
+            {detail && (
+              <p className="text-xs text-muted-foreground mt-1">{detail}</p>
+            )}
+          </div>
+          {/* Dismiss only — it closes the modal without acting, leaving the
+              finished board visible and still refusing taps. */}
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground rounded shrink-0"
+            aria-label="Close"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-4">
+          <dl className="space-y-1">
+            {figures.map(({ label, value }) => (
+              <div key={label} className="flex justify-between gap-3 text-sm">
+                <dt className="text-muted-foreground">{label}</dt>
+                <dd className="text-foreground">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+
+        <div className="p-4 border-t border-border">
+          <button
+            type="button"
+            onClick={onPrimary}
+            className="w-full px-4 py-2 min-h-[44px] rounded bg-primary text-white shadow-sm"
+          >
+            {primaryLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Drop() {
-  const [board, setBoard] = useState(newBoard);
+  // Read once, lazily, on mount. A restored run and a fresh one have exactly
+  // the same shape, so nothing downstream knows which it got.
+  const [restored] = useState(initialRun);
+
+  const [board, setBoard] = useState(restored.board);
 
   // The move stack. Each entry is { kind, board }: the whole board as it stood
   // before a tap — before promotion, before clearing, before gravity — or
@@ -375,19 +620,19 @@ export default function Drop() {
   // tell a reroll from a move. Depth is unlimited within a run; "New board"
   // clears it. A game-move stack, nothing to do with Alfred's 5-second archive
   // undo.
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState(restored.history);
 
   // Boards banked by a refill. Kept as real state rather than derived, because
   // refill clears the move stack and there would be nothing left to derive them
   // from. Session-scoped: "New board" resets it.
-  const [bankedClears, setBankedClears] = useState(0);
+  const [bankedClears, setBankedClears] = useState(restored.bankedClears);
 
   // Set only when playableShuffle exhausts SHUFFLE_TRIES on this exact board.
   // It cannot be derived — it is the outcome of a random search, not a property
   // of the position — so it is cleared by hand anywhere the board changes
   // underneath it: undo, refill and reset. A tap cannot stale it, because a
   // board with no chains has no valid tap to make.
-  const [searchExhausted, setSearchExhausted] = useState(false);
+  const [searchExhausted, setSearchExhausted] = useState(restored.searchExhausted);
 
   // How far each tile fell on the move that produced the current board, purely
   // so the drop can be seen. Presentation only — nothing reads it but the
@@ -395,7 +640,49 @@ export default function Drop() {
   // undo, shuffle and refill land without a phantom fall.
   const [fall, setFall] = useState(NO_FALL);
 
-  const taps = history.filter((e) => e.kind === "tap").length;
+  // The modal opens when true game over is live and has not been dismissed.
+  // Dismissal is cleared by every action that leaves that state — undo, refill,
+  // reset — so re-entering it counts as a fresh firing and opens again. Nothing
+  // else reopens it.
+  const [resultDismissed, setResultDismissed] = useState(false);
+
+  // The one armed cell, or null. Armed is a property of a specific tile, not of
+  // a row: it survives the gravity pass that created it and the tiles that fall
+  // in around it. Only ever one at a time.
+  const [armed, setArmed] = useState(restored.armed);
+
+  // Real state, not derived from the stack. They used to be counted off the
+  // history, which only worked while it held the whole run — capped at
+  // UNDO_DEPTH it would report the last five moves and call it the total. Each
+  // stack entry carries the pair as they stood before that move, so undo still
+  // rewinds them exactly, and entries that fall off the bottom are ones we can
+  // no longer undo past anyway.
+  const [taps, setTaps] = useState(restored.taps);
+  const [largestChain, setLargestChain] = useState(restored.largestChain);
+
+  // Save on any change to the run, rather than from inside each of tap,
+  // destroy, shuffle, refill and undo. One place cannot fall out of step with
+  // the mutators, and a future move type is persisted without anyone
+  // remembering to add a call.
+  //
+  // `cleared` is deliberately absent: it is `isCleared(board)`, so the restored
+  // board reproduces it. Saving it too would create a second source of truth
+  // that could come back disagreeing with the board it describes.
+  useEffect(() => {
+    writeSave(VARIANT_ID, {
+      board,
+      history,
+      armed,
+      taps,
+      largestChain,
+      bankedClears,
+      searchExhausted,
+    });
+  }, [board, history, armed, taps, largestChain, bankedClears, searchExhausted]);
+
+  // Where focus lands when the modal closes.
+  const boardRef = useRef(null);
+
 
   // Undoing a shuffle pops its entry, which refunds it for free. With
   // SHUFFLE_LIMIT null there is nothing to refund, but the budget path is kept
@@ -405,31 +692,6 @@ export default function Drop() {
     SHUFFLE_LIMIT == null ? Infinity : SHUFFLE_LIMIT - shufflesUsed;
 
   const remaining = filled(board);
-
-  // High-water mark across the whole run, not the maximum currently on screen.
-  // Row clears can delete the highest tile — a promoted one included — so the
-  // board's own maximum can now fall, and reading it off the current board
-  // alone would under-report. Scanning every board in the timeline stays honest
-  // and still rewinds with undo, since popping an entry drops its board from
-  // the scan. Pitches are never negative, so 0 is a safe floor for a board that
-  // has been emptied.
-  let highest = 0;
-  for (const past of history) {
-    for (const pitch of past.board) if (pitch != null && pitch > highest) highest = pitch;
-  }
-  for (const pitch of board) if (pitch != null && pitch > highest) highest = pitch;
-
-  // Recorded on the entry at the moment of the tap rather than inferred from
-  // the change in tile count. Inference worked while every tap left exactly one
-  // tile standing; a row clear leaves none, so the same arithmetic would report
-  // the chain one longer than it was. Stored on the entry it still rewinds with
-  // undo — the length is popped along with the board it belongs to.
-  let largestChain = 0;
-  for (const entry of history) {
-    if (entry.kind === "tap" && entry.chainLength > largestChain) {
-      largestChain = entry.chainLength;
-    }
-  }
 
   // Recomputed from `board` on every render, so a tap, a shuffle, an undo and
   // a new board all refresh it without anyone having to remember to.
@@ -460,33 +722,72 @@ export default function Drop() {
   // being farmed by clearing and undoing on the spot.
   const boardsCleared = bankedClears + (cleared ? 1 : 0);
 
+  // Either terminal state. Both refuse taps; only their own action moves on.
+  // They are handled quite differently though — `cleared` puts a Refill button
+  // in the button row, `over` raises the modal.
+  const terminal = cleared || over;
+
   function tap(i) {
-    if (over || cleared) return;
+    // Both terminal states refuse taps, including a cleared board waiting on
+    // Refill — the board is finished either way.
+    if (terminal) return;
 
-    const chain = rowChain(board, i);
-    // An invalid tap does nothing at all — no error, no flash, no sound.
-    if (chain.length < 2) return;
+    // Tapping the armed tile destroys it, whatever else is true of that tile.
+    // This is checked before chains, so an armed tile that has since gained a
+    // neighbour still destroys rather than chaining.
+    if (armed === i) {
+      // Named `next` rather than `cleared` so it cannot shadow the
+      // cleared-board flag above — the early return reads it, and a shadowing
+      // const here would put that read in the temporal dead zone.
+      const next = board.slice();
+      next[i] = null; // no promotion, the tile simply goes
 
-    // Order matters: row-clear test, then promote-or-not, then fall.
-    // Named `next` rather than `cleared` so it cannot shadow the cleared-board
-    // flag above — the early return reads it, and a shadowing const here would
-    // put that read in the temporal dead zone.
-    const next = board.slice();
-    for (const cell of chain) next[cell] = null;
-
-    // A row clear takes the tapped tile with it and skips promotion entirely.
-    // It is the only way a promoted tile can die, and the only way the board
-    // can reach zero tiles.
-    if (!clearsRow(board, chain)) {
-      next[i] = board[i] + PROMOTION(chain.length);
+      const settled = applyGravity(next);
+      setHistory((h) =>
+        pushMove(h, {
+          kind: "destroy",
+          board,
+          armedBefore: armed,
+          tapsBefore: taps,
+          largestChainBefore: largestChain,
+        })
+      );
+      setTaps((n) => n + 1);
+      setFall(fallDistances(next, settled));
+      setArmed(null);
+      setBoard(settled);
+      return;
     }
 
+    const chain = rowChain(board, i);
+    // An invalid tap does nothing at all — no error, no flash, no sound, and
+    // deliberately no disarm either.
+    if (chain.length < 2) return;
+
+    // Judged before anything is cleared: this is what arms the survivor.
+    const arms = coversRow(board, chain);
+
+    const next = board.slice();
+    for (const cell of chain) next[cell] = null;
+    next[i] = board[i] + PROMOTION_STEPS; // flat, whatever the chain length
+
     const settled = applyGravity(next);
-    setHistory((h) => [
-      ...h,
-      { kind: "tap", board, chainLength: chain.length },
-    ]);
+    setHistory((h) =>
+      pushMove(h, {
+        kind: "tap",
+        board,
+        chainLength: chain.length,
+        armedBefore: armed,
+        tapsBefore: taps,
+        largestChainBefore: largestChain,
+      })
+    );
+    setTaps((n) => n + 1);
+    setLargestChain((m) => Math.max(m, chain.length));
     setFall(fallDistances(next, settled));
+    // Any valid chain tap clears the standing arm before resolving; this tap
+    // may then arm its own survivor.
+    setArmed(arms ? settledIndexOf(next, i) : null);
     setBoard(settled);
   }
 
@@ -503,8 +804,17 @@ export default function Drop() {
       return;
     }
 
-    setHistory((h) => [...h, { kind: "shuffle", board }]);
+    setHistory((h) =>
+      pushMove(h, {
+        kind: "shuffle",
+        board,
+        armedBefore: armed,
+        tapsBefore: taps,
+        largestChainBefore: largestChain,
+      })
+    );
     setFall(NO_FALL);
+    setArmed(null);
     setBoard(next);
   }
 
@@ -512,9 +822,17 @@ export default function Drop() {
   // out of rather than only restarted.
   function undo() {
     if (history.length === 0) return;
-    setBoard(history[history.length - 1].board);
+    const entry = history[history.length - 1];
+    setBoard(entry.board);
     setHistory((h) => h.slice(0, -1));
+    // Every entry carries the arm as it stood before that action, so undoing a
+    // destroy restores the tile still armed, and undoing anything else puts
+    // back whatever arm it cleared.
+    setArmed(entry.armedBefore);
+    setTaps(entry.tapsBefore);
+    setLargestChain(entry.largestChainBefore);
     setFall(NO_FALL);
+    setResultDismissed(false);
     setSearchExhausted(false); // different board, so the old verdict is void
   }
 
@@ -532,7 +850,11 @@ export default function Drop() {
     setBoard(board.map((pitch) => (pitch == null ? spawnPitch() : pitch)));
     setBankedClears((n) => n + 1);
     setHistory([]); // no undoing back across a refill
+    setTaps(0);
+    setLargestChain(0);
+    setArmed(null);
     setFall(NO_FALL);
+    setResultDismissed(false);
     setSearchExhausted(false);
   }
 
@@ -540,7 +862,15 @@ export default function Drop() {
     setBoard(newBoard());
     setHistory([]);
     setBankedClears(0);
+    setTaps(0);
+    setLargestChain(0);
+    setArmed(null);
+    // Drop the save before the effect writes the fresh run. If that write then
+    // fails — storage full or disabled — we are left with nothing rather than
+    // with the finished run, which is what you would otherwise come back to.
+    clearSave(VARIANT_ID);
     setFall(NO_FALL);
+    setResultDismissed(false);
     setSearchExhausted(false);
   }
 
@@ -582,6 +912,8 @@ export default function Drop() {
           same as before, and leaves the bands meeting edge to edge. The board
           is one gap taller than it was; nothing else moves. */}
       <div
+        ref={boardRef}
+        tabIndex={-1}
         className="mx-auto"
         style={{
           width: `min(${boardWidth}px, 100%)`,
@@ -622,17 +954,34 @@ export default function Drop() {
                   className={`aspect-square p-0 bg-transparent border-0 disabled:opacity-100${
                     fall[i] > 0 ? " drop-fell" : ""
                   }`}
-                  // The offset is expressed in the tile's own height, so it
-                  // stays exact at any board scale: one row is 100% of the
+                  // The drop offset is expressed in the tile's own height, so
+                  // it stays exact at any board scale: one row is 100% of the
                   // tile plus one gap.
-                  style={
-                    fall[i] > 0
+                  //
+                  // The armed ring is drawn as a box-shadow rather than a
+                  // border, so it costs no layout and cannot nudge the board.
+                  // --primary is Alfred's action colour; it says "this tile is
+                  // the next thing you can act on", and since exactly one tile
+                  // is ever armed and it moves every time, it cannot be read as
+                  // encoding pitch. The staff and notehead are untouched.
+                  style={{
+                    ...(fall[i] > 0
                       ? {
                           "--drop-from": `calc(${-fall[i]} * (100% + ${GAP}px))`,
                         }
-                      : undefined
+                      : null),
+                    ...(armed === i
+                      ? {
+                          borderRadius: "var(--radius)",
+                          boxShadow: "0 0 0 3px var(--primary)",
+                        }
+                      : null),
+                  }}
+                  aria-label={
+                    pitch == null
+                      ? "empty"
+                      : `note ${pitch}${armed === i ? ", armed" : ""}`
                   }
-                  aria-label={pitch == null ? "empty" : `note ${pitch}`}
                 >
                   <NoteTile pitch={pitch} size={TILE} />
                 </button>
@@ -664,62 +1013,68 @@ export default function Drop() {
             Undo
           </button>
         )}
+        {/* Filled in --primary, the same brown as Alfred's Start Now and Add
+            Intention buttons, and the same treatment the modal's Refill and New
+            board use here. Shuffle only ever appears when it is the one thing
+            left to do, so it reads as the primary action. Alfred pairs this
+            fill with a darkening hover state; that half is deliberately left
+            off, since nothing here depends on hover. */}
         {canShuffle && (
           <button
             type="button"
             onClick={shuffle}
-            className="px-4 py-2 min-h-[44px] rounded bg-card border border-border text-foreground"
+            className="px-4 py-2 min-h-[44px] rounded bg-primary text-white shadow-sm"
           >
             Shuffle
           </button>
         )}
-      </div>
-
-      {cleared && (
-        <div className="mt-6 mx-auto max-w-xs p-4 bg-card border border-border rounded-lg text-center">
-          <p className="text-sm font-medium text-foreground">Board cleared</p>
-          <p className="text-sm text-muted-foreground mt-2">
-            Boards cleared this session: {boardsCleared}
-          </p>
+        {/* Clearing a board is the good outcome, so it gets a button rather
+            than an overlay. Same hide-when-irrelevant pattern as the other two,
+            in the same fixed-height row, so nothing moves. Taps stay refused
+            until it is pressed. */}
+        {cleared && (
           <button
             type="button"
             onClick={refill}
-            className="mt-4 px-4 py-2 min-h-[44px] rounded bg-primary text-white shadow-sm"
+            className="px-4 py-2 min-h-[44px] rounded bg-primary text-white shadow-sm"
           >
             Refill
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* The other terminal state, and deliberately worded so the two cannot be
-          mistaken for each other: "Board cleared" is the win and the session
-          carries on, "Game over" is the end of the session. */}
-      {over && (
-        <div className="mt-6 mx-auto max-w-xs p-4 bg-card border border-border rounded-lg text-center">
-          <p className="text-sm font-medium text-foreground">
-            Game over — {finishCause(board)}.
-          </p>
-          <p className="text-sm text-muted-foreground mt-2">
-            Highest pitch reached: {highest}
-          </p>
-          <p className="text-sm text-muted-foreground">Taps taken: {taps}</p>
-          <p className="text-sm text-muted-foreground">
-            Largest chain cleared: {largestChain}
-          </p>
-          <p className="text-sm text-muted-foreground">
-            Tiles remaining: {remaining}
-          </p>
-          <p className="text-sm text-muted-foreground">
-            Boards cleared this session: {boardsCleared}
-          </p>
+      {/* Fixed height again, so the reopen control appearing cannot move the
+          board or the row above it. */}
+      <div className="mt-2 flex items-center justify-center h-11">
+        {over && resultDismissed && (
           <button
             type="button"
-            onClick={reset}
-            className="mt-4 px-4 py-2 min-h-[44px] rounded bg-primary text-white shadow-sm"
+            onClick={() => setResultDismissed(false)}
+            className="px-4 py-2 min-h-[44px] rounded bg-card border border-border text-foreground"
           >
-            New board
+            Show summary
           </button>
-        </div>
+        )}
+      </div>
+
+      {/* True game over only. Dismissing touches no board state: the finished
+          board stays exactly as it is and still refuses taps, and only New
+          board acts. Boards cleared leads the figures — it is the score. */}
+      {over && !resultDismissed && (
+        <ResultModal
+          title="Game over"
+          detail={`${finishCause(board)}.`}
+          figures={[
+            { label: "Boards cleared this session", value: boardsCleared },
+            { label: "Tiles remaining", value: remaining },
+            { label: "Taps taken", value: taps },
+            { label: "Largest chain cleared", value: largestChain },
+          ]}
+          primaryLabel="New board"
+          onPrimary={reset}
+          onDismiss={() => setResultDismissed(true)}
+          returnFocusTo={boardRef}
+        />
       )}
     </div>
   );

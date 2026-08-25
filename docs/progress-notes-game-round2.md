@@ -1,6 +1,6 @@
 # Progress: Notes game — round 2
 
-## Status: All 8 steps complete. Step 8 awaiting verification.
+## Status: Round 2 complete. Amendments A and B awaiting verification.
 
 Spec: `docs/technical-spec-notes-game-round2.md`
 
@@ -12,6 +12,8 @@ Shared tile renderer and board geometry are not to be touched.
 - [x] Step 1: Row clear. If a chain covers every occupied cell in its row, remove the
       whole chain including the tapped tile, with no promotion. Confirm gravity drops
       everything above by one row.
+      **SUPERSEDED by Amendment A — row clear is gone, replaced by arm-and-destroy.
+      The full-row test survives as the arming condition.**
 - [x] Step 2: Board cleared detection. A board is cleared when no column holds more
       than one tile, zero tiles included. Stop accepting taps and show a Refill button.
       Add a session boards-cleared counter.
@@ -23,6 +25,8 @@ Shared tile renderer and board geometry are not to be touched.
 - [x] Step 5: True game over. Fires when the shuffle retry loop exhausts. Summary shows
       highest pitch, taps, largest chain, tiles remaining, boards cleared. "New board"
       resets everything including the counter.
+      **AMENDED by Amendment B — highest pitch dropped from the summary and from state;
+      the summary is now a modal, led by boards cleared.**
 - [x] Step 6: Alternating row bands. Low-contrast background banding by row. Tiles stay
       black and white.
 - [x] Step 7: Drop feedback. Moved tiles visibly distinguishable after gravity. Under
@@ -32,19 +36,105 @@ Shared tile renderer and board geometry are not to be touched.
 
 ### Verification steps
 
-- [x] Chain an entire row and confirm the promoted tile dies with it
-- [x] Confirm a row with a gap in it cannot trigger a row clear
+- [x] ~~Chain an entire row and confirm the promoted tile dies with it~~ — superseded
+      by Amendment A; the survivor now arms instead of dying
+- [x] Confirm a row with a gap in it cannot trigger a row clear (now: cannot arm)
 - [x] Clear a board and confirm Refill preserves the bottom-row pitches
 - [x] Get stuck and confirm shuffle appears, and that it always yields a playable board
 - [x] Confirm true game over only fires when no arrangement can help
 - [ ] Play ten minutes on the phone and confirm the animation is not annoying at speed
+- [ ] Amendment A: chain a full row, confirm the survivor arms and tiles fall in around it
+- [ ] Amendment A: confirm a second tap destroys it and its column drops
+- [ ] Amendment A: confirm tapping a different chain disarms
+- [ ] Amendment A: confirm a partial-row chain never arms anything
+- [ ] Amendment B: clear a board, confirm Refill appears inline with no modal and no
+      layout shift
+- [ ] Amendment B: reach true game over, confirm the modal behaves as before minus
+      highest pitch
 
 Ticked items were confirmed at each step's handover. The ten-minute soak is the one
 outstanding check — it is a sustained-play judgement that no per-step verification covers.
 
 ### Notes
 
-**Step 1 (row clear) — decisions taken**
+## Amendment B — board cleared goes inline, modal is game over only, highest pitch dropped
+
+**Board cleared is no longer a modal.** Clearing a board is the good outcome, and an
+overlay every time would wear out fast. It now shows a Refill button inline in the
+existing button row beside Undo and Shuffle, on the same hide-when-irrelevant pattern
+and in the same fixed-height row, so nothing moves. Taps stay refused until Refill is
+pressed — `tap` guards on `terminal`, which is still both states.
+
+**The modal is true game over only.** Dismiss, reopen, backdrop, Escape and the focus
+handling are all unchanged; only the gating moved from `terminal` to `over`. The
+two-state prop plumbing on `ResultModal` collapses to fixed values.
+
+**Highest pitch is gone**, along with the timeline scan that computed it and the tile
+that rendered it in the modal. **Boards cleared is now the game's score**, and it leads
+the summary: boards cleared this session, tiles remaining, taps taken, largest chain.
+
+**Decisions taken**
+
+- `terminal` was left in place and put to work in `tap` rather than deleted. Lint caught
+  it going unused the moment the modal stopped keying off it, and the guard reads better
+  as one named concept than as `over || cleared` spelled out.
+- Refill is styled as a primary action (`bg-primary`, white), matching Shuffle and the
+  modal's New board. It only appears when it is the one thing to do.
+- **Verified** over 40,000 simulated sessions: the modal never appeared on a cleared
+  board, Refill and the modal were never shown together, no game over ever opened
+  already-dismissed, and dismissal never leaked outside game over. 2,271 boards cleared
+  and 40,000 game overs exercised across the run.
+
+## Amendment A — flat promotion and arm-and-destroy
+
+Post-round change to tap resolution. No other rules touched; board state, gravity,
+cleared-board detection, shuffle, refill, game over and the modal are all unchanged.
+
+**Flat promotion.** `PROMOTION(chainLength)` is replaced by `PROMOTION_STEPS = 1`.
+Every chain tap promotes the survivor exactly one step. Chain length now buys reach and
+board space, never a bigger promotion.
+
+**Row clear is gone.** A full-row chain no longer wipes the row. Resolution is now:
+clear the chain except the tapped tile, promote it by one, run gravity, and if the chain
+covered every occupied cell in its row *before* clearing, the promoted tile becomes
+armed. Tapping an armed tile destroys it — cell empties, gravity runs, nothing promotes.
+That is now the only way a promoted tile can die and the only route to a zero-tile board,
+the role row clear used to play.
+
+**Decisions taken**
+
+- `clearsRow` renamed `coversRow`. Same predicate, different job: it no longer decides
+  whether to wipe a row, only whether to arm the survivor.
+- **Destroy is checked before chains.** An armed tile that has since gained a neighbour
+  still destroys rather than chaining — "tapping an armed tile destroys it" is
+  unconditional.
+- **The arm is a cell index, not a row.** `settledIndexOf` computes where the survivor
+  lands after gravity. For an arming tap it provably returns the tapped cell unchanged:
+  the chain lies in one row, so nothing below the survivor is removed and it has nowhere
+  to fall — the tiles that move are the ones dropping in around it. Verified across
+  9,206 arming taps: the survivor moved zero times. It is computed properly anyway, so a
+  future change to chain shape cannot silently strand the arm on the wrong cell.
+- **Undo carries the arm on every entry.** Each stack entry records `armedBefore`, so
+  one mechanism covers all three cases: undoing a destroy restores the tile still armed,
+  undoing a chain tap puts back whatever arm it cleared, and undoing a shuffle restores
+  the arm it cleared. Arming is never its own entry.
+- **`taps` now counts destroys as well as chain taps.** A destroy is a tap; the summary
+  figure would under-report otherwise. `largestChain` still reads only chain-tap entries.
+- **Visual:** a 3px `--primary` ring drawn as a box-shadow, so it costs no layout and
+  cannot nudge the board. Exactly one tile is ever armed and it moves every time, so it
+  cannot be read as encoding pitch. Staff and notehead untouched.
+- Arming is deliberately invisible to the chain readout and to `canShuffle`. In 835
+  observed positions a tile was armed with zero chains available; Shuffle was offered as
+  normal, and taking it clears the arm.
+
+**Verified** by driving the state machine over 326,458 chain taps, 9,206 arms, 3,613
+destroys and 4,571 disarms: nothing ever armed without covering its row, no arm landed
+on an empty cell, invalid taps never disarmed, and every full unwind restored board and
+arm together. Peak pitch on the board fell to 9 under flat promotion, moving the
+tile-clipping ceiling further out of reach. (The figure was measured in simulation;
+highest pitch is no longer tracked in the game itself — see Amendment B.)
+
+**Step 1 (row clear) — decisions taken (superseded by Amendment A above)**
 
 - The test is `clearsRow(board, chain)`: chain length equals the count of occupied cells
   in that row. It is deliberately not "the row is full". A row holding three tiles in its
@@ -282,7 +372,9 @@ the registry pattern is exactly what the spec asked for, so slotting it in later
 entry and one file, with nothing else to touch.
 
 **RESOLVED — scope of the summary figures.** Accepted per-board at Step 5 verification.
-Original note kept below for context.
+Partly moot as of Amendment B: highest pitch is gone entirely, so the question now only
+covers taps and largest chain, both still per-board. Boards cleared is the session-level
+figure and the score. Original note kept below for context.
 
 **Earlier open question —** The spec does not say whether
 highest pitch / taps / largest chain are per-board or per-session, and it matters once a

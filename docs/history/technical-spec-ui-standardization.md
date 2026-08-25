@@ -316,9 +316,10 @@ arrived at deliberately:
 - The tiebreaker stays A→Z regardless of direction, except when title is the sort key.
 - Missing values sort last in both directions.
 
-### Scope: list pages only
+### Rule: list pages, not sub-lists inside detail pages
 
-_(Clarified 2026-08-24.)_ The control governs the five **list pages** below. It does
+_(Stated as a rule rather than a one-off answer, 2026-08-25 — it governs every list
+added from here on.)_ The control governs the five **list pages** below. It does
 not go on sub-lists inside detail pages — Context detail alone holds three (Items,
 Intentions, Collections), and Intention detail and Item detail one each. Those keep
 their fixed orders: Context detail's Items stays `updatedAt` descending, the rest keep
@@ -342,6 +343,17 @@ Show only applicable options; do not render disabled ones.
 | Collections | Name · Created · Last modified | Name, ascending |
 
 The dropdown label must read **"Scheduled date"**, not "Date."
+
+### Every accessor bag must supply `title`
+
+Whether or not the page offers **Name** as an option. The shared comparator uses
+`get.title` as the tiebreaker for *every* order — that is what makes each order total,
+and it is the whole reason two rows sharing a date do not fall back to arrival order.
+
+This is invisible from the option table above, which lists Name as one choice among
+four, so a page offering only dates looks like it needs no title accessor. Omitting it
+throws a `TypeError` **inside the comparator**, on the first sort, in a stack trace
+that mentions nothing sort-shaped.
 
 ### Field mapping
 

@@ -1298,7 +1298,10 @@ export default function Alfred() {
    */
   function permanentDeleteWarning(tab, count = null) {
     const isCollection = tab === "collections";
-    const noun = isCollection ? "collection" : "record";
+    // Contexts reach this point only when empty — the guards above refuse
+    // otherwise — so there is nothing to warn about destroying. The generic
+    // wording is honest here in a way it is not for collections.
+    const noun = isCollection ? "collection" : tab === "contexts" ? "context" : "record";
     const subject =
       count === null ? `this ${noun}` : `${count} ${noun}${count > 1 ? "s" : ""}`;
     const cascade = !isCollection
@@ -1337,6 +1340,12 @@ export default function Alfred() {
         case "executions":
           query = supabase.from("executions").select("id, intent_id, event_id, outcome, started_at, closed_at, updated_at")
             .eq("status", "closed")
+            .order("updated_at", { ascending: false, nullsFirst: false })
+            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          break;
+        case "contexts":
+          query = supabase.from("contexts").select("id, name, description, shared, updated_at")
+            .eq("archived", true)
             .order("updated_at", { ascending: false, nullsFirst: false })
             .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
           break;
@@ -1394,6 +1403,7 @@ export default function Alfred() {
         case "events": table = "events"; updates = { archived: false }; break;
         case "executions": table = "executions"; updates = { status: "paused" }; break;
         case "collections": table = "item_collections"; updates = { archived: false }; break;
+        case "contexts": table = "contexts"; updates = { archived: false }; break;
         case "songs": table = "sam_songs"; updates = { archived: false }; break;
         case "snippets": table = "sam_snippets"; updates = { archived: false }; break;
         default: return;
@@ -1410,7 +1420,13 @@ export default function Alfred() {
       // stays invisible until a manual refresh — a silent failure, not a delay.
       // refreshData also re-runs loadCollectionMembers, so the member counts
       // come back with it.
-      if (["items", "intents", "events", "collections"].includes(tab)) {
+      // "contexts" is here for robustness, NOT necessity — unlike collections.
+      // There IS a realtime channel on contexts, so an UPDATE propagates to
+      // handleContextChange and the row reappears without this. But realtime
+      // can be disconnected (the header shows exactly that state), and items,
+      // intents and events are all in this list despite having channels too.
+      // Consistent, and correct when the socket is down.
+      if (["items", "intents", "events", "collections", "contexts"].includes(tab)) {
         refreshData();
       }
     } catch (e) {
@@ -1422,6 +1438,25 @@ export default function Alfred() {
   }
 
   async function recyclePermanentDelete(tab, id) {
+    // Re-check emptiness at the far end, not just at archive time. The empty
+    // rule is what makes context archiving safe at all, and children can appear
+    // between archive and purge — from another device, from an MCP tool, or
+    // from Elise on a shared context. Deleting a context with children does not
+    // remove them; it leaves them pointing at a row that no longer exists, and
+    // an item in that state shows up nowhere at all: Memories filters on
+    // `!contextId`, and an orphan HAS one.
+    if (tab === "contexts") {
+      const blockers = contextArchiveBlockers(id);
+      if (blockers.length > 0) {
+        window.alert(
+          `Cannot delete this context: it still holds ${blockers.join(", ")}. ` +
+            "Deleting it would leave those records pointing at nothing, and an " +
+            "item in that state is reachable from nowhere. Restore the context " +
+            "and empty it first.",
+        );
+        return;
+      }
+    }
     if (!window.confirm(permanentDeleteWarning(tab))) return;
     setRecycleLoading(true);
     try {
@@ -1434,6 +1469,10 @@ export default function Alfred() {
         // The one hard delete left in the app. Cascades to collection_items and
         // collection_item_removals — deliberate, and named in the confirm.
         case "collections": table = "item_collections"; break;
+        // Contexts do NOT cascade: no child table carries a foreign key to
+        // them. Deleting one ORPHANS its children instead, which is quieter
+        // and worse — see the guard above recyclePermanentDelete.
+        case "contexts": table = "contexts"; break;
         case "songs": table = "sam_songs"; break;
         case "snippets": table = "sam_snippets"; break;
         default: return;
@@ -1479,6 +1518,7 @@ export default function Alfred() {
         case "events": table = "events"; updates = { archived: false }; break;
         case "executions": table = "executions"; updates = { status: "paused" }; break;
         case "collections": table = "item_collections"; updates = { archived: false }; break;
+        case "contexts": table = "contexts"; updates = { archived: false }; break;
         case "songs": table = "sam_songs"; updates = { archived: false }; break;
         case "snippets": table = "sam_snippets"; updates = { archived: false }; break;
         default: return;
@@ -1491,8 +1531,9 @@ export default function Alfred() {
       setRecycleData(prev => prev.filter(r => !recycleSelected.has(r.id)));
       setRecycleSelected(new Set());
 
-      // See recycleRestore: no realtime channel on item_collections.
-      if (["items", "intents", "events", "collections"].includes(recycleTab)) {
+      // See recycleRestore for why contexts is included and collections is
+      // required.
+      if (["items", "intents", "events", "collections", "contexts"].includes(recycleTab)) {
         refreshData();
       }
     } catch (e) {
@@ -1505,6 +1546,19 @@ export default function Alfred() {
 
   async function recycleBulkDelete() {
     if (recycleSelected.size === 0) return;
+    if (recycleTab === "contexts") {
+      const blocked = Array.from(recycleSelected).filter(
+        (id) => contextArchiveBlockers(id).length > 0,
+      );
+      if (blocked.length > 0) {
+        window.alert(
+          `${blocked.length} of the selected contexts still hold records. ` +
+            "Deleting them would leave those records pointing at nothing. " +
+            "Deselect them and try again.",
+        );
+        return;
+      }
+    }
     if (!window.confirm(permanentDeleteWarning(recycleTab, recycleSelected.size))) return;
     setRecycleLoading(true);
     try {
@@ -1517,6 +1571,10 @@ export default function Alfred() {
         // The one hard delete left in the app. Cascades to collection_items and
         // collection_item_removals — deliberate, and named in the confirm.
         case "collections": table = "item_collections"; break;
+        // Contexts do NOT cascade: no child table carries a foreign key to
+        // them. Deleting one ORPHANS its children instead, which is quieter
+        // and worse — see the guard above recyclePermanentDelete.
+        case "contexts": table = "contexts"; break;
         case "songs": table = "sam_songs"; break;
         case "snippets": table = "sam_snippets"; break;
         default: return;
@@ -1855,20 +1913,37 @@ export default function Alfred() {
     });
   }
 
-  async function archiveInboxItem(inboxItemId) {
+  // Discard. A capture that does not make it through the inbox never happened,
+  // so the row is deleted rather than flagged — see the spec's Part C. The
+  // `audit_row` AFTER DELETE trigger in platform.audit_log records it, so this
+  // is not the last copy.
+  //
+  // `archived` and `triaged_at` are deliberately NOT written on the way out and
+  // NOT dropped from the table: existing archived rows are the only record of
+  // past captures and are out of scope here.
+  async function deleteInboxItem(inboxItemId) {
     const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
     if (!inboxItem) return;
-    return withLoading('Archiving...', async () => {
-      const updated = { ...inboxItem, archived: true, triagedAt: new Date().toISOString() };
-      await storage.set(`inbox:${inboxItem.id}`, updated);
+    return withLoading('Deleting...', async () => {
+      const deleted = await storage.delete(`inbox:${inboxItem.id}`);
+      // storage.delete swallows its own errors and returns false. Dropping the
+      // row from the list after a failed delete would hide a capture that is
+      // still in the database, and it would come back on the next refresh.
+      if (!deleted) {
+        window.alert("Could not delete that capture. It is still in your inbox.");
+        return;
+      }
       setInboxItems(inboxItems.filter((i) => i.id !== inboxItemId));
 
-      // Step 10 turns this into a hard delete. The restore closure does not
-      // change when it does — `storage.set` re-inserts a missing row under its
-      // original id — only the list re-insert below stays load-bearing, which
-      // it already is: the row leaves the array here rather than being flagged
-      // in place, so undo has to put it back in createdAt order.
-      offerUndoFor("Archived capture.", async () => {
+      // Unchanged from Step 2, which is the point: `storage.set` UPDATEs by id
+      // and INSERTs only when that matched nothing, so re-inserting a deleted
+      // row keeps its original id for free. Swapping the archive for a delete
+      // above changed what this closure reverses, not how it does it.
+      //
+      // (Step 2 called the createdAt re-sort load-bearing. It no longer is —
+      // Step 9b made display order a function of the sort preference rather
+      // than of array order. Kept so `inboxItems` stays in a canonical order.)
+      offerUndoFor("Capture deleted.", async () => {
         await storage.set(`inbox:${inboxItem.id}`, inboxItem);
         setInboxItems((prev) =>
           [...prev.filter((i) => i.id !== inboxItemId), inboxItem].sort((a, b) =>
@@ -1891,6 +1966,19 @@ export default function Alfred() {
     return withLoading('Saving...', async () => {
       let createdItemId = null;
 
+      // "Delete only on success" needs an explicit check, because none of the
+      // writers below throw. `storage.set` catches its own errors and returns
+      // false; `addItemsToCollection` alerts and returns false. Nothing read
+      // either until now, which was survivable while disposal merely set a
+      // flag — the row stayed in the table and could be recovered. A hard
+      // delete on a failed triage would destroy the capture AND leave nothing
+      // downstream to show for it.
+      let allWritesSucceeded = true;
+      const wrote = (result) => {
+        if (result === false) allWritesSucceeded = false;
+        return result !== false;
+      };
+
       // Create item if Item section was open
       if (triageData.createItem && triageData.itemData) {
         const newItem = {
@@ -1907,7 +1995,7 @@ export default function Alfred() {
 
         const context = contexts.find((c) => c.id === newItem.contextId);
         const isShared = context?.shared || false;
-        await storage.set(`item:${newItem.id}`, newItem, isShared);
+        wrote(await storage.set(`item:${newItem.id}`, newItem, isShared));
         setItems((prev) => [...prev, newItem]);
         createdItemId = newItem.id;
 
@@ -1949,7 +2037,7 @@ export default function Alfred() {
           endDate: triageData.intentionData.endDate || null,
           tags: triageData.intentionData.tags || [],
         };
-        await storage.set(`intent:${newIntent.id}`, newIntent);
+        wrote(await storage.set(`intent:${newIntent.id}`, newIntent));
         setIntents((prev) => [...prev, newIntent]);
 
         // Create event if scheduled
@@ -1965,7 +2053,7 @@ export default function Alfred() {
             createdAt: new Date().toISOString(),
             text: triageData.intentionData.text,
           };
-          await storage.set(`event:${newEvent.id}`, newEvent);
+          wrote(await storage.set(`event:${newEvent.id}`, newEvent));
           setEvents((prev) => [...prev, newEvent]);
         }
       }
@@ -1975,18 +2063,43 @@ export default function Alfred() {
         const targetItemId = triageData.collectionData.itemId || createdItemId;
         const targetCollectionId = triageData.collectionData.collectionId;
         if (targetItemId && targetCollectionId) {
-          await addItemsToCollection(targetCollectionId, [
-            {
-              itemId: targetItemId,
-              quantity: triageData.collectionData.quantity || '1',
-            },
-          ]);
+          wrote(
+            await addItemsToCollection(targetCollectionId, [
+              {
+                itemId: targetItemId,
+                quantity: triageData.collectionData.quantity || '1',
+              },
+            ]),
+          );
         }
       }
 
-      // Archive inbox item
-      const updated = { ...inboxItem, archived: true, triagedAt: new Date().toISOString() };
-      await storage.set(`inbox:${inboxItem.id}`, updated);
+      // On failure the row stays put. Partial success is possible — the item
+      // may have been created and the intention not — so this says "check what
+      // was created" rather than "try again", which could duplicate the half
+      // that worked.
+      if (!allWritesSucceeded) {
+        window.alert(
+          "Some of that capture could not be saved, so it has been left in your inbox. Check what was created before filing it again.",
+        );
+        return;
+      }
+
+      // Triage succeeded, so the capture has become an item, an intention, an
+      // event or a collection member. The row has no further job.
+      //
+      // No Undo offered here, deliberately, unlike the discard path. Undo would
+      // put the inbox row back but could not remove the records it turned into,
+      // so it would restore a capture that had already been filed — a button
+      // labelled Undo that half-undoes is worse than none. Discard has no such
+      // problem: nothing downstream exists to reverse.
+      const disposed = await storage.delete(`inbox:${inboxItem.id}`);
+      if (!disposed) {
+        window.alert(
+          "Everything was saved, but the capture could not be removed from your inbox. Delete it manually.",
+        );
+        return;
+      }
       setInboxItems((prev) => prev.filter((i) => i.id !== inboxItemId));
     });
   }
@@ -3105,7 +3218,73 @@ export default function Alfred() {
     return e.time <= today;
   });
   const allNonArchivedEvents = validEvents;
-  const pinnedContexts = contexts.filter((c) => c.pinned);
+  // Contexts are soft-deletable from Step 11. Same split as activeCollections:
+  // `activeContexts` for anything that offers a CHOICE, raw `contexts` for
+  // anything that resolves an ID — an archived context's name must still render
+  // on a Recycle Bin row, an execution badge, and every item that was in it.
+  const activeContexts = contexts.filter((c) => !c.archived);
+  const pinnedContexts = activeContexts.filter((c) => c.pinned);
+
+  // Contexts are taxonomy, not content, so archiving one is only safe while it
+  // holds nothing — nothing cascades, and nothing is left pointing at a parent
+  // the UI has stopped showing.
+  //
+  // ARCHIVED CHILDREN COUNT. An archived item still belongs to its context, and
+  // there is a concrete reason beyond principle: the Recycle Bin labels each
+  // archived row with its context name, and restoring an item whose context is
+  // archived would put it somewhere with no page to reach. Emptiness means "no
+  // children at all", not "no live children".
+  //
+  // All four counts come from state already loaded — `loadData` selects every
+  // row of each table without a filter — so this needs no query.
+  function contextChildCounts(contextId) {
+    return {
+      items: items.filter((i) => i.contextId === contextId).length,
+      intentions: intents.filter((i) => i.contextId === contextId).length,
+      events: events.filter((e) => e.contextId === contextId).length,
+      collections: collections.filter((c) => c.contextId === contextId).length,
+    };
+  }
+
+  /** Human list of what is stopping a context being archived; empty when clear. */
+  function contextArchiveBlockers(contextId) {
+    const counts = contextChildCounts(contextId);
+    const label = (n, one, many) => (n === 1 ? `1 ${one}` : `${n} ${many}`);
+    const parts = [];
+    if (counts.items) parts.push(label(counts.items, "item", "items"));
+    if (counts.intentions)
+      parts.push(label(counts.intentions, "intention", "intentions"));
+    if (counts.events) parts.push(label(counts.events, "event", "events"));
+    if (counts.collections)
+      parts.push(label(counts.collections, "collection", "collections"));
+    return parts;
+  }
+
+  async function archiveContext(contextId) {
+    const context = contexts.find((c) => c.id === contextId);
+    if (!context) return;
+    // Belt and braces: the button is disabled when this is non-empty, but the
+    // counts come from state that a realtime insert can change between render
+    // and click.
+    const blockers = contextArchiveBlockers(contextId);
+    if (blockers.length > 0) {
+      window.alert(
+        `Cannot archive "${context.name}": it still holds ${blockers.join(", ")}.`,
+      );
+      return;
+    }
+    return withLoading("Archiving...", async () => {
+      const archived = { ...context, archived: true };
+      await storage.set(`context:${contextId}`, archived, context.shared);
+      setContexts((prev) => prev.map((c) => (c.id === contextId ? archived : c)));
+
+      offerUndoFor(`Archived "${context.name}".`, async () => {
+        await storage.set(`context:${contextId}`, context, context.shared);
+        setContexts((prev) => prev.map((c) => (c.id === contextId ? context : c)));
+      });
+    });
+  }
+
   // Collections are soft-deleted from Step 4b, so `collections` now holds
   // archived rows too — the Recycle Bin reads them from there. Everything else
   // wants the live ones, and "everything else" is about fifteen places: three
@@ -3887,7 +4066,7 @@ export default function Alfred() {
                     items={items}
                     collections={activeCollections}
                     onSave={handleInboxSave}
-                    onArchive={archiveInboxItem}
+                    onDelete={deleteInboxItem}
                     onEnrich={handleInboxEnrich}
                     onDirtyChange={setUnsavedChanges}
                   />
@@ -3925,7 +4104,7 @@ export default function Alfred() {
                 }}
                 onDirtyChange={setUnsavedChanges}
               />
-            ) : contexts.length === 0 ? (
+            ) : activeContexts.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 <p>No contexts yet.</p>
                 <p className="text-sm mt-2">
@@ -3952,7 +4131,7 @@ export default function Alfred() {
                     list pages; detail pages hold five such sub-lists between
                     them, and giving each a control is a different decision. */}
                 {sortRows(
-                  contexts, contextsSort.sortKey, NAMED_RECORD_ACCESSORS, contextsSort.sortDir,
+                  activeContexts, contextsSort.sortKey, NAMED_RECORD_ACCESSORS, contextsSort.sortDir,
                 ).map((context) => (
                   <ContextCard
                     key={context.id}
@@ -3987,6 +4166,8 @@ export default function Alfred() {
             onUpdateIntent={updateIntent}
             onSchedule={moveToPlanner}
             onSaveContext={saveContextRecord}
+            onArchiveContext={archiveContext}
+            archiveBlockers={contextArchiveBlockers(selectedContextId)}
             onAddItem={handleAddItemToContext}
             onAddIntention={handleAddIntentionToContext}
             onViewIntentionDetail={(id) =>
@@ -4410,7 +4591,10 @@ export default function Alfred() {
                     className="w-full px-3 py-2 border border-border rounded text-base"
                   >
                     <option value="">No context</option>
-                    {contexts.map((ctx) => (
+                    {/* Filtered inline rather than by swapping the prop: this
+                        component also looks context names up by id for badges,
+                        and an archived context must still resolve there. */}
+                    {contexts.filter((c) => !c.archived).map((ctx) => (
                       <option key={ctx.id} value={ctx.id}>{ctx.name}</option>
                     ))}
                   </select>
@@ -4830,6 +5014,7 @@ export default function Alfred() {
                 { key: "events", label: "Events" },
                 { key: "executions", label: "Executions" },
                 { key: "collections", label: "Collections" },
+                { key: "contexts", label: "Contexts" },
                 { key: "songs", label: "Songs" },
                 { key: "snippets", label: "Snippets" },
               ].map((tab) => (
@@ -4922,6 +5107,12 @@ export default function Alfred() {
                     case "collections":
                       title = record.name || "Untitled collection";
                       subtitle = contextName || "";
+                      break;
+                    case "contexts":
+                      title = record.name || "Untitled context";
+                      subtitle = [record.description, record.shared ? "Shared" : null]
+                        .filter(Boolean)
+                        .join(" · ");
                       break;
                     case "songs":
                       title = record.title || "Untitled song";
@@ -5152,7 +5343,10 @@ function InboxCard({
   items,
   collections,
   onSave,
-  onArchive,
+  // Renamed with the behaviour in Step 10: this hard-deletes the row now
+  // rather than flagging it, and a prop still called onArchive would be the
+  // last place anyone looked to find that out.
+  onDelete,
   onEnrich,
   onDirtyChange,
 }) {
@@ -5236,6 +5430,7 @@ function InboxCard({
     contexts && intentContextSearch.trim()
       ? contexts
           .filter((c) =>
+            !c.archived &&
             c.name.toLowerCase().includes(intentContextSearch.toLowerCase()),
           )
           .slice(0, 10)
@@ -5676,16 +5871,16 @@ function InboxCard({
               onClick={(e) => {
                 e.stopPropagation();
                 if (onDirtyChange) onDirtyChange(false);
-                onArchive(inboxItem.id);
+                onDelete(inboxItem.id);
               }}
-              title="Archive this capture"
+              title="Delete this capture"
               // ml-1 on top of the row's gap-2 = 12px. The badges stay tightly
               // grouped as one informational cluster; the action separates from
               // them. Its neighbour is the source icon, which LOOKS static but
               // is card-click — tap it and the card expands instead.
               className="ml-1 flex items-center justify-center p-2 min-h-[44px] min-w-[44px] rounded-lg text-muted-foreground hover:text-destructive hover:bg-secondary transition-colors shrink-0"
             >
-              <Archive className="w-4 h-4" />
+              <Trash2 className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -6013,7 +6208,7 @@ function InboxCard({
                 className="w-full px-3 py-2 border border-border rounded text-base"
               >
                 <option value="">No context</option>
-                {contexts.map((ctx) => (
+                {contexts.filter((c) => !c.archived).map((ctx) => (
                   <option key={ctx.id} value={ctx.id}>
                     {ctx.name}
                   </option>
@@ -6320,11 +6515,14 @@ function InboxCard({
             Cancel
           </button>
         </div>
+        {/* "Delete", not "Archive". The two ran byte-identical code and were
+            indistinguishable in the data; now this removes the row and the
+            label says so. Same call as the collapsed row's icon. */}
         <button
-          onClick={() => { if (onDirtyChange) onDirtyChange(false); onArchive(inboxItem.id); }}
+          onClick={() => { if (onDirtyChange) onDirtyChange(false); onDelete(inboxItem.id); }}
           className="min-h-[44px] text-muted-foreground hover:text-destructive transition-colors flex items-center gap-1"
         >
-          <Archive className="w-4 h-4" /> Archive
+          <Trash2 className="w-4 h-4" /> Delete
         </button>
       </div>
 
@@ -6708,6 +6906,8 @@ function ContextDetailView({
   onUpdateIntent,
   onSchedule,
   onSaveContext,
+  onArchiveContext,
+  archiveBlockers = [],
   onAddItem,
   onAddIntention,
   onViewIntentionDetail,
@@ -6834,6 +7034,31 @@ function ContextDetailView({
               </span>
               <span className="sm:hidden">{isEditingContext ? "Close" : "Edit"}</span>
             </button>
+            {/* Only while the context is empty. Contexts are taxonomy: nothing
+                cascades, so archiving one that still holds records would strand
+                them under a parent the UI no longer shows — and an archived
+                child would be strandable in a way nothing could reach.
+                Disabled-with-a-reason, reading the same way as the
+                active-execution guards on EventCard and IntentionCard. */}
+            {onArchiveContext && (
+              <button
+                onClick={() => onArchiveContext(context.id)}
+                disabled={archiveBlockers.length > 0}
+                title={
+                  archiveBlockers.length > 0
+                    ? `Cannot archive: still holds ${archiveBlockers.join(", ")}`
+                    : "Archive this context"
+                }
+                className={`flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base ${
+                  archiveBlockers.length > 0
+                    ? "bg-secondary text-muted-foreground cursor-not-allowed"
+                    : "bg-destructive hover:bg-destructive-hover text-white"
+                }`}
+              >
+                <Archive className="w-4 h-4" />
+                <span className="hidden sm:inline">Archive</span>
+              </button>
+            )}
           </div>
         </div>
         {context.description && (
@@ -8470,7 +8695,7 @@ function ItemCard({
               className="w-full px-3 py-2 border border-border rounded text-base"
             >
               <option value="">No context</option>
-              {contexts.map((ctx) => (
+              {contexts.filter((c) => !c.archived).map((ctx) => (
                 <option key={ctx.id} value={ctx.id}>
                   {ctx.name}
                 </option>
@@ -9409,6 +9634,7 @@ function IntentionCard({
     contexts && contextSearch.trim()
       ? contexts
           .filter((c) =>
+            !c.archived &&
             c.name.toLowerCase().includes(contextSearch.toLowerCase()),
           )
           .slice(0, 10)
