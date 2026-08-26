@@ -121,7 +121,7 @@ const SHARED_TOOLS: Anthropic.Tool[] = [
         suggested_item_description: { type: "string", description: "Description for the item" },
         suggested_item_elements: {
           type: "array",
-          description: "Structured elements (steps, ingredients, checklist items). Each element: {type: 'ingredient'|'step'|'header'|'bullet', text: '...'}",
+          description: "Structured elements. Each element: {type: 'header'|'bullet'|'step', text: '...', collectable?: true}. Recipes: an 'Ingredients' header, one collectable bullet per ingredient (exactly one purchasable product each), then a 'Steps' header with step elements.",
         },
         suggested_item_id: { type: "string", description: "ID of an EXISTING item to link to" },
         suggest_intent: { type: "boolean", description: "Should this become an Intention/task?" },
@@ -261,10 +261,24 @@ RULES:
 7. Set ai_confidence lower when you're uncertain
 8. When done, call submit_suggestions with your final recommendations
 9. Tags should be lowercase, underscore-separated
-10. For recipes: parse into structured elements with type "ingredient" and "step"
-11. For items with multiple steps/components, use elements with type "step", "header", "bullet", or "ingredient"
-12. Search collections to find capture targets (like grocery lists, shopping lists). Collections with is_capture_target=true are frequently used for quick capture. If the capture seems like it belongs in a collection, set suggested_collection_id.
-13. When searching items, pay attention to items with is_capture_target=true — these are items the user frequently references (common recipes, recurring checklists). Prefer linking to these via suggested_item_id over creating new items.
+10. Element types are exactly three: "header", "bullet", "step". There is no
+    "ingredient" type. Any other value renders as a numbered step and corrupts
+    the step numbering of the whole item.
+11. Recipes take this shape: an "Ingredients" header, one bullet per ingredient,
+    a "Steps" header, one step per instruction, and optionally a "Notes" header
+    with bullets.
+12. One purchasable product per ingredient bullet. Split "salt and pepper" into
+    two bullets. Split "Stage 1 herbs: 6 sprigs thyme, 2 sprigs rosemary, 2 bay
+    leaves" into three. Keep genuine either/or choices on one bullet ("butter or
+    neutral oil"). Keep preparation notes attached to their ingredient ("1 small
+    onion, finely diced").
+13. Set "collectable": true on every ingredient bullet. This is what lets the
+    user add it to a shopping list. Never set it on headers, steps, or notes.
+14. Sections are real header elements. Never fake a section with a bullet like
+    "--- Dressing ---". A recipe may have several ingredient headers
+    ("Ingredients — Dressing"); bullets under all of them are collectable.
+15. Search collections to find capture targets (like grocery lists, shopping lists). Collections with is_capture_target=true are frequently used for quick capture. If the capture seems like it belongs in a collection, set suggested_collection_id.
+16. When searching items, pay attention to items with is_capture_target=true — these are items the user frequently references (common recipes, recurring checklists). Prefer linking to these via suggested_item_id over creating new items.
 
 IMPORTANT: The user will review and approve your suggestions before anything is created. Suggest generously — it's easier for them to remove a suggestion than to add a missing one.`;
 
