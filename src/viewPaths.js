@@ -9,7 +9,7 @@
 // lookups, so it can be reasoned about (and unit-tested) without React or the
 // router in the picture.
 
-// The 19 view values, in the order they appear in the progress doc's table.
+// The 20 view values, in the order they appear in the progress doc's table.
 // Detail views carry no id this slice — the id-bearing navigations set their
 // id via a separate React state call that has not flushed by the time
 // `setView` runs, so threading an id into the URL would mean editing the
@@ -26,6 +26,7 @@ export const VIEW_TO_PATH = {
   "intention-detail": "/intentions/detail",
   memories: "/memories",
   "item-detail": "/memories/detail",
+  "item-add-to-collection": "/memories/add-to-collection",
   collections: "/collections",
   "collection-detail": "/collections/detail",
   "collection-history": "/collections/history",

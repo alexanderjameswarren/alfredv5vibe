@@ -16,8 +16,8 @@ import {
 // on — above all "never crash, fall back to home".
 
 describe("the map itself", () => {
-  it("covers all 19 view values", () => {
-    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(19);
+  it("covers all 20 view values", () => {
+    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(20);
   });
 
   it("is a bijection — no two views share a path", () => {
@@ -107,7 +107,7 @@ describe("parentPath (used by Step 9's cold-load redirect)", () => {
     const details = Object.values(VIEW_TO_PATH).filter(
       (p) => p.split("/").length > 2
     );
-    expect(details).toHaveLength(7);
+    expect(details).toHaveLength(8);
     for (const path of details) {
       expect(pathToView(parentPath(path))).not.toBe(undefined);
       expect(VIEW_TO_PATH[pathToView(parentPath(path))]).toBe(parentPath(path));

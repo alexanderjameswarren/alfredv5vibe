@@ -277,6 +277,190 @@ export async function addMember(collectionId, itemId, options = {}) {
 }
 
 /**
+ * Combine an existing member quantity with an incoming one.
+ *
+ * Quantity is free text and always has been, so there is no arithmetic here:
+ * "2 cans" and "1 lb" have no sum. Concatenation is the decision.
+ *
+ * @param {string|null} existing
+ * @param {string|null} incoming
+ * @returns {{value: string|null, changed: boolean}}
+ */
+function mergeQuantities(existing, incoming) {
+  const current = normaliseQuantity(existing);
+  const next = normaliseQuantity(incoming);
+
+  // Nothing new to contribute: never clear a quantity somebody already set.
+  if (next === null) return { value: current, changed: false };
+  if (current === null) return { value: next, changed: true };
+
+  // Identical text: adding the same recipe twice must not yield "2 cans + 2 cans".
+  if (current.trim() === next.trim()) return { value: current, changed: false };
+
+  return { value: `${current.trim()} + ${next.trim()}`, changed: true };
+}
+
+/**
+ * Collapse repeats within a single call, so two ingredients resolving to the
+ * same item merge with each other before touching the database.
+ */
+function collapseEntries(entries) {
+  const order = [];
+  const byItemId = new Map();
+  for (const entry of entries) {
+    const itemId = entry && entry.itemId;
+    if (!itemId) return { entries: null, error: "every entry needs an itemId" };
+    if (!byItemId.has(itemId)) {
+      order.push(itemId);
+      byItemId.set(itemId, normaliseQuantity(entry.quantity));
+      continue;
+    }
+    byItemId.set(
+      itemId,
+      mergeQuantities(byItemId.get(itemId), entry.quantity).value,
+    );
+  }
+  return {
+    entries: order.map((itemId) => ({ itemId, quantity: byItemId.get(itemId) })),
+    error: null,
+  };
+}
+
+/**
+ * Add items to a collection, merging quantities with any already present.
+ *
+ * This is what `addMembers` is not. `addMembers` upserts with
+ * `ignoreDuplicates: true`, so re-adding an item is silently skipped and the
+ * caller is told via `skipped`. That is right for the re-add control, and wrong
+ * here: adding BBQ bean salad and then a second recipe that also needs limes
+ * should combine them into one row reading "6 + 3", not skip the second.
+ *
+ * Per entry, against the member already in the collection:
+ *
+ *   not present                      -> insert, appended via nextPosition
+ *   present, existing quantity empty -> take the new quantity
+ *   present, new quantity empty      -> leave the existing one alone
+ *   present, both set and identical  -> leave as-is
+ *   present, both set and different  -> concatenate with " + "
+ *
+ * No arithmetic — quantity is free text; "2 cans" and "1 lb" have no sum.
+ *
+ * The insert still goes through `addMembers`, so its `ignoreDuplicates` is load
+ * bearing: anything it reports as `skipped` became a member between our read and
+ * our write, and is merged on a second pass rather than being dropped. Without
+ * that pass a concurrent add would silently discard this caller's quantity.
+ *
+ * Follows the module contract: resolves to `{ data, error }` and never throws
+ * for an expected failure.
+ *
+ * @param {string} collectionId
+ * @param {Array<{itemId: string, quantity?: string}>} entries
+ * @param {Object} [options]
+ * @param {string} [options.userId] - Recorded as added_by on inserts.
+ * @returns {Promise<{data: Array<Object>|null, error: string|null,
+ *   inserted: Array<string>, merged: Array<string>, unchanged: Array<string>}>}
+ *   `data` holds every affected member row. The three id arrays say what
+ *   happened to each entry.
+ */
+export async function addOrMergeMembers(collectionId, entries, options = {}) {
+  const empty = { inserted: [], merged: [], unchanged: [] };
+
+  if (!collectionId)
+    return fail("addOrMergeMembers", "collectionId is required", empty);
+  if (!Array.isArray(entries) || entries.length === 0) return ok([], empty);
+
+  const { entries: collapsed, error: collapseError } = collapseEntries(entries);
+  if (collapseError)
+    return fail("addOrMergeMembers", collapseError, empty);
+
+  const { data: members, error: loadError } = await loadMembers(collectionId);
+  if (loadError) return { data: null, error: loadError, ...empty };
+
+  const byItemId = new Map((members || []).map((m) => [m.itemId, m]));
+
+  const toInsert = [];
+  const pendingMerges = [];
+  const unchanged = [];
+
+  for (const entry of collapsed) {
+    const existing = byItemId.get(entry.itemId);
+    if (!existing) {
+      toInsert.push(entry);
+      continue;
+    }
+    const { value, changed } = mergeQuantities(existing.quantity, entry.quantity);
+    if (changed) pendingMerges.push({ itemId: entry.itemId, quantity: value });
+    else unchanged.push(entry.itemId);
+  }
+
+  let inserted = [];
+  if (toInsert.length > 0) {
+    const result = await addMembers(collectionId, toInsert, {
+      userId: options.userId,
+    });
+    if (result.error) return { data: null, error: result.error, ...empty };
+    inserted = result.data || [];
+
+    // Anything skipped was inserted by somebody else between our read and this
+    // write. Re-read those rows and merge into them instead of losing them.
+    const raced = result.skipped || [];
+    if (raced.length > 0) {
+      const { data: rows, error: raceError } = await supabase
+        .from(MEMBERS_TABLE)
+        .select("*")
+        .eq("collection_id", collectionId)
+        .in("item_id", raced);
+
+      if (raceError) return fail("addOrMergeMembers", raceError, empty);
+
+      const now = new Map(
+        (rows || []).map((row) => {
+          const member = toCamelCase(row);
+          return [member.itemId, member];
+        }),
+      );
+      for (const entry of toInsert) {
+        const member = now.get(entry.itemId);
+        if (!member) continue;
+        const { value, changed } = mergeQuantities(member.quantity, entry.quantity);
+        if (changed) pendingMerges.push({ itemId: entry.itemId, quantity: value });
+        else unchanged.push(entry.itemId);
+      }
+    }
+  }
+
+  const merged = [];
+  for (const pending of pendingMerges) {
+    const result = await updateMemberQuantity(
+      collectionId,
+      pending.itemId,
+      pending.quantity,
+    );
+    if (result.error) {
+      // Some writes already landed. Report what happened rather than a bare
+      // failure the user cannot reconcile with what they can see on the list.
+      return fail(
+        "addOrMergeMembers",
+        `${result.error} — ${inserted.length} item(s) were added and ` +
+          `${merged.length} quantity merge(s) applied before this failed`,
+        {
+          inserted: inserted.map((row) => row.itemId),
+          merged: merged.map((row) => row.itemId),
+          unchanged,
+        },
+      );
+    }
+    merged.push(result.data);
+  }
+
+  return ok([...inserted, ...merged], {
+    inserted: inserted.map((row) => row.itemId),
+    merged: merged.map((row) => row.itemId),
+    unchanged,
+  });
+}
+
+/**
  * Update a member's free-text quantity. Empty string is stored as null.
  *
  * @param {string} collectionId

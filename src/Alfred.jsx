@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   pathToView,
@@ -13,6 +13,11 @@ import UndoMessage, { useUndo } from "./UndoMessage";
 import SortControl, { useSortPreference } from "./SortControl";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
+import {
+  parseIngredient,
+  matchProduct,
+  findNearMisses,
+} from "./utils/ingredientMatch";
 import {
   Plus,
   Share2,
@@ -57,6 +62,7 @@ import {
   loadMembers,
   loadRemovals,
   addMembers,
+  addOrMergeMembers,
   removeMember,
   removeMembers,
   reAddRemoval,
@@ -757,6 +763,442 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
   );
 }
 
+/**
+ * Add to Collection — resolve an item's collectable elements to items in a
+ * target collection's context, and pick which to add.
+ *
+ * Step 6 is read-only: it resolves, displays and lets the user adjust, but
+ * writes nothing. The footer is inert.
+ *
+ * Measured on the real corpus, 55% of rows resolve to nothing and must create a
+ * new item, so create-new is the common path and costs exactly one tap: the row
+ * checkbox itself commits to it. There is no dialog and no detour. Rows that
+ * failed to match but have plausible alternatives show them as chips, each of
+ * which retargets and checks the row in one tap — that is what stops the
+ * Shopping context growing "Salt", "kosher salt" and "Sea salt" separately.
+ */
+function ItemAddToCollection({ item, items, collections, contexts, onBack, onAdd }) {
+  const available = useMemo(
+    () => (collections || []).filter((c) => !c.archived),
+    [collections],
+  );
+
+  // Preselect: the item context's default collection, then a capture target in
+  // that context, then any capture target, then the first collection.
+  //
+  // The third rule is not in the spec. Without it the driving case never fires:
+  // Groceries is the capture target but lives in Shopping, while recipes live
+  // in Recipes, so rule two cannot match and an arbitrary "first collection"
+  // wins. Preferring a capture target anywhere over an arbitrary one is
+  // strictly better; flagged for review.
+  const defaultCollectionId = useMemo(() => {
+    const ctx = (contexts || []).find((c) => c.id === item.contextId);
+    const pinned =
+      ctx && ctx.defaultCollectionId
+        ? available.find((c) => c.id === ctx.defaultCollectionId)
+        : null;
+    if (pinned) return pinned.id;
+    const captureHere = available.find(
+      (c) => c.isCaptureTarget && c.contextId === item.contextId,
+    );
+    if (captureHere) return captureHere.id;
+    const captureAnywhere = available.find((c) => c.isCaptureTarget);
+    if (captureAnywhere) return captureAnywhere.id;
+    return available[0] ? available[0].id : "";
+  }, [available, contexts, item.contextId]);
+
+  const [collectionId, setCollectionId] = useState(defaultCollectionId);
+  const [overrides, setOverrides] = useState({});
+  const [pickerRow, setPickerRow] = useState(null);
+  const [pickerSearch, setPickerSearch] = useState("");
+
+  const collection = available.find((c) => c.id === collectionId) || null;
+  const targetContextId = collection ? collection.contextId ?? null : null;
+
+  // Targets are context-specific, so a change of collection invalidates every
+  // resolved row. Reset rather than carry stale targets across.
+  useEffect(() => {
+    setOverrides({});
+  }, [collectionId]);
+
+  /**
+   * Resolve once per (item, collection). Ordering is computed here and frozen:
+   * unmatched first, then matched in recipe order. It deliberately does not
+   * depend on `overrides`, because re-sorting as the user accepts a suggestion
+   * would move rows out from under a thumb mid-tap.
+   */
+  const rows = useMemo(() => {
+    const elements = Array.isArray(item.elements) ? item.elements : [];
+    const typeOf = (el) => el.displayType || el.display_type || "step";
+    // Carry the index into item.elements, not into the filtered list: Step 7
+    // stamps collectable/collectableItemId back onto the original array.
+    const indexed = elements.map((el, idx) => ({ el, idx }));
+    const flagged = indexed.filter(({ el }) => el.collectable === true);
+    // Fallback: an un-annotated item still works, on its bullets.
+    const source = flagged.length
+      ? flagged
+      : indexed.filter(({ el }) => typeOf(el) === "bullet");
+
+    const resolved = source.map(({ el, idx }) => {
+      const text = el.name || "";
+      const { quantity, product } = parseIngredient(text);
+      const pinnedId = el.collectableItemId || el.collectable_item_id || null;
+      // Already resolved on a previous visit: skip matching entirely.
+      const pinned = pinnedId
+        ? (items || []).find((i) => i.id === pinnedId && !i.archived)
+        : null;
+      const match =
+        pinned ||
+        matchProduct(product, items || [], { contextId: targetContextId });
+      const near = match
+        ? []
+        : findNearMisses(product, items || [], { contextId: targetContextId });
+      return { key: `${idx}-${text}`, elementIndex: idx, text, quantity, product, match, near };
+    });
+
+    const unmatched = resolved.filter((r) => !r.match);
+    const matched = resolved.filter((r) => r.match);
+    return [...unmatched, ...matched];
+  }, [item.elements, items, targetContextId]);
+
+  const stateFor = (row) => {
+    const o = overrides[row.key] || {};
+    return {
+      checked: o.checked === true,
+      quantity: o.quantity !== undefined ? o.quantity : row.quantity,
+      targetId:
+        o.targetId !== undefined ? o.targetId : row.match ? row.match.id : null,
+    };
+  };
+
+  const patch = (key, next) =>
+    setOverrides((prev) => ({ ...prev, [key]: { ...prev[key], ...next } }));
+
+  const selectedCount = rows.filter((r) => stateFor(r).checked).length;
+
+  const [busy, setBusy] = useState(false);
+
+  // "Existing" means the row currently resolves to an item that already lives
+  // in the target context — either matched automatically or via an accepted
+  // suggestion. Deliberately NOT create-new rows: each of those mints a new
+  // item in the catalogue, and fifteen uninspected new items in one tap is how
+  // a shopping catalogue fills with junk. Creating stays one deliberate tap.
+  const existingRows = rows.filter((r) => stateFor(r).targetId);
+  const allExistingSelected =
+    existingRows.length > 0 && existingRows.every((r) => stateFor(r).checked);
+
+  function selectExisting() {
+    const keys = existingRows.map((r) => r.key);
+    setOverrides((prev) => {
+      const next = { ...prev };
+      for (const k of keys) next[k] = { ...next[k], checked: true };
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    const keys = rows.map((r) => r.key);
+    setOverrides((prev) => {
+      const next = { ...prev };
+      for (const k of keys) next[k] = { ...next[k], checked: false };
+      return next;
+    });
+  }
+
+  async function handleAdd() {
+    if (busy || !collection) return;
+    const picks = rows
+      .filter((r) => stateFor(r).checked)
+      .map((r) => {
+        const st = stateFor(r);
+        return {
+          elementIndex: r.elementIndex,
+          targetItemId: st.targetId,
+          productName: r.product,
+          quantity: st.quantity,
+        };
+      });
+    if (picks.length === 0) return;
+    setBusy(true);
+    const ok = await onAdd(collection.id, picks);
+    setBusy(false);
+    // Stay put on failure so the selection is not lost.
+    if (ok) onBack();
+  }
+
+  const pickerRowData = pickerRow ? rows.find((r) => r.key === pickerRow) : null;
+  const pickerCandidates = (items || [])
+    .filter((i) => !i.archived)
+    .filter((i) => targetContextId == null || i.contextId === targetContextId)
+    .filter((i) => {
+      const q = pickerSearch.trim().toLowerCase();
+      return !q || i.name.toLowerCase().includes(q);
+    })
+    .slice(0, 20);
+
+  return (
+    <div>
+      <button
+        onClick={onBack}
+        className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Back
+      </button>
+
+      <h2 className="text-lg sm:text-xl font-medium text-foreground mb-1">
+        Add to Collection
+      </h2>
+      <p className="text-sm text-muted-foreground mb-3">{item.name}</p>
+
+      {available.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-4">
+          No collections yet. Create one first.
+        </p>
+      ) : (
+        <>
+          <label className="block text-sm font-medium text-foreground mb-1">
+            Collection
+          </label>
+          <select
+            value={collectionId}
+            onChange={(e) => setCollectionId(e.target.value)}
+            className="w-full px-3 py-2 min-h-[44px] border border-border rounded-lg text-base mb-3"
+          >
+            {available.map((c) => {
+              const ctx = (contexts || []).find((x) => x.id === c.contextId);
+              return (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                  {ctx ? ` — ${ctx.name}` : ""}
+                </option>
+              );
+            })}
+          </select>
+
+          {rows.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4">
+              Nothing to add — this item has no collectable elements and no
+              bullets.
+            </p>
+          ) : (
+            <>
+            {/* Select-all covers only rows that already resolve to an existing
+                item. A create-new row mints a new catalogue entry, so it stays
+                one deliberate tap. The label carries the count and the word
+                "existing" for exactly that reason: a plain "Select all" here
+                would claim to do something it deliberately does not. */}
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="text-sm text-muted-foreground">
+                {selectedCount} of {rows.length} selected
+              </span>
+              {existingRows.length > 0 && (
+                <button
+                  onClick={allExistingSelected ? clearSelection : selectExisting}
+                  className="px-3 py-2 min-h-[44px] shrink-0 rounded-lg border border-border text-sm text-primary hover:border-primary"
+                >
+                  {allExistingSelected
+                    ? "Select none"
+                    : `Select ${existingRows.length} existing`}
+                </button>
+              )}
+            </div>
+            {existingRows.length < rows.length && (
+              <p className="text-xs text-muted-foreground mb-2">
+                Rows that create a new item are not included — tap those
+                individually.
+              </p>
+            )}
+
+            {/* No interior scroll. An inner scroller nested in the page
+                scroller is unusable on a phone — a 32-row recipe in a
+                half-screen box is the case that breaks it. The page scrolls
+                once and the sticky footer now genuinely engages, which is
+                what it was always there for. */}
+            <div className="space-y-2 mb-4">
+              {rows.map((row) => {
+                const st = stateFor(row);
+                const target = st.targetId
+                  ? (items || []).find((i) => i.id === st.targetId)
+                  : null;
+                return (
+                  <div
+                    key={row.key}
+                    onClick={() => patch(row.key, { checked: !st.checked })}
+                    className={`flex gap-3 p-3 border rounded-lg cursor-pointer ${
+                      st.checked
+                        ? "border-primary bg-background"
+                        : "border-border bg-white hover:border-primary"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={st.checked}
+                      readOnly
+                      className="mt-1 rounded accent-primary pointer-events-none shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-foreground break-words">
+                        {row.text}
+                      </p>
+
+                      <div className="flex items-center gap-2 mt-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPickerSearch("");
+                            setPickerRow(row.key);
+                          }}
+                          className={`flex-1 min-w-0 text-left truncate px-2 py-2 min-h-[44px] rounded text-sm ${
+                            target
+                              ? "border border-border text-foreground"
+                              : "border-2 border-dashed border-primary text-primary"
+                          }`}
+                        >
+                          {target ? (
+                            <span className="truncate">{target.name}</span>
+                          ) : (
+                            <span className="truncate">
+                              Create &quot;{row.product}&quot;
+                            </span>
+                          )}
+                        </button>
+                        <input
+                          type="text"
+                          value={st.quantity}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            patch(row.key, { quantity: e.target.value });
+                          }}
+                          placeholder="Qty"
+                          className="w-20 sm:w-24 shrink-0 px-2 py-2 min-h-[44px] border border-border rounded text-base"
+                        />
+                      </div>
+
+                      {!target && row.near.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                          <span className="text-xs text-muted-foreground">
+                            or use
+                          </span>
+                          {row.near.map((n) => (
+                            <button
+                              key={n.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                patch(row.key, { targetId: n.id, checked: true });
+                              }}
+                              className="px-2 py-1 min-h-[32px] rounded-full border border-border bg-secondary text-xs text-foreground hover:border-primary"
+                            >
+                              {n.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            </>
+          )}
+
+          {/* Same offsets as CollectionAddItems. Now that the list no longer
+              scrolls internally this genuinely engages on a long recipe. */}
+          <div className="flex gap-2 sticky bottom-28 sm:bottom-32 pt-2 pb-3 bg-background border-t border-border">
+            <button
+              onClick={handleAdd}
+              disabled={busy || selectedCount === 0 || !collection}
+              className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm disabled:opacity-50 text-sm"
+            >
+              {busy
+                ? "Adding..."
+                : `Add ${selectedCount > 0 ? `(${selectedCount})` : ""} to Collection`}
+            </button>
+            <button
+              onClick={onBack}
+              className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+
+      {pickerRowData && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+          onClick={() => setPickerRow(null)}
+        >
+          <div
+            className="bg-card p-4 sm:p-6 rounded-lg max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-medium text-foreground">Change target</h3>
+              <button
+                onClick={() => setPickerRow(null)}
+                aria-label="Close"
+                className="flex items-center justify-center min-h-[44px] min-w-[44px] -mr-2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-muted-foreground mb-3 break-words">
+              {pickerRowData.text}
+            </p>
+
+            <button
+              onClick={() => {
+                patch(pickerRowData.key, { targetId: null, checked: true });
+                setPickerRow(null);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 min-h-[44px] mb-3 border-2 border-dashed border-primary rounded-lg text-primary text-sm"
+            >
+              <Plus className="w-4 h-4 shrink-0" />
+              <span className="truncate">
+                Create &quot;{pickerRowData.product}&quot;
+              </span>
+            </button>
+
+            <input
+              type="text"
+              placeholder="Search items..."
+              value={pickerSearch}
+              onChange={(e) => setPickerSearch(e.target.value)}
+              className="w-full px-3 py-2 min-h-[44px] border border-border rounded-lg text-base mb-3"
+              autoFocus
+            />
+
+            <div className="space-y-2">
+              {pickerCandidates.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-2">
+                  No matching items
+                </p>
+              ) : (
+                pickerCandidates.map((cand) => (
+                  <button
+                    key={cand.id}
+                    onClick={() => {
+                      patch(pickerRowData.key, { targetId: cand.id, checked: true });
+                      setPickerRow(null);
+                    }}
+                    className="w-full text-left px-3 py-2 min-h-[44px] border border-border rounded-lg text-sm hover:border-primary"
+                  >
+                    {cand.name}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export default function Alfred() {
   // --- Navigation bridge (Step 4, docs/technical-spec-navigation-urls.md) ---
   // `view` used to be `useState("home")`. It is now derived from the URL, and
@@ -861,6 +1303,7 @@ export default function Alfred() {
     "context-detail": selectedContextId,
     "intention-detail": selectedIntentionId,
     "item-detail": selectedItemId,
+    "item-add-to-collection": selectedItemId,
     "execution-detail": activeExecution,
     "collection-detail": selectedCollectionId,
     "collection-history": selectedCollectionId,
@@ -2783,6 +3226,111 @@ export default function Alfred() {
     return true;
   }
 
+  /**
+   * Step 7 write path for Add to Collection.
+   *
+   * Three things happen, in this order:
+   *   1. create any items the user chose to create
+   *   2. ONE save of the source item's elements, stamping collectable and
+   *      collectableItemId onto every row that was added
+   *   3. add-or-merge the membership rows
+   *
+   * Returns true only if all three succeeded. The caller stays on the page on
+   * false so the selection is not lost.
+   *
+   * Deliberately does NOT call updateItem: that helper ends with
+   * `setItems(items.map(...))` over a closed-over snapshot, which would drop
+   * the items created moments earlier in this same handler. State is updated
+   * once here, functionally.
+   */
+  async function addElementsToCollection(collectionId, sourceItem, picks) {
+    if (!collectionId || !sourceItem || !picks || picks.length === 0) return false;
+    const coll = collections.find((c) => c.id === collectionId);
+    if (!coll) return false;
+
+    return withLoading("Adding...", async () => {
+      const targetContext = contexts.find((c) => c.id === coll.contextId);
+      const targetShared = targetContext?.shared || false;
+
+      const created = [];
+      const entries = [];
+      const stamp = new Map();
+      // One recipe can yield two create-new rows for the same product —
+      // "Salt for the bean water" and "1/4 tsp salt" both reduce to salt.
+      // Creating two items would be the catalogue pollution this feature
+      // exists to prevent, so the first creation wins and the second reuses it.
+      const createdByName = new Map();
+
+      try {
+        for (const pick of picks) {
+          let itemId = pick.targetItemId;
+          const nameKey = (pick.productName || "").trim().toLowerCase();
+          if (!itemId && createdByName.has(nameKey)) {
+            itemId = createdByName.get(nameKey);
+          }
+          if (!itemId) {
+            // Same on-the-fly shape as CollectionAddItems.
+            const newItem = {
+              id: uid(),
+              user_id: user.id,
+              name: pick.productName,
+              description: "",
+              contextId: coll.contextId,
+              elements: [],
+              tags: [],
+              isCaptureTarget: false,
+              createdAt: new Date().toISOString(),
+            };
+            await storage.set(`item:${newItem.id}`, newItem, targetShared);
+            created.push(newItem);
+            itemId = newItem.id;
+            createdByName.set(nameKey, itemId);
+          }
+          entries.push({ itemId, quantity: pick.quantity });
+          if (Number.isInteger(pick.elementIndex)) stamp.set(pick.elementIndex, itemId);
+        }
+
+        // One save of the elements array, not one per row.
+        const nextElements = (sourceItem.elements || []).map((el, idx) =>
+          stamp.has(idx)
+            ? { ...el, collectable: true, collectableItemId: stamp.get(idx) }
+            : el,
+        );
+        const updatedSource = { ...sourceItem, elements: nextElements };
+        const sourceContext = contexts.find((c) => c.id === updatedSource.contextId);
+        await storage.set(
+          `item:${updatedSource.id}`,
+          updatedSource,
+          sourceContext?.shared || false,
+        );
+
+        // One functional update covering both writes above.
+        setItems((prev) => [
+          ...prev.map((i) => (i.id === updatedSource.id ? updatedSource : i)),
+          ...created,
+        ]);
+      } catch (error) {
+        // storage.set throws; the module contract does not apply to it.
+        console.error("[addElementsToCollection]", error);
+        window.alert(
+          "Could not save: " + (error?.message || "Unknown error") +
+            ". Nothing was added to the collection.",
+        );
+        return false;
+      }
+
+      const result = await addOrMergeMembers(collectionId, entries, {
+        userId: user.id,
+      });
+      await loadCollectionMembers([collectionId]);
+      if (result.error) {
+        reportMembershipError("add to this collection", result.error);
+        return false;
+      }
+      return true;
+    });
+  }
+
   async function removeItemFromCollection(collectionId, itemId) {
     const result = await removeMember(collectionId, itemId, {
       reason: REMOVAL_MANUAL,
@@ -2958,8 +3506,13 @@ export default function Alfred() {
     keywords = "",
     description = "",
     pinned = false,
+    defaultCollectionId = null,
   ) {
     return withLoading('Saving context...', async () => {
+      // The <select> uses "" for "none", but default_collection_id is a FK to
+      // item_collections.id — an empty string would violate it. Normalise here,
+      // at the single point every caller funnels through.
+      const defaultCollection = defaultCollectionId || null;
       const context = existing
         ? {
             ...existing,
@@ -2968,6 +3521,7 @@ export default function Alfred() {
             keywords,
             description,
             pinned,
+            defaultCollectionId: defaultCollection,
           }
         : {
             id: uid(),
@@ -2977,6 +3531,7 @@ export default function Alfred() {
             keywords,
             description,
             pinned,
+            defaultCollectionId: defaultCollection,
             createdAt: new Date().toISOString(),
           };
 
@@ -3001,6 +3556,7 @@ export default function Alfred() {
     keywords = "",
     description = "",
     pinned = false,
+    defaultCollectionId = null,
   ) {
     await saveContextRecord(
       editingContext,
@@ -3009,6 +3565,7 @@ export default function Alfred() {
       keywords,
       description,
       pinned,
+      defaultCollectionId,
     );
     setShowContextForm(false);
     setEditingContext(null);
@@ -4097,6 +4654,7 @@ export default function Alfred() {
               <ContextForm
                 editing={editingContext}
                 stickyFooter
+                collections={collections}
                 onSave={saveContext}
                 onCancel={() => {
                   setShowContextForm(false);
@@ -4235,6 +4793,7 @@ export default function Alfred() {
             contexts={contexts}
             items={items}
             onBack={handleBackFromItemDetail}
+            onAddToCollection={() => setView("item-add-to-collection")}
             onUpdateItem={updateItem}
             onEditItem={() => {
               // User can click item to edit inline
@@ -4620,6 +5179,29 @@ export default function Alfred() {
                   <span className="text-sm">Pin to home</span>
                 </label>
 
+                {/* The column has existed since the collections migration and
+                    ai-enrich has been reading it to decide where a capture
+                    should go, but there was no UI — the only way to set it was
+                    raw SQL, which is how Groceries got its flag. */}
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={coll.isCaptureTarget || false}
+                    onChange={(e) =>
+                      updateCollection(coll.id, { isCaptureTarget: e.target.checked })
+                    }
+                    className="mt-1 rounded accent-primary"
+                  />
+                  <span className="text-sm">
+                    Capture target
+                    <span className="block text-xs text-muted-foreground">
+                      Alfred files new captures here by default, and it is
+                      preselected when adding an item's ingredients to a
+                      collection.
+                    </span>
+                  </span>
+                </label>
+
                 <div>
                   {/* Membership — reads and writes both go to collection_items. */}
                   <div className="flex items-center justify-between mb-2">
@@ -4924,6 +5506,29 @@ export default function Alfred() {
         })()}
 
         {/* Collection Add Items View */}
+        {/* The picker. Back is a bare setView("item-detail"): it touches
+            neither previousView (the shared slot holding where item detail
+            itself came from) nor itemHistoryStack (a stack of item ids for
+            item-to-item navigation). selectedItemId is untouched by this
+            navigation and this view is keyed on it in DETAIL_VIEW_STATE, so
+            no return address is needed. Same as collection-add-items. */}
+        {view === "item-add-to-collection" && (() => {
+          const target = items.find((i) => i.id === selectedItemId);
+          if (!target) return <p className="text-muted-foreground">Item not found</p>;
+          return (
+            <ItemAddToCollection
+              item={target}
+              items={items}
+              collections={collections}
+              contexts={contexts}
+              onBack={() => setView("item-detail")}
+              onAdd={(collectionId, picks) =>
+                addElementsToCollection(collectionId, target, picks)
+              }
+            />
+          );
+        })()}
+
         {view === "collection-add-items" && (() => {
           const coll = collections.find((c) => c.id === selectedCollectionId);
           if (!coll) return <p className="text-muted-foreground">Collection not found</p>;
@@ -5400,7 +6005,8 @@ function InboxCard({
         name: el.text || '',
         displayType: el.type || 'step',
         quantity: el.quantity || '',
-        description: el.description || ''
+        description: el.description || '',
+        ...(el.collectable ? { collectable: true } : {})
       }
     )
   );
@@ -5477,7 +6083,8 @@ function InboxCard({
             name: el.text || '',
             displayType: el.type || 'step',
             quantity: el.quantity || '',
-            description: el.description || ''
+            description: el.description || '',
+            ...(el.collectable ? { collectable: true } : {})
           }
         ));
         setItemTags(inboxItem.suggestedTags || []);
@@ -5519,7 +6126,8 @@ function InboxCard({
             name: el.text || '',
             displayType: el.type || 'step',
             quantity: el.quantity || '',
-            description: el.description || ''
+            description: el.description || '',
+            ...(el.collectable ? { collectable: true } : {})
           }
         )
       ) ||
@@ -5821,7 +6429,8 @@ function InboxCard({
         name: el.text || '',
         displayType: el.type || 'step',
         quantity: el.quantity || '',
-        description: el.description || ''
+        description: el.description || '',
+        ...(el.collectable ? { collectable: true } : {})
       }
     ));
     setItemTags(inboxItem.suggestedTags || []);
@@ -6610,12 +7219,15 @@ function InboxCard({
  * Defaulting to false so a third render site gets the safe behaviour and has to
  * ask for the other.
  */
-function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = false }) {
+function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = false, collections = [] }) {
   const [name, setName] = useState(editing?.name || "");
   const [shared, setShared] = useState(editing?.shared || false);
   const [keywords, setKeywords] = useState(editing?.keywords || "");
   const [description, setDescription] = useState(editing?.description || "");
   const [pinned, setPinned] = useState(editing?.pinned || false);
+  const [defaultCollectionId, setDefaultCollectionId] = useState(
+    editing?.defaultCollectionId || "",
+  );
 
   useEffect(() => {
     if (!onDirtyChange) return;
@@ -6624,9 +7236,10 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = 
       shared !== (editing?.shared || false) ||
       keywords !== (editing?.keywords || "") ||
       description !== (editing?.description || "") ||
-      pinned !== (editing?.pinned || false);
+      pinned !== (editing?.pinned || false) ||
+      defaultCollectionId !== (editing?.defaultCollectionId || "");
     onDirtyChange(isDirty, "this context");
-  }, [name, shared, keywords, description, pinned]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [name, shared, keywords, description, pinned, defaultCollectionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => { if (onDirtyChange) onDirtyChange(false); };
@@ -6679,6 +7292,35 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = 
           />
         </div>
 
+        <div>
+          <label className="block text-sm font-medium text-foreground mb-1">
+            Default collection
+          </label>
+          {/* Every non-archived collection, deliberately unfiltered by context.
+              A default collection names where this context's items GO, which is
+              normally a *different* context: a recipe lives in Recipes and its
+              ingredients belong in Shopping alongside the other products. An
+              earlier same-context filter here broke the feature's own driving
+              case, because Recipes could not point at Groceries. */}
+          <select
+            value={defaultCollectionId}
+            onChange={(e) => setDefaultCollectionId(e.target.value)}
+            className="w-full px-3 py-2 min-h-[44px] border border-border rounded text-base"
+          >
+            <option value="">None</option>
+            {(collections || [])
+              .filter((c) => !c.archived)
+              .map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+          </select>
+          <p className="text-xs text-muted-foreground mt-1">
+            Preselected when adding an item's ingredients to a collection.
+          </p>
+        </div>
+
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -6714,7 +7356,7 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = 
             onClick={() => {
               if (name.trim()) {
                 if (onDirtyChange) onDirtyChange(false);
-                onSave(name, shared, keywords, description, pinned);
+                onSave(name, shared, keywords, description, pinned, defaultCollectionId);
               }
             }}
             className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
@@ -7005,8 +7647,13 @@ function ContextDetailView({
 
       {isEditingContext && (
         <div className="mb-4 sm:mb-6">
+          {/* onSave below forwards with (...args), so it is positionally
+              transparent: the new defaultCollectionId argument flows through
+              without an edit here. The other three layers are explicit and all
+              had to change. */}
           <ContextForm
             editing={context}
+            collections={collections}
             onSave={async (...args) => {
               await onSaveContext(context, ...args);
               setIsEditingContext(false);
@@ -7485,6 +8132,7 @@ function ItemDetailView({
   contexts,
   items,
   onBack,
+  onAddToCollection,
   onUpdateItem,
   onEditItem,
   onUpdateIntent,
@@ -7632,6 +8280,21 @@ function ItemDetailView({
               <span className="hidden sm:inline">Edit Item</span>
               <span className="sm:hidden">Edit</span>
             </button>
+            {/* Fifth button. Sits before Archive, not after it: the documented
+                order puts the destructive action last, and that convention
+                outranks "append the new one at the end". Present on every item,
+                not just recipes — `collectable` is a generic flag and a packing
+                list should work the same way. */}
+            {onAddToCollection && (
+              <button
+                onClick={onAddToCollection}
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              >
+                <ClipboardList className="w-4 h-4" />
+                <span className="hidden sm:inline">Add to Collection</span>
+                <span className="sm:hidden">Collect</span>
+              </button>
+            )}
             {/* New here. Archiving was previously reachable only from inside the
                 edit form, which broke governing rule 4 — a state change hidden
                 behind a content-editing surface. `onUpdateItem` already offers
@@ -8406,6 +9069,7 @@ function ItemCard({
             quantity: el.quantity || "",
             description: el.description || "",
             ...(el.itemId || el.item_id ? { itemId: el.itemId || el.item_id } : {}),
+            ...(el.collectable ? { collectable: true } : {}),
           },
     ),
   );
@@ -8430,6 +9094,7 @@ function ItemCard({
             quantity: el.quantity || "",
             description: el.description || "",
             ...(el.itemId || el.item_id ? { itemId: el.itemId || el.item_id } : {}),
+            ...(el.collectable ? { collectable: true } : {}),
           }
     );
     const isDirty =
@@ -8522,7 +9187,13 @@ function ItemCard({
 
   function updateElement(index, field, value) {
     const newElements = [...elements];
-    newElements[index] = { ...newElements[index], [field]: value };
+    const next = { ...newElements[index], [field]: value };
+    // `collectable` means "this is a thing you can buy" and only applies to
+    // bullets. Changing a row away from bullet drops the flag rather than
+    // leaving it set on a row whose checkbox is no longer rendered: an
+    // invisible flag would still surface the row in Add to Collection.
+    if (field === "displayType" && value !== "bullet") delete next.collectable;
+    newElements[index] = next;
     setElements(newElements);
   }
 
@@ -8787,6 +9458,26 @@ function ItemCard({
                         placeholder="Qty"
                         className="w-16 px-2 py-2 border border-border rounded text-sm"
                       />
+                      {(element.displayType || "step") === "bullet" && (
+                        <label
+                          className="flex items-center gap-2 min-h-[44px] cursor-pointer"
+                          title="This is something you can buy, so it can be added to a shopping collection."
+                        >
+                          <input
+                            type="checkbox"
+                            checked={element.collectable === true}
+                            onChange={(e) =>
+                              updateElement(
+                                index,
+                                "collectable",
+                                e.target.checked ? true : undefined,
+                              )
+                            }
+                            className="rounded accent-primary"
+                          />
+                          <span className="text-sm whitespace-nowrap">Can buy</span>
+                        </label>
+                      )}
                     </div>
 
                     {/* Item reference link */}
