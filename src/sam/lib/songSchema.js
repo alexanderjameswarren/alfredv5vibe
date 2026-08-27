@@ -4,10 +4,15 @@
 //   1. Structural — Ajv over `sam-drill-format.schema.json` at the repo root.
 //      Enforces required fields, type constraints, enum values, the duration
 //      regex, the `beats[]` rejection, the inline-`lyric` rejection.
-//   2. Semantic — two things the schema cannot express:
+//   2. Semantic — three things the schema cannot express declaratively:
 //        (a) `midi` and `name` on a Note must agree
 //        (b) durations in a measure must sum to `(beats/beatType)*4` beats
 //            (skipped when the measure contains a tuplet, per spec §4)
+//        (c) no two notes in one event may share a `midi` unless one is a tie
+//            continuation (M2 — see noteDuplicates.js for the rule). Draft-07
+//            cannot compare sibling array items, so the schema carries this as
+//            a custom Ajv keyword registered below rather than as a plain
+//            constraint.
 //
 // ERRORS vs WARNINGS. Structural failures and midi/name disagreement are
 // ERRORS: they describe a document that cannot be stored, or whose notes mean
@@ -38,6 +43,9 @@ import Ajv from "ajv";
 // it up. Regenerated file — do not edit this copy.
 import schema from "./sam-drill-format.schema.json";
 import { tokenToBeats } from "./durations";
+// M2 — the duplicate-pitch rule. Same predicate the parser merges with, so
+// the fixer and the checker cannot disagree about what counts as a duplicate.
+import { duplicatePitchErrors, registerDuplicatePitchKeyword } from "./noteDuplicates";
 
 // `verbose: true` populates `error.schema` on each error object — required
 // for `formatStructuralError` to detect and reword the `not: { required:
@@ -45,6 +53,9 @@ import { tokenToBeats } from "./durations";
 // generic "must NOT be valid" that reveals nothing about which not-clause
 // tripped.
 const ajv = new Ajv({ allErrors: true, strict: false, verbose: true });
+// M2 — the schema's `noDuplicatePitches` keyword. Must be taught to the
+// instance before compile, or Ajv (strict:false) silently ignores it.
+registerDuplicatePitchKeyword(ajv);
 const validateStructure = ajv.compile(schema);
 
 // ---------------------------------------------------------------------------
@@ -171,6 +182,14 @@ export function validateSongDocument(doc) {
             );
           }
         }
+
+        // 2c — no two notes in one event may share a pitch (M2). An ERROR,
+        // not a warning: unlike a short bar, this document cannot be rendered
+        // or indexed correctly, and there is nothing for a human to weigh up
+        // at the M8 gate. Continuations are exempt — see noteDuplicates.js.
+        errors.push(
+          ...duplicatePitchErrors(evt.notes, `measure ${mi + 1} ${hand}[${ei}]`)
+        );
 
         // Accumulate beats for the per-hand sum below.
         const b = eventBeats(evt);

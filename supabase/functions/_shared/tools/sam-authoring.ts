@@ -18,6 +18,10 @@
 // eventBeats) are duplicated from src/sam/lib/songSchema.js — ~30 lines,
 // stable, and the ESM-vs-Deno boundary rules out clean sharing at runtime.
 // If either helper changes in the app, mirror it here.
+//
+// The M2 duplicate-pitch rule is the same kind of port (../noteDuplicates.ts),
+// but that one is covered by a parity test on the browser side, so drift fails
+// a test rather than relying on this comment.
 
 import Ajv from "ajv";
 import { defineTool, envelope } from "../platform.ts";
@@ -30,6 +34,9 @@ import schema from "../sam-drill-format.schema.json" with { type: "json" };
 // ---------------------------------------------------------------------------
 
 const ajv = new Ajv({ allErrors: true, strict: false, verbose: true });
+// M2 — teach the instance the schema's `noDuplicatePitches` keyword before
+// anything is compiled, or Ajv (strict:false) silently ignores it.
+registerDuplicatePitchKeyword(ajv);
 // `Ajv.addSchema` registers the whole document once; then `getSchema(ref)`
 // returns a compiled validator for the sub-schema we want.
 ajv.addSchema(schema, schema.$id);
@@ -56,6 +63,12 @@ const NAME_RE = /^([A-G])(##|bb|#|b)?(-)?(\d)$/;
 // "Deno-copy BASE parity" test in durations.test.js — any drift on
 // tokens or beat values fails there before it can ship.
 import { tokenToBeats } from "../durations.ts";
+// M2 — the duplicate-pitch rule. Deno port of src/sam/lib/noteDuplicates.js,
+// kept honest by the "Deno-copy predicate parity" test on the browser side.
+import {
+  duplicatePitchErrors,
+  registerDuplicatePitchKeyword,
+} from "../noteDuplicates.ts";
 
 function nameToMidi(name: string): number | null {
   const m = NAME_RE.exec(name);
@@ -79,7 +92,10 @@ function eventBeats(evt: { duration?: string; tuplet?: { actual: number; normal:
 
 interface Measure {
   timeSignature?: { beats: number; beatType: number };
-  rh?: Array<{ duration: string; notes?: Array<{ midi: number; name: string }>; tuplet?: { actual: number; normal: number; position: string } }>;
+  // `tie` is part of the Note shape in the schema ("start" | "end" | "both")
+  // and the M2 duplicate-pitch rule turns on it — a continuation is exempt.
+  // It was absent here while nothing in this file read it.
+  rh?: Array<{ duration: string; notes?: Array<{ midi: number; name: string; tie?: string }>; tuplet?: { actual: number; normal: number; position: string } }>;
   lh?: typeof Measure.prototype.rh; // deliberately loose — same shape as rh
   chord?: string;
   section?: string;
@@ -135,6 +151,14 @@ function validateOneMeasure(m: Measure, prefix: string): string[] {
           errors.push(`${prefix} ${hand}[${ei}].notes[${ni}]: midi=${note.midi} does not agree with name="${note.name}" (expected midi=${expected}).`);
         }
       }
+      // M2 — no two notes in one event may share a pitch unless one is a tie
+      // continuation. Same predicate the parser merges with. This is the
+      // primary check; the schema keyword above is the second layer, and on a
+      // structurally-invalid measure it fires first and we never reach here.
+      errors.push(
+        ...duplicatePitchErrors(evt.notes, `${prefix} ${hand}[${ei}]`),
+      );
+
       const b = eventBeats(evt);
       if (b != null) handBeats += b;
     }

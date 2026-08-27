@@ -183,17 +183,66 @@ Neither signal works alone:
 3. Assign each voice to the hand of its majority staff, and apply that to every
    note of that voice everywhere — including notes engraved on the other staff.
 4. If a voice's majority is below 60%, FLAG rather than guess. Corpus low is 67%.
+5. **(amended 2026-08-27, M4)** Except where a voice sits wholly on the other
+   staff for a RUN of two or more consecutive measures — there it follows the
+   engraving instead. A *split* measure (the voice on both staves at once) is
+   never re-routed, and a run of one is not enough.
 
 Song-level tallies are stable; per-measure majorities are not. Entertainer m3 has
 voice 1 at 3 notes on staff 1 vs 5 on staff 2, while m4 has 7 vs 1 — a per-measure
 rule flips the melody between hands in adjacent bars. Song-level gives
 `voice 1 → staff 1 (99%)`, `voice 5 → staff 2 (99%)` unambiguously.
 
-Applied to Moonlight: voices 1 and 2 → RH, voices 5 and 6 → LH. Melody and full
-arpeggio in the right hand, bass octaves in the left. Exactly how it is played.
+Applied to Moonlight: voices 1 and 2 → RH for most of the piece, voices 5 and 6 →
+LH. Melody and full arpeggio in the right hand, bass octaves in the left.
+
+**Amendment (2026-08-27, M4): rule 3 alone was wrong for part of Moonlight, and
+the worked example above used to claim otherwise.** It read "voices 1 and 2 → RH
+… exactly how it is played". In m37-41 that is not how it is played. There is
+nothing on the treble staff at all in those bars — voices 1 and 2 are engraved
+entirely on the bass staff, with voice 5 holding the pedal octaves beneath them —
+and the 71%/67% song-level majority dragged all of it into the right hand. The
+result asked the right hand to play a B#2-A3 triplet arpeggio and the inner voice
+at once while the left hand played two notes.
+
+The limitation is granularity: **a per-song rule cannot represent a voice whose
+hand genuinely changes during the piece.** Rule 5 is the fix. Under it,
+Moonlight's voice 1 goes to the left hand for m38-41 and m66-67, and voice 2 for
+m13-14, m21-22, m37-40, m58-59 and m68-69. Nothing else in the 13-fixture corpus
+changes at all.
+
+**Run length is a proxy.** The signal underneath it is left-hand occupancy. The
+isolated bars this rule leaves alone — Moonlight m31, m63, m65 — are ones where
+the left hand is already holding a bass octave through the whole bar and has no
+capacity, so the figure has to be a momentary right-hand cross; m31 is m30 an
+octave down, and m63/m65 are one descending line from B#4 that crosses the staff
+boundary late in the bar. The engraver switched staves to avoid ledger lines.
+Occupancy is deliberately NOT implemented: run length is simpler and agrees with
+it on all 13 fixtures. If rule 5 ever misfires on a future score, occupancy is
+the first place to look.
+
+Two fixes that look obvious and are wrong, recorded so they are not re-proposed:
+
+- **Per-measure majority.** Rejected above, with Entertainer m3/m4.
+- **Anything pitch-based.** The parser legitimately puts ~300 notes below middle C
+  in Moonlight's right hand — G#3 alone is 80 notes across 33 measures of RH
+  arpeggio. A `midi < 60 → LH` pass shreds the piece.
+
+And one counterexample the rule is built to survive: The Entertainer's m1 pickup
+has both hands playing the same figure an octave apart, the whole bar engraved on
+the treble staff. Voice 5 is genuinely the left hand, written high. "Follow the
+engraving whenever a voice is wholly on the other staff" would put both lines in
+the right hand; requiring a run of two or more leaves it alone.
 
 The existing `staff === 0 && midi < 60` middle-C fallback stays for single-staff
-sources only, and FLAGs when it fires.
+sources only, and FLAGs when it fires. Rule 5 does not reach it, or the
+two-parts-as-two-staves case: neither has a song-level assignment for a run to
+override.
+
+**One voice no longer means one hand.** Anything downstream that assumed a voice
+number maps to exactly one hand for a whole song is now wrong. The validator's
+`hand_assignment_mismatch` check used to assert exactly that and was rewritten in
+M4; see below.
 
 ### 3.7 Short measures: anacrusis vs incomplete
 

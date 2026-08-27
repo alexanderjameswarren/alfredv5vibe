@@ -55,15 +55,32 @@ export function validate(xmlString, label) {
   const add = (defect, measure, hand, detail) =>
     findings.push({ defect, measure, hand, detail });
 
-  const truth = buildTruth(xmlString);
-
+  // M4 — parse FIRST, then build truth against the parser's own routing.
+  //
+  // The oracle no longer decides which hand a voice belongs to (xmlTruth.js
+  // voiceStaffTally explains why). It answers the question that is a fact:
+  // given this routing, is the content in each hand right? A parser that routes
+  // differently from what it publishes in `handRouting` diverges in both hands
+  // and is caught by the walk below; whether the routing itself is SENSIBLE is
+  // checked separately, by the invariants near the end of this function.
   let parsed;
   try {
     parsed = parseMusicXML(xmlString);
   } catch (err) {
     add(DEFECTS.PARSE_ERROR, null, null, err.message);
-    return { label, truth, parsed: null, findings, summary: summarise(findings) };
+    return {
+      label,
+      truth: buildTruth(xmlString),
+      parsed: null,
+      findings,
+      summary: summarise(findings),
+    };
   }
+
+  const routing = parsed.handRouting
+    ? parsed.handRouting.map((o) => new Map(Object.entries(o || {})))
+    : null;
+  const truth = buildTruth(xmlString, { routing });
 
   // ---- Song-level ----------------------------------------------------------
   //
@@ -579,50 +596,24 @@ export function validate(xmlString, label) {
     }
   }
 
-  // ---- Hand-assignment cross-check ---------------------------------------
-  // Reconstruct the parser's per-voice hand assignment from its output and
-  // compare against truth.handAssignment (independently computed by
-  // xmlTruth.js from the same XML). Fire HAND_ASSIGNMENT_MISMATCH when they
-  // disagree — that's a bug in one side's §3.6 implementation, invisible to
-  // any per-measure divergence check because both parser and truth would
-  // route in a self-consistent but wrong way.
-  //
-  // Also fires when the parser emits a single voice number on more than one
-  // hand across the song. Under §3.6 a voice belongs to exactly one hand;
-  // seeing it on both means the parser's assignment leaked.
-  if (truth.handAssignment && truth.handAssignment.size > 0) {
-    const parserVoiceHands = new Map();  // voice -> Map<hand, note_count>
-    for (const m of parsed.measures) {
-      for (const [hand, events] of [["rh", m.rh], ["lh", m.lh]]) {
-        for (const e of events || []) {
-          if (e.voice === undefined) continue;
-          if (!e.notes || e.notes.length === 0) continue;
-          if (!parserVoiceHands.has(e.voice)) parserVoiceHands.set(e.voice, new Map());
-          const handCounts = parserVoiceHands.get(e.voice);
-          handCounts.set(hand, (handCounts.get(hand) || 0) + 1);
-        }
-      }
-    }
-    for (const [voice, handCounts] of parserVoiceHands) {
-      if (handCounts.size > 1) {
-        const dist = [...handCounts.entries()].map(([h, c]) => `${h}: ${c}`).join(", ");
-        add(DEFECTS.HAND_ASSIGNMENT_MISMATCH, null, null,
-          `voice ${voice}: parser emits notes on both hands (${dist}) — assignment leaked`);
-      }
-    }
-    for (const [voice, info] of truth.handAssignment) {
-      const parserHands = parserVoiceHands.get(voice);
-      if (!parserHands || parserHands.size === 0) continue;
-      const parserHand = [...parserHands.entries()].sort((a, b) => b[1] - a[1])[0][0];
-      if (parserHand !== info.hand) {
-        add(DEFECTS.HAND_ASSIGNMENT_MISMATCH, null, null,
-          `voice ${voice}: parser → ${parserHand}, truth → ${info.hand} ` +
-          `(truth majority staff ${info.staff} at ${(info.majority * 100).toFixed(0)}%)`);
-      }
+  // ---- Hand-assignment invariants (M4) -------------------------------------
+  for (const f of handAssignmentInvariants(parsed, truth)) {
+    add(DEFECTS.HAND_ASSIGNMENT_MISMATCH, f.measure, null, f.detail);
+  }
+
+  // Per-voice routing summary for the CLI: measures routed to each staff.
+  // Taken from handRouting, not from output attribution — an output event
+  // records only the FIRST voice covering its segment, so counting there
+  // under-reports any voice that shares a hand with another.
+  const voiceRouting = new Map(); // voice -> { rh, lh } measure counts
+  for (const map of parsed.handRouting || []) {
+    for (const [voice, staff] of Object.entries(map || {})) {
+      if (!voiceRouting.has(voice)) voiceRouting.set(voice, { rh: 0, lh: 0 });
+      voiceRouting.get(voice)[staff === "1" ? "rh" : "lh"] += 1;
     }
   }
 
-  return { label, truth, parsed, findings, summary: summarise(findings) };
+  return { label, truth, parsed, voiceRouting, findings, summary: summarise(findings) };
 }
 
 const round = (x) => Math.round(x * 1000) / 1000;
@@ -749,5 +740,179 @@ function summarise(findings) {
       measures: measures[k] ? [...measures[k]].sort((a, b) => a - b) : [],
     };
   }
+  return out;
+}
+
+
+// ---------------------------------------------------------------------------
+/**
+ * The four hand-assignment invariants (M4). Exported so they can be exercised
+ * against synthetic routings — an invariant that has never fired has not been
+ * tested.
+ *
+ * @param parsed  parseMusicXML output; needs `measures` and `handRouting`
+ * @param truth   buildTruth output; needs `measures`, `voiceStaffTallies`,
+ *                `applyThreeSix`
+ * @returns [{ measure, detail }] — empty when the routing is sound.
+ */
+export function handAssignmentInvariants(parsed, truth) {
+  const out = [];
+  //
+  // §3.6 is now per-RUN, not per-song: one voice number no longer means one
+  // hand, so the old checks — "a voice on both hands is a leak" and "parser
+  // hand != truth hand" — are gone. The first is legal by design now; the
+  // second has no truth hand left to compare against, because the oracle
+  // deliberately stopped deriving one.
+  //
+  // What replaces them is four properties that hold for ANY correct
+  // assignment, whatever policy produced it. None of them encodes the run
+  // length or the majority threshold — those are tunable, and they are pinned
+  // in the parser's own fixture test instead. Facts here, policy there.
+  //
+  // All four are skipped when §3.6 does not apply: a single-staff source routes
+  // per NOTE by pitch, so one voice legitimately spans both hands in one bar.
+  if (!truth.applyThreeSix) return out;
+  {
+    // I1 — one voice, one hand, within a measure.
+    //
+    // The honest successor to the old "assignment leaked" check: same bug class
+    // (routing applied incoherently) without forbidding a change BETWEEN bars.
+    // Read from the parser's output attribution, which is one-sided: an event
+    // carries only the FIRST voice covering its segment, so a voice can be
+    // hidden. That yields false negatives, never false positives — this check
+    // accuses only when it has seen both hands for one voice in one bar.
+    for (const m of parsed.measures) {
+      const handsHere = new Map();
+      for (const [hand, events] of [["rh", m.rh], ["lh", m.lh]]) {
+        for (const e of events || []) {
+          if (e.voice === undefined) continue;
+          if (!e.notes || e.notes.length === 0) continue;
+          if (!handsHere.has(e.voice)) handsHere.set(e.voice, new Set());
+          handsHere.get(e.voice).add(hand);
+        }
+      }
+      for (const [voice, hands] of handsHere) {
+        if (hands.size > 1) {
+          out.push({ measure: m.number, detail:
+            `voice ${voice}: notes in BOTH hands within one measure — a voice may ` +
+            `change hands between measures, never inside one` });
+        }
+      }
+    }
+
+    const routed = parsed.handRouting || [];
+
+    // Source engraving per (source measure, voice): which staves it sounded on.
+    const engraved = truth.measures.map((m) => {
+      const per = new Map();
+      for (const [key, evs] of m.voices) {
+        const [staff, voice] = key.split(":");
+        if (!evs.some((e) => !e.rest && e.notes.length > 0)) continue;
+        if (!per.has(voice)) per.set(voice, new Set());
+        per.get(voice).add(staff);
+      }
+      return per;
+    });
+
+    // I2 — every routing decision must have a basis in the source.
+    //
+    // A voice may be routed to a staff it is engraved on in that measure, or
+    // else to its own home staff — the one it is routed to in most measures.
+    // The second clause is what lets a hand keep its identity while written on
+    // the other clef for range reasons (The Entertainer's pickup: the left hand
+    // plays D5-G4 engraved up on the treble staff), and what lets a voice
+    // RETURN from an away run to where it normally lives.
+    //
+    // Deliberately does not check run length, and deliberately says nothing
+    // about which side of a SPLIT measure a voice belongs to — that is the
+    // §3.6 judgement itself, and it is pinned in the parser's fixture test.
+    const homeStaff = new Map(); // voice -> staff it is routed to most often
+    {
+      const counts = new Map();
+      for (const map of routed) {
+        for (const [voice, staff] of Object.entries(map || {})) {
+          if (!counts.has(voice)) counts.set(voice, new Map());
+          const c = counts.get(voice);
+          c.set(staff, (c.get(staff) || 0) + 1);
+        }
+      }
+      for (const [voice, c] of counts) {
+        let best = null;
+        let bestN = -1;
+        for (const [staff, n] of c) if (n > bestN) { bestN = n; best = staff; }
+        homeStaff.set(voice, best);
+      }
+    }
+
+    for (let i = 0; i < routed.length; i++) {
+      for (const [voice, staff] of Object.entries(routed[i] || {})) {
+        const staves = engraved[i] ? engraved[i].get(voice) : null;
+        if (staves && staves.has(staff)) continue;      // engraved here — fine
+        if (homeStaff.get(voice) === staff) continue;   // staying home — fine
+        const seen = staves && staves.size ? [...staves].sort().join("+") : "nothing";
+        out.push({ measure: i + 1, detail:
+          `voice ${voice}: routed to staff ${staff} here, but the source engraves ` +
+          `it on ${seen} in this measure and its home staff is ` +
+          `${homeStaff.get(voice)} — no basis for that placement` });
+      }
+    }
+
+    // I3 — unambiguous engraving is respected. A voice written on exactly one
+    // staff for the whole song must be routed there in every measure. Policy-
+    // free: every candidate assignment rule agrees on this case, and it covers
+    // most of the corpus outright.
+    for (const [voice, staffCounts] of truth.voiceStaffTallies) {
+      if (staffCounts.size !== 1) continue;
+      const only = [...staffCounts.keys()][0];
+      const offenders = [];
+      routed.forEach((map, i) => {
+        const staff = map ? map[voice] : undefined;
+        if (staff !== undefined && staff !== only) offenders.push(i + 1);
+      });
+      if (offenders.length > 0) {
+        out.push({ measure: null, detail:
+          `voice ${voice}: engraved only ever on staff ${only}, but routed elsewhere ` +
+          `in ${offenders.length} measure(s) (${offenders.slice(0, 8).join(", ")}` +
+          `${offenders.length > 8 ? ", …" : ""})` });
+      }
+    }
+
+    // I4 — the dominant hand still matches the majority engraved staff.
+    // Catches a gross inversion. The counting is arithmetic on a fact; only
+    // what happens to the MINORITY is policy, and that is left alone here.
+    for (const [voice, staffCounts] of truth.voiceStaffTallies) {
+      let majorityStaff = null;
+      let best = 0;
+      let total = 0;
+      for (const [staff, count] of staffCounts) {
+        total += count;
+        if (count > best) { best = count; majorityStaff = staff; }
+      }
+      if (!total || !majorityStaff) continue;
+      const perStaff = new Map();
+      routed.forEach((map, i) => {
+        const staff = map ? map[voice] : undefined;
+        if (staff === undefined) return;
+        const n = (engraved[i]?.get(voice)?.size ?? 0) > 0
+          ? [...truth.measures[i].voices.entries()]
+              .filter(([k]) => k.endsWith(`:${voice}`))
+              .reduce((acc, [, evs]) => acc + evs.filter((e) => !e.rest && e.notes.length > 0).length, 0)
+          : 0;
+        perStaff.set(staff, (perStaff.get(staff) || 0) + n);
+      });
+      let routedStaff = null;
+      let routedBest = -1;
+      for (const [staff, n] of perStaff) {
+        if (n > routedBest) { routedBest = n; routedStaff = staff; }
+      }
+      if (routedStaff && routedStaff !== majorityStaff) {
+        const dist = [...staffCounts.entries()].map(([st, c]) => `staff ${st}: ${c}`).join(", ");
+        out.push({ measure: null, detail:
+          `voice ${voice}: engraved mostly on staff ${majorityStaff} [${dist}] but routed ` +
+          `mostly to staff ${routedStaff} — the dominant hand is inverted` });
+      }
+    }
+  }
+
   return out;
 }

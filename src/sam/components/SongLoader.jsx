@@ -8,6 +8,7 @@ import { importMusicxmlFingerings } from "../lib/fingeringsApi";
 import { importLyrics } from "../lib/lyricsApi";
 import { fetchSongById } from "../lib/songLoad";
 import { validateSongDocument } from "../lib/songSchema";
+import { scanMeasuresForDuplicatePitches } from "../lib/noteDuplicates";
 import usePracticeStats from "../lib/usePracticeStats";
 import useSongLibrary from "../lib/useSongLibrary";
 import JSZip from "jszip";
@@ -29,10 +30,36 @@ import StatsPage from "./StatsPage";
 // document). The strict schema validator (validateSongDocument) rejects
 // inline lyrics per spec §4. Route MusicXML output through this lightweight
 // sanity check instead; the strict schema gates hand-authored JSON only.
-function validateMusicXmlSong(song) {
+// Exported for tests. It is one of M2's three write paths, and the only one
+// whose duplicate-pitch check has no other way in — the JSON path goes through
+// validateSongDocument, and append_sam_measures lives in the Edge Function.
+export function validateMusicXmlSong(song) {
   if (!song || typeof song !== "object") return "Invalid MusicXML: parse produced no object";
   if (!Array.isArray(song.measures) || song.measures.length === 0)
     return "Invalid MusicXML: parse produced no measures";
+
+  // M2 — the duplicate-pitch rule, same predicate the parser merges with.
+  //
+  // This path deliberately does NOT run the strict schema (parser output
+  // legitimately carries inline `lyric`, which the schema forbids — see
+  // songSchema.js's header), so the schema layer never sees a MusicXML import.
+  // That left the path that actually produced the bad rows as the only
+  // ungated one. The check has to be here explicitly.
+  //
+  // Reaching this means M1's merge in mergeStaff failed to fire: the parser
+  // should be incapable of emitting a fresh duplicate. Treated as a hard error
+  // rather than a gate warning for that reason — it indicates a parser bug, not
+  // a source-quality issue the human can sensibly approve.
+  const dupes = scanMeasuresForDuplicatePitches(song.measures);
+  if (dupes.length > 0) {
+    const shown = dupes.slice(0, 5);
+    const more = dupes.length - shown.length;
+    return (
+      `Invalid MusicXML: parse produced ${dupes.length} duplicate pitch(es). ` +
+      `This is a parser defect — please report it.\n• ${shown.join("\n• ")}` +
+      (more > 0 ? `\n(+${more} more)` : "")
+    );
+  }
   return null;
 }
 

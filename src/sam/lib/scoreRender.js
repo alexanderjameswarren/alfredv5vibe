@@ -3,7 +3,8 @@
 // VexFlow context. ScrollEngine drives them from its initial-render effect
 // and from the metronome scheduler.
 import {
-  noteToVexKey,
+  toVexKeys,
+  tieEndpoints,
   noteAccidental,
   getBeamGroups,
   getMeasureWidth,
@@ -460,11 +461,13 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
       for (const evt of rhEvents) {
         const notes = evt.notes || [];
         if (notes.length > 0) {
-          const keys = notes.map((n) => noteToVexKey(n));
+          const { keys, heads, keyIndexFor } = toVexKeys(notes);
           const { base, dots } = parseDuration(evt.duration);
           const sn = new VF.StaveNote({ clef: "treble", keys, duration: base });
           for (let i = 0; i < dots; i++) VF.Dot.buildAndAttach([sn]);
-          notes.forEach((n, ki) => {
+          // One accidental per NOTEHEAD — heads[] is already deduped, so a
+          // collapsed pair cannot stack two accidentals on one key.
+          heads.forEach((n, ki) => {
             const acc = noteAccidental(n);
             if (acc) sn.addModifier(new VF.Accidental(acc), ki);
           });
@@ -477,12 +480,7 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
           }
           trebleNotes.push(sn);
           // Track tie info for cross-barline tie rendering
-          const starts = [];
-          const ends = [];
-          notes.forEach((n, ki) => {
-            if (n.tie === "start" || n.tie === "both") starts.push({ keyIdx: ki, midi: n.midi });
-            if (n.tie === "end" || n.tie === "both") ends.push({ keyIdx: ki, midi: n.midi });
-          });
+          const { starts, ends } = tieEndpoints(notes, keyIndexFor);
           if (starts.length > 0 || ends.length > 0) {
             tieTracker.treble.push({ vexNote: sn, starts, ends });
           }
@@ -500,22 +498,19 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
       for (const evt of lhEvents) {
         const notes = evt.notes || [];
         if (notes.length > 0) {
-          const keys = notes.map((n) => noteToVexKey(n));
+          const { keys, heads, keyIndexFor } = toVexKeys(notes);
           const { base, dots } = parseDuration(evt.duration);
           const sn = new VF.StaveNote({ clef: "bass", keys, duration: base });
           for (let i = 0; i < dots; i++) VF.Dot.buildAndAttach([sn]);
-          notes.forEach((n, ki) => {
+          // One accidental per NOTEHEAD — heads[] is already deduped, so a
+          // collapsed pair cannot stack two accidentals on one key.
+          heads.forEach((n, ki) => {
             const acc = noteAccidental(n);
             if (acc) sn.addModifier(new VF.Accidental(acc), ki);
           });
           bassNotes.push(sn);
           // Track tie info for cross-barline tie rendering
-          const starts = [];
-          const ends = [];
-          notes.forEach((n, ki) => {
-            if (n.tie === "start" || n.tie === "both") starts.push({ keyIdx: ki, midi: n.midi });
-            if (n.tie === "end" || n.tie === "both") ends.push({ keyIdx: ki, midi: n.midi });
-          });
+          const { starts, ends } = tieEndpoints(notes, keyIndexFor);
           if (starts.length > 0 || ends.length > 0) {
             tieTracker.bass.push({ vexNote: sn, starts, ends });
           }
@@ -623,10 +618,10 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
 
         let trebleNote;
         if (trebleGroup.length > 0) {
-          const keys = trebleGroup.map((n) => noteToVexKey(n));
+          const { keys, heads } = toVexKeys(trebleGroup);
           trebleNote = new VF.StaveNote({ clef: "treble", keys, duration: beatBase });
           for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([trebleNote]);
-          trebleGroup.forEach((n, ki) => {
+          heads.forEach((n, ki) => {
             const acc = noteAccidental(n);
             if (acc) trebleNote.addModifier(new VF.Accidental(acc), ki);
           });
@@ -638,10 +633,10 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
 
         let bassNote;
         if (bassGroup.length > 0) {
-          const keys = bassGroup.map((n) => noteToVexKey(n));
+          const { keys, heads } = toVexKeys(bassGroup);
           bassNote = new VF.StaveNote({ clef: "bass", keys, duration: beatBase });
           for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([bassNote]);
-          bassGroup.forEach((n, ki) => {
+          heads.forEach((n, ki) => {
             const acc = noteAccidental(n);
             if (acc) bassNote.addModifier(new VF.Accidental(acc), ki);
           });

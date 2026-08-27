@@ -31,6 +31,10 @@ import {
   ONSET_EPS,
 } from "./durations.js";
 import { resolvePlaybackOrder } from "./playbackOrder.js";
+// M2 — the duplicate-pitch rule moved to its own module so the parse-time fix
+// and the three write-path checks are literally the same predicate. See
+// noteDuplicates.js for the rule and why continuations are exempt.
+import { mergeDuplicatePitches } from "./noteDuplicates.js";
 
 const EPS = ONSET_EPS;
 
@@ -213,10 +217,18 @@ export function padWithRests(events, extraBeats) {
 //      `[no tie][end][end]` for a three-way split — no start, two orphan
 //      ends. The reference in xmlTruth has been corrected to match.
 //
+//   3. duplicate-pitch merge (M1) — each segment's flattened notes[] runs
+//      through mergeDuplicatePitches before it becomes an event. This is the
+//      only place the flattening happens, so it is the only place the fix is
+//      needed. `parseWarnings`/`context` are optional and follow
+//      durations.fromTimeline's convention; when omitted, conflicts are merged
+//      silently (used by unit tests and by any caller with no song to report
+//      against).
+//
 // Exported so the same code can be unit-tested and reused by the
 // simplification pipeline later.
 // ---------------------------------------------------------------------------
-export function mergeStaff(voices, staff, measureLen) {
+export function mergeStaff(voices, staff, measureLen, parseWarnings, context) {
   const staffVoices = [...voices.entries()].filter(([k]) => k.startsWith(`${staff}:`));
   if (staffVoices.length === 0) {
     return [{ onset: 0, dur: measureLen, notes: [], rest: true }];
@@ -276,7 +288,22 @@ export function mergeStaff(voices, staff, measureLen) {
         }
       }
     }
-    const seg = { onset: t0, dur: t1 - t0, notes, rest: notes.length === 0 };
+    // M1 — collapse non-continuation duplicate pitches. `out.length` is the
+    // index this segment will occupy, and fromTimeline is 1-segment-in /
+    // 1-event-out, so it is also the event index in the final rh/lh array —
+    // which is what a reader needs to find the note the warning is about.
+    const eventIndex = out.length;
+    const deduped = mergeDuplicatePitches(
+      notes,
+      parseWarnings
+        ? (msg) =>
+            parseWarnings.push(
+              `${context ? `${context}: ` : ""}event ${eventIndex}: ${msg}`
+            )
+        : undefined
+    );
+
+    const seg = { onset: t0, dur: t1 - t0, notes: deduped, rest: deduped.length === 0 };
     if (carriedTuplet) seg.tuplet = carriedTuplet;
     if (carriedVoice !== undefined) seg.voice = carriedVoice;
     out.push(seg);
@@ -563,14 +590,150 @@ function computeHandAssignment(voiceStaffTallies, parseWarnings) {
 }
 
 // ---------------------------------------------------------------------------
+// Phase B2 — per-run refinement of the song-level assignment (spec §3.6, M4).
+//
+// The song-level majority cannot represent a voice whose hand genuinely changes
+// during the piece. Moonlight m37-41 is the case: voices 1 and 2 are engraved
+// entirely on the bass staff there — nothing is on the treble staff at all —
+// and the 71%/67% song majority drags the whole arpeggio back to the right
+// hand, which then has to play a B#2-A3 triplet figure and the inner voice at
+// once while the left hand plays two notes.
+//
+// The rule: a voice follows the ENGRAVED staff for a run of AWAY_RUN_MIN or more
+// consecutive measures written wholly on the other staff. Shorter runs keep the
+// song-level assignment.
+//
+// Three things this deliberately does NOT do:
+//
+//   - It never touches a SPLIT measure (the voice on both staves at once).
+//     That is the cross-staff case §3.6 exists to protect — Moonlight m6, one
+//     arpeggio written D#4/F#4 on the treble staff and G#3 on the bass. Routing
+//     those by staff sends every third note to the wrong hand.
+//   - It is not per-measure majority. §3.6 rejects that with Entertainer m3
+//     (3 notes staff 1 vs 5 staff 2) against m4 (7 vs 1) — the melody would
+//     flip hands in adjacent bars.
+//   - It is not pitch-based. The parser legitimately puts ~300 notes below
+//     middle C in Moonlight's right hand; a `midi < 60 -> LH` pass would shred
+//     the arpeggio.
+//
+// RUN LENGTH IS A PROXY. The signal underneath it is left-hand occupancy: the
+// isolated bars this rule leaves alone (Moonlight m31, m63, m65) are ones where
+// the left hand is already holding a bass octave through the whole bar and has
+// no capacity, so the figure has to be a momentary right-hand cross. Occupancy
+// is deliberately not implemented — run length is simpler and agrees with it on
+// all 13 fixtures. If this rule ever misfires on a future score, occupancy is
+// the first place to look.
+// ---------------------------------------------------------------------------
+
+export const AWAY_RUN_MIN = 2;
+
+/**
+ * Work out, per measure, which voices should follow the engraving instead of
+ * their song-level assignment.
+ *
+ * Pure, and takes only plain data so it can be unit-tested without a parser:
+ *
+ * @param perMeasureVoiceStaves  Array (one entry per measure, in source order)
+ *                               of Map<voice, Set<staff>> — which staves that
+ *                               voice actually sounded on in that measure.
+ *                               A voice absent from a measure is absent here.
+ * @param assignment             Map<voice, staff> from computeHandAssignment.
+ * @param minRun                 Consecutive-measure threshold.
+ * @returns Array (one per measure) of Map<voice, staff> overrides. Empty maps
+ *          where nothing changes.
+ *
+ * A measure where the voice does not sound BREAKS a run rather than extending
+ * it — a run is consecutive measures in which the voice is present and wholly
+ * on the other staff.
+ */
+export function computeStaffOverrides(perMeasureVoiceStaves, assignment, minRun = AWAY_RUN_MIN) {
+  const overrides = perMeasureVoiceStaves.map(() => new Map());
+  const voices = new Set();
+  for (const perVoice of perMeasureVoiceStaves) {
+    for (const v of perVoice.keys()) voices.add(v);
+  }
+
+  for (const voice of voices) {
+    const assigned = assignment.get(voice);
+    if (!assigned) continue;
+
+    // Where is this voice wholly on the other staff?
+    const away = perMeasureVoiceStaves.map((perVoice) => {
+      const staves = perVoice.get(voice);
+      if (!staves || staves.size === 0) return null;   // absent — breaks the run
+      if (staves.size > 1) return null;                // split — protected
+      const only = [...staves][0];
+      return only === assigned ? null : only;
+    });
+
+    let i = 0;
+    while (i < away.length) {
+      if (away[i] === null) { i += 1; continue; }
+      let j = i;
+      while (j < away.length && away[j] !== null) j += 1;
+      if (j - i >= minRun) {
+        for (let k = i; k < j; k++) overrides[k].set(voice, away[k]);
+      }
+      i = j;
+    }
+  }
+
+  return overrides;
+}
+
+/** Build the input `computeStaffOverrides` wants out of Phase A's voice maps. */
+function voiceStavesPerMeasure(measureIntermediates) {
+  return measureIntermediates.map((mi) => {
+    const perVoice = new Map();
+    for (const [key, evs] of mi.voices) {
+      const [staff, voice] = key.split(":");
+      if (!evs.some((e) => !e.rest && e.notes.length > 0)) continue;
+      if (!perVoice.has(voice)) perVoice.set(voice, new Set());
+      perVoice.get(voice).add(staff);
+    }
+    return perVoice;
+  });
+}
+
+/** One parseWarning per contiguous run, so the import gate can show the change. */
+function warnAboutOverrides(overrides, measureIntermediates, parseWarnings) {
+  const runsByVoice = new Map();
+  overrides.forEach((map, idx) => {
+    for (const [voice, staff] of map) {
+      if (!runsByVoice.has(voice)) runsByVoice.set(voice, []);
+      const runs = runsByVoice.get(voice);
+      const last = runs[runs.length - 1];
+      const number = measureIntermediates[idx]?.number ?? idx + 1;
+      if (last && last.endIdx === idx - 1) {
+        last.endIdx = idx;
+        last.end = number;
+      } else {
+        runs.push({ startIdx: idx, endIdx: idx, start: number, end: number, staff });
+      }
+    }
+  });
+  for (const [voice, runs] of runsByVoice) {
+    for (const r of runs) {
+      const span = r.start === r.end ? `m${r.start}` : `m${r.start}-${r.end}`;
+      parseWarnings.push(
+        `voice ${voice}: engraved wholly on staff ${r.staff} for ${span} — ` +
+        `following the engraving there instead of the song-level assignment ` +
+        `(spec §3.6 per-run refinement)`
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Phase C helpers — apply assignment then run mergeStaff + fromTimeline.
 // ---------------------------------------------------------------------------
 
-function applyHandAssignment(intermediateVoices, assignment) {
+function applyHandAssignment(intermediateVoices, assignment, overrides) {
   const out = new Map();
   for (const [key, evs] of intermediateVoices) {
     const [origStaff, voice] = key.split(":");
-    const assignedStaff = assignment.get(voice) || origStaff;
+    const assignedStaff =
+      (overrides && overrides.get(voice)) || assignment.get(voice) || origStaff;
     const newKey = `${assignedStaff}:${voice}`;
     const existing = out.get(newKey) || [];
     existing.push(...evs);
@@ -586,7 +749,7 @@ function applyHandAssignment(intermediateVoices, assignment) {
 }
 
 function mergeAndConvert(assignedVoices, staff, measureLen, parseWarnings, mNum, hand) {
-  const timeline = mergeStaff(assignedVoices, staff, measureLen);
+  const timeline = mergeStaff(assignedVoices, staff, measureLen, parseWarnings, `m${mNum} ${hand}`);
   // Adapt mergeStaff's output shape ({onset, dur, ...}) to what
   // fromTimeline expects ({onsetBeats, durBeats, ...}) — same values,
   // different keys. Two names because mergeStaff mirrors xmlTruth's shape
@@ -787,6 +950,44 @@ export function parseMusicXML(xmlString) {
       ? null
       : computeHandAssignment(voiceStaffTallies, parseWarnings);
 
+  // PHASE B2 (M4) — per-run refinement. Only meaningful when Phase B ran:
+  // usePerNoteFallback routes per note by pitch and useTwoParts forces the
+  // staff from the part index, so neither has a song-level assignment for a
+  // run to override.
+  const staffOverrides = voiceHandAssignment
+    ? computeStaffOverrides(
+        voiceStavesPerMeasure(measureIntermediates),
+        voiceHandAssignment
+      )
+    : null;
+  if (staffOverrides) {
+    warnAboutOverrides(staffOverrides, measureIntermediates, parseWarnings);
+  }
+
+  // M4 — the routing the parser is about to apply, published in SOURCE measure
+  // order as [{ voice: staff }]. Diagnostic only; nothing in the app reads it,
+  // and it is never stored.
+  //
+  // It exists because tools/sam-tools' oracle no longer decides routing for
+  // itself (see xmlTruth.js voiceStaffTally). The oracle takes this and answers
+  // the question that is a fact — "given that you routed it this way, is the
+  // content in each hand right?" — so a parser that ROUTES differently from what
+  // it publishes here shows up immediately as content divergence in both hands.
+  //
+  // null for the two Phase B skip cases: there is no per-voice map to publish
+  // when routing is per note (usePerNoteFallback) or per part (useTwoParts).
+  const handRouting = voiceHandAssignment
+    ? measureIntermediates.map((mi, idx) => {
+        const out = {};
+        for (const key of mi.voices.keys()) {
+          const [origStaff, voice] = key.split(":");
+          const override = staffOverrides?.[idx]?.get(voice);
+          out[voice] = override || voiceHandAssignment.get(voice) || origStaff;
+        }
+        return out;
+      })
+    : null;
+
   if (songFlags.fallbackFiredMeasures > 0) {
     parseWarnings.push(
       `single-staff source: midi<60 → LH fallback used in ` +
@@ -879,9 +1080,13 @@ export function parseMusicXML(xmlString) {
   // exactly the bug that swallowed Prelude m43 in M2 (spec §M3 comment).
   // -------------------------------------------------------------------------
   const keyFifths = state.fifths;
-  const rawMeasures = measureIntermediates.map((mi) => {
+  const rawMeasures = measureIntermediates.map((mi, miIdx) => {
     const assignedVoices = voiceHandAssignment
-      ? applyHandAssignment(mi.voices, voiceHandAssignment)
+      ? applyHandAssignment(
+          mi.voices,
+          voiceHandAssignment,
+          staffOverrides ? staffOverrides[miIdx] : null
+        )
       : mi.voices;
 
     const rh = mergeAndConvert(assignedVoices, "1", mi.measureLen, parseWarnings, mi.number, "rh");
@@ -1101,5 +1306,6 @@ export function parseMusicXML(xmlString) {
     ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
     ...(parseWarningsStructured.length > 0 ? { parseWarningsStructured } : {}),
     ...(fingerings.length > 0 ? { fingerings } : {}),
+    ...(handRouting ? { handRouting } : {}),
   };
 }

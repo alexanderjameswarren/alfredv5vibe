@@ -208,6 +208,71 @@ function parseMeasure(measEl, state) {
   };
 }
 
+/** A note the segmentation says was already sounding — a hold, not a strike. */
+const isHeld = (n) => n.tie === "end" || n.tie === "both";
+
+/**
+ * Collapse duplicate pitches within one merged segment — the oracle's own
+ * statement of what the correct output is.
+ *
+ * Deliberately NOT a call into songParser's mergeDuplicatePitches. The oracle
+ * exists to be able to disagree with the parser; if both sides ran the same
+ * predicate, a bug inside it would cancel out and the validator would report
+ * clean — including the case that matters most, a legitimate pair wrongly
+ * merged. Same rule, independent code, on purpose.
+ *
+ * The rule: two entries for one `midi` are the same sounding pitch and collapse
+ * — UNLESS either is held, which means one voice is sustaining the pitch while
+ * another strikes it fresh. Those are two distinct sounding events and both
+ * survive (Moonlight m60, Someone Like You m27; the app's noteTimeline.js
+ * tie-chain walk depends on it).
+ *
+ * The held/fresh distinction is derived here from this file's own segmentation
+ * — `isFirst`/`isLast` below force a tie onto any fragment whose source event
+ * crosses the segment boundary — so nothing about it is imported from the
+ * parser.
+ *
+ * Notes here are {midi, name, tie?}; the oracle reads no other property from
+ * the XML. So the union reduces to: keep the first spelling, and keep a "start"
+ * if either entry carried one. A spelling disagreement is dropped silently —
+ * the oracle is compared on pitch, and it has no warning channel.
+ */
+function collapseSoundingDuplicates(notes) {
+  if (notes.length < 2) return notes;
+
+  // Pass 1 — how many FRESH strikes does each pitch have in this segment?
+  const freshPerMidi = new Map();
+  for (const n of notes) {
+    if (isHeld(n)) continue;
+    freshPerMidi.set(n.midi, (freshPerMidi.get(n.midi) || 0) + 1);
+  }
+  let anyCollapsible = false;
+  for (const count of freshPerMidi.values()) {
+    if (count > 1) { anyCollapsible = true; break; }
+  }
+  if (!anyCollapsible) return notes;
+
+  // Pass 2 — emit in order, folding each over-counted pitch into its first
+  // fresh entry. Held entries and single-strike pitches pass through untouched.
+  const out = [];
+  const foldedAt = new Map();
+  for (const n of notes) {
+    if (isHeld(n) || freshPerMidi.get(n.midi) === 1) {
+      out.push(n);
+      continue;
+    }
+    const at = foldedAt.get(n.midi);
+    if (at === undefined) {
+      foldedAt.set(n.midi, out.length);
+      out.push({ ...n });
+      continue;
+    }
+    // Only "start" can reach here — "end"/"both" are held and never folded.
+    if (n.tie === "start") out[at].tie = "start";
+  }
+  return out;
+}
+
 /**
  * Merge the voices of one staff into a single serial timeline — the shape SAM
  * stores. Segment boundaries are the union of all onsets; a note that began in
@@ -290,7 +355,11 @@ export function mergeStaff(voices, staff, measureLen) {
         }
       }
     }
-    const seg = { onset: t0, dur: t1 - t0, notes, rest: notes.length === 0 };
+    // Two voices sounding one pitch is one sounding pitch. Collapse before
+    // this becomes an expected event, so the oracle states the correct output
+    // rather than reproducing the parser's old defect.
+    const sounding = collapseSoundingDuplicates(notes);
+    const seg = { onset: t0, dur: t1 - t0, notes: sounding, rest: sounding.length === 0 };
     if (carriedTuplet) seg.tuplet = carriedTuplet;
     out.push(seg);
   }
@@ -447,26 +516,26 @@ export function scanNotations(doc) {
 }
 
 /**
- * Independent implementation of spec §3.6's per-voice-per-song hand assignment.
+ * Per-voice engraved-staff note counts across the whole song. A FACT about the
+ * source, not a routing decision.
  *
- * The parser has its own copy in src/sam/lib/songParser.js. Truth deliberately
- * does NOT import from there — hand assignment is the judgment call §3.6 is
- * about, and if both sides shared a single function a design error inside it
- * would be invisible (both agree, both report clean). Duration math, pitch
- * extraction, tuplet ratios, voice grouping, merge segmentation, and playback
- * order all stay independent; hand assignment must too. Implementation
- * divergence between the two copies surfaces via HAND_ASSIGNMENT_MISMATCH.
+ * M4 removed `computeHandAssignmentTruth`, which used to derive the §3.6
+ * assignment here so validate.js could compare it against the parser's. That
+ * was the right shape while the rule was "one voice, one hand for the whole
+ * song" — but §3.6 is now per-run, and hand assignment is a POLICY with free
+ * parameters (the 60% majority threshold, the run length, tie-breaks, what
+ * counts as a note). Two independent implementations of a policy do not
+ * converge on scores neither has seen; they only agree where both encode the
+ * same arbitrary constants, at which point the second one is a copy with
+ * different spelling and every future refinement costs a mirroring pass.
  *
- * Rule (spec §3.6):
- *   Tally each voice NUMBER's <staff> distribution across the whole song.
- *   Assign each voice to its majority staff — every note of that voice
- *   goes there, including notes engraved on the other staff. <60% majority
- *   FLAGs but still picks the best.
- *
- * Returns Map<voiceNumber, { hand, staff, majority, tally }> — the
- * per-voice detail so the reporter can print an assignment line.
+ * So the oracle no longer has an opinion about routing. `buildTruth` takes the
+ * parser's routing as an input and answers the question that IS a fact —
+ * "given that you routed it this way, is the content in each hand right?" —
+ * while validate.js checks the routing itself against invariants that hold for
+ * any correct assignment. Facts here, policy in the parser's own tests.
  */
-function computeHandAssignmentTruth(measures) {
+function voiceStaffTally(measures) {
   const tallies = new Map(); // voice -> Map<staff, note_count>
   for (const m of measures) {
     for (const [key, evs] of m.voices) {
@@ -478,42 +547,24 @@ function computeHandAssignmentTruth(measures) {
       staffCounts.set(staff, (staffCounts.get(staff) || 0) + noteCount);
     }
   }
-  const out = new Map();
-  for (const [voice, staffCounts] of tallies) {
-    let bestStaff = null;
-    let bestCount = 0;
-    let total = 0;
-    for (const [staff, count] of staffCounts) {
-      total += count;
-      if (count > bestCount) {
-        bestStaff = staff;
-        bestCount = count;
-      }
-    }
-    if (total === 0) continue;
-    out.set(voice, {
-      hand: bestStaff === "1" ? "rh" : "lh",
-      staff: bestStaff,
-      majority: bestCount / total,
-      tally: Object.fromEntries(staffCounts),
-    });
-  }
-  return out;
+  return tallies;
 }
 
 /**
- * Apply the hand assignment to a measure's voices Map: every voice's events
- * get rekeyed to the voice's assigned staff, regardless of the original
+ * Apply the CALLER'S routing to a measure's voices Map: every voice's events
+ * get rekeyed to the staff the routing names, regardless of the original
  * engraved staff. Then re-sort by onset so a cross-staff voice's events
  * (which may have arrived under two different keys) form a monotonic
  * timeline for mergeStaff.
+ *
+ * `routing` is Map<voice, staff> for THIS measure. A voice the routing does
+ * not mention stays on the staff it was engraved on.
  */
-function applyAssignmentToMeasure(voices, assignment) {
+function applyAssignmentToMeasure(voices, routing) {
   const out = new Map();
   for (const [key, evs] of voices) {
     const [origStaff, voice] = key.split(":");
-    const info = assignment.get(voice);
-    const assignedStaff = info ? info.staff : origStaff;
+    const assignedStaff = (routing && routing.get(voice)) || origStaff;
     const newKey = `${assignedStaff}:${voice}`;
     const existing = out.get(newKey) || [];
     existing.push(...evs);
@@ -542,7 +593,21 @@ function applyAssignmentToMeasure(voices, assignment) {
 // in validate.js has an explicit trailing-silence exception for this.
 // ---------------------------------------------------------------------------
 
-export function buildTruth(xmlString) {
+/**
+ * @param xmlString      the source MusicXML
+ * @param options.routing  OPTIONAL per-measure routing, supplied by the caller:
+ *   an array indexed by SOURCE measure (0-based) of Map<voice, staff>. When
+ *   present, each measure's voices are rekeyed to the staff the caller names
+ *   before mergeStaff runs, so truth's rh/lh describe the content that SHOULD
+ *   appear given that routing.
+ *
+ *   The oracle deliberately does not decide routing itself — see
+ *   `voiceStaffTally` above. Omit it and every voice stays on the staff it was
+ *   engraved on, which is the right answer for the error path and for callers
+ *   that only want the source facts, but is NOT comparable to parser output on
+ *   any score with a cross-staff voice.
+ */
+export function buildTruth(xmlString, options = {}) {
   const dom = new JSDOM(xmlString, { contentType: "text/xml" });
   const doc = dom.window.document;
 
@@ -582,18 +647,17 @@ export function buildTruth(xmlString) {
     return { number: idx + 1, sourceAttribute: el.getAttribute("number"), ...parsed, staffVoices };
   });
 
-  // Phase 2: compute the song-level assignment (independent of the parser's
-  // implementation). Skip when §3.6 doesn't apply.
-  const handAssignment = applyThreeSix
-    ? computeHandAssignmentTruth(measuresRaw)
-    : new Map();
+  // Phase 2: the source-level fact about where each voice was engraved.
+  // NOT a routing decision — see voiceStaffTally's comment.
+  const tallies = voiceStaffTally(measuresRaw);
 
-  // Phase 3: apply assignment, then run mergeStaff per hand. staffVoices
-  // stays as computed above — it's the source-level fact, and the cross_staff
-  // label depends on it.
-  const measures = measuresRaw.map((m) => {
-    const assignedVoices = applyThreeSix
-      ? applyAssignmentToMeasure(m.voices, handAssignment)
+  // Phase 3: apply the CALLER's routing, then run mergeStaff per hand.
+  // staffVoices stays as computed above — it's the source-level fact, and the
+  // cross_staff label depends on it.
+  const routing = options.routing || null;
+  const measures = measuresRaw.map((m, idx) => {
+    const assignedVoices = routing
+      ? applyAssignmentToMeasure(m.voices, routing[idx])
       : m.voices;
     const rh = mergeStaff(assignedVoices, "1", m.measureLen);
     const lh = mergeStaff(assignedVoices, "2", m.measureLen);
@@ -612,7 +676,8 @@ export function buildTruth(xmlString) {
     numStaves,
     useTwoParts,
     applyThreeSix,
-    handAssignment,  // Map<voice, { hand, staff, majority, tally }>
+    voiceStaffTallies: tallies,  // Map<voice, Map<staff, note_count>> — a fact
+    routed: Boolean(routing),
     measureCount: measures.length,
     measures,
     playback,

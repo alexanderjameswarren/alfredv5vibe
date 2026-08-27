@@ -88,7 +88,7 @@ function fmtMeasures(list, cap = 14) {
 }
 
 function report(result, verbose) {
-  const { label, truth, summary, findings } = result;
+  const { label, truth, summary, findings, voiceRouting } = result;
   const blocking = Object.keys(summary).filter((d) => SEVERITY[d] <= 1);
   const status = findings.length === 0 ? "CLEAN" : blocking.length ? "BLOCKED" : "WARN";
 
@@ -99,13 +99,21 @@ function report(result, verbose) {
   console.log(`\n${"─".repeat(78)}`);
   console.log(`${status.padEnd(8)} ${label}`);
   console.log(`         ${bars}  ·  fifths ${truth.fifths}  ·  "${truth.title}"`);
-  if (truth.handAssignment && truth.handAssignment.size > 0) {
-    // Print the truth's independent §3.6 assignment. If parser and truth
-    // agree, this is also what the parser did. If they don't,
-    // HAND_ASSIGNMENT_MISMATCH fires below with the specific voice.
-    const parts = [...truth.handAssignment.entries()]
+  if (voiceRouting && voiceRouting.size > 0) {
+    // What the PARSER routed, per voice, in measures. Truth no longer has an
+    // opinion about routing (xmlTruth.js voiceStaffTally), and under §3.6's
+    // per-run rule a voice can legitimately appear in both hands — so show the
+    // split rather than a single winner.
+    const parts = [...voiceRouting.entries()]
       .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
-      .map(([voice, info]) => `${voice}→${info.hand.toUpperCase()}(${Math.round(info.majority * 100)}%)`);
+      .map(([voice, { rh, lh }]) => {
+        if (rh && lh) {
+          const dom = rh >= lh ? "RH" : "LH";
+          const other = rh >= lh ? "LH" : "RH";
+          return `${voice}→${dom}(${Math.max(rh, lh)}m)+${other}(${Math.min(rh, lh)}m)`;
+        }
+        return `${voice}→${rh ? "RH" : "LH"}`;
+      });
     console.log(`         voices: ${parts.join("  ")}`);
   }
 

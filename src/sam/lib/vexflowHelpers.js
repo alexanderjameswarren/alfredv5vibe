@@ -115,3 +115,83 @@ export function colorBeatEls(beatEvent, color) {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// M5 — one notehead per staff position.
+//
+// The continuation rule (see noteDuplicates.js) deliberately keeps same-pitch
+// pairs in the data: one voice holding a tied note while another strikes that
+// pitch fresh. Moonlight m60 `C#4 + C#4:end` and Someone Like You m27
+// `F#4 + F#4:end` are the corpus cases, and playback depends on both copies
+// being there.
+//
+// Correct engraving still draws ONE notehead. Handing VexFlow two identical
+// keys makes it draw two, displacing one sideways off the staff line — the
+// smear that prompted this whole investigation. So the render layer collapses
+// them, and the data is left exactly as it is.
+//
+// Collapsing keys on the VEXFLOW KEY, not on `midi`: an enharmonic pair
+// (C#4 and Db4, both midi 61) sits on two different staff lines and is two
+// noteheads, correctly. Same key string means same notehead position, which is
+// the only thing that matters here.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param notes  an event's notes[]
+ * @returns {{ keys: string[], heads: object[], keyIndexFor: number[] }}
+ *   `keys`        — deduped VexFlow key strings, in first-appearance order.
+ *   `heads`       — the first note object at each key, for accidentals.
+ *   `keyIndexFor` — parallel to `notes`: which key index each note renders on.
+ *                   Two notes sharing a notehead share an index.
+ */
+export function toVexKeys(notes) {
+  const keys = [];
+  const heads = [];
+  const keyIndexFor = [];
+  const seen = new Map();
+
+  for (const n of notes || []) {
+    const key = noteToVexKey(n);
+    const existing = seen.get(key);
+    if (existing !== undefined) {
+      keyIndexFor.push(existing);
+      continue;
+    }
+    seen.set(key, keys.length);
+    keyIndexFor.push(keys.length);
+    keys.push(key);
+    heads.push(n);
+  }
+
+  return { keys, heads, keyIndexFor };
+}
+
+/**
+ * Tie endpoints for one event, addressed by RENDERED key index.
+ *
+ * Deduped: when two notes collapse onto one notehead and both carry the same
+ * tie direction, that is one tie, not two. Feeding VexFlow's StaveTie the same
+ * index twice draws the arc twice.
+ */
+export function tieEndpoints(notes, keyIndexFor) {
+  const starts = [];
+  const ends = [];
+  const seenStart = new Set();
+  const seenEnd = new Set();
+
+  (notes || []).forEach((n, i) => {
+    const keyIdx = keyIndexFor[i];
+    if (keyIdx === undefined) return;
+    const id = `${keyIdx}:${n.midi}`;
+    if ((n.tie === "start" || n.tie === "both") && !seenStart.has(id)) {
+      seenStart.add(id);
+      starts.push({ keyIdx, midi: n.midi });
+    }
+    if ((n.tie === "end" || n.tie === "both") && !seenEnd.has(id)) {
+      seenEnd.add(id);
+      ends.push({ keyIdx, midi: n.midi });
+    }
+  });
+
+  return { starts, ends };
+}

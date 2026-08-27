@@ -130,7 +130,8 @@
         "notes": {
           "type": "array",
           "items": { "$ref": "#/definitions/Note" },
-          "description": "Simultaneous pitches at this event's onset. Empty array [] means a rest."
+          "noDuplicatePitches": true,
+          "description": "Simultaneous pitches at this event's onset. Empty array [] means a rest. `noDuplicatePitches` is a custom Ajv keyword (registered by src/sam/lib/noteDuplicates.js and its Deno port): no two notes here may share a `midi` unless one is a tie continuation. Draft-07 cannot compare sibling array items, so the rule cannot be a plain constraint; a validator that does not know the keyword ignores it."
         },
         "tuplet": {
           "type": "object",
