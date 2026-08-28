@@ -576,28 +576,43 @@ rows written; the error named §4.3 and pointed at Takeout.
 `plays_already_held: 3`, `tracks_created: 0` — the unique index absorbing repeats and
 `dj_tracks` staying insert-only, now confirmed against the NEW key.
 
-**Test 3 — Today→Yesterday convergence: 🛑 DUE ON THE NEXT SYNC. Still the ONLY unverified
-mechanism in Block F.**
+**Test 3 — Today→Yesterday convergence: ✅ VERIFIED 2026-08-29.**
 
-**Trigger condition, not a date:** run it on the first sync where `poll_date` is **later than
-2026-08-28**. Stated as a condition on purpose — running it while `poll_date` is still
-2026-08-28 would show zero inserts because those plays are still `Today`, which is the right
-answer for the wrong reason and would mark a working mechanism verified without testing it.
+41 rows, 41 distinct tracks, **zero duplicates in `dj_plays`.** Yesterday's 30 plays came
+back under `Yesterday`, resolved to the same `played_on: 2026-08-28` the `Today` capture
+used, and re-matched instead of minting second rows. **Block F's last unverified mechanism
+is now confirmed against live data** — every prior test used a constructed feed.
 
-**State to check against: 30 plays, all stored at `played_on: 2026-08-28`.**
+Arithmetic: the `Yesterday` bucket offered 41; **29 re-matched and 12 inserted**, totalling
+41. See finding 3 below for the missing one.
 
-```
-get_dj_history   buckets: ["Today", "Yesterday"]   limit: 200
-record_dj_plays  plays: <mapped>   poll_date: "<the new date>"   source: "poll"
-```
+### ⚠️ FEED INSTABILITY — third finding, and the one that changes phase 5
 
-**Expected:** those 30 come back under `Yesterday`, and `plays_inserted` counts only
-genuinely new plays — **zero of the 30**.
+**One of yesterday's 30 stored plays vanished from the feed entirely.** It exists in the
+database with no upstream counterpart. Not a duplicate, not a dedupe failure — a dropout.
 
-**Why it is the whole fix.** `Yesterday` resolves to `poll_date − 1`, which lands on exactly
-the `played_on` the `Today` capture used, so the same real play dedupes instead of minting a
-second row. That convergence is the entire reason the key could move to `played_on`, and
-nothing else tests it. Every unit test uses a constructed feed.
+That is now **three** independent observations that the feed misreports the past:
+
+| # | Observation | Phase |
+|---|---|---|
+| 1 | Items leave the page from the MIDDLE, not the tail (`Today` 28→29 while `This week` 105→104) | 2b |
+| 2 | `oldest_bucket_is_partial` — the page edge truncates a bucket mid-way | 1 |
+| 3 | **A previously-present play disappeared from the feed while still stored** | Block F verification |
+
+Individually minor. Together they say something the design does not currently assume:
+
+> 🛑 **THE FEED IS LOSSY, NOT MERELY TRUNCATED. Phase 5's gap logic must assume plays can
+> disappear from the middle of a window it has already covered.**
+
+Truncation and lossiness are different failure modes and **only truncation is accounted
+for**. A gap calculation that reasons "we saw back to X, therefore everything after X is
+covered" is unsound against a feed that can drop an item it previously served. Worse, the
+DIRECTION of the error is silent: a dropout makes coverage look complete.
+
+Practical consequence: **`dj_plays` is the authority on what was heard, not the feed.**
+Re-polling a covered window can legitimately return fewer rows than are stored, and that is
+not evidence of a bug. A sync that finds fewer plays than it holds must not "correct"
+anything — `dj_plays` is append-only and a dropout is not a deletion signal.
 
 **`albums_discarded` is a POLICY counter, not a filter-quality signal.** It came back 30 of
 30 and 3 of 3, which is correct: the poll discards **every** album unconditionally, so the
@@ -790,6 +805,53 @@ other way round.
 
 ---
 
+## Pre-Phase-5 batch (2026-08-29)
+
+- [x] `get_dj_plays` built, tested (18 cases), deployed — Alfred **29 → 30 tools**
+- [x] Tier-3 preview — **was already built** in phase 3a; appeared outstanding only because
+      dev Workshop had not been restarted since. No code needed.
+- [x] `canonical_links` identity fields — **already built and deployed** in
+      `dj-tracks.ts`; looked absent in 3b because `canonical_links_made` was 0
+- [ ] Restart dev Workshop (lands tier-3 preview, `move` pair-verification, `rename`,
+      credential fix)
+- [ ] **Fresh conversation**; verify `get_dj_plays` both modes
+
+**`get_dj_plays` — tier 1, two modes.**
+
+`plays` returns raw rows newest-first with the track inlined, a real `total` from a count
+query, and date/source/video_id filters. `familiarity` returns one row per canonical group
+**sorted least-familiar first, which is cram order directly** (§5).
+
+**Zero-play tracks come back, and that is the point rather than an edge case.** familiarity
+reads `dj_plays`, so a never-played track produces no row — yet those are exactly the songs
+that belong at the TOP of a cram list. When `video_ids` is supplied, **every id gets an
+entry**, including ids unknown to `dj_tracks` entirely (`known_track: false`) — a newly
+discovered setlist song would otherwise be invisible twice over. Leaving the caller to
+notice what came back missing is reconstruction logic that gets written once, forgotten,
+and then quietly wrong.
+
+**`distinct_days: 0` is a fact; `days_since_last: null` means NEVER.** The null-vs-zero
+distinction is deliberate and stated in the tool description.
+
+**An enumerated subject is never truncated.** `limit` applies only to the date-range form —
+clamping a familiarity result the caller explicitly enumerated would recreate the
+reconstruction problem the zero-play rule removes.
+
+**Errors rather than truncates above a 5000-row scan cap.** Truncation that shortens an
+answer is fine; truncation that *corrupts* one is not — a clamped aggregate returns a
+`distinct_days` that is wrong rather than short, and the caller sorts by it. Same reasoning
+as the 500-play submission limit.
+
+**`estimated_days`** counts days made only of coarse-bucket guesses. Expected to be 0 — the
+poll writes `day`, Takeout writes `exact` — which is exactly why it should be visible if it
+ever isn't.
+
+**Deferred: the unbounded all-time ranking.** Needs a Postgres RPC to aggregate server-side
+(the pattern `get_items` uses via `platform_search_items`), which is a migration. Not
+guessing at its shape before a consumer exists.
+
+---
+
 ## Phase 4 — Surface deployment ⚠️ FULL PHASE, NOT A STEP
 
 - [x] Pin `ytmusicapi==1.12.2` in `workshop/requirements.txt`
@@ -850,6 +912,10 @@ other way round.
 > This is a design constraint, not a footnote. Either understand the behaviour first, or
 > build gap detection on `platform_runs.covered_to` alone and treat the page as unordered.
 
+- [ ] ⚠️ **Verify the coarse-bucket rejection LIVE** — `record_dj_plays` refusing
+      `This week` / `Last week` is unit-tested (`dj-courier.test.mjs:321`) but the live
+      path has never been hit; every test so far filtered at read time. Unit tested is not
+      unexercised, and the contract asserts it.
 - [ ] Draft the task prompt (confirm Surface → check gap → backfill → poll → write → stamp)
 - [ ] ⚠️ **Two different questions, two different filters over `platform_runs`** — see note
 - [ ] Record `oldest_bucket_is_partial` and `page_full` in `platform_runs.details`

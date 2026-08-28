@@ -20,6 +20,7 @@ import {
   recordDjPlaylistTool,
   createDjConcertTool,
 } from "../_shared/tools/dj-playlists.ts";
+import { getDjPlaysTool } from "../_shared/tools/dj-reads.ts";
 import {
   getItems,
   searchItems,
@@ -1108,6 +1109,28 @@ function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(createDjConcertTool, args, token),
+  );
+
+  server.registerTool(
+    "get_dj_plays",
+    {
+      title: "Get DJ Plays",
+      description:
+        "Read the durable listening record. Two modes. `plays` returns raw rows newest-first with each track inlined. `familiarity` returns one row per CANONICAL GROUP sorted LEAST FAMILIAR FIRST — which is cram order directly (spec §5). " +
+        "⚠️ `distinct_days` is DISTINCT DAYS PLAYED, NOT a play count: YouTube's feed carries one entry per track per bucket, so repeats do not stack and true counts are unobtainable by polling (spec §5). `play_rows` is returned alongside so the difference stays visible. " +
+        "ZERO-PLAY TRACKS COME BACK: when you pass `video_ids`, every id gets an entry, including ids unknown to dj_tracks entirely (`known_track: false`) — a never-played song belongs at the TOP of a cram list, and making the caller reconstruct the missing ones is exactly the logic that goes quietly wrong. `distinct_days: 0` is a FACT; `days_since_last: null` means NEVER — the null-vs-zero distinction is deliberate. " +
+        "`familiarity` refuses to run unbounded: pass `video_ids` or a date range. It ERRORS rather than truncates above its scan cap, because a clamped aggregate returns a distinct_days that is wrong rather than short and the caller would sort by it. `estimated_days` counts days made only of coarse-bucket guesses — expected to be 0. Tier 1, read-only.",
+      inputSchema: {
+        mode: z.enum(["plays", "familiarity"]).optional().describe("Defaults to 'plays'."),
+        video_ids: z.array(z.string()).optional().describe("YouTube video ids, max 50. Resolved to canonical groups server-side, so a play by any variant counts. In familiarity mode EVERY id passed gets an entry, zero-played ones included."),
+        from_date: z.string().optional().describe("YYYY-MM-DD, inclusive."),
+        to_date: z.string().optional().describe("YYYY-MM-DD, inclusive."),
+        source: z.enum(["poll", "takeout", "manual"]).optional().describe("Filter by provenance. Only 'takeout' rows can express true repeat counts."),
+        as_of: z.string().optional().describe("YYYY-MM-DD basis for days_since_last. Defaults to today UTC; pass the local date if that differs."),
+        limit: z.number().optional().describe("Max rows (plays) or groups (familiarity, date-range form only — an enumerated video_ids subject always returns every entry). Default 20, cap 50."),
+      },
+    },
+    async (args) => runToolForMcp(getDjPlaysTool, args, token),
   );
 
   return server;

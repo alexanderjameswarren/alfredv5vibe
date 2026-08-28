@@ -842,6 +842,17 @@ more than was asked for, so the library never paginated and never trimmed.
 **A declared cap is enforced by slicing in the handler or it is not enforced at all.**
 Assume it of every ytmusicapi call that takes a `limit`, including ones not yet used.
 
+**⚠️ THE HISTORY FEED IS LOSSY, NOT MERELY TRUNCATED.** Three independent observations:
+items leave the page from the MIDDLE rather than the tail (`Today` 28→29 while `This week`
+105→104); `oldest_bucket_is_partial` cuts a bucket at the page edge; and **a play stored
+yesterday vanished from the feed entirely while still present in `dj_plays`.** Together
+these mean the feed cannot be treated as authoritative about the past.
+**`dj_plays` is the authority on what was heard.** Re-polling a covered window can
+legitimately return fewer rows than are stored; that is not a bug and never a deletion
+signal — `dj_plays` is append-only. Phase 5 gap logic must not reason "we saw back to X,
+therefore everything after X is covered": a dropout makes coverage look complete, so the
+error is silent and in the reassuring direction.
+
 **⚠️ The history feed carries one entry per track per bucket.** Positioned at that track's
 most recent play; repeats do not stack. Measured in phase 2b (§5). Consequences: play
 counts are not obtainable from polling, and `occurrence` will never exceed 1 from the poll.
