@@ -49,25 +49,82 @@ DJ_DATA_DIR = _WORKSHOP_ROOT / "data" / "dj"
 CREDENTIAL_PATH = DJ_DATA_DIR / "browser.json"
 
 
+def _absent_detail(path: Path) -> str:
+    """Explain WHY a credential file could not be found.
+
+    ⚠️ "Not copied" and "copied but invisible to this process" are different
+    problems with different fixes, and ``Path.exists()`` cannot tell them apart:
+    it swallows PermissionError and returns False, so a file sitting right there
+    behind a directory ACL reports as missing. That sends you hunting for a
+    failed copy when the real problem is permissions.
+
+    This matters on the Surface specifically. The credential arrives by hand
+    over RDP, written by ``rdpuser``, while Workshop runs as ``alexa`` — so a
+    directory that ``alexa`` cannot traverse is a live failure mode, not a
+    hypothetical one (spec §7 phase 4).
+    """
+    parent = path.parent
+    try:
+        entries = sorted(p.name for p in parent.iterdir())
+    except FileNotFoundError:
+        return (
+            f"no credential directory at {parent} — nothing has been copied to "
+            f"this host yet. Create it and run scripts/dj_auth.py, or copy "
+            f"browser.json across from a host that has one."
+        )
+    except PermissionError:
+        return (
+            f"the directory {parent} EXISTS but this process cannot list it "
+            f"(permission denied). The credential may well be present and simply "
+            f"invisible — this is a directory ACL problem, NOT a failed copy. "
+            f"Workshop runs as its own service account; a folder written over RDP "
+            f"by a different user needs read and traverse granted explicitly."
+        )
+    except OSError as e:
+        return f"could not inspect {parent}: {e.__class__.__name__}"
+    return (
+        f"no credential file at {path}. The directory is readable and contains "
+        f"{entries if entries else 'nothing'} — so this is a missing or failed "
+        f"copy, not a permissions problem."
+    )
+
+
 def credential_state() -> tuple[bool, str]:
     """Presence-and-readability check on the browser credential.
 
     This is NOT proof YouTube still accepts it — only a network call proves
     that, and ``get_workshop_status`` must stay fast and offline-safe. What it
     does catch is the phase-4 failure mode: the file never made it to the
-    Surface, or it landed owned by ``rdpuser`` while Workshop runs as ``alexa``.
+    Surface, or it landed owned by one user while Workshop runs as another.
+
+    Deliberately uses ``stat()`` rather than ``exists()``: ``exists()`` returns
+    False for BOTH "absent" and "present but unreadable", which are the two
+    outcomes phase 4 most needs to tell apart.
 
     Never returns any part of the file's contents — it holds a full Google
     session cookie, not merely a YouTube credential (spec §9).
     """
-    if not CREDENTIAL_PATH.exists():
-        return False, f"no credential file at {CREDENTIAL_PATH}"
+    try:
+        CREDENTIAL_PATH.stat()
+    except FileNotFoundError:
+        return False, _absent_detail(CREDENTIAL_PATH)
+    except PermissionError:
+        return False, (
+            f"the credential file at {CREDENTIAL_PATH} cannot be inspected by "
+            f"this process (permission denied on stat). It EXISTS — this is a "
+            f"file ownership or ACL problem, not a missing file."
+        )
+    except OSError as e:
+        return False, (
+            f"credential file at {CREDENTIAL_PATH} could not be inspected: "
+            f"{e.__class__.__name__}"
+        )
     try:
         raw = CREDENTIAL_PATH.read_text(encoding="utf-8")
     except OSError as e:
         return False, (
             f"credential file exists at {CREDENTIAL_PATH} but this process "
-            f"cannot read it (check file ownership): {e.__class__.__name__}"
+            f"cannot READ it (check file ownership): {e.__class__.__name__}"
         )
     try:
         parsed = json.loads(raw)

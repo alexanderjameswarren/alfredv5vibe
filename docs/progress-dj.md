@@ -576,13 +576,28 @@ rows written; the error named §4.3 and pointed at Takeout.
 `plays_already_held: 3`, `tracks_created: 0` — the unique index absorbing repeats and
 `dj_tracks` staying insert-only, now confirmed against the NEW key.
 
-**Test 3 — Today→Yesterday convergence: PENDING, needs a real day to pass.**
-State to check against: **poll date 2026-08-28, 30 plays, all stored at
-`played_on: 2026-08-28`.** On 2026-08-29 or later, `get_dj_history` with
-`buckets: ["Today", "Yesterday"]` should show those 30 as `Yesterday`, and
-`record_dj_plays` with the *new* `poll_date` must insert **zero** rows for them.
-**This is the single mechanism the whole Block F fix rests on** — Yesterday resolving to
-`poll_date − 1` lands on the same `played_on` the Today capture used. Nothing else tests it.
+**Test 3 — Today→Yesterday convergence: 🛑 DUE ON THE NEXT SYNC. Still the ONLY unverified
+mechanism in Block F.**
+
+**Trigger condition, not a date:** run it on the first sync where `poll_date` is **later than
+2026-08-28**. Stated as a condition on purpose — running it while `poll_date` is still
+2026-08-28 would show zero inserts because those plays are still `Today`, which is the right
+answer for the wrong reason and would mark a working mechanism verified without testing it.
+
+**State to check against: 30 plays, all stored at `played_on: 2026-08-28`.**
+
+```
+get_dj_history   buckets: ["Today", "Yesterday"]   limit: 200
+record_dj_plays  plays: <mapped>   poll_date: "<the new date>"   source: "poll"
+```
+
+**Expected:** those 30 come back under `Yesterday`, and `plays_inserted` counts only
+genuinely new plays — **zero of the 30**.
+
+**Why it is the whole fix.** `Yesterday` resolves to `poll_date − 1`, which lands on exactly
+the `played_on` the `Today` capture used, so the same real play dedupes instead of minting a
+second row. That convergence is the entire reason the key could move to `played_on`, and
+nothing else tests it. Every unit test uses a constructed feed.
 
 **`albums_discarded` is a POLICY counter, not a filter-quality signal.** It came back 30 of
 30 and 3 of 3, which is correct: the poll discards **every** album unconditionally, so the

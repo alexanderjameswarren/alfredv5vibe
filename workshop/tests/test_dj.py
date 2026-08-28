@@ -14,6 +14,11 @@ from __future__ import annotations
 
 import unittest
 
+import tempfile
+import unittest.mock as mock
+from pathlib import Path
+
+import workshop.tools.dj as dj
 from workshop.platform import OperationalError
 from workshop.tools.dj import (
     KNOWN_BUCKETS,
@@ -244,6 +249,92 @@ class TestErrorClassification(unittest.TestCase):
         err = _upstream_error(RuntimeError("server said do not retry"), "surface")
         self.assertIsInstance(err, OperationalError)
         self.assertNotIn("do not retry", str(err).lower())
+
+
+class TestCredentialState(unittest.TestCase):
+    """"Not copied" and "copied but invisible to this process" are different
+    problems with different fixes, and Path.exists() cannot tell them apart —
+    it swallows PermissionError and reports False. On the Surface the credential
+    arrives over RDP written by one user while Workshop runs as another, so the
+    ACL case is live rather than hypothetical (spec §7 phase 4)."""
+
+    def _with_path(self, path):
+        return mock.patch.object(dj, "CREDENTIAL_PATH", path)
+
+    def test_missing_directory_says_nothing_was_copied(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "absent" / "browser.json"
+            with self._with_path(p):
+                ok, detail = dj.credential_state()
+        self.assertFalse(ok)
+        self.assertIn("no credential directory", detail)
+        self.assertIn("nothing has been copied", detail)
+
+    def test_readable_directory_without_the_file_is_a_FAILED_COPY(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "headers.txt").write_text("x", encoding="utf-8")
+            p = Path(d) / "browser.json"
+            with self._with_path(p):
+                ok, detail = dj.credential_state()
+        self.assertFalse(ok)
+        self.assertIn("missing or failed copy", detail)
+        self.assertIn("not a permissions problem", detail)
+        # It names what IS there, which is the evidence for that conclusion.
+        self.assertIn("headers.txt", detail)
+
+    def test_unlistable_directory_is_reported_as_AN_ACL_PROBLEM(self):
+        # The case the old code got wrong: it reported "no credential file",
+        # sending the reader after a failed copy instead of a directory ACL.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "browser.json"
+            with self._with_path(p), mock.patch.object(
+                Path, "iterdir", side_effect=PermissionError(13, "denied")
+            ):
+                ok, detail = dj.credential_state()
+        self.assertFalse(ok)
+        self.assertIn("EXISTS but this process cannot list it", detail)
+        self.assertIn("NOT a failed copy", detail)
+        self.assertNotIn("no credential file at", detail)
+
+    def test_unstattable_file_is_reported_as_present_but_inaccessible(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "browser.json"
+            p.write_text("{}", encoding="utf-8")
+            with self._with_path(p), mock.patch.object(
+                Path, "stat", side_effect=PermissionError(13, "denied")
+            ):
+                ok, detail = dj.credential_state()
+        self.assertFalse(ok)
+        self.assertIn("It EXISTS", detail)
+        self.assertIn("not a missing file", detail)
+
+    def test_a_good_credential_still_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "browser.json"
+            p.write_text('{"cookie": "redacted", "user-agent": "x"}', encoding="utf-8")
+            with self._with_path(p):
+                ok, detail = dj.credential_state()
+        self.assertTrue(ok)
+        self.assertIn("present, readable", detail)
+
+    def test_no_cookie_header_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "browser.json"
+            p.write_text('{"user-agent": "x"}', encoding="utf-8")
+            with self._with_path(p):
+                ok, detail = dj.credential_state()
+        self.assertFalse(ok)
+        self.assertIn("no Cookie header", detail)
+
+    def test_detail_never_leaks_credential_contents(self):
+        secret = "SAPISID=THIS_MUST_NEVER_APPEAR"
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "browser.json"
+            p.write_text('{"cookie": "%s"}' % secret, encoding="utf-8")
+            with self._with_path(p):
+                _, detail = dj.credential_state()
+        self.assertNotIn(secret, detail)
+        self.assertNotIn("SAPISID", detail)
 
 
 class TestConstants(unittest.TestCase):
