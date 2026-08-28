@@ -798,6 +798,64 @@ From the `mcp-platform` skill and `COMMENT ON SCHEMA platform`:
 
 ---
 
+## 11. Verification principles
+
+Standing rules, not phase notes. Each was learned by getting it wrong.
+
+### 11.1 A verification needs a case that FAILS if the thing is broken
+
+Before writing a check, ask: **would this have returned the same answer if the feature were
+absent?** If yes, it is not a check.
+
+Bitten three times:
+
+| What happened | Why it read as fine |
+|---|---|
+| A stale `phase2a_smoke` row satisfied the newest-successful-run query | Gap detection *succeeded* — with a wrong answer |
+| `finished_at` preceded `started_at` | Both timestamps were individually plausible |
+| Twelve setlist tracks all had plays, so the zero-play check returned twelve | It would have returned twelve with zero-fill entirely broken |
+
+The third is the purest form: the check was written *specifically* to test zero-fill, and
+could not have detected its absence. **A subject where the property holds either way proves
+nothing**, however carefully the criteria are worded.
+
+Practical consequences:
+- Pick a subject where the feature CHANGES the answer. If none exists, say so and record
+  **NOT EXERCISED** — never a pass.
+- Include a negative case. The tier-3 preview check only became meaningful when a
+  deliberately mistyped id was added alongside the valid one.
+- Phases 5 and 8 both have checks that could be written this way. Gap detection "finding no
+  gap" and a Takeout import "inserting no duplicates" are both answers that a broken
+  implementation returns just as readily as a working one.
+
+### 11.2 Prefer failures that are loud over answers that are reassuring
+
+Every silent failure this project has produced has erred in the comforting direction:
+coverage looking complete, a duplicate looking absorbed, an album looking known. **Errors
+that look like success are the ones that survive**, because nobody investigates them.
+
+Where truncation would corrupt an answer rather than shorten it, **fail the call** — the
+500-play submission cap and the 5000-row aggregate cap both do this. Where a value is an
+estimate, name it as one (`estimated_days`, `precision`). Where a tool cannot tell two
+situations apart, make it report both explicitly rather than collapsing them — which is why
+`record_dj_plays` reports every ingestible bucket including those with `submitted: 0`.
+
+### 11.3 The feed cannot be used to prove ABSENCE
+
+YouTube's history feed can confirm a play **happened**. It can never confirm one **did
+not**. Three independent observations (§9): items leave the page from the middle rather than
+the tail; the oldest bucket is truncated at the page edge; and a stored play vanished from
+the feed entirely.
+
+**So gap logic must never reason "we saw back to X, therefore everything after X is
+covered."** That inference fails in the reassuring direction — a dropout makes coverage look
+complete — which is the direction nobody investigates (§11.2).
+
+`dj_plays` is the authority on what was heard. A re-poll returning fewer rows than are
+stored is legitimate and is **never** a deletion signal.
+
+---
+
 ## 9. Reference
 
 **Playlists (from probe, 2026-08-27):** 43 total. Concert playlists include Foo

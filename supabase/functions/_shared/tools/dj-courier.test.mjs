@@ -133,6 +133,35 @@ const play = (o) => ({
 
 // ---------------------------------------------------------------------------
 
+test("by_bucket reports UNSUBMITTED buckets as explicit zeros", async () => {
+  // The whole point. A run that skips a bucket must not look identical to a run
+  // where the bucket was empty — so an absent bucket appears as submitted: 0
+  // rather than not appearing. Counts come from the write, not the caller.
+  const db = makeDb();
+  const r = await run(db, {
+    poll_date: "2026-08-27",
+    plays: [play({ v: "v1", t: "A", b: "Today" }), play({ v: "v2", t: "B", b: "Today" })],
+  });
+  assert.deepEqual(r.by_bucket, {
+    Today: { submitted: 2, inserted: 2, already_held: 0 },
+    Yesterday: { submitted: 0, inserted: 0, already_held: 0 },
+  });
+});
+
+test("by_bucket attributes already-held rows to the right bucket", async () => {
+  const db = makeDb();
+  const args = {
+    poll_date: "2026-08-27",
+    plays: [play({ v: "v1", t: "A", b: "Today" }), play({ v: "v2", t: "B", b: "Yesterday" })],
+  };
+  await run(db, args);
+  const second = await run(db, args);
+  assert.deepEqual(second.by_bucket, {
+    Today: { submitted: 1, inserted: 0, already_held: 1 },
+    Yesterday: { submitted: 1, inserted: 0, already_held: 1 },
+  });
+});
+
 test("fresh import creates tracks and plays", async () => {
   const db = makeDb();
   const r = await run(db, {

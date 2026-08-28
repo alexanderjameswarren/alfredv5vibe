@@ -101,7 +101,26 @@ test("a video_id unknown to dj_tracks ENTIRELY still comes back", async () => {
   const unknown = r.data.groups.find((g) => g.canonical_video_id === "v_new");
   assert.equal(unknown.known_track, false);
   assert.equal(unknown.distinct_days, 0);
-  assert.deepEqual(r.data.unknown_video_ids, ["v_new"]);
+  // Annotation, not exclusion: the id is in BOTH the results and this list.
+  assert.deepEqual(r.data.unknown_ids_returned_as_zeros, ["v_new"]);
+  assert.equal(r.data.all_requested_returned, true);
+  assert.equal(r.data.unknown_video_ids, undefined, "old misleading name is gone");
+});
+
+test("all_requested_returned is the single assertion a caller can make", async () => {
+  // The old field name read as a bucket these ids went into INSTEAD of the
+  // results, and misled a reader into thinking unknowns were dropped. One
+  // boolean removes the need to count.
+  const tables = {
+    dj_tracks: [track("t1", "v1", "A"), track("t2", "v2", "B")],
+    dj_plays: [play("t1", "2026-08-28")],
+  };
+  const r = await run(tables, { mode: "familiarity", video_ids: ["v1", "v2", "v_ghost"] });
+  assert.equal(r.data.returned, 3);
+  assert.equal(r.data.all_requested_returned, true);
+  assert.deepEqual(r.data.unknown_ids_returned_as_zeros, ["v_ghost"]);
+  const ids = r.data.groups.map((g) => g.canonical_video_id).sort();
+  assert.deepEqual(ids, ["v1", "v2", "v_ghost"], "every requested id is present");
 });
 
 test("all-unknown ids short-circuit to all zeros without scanning", async () => {

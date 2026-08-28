@@ -300,7 +300,17 @@ export const recordDjPlaysTool = defineTool({
       source,
     }));
 
+    // Per-bucket accounting — see NO_BUCKET / buildByBucket below for why this
+    // is measured here rather than left to the caller.
+    const NO_BUCKET = "(no bucket)";
+    const submittedByBucket: Record<string, number> = {};
+    for (const p of prepared) {
+      const k = p.played_bucket ?? NO_BUCKET;
+      submittedByBucket[k] = (submittedByBucket[k] ?? 0) + 1;
+    }
+
     let inserted = 0;
+    const insertedByBucket: Record<string, number> = {};
     for (const batch of chunk(playRows, 200)) {
       const { data, error } = await ctx.db
         .from("dj_plays")
@@ -308,9 +318,37 @@ export const recordDjPlaysTool = defineTool({
           onConflict: PLAYS_CONFLICT_TARGET,
           ignoreDuplicates: true,
         })
-        .select("id");
+        // played_bucket comes back so inserts can be attributed to a bucket.
+        // Counting them any other way would mean inferring which rows landed.
+        .select("id, played_bucket");
       if (error) throw new Error(`record_dj_plays: play insert failed: ${error.message}`);
+      for (const row of (data ?? []) as Array<{ played_bucket: string | null }>) {
+        const k = row.played_bucket ?? NO_BUCKET;
+        insertedByBucket[k] = (insertedByBucket[k] ?? 0) + 1;
+      }
       inserted += (data ?? []).length;
+    }
+
+    // EVERY ingestible bucket is reported, INCLUDING ONES WITH submitted: 0.
+    //
+    // That zero is the whole point. A run on 2026-08-28 wrote 30 Today rows and
+    // no Yesterday rows; the Yesterday rows appeared two hours later. Either the
+    // first run never submitted its Yesterday bucket, or the plays were not in
+    // the feed yet — and the stored row counts could not tell those apart. A run
+    // that silently skips a bucket looks identical to a run where the bucket was
+    // genuinely empty.
+    //
+    // Omitting absent buckets would reproduce exactly that ambiguity, so an
+    // unsubmitted bucket has to appear as an explicit 0 rather than not appear.
+    // And these counts come from the WRITE, not from the caller's memory of what
+    // it sent, so a platform_runs stamp built from them cannot record something
+    // the caller merely believes.
+    const byBucket: Record<string, { submitted: number; inserted: number; already_held: number }> = {};
+    for (const k of [...INGESTIBLE_BUCKETS, ...Object.keys(submittedByBucket)]) {
+      if (byBucket[k]) continue;
+      const sub = submittedByBucket[k] ?? 0;
+      const ins = insertedByBucket[k] ?? 0;
+      byBucket[k] = { submitted: sub, inserted: ins, already_held: sub - ins };
     }
 
     const dates = prepared.map((p) => p.played_on).sort();
@@ -326,6 +364,8 @@ export const recordDjPlaysTool = defineTool({
       plays_submitted: playRows.length,
       plays_inserted: inserted,
       plays_already_held: playRows.length - inserted,
+      // Per bucket, with unsubmitted buckets present as explicit zeros.
+      by_bucket: byBucket,
       // Visible, not silent: the poll never stores album (spec §9).
       // POLICY counter, not a filter-quality signal — the poll discards EVERY
       // album unconditionally, so this always equals the number of submitted

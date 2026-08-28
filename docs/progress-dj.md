@@ -850,6 +850,47 @@ ever isn't.
 (the pattern `get_items` uses via `platform_search_items`), which is a migration. Not
 guessing at its shape before a consumer exists.
 
+
+### Verification pass 2026-08-28 — results
+
+**Tier-3 preview: ✅ VERIFIED.** A real playlist resolves with title, 160 tracks, owned,
+privacy and a concrete effect statement; a mistyped id returns `resolved: false` with a
+plain "do NOT confirm" warning above the raw error. The gate now stops a wrong TARGET, not
+just accidental execution.
+
+**Canonical grouping: ✅ VISIBLY WORKING on live data.** *The Pleasure Is Mine* reads
+`distinct_days: 1` with `play_rows: 2` across two video_ids — which is precisely why both
+fields exist, and the first live confirmation that variant grouping counts as one song.
+
+**⚠️ Zero-play rule: STILL UNTESTED. Check C could not test it and I wrote it wrongly.**
+All twelve setlist songs turned out to have plays, so the query returned 12 because twelve
+tracks have plays — **not** because zero-fill worked. **If zero-fill were entirely broken
+that exact query would still return 12.** A check that cannot fail is not a check.
+
+Both cases ARE built and unit-tested (`dj-reads.test.mjs:80` known-with-no-plays,
+`dj-reads.test.mjs:95` unknown-to-dj_tracks). Neither has live coverage.
+
+**⚠️ There is probably no live subject for the known-but-unplayed case.** Every `dj_tracks`
+row originates from `record_dj_plays` (which writes a play by construction) or from the
+twelve written by `record_dj_playlist` — and all twelve have plays. **Zero-play tracks do
+not currently exist in the database.** Options: add *Perfect Situation* (`Mpp3vUZKuzc`,
+position 12 of the old playlist's head, a genuine setlist candidate) which would create one
+naturally; or accept that phase 7 is the first live exercise. A fabricated video_id can
+exercise the unknown-id case today at no cost.
+
+**`unknown_video_ids` is a DIAGNOSTIC LIST, not a substitute bucket.** Unknown ids appear
+both in that list AND as zero rows with `known_track: false`. The empty list in the
+verification read meant "no unknown ids were passed", which reads misleadingly like
+"unknowns are excluded". Naming issue, not a behaviour issue.
+
+**Dev-vs-Surface divergence: RULED OUT by the repo.** `dj_write.py` is **byte-identical**
+between `17d06ba` (Surface) and `131d87e` (Dev) — the whole file arrived in one commit
+(`588ba28`) with `rename`, `_verify_entries`, `_preview_removal` and
+`stale_or_foreign_handle` together, and `17d06ba` is an ancestor of `131d87e`. A frozen
+conversation manifest served old tool descriptions against a restarted server.
+**The only workshop-side difference between the hosts is `dj.py`** — the `credential_state`
+fix, which matters for phase-4 diagnosis and nothing else.
+
 ---
 
 ## Phase 4 — Surface deployment ⚠️ FULL PHASE, NOT A STEP
@@ -916,6 +957,21 @@ guessing at its shape before a consumer exists.
       `This week` / `Last week` is unit-tested (`dj-courier.test.mjs:321`) but the live
       path has never been hit; every test so far filtered at read time. Unit tested is not
       unexercised, and the contract asserts it.
+- [ ] 🛑 **THE FEED CANNOT PROVE ABSENCE** (spec §11.3). It confirms a play happened; it
+      never confirms one did not. Gap logic must not reason "we saw back to X, therefore
+      everything after X is covered" — that fails in the reassuring direction, which is the
+      direction nobody investigates. `dj_plays` is the authority.
+- [ ] 🛑 **Verify** per-bucket counts land in `platform_runs.details`.
+      `record_dj_plays` now RETURNS `by_bucket` with every ingestible bucket including
+      `submitted: 0`, so the mechanism is the tool rather than the caller's memory — this
+      checklist item is the verification that the run stamp actually carries it.
+      The 18:25 run on 2026-08-28 wrote 30 `Today` rows and **zero `Yesterday` rows**; the
+      12 Weezer `Yesterday` rows only appeared at 20:19. Either that run never submitted its
+      Yesterday bucket, or the plays were not in the feed yet — **and the stored row counts
+      cannot distinguish those.** A run that silently skips a bucket looks identical to a
+      run where the bucket was empty. Same shape as the lossy-feed finding: the failure is
+      invisible after the fact unless the run records what it SUBMITTED, not just what
+      landed.
 - [ ] Draft the task prompt (confirm Surface → check gap → backfill → poll → write → stamp)
 - [ ] ⚠️ **Two different questions, two different filters over `platform_runs`** — see note
 - [ ] Record `oldest_bucket_is_partial` and `page_full` in `platform_runs.details`

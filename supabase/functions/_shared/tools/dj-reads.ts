@@ -374,14 +374,21 @@ export const getDjPlaysTool = defineTool({
         rows_scanned: playRows.length,
         requested_video_ids: videoIds ?? null,
         requested_count: videoIds?.length ?? null,
-        unknown_video_ids: unknownVideoIds,
+        // Renamed from `unknown_video_ids`, which read as a bucket these ids
+        // went into INSTEAD of the results — it misled a reader once. They are
+        // returned as zero rows AND listed here; this is an annotation.
+        unknown_ids_returned_as_zeros: unknownVideoIds,
+        // One field a caller can assert on instead of counting.
+        all_requested_returned: videoIds ? shown.length >= videoIds.length : null,
         from_date: fromDate ?? null,
         to_date: toDate ?? null,
         reading: (
           "distinct_days is DISTINCT DAYS PLAYED, not a play count — polling " +
           "cannot measure repeats (spec §5). distinct_days 0 with " +
           "days_since_last null means never played; 0 is a fact, null means " +
-          "no last play exists. Sorted least-familiar first, which is cram order."
+          "no last play exists. Sorted least-familiar first, which is cram order. " +
+          "unknown_ids_returned_as_zeros ANNOTATES the results — those ids are " +
+          "included above as zero rows, not excluded. Check all_requested_returned."
         ),
       },
       meta: shown.length < out.length
@@ -464,12 +471,14 @@ function zeroOnlyResult(
       rows_scanned: 0,
       requested_video_ids: videoIds,
       requested_count: videoIds.length,
-      unknown_video_ids: videoIds,
+      unknown_ids_returned_as_zeros: videoIds,
+      all_requested_returned: true,
       from_date: fromDate ?? null,
       to_date: toDate ?? null,
       reading:
         "None of these video_ids are known to dj_tracks, so all are zero-played. " +
-        "distinct_days 0 is a fact; days_since_last null means never.",
+        "They are RETURNED as zero rows above, not omitted. distinct_days 0 is a " +
+        "fact; days_since_last null means never.",
     },
     meta: {},
   };
