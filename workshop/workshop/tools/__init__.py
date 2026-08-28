@@ -6,3 +6,5 @@ compile-time (import-time) error rather than a silently-absent tool."""
 
 from . import status  # noqa: F401  — registers get_workshop_status
 from . import jobs    # noqa: F401  — registers get_job_status + list_jobs
+from . import dj      # noqa: F401  — registers get_dj_history + get_dj_playlists
+from . import dj_write  # noqa: F401  — registers search + the 3 playlist write tools

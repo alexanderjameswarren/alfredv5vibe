@@ -12,6 +12,15 @@ import {
   appendSamMeasuresTool,
 } from "../_shared/tools/sam-authoring.ts";
 import {
+  recordDjPlaysTool,
+  createPlatformRunTool,
+  getPlatformRunsTool,
+} from "../_shared/tools/dj-courier.ts";
+import {
+  recordDjPlaylistTool,
+  createDjConcertTool,
+} from "../_shared/tools/dj-playlists.ts";
+import {
   getItems,
   searchItems,
   getExecutionHistory,
@@ -981,6 +990,124 @@ function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(appendSamMeasuresTool, args, token),
+  );
+
+  // --- DJ courier (spec §2) -------------------------------------------------
+
+  server.registerTool(
+    "record_dj_plays",
+    {
+      title: "Record DJ Plays",
+      description:
+        "Write listening history to the durable record: upserts dj_tracks and inserts dj_plays in ONE call. Pass the plays exactly as `get_dj_history` returned them (mapping `artists` to an array of names and `album` to its name string) plus a top-level `poll_date` — the handler derives match_key, played_on and precision server-side so grouping stays identical across every import path. IMPORTANT: the poll can only write the PRECISE buckets 'Today' and 'Yesterday'; 'This week' and 'Last week' are REJECTED, because they resolve to a date relative to poll_date and that date moves every day, so the same play would re-insert under a new one. Read the coarse buckets for gap detection and import older history from Takeout, which carries real timestamps. dj_tracks is INSERT-ONLY: a re-poll of a known track changes nothing and can never clobber hand-curated canonical grouping. Deduping is a database guarantee, not arithmetic — the unique index on (user_id, track_id, played_on, occurrence, source) absorbs rows already held, so re-running the same sync inserts zero rows. Note occurrence will always be 1 from polling: YouTube's feed carries one entry per track per bucket, so repeats do not stack and play counts are NOT obtainable this way. Returns counts plus `canonical_links` for review. NOTE `albums_discarded` is a POLICY counter, not a filter-quality signal: the poll discards EVERY album unconditionally, so this simply equals the number of submitted plays that carried one. It tells you how much album data was dropped; it can never indicate whether the rule is working. Per-call cap 500 plays; over that the call is REJECTED rather than truncated, because a silently-dropped tail would be stamped as a successful run. Tier 1.",
+      inputSchema: {
+        plays: z
+          .array(z.record(z.unknown()))
+          .describe(
+            "Array of plays. Each: video_id (required), title (required), artists (string[] — the FIRST is used for match_key, the rest are stored), album, duration_seconds, occurrence (default 1), and EITHER played_bucket ('Today'|'Yesterday'|'This week'|'Last week', needing poll_date) OR an explicit played_on (YYYY-MM-DD) + precision ('exact'|'day'|'week'|'fortnight') for Takeout/manual rows.",
+          ),
+        poll_date: z
+          .string()
+          .optional()
+          .describe(
+            "YYYY-MM-DD, the local date the poll ran. Required when any play uses played_bucket. Coarse buckets resolve against it: 'This week' → poll_date − 2 days, 'Last week' → − 9, skewed to the recent end of the bucket deliberately (spec §4.2).",
+          ),
+        source: z
+          .enum(["poll", "takeout", "manual"])
+          .optional()
+          .describe("Provenance of these rows. Defaults to 'poll'. Part of the dedupe key."),
+      },
+    },
+    async (args) => runToolForMcp(recordDjPlaysTool, args, token),
+  );
+
+  server.registerTool(
+    "create_platform_run",
+    {
+      title: "Create Platform Run",
+      description:
+        "Stamp one attempted job run — scheduled or on-demand — in platform_runs. Append-only. Call this on EVERY run including failures: a poll that could not reach YouTube still writes status 'failed' or 'auth_expired', and that row is what staleness detection and the phase-6 failure tests read. Absence of a row is the only signal for both 'the task never fired' and 'it fired but could not reach Supabase', so a missing stamp is indistinguishable from a missing run. Tier 1.",
+      inputSchema: {
+        app: z.enum(["dj", "sam", "alfred", "workshop"]).describe("Which app this job belongs to."),
+        job: z.string().describe("Job name, e.g. 'daily_history_sync'. Stable across runs — staleness queries group on it."),
+        executor: z.enum(["workshop", "claude", "alfred"]).describe("Who actually ran it. Different executors fail in different ways."),
+        status: z
+          .enum(["ok", "failed", "auth_expired", "partial"])
+          .describe("'partial' = ran and wrote something but not everything. 'auth_expired' is separate because it is the one status with a human remedy rather than a retry."),
+        host: z.string().optional().describe("Which host ran it, e.g. 'desktop' or 'surface'."),
+        started_at: z.string().optional().describe("ISO timestamp of when the run BEGAN. Pass this to get a real duration — record it before the work starts. Omitted, it defaults to the same instant as finished_at (duration zero), because a run whose start is unknown should not report a made-up interval."),
+        finished_at: z.string().optional().describe("ISO timestamp. Defaults to now. Must not be earlier than started_at — the call is rejected if it is."),
+        covered_from: z.string().optional().describe("YYYY-MM-DD — earliest date this run covered. Compared against the previous run to detect a lost window."),
+        covered_to: z.string().optional().describe("YYYY-MM-DD — latest date this run covered."),
+        details: z.record(z.unknown()).optional().describe("Free-form JSON receipt, e.g. row counts, page_full, buckets seen."),
+        error_message: z.string().optional().describe("What broke, when status is not 'ok'."),
+        notified_at: z.string().optional().describe("ISO timestamp set once the failure has been surfaced to the human. Stops one broken credential minting an identical inbox item every day."),
+      },
+    },
+    async (args) => runToolForMcp(createPlatformRunTool, args, token),
+  );
+
+  server.registerTool(
+    "get_platform_runs",
+    {
+      title: "Get Platform Runs",
+      description:
+        "Read the job run log, most recent first. The gap-detection read: call with app, job and status 'ok', limit 1 to get the newest successful run, then backfill anything between its covered_to and today. Also the staleness and failure-triage read. Tier 1.",
+      inputSchema: {
+        app: z.enum(["dj", "sam", "alfred", "workshop"]).optional().describe("Filter to one app."),
+        job: z.string().optional().describe("Filter to one job name."),
+        status: z.enum(["ok", "failed", "auth_expired", "partial"]).optional().describe("Filter by outcome. Use 'ok' for gap detection."),
+        unnotified_only: z.boolean().optional().describe("Only runs whose failure has not yet been surfaced (notified_at is null)."),
+        limit: z.number().optional().describe("Max rows (default 20, cap 50)."),
+      },
+    },
+    async (args) => runToolForMcp(getPlatformRunsTool, args, token),
+  );
+
+  server.registerTool(
+    "record_dj_playlist",
+    {
+      title: "Record DJ Playlist",
+      description:
+        "Record a managed playlist and its membership: writes dj_playlists and dj_playlist_tracks in ONE call, resolving every video_id to a dj_tracks row server-side (creating tracks and canonical groupings as needed, via the same shared resolver record_dj_plays uses). Re-recording the same yt_playlist_id UPDATES it — that is how the yt_set_video_id cache gets refreshed, which any later move or remove depends on. A track may hold one row per ZONE, so the same song legitimately appears in both cram and body; twice in the same zone is rejected. Rendered YouTube order is every cram row by position, then every body row by position. Tier 2.",
+      inputSchema: {
+        yt_playlist_id: z.string().describe("YouTube's playlist id, from create_dj_playlist or get_dj_playlists."),
+        name: z.string().describe("Playlist name."),
+        kind: z.enum(["concert", "artist", "jazz", "discovery"]).describe("Only 'concert' has a setlist body and a cram block; the others are flat."),
+        concert_id: z.string().optional().describe("UUID from create_dj_concert. Only allowed when kind is 'concert'."),
+        description: z.string().optional().describe("Optional description."),
+        cram_cap: z.number().optional().describe("Max songs in the cram block. Defaults to 8 — past roughly that, cram stops focusing attention and becomes the playlist again."),
+        tracks: z
+          .array(z.record(z.unknown()))
+          .optional()
+          .describe(
+            "Membership. Each: video_id, title, artists (string[]), album, duration_seconds, role ('body'|'cram'), position (integer, ordering WITHIN the zone), yt_set_video_id (from a fresh contents read — a cache, refresh it), added_reason ('new_setlist'|'neglected'|'manual'|'import')."
+          ),
+      },
+    },
+    async (args) => runToolForMcp(recordDjPlaylistTool, args, token),
+  );
+
+  server.registerTool(
+    "create_dj_concert",
+    {
+      title: "Create DJ Concert",
+      description:
+        "Create a concert row covering the whole pipeline from screening to attended. The artist is resolved BY NAME and created if unknown — dj_concerts.artist_id is NOT NULL with ON DELETE RESTRICT, so a concert cannot exist without one, and sequencing that is not the caller's problem. Leave ends_on null for a single night; fill it for a residency, where the run is starts_on..ends_on. Tier 2.",
+      inputSchema: {
+        artist_name: z.string().describe("Artist name. Matched exactly against dj_artists, created if absent."),
+        artist_tags: z.array(z.string()).optional().describe("Only used when the artist is newly created. Era and genre descriptors for discovery, e.g. ['90s','alt-rock']."),
+        starts_on: z.string().describe("YYYY-MM-DD. First (or only) night."),
+        ends_on: z.string().optional().describe("YYYY-MM-DD. Null for a single night; set for a residency."),
+        status: z
+          .enum(["screening", "interested", "committed", "attended", "missed", "rejected"])
+          .describe("screening = deciding. interested = want to, not committed. committed = going. attended = went. missed = did NOT go but still want to see them. rejected = not for me."),
+        tour_name: z.string().optional().describe("e.g. 'WEEZER: The Gathering'."),
+        venue_id: z.string().optional().describe("UUID of an existing dj_venues row. There is no venue-creation tool yet — put the location in `notes` until there is."),
+        notes: z.string().optional().describe("Free text about this show."),
+      },
+    },
+    async (args) => runToolForMcp(createDjConcertTool, args, token),
   );
 
   return server;

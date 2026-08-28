@@ -15,6 +15,7 @@ from typing import Any
 from .. import GIT_SHA, START_TIME, __version__, uptime_seconds
 from ..config import config_keys_present
 from ..platform import Ctx, define_tool, get_registry
+from .dj import credential_state
 
 
 def _probe(name: str, extras: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -33,11 +34,43 @@ def _probe(name: str, extras: dict[str, Any] | None = None) -> dict[str, Any]:
     version = getattr(module, "__version__", None)
     base = {"available": True, "version": version}
     if extras:
-        # In Step 3 we don't yet know how to auth-check ytmusicapi etc.
-        # Later PRs will replace the None with a real check. Keys are
-        # present so callers see a stable shape.
+        # Extras are resolved by the caller (see _ytmusicapi_probe). Seed the
+        # keys here so the shape stays constant whether or not the dependency
+        # imported — callers must never have to branch on key presence.
         base.update({k: None for k in extras})
     return base
+
+
+def _ytmusicapi_probe() -> dict[str, Any]:
+    """``_probe`` plus the DJ credential check (spec §7 phase 4).
+
+    ``credential_readable`` means exactly what it says: a credential file is
+    present and this process can read it, on this host. It is deliberately NOT
+    a liveness check — proving YouTube still accepts the cookie needs a network
+    round trip, and ``get_workshop_status`` runs at the top of every scheduled
+    task (spec §7 phase 4, step 8), so it must stay fast and work offline.
+
+    The field was called ``auth_valid`` and was renamed, because that name
+    promised liveness this check does not deliver. A reader seeing
+    ``auth_valid: true`` would reasonably conclude YouTube accepted the
+    credential — and the gap between that belief and the truth IS the phase-6
+    failure mode. An expired cookie reports ``credential_readable: true`` here
+    and then fails at the DJ tool with ``auth_expired:``. Two different
+    questions; this one answers only the cheap half, and now says so.
+
+    What the cheap half is for: on the Surface the credential arrives by hand
+    rather than by git, and the known failure is a file written by ``rdpuser``
+    that ``alexa`` cannot read.
+    """
+    probe = _probe(
+        "ytmusicapi", extras={"credential_readable": None, "auth_detail": None}
+    )
+    if not probe["available"]:
+        return probe
+    readable, detail = credential_state()
+    probe["credential_readable"] = readable
+    probe["auth_detail"] = detail
+    return probe
 
 
 def _jobs_snapshot(ctx: Ctx) -> dict[str, int]:
@@ -60,7 +93,11 @@ def _jobs_snapshot(ctx: Ctx) -> dict[str, int]:
         "loaded from .env, and a jobs counter. Use this to confirm which "
         "connector answered (host=desktop vs host=surface), verify a "
         "deployment landed (git_sha), and check whether optional deps like "
-        "ytmusicapi have been installed on this host."
+        "ytmusicapi have been installed on this host. "
+        "`dependencies.ytmusicapi.credential_readable` reports only that a "
+        "credential file exists and is readable HERE — it is not a liveness "
+        "check, and an expired cookie still reports true. Only a DJ tool call "
+        "returning `auth_expired:` proves YouTube has rejected it."
     ),
     input_schema={"type": "object", "properties": {}},
 )
@@ -79,7 +116,7 @@ async def get_workshop_status(args: dict, ctx: Ctx) -> dict:
         "auth_mode": ctx.config.auth_mode,
         "dependencies": {
             "music21": _probe("music21"),
-            "ytmusicapi": _probe("ytmusicapi", extras={"auth_valid": None}),
+            "ytmusicapi": _ytmusicapi_probe(),
         },
         "tools": manifest,
         "config_keys_present": config_keys_present(),

@@ -125,6 +125,9 @@ class ToolEntry:
     input_schema: dict
     long_running: bool
     handler: Handler
+    # Tier-3 only, and REQUIRED there. Resolves what the call would actually
+    # act on, so the proposal describes a target rather than echoing arguments.
+    preview: Union[Handler, None] = None
 
 
 _REGISTRY: dict[str, ToolEntry] = {}
@@ -207,6 +210,7 @@ def define_tool(
     description: str,
     input_schema: dict,
     long_running: bool = False,
+    preview: Union[Handler, None] = None,
 ) -> Callable[[Handler], Handler]:
     """Register a tool. Every ``@define_tool`` fires at import so the
     registry is populated before ``list_tools`` is ever served.
@@ -217,6 +221,18 @@ def define_tool(
       * every key the handler reads appears in ``input_schema.properties``
         (see ``_statically_read_arg_keys`` for scope)
       * ``name`` isn't already registered
+      * tier-3 tools supply a ``preview`` (see below)
+
+    ``preview(args, ctx)`` is MANDATORY for tier 3 and ignored otherwise. It
+    resolves what the call would act on and returns a dict describing it, which
+    the gate embeds in the proposal.
+
+    Without it the gate stops accidental EXECUTION but not accidental WRONG
+    TARGET: a proposal that only echoes its arguments looks exactly as
+    reassuring for a mistyped id as for the right one, so a human reading it
+    cannot tell the difference — and reading it is the entire point of a speed
+    bump. Requiring the hook at registration makes "a destructive tool can say
+    what it would destroy" mechanical rather than a habit each tool re-forms.
     """
 
     if tier not in (1, 2, 3):
@@ -229,6 +245,13 @@ def define_tool(
     if input_schema.get("type") != "object":
         raise ValueError(
             f"Tool {name!r}: input_schema.type must be 'object'"
+        )
+    if tier == 3 and preview is None:
+        raise ValueError(
+            f"Tool {name!r} is tier 3 and must supply a `preview` callable. "
+            f"The confirmation gate exists so a human can read what would "
+            f"happen; a proposal that only echoes its arguments is "
+            f"indistinguishable between the right target and a mistyped one."
         )
     if "properties" not in input_schema:
         raise ValueError(
@@ -249,6 +272,7 @@ def define_tool(
             input_schema=input_schema,
             long_running=long_running,
             handler=handler,
+            preview=preview,
         )
         return handler
 
@@ -325,19 +349,43 @@ def _validate_envelope(envelope: Any, tool_name: str) -> tuple[Any, dict]:
 # ---------------------------------------------------------------------------
 
 
-def _build_tier_3_proposal(entry: ToolEntry, args: dict) -> dict:
+async def _build_tier_3_proposal(entry: ToolEntry, args: dict, ctx: Ctx) -> dict:
     """Payload returned by the tier-3 gate when ``confirmed`` is missing or
     false. The MCP layer emits this as normal tool output — the confirmation
-    is a re-call by the user, not a bespoke UI (spec §4.1)."""
+    is a re-call by the user, not a bespoke UI (spec §4.1).
+
+    Runs the tool's ``preview`` so the proposal describes the TARGET, not just
+    the arguments. A preview failure is reported inside the proposal rather
+    than raised: "I could not find that playlist" is exactly what the reader
+    needs to see, and it must not look like a transport error.
+    """
+    target: Any
+    try:
+        if inspect.iscoroutinefunction(entry.preview):
+            target = await entry.preview(args, ctx)
+        else:
+            target = entry.preview(args, ctx)  # type: ignore[misc]
+    except Exception as e:
+        target = {
+            "resolved": False,
+            "error": f"{type(e).__name__}: {e}",
+            "warning": (
+                "The target could not be resolved, so this proposal cannot say "
+                "what would be affected. Do NOT confirm until this is understood "
+                "— an unresolvable target is usually a wrong id."
+            ),
+        }
     return {
         "kind": "tier_3_proposal",
         "tool": entry.name,
         "description": entry.description,
         "args": {k: v for k, v in args.items() if k != "confirmed"},
+        "target": target,
         "message": (
             f"Tool '{entry.name}' is tier 3 (destructive, superseding, or "
-            f"semantically significant). Nothing has been executed. To proceed, "
-            f"re-call this tool with `confirmed: true` in the arguments."
+            f"semantically significant). Nothing has been executed. Read `target` "
+            f"and confirm it is what you meant — then re-call this tool with "
+            f"`confirmed: true` in the arguments."
         ),
     }
 
@@ -360,7 +408,7 @@ async def call_tool(name: str, args: dict, ctx: Ctx) -> tuple[Any, dict]:
         raise OperationalError(f"Unknown tool: {name!r}")
 
     if entry.tier == 3 and args.get("confirmed") is not True:
-        return _build_tier_3_proposal(entry, args), {}
+        return await _build_tier_3_proposal(entry, args, ctx), {}
 
     if entry.long_running:
         # Enqueue via ctx.jobs and return the handle. The handler runs on a

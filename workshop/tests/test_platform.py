@@ -190,6 +190,7 @@ class SchemaParityTests(unittest.TestCase):
             tier=3,
             description="",
             input_schema={"type": "object", "properties": {}},
+            preview=lambda args, ctx: {"resolved": True},
         )
         async def h(args, ctx):
             _ = args.get("confirmed")
@@ -225,6 +226,11 @@ class TierGateTests(unittest.TestCase):
                 "type": "object",
                 "properties": {"target_id": {"type": "string"}},
             },
+            preview=lambda args, ctx: {
+                "resolved": True,
+                "title": f"row {args.get('target_id')}",
+                "effect": "would delete 1 row",
+            },
         )
         async def h(args, ctx):
             # Would delete; must never execute without confirmation.
@@ -240,6 +246,10 @@ class TierGateTests(unittest.TestCase):
         # The 'confirmed' field, if present, is stripped from the echoed args.
         self.assertNotIn("confirmed", data["args"])
         self.assertIn("re-call this tool with `confirmed: true`", data["message"])
+        # The proposal must describe the TARGET, not merely echo the arguments.
+        self.assertEqual(data["target"]["resolved"], True)
+        self.assertEqual(data["target"]["title"], "row abc-123")
+        self.assertIn("would delete 1 row", data["target"]["effect"])
         self.assertEqual(meta, {})
 
     def test_tier_3_with_confirmed_executes(self) -> None:
@@ -251,6 +261,7 @@ class TierGateTests(unittest.TestCase):
                 "type": "object",
                 "properties": {"target_id": {"type": "string"}},
             },
+            preview=lambda args, ctx: {"resolved": True},
         )
         async def h(args, ctx):
             return {"data": {"deleted": args["target_id"]}}
@@ -271,6 +282,7 @@ class TierGateTests(unittest.TestCase):
             tier=3,
             description="",
             input_schema={"type": "object", "properties": {}},
+            preview=lambda args, ctx: {"resolved": True},
         )
         async def h(args, ctx):
             raise AssertionError("must not execute")
@@ -279,6 +291,82 @@ class TierGateTests(unittest.TestCase):
             call_tool("t3_string_true", {"confirmed": "true"}, _make_test_ctx())
         )
         self.assertEqual(data["kind"], "tier_3_proposal")
+
+    def test_tier_3_registration_requires_a_preview(self) -> None:
+        # The gate stops accidental EXECUTION; the preview is what stops
+        # accidental WRONG TARGET. A proposal that only echoes its arguments
+        # reads identically for a mistyped id and the right one, so a human
+        # cannot tell them apart — and reading it is the whole point.
+        with self.assertRaises(ValueError) as cm:
+            @define_tool(
+                name="t3_no_preview",
+                tier=3,
+                description="",
+                input_schema={"type": "object", "properties": {}},
+            )
+            async def h(args, ctx):
+                return {"data": None}
+
+        self.assertIn("must supply a `preview`", str(cm.exception))
+        self.assertNotIn("t3_no_preview", get_registry())
+
+    def test_tiers_1_and_2_do_not_require_a_preview(self) -> None:
+        for tier in (1, 2):
+            @define_tool(
+                name=f"t{tier}_no_preview_ok",
+                tier=tier,
+                description="",
+                input_schema={"type": "object", "properties": {}},
+            )
+            async def h(args, ctx):
+                return {"data": None}
+
+        self.assertIn("t1_no_preview_ok", get_registry())
+        self.assertIn("t2_no_preview_ok", get_registry())
+
+    def test_a_failing_preview_is_reported_INSIDE_the_proposal(self) -> None:
+        # An unresolvable target is usually a wrong id, and "I could not find
+        # that" is exactly what the reader needs to see. Surfacing it as a
+        # transport error would hide the one fact that matters.
+        @define_tool(
+            name="t3_bad_target",
+            tier=3,
+            description="",
+            input_schema={
+                "type": "object",
+                "properties": {"target_id": {"type": "string"}},
+            },
+            preview=lambda args, ctx: (_ for _ in ()).throw(
+                OperationalError("not_found: no such target")
+            ),
+        )
+        async def h(args, ctx):
+            raise AssertionError("must not execute")
+
+        data, _ = _run(
+            call_tool("t3_bad_target", {"target_id": "typo"}, _make_test_ctx())
+        )
+        self.assertEqual(data["kind"], "tier_3_proposal")
+        self.assertEqual(data["target"]["resolved"], False)
+        self.assertIn("not_found", data["target"]["error"])
+        self.assertIn("Do NOT confirm", data["target"]["warning"])
+
+    def test_async_preview_is_awaited(self) -> None:
+        async def preview(args, ctx):
+            return {"resolved": True, "async": True}
+
+        @define_tool(
+            name="t3_async_preview",
+            tier=3,
+            description="",
+            input_schema={"type": "object", "properties": {}},
+            preview=preview,
+        )
+        async def h(args, ctx):
+            raise AssertionError("must not execute")
+
+        data, _ = _run(call_tool("t3_async_preview", {}, _make_test_ctx()))
+        self.assertEqual(data["target"], {"resolved": True, "async": True})
 
     def test_unknown_tool_raises_operational(self) -> None:
         with self.assertRaises(OperationalError):
