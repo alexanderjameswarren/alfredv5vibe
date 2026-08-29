@@ -854,6 +854,37 @@ complete — which is the direction nobody investigates (§11.2).
 `dj_plays` is the authority on what was heard. A re-poll returning fewer rows than are
 stored is legitimate and is **never** a deletion signal.
 
+### 11.4 A record that cannot be checked against the thing it describes will eventually disagree with it, silently
+
+`platform_runs` asserts coverage. **Nothing can verify that assertion against `dj_plays`** —
+there is no link from a run to the rows it produced. Today the two happen to be
+reconcilable because `dj_plays.observed_at` clusters into visible batches, but **that is a
+coincidence of how the data looks, not a property of the design.** Two writers a second
+apart would be indistinguishable.
+
+So gap detection reading `platform_runs` is trusting a record it cannot audit. Concretely:
+a run that writes plays and fails to stamp leaves coverage the log does not know about —
+the data ahead of the record, with nothing flagging it. And a manual run keeps coverage
+current, masking a scheduled task that has died.
+
+**The rule: where a derived record and the underlying data disagree, THE DATA WINS.**
+"What is the newest `played_on` I actually hold?" is answerable from `dj_plays` and cannot
+drift. "What does the log say I covered?" can. Reconcile, do not trust.
+
+This is the same principle §11.3 applies to the feed, applied to our own log — and it is
+the fourth instance of one shape:
+
+| Instance | The record | What it disagreed with |
+|---|---|---|
+| Stale `phase2a_smoke` row | newest successful run | what had actually been synced |
+| `finished_at` before `started_at` | a run's duration | the order events happened in |
+| Skipped bucket invisible in row counts | what a run covered | what it submitted |
+| Unstamped run | coverage in `platform_runs` | rows in `dj_plays` |
+
+**A foreign key from plays to runs is NOT the fix being proposed** — that is a schema change
+and phase 5 does not need it. The fix is that every consumer of a derived record reconciles
+it against the source rather than treating it as authoritative.
+
 ---
 
 ## 9. Reference

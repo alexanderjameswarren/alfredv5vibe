@@ -20,7 +20,7 @@ import {
   recordDjPlaylistTool,
   createDjConcertTool,
 } from "../_shared/tools/dj-playlists.ts";
-import { getDjPlaysTool } from "../_shared/tools/dj-reads.ts";
+import { getDjPlaysTool, getDjManagedPlaylistsTool } from "../_shared/tools/dj-reads.ts";
 import {
   getItems,
   searchItems,
@@ -1131,6 +1131,29 @@ function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(getDjPlaysTool, args, token),
+  );
+
+  server.registerTool(
+    "get_dj_managed_playlists",
+    {
+      title: "Get DJ Managed Playlists",
+      description:
+        "Read the SUPABASE record of managed playlists and their membership. " +
+        "⚠️ NOT the same as Workshop's `get_dj_playlists`, which reads YOUTUBE. These return plausible-but-different data, so choosing the wrong one is a wrong answer that looks right: use THIS to see what was recorded, and `get_dj_playlists` to see what YouTube currently holds. Diffing the two is how phase 7 detects drift. " +
+        "`list` returns managed playlists with per-role `track_counts` and `cram_headroom` (cram_cap minus current cram rows) so a caller can decide whether anything may be added without a second call. " +
+        "`tracks` returns one playlist's recorded membership including `rendered_position` — the 0-indexed order YouTube SHOULD show, being every cram row by position then every body row by position (spec §5). That is computed here so callers never reimplement the rule; compare it directly against `position` from a live contents read. " +
+        "Note `position` is per-ZONE, so cram 1 and body 1 are different entries and one track may legitimately hold a row in each — that duplication is what lets a cram clear leave the setlist intact. " +
+        "⚠️ `yt_set_video_id` is a CACHE: stale by default and reused across playlists for DIFFERENT songs. `counts.missing_set_video_id` tells you how many rows cannot be moved or removed without a fresh read. Tier 1, read-only.",
+      inputSchema: {
+        mode: z.enum(["list", "tracks"]).optional().describe("Defaults to 'list'."),
+        yt_playlist_id: z.string().optional().describe("mode=tracks: YouTube's playlist id. Either this or playlist_id — Workshop only ever knows this one."),
+        playlist_id: z.string().optional().describe("mode=tracks: the internal dj_playlists uuid."),
+        kind: z.enum(["concert", "artist", "jazz", "discovery"]).optional().describe("mode=list: filter by kind."),
+        concert_id: z.string().optional().describe("mode=list: filter to playlists linked to one concert."),
+        limit: z.number().optional().describe("mode=list: max playlists (default 20, cap 50)."),
+      },
+    },
+    async (args) => runToolForMcp(getDjManagedPlaylistsTool, args, token),
   );
 
   return server;

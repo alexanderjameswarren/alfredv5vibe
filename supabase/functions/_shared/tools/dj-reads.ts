@@ -1,8 +1,17 @@
-// Reading the durable listening record back.
+// Reading the durable record back — plays, and managed playlists.
 //
 //   get_dj_plays — tier 1. Two modes:
 //     plays        raw rows in a window, newest first
 //     familiarity  distinct-days per canonical group, LEAST FAMILIAR FIRST
+//
+//   get_dj_managed_playlists — tier 1. Two modes:
+//     list         what this system manages, with per-role track counts
+//     tracks       one playlist's recorded membership, in RENDERED order
+//
+// ⚠️ get_dj_managed_playlists reads SUPABASE. Workshop's similarly-named
+// `get_dj_playlists` reads YOUTUBE. They return plausible-but-different data,
+// so picking the wrong one is a wrong answer that looks right (spec §11.2) —
+// each tool's description names the other explicitly for that reason.
 //
 // Built because there was no way to read dj_plays at all: diagnosing a sync
 // discrepancy meant opening the SQL editor, and phase 5 needs this structurally
@@ -483,3 +492,205 @@ function zeroOnlyResult(
     meta: {},
   };
 }
+
+// ---------------------------------------------------------------------------
+// get_dj_managed_playlists — tier 1
+// ---------------------------------------------------------------------------
+
+const PLAYLIST_COLS =
+  "id, yt_playlist_id, name, kind, concert_id, description, cram_cap, last_synced_at, created_at";
+const MEMBER_COLS =
+  "id, playlist_id, track_id, role, position, yt_set_video_id, added_reason, added_at";
+
+interface MemberRow {
+  id: string;
+  playlist_id: string;
+  track_id: string;
+  role: string;
+  position: number;
+  yt_set_video_id: string | null;
+  added_reason: string | null;
+  added_at: string;
+}
+
+/**
+ * Spec §5: rendered YouTube order is EVERY CRAM ROW BY POSITION, THEN EVERY
+ * BODY ROW BY POSITION. Computed here, once, rather than by each caller.
+ *
+ * A caller reimplementing this would not error when it diverged — it would diff
+ * against the wrong index and propose confidently wrong moves. Same reasoning
+ * that made the canonical resolver shared: silent divergence is the failure
+ * mode, so there is exactly one implementation.
+ *
+ * `position` is per-ZONE, so cram 1 and body 1 both exist and are different
+ * entries. A track may legitimately hold one row in each zone — that
+ * duplication is what makes "clear the cram list" leave the setlist intact —
+ * so this must never deduplicate by track.
+ */
+function withRenderedPositions(
+  rows: MemberRow[],
+): Array<MemberRow & { rendered_position: number }> {
+  const byPos = (a: MemberRow, b: MemberRow) => a.position - b.position;
+  const cram = rows.filter((r) => r.role === "cram").sort(byPos);
+  const body = rows.filter((r) => r.role === "body").sort(byPos);
+  return [...cram, ...body].map((r, i) => ({ ...r, rendered_position: i }));
+}
+
+export const getDjManagedPlaylistsTool = defineTool({
+  name: "get_dj_managed_playlists",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const mode = (args.mode as string | undefined) ?? "list";
+    if (mode !== "list" && mode !== "tracks") {
+      throw new Error(
+        `get_dj_managed_playlists: \`mode\` must be 'list' or 'tracks' ` +
+          `(got ${JSON.stringify(mode)}).`,
+      );
+    }
+
+    if (mode === "list") {
+      const limit = clampLimit(args.limit as number | undefined);
+      let q = ctx.db
+        .from("dj_playlists")
+        .select(PLAYLIST_COLS, { count: "exact" })
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (args.kind) q = q.eq("kind", args.kind as string);
+      if (args.concert_id) q = q.eq("concert_id", args.concert_id as string);
+      const { data, error, count } = await q;
+      if (error) throw new Error(`get_dj_managed_playlists: ${error.message}`);
+      const rows = (data ?? []) as Array<Record<string, unknown>>;
+
+      // Counts ride along because phase 7 must compare cram against cram_cap
+      // BEFORE deciding whether anything may be added — and a second call is a
+      // call that gets skipped.
+      const ids = rows.map((r) => r.id as string);
+      const counts = new Map<string, { body: number; cram: number; total: number }>();
+      for (const id of ids) counts.set(id, { body: 0, cram: 0, total: 0 });
+      for (const batch of chunk(ids, IN_CHUNK)) {
+        if (batch.length === 0) continue;
+        const { data: mem, error: memErr } = await ctx.db
+          .from("dj_playlist_tracks")
+          .select("playlist_id, role")
+          .in("playlist_id", batch);
+        if (memErr) {
+          throw new Error(
+            `get_dj_managed_playlists: membership count failed: ${memErr.message}`,
+          );
+        }
+        for (const m of (mem ?? []) as Array<{ playlist_id: string; role: string }>) {
+          const c = counts.get(m.playlist_id);
+          if (!c) continue;
+          if (m.role === "cram") c.cram += 1;
+          else c.body += 1;
+          c.total += 1;
+        }
+      }
+
+      const playlists = rows.map((r) => {
+        const c = counts.get(r.id as string) ?? { body: 0, cram: 0, total: 0 };
+        return {
+          ...r,
+          track_counts: c,
+          cram_headroom: (r.cram_cap as number) - c.cram,
+        };
+      });
+      const total = count ?? playlists.length;
+      return {
+        data: {
+          mode: "list",
+          playlists,
+          returned: playlists.length,
+          total,
+          limit_applied: limit,
+          note: "This is the SUPABASE record. Workshop's get_dj_playlists reads YouTube.",
+        },
+        meta: playlists.length < total
+          ? { truncated: true, total, limit_applied: limit, count: playlists.length }
+          : {},
+      };
+    }
+
+    // -------------------------------------------------------------- tracks
+    const ytId = args.yt_playlist_id as string | undefined;
+    const plId = args.playlist_id as string | undefined;
+    if (!ytId && !plId) {
+      throw new Error(
+        "get_dj_managed_playlists: mode 'tracks' requires `yt_playlist_id` or " +
+          "`playlist_id`. Either works — Workshop only ever knows the YouTube one.",
+      );
+    }
+    let pq = ctx.db.from("dj_playlists").select(PLAYLIST_COLS);
+    pq = ytId ? pq.eq("yt_playlist_id", ytId) : pq.eq("id", plId as string);
+    const { data: pl, error: plErr } = await pq.maybeSingle();
+    if (plErr) {
+      throw new Error(`get_dj_managed_playlists: playlist lookup failed: ${plErr.message}`);
+    }
+    if (!pl) {
+      throw new Error(
+        `get_dj_managed_playlists: no managed playlist matches ` +
+          `${ytId ? `yt_playlist_id ${ytId}` : `playlist_id ${plId}`}. It may exist on ` +
+          `YouTube without ever having been recorded — record_dj_playlist writes this side.`,
+      );
+    }
+    const playlist = pl as Record<string, unknown>;
+
+    const { data: mem, error: memErr } = await ctx.db
+      .from("dj_playlist_tracks")
+      .select(MEMBER_COLS)
+      .eq("playlist_id", playlist.id as string);
+    if (memErr) {
+      throw new Error(`get_dj_managed_playlists: membership read failed: ${memErr.message}`);
+    }
+    const members = (mem ?? []) as MemberRow[];
+
+    const tracks = await fetchTracksByIds(ctx, [...new Set(members.map((m) => m.track_id))]);
+    const trackById = new Map(tracks.map((t) => [t.id, t]));
+
+    const ordered = withRenderedPositions(members).map((m) => {
+      const t = trackById.get(m.track_id);
+      return {
+        role: m.role,
+        position: m.position,
+        rendered_position: m.rendered_position,
+        video_id: t?.video_id ?? null,
+        title: t?.title ?? null,
+        artist: t?.artist ?? null,
+        canonical_track_id: t?.canonical_track_id ?? null,
+        yt_set_video_id: m.yt_set_video_id,
+        added_reason: m.added_reason,
+        added_at: m.added_at,
+      };
+    });
+
+    const cram = ordered.filter((t) => t.role === "cram").length;
+    const missingHandles = ordered.filter((t) => !t.yt_set_video_id).length;
+
+    return {
+      data: {
+        mode: "tracks",
+        playlist,
+        tracks: ordered,
+        counts: {
+          body: ordered.length - cram,
+          cram,
+          total: ordered.length,
+          missing_set_video_id: missingHandles,
+        },
+        cram_headroom: (playlist.cram_cap as number) - cram,
+        reading: (
+          "`rendered_position` is the 0-indexed order YouTube should show: every " +
+          "cram row by position, then every body row by position (spec §5). It is " +
+          "computed here so callers do not reimplement the rule — compare it " +
+          "directly against `position` from Workshop's get_dj_playlists " +
+          "mode=contents. `position` here is per-ZONE, so cram 1 and body 1 are " +
+          "different entries and one track may legitimately hold a row in each. " +
+          "⚠️ `yt_set_video_id` is a CACHE: stale by default, and reused across " +
+          "playlists for DIFFERENT songs — refresh it from a live contents read " +
+          "before issuing any move or remove."
+        ),
+      },
+      meta: {},
+    };
+  },
+});

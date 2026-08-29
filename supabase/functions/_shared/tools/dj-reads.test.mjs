@@ -38,7 +38,7 @@ const tool = Object.fromEntries(globalThis.__tools.map((t) => [t.name, t]));
 function makeDb(tables) {
   function builder(table) {
     const filters = [];
-    let head = false, wantCount = false, limit = null;
+    let head = false, wantCount = false, limit = null, single = false;
     const api = {
       select(_cols, opts = {}) {
         wantCount = opts.count === "exact";
@@ -51,10 +51,13 @@ function makeDb(tables) {
       lte(c, v) { filters.push((r) => r[c] <= v); return api; },
       order() { return api; },
       limit(n) { limit = n; return api; },
+      single() { single = true; return api; },
+      maybeSingle() { single = true; return api; },
       then(resolve) {
         let rows = (tables[table] ?? []).filter((r) => filters.every((f) => f(r)));
         const count = rows.length;
         if (limit != null) rows = rows.slice(0, limit);
+        if (single) return resolve({ data: rows[0] ?? null, error: null, count: null });
         return resolve({ data: head ? null : rows, error: null, count: wantCount ? count : null });
       },
     };
@@ -65,6 +68,8 @@ function makeDb(tables) {
 
 const run = (tables, args) =>
   tool.get_dj_plays.handler(args, { db: makeDb(tables), userId: "u1" });
+const runMp = (tables, args) =>
+  tool.get_dj_managed_playlists.handler(args, { db: makeDb(tables), userId: "u1" });
 
 const track = (id, video_id, title, canonical = null) =>
   ({ id, video_id, title, artist: "Weezer", canonical_track_id: canonical });
@@ -310,4 +315,133 @@ test("an invalid mode is rejected", async () => {
     () => run({ dj_tracks: [], dj_plays: [] }, { mode: "summary" }),
     /must be 'plays' or 'familiarity'/,
   );
+});
+
+
+// ---------------------------------------------------------------------------
+// get_dj_managed_playlists — rendered_position
+// ---------------------------------------------------------------------------
+
+const PL = {
+  id: "pl1", yt_playlist_id: "PLxyz", name: "Weezer Concert 2026", kind: "concert",
+  concert_id: "c1", description: null, cram_cap: 8,
+  last_synced_at: null, created_at: "2026-08-28T00:00:00Z",
+};
+const mem = (track_id, role, position, svid = "SV" + track_id) =>
+  ({ id: `m-${role}-${position}`, playlist_id: "pl1", track_id, role, position,
+     yt_set_video_id: svid, added_reason: "import", added_at: "2026-08-28T00:00:00Z" });
+
+test("rendered_position is cram-then-body, and WRONG implementations fail here", async () => {
+  // Designed so the three plausible-but-wrong implementations each produce a
+  // different, detectably incorrect sequence:
+  //   using `position` directly      -> collisions (cram 1 and body 1 both -> 1)
+  //   sorting by position across all -> interleaved b1,c1,b2,c2,b3
+  //   body-then-cram                 -> b1,b2,b3,c1,c2
+  // Only cram-by-position-then-body-by-position gives c1,c2,b1,b2,b3.
+  const tables = {
+    dj_playlists: [PL],
+    dj_playlist_tracks: [
+      mem("tb1", "body", 1), mem("tb2", "body", 2), mem("tb3", "body", 3),
+      mem("tc1", "cram", 1), mem("tc2", "cram", 2),
+    ],
+    dj_tracks: [
+      track("tb1", "vb1", "Body One"), track("tb2", "vb2", "Body Two"),
+      track("tb3", "vb3", "Body Three"),
+      track("tc1", "vc1", "Cram One"), track("tc2", "vc2", "Cram Two"),
+    ],
+  };
+  const r = await runMp(tables, { mode: "tracks", yt_playlist_id: "PLxyz" });
+  assert.deepEqual(
+    r.data.tracks.map((t) => t.video_id),
+    ["vc1", "vc2", "vb1", "vb2", "vb3"],
+  );
+  assert.deepEqual(r.data.tracks.map((t) => t.rendered_position), [0, 1, 2, 3, 4]);
+  // Per-zone positions are UNCHANGED — rendered_position is additional, not a
+  // replacement, or a caller could not map back to the row it must update.
+  assert.deepEqual(r.data.tracks.map((t) => t.position), [1, 2, 1, 2, 3]);
+  assert.deepEqual(r.data.tracks.map((t) => t.role),
+    ["cram", "cram", "body", "body", "body"]);
+});
+
+test("membership rows are NOT deduplicated by track", async () => {
+  // §5: a track holding one row per zone is load-bearing — it is what makes
+  // "clear the cram list" leave the concert order intact. Dedup would silently
+  // destroy that.
+  const tables = {
+    dj_playlists: [PL],
+    dj_playlist_tracks: [mem("t1", "body", 1, "SVbody"), mem("t1", "cram", 1, "SVcram")],
+    dj_tracks: [track("t1", "v1", "Shine Again")],
+  };
+  const r = await runMp(tables, { mode: "tracks", yt_playlist_id: "PLxyz" });
+  assert.equal(r.data.counts.total, 2);
+  assert.deepEqual(r.data.tracks.map((t) => t.role), ["cram", "body"]);
+  assert.deepEqual(r.data.tracks.map((t) => t.video_id), ["v1", "v1"]);
+  assert.deepEqual(r.data.tracks.map((t) => t.yt_set_video_id), ["SVcram", "SVbody"]);
+});
+
+test("out-of-order rows still render by position, not by storage order", async () => {
+  const tables = {
+    dj_playlists: [PL],
+    dj_playlist_tracks: [
+      mem("tb3", "body", 3), mem("tc2", "cram", 2),
+      mem("tb1", "body", 1), mem("tc1", "cram", 1), mem("tb2", "body", 2),
+    ],
+    dj_tracks: [
+      track("tb1", "vb1", "B1"), track("tb2", "vb2", "B2"), track("tb3", "vb3", "B3"),
+      track("tc1", "vc1", "C1"), track("tc2", "vc2", "C2"),
+    ],
+  };
+  const r = await runMp(tables, { mode: "tracks", yt_playlist_id: "PLxyz" });
+  assert.deepEqual(r.data.tracks.map((t) => t.video_id),
+    ["vc1", "vc2", "vb1", "vb2", "vb3"]);
+});
+
+test("missing set_video_id is counted so a rebuild finds out before moving", async () => {
+  const tables = {
+    dj_playlists: [PL],
+    dj_playlist_tracks: [mem("t1", "body", 1, null), mem("t2", "body", 2, "SV2")],
+    dj_tracks: [track("t1", "v1", "A"), track("t2", "v2", "B")],
+  };
+  const r = await runMp(tables, { mode: "tracks", yt_playlist_id: "PLxyz" });
+  assert.equal(r.data.counts.missing_set_video_id, 1);
+});
+
+test("tracks mode resolves by EITHER id form", async () => {
+  const tables = {
+    dj_playlists: [PL],
+    dj_playlist_tracks: [mem("t1", "body", 1)],
+    dj_tracks: [track("t1", "v1", "A")],
+  };
+  const byYt = await runMp(tables, { mode: "tracks", yt_playlist_id: "PLxyz" });
+  const byId = await runMp(tables, { mode: "tracks", playlist_id: "pl1" });
+  assert.deepEqual(byYt.data.tracks, byId.data.tracks);
+});
+
+test("an unrecorded playlist errors and says why", async () => {
+  await assert.rejects(
+    () => runMp({ dj_playlists: [], dj_playlist_tracks: [], dj_tracks: [] },
+      { mode: "tracks", yt_playlist_id: "PLnope" }),
+    /record_dj_playlist writes this side/,
+  );
+});
+
+test("list mode reports per-role counts and cram headroom", async () => {
+  const tables = {
+    dj_playlists: [PL],
+    dj_playlist_tracks: [
+      mem("t1", "body", 1), mem("t2", "body", 2), mem("t3", "cram", 1),
+    ],
+    dj_tracks: [track("t1", "v1", "A"), track("t2", "v2", "B"), track("t3", "v3", "C")],
+  };
+  const r = await runMp(tables, { mode: "list" });
+  assert.deepEqual(r.data.playlists[0].track_counts, { body: 2, cram: 1, total: 3 });
+  assert.equal(r.data.playlists[0].cram_headroom, 7, "cram_cap 8 minus 1 cram row");
+});
+
+test("mode must be list or tracks, and tracks needs an id", async () => {
+  const empty = { dj_playlists: [], dj_playlist_tracks: [], dj_tracks: [] };
+  await assert.rejects(() => runMp(empty, { mode: "everything" }),
+    /must be 'list' or 'tracks'/);
+  await assert.rejects(() => runMp(empty, { mode: "tracks" }),
+    /requires `yt_playlist_id` or `playlist_id`/);
 });

@@ -891,6 +891,46 @@ conversation manifest served old tool descriptions against a restarted server.
 **The only workshop-side difference between the hosts is `dj.py`** — the `credential_state`
 fix, which matters for phase-4 diagnosis and nothing else.
 
+
+### Verification pass 2026-08-29 — results
+
+**Check 1 — zero-fill: ✅ PASSED, and it is the first zero-play check that COULD have
+failed.** A deliberately fake id returned `distinct_days: 0`, `days_since_last: null`,
+`known_track: false`, appearing in **both** the diagnostic list and `groups`, sorted first.
+Never-played sorting to cram position one is correct (§5). Broken zero-fill would have
+returned 1 rather than 2 — spec §11.1 applied and working.
+
+**Check 2 — Perfect Situation: ALREADY DONE.** The playlist already held 13 tracks with
+Perfect Situation present, `role: body`, cram 0, `concert_id` linked. **Phase 3b included
+the 13th track from the start**, so the "add it on the merits" proposal was a decision
+already made. Supabase agrees with YouTube: `96eaf6f4-9781-4341-9147-4271bded0638` ↔
+`PLGhCMggoJnIc`. Nothing to fix.
+
+**Check 3 — known-but-unplayed: NOT EXERCISED, and there will be no live subject.** Every
+`dj_tracks` row arrives either via a play (which creates one by construction) or via a
+setlist that has been played through. **Phase 7 is the first live exercise.** Recorded
+as-is; deliberately not engineered around.
+
+**⚠️ Check 4 — `by_bucket`: PASSED, but against a NO-OP run only.** `Yesterday` came back
+with `submitted: 0` despite never being sent, so the explicit zero works. But all three
+`Today` plays were `already_held`, so **no rows were inserted at all** — the insert path
+was never exercised. **Re-verify against a poll that actually writes.** This is spec §11.1
+again in miniature: the zero was demonstrated, the insert attribution was not.
+
+**⚠️ SOMETHING OTHER THAN A SCHEDULED TASK IS WRITING PLAYS.** Today's sync had already run
+before that conversation opened, and **no scheduled task exists yet** — so it was run
+manually from somewhere else.
+
+> 🛑 **Phase 5's gap logic assumes the scheduled task is the only writer. It is not, and it
+> may never be.** A manual sync is indistinguishable from a scheduled one in `dj_plays`, and
+> only distinguishable in `platform_runs` if whoever ran it stamped a row — which nothing
+> enforces. Consequences: a manual run keeps coverage current and therefore MASKS a dead
+> scheduled task (already recorded under phase 5's two-questions-two-filters note), and a
+> run that wrote plays without stamping leaves coverage the log does not know about. The
+> second is the more dangerous: the data is ahead of the record, so gap detection would
+> re-poll a window already covered — harmless via dedupe, but it means the log understates
+> reality and nothing flags it.
+
 ---
 
 ## Phase 4 — Surface deployment ⚠️ FULL PHASE, NOT A STEP
@@ -957,6 +997,21 @@ fix, which matters for phase-4 diagnosis and nothing else.
       `This week` / `Last week` is unit-tested (`dj-courier.test.mjs:321`) but the live
       path has never been hit; every test so far filtered at read time. Unit tested is not
       unexercised, and the contract asserts it.
+- [ ] 🛑 **Gap detection must RECONCILE the run log against `dj_plays`, not trust it.**
+      `platform_runs` asserts coverage and nothing can check that assertion against the
+      data — there is no link from a run to the rows it produced. They are reconcilable
+      today only because `observed_at` clusters into visible batches, which is a
+      coincidence of how the data looks, not a property of the design; two writers a second
+      apart would be indistinguishable. **"What is the newest `played_on` I actually hold?"
+      is answerable from `dj_plays` and cannot drift. "What does the log say I covered?"
+      can. Where they disagree, THE DATA WINS.** (spec §11.4)
+- [ ] 🛑 **The scheduled task is NOT the only writer.** Plays have already been written
+      manually with no scheduled task in existence. Gap logic must not assume a single
+      writer, and a run that writes without stamping leaves coverage the log does not know
+      about — the data ahead of the record, with nothing flagging it.
+- [ ] 🛑 **Re-verify `by_bucket` against a poll that actually INSERTS.** The 2026-08-29
+      check passed against a no-op run: the explicit `Yesterday: 0` was demonstrated, but
+      every Today play was already held, so insert attribution was never exercised.
 - [ ] 🛑 **THE FEED CANNOT PROVE ABSENCE** (spec §11.3). It confirms a play happened; it
       never confirms one did not. Gap logic must not reason "we saw back to X, therefore
       everything after X is covered" — that fails in the reassuring direction, which is the
