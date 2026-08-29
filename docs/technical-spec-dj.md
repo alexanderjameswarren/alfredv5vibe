@@ -749,6 +749,14 @@ Music entries are mixed with ordinary video watches. Filter on `- Topic` channel
 If the Google account has activity auto-delete enabled, history beyond that window is
 already gone and cannot be recovered.
 
+**Measured on arrival, 2026-08-29: 18,188 entries spanning 2024-09-19 to 2026-08-29 —
+~23.3 months, every month present.** Auto-delete has probably NOT pruned it: Google's
+settings are 3 / 18 / 36 months, whose boundaries from that date fall at 2026-05-29,
+2025-02-28 and 2023-08-29, and the oldest entry matches none of them. A pruned history would
+end ON a boundary. 15,525 entries carry `header: "YouTube Music"`; 16,766 sit on a
+`- Topic` channel. **Those two filters disagree by 1,241 entries — that gap is precisely
+what the classification review is for.**
+
 ### Phase 9 — Alfred surfaces
 
 - **Staleness banner** on the home view: newest successful run per app vs. expected

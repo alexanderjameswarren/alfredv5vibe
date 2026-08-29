@@ -956,30 +956,66 @@ passed — spec §11.1. The rule is covered by unit tests with a deliberately di
 fixture (`dj-reads.test.mjs`), but has never run on real data.
 
 
-### ⚠️ THE DJ SCHEMA HAS NO SOURCE OUTSIDE THE DATABASE
+### ⚠️ THE SCHEMA HAS NO SOURCE OUTSIDE THE DATABASE — REPO-WIDE, NOT A DJ GAP
 
-Blocks A–E were **all** run in the Supabase SQL editor and never written to migration files.
-Confirmed by grep: **not one of the eleven DJ and platform tables** — `dj_tracks`,
-`dj_plays`, `dj_playlists`, `dj_playlist_tracks`, `dj_concerts`, `dj_venues`, `dj_artists`,
-`dj_albums`, `dj_feedback`, `platform_runs`, `platform_schedules` — appears in a
-`create table` anywhere in `supabase/migrations/`. Only Block F (`005`) exists as a file,
-because it was written during this work rather than in the editor.
+**Corrected.** An earlier version of this note said "the DJ schema has no source", which
+implied DJ was uniquely undocumented. It is not — **this is how the whole repo has always
+worked.**
 
-**This is not a tidiness problem. It blocked work.** `create_platform_schedule` could not be
-built while the connector JWT was expired, because the columns existed nowhere else — and
-the spec's own line, *"full column definitions live in the migration SQL and in COMMENT ON"*,
-is half untrue: there is no migration SQL.
+Only **six of 29 registered tables** have a `create table` anywhere in
+`supabase/migrations/`: `sam_songs`, `sam_sessions`, `sam_snippets`, `item_collections`,
+and the two reconstructed here. **Missing entirely:** `items`, `contexts`, `intents`,
+`events`, `executions`, `inbox`, `sam_song_measures`, `sam_song_lyrics`,
+`sam_song_fingerings`, `sam_session_events`, `collection_items`,
+`collection_item_removals`, and all nine remaining DJ tables.
 
-**Partially addressed:** `000_RECONSTRUCTED_platform_runs_schedules.sql` reconstructs Block D
-from introspection. It is labelled RECONSTRUCTED at the top and is explicitly **not** the
-original DDL — statement order and anything introspection cannot see are best-effort, and it
-must not be run against the live database.
+**The existing migration files are documentation, not a runnable build.** Every original
+says *"Run this in the Supabase SQL Editor"* in its header; the filenames are `001_`–`005_`
+rather than the CLI's required `<14-digit timestamp>_name.sql`, so **the CLI has never
+applied them and there is no remote migration history**; and `001_sam_tables.sql` uses bare
+`CREATE TABLE` with no `IF NOT EXISTS`, so it cannot be re-run. They are a chronological
+record of selected changes, each with prose explaining *why* — which is valuable, and a
+different thing from a schema source.
 
-**Still outstanding: Blocks A, B, C and E — nine tables.** Reconstructing them is
-mechanical (read the schema, write the file) but was not done here because only Block D
-blocked anything. Worth doing before phase 8, when the Takeout import will want to reason
-about `dj_plays` and `dj_tracks` constraints without a live connector.
+**Adopting CLI migrations properly is a PROJECT-WIDE decision affecting Alfred and SAM —
+explicitly not something to decide inside DJ phase 5.** It would mean repairing remote
+history, renaming every file, and taking a baseline; it touches every app.
 
+**Chosen route: a schema SNAPSHOT, outside `migrations/`.**
+
+```
+supabase db dump --schema public,platform -f supabase/schema-snapshot.sql
+```
+
+Rather than hand-reconstructing the nine remaining tables. A hand reconstruction is
+best-effort introspection while a dump is authoritative — so **the hand version would itself
+be a record that cannot be checked against the thing it describes, which is §11.4 appearing
+inside the fix for §11.4.**
+
+Outside `migrations/` on purpose. Placed inside it, a pulled or dumped file would collide
+three ways: **naming** (a timestamped file alongside `001_`–`005_` breaks the ordering
+convention), **granularity** (a flat snapshot duplicates `001` and `002`, creating two
+sources for `sam_songs` and `item_collections`), and **run-vs-document ambiguity** (the
+existing files announce "paste this into the SQL editor" and are not idempotent, whereas a
+dumped file looks CLI-managed and runnable).
+
+⚠️ **`--schema public,platform` is not optional.** `db dump` and `db pull` default to
+`public` only, which would omit the `platform` schema — `register_table`,
+`check_conformance`, `audit_row`, `registry`. That is the load-bearing part of the contract.
+
+⛔ **BLOCKED ON DOCKER (2026-08-29).** `supabase db dump` requires Docker Desktop and it is
+not installed on this machine (`docker: command not found`). Credentials were NOT the
+problem — the CLI got as far as *"Initialising login role... Dumping schemas from remote
+database..."* using the linked project's stored credentials, then failed with
+`LegacyDockerRunError`. **It also left a 0-byte `schema-snapshot.sql`, which was deleted** —
+an empty snapshot is the staleness trap in its purest form, a file that looks current and
+says nothing.
+
+🛑 **NOTHING ENFORCES REGENERATION.** The snapshot must be re-dumped whenever the schema
+changes, and no check will notice if it isn't. **A stale snapshot is worse than none,
+because it looks current** — §11.4 again, which is exactly why the file carries its
+generation date in a header line and lives outside `migrations/` where it cannot be mistaken
+for the thing that built the database.
 
 ### ⚠️ `platform.registry` retains a row for a DROPPED table
 
@@ -997,8 +1033,56 @@ thing it describes, disagreeing with it silently. It is not DJ-specific — it b
 platform contract and the `mcp-platform` skill, and either `register_table` needs an
 `unregister_table` counterpart or conformance needs to flag orphaned registry rows.
 
-**Not fixed here.** Changing platform behaviour is out of DJ's scope, and the harm today is
-a misleading inventory rather than a broken invariant. Recorded so it is not rediscovered.
+**The orphan row itself is trivial to remove** and should be, since an inventory listing a
+non-existent table is actively misleading:
+
+```sql
+delete from platform.registry where table_name = 'public.dj_sync_runs';
+-- then: check_platform_conformance  -- expect CONFORMANT, and the registry drops to 27
+```
+
+(Run in the SQL editor — the `platform` schema is not reachable through PostgREST, so no
+tool can do it. Verify the column name against `select * from platform.registry limit 1`
+first; `table_name` is inferred from the contract text, not confirmed.)
+
+**The MISSING CHECK is not fixed here, deliberately.** Conformance validates tables that
+exist; nothing validates that every registry row still HAS a table. Adding that is a change
+to the platform contract and the `mcp-platform` skill, affecting Alfred and SAM as much as
+DJ — out of scope for DJ phase 5, and recorded so it is not rediscovered.
+
+
+### ✅ Takeout export arrived 2026-08-29 — measured, not imported
+
+`workshop/data/dj/watch-history.json` and `search-history.json` (gitignored, desktop only).
+**Nothing has been parsed or imported.** Phase 8 is not started. These are counts only.
+
+| | |
+|---|---|
+| watch-history.json | 7.0 MB, **18,188 entries** |
+| Oldest | **2024-09-19T16:55:15Z** |
+| Newest | 2026-08-29T16:08:20Z (today) |
+| Reach | **~23.3 months, unbroken** — every month from 2024-09 to 2026-08 present |
+| Per year | 2024: 2,961 · 2025: 9,696 · 2026: 5,531 (partial) |
+| YouTube Music entries | **15,525** |
+| Plain YouTube entries | 2,663 |
+| `- Topic` channel entries | **16,766** |
+
+**⚠️ AUTO-DELETE HAS PROBABLY NOT PRUNED IT, and the reasoning is checkable rather than
+reassuring.** Google's activity auto-delete settings are 3, 18 or 36 months. Measured from
+2026-08-29 those boundaries fall at 2026-05-29, 2025-02-28 and 2023-08-29. **The oldest
+entry, 2024-09-19, matches none of them** — it sits nearly 19 months before the 18-month
+boundary and well after the 36-month one. A pruned history would end ON a boundary. So
+2024-09-19 most likely marks where the account's history genuinely begins.
+
+**Scale, for context:** `dj_plays` currently holds ~71 rows. Takeout is **roughly 250×**
+that, and it is the only source with real timestamps and per-play rows — so it is the only
+thing that can ever measure true play counts or exercise `occurrence > 1` (spec §7 phase 8).
+
+**⚠️ The two music filters disagree by 1,241 entries.** `header: "YouTube Music"` gives
+15,525; `- Topic` channels give 16,766. Spec §7 phase 8 says to filter on `- Topic` and
+review the classification before committing rows — **that gap is what the review is for**,
+and neither number should be assumed correct in advance.
+
 
 ---
 
@@ -1254,7 +1338,8 @@ duration display must tolerate zero rather than treat it as an error.
 
 ## Phase 8 — Takeout backfill
 
-- [ ] Takeout export downloaded (requested 2026-08-27, scheduled start 2026-08-29)
+- [x] Takeout export downloaded 2026-08-29 — **18,188 entries, 2024-09-19 → 2026-08-29,
+      ~23.3 months unbroken.** Measured only; nothing parsed. See the arrival note above.
 - [ ] Parser for `watch-history.json` → `precision: 'exact'`
 - [ ] Music filter (`- Topic` channels); **review classification before committing**
 - [ ] Import; record how far back history actually reaches
