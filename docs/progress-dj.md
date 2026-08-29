@@ -1115,6 +1115,99 @@ editor. **A field nobody can read is a field nobody can check.** Now added to `T
 surfacing on `get_dj_plays` (inlined track) and `get_dj_managed_playlists`.
 
 
+
+### Takeout dry run 2026-08-29 — measured, nothing written
+
+`workshop/scripts/dj_takeout_prepare.py`. Reads only; no database, no network.
+
+```
+importable rows      15,185      distinct videos  4,563
+distinct days           650      date range       2024-09-19 .. 2026-08-29 (LA)
+EXCLUDED: 2,663 not YouTube Music · 321 non-'- Topic' · 19 no subtitles
+```
+
+**15,185 matches the `- Topic` count exactly** — the filter lands where predicted.
+
+#### ✅ REPLAYS ARE RARE — distinct-days is nearly lossless
+
+| | |
+|---|---|
+| `(video, day)` pairs with >1 play | **342** of 14,843 (**2.3%**) |
+| Rows in those pairs | 684 |
+| Maximum plays on one day | **2 — no triples in 650 days** |
+
+**§5 adopted distinct-days as a concession after establishing that true counts are
+unobtainable by polling. It turns out to lose ~2.2% — 342 plays out of 15,185.** For cram
+ordering, which sorts by *relative* familiarity, that is noise. **Worth knowing before phase
+7 builds on the proxy**: the worry that it was discarding a lot was unfounded.
+
+Also: `occurrence > 1` will finally have **342 live subjects**, after being NOT EXERCISED
+since phase 2b.
+
+#### All 19 artist-less entries have a URL as their title
+
+`Watched https://music.youtube.com/watch?v=i0BGs4v-8H4` — Takeout recorded no metadata at
+all, only the link. Not a missing channel on an otherwise normal entry: **unusable, not
+merely awkward.** Their video_ids are listed and recoverable later via a real lookup.
+
+#### ⚠️ THE FIRST PARITY SUBJECTS WERE A CHECK THAT COULD NOT FAIL
+
+The initial design listed the 15 most recent entries. **A timezone bug only manifests when
+the UTC timestamp falls between 00:00 and 08:00** — late evening in Los Angeles, already
+tomorrow in UTC. A play at `20:00Z` is the same date under either conversion, so those
+subjects would have passed whether the code was right or wrong. §11.1, in the check written
+to enforce §11.1.
+
+**Corrected two ways:**
+1. **A standalone arithmetic self-check** that needs no data and runs on every invocation:
+   six discriminating timestamps either side of the DST boundary, asserting `02:30Z → the
+   previous day` and `07:00Z → the same day` in PDT, `03:30Z`/`08:00Z` in PST. It aborts the
+   whole script on failure.
+2. **Parity subjects are now drawn ONLY from the discriminating window.** 3,528 entries
+   qualify; **18 fall on days where poll rows exist**.
+
+#### 🛑 AND THE CORRECTED CHECK IMMEDIATELY SURFACED A DISAGREEMENT TO RESOLVE
+
+Takeout says these were played on **2026-08-27** Los Angeles time:
+
+| video_id | UTC | Los Angeles | Takeout `played_on` |
+|---|---|---|---|
+| `6iGO6X1uXAM` Eddie Higgins | 2026-08-28T02:59Z | 2026-08-27 19:59 PDT | **2026-08-27** |
+| `Cn3hIJhVXT8` Red Garland | 2026-08-28T02:18Z | 2026-08-27 19:18 PDT | **2026-08-27** |
+| `lOy_PAVZUD4` Red Garland | 2026-08-28T02:10Z | 2026-08-27 19:10 PDT | **2026-08-27** |
+| `PMeRw7YeUs8` Red Garland | 2026-08-28T01:28Z | 2026-08-27 18:28 PDT | **2026-08-27** |
+
+**But the 2026-08-28 poll captured Eddie Higgins and Red Garland tracks in its `Today`
+bucket, which resolved them to `played_on: 2026-08-28`.** If those are the same listens,
+the two sources disagree by one day, and only two explanations fit:
+
+- **(a) the LA conversion is wrong** — unlikely, the arithmetic self-check covers exactly
+  this window; or
+- **(b) YouTube's `Today` bucket does not align with the account-timezone calendar day.**
+
+**(b) would be a real finding.** §4.2 treats `Today`/`Yesterday` as `precision: "day"` —
+*actual*, not estimated. If YouTube's day boundary is not the account's midnight, that claim
+is wrong, and every poll-sourced `day` row is potentially off by one.
+
+🛑 **RESOLVE BEFORE IMPORTING ANY BATCH.** Compare the four video_ids above against
+`get_dj_plays` with `source: "poll"`. Same `played_on` → conversion verified. Different →
+stop, because 15,185 rows are about to commit to whichever answer is right.
+
+#### Overlap mitigation: `get_dj_plays` CAN filter by source
+
+Confirmed in code — `source` is a parameter on **both** modes, applied through
+`applyPlayFilters`. So a consumer can separate poll from takeout rows and avoid
+double-counting raw plays. **Within the 2024-09 → today overlap, Takeout is the better
+record**: exact timestamps and per-play granularity, against day buckets from a feed known
+to drop entries. The poll rows there are not merely redundant, they are inferior — but
+`dj_plays` is append-only and they stay.
+
+#### `tzdata==2026.3` added to requirements
+
+`zoneinfo` had no tz database (Windows ships none). Pinned rather than hand-rolling DST
+arithmetic. Phase 5's `poll_date` has the same requirement.
+
+
 ---
 
 ## Phase 4 — Surface deployment ⚠️ FULL PHASE, NOT A STEP
