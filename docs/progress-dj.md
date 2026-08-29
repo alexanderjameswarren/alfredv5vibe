@@ -1084,6 +1084,37 @@ review the classification before committing rows — **that gap is what the revi
 and neither number should be assumed correct in advance.
 
 
+
+### Album nulling — confirmed built, and the rule that generalises
+
+**It was implemented in Migration Block F**, in three places: `dj-courier.ts:261`
+(`album: source === "poll" ? null : albumIn`, with `albums_discarded` counted and returned),
+the one-off backfill in `005_dj_plays_dedupe_key.sql:138`, and the `COMMENT ON` explaining
+why. Verified at the time: `select album ... where album is not null` returned zero rows.
+
+**The detection rule is SOURCE, not content — and that generalises.** The original guess was
+"same album name across tracks by different artists". That cannot work, and the reason
+applies to **any field written into an insert-only table**:
+
+> 🛑 **In an insert-only table, a value is frozen at write, so any rule that decides it must
+> be correct FROM ONE BATCH ALONE.** A retrospective signal — one that only becomes visible
+> as more data arrives — can never be that rule. The cross-artist signal is retrospective by
+> nature: an album looking single-artist today becomes multi-artist next week, by which point
+> the row cannot be corrected. Every false negative is permanent.
+
+So the poll stores no album, unconditionally. **Playlist-sourced albums ARE kept**
+(`dj-playlists.ts:165`) and that is deliberate: a playlist read returns each track's real
+album — "Weezer (Blue Album)", "Pinkerton - Deluxe Edition", varying per track. **Same field
+name, different meaning, different source.** The history feed gives playback context; a
+playlist read gives the album.
+
+**⚠️ The finding that prompted the re-check: `dj_tracks.album` could not be inspected by any
+tool.** `TRACK_COLS` in both read tools omitted it, so a field the system had made a
+deliberate correctness decision about was invisible — confirming it meant opening the SQL
+editor. **A field nobody can read is a field nobody can check.** Now added to `TRACK_COLS`,
+surfacing on `get_dj_plays` (inlined track) and `get_dj_managed_playlists`.
+
+
 ---
 
 ## Phase 4 — Surface deployment ⚠️ FULL PHASE, NOT A STEP
@@ -1338,10 +1369,61 @@ duration display must tolerate zero rather than treat it as an error.
 
 ## Phase 8 — Takeout backfill
 
+> 🛑 **PRECONDITIONS. All three are decided BEFORE the import, not during it.**
+> `dj_tracks` is insert-only, so anything written wrong here can never be corrected —
+> `match_key` and `canonical_track_id` are frozen at insert (§4.1.2). At ~18k entries this
+> is the largest write the system will ever make, and it is one-way.
+>
+> **1. 🛑 STRIP `"Watched "` AND DERIVE ARTIST BEFORE THE NORMALISER SEES ANYTHING.**
+> **All 15,525** music titles are prefixed `"Watched "` — `"Watched Everything Will Be
+> Alright"`. There is no artist field at all; the artist is `subtitles[0].name` minus
+> `" - Topic"` (`"The Killers - Topic"`).
+> Passed raw, every Takeout track would get `the killers|watched everything will be alright`,
+> which **never groups** with the poll's `the killers|everything will be alright`. No error.
+> Two familiarity groups per song, permanently, across ~18k rows — §11.2 at scale.
+> Partially mitigated by luck: `titleUrl` yields the video_id, `dj_tracks` is keyed on
+> `(user_id, video_id)`, and insert-only means an already-known video keeps its correct row.
+> **The damage is confined to videos not yet in `dj_tracks` — which is nearly all of them.**
+> - [ ] **Verification that CAN FAIL:** pick a track that **already exists in `dj_tracks`
+>       from polling**, import its Takeout counterpart, and confirm the two produce the
+>       **same `match_key`**. Do not assume — a check run against a track absent from
+>       `dj_tracks` would pass whether or not the stripping works (§11.1).
+>
+> **2. 🛑 THE 19 ENTRIES WITH NO `subtitles` HAVE NO DERIVABLE ARTIST — SKIP AND REPORT.**
+> Decided, not deferred. `buildMatchKey` with no artist yields `|title`, so **every
+> artist-less track sharing a title groups together** — and "Happy Together" alone has six
+> distinct recordings. A null artist does not group with nothing; it is a collision engine.
+> 19 of 15,525 is 0.12%. Skip them, report the count and the titles, write nothing.
+>
+> **3. ⚠️ THE 321 MUSIC ENTRIES ON NON-`Topic` CHANNELS — SAMPLED, AND THEY SPLIT THREE WAYS.**
+> This is the filter disagreement in concrete form (15,525 by `header` vs 15,185 `- Topic`).
+> Sampled 2026-08-29:
+> - **Ambient / sleep / background** — Yellow Brick Cinema (34), relaxdaily (9), Soothing
+>   Relaxation (8), Liquid Mind, SleepTube, Nu Meditation Music, BuddhaTribe. Plausibly not
+>   taste-model material at all.
+> - **Official artist / VEVO channels** — BrandonFlowersVEVO, TheKillersMusic, BLACKPINK,
+>   ROSÉ, DisneyMusicVEVO. Genuine music, just not auto-generated `- Topic` uploads.
+> - **Non-song video** — "DANCE PERFORMANCE", "JACKET MAKING", official video uploads.
+>   Watched, but not listened to.
+>
+> ⚠️ **And for these, THE CHANNEL IS NOT THE ARTIST.** "Vance Joy – Riptide" sits on
+> channel **"Mushroom"** (a record label); "Brandon Flowers – Miss America" on **"Abby
+> Noroozi"** (a fan upload). The `- Topic` artist-derivation rule silently produces a label
+> or a stranger's name as the artist. **So the 321 cannot be imported by the same rule**,
+> and importing them wrong is worse than not importing them.
+> - [ ] Recommended default: **import `- Topic` only (15,185)**, and treat the 321 as a
+>       reviewed exception list — most probably skipped.
+
+
 - [x] Takeout export downloaded 2026-08-29 — **18,188 entries, 2024-09-19 → 2026-08-29,
       ~23.3 months unbroken.** Measured only; nothing parsed. See the arrival note above.
 - [ ] Parser for `watch-history.json` → `precision: 'exact'`
-- [ ] Music filter (`- Topic` channels); **review classification before committing**
+- [ ] Music filter (`- Topic` channels); **review classification before committing** — see
+      precondition 3, already sampled
+- [ ] **Takeout has NO album field.** Confirmed: the complete key set across all 18,188
+      entries is `activityControls, header, products, subtitles, time, title, titleUrl`.
+      Phase 8 rows get `album = null` **by necessity, not policy** — the album question only
+      ever applied to poll-sourced rows and is already handled (Block F).
 - [ ] Import; record how far back history actually reaches
 - [ ] Re-run canonical grouping across the enlarged track set
 

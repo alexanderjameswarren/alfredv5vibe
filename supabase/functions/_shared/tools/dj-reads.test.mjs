@@ -71,8 +71,8 @@ const run = (tables, args) =>
 const runMp = (tables, args) =>
   tool.get_dj_managed_playlists.handler(args, { db: makeDb(tables), userId: "u1" });
 
-const track = (id, video_id, title, canonical = null) =>
-  ({ id, video_id, title, artist: "Weezer", canonical_track_id: canonical });
+const track = (id, video_id, title, canonical = null, album = null) =>
+  ({ id, video_id, title, artist: "Weezer", album, canonical_track_id: canonical });
 const play = (track_id, played_on, precision = "day", source = "poll") =>
   ({ id: `p-${track_id}-${played_on}-${Math.random()}`, track_id, played_on,
      precision, played_bucket: "Today", occurrence: 1, source,
@@ -444,4 +444,28 @@ test("mode must be list or tracks, and tracks needs an id", async () => {
     /must be 'list' or 'tracks'/);
   await assert.rejects(() => runMp(empty, { mode: "tracks" }),
     /requires `yt_playlist_id` or `playlist_id`/);
+});
+
+test("album is readable — the poll's null and a playlist's real value both visible", async () => {
+  // A field nobody can read is a field nobody can check. The poll never stores
+  // album (spec §9); confirming that previously required the SQL editor.
+  const tables = {
+    dj_playlists: [PL],
+    dj_playlist_tracks: [mem("t1", "body", 1), mem("t2", "body", 2)],
+    dj_tracks: [
+      track("t1", "v1", "Hackensack", null, null),
+      track("t2", "v2", "Buddy Holly", null, "Weezer (Blue Album)"),
+    ],
+  };
+  const r = await runMp(tables, { mode: "tracks", yt_playlist_id: "PLxyz" });
+  assert.deepEqual(r.data.tracks.map((t) => t.album), [null, "Weezer (Blue Album)"]);
+});
+
+test("plays mode exposes album on the inlined track", async () => {
+  const tables = {
+    dj_tracks: [track("t1", "v1", "A", null, "Some Album")],
+    dj_plays: [play("t1", "2026-08-28")],
+  };
+  const r = await run(tables, { mode: "plays", limit: 10 });
+  assert.equal(r.data.plays[0].track.album, "Some Album");
 });

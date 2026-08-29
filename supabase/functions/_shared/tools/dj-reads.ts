@@ -44,13 +44,17 @@ const VALID_SOURCE = ["poll", "takeout", "manual"];
 
 const PLAY_COLS =
   "id, track_id, played_on, precision, played_bucket, occurrence, source, observed_at";
-const TRACK_COLS = "id, video_id, title, artist, canonical_track_id";
+// `album` is here because a field nobody can READ is a field nobody can CHECK.
+// The poll deliberately never stores it (spec §9) — and that decision could not
+// be verified through any tool, so confirming it meant opening the SQL editor.
+const TRACK_COLS = "id, video_id, title, artist, album, canonical_track_id";
 
 interface TrackRow {
   id: string;
   video_id: string;
   title: string;
   artist: string | null;
+  album: string | null;
   canonical_track_id: string | null;
 }
 
@@ -656,6 +660,7 @@ export const getDjManagedPlaylistsTool = defineTool({
         video_id: t?.video_id ?? null,
         title: t?.title ?? null,
         artist: t?.artist ?? null,
+        album: t?.album ?? null,
         canonical_track_id: t?.canonical_track_id ?? null,
         yt_set_video_id: m.yt_set_video_id,
         added_reason: m.added_reason,
