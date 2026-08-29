@@ -55,13 +55,14 @@ const toolByName = Object.fromEntries(globalThis.__tools.map((t) => [t.name, t])
 const USER = "user-1";
 
 function makeDb() {
-  const tables = { dj_tracks: [], dj_plays: [], platform_runs: [] };
+  const tables = { dj_tracks: [], dj_plays: [], platform_runs: [], platform_schedules: [] };
   let seq = 0;
   const uniq = {
     dj_tracks: (r) => `${r.user_id}|${r.video_id}`,
     dj_plays: (r) => `${r.user_id}|${r.track_id}|${r.played_on}|${r.occurrence}|${r.source}`,
     // No unique constraint beyond the PK — it is an append-only run log.
     platform_runs: (r) => r.id,
+    platform_schedules: (r) => `${r.user_id}|${r.app}|${r.job}`,
   };
 
   function builder(table) {
@@ -80,7 +81,8 @@ function makeDb() {
       maybeSingle() { single = true; return api; },
       update(vals) { updates = vals; return api; },
       upsert(newRows, opts = {}) {
-        rows = { newRows, opts };
+        // PostgREST accepts a single row or an array; the fake must too.
+        rows = { newRows: Array.isArray(newRows) ? newRows : [newRows], opts };
         return api;
       },
       insert(newRow) {
@@ -95,7 +97,7 @@ function makeDb() {
           return resolve({ data: single ? (copies[0] ?? null) : copies, error: null });
         }
         if (rows) {
-          const inserted = [];
+          const out = [];
           for (const r of rows.newRows) {
             const full = {
               id: `id-${++seq}`,
@@ -104,15 +106,20 @@ function makeDb() {
               ...r,
             };
             const key = uniq[table](full);
-            const clash = tables[table].some((e) => uniq[table](e) === key);
+            const clash = tables[table].find((e) => uniq[table](e) === key);
             if (clash) {
               if (rows.opts.ignoreDuplicates) continue;      // ON CONFLICT DO NOTHING
+              if (rows.opts.onConflict) {                    // ON CONFLICT DO UPDATE
+                Object.assign(clash, r);
+                out.push({ ...clash });
+                continue;
+              }
               return resolve({ data: null, error: { message: `duplicate key ${key}` } });
             }
             tables[table].push(full);
-            inserted.push(full);
+            out.push({ ...full });
           }
-          const data = single ? (inserted[0] ?? null) : inserted;
+          const data = single ? (out[0] ?? null) : out;
           return resolve({ data, error: null });
         }
         // Clone on read. PostgREST returns a detached JSON response; handing
@@ -583,4 +590,79 @@ test("an inverted pair is rejected rather than written", async () => {
     /cannot end before it begins/,
   );
   assert.equal(db._tables.platform_runs.length, 0);
+});
+
+
+// ---------------------------------------------------------------------------
+// platform_schedules
+// ---------------------------------------------------------------------------
+
+const sched = (db, a) => toolByName.create_platform_schedule.handler(a, { db, userId: USER });
+const getSched = (db, a) => toolByName.get_platform_schedules.handler(a, { db, userId: USER });
+
+test("a daily schedule seeds with sensible defaults", async () => {
+  const db = makeDb();
+  const r = await sched(db, {
+    app: "dj", job: "daily_history_sync", executor: "claude", cadence: "daily",
+    notes: "poll_date derived from America/Los_Angeles",
+  });
+  assert.equal(r.cadence, "daily");
+  assert.equal(r.day_of_week, null);
+  assert.equal(db._tables.platform_schedules.length, 1);
+});
+
+test("re-seeding the same app+job UPDATES rather than duplicating", async () => {
+  // A schedule is a DEFINITION. platform_runs is a log and must never be
+  // rewritten; this is the opposite case and upsert is correct.
+  const db = makeDb();
+  await sched(db, { app: "dj", job: "daily_history_sync", executor: "claude", cadence: "daily" });
+  const second = await sched(db, {
+    app: "dj", job: "daily_history_sync", executor: "claude", cadence: "daily",
+    grace_hours: 12,
+  });
+  assert.equal(db._tables.platform_schedules.length, 1);
+  assert.equal(second.grace_hours, 12);
+});
+
+test("weekly REQUIRES day_of_week, and the message names the Postgres convention", async () => {
+  const db = makeDb();
+  await assert.rejects(
+    () => sched(db, { app: "dj", job: "friday_review", executor: "claude", cadence: "weekly" }),
+    /requires `day_of_week`[\s\S]*0 = SUNDAY[\s\S]*not the ISO convention/,
+  );
+  const ok = await sched(db, {
+    app: "dj", job: "friday_review", executor: "claude", cadence: "weekly", day_of_week: 5,
+  });
+  assert.equal(ok.day_of_week, 5, "5 = Friday under the Postgres convention");
+});
+
+test("daily REJECTS day_of_week rather than silently ignoring it", async () => {
+  const db = makeDb();
+  await assert.rejects(
+    () => sched(db, { app: "dj", job: "j", executor: "claude", cadence: "daily", day_of_week: 3 }),
+    /only meaningful for cadence 'weekly'/,
+  );
+});
+
+test("bad enums, times and grace values are all rejected", async () => {
+  const db = makeDb();
+  const base = { app: "dj", job: "j", executor: "claude", cadence: "daily" };
+  await assert.rejects(() => sched(db, { ...base, app: "ken" }), /`app` must be one of/);
+  await assert.rejects(() => sched(db, { ...base, executor: "cron" }), /`executor` must be one of/);
+  await assert.rejects(() => sched(db, { ...base, cadence: "hourly" }), /`cadence` must be one of/);
+  await assert.rejects(() => sched(db, { ...base, expected_by: "8am" }), /HH:MM/);
+  await assert.rejects(() => sched(db, { ...base, expected_by: "25:00" }), /HH:MM/);
+  await assert.rejects(() => sched(db, { ...base, grace_hours: -1 }), /non-negative integer/);
+});
+
+test("get_platform_schedules filters and says staleness is not computed here", async () => {
+  const db = makeDb();
+  await sched(db, { app: "dj", job: "daily_history_sync", executor: "claude", cadence: "daily" });
+  await sched(db, { app: "sam", job: "x", executor: "alfred", cadence: "daily" });
+  const all = await getSched(db, {});
+  assert.equal(all.data.total, 2);
+  const dj = await getSched(db, { app: "dj" });
+  assert.equal(dj.data.returned, 1);
+  assert.match(dj.data.reading, /Staleness is NOT computed here/);
+  assert.match(dj.data.reading, /0 = SUNDAY/);
 });

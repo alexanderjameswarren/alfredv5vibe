@@ -571,3 +571,139 @@ export const updatePlatformRunTool = defineTool({
     };
   },
 });
+
+// ---------------------------------------------------------------------------
+// platform_schedules — what is SUPPOSED to run
+// ---------------------------------------------------------------------------
+//
+// §4.5: cadence is stored, expected occurrences are NOT materialised.
+// Materialising would need a job to create those rows, and that job could fail
+// silently — which is the exact problem this table exists to detect. Staleness
+// is derived at read time by comparing the due occurrence against platform_runs.
+
+const VALID_APP = ["dj", "sam", "alfred", "workshop"];
+const VALID_EXECUTOR = ["workshop", "claude", "alfred"];
+const VALID_CADENCE = ["daily", "weekly"];
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+
+export const createPlatformScheduleTool = defineTool({
+  name: "create_platform_schedule",
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const app = args.app as string | undefined;
+    const job = args.job as string | undefined;
+    const executor = args.executor as string | undefined;
+    const cadence = args.cadence as string | undefined;
+
+    if (!app || !VALID_APP.includes(app)) {
+      throw new Error(`create_platform_schedule: \`app\` must be one of ${VALID_APP.join(", ")}.`);
+    }
+    if (!job) throw new Error("create_platform_schedule: `job` is required.");
+    if (!executor || !VALID_EXECUTOR.includes(executor)) {
+      throw new Error(
+        `create_platform_schedule: \`executor\` must be one of ${VALID_EXECUTOR.join(", ")}.`,
+      );
+    }
+    if (!cadence || !VALID_CADENCE.includes(cadence)) {
+      throw new Error(
+        `create_platform_schedule: \`cadence\` must be one of ${VALID_CADENCE.join(", ")}.`,
+      );
+    }
+
+    const dow = args.day_of_week as number | undefined;
+    if (cadence === "weekly") {
+      if (dow === undefined || !Number.isInteger(dow) || dow < 0 || dow > 6) {
+        throw new Error(
+          "create_platform_schedule: cadence 'weekly' requires `day_of_week`, an integer " +
+            "0-6 in the Postgres dow convention where 0 = SUNDAY. Note that is not the " +
+            "ISO convention, where 1 = Monday.",
+        );
+      }
+    } else if (dow !== undefined && dow !== null) {
+      throw new Error(
+        "create_platform_schedule: `day_of_week` is only meaningful for cadence 'weekly'.",
+      );
+    }
+
+    const expectedBy = args.expected_by as string | undefined;
+    if (expectedBy !== undefined && !TIME_RE.test(expectedBy)) {
+      throw new Error(
+        `create_platform_schedule: \`expected_by\` must be HH:MM or HH:MM:SS (got ${JSON.stringify(expectedBy)}).`,
+      );
+    }
+    const grace = args.grace_hours as number | undefined;
+    if (grace !== undefined && (!Number.isInteger(grace) || grace < 0 || grace > 32767)) {
+      throw new Error("create_platform_schedule: `grace_hours` must be a non-negative integer.");
+    }
+
+    const row = {
+      app,
+      job,
+      executor,
+      cadence,
+      day_of_week: cadence === "weekly" ? dow : null,
+      ...(expectedBy !== undefined ? { expected_by: expectedBy } : {}),
+      ...(grace !== undefined ? { grace_hours: grace } : {}),
+      ...(args.enabled !== undefined ? { enabled: args.enabled as boolean } : {}),
+      notes: (args.notes as string | null | undefined) ?? null,
+    };
+
+    // UNIQUE (user_id, app, job): re-seeding the same job updates its definition
+    // rather than erroring or duplicating. A schedule is a DEFINITION, not a log
+    // — unlike platform_runs, which is append-only and must never be rewritten.
+    const { data, error } = await ctx.db
+      .from("platform_schedules")
+      .upsert(row, { onConflict: "user_id,app,job" })
+      .select("id, app, job, executor, cadence, day_of_week, expected_by, grace_hours, enabled, notes, created_at")
+      .single();
+    if (error) throw new Error(`create_platform_schedule: ${error.message}`);
+    return data;
+  },
+});
+
+export const getPlatformSchedulesTool = defineTool({
+  name: "get_platform_schedules",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const limit = clampLimit(args.limit as number | undefined);
+    let q = ctx.db
+      .from("platform_schedules")
+      .select(
+        "id, app, job, executor, cadence, day_of_week, expected_by, grace_hours, enabled, notes, created_at",
+        { count: "exact" },
+      )
+      .order("app", { ascending: true })
+      .order("job", { ascending: true })
+      .limit(limit);
+    if (args.app) q = q.eq("app", args.app as string);
+    if (args.job) q = q.eq("job", args.job as string);
+    if (args.enabled !== undefined) q = q.eq("enabled", args.enabled as boolean);
+
+    const { data, error, count } = await q;
+    if (error) throw new Error(`get_platform_schedules: ${error.message}`);
+    const rows = data ?? [];
+    const total = count ?? rows.length;
+    return {
+      data: {
+        schedules: rows,
+        returned: rows.length,
+        total,
+        limit_applied: limit,
+        reading: (
+          "These are DEFINITIONS of what should run, not occurrences — expected runs are " +
+          "derived at read time, never materialised (spec §4.5). `day_of_week` uses the " +
+          "Postgres convention where 0 = SUNDAY, not ISO. `enabled: false` suspends " +
+          "staleness checking without deleting the definition, so a paused job neither " +
+          "alarms nor has to be reconstructed from memory later. " +
+          "⚠️ Staleness is NOT computed here: it needs the newest matching run from " +
+          "get_platform_runs AND a timezone to resolve `expected_by` against. Compare " +
+          "against dj_plays too, not the run log alone — the log asserts coverage and " +
+          "cannot be audited against the data (spec §11.4)."
+        ),
+      },
+      meta: rows.length < total
+        ? { truncated: true, total, limit_applied: limit, count: rows.length }
+        : {},
+    };
+  },
+});

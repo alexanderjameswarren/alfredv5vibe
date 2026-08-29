@@ -16,6 +16,8 @@ import {
   createPlatformRunTool,
   getPlatformRunsTool,
   updatePlatformRunTool,
+  createPlatformScheduleTool,
+  getPlatformSchedulesTool,
 } from "../_shared/tools/dj-courier.ts";
 import {
   recordDjPlaylistTool,
@@ -1172,6 +1174,46 @@ function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(updatePlatformRunTool, args, token),
+  );
+
+  server.registerTool(
+    "create_platform_schedule",
+    {
+      title: "Create Platform Schedule",
+      description:
+        "Define what is SUPPOSED to run and how often. Stores the CADENCE, not materialised expected occurrences — materialising would need a job to create those rows, and that job could fail silently, which is the exact problem this table exists to detect (spec §4.5). Staleness is derived at read time by comparing the due occurrence against platform_runs. " +
+        "Re-seeding the same (app, job) UPDATES its definition rather than duplicating: a schedule is a definition, unlike platform_runs which is an append-only log. " +
+        "⚠️ `day_of_week` uses the POSTGRES convention where 0 = SUNDAY — not ISO, where 1 = Monday. Required for weekly, rejected for daily. Tier 2.",
+      inputSchema: {
+        app: z.enum(["dj", "sam", "alfred", "workshop"]).describe("Which app this job belongs to."),
+        job: z.string().describe("Job name, matching the `job` used in create_platform_run — staleness queries join on it."),
+        executor: z.enum(["workshop", "claude", "alfred"]).describe("Who is supposed to run it."),
+        cadence: z.enum(["daily", "weekly"]).describe("How often."),
+        day_of_week: z.number().optional().describe("0-6, POSTGRES convention where 0 = SUNDAY. Required for weekly, rejected for daily."),
+        expected_by: z.string().optional().describe("HH:MM or HH:MM:SS. Defaults to 08:00."),
+        grace_hours: z.number().optional().describe("How late before absence counts as a problem. Defaults to 6 — a job due at 08:00 should not alarm at 08:01. Set higher for a job on a machine that sleeps."),
+        enabled: z.boolean().optional().describe("Defaults true. False suspends staleness checking WITHOUT deleting the definition, so a paused job neither alarms nor has to be reconstructed from memory later."),
+        notes: z.string().optional().describe("Free text."),
+      },
+    },
+    async (args) => runToolForMcp(createPlatformScheduleTool, args, token),
+  );
+
+  server.registerTool(
+    "get_platform_schedules",
+    {
+      title: "Get Platform Schedules",
+      description:
+        "Read the cadence definitions — what is supposed to run. These are DEFINITIONS, not occurrences (spec §4.5). `day_of_week` uses the Postgres convention where 0 = SUNDAY. " +
+        "⚠️ Staleness is deliberately NOT computed here: it needs the newest matching run from get_platform_runs AND a timezone to resolve `expected_by` against, and it must be reconciled against dj_plays rather than trusting the run log, which asserts coverage and cannot be audited against the data (spec §11.4). Tier 1, read-only.",
+      inputSchema: {
+        app: z.enum(["dj", "sam", "alfred", "workshop"]).optional().describe("Filter to one app."),
+        job: z.string().optional().describe("Filter to one job name."),
+        enabled: z.boolean().optional().describe("Filter to enabled or suspended definitions."),
+        limit: z.number().optional().describe("Max rows (default 20, cap 50)."),
+      },
+    },
+    async (args) => runToolForMcp(getPlatformSchedulesTool, args, token),
   );
 
   return server;

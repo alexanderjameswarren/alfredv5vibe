@@ -955,6 +955,51 @@ the rule gives the same answer when cram is empty.** Recorded as **NOT EXERCISED
 passed — spec §11.1. The rule is covered by unit tests with a deliberately discriminating
 fixture (`dj-reads.test.mjs`), but has never run on real data.
 
+
+### ⚠️ THE DJ SCHEMA HAS NO SOURCE OUTSIDE THE DATABASE
+
+Blocks A–E were **all** run in the Supabase SQL editor and never written to migration files.
+Confirmed by grep: **not one of the eleven DJ and platform tables** — `dj_tracks`,
+`dj_plays`, `dj_playlists`, `dj_playlist_tracks`, `dj_concerts`, `dj_venues`, `dj_artists`,
+`dj_albums`, `dj_feedback`, `platform_runs`, `platform_schedules` — appears in a
+`create table` anywhere in `supabase/migrations/`. Only Block F (`005`) exists as a file,
+because it was written during this work rather than in the editor.
+
+**This is not a tidiness problem. It blocked work.** `create_platform_schedule` could not be
+built while the connector JWT was expired, because the columns existed nowhere else — and
+the spec's own line, *"full column definitions live in the migration SQL and in COMMENT ON"*,
+is half untrue: there is no migration SQL.
+
+**Partially addressed:** `000_RECONSTRUCTED_platform_runs_schedules.sql` reconstructs Block D
+from introspection. It is labelled RECONSTRUCTED at the top and is explicitly **not** the
+original DDL — statement order and anything introspection cannot see are best-effort, and it
+must not be run against the live database.
+
+**Still outstanding: Blocks A, B, C and E — nine tables.** Reconstructing them is
+mechanical (read the schema, write the file) but was not done here because only Block D
+blocked anything. Worth doing before phase 8, when the Takeout import will want to reason
+about `dj_plays` and `dj_tracks` constraints without a live connector.
+
+
+### ⚠️ `platform.registry` retains a row for a DROPPED table
+
+`get_platform_contract` lists **`public.dj_sync_runs`** among registered tables.
+`get_database_schema('dj_sync_runs')` returns **"table not found"** — it was dropped in
+Block D, when `platform_runs` and `platform_schedules` replaced it.
+
+The registry lists **28 non-exempt** tables; `check_platform_conformance` reports **27**.
+Conformance passes because it checks tables that exist; **nothing checks for registry rows
+whose table does not.** So the contract's own inventory has advertised a non-existent table
+since Block D and no check has ever noticed.
+
+**This is §11.4 inside the platform layer**: a record that cannot be checked against the
+thing it describes, disagreeing with it silently. It is not DJ-specific — it belongs to the
+platform contract and the `mcp-platform` skill, and either `register_table` needs an
+`unregister_table` counterpart or conformance needs to flag orphaned registry rows.
+
+**Not fixed here.** Changing platform behaviour is out of DJ's scope, and the harm today is
+a misleading inventory rather than a broken invariant. Recorded so it is not rediscovered.
+
 ---
 
 ## Phase 4 — Surface deployment ⚠️ FULL PHASE, NOT A STEP
@@ -1102,13 +1147,20 @@ fixture (`dj-reads.test.mjs`), but has never run on real data.
 - [ ] ⚠️ Poll must filter to `Today` / `Yesterday` before calling `record_dj_plays` — the
       handler rejects coarse buckets (spec §4.3), so an unfiltered batch fails the whole call
 - [ ] Create the recurring Claude task
-- [ ] ⛔ **BLOCKED — seed the `platform_schedules` row last.** No tool can write
-      `platform_schedules`; `create_platform_schedule` / `get_platform_schedules` are not
-      built, because the table's columns live only in the database (Block D was run in the
-      SQL editor and never written to a migration file) and the connector JWT expired
-      before they could be read. **Column names were not guessed.** Refresh the connector,
-      re-read the schema, then build. The read is not optional either — §4.5 derives
-      expected runs from cadence, so phase 9's staleness banner cannot compute without it.
+- [ ] Seed the `platform_schedules` row **last** — `create_platform_schedule` with
+      `app: "dj"`, `job: "daily_history_sync"`, `executor: "claude"`, `cadence: "daily"`.
+      **The schedule definition is the final step of standing a job up, not the first**
+      (spec §7 phase 5): a cadence recorded before the job actually runs makes the staleness
+      check alarm about a job that was never stood up.
+
+- [ ] 🛑 **`credential_readable` is NOT an auth check. The task must not treat it as one.**
+      It proves a credential FILE exists and is readable by this process. It does **not**
+      prove YouTube still accepts the cookie — an expired credential reports
+      `credential_readable: true` and then fails at the first DJ call with `auth_expired:`.
+      **Only a real DJ call proves the credential is alive.** This is exactly why the field
+      was renamed from `auth_valid`; a task prompt that reads it as an auth gate would
+      reintroduce the misreading the rename existed to prevent, and would report a healthy
+      run while polling nothing.
 - [ ] Observe two consecutive successful days
 
 **Notes:**

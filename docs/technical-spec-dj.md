@@ -965,6 +965,25 @@ at positions 5, 13 and 62, each copy with its own distinct `setVideoId`. This is
 property §5 relies on to make cram zones work. **Key playlist entries on `set_video_id` or
 `position`, never on `video_id`.**
 
+**Reconnecting the Alfred MCP connector — do NOT use automatic registration.**
+
+⚠️ **"No client ID — register one automatically" FAILS on reconnect.** Dynamic Client
+Registration mints a *fresh* registration every time, so each reconnect attempt creates a
+new client rather than reusing the working one. The MCP server itself is fully compliant —
+**the failure is on Claude's side of the DCR handshake**, so there is nothing to fix
+server-side and no amount of redeploying will help.
+
+Use **"Use your own OAuth client"** with:
+
+| Field | Value |
+|---|---|
+| client_id | `2804f812-ea1a-4827-9443-3421fc4771f5` |
+| client secret | **blank** |
+
+It is a public client already registered with Claude's redirect URI. Recorded here because
+this is exactly the kind of procedure that is stale by the time it is next needed, and the
+symptom (auth failing on a server that is working correctly) points in the wrong direction.
+
 **Paths:**
 - Workshop: `C:\Users\Alex\projects\alfred-v5\workshop`
 - venv: `workshop\.venv` (VS Code does not auto-activate; use the explicit
