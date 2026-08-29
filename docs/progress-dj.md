@@ -931,6 +931,30 @@ manually from somewhere else.
 > re-poll a window already covered — harmless via dedupe, but it means the log understates
 > reality and nothing flags it.
 
+
+### `get_dj_managed_playlists` verification 2026-08-29 — all four passed
+
+**Checks 1, 2, 4 passed.** List mode returned `track_counts {body: 13, cram: 0}` and
+`cram_headroom: 8`; tracks mode returned 13 with `missing_set_video_id: 0`; an unrecorded
+playlist errored loudly naming `record_dj_playlist` rather than returning empty.
+
+**Check 3 passed — recorded order matches YouTube for all 13.** The first live run of what
+phase 7's diff will do.
+
+**⚠️ Two caveats from that pass, both worth keeping:**
+
+**Every cached `yt_set_video_id` currently matches the live one — that is a COINCIDENCE OF
+TIMING, not a guarantee.** The playlist was recorded minutes after it was built and nothing
+has moved since. The refresh-before-every-move rule stands unchanged; a matching cache today
+is not evidence the cache can be trusted tomorrow.
+
+**⚠️ THE §5 INTERLEAVING RULE IS STILL UNVERIFIED.** Check 3 ran against an **empty cram
+block**, so what passed is the degenerate case where "every cram row by position, then every
+body row by position" reduces to "body order, unchanged". **Every wrong implementation of
+the rule gives the same answer when cram is empty.** Recorded as **NOT EXERCISED**, not as
+passed — spec §11.1. The rule is covered by unit tests with a deliberately discriminating
+fixture (`dj-reads.test.mjs`), but has never run on real data.
+
 ---
 
 ## Phase 4 — Surface deployment ⚠️ FULL PHASE, NOT A STEP
@@ -1027,13 +1051,64 @@ manually from somewhere else.
       run where the bucket was empty. Same shape as the lossy-feed finding: the failure is
       invisible after the fact unless the run records what it SUBMITTED, not just what
       landed.
-- [ ] Draft the task prompt (confirm Surface → check gap → backfill → poll → write → stamp)
+- [ ] 🛑 **HOST CHECK, EVERY RUN.** The task prompt begins by calling
+      `get_workshop_status` and confirming `host` is `"surface"`, and STOPS if it is not.
+      Promoted out of the drafting parenthetical it used to live in, because anything
+      inside a drafting note gets dropped the next time the prompt is rewritten — and this
+      runs daily, not once. Both hosts expose identically-named tools, so a task silently
+      polling a desktop that is sometimes off is a failure that looks like something else
+      for a week (spec §7 phase 4 step 8).
+
+- [ ] 🛑 **`poll_date` MUST be derived from `America/Los_Angeles`, named explicitly.**
+      Not "local", not the task's timezone, not UTC. **YouTube buckets by the ACCOUNT's
+      timezone setting** — which does not move when Alex does, so "local date" is the wrong
+      framing and would silently be wrong while travelling.
+      **A mismatch reintroduces the Block F duplication.** `Yesterday` resolves to
+      `poll_date − 1`; if `poll_date` is off by one, that lands on a date the `Today`
+      capture never used, so the same play inserts a second time. Every unit test passes,
+      nothing errors, and it happens in an unattended task where nobody is watching.
+      - [ ] Runtime guard: if the resolved `poll_date` differs from what the previous
+            successful run's `covered_to` would predict, the run SAYS SO rather than
+            proceeding quietly.
+
+- [ ] 🛑 **Unfillable gaps: do NOT attempt the backfill.**
+      **A gap of exactly ONE day needs no special handling** — that is precisely what the
+      `Yesterday` bucket covers, so the normal poll fills it. This is why §6 chose a daily
+      cadence: a single missed run is self-healing.
+      **A gap of TWO OR MORE days is permanently lost from the live API.** Everything older
+      than yesterday is unreachable — coarse buckets are rejected by `record_dj_plays`
+      (spec §4.3), so attempting it is guaranteed to fail and is just noise in the log.
+      Instead: poll Today and Yesterday normally, stamp `status: "partial"` with the
+      unfillable dates in `details`, raise **ONE** inbox item naming the lost range and
+      saying **Takeout is the only recovery path**, then set `notified_at` via
+      `update_platform_run` so it does not repeat daily.
+      **The data is gone. The run's job is to record that accurately, not to pretend
+      otherwise.**
+
+- [ ] 🛑 **An EMPTY day is `status: "ok"` with zeros — never `failed`.**
+      A quiet day is a normal outcome. Marking it failed would make the staleness signal
+      cry wolf, which is how people learn to ignore it. `by_bucket` already distinguishes
+      "empty" from "not submitted", which is the distinction that actually matters.
+
+- [ ] **The gap-reconciliation call is `get_dj_plays` `mode: "plays"`, `limit: 1`** — it
+      returns newest `played_on` first, answering "what do I actually hold?" directly.
+      Named here so it does not get rebuilt. Compare it against `platform_runs.covered_to`;
+      where they disagree, the data wins (§11.4).
+
+- [ ] Draft the task prompt (confirm Surface → reconcile → poll Today+Yesterday → write →
+      stamp). **Note "backfill" is deliberately NOT a step** — see the unfillable-gap item.
 - [ ] ⚠️ **Two different questions, two different filters over `platform_runs`** — see note
 - [ ] Record `oldest_bucket_is_partial` and `page_full` in `platform_runs.details`
 - [ ] ⚠️ Poll must filter to `Today` / `Yesterday` before calling `record_dj_plays` — the
       handler rejects coarse buckets (spec §4.3), so an unfiltered batch fails the whole call
 - [ ] Create the recurring Claude task
-- [ ] Seed the `platform_schedules` row **last**
+- [ ] ⛔ **BLOCKED — seed the `platform_schedules` row last.** No tool can write
+      `platform_schedules`; `create_platform_schedule` / `get_platform_schedules` are not
+      built, because the table's columns live only in the database (Block D was run in the
+      SQL editor and never written to a migration file) and the connector JWT expired
+      before they could be read. **Column names were not guessed.** Refresh the connector,
+      re-read the schema, then build. The read is not optional either — §4.5 derives
+      expected runs from cadence, so phase 9's staleness banner cannot compute without it.
 - [ ] Observe two consecutive successful days
 
 **Notes:**
@@ -1086,6 +1161,28 @@ duration display must tolerate zero rather than treat it as an error.
 ---
 
 ## Phase 7 — setlist.fm and cram logic
+
+> 🛑 **THE FIRST CRAM ROW EXERCISES TWO DEFERRED RULES.** Both have been verified only
+> against unit tests with constructed fixtures, and neither can run on real data until a
+> cram row exists — which happens here, and nowhere earlier.
+>
+> **1. §5 interleaving.** Rendered order is every cram row by position, then every body row
+> by position. Every live check so far ran with an EMPTY cram block, where the rule reduces
+> to "body order, unchanged" and every wrong implementation gives the identical answer.
+> Verify by comparing `rendered_position` from `get_dj_managed_playlists` against YouTube's
+> `position` from `get_dj_playlists mode=contents` **with at least two cram rows and two
+> body rows present** — fewer cannot distinguish the failure modes.
+>
+> **2. The known-but-unplayed zero-play case.** `get_dj_plays` mode `familiarity` returns
+> `distinct_days: 0` / `days_since_last: null` for a track in `dj_tracks` with no plays.
+> No such track has ever existed: every `dj_tracks` row arrives via a play, or via a
+> setlist that has been played through. A cram row for a newly-discovered setlist song is
+> the first one — and it is the case §5 depends on, since a never-played song is what
+> should float to the top of the cram list.
+>
+> **These are not two footnotes. They are two verifications riding on this phase**, and
+> both are currently marked NOT EXERCISED rather than passed.
+
 
 - [ ] Obtain setlist.fm API key
 - [ ] Populate `dj_artists.mbid` for artists with upcoming concerts

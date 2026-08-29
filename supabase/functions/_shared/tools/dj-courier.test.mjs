@@ -65,7 +65,7 @@ function makeDb() {
   };
 
   function builder(table) {
-    let rows = null;          // set by upsert/insert
+    let rows = null, updates = null;   // set by upsert/insert/update
     const filters = [];
     let order = null, limit = null, single = false, wantSelect = false;
 
@@ -77,6 +77,8 @@ function makeDb() {
       order(col, o) { order = { col, asc: o?.ascending !== false }; return api; },
       limit(n) { limit = n; return api; },
       single() { single = true; return api; },
+      maybeSingle() { single = true; return api; },
+      update(vals) { updates = vals; return api; },
       upsert(newRows, opts = {}) {
         rows = { newRows, opts };
         return api;
@@ -86,6 +88,12 @@ function makeDb() {
         return api;
       },
       then(resolve) {
+        if (updates) {
+          const hit = tables[table].filter((r) => filters.every((f) => f(r)));
+          for (const r of hit) Object.assign(r, updates);
+          const copies = hit.map((r) => ({ ...r }));
+          return resolve({ data: single ? (copies[0] ?? null) : copies, error: null });
+        }
         if (rows) {
           const inserted = [];
           for (const r of rows.newRows) {
@@ -107,7 +115,12 @@ function makeDb() {
           const data = single ? (inserted[0] ?? null) : inserted;
           return resolve({ data, error: null });
         }
-        let out = tables[table].filter((r) => filters.every((f) => f(r)));
+        // Clone on read. PostgREST returns a detached JSON response; handing
+        // back live references let a later update mutate a "before" snapshot,
+        // which silently made a before/after diff read as no change at all.
+        let out = tables[table]
+          .filter((r) => filters.every((f) => f(r)))
+          .map((r) => ({ ...r }));
         if (order) {
           out = [...out].sort((a, b) =>
             order.asc
@@ -478,6 +491,57 @@ test("create_platform_run and get_platform_runs round-trip", async () => {
     { app: "dj", job: "daily_history_sync", status: "ok", limit: 1 }, ctx);
   assert.equal(ok.length, 1);
   assert.equal(ok[0].covered_to, "2026-08-27");
+});
+
+test("update_platform_run sets notified_at and reports before/after", async () => {
+  const db = makeDb();
+  const ctx = { db, userId: USER };
+  const run = await toolByName.create_platform_run.handler(
+    { app: "dj", job: "j", executor: "claude", status: "failed",
+      error_message: "auth_expired: rejected" }, ctx);
+  assert.equal(run.notified_at ?? null, null);
+
+  const upd = await toolByName.update_platform_run.handler(
+    { id: run.id, notified_at: "2026-08-29T10:00:00.000Z" }, ctx);
+  assert.equal(upd.run.notified_at, "2026-08-29T10:00:00.000Z");
+  assert.deepEqual(upd.changed.notified_at, { from: null, to: "2026-08-29T10:00:00.000Z" });
+  // platform_runs is audit-off, so the response is the only record of the edit.
+  assert.equal(upd.changed.status, undefined, "status untouched when not passed");
+});
+
+test("update_platform_run can move a run to 'partial'", async () => {
+  const db = makeDb();
+  const ctx = { db, userId: USER };
+  const run = await toolByName.create_platform_run.handler(
+    { app: "dj", job: "j", executor: "claude", status: "ok" }, ctx);
+  const upd = await toolByName.update_platform_run.handler(
+    { id: run.id, status: "partial" }, ctx);
+  assert.deepEqual(upd.changed.status, { from: "ok", to: "partial" });
+});
+
+test("update_platform_run ERRORS on an unknown id rather than no-opping", async () => {
+  // An UPDATE matching zero rows reports success in PostgREST — the quietest
+  // possible wrong answer, and exactly the shape §11.4 warns about.
+  const db = makeDb();
+  await assert.rejects(
+    () => toolByName.update_platform_run.handler(
+      { id: "no-such-run", notified_at: "2026-08-29T10:00:00.000Z" },
+      { db, userId: USER }),
+    /no run with id no-such-run/,
+  );
+});
+
+test("update_platform_run refuses a no-op and an invalid status", async () => {
+  const db = makeDb();
+  const ctx = { db, userId: USER };
+  const run = await toolByName.create_platform_run.handler(
+    { app: "dj", job: "j", executor: "claude", status: "ok" }, ctx);
+  await assert.rejects(
+    () => toolByName.update_platform_run.handler({ id: run.id }, ctx),
+    /nothing to change/);
+  await assert.rejects(
+    () => toolByName.update_platform_run.handler({ id: run.id, status: "done" }, ctx),
+    /must be one of ok, failed, auth_expired, partial/);
 });
 
 test("timestamps never invert when both are defaulted", async () => {

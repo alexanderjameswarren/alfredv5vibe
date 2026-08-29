@@ -15,6 +15,7 @@ import {
   recordDjPlaysTool,
   createPlatformRunTool,
   getPlatformRunsTool,
+  updatePlatformRunTool,
 } from "../_shared/tools/dj-courier.ts";
 import {
   recordDjPlaylistTool,
@@ -1154,6 +1155,23 @@ function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(getDjManagedPlaylistsTool, args, token),
+  );
+
+  server.registerTool(
+    "update_platform_run",
+    {
+      title: "Update Platform Run",
+      description:
+        "Change `status` and/or `notified_at` on an existing run. DELIBERATELY NARROW — nothing else about a run is editable. platform_runs is a LOG, and a log you can rewrite is a log you cannot trust; app, job, executor, covered_from, covered_to, started_at and details are what a run ASSERTS and are not accepted here. " +
+        "The field that genuinely must change after the fact is `notified_at`: it is set once a failure has actually been surfaced to the human, which is necessarily after the row exists, and it is what stops one broken credential minting an identical inbox item every day. Doing that by insert-order instead (notify first, stamp second) fails where it matters — if the stamp then fails, a notification exists describing a run with no row. " +
+        "An id matching no run is an ERROR, not a silent no-op. Returns the full row plus a `changed` before/after, which is the only record of the edit since platform_runs is registered with audit off. Tier 2.",
+      inputSchema: {
+        id: z.string().describe("UUID of the run, from get_platform_runs."),
+        status: z.enum(["ok", "failed", "auth_expired", "partial"]).optional().describe("'partial' = ran and wrote something but not everything — what a run with an unfillable gap records, since days beyond yesterday are unreachable from the live API."),
+        notified_at: z.string().optional().describe("ISO timestamp: when this failure was surfaced to the human. Set it AFTER the inbox item exists."),
+      },
+    },
+    async (args) => runToolForMcp(updatePlatformRunTool, args, token),
   );
 
   return server;

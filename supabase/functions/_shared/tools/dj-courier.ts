@@ -72,6 +72,11 @@ const PLAYS_CONFLICT_TARGET = "user_id,track_id,played_on,occurrence,source";
 // phase 5's scheduled task would otherwise have to remember it forever.
 const INGESTIBLE_BUCKETS = new Set(["Today", "Yesterday"]);
 
+// platform_runs.status CHECK vocabulary. 'partial' means it ran and wrote
+// something but not everything — which is what a run with an unfillable gap
+// records, since the days beyond yesterday are unreachable from the live API.
+const VALID_RUN_STATUS = ["ok", "failed", "auth_expired", "partial"];
+
 // ---------------------------------------------------------------------------
 // Shapes
 // ---------------------------------------------------------------------------
@@ -482,5 +487,87 @@ export const getPlatformRunsTool = defineTool({
     const { data, error } = await q;
     if (error) throw new Error(`get_platform_runs: ${error.message}`);
     return data ?? [];
+  },
+});
+
+// ---------------------------------------------------------------------------
+// update_platform_run — tier 2
+// ---------------------------------------------------------------------------
+
+export const updatePlatformRunTool = defineTool({
+  name: "update_platform_run",
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const id = args.id as string | undefined;
+    if (!id) throw new Error("update_platform_run: `id` is required.");
+
+    const status = args.status as string | undefined;
+    const notifiedAt = args.notified_at as string | undefined;
+    if (status === undefined && notifiedAt === undefined) {
+      throw new Error(
+        "update_platform_run: nothing to change — pass `status`, `notified_at`, or both.",
+      );
+    }
+    if (status !== undefined && !VALID_RUN_STATUS.includes(status)) {
+      throw new Error(
+        `update_platform_run: \`status\` must be one of ${VALID_RUN_STATUS.join(", ")}.`,
+      );
+    }
+
+    // DELIBERATELY NARROW: status and notified_at only.
+    //
+    // platform_runs is a LOG, and a log you can rewrite is a log you cannot
+    // trust — §11.4 is about records drifting from the thing they describe, and
+    // a general "edit any run" tool would make that drift a feature. app, job,
+    // executor, covered_from, covered_to, started_at and details are what a run
+    // ASSERTS; they are not editable here and are absent from the input schema
+    // rather than merely ignored.
+    //
+    // The one field that genuinely has to change after the fact is notified_at:
+    // §6 sets it once a failure has actually been surfaced, which is necessarily
+    // after the row exists. Doing that by insert-order instead — notify first,
+    // then stamp with notified_at preset — fails exactly where it matters: if
+    // the stamp then fails, a notification exists describing a run with no row.
+
+    const { data: before, error: findErr } = await ctx.db
+      .from("platform_runs")
+      .select("id, app, job, status, notified_at")
+      .eq("id", id)
+      .maybeSingle();
+    if (findErr) throw new Error(`update_platform_run: lookup failed: ${findErr.message}`);
+    if (!before) {
+      // A typo must not silently no-op. An UPDATE matching zero rows reports
+      // success in PostgREST, which is the quietest possible wrong answer.
+      throw new Error(
+        `update_platform_run: no run with id ${id}. Nothing was changed. ` +
+          `Find the id with get_platform_runs.`,
+      );
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (status !== undefined) patch.status = status;
+    if (notifiedAt !== undefined) patch.notified_at = notifiedAt;
+
+    const { data, error } = await ctx.db
+      .from("platform_runs")
+      .update(patch)
+      .eq("id", id)
+      .select("id, app, job, executor, host, status, started_at, finished_at, covered_from, covered_to, details, error_message, notified_at")
+      .single();
+    if (error) throw new Error(`update_platform_run: ${error.message}`);
+
+    const prev = before as Record<string, unknown>;
+    return {
+      run: data,
+      // platform_runs is registered with audit OFF (high-volume observability),
+      // so this response is the ONLY record that the change happened. Returning
+      // before/after keeps the edit visible rather than silent.
+      changed: {
+        ...(status !== undefined ? { status: { from: prev.status, to: status } } : {}),
+        ...(notifiedAt !== undefined
+          ? { notified_at: { from: prev.notified_at, to: notifiedAt } }
+          : {}),
+      },
+    };
   },
 });
