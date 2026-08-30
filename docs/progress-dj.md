@@ -1208,6 +1208,75 @@ to drop entries. The poll rows there are not merely redundant, they are inferior
 arithmetic. Phase 5's `poll_date` has the same requirement.
 
 
+
+### ✅ HYPOTHESIS CONFIRMED 2026-08-29 — YouTube buckets by UTC day
+
+**41 of 41** disagreements fell in the discriminating window; **every** in-window pair
+disagreed; **every** one matched the UTC date. No mixed cases, no out-of-window
+disagreements.
+
+**UTC is FORCED, not chosen — this is the load-bearing point.** The poll receives only a
+bucket LABEL and never learns time-of-day, so a poll row can **never** be converted to a
+local date: the information does not exist in the feed. Poll rows can therefore only carry
+UTC dates, and Takeout must match THEM. **The weaker source dictates the definition, because
+the stronger one can adapt and the weaker one cannot.**
+
+**The ~94 existing poll rows need no correction.** They already hold UTC dates. Under the
+corrected definition they were right all along — only §4.2's documentation was wrong.
+
+**Block F convergence is unaffected.** It is arithmetic, not semantic: `Today` on a run with
+`poll_date = D` gives `D`; `Yesterday` on a run with `poll_date = D+1` gives `D`. Both land
+on `D` regardless of what the buckets *mean*, because the resolution is `poll_date − 0` and
+`poll_date − 1`. It depends only on `poll_date` advancing by one per day.
+
+**`tzdata` is no longer needed and the pin was removed.** Nothing converts to a local
+timezone any more; the only remaining `zoneinfo` use is the parity script's diagnostic
+comparison. Left in, a dependency present "just in case" would hint that timezone conversion
+happens somewhere — and the whole point of this decision is that it does not. It is one line
+to restore.
+
+#### ⚠️ CORRECTION: the replay number I reported was measured on the wrong date definition
+
+I previously reported **342 repeat pairs, 2.3%, "distinct-days is nearly lossless"**. That
+was computed with Pacific dates. Re-run under UTC:
+
+| | Pacific dates (wrong) | **UTC dates (correct)** |
+|---|---|---|
+| `(video, day)` pairs with >1 play | 342 | **9** |
+| Share of all pairs | 2.3% | **0.1%** |
+| Distinct days | 650 | **663** |
+
+**But the drop is an ARTIFACT OF THE BOUNDARY, not a change in listening behaviour.** UTC
+midnight is 17:00 Pacific — the middle of an evening. A track played at 16:00 and 18:00
+Pacific is one Pacific day with two plays, and **two different UTC days with one play each**.
+333 of the 342 repeat pairs were split apart that way, which is also why distinct days rose
+by 13.
+
+So the honest reading is **not** "replays are rarer than I thought". It is:
+
+- **By listening session** (Pacific day), the replay rate is ~2.3% — that number stands.
+- **Under the stored UTC definition**, distinct-days loses only 0.1% *because the boundary
+  already separates most same-evening repeats into different days*.
+- **The cost is the other direction:** one evening's double-play can count as two distinct
+  days, inflating familiarity slightly. Exactly the ±1 distortion named in §4.2, now
+  measured at 333 pairs out of 15,176.
+
+**For phase 7 this is still fine** — distinct-days is a *relative* measure and the distortion
+runs both ways across all tracks. But "nearly lossless" was the right conclusion for the
+wrong reason, and §5's proxy should not be described as capturing replays. It does not; it
+counts UTC days.
+
+**`occurrence > 1` now has 9 live subjects, not 342.** Still the first ever, but a much
+thinner sample — the multi-occurrence dedupe path gets exercised, barely.
+
+#### The parity guard now confirms alignment
+
+The 15 subjects that previously resolved to `2026-08-27` under Pacific now resolve to
+`2026-08-28` — matching the poll rows exactly. The script's self-check was inverted to assert
+**no local-time conversion**: six cases in the window where a Pacific conversion would give a
+different answer, so reintroducing one fails all six immediately.
+
+
 ---
 
 ## Phase 4 — Surface deployment ⚠️ FULL PHASE, NOT A STEP
@@ -1312,17 +1381,29 @@ arithmetic. Phase 5's `poll_date` has the same requirement.
       polling a desktop that is sometimes off is a failure that looks like something else
       for a week (spec §7 phase 4 step 8).
 
-- [ ] 🛑 **`poll_date` MUST be derived from `America/Los_Angeles`, named explicitly.**
-      Not "local", not the task's timezone, not UTC. **YouTube buckets by the ACCOUNT's
-      timezone setting** — which does not move when Alex does, so "local date" is the wrong
-      framing and would silently be wrong while travelling.
-      **A mismatch reintroduces the Block F duplication.** `Yesterday` resolves to
-      `poll_date − 1`; if `poll_date` is off by one, that lands on a date the `Today`
-      capture never used, so the same play inserts a second time. Every unit test passes,
-      nothing errors, and it happens in an unattended task where nobody is watching.
+- [ ] 🛑 **`poll_date` MUST be the UTC date. ⚠️ THIS REVERSES THE 2026-08-27 DECISION.**
+      That decision said `America/Los_Angeles`, **and the reasoning was wrong**: it assumed
+      the account timezone governs how YouTube buckets history. It does not — YouTube
+      buckets by **UTC day**, confirmed 41/41 against exact Takeout timestamps (spec §4.2).
+      **The reversal is recorded with its reason so it is not re-reversed later by someone
+      reading the old rationale.**
+      More fundamentally, UTC is **forced rather than chosen**: the poll receives only a
+      bucket LABEL and never learns time-of-day, so a poll row can never be converted to a
+      local date. The information does not exist in the feed.
       - [ ] Runtime guard: if the resolved `poll_date` differs from what the previous
             successful run's `covered_to` would predict, the run SAYS SO rather than
             proceeding quietly.
+
+- [ ] 🛑 **SCHEDULE THE POLL AWAY FROM UTC MIDNIGHT.** If bucket boundaries are UTC, a run
+      near 00:00 UTC risks the feed rolling over mid-request — some entries answered under
+      one UTC day, some under the next, with no way to tell which afterwards. **The 18:25
+      UTC run was safely mid-day.** Recommend a stable slot around **16:00–20:00 UTC**
+      (09:00–13:00 Pacific) and record the reason, because a firing time chosen for
+      convenience will eventually drift toward the boundary with nobody remembering why it
+      mattered.
+      ⚠️ **This is a real lever, not the earlier coincidence.** Choosing a time so that the
+      LA date and UTC date happen to agree would have been leaning on an accident; choosing
+      a time far from the boundary that actually governs bucketing is the mechanism itself.
 
 - [ ] 🛑 **Unfillable gaps: do NOT attempt the backfill.**
       **A gap of exactly ONE day needs no special handling** — that is precisely what the

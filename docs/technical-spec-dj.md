@@ -1,9 +1,8 @@
 # DJ — Technical Specification
 
-**Status:** Phases 0, 1, 2a, 2b complete. The courier loop runs end to end — Workshop
-reads YouTube, Claude carries, Alfred MCP writes Supabase. Migration Block F (re-key
-`dj_plays` on `played_on`; null poll-sourced albums) is the current work.
-**Last updated:** 2026-08-27
+**Status:** Phases 0, 1, 2a, 2b, 3a, 3b complete. Phase 8 blocked on one SQL statement
+(the `played_on` schema comment); nothing imported. Phases 4, 5, 6, 7 outstanding.
+**Last updated:** 2026-08-29
 
 ---
 
@@ -237,6 +236,35 @@ Only **exact** normalised equality auto-links. Anything fuzzier stays a proposal
 human, per the "propose" wording above.
 
 ### 4.2 Play dates are resolved estimates, and say so
+
+> 🛑 **`played_on` MEANS THE UTC DATE OF THE PLAY. Both sources. Not "local", not
+> "the account's day" — UTC, named.**
+>
+> **And this is FORCED, not chosen.** The poll only ever receives a bucket LABEL
+> (`Today`, `Yesterday`). It never learns time-of-day, so a poll row can NEVER be converted
+> to a local date — the information required does not exist in the feed. Poll rows can
+> therefore only carry UTC dates, and Takeout must match THEM rather than the reverse.
+> **The weaker source dictates the definition, because the stronger one can adapt and the
+> weaker one cannot.**
+>
+> Confirmed empirically 2026-08-29 by cross-referencing every poll row against its exact
+> Takeout timestamp: **41 of 41 disagreements fell in the discriminating window** (UTC hour
+> < 8, where a UTC date and a Pacific date differ), **every in-window pair disagreed, and
+> every one matched the UTC date.** No mixed cases. YouTube buckets by UTC day.
+>
+> **⚠️ KNOWN, BOUNDED DISTORTION.** UTC midnight is 17:00 Pacific in summer, 16:00 in
+> winter — the middle of a listening day, not the middle of the night. A track heard Monday
+> evening and Tuesday afternoon can collapse into one UTC day; one heard either side of
+> 17:00 splits across two. **Bounded at ±1 day in both directions**, so it roughly cancels
+> for a relative measure like §5's distinct-days. Recorded rather than papered over.
+>
+> **One genuine upside: UTC has no DST.** The Pacific boundary moves twice a year; the UTC
+> one never does. A definition that does not shift under you is worth something.
+>
+> The ~94 existing poll rows **need no correction** — they already carry UTC dates. Under
+> the corrected definition they were right all along; only the documentation was wrong.
+
+
 
 YouTube's history feed returns **day buckets, not timestamps**: `Today`, `Yesterday`,
 `This week`, `Last week`. Only the first two convert to a date cleanly. In the probe,
@@ -892,6 +920,23 @@ the fourth instance of one shape:
 **A foreign key from plays to runs is NOT the fix being proposed** — that is a schema change
 and phase 5 does not need it. The fix is that every consumer of a derived record reconciles
 it against the source rather than treating it as authoritative.
+
+### 11.5 A claim about what data MEANS is as falsifiable as a claim about what it contains
+
+Fifth instance, and a new variety. The previous four were **records disagreeing with the
+thing they described**. This one is a record that was **CORRECT while its DOCUMENTATION was
+wrong**: `dj_plays` rows always held UTC dates, and §4.2 asserted they were actual local
+dates. Nothing was inconsistent. No query returned a wrong number. The meaning was simply
+misstated — and it went unexamined for weeks **because the data looked fine, which it was**.
+
+**A semantic claim needs checking the same way a factual one does.** "This column holds the
+local date" is a hypothesis with a falsification condition, and it can be tested — here, by
+finding rows where a local date and a UTC date would differ and seeing which one the data
+matched. Nothing about the rows themselves would ever have prompted the question.
+
+The tell: **a documented meaning that has never been checked against a case where the
+alternatives diverge.** Everywhere the candidate interpretations agree, the documentation is
+unfalsifiable, and unfalsifiable documentation drifts silently.
 
 ---
 

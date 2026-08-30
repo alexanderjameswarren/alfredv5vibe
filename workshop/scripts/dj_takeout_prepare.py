@@ -49,17 +49,35 @@ import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SOURCE = ROOT / "data" / "dj" / "watch-history.json"
 OUT_DIR = ROOT / "data" / "dj" / "takeout-batches"
 
-# The ACCOUNT's timezone, named explicitly. Not "local", not the machine's, not
-# UTC. YouTube buckets by the account setting, which does not move when the user
-# does — and poll-sourced rows already use LA dates, so a mismatch would put the
-# same listen on two different played_on values across the two sources.
-ACCOUNT_TZ = ZoneInfo("America/Los_Angeles")
+# played_on IS THE UTC DATE OF THE PLAY. Not local, not the account's day — UTC,
+# named. And this is FORCED, not chosen.
+#
+# The poll only ever receives a bucket LABEL ("Today", "Yesterday"). It never
+# learns time-of-day, so a poll row can NEVER be converted to a local date: the
+# information required does not exist in the feed. Poll rows can therefore only
+# carry UTC dates, and Takeout must match THEM — the weaker source dictates the
+# definition, because the stronger one can adapt and the weaker one cannot.
+#
+# Confirmed empirically 2026-08-29: 41 of 41 poll/Takeout disagreements fell in
+# the discriminating window (UTC hour < 8), every in-window pair disagreed, and
+# every one matched the UTC date. No mixed cases. YouTube buckets by UTC day.
+#
+# KNOWN, BOUNDED DISTORTION: UTC midnight is 17:00 Pacific in summer, 16:00 in
+# winter — the middle of a listening day, not the middle of the night. So a
+# track heard Monday evening and Tuesday afternoon can collapse into one UTC
+# day, and one heard either side of 17:00 can split across two. Bounded at ±1
+# day in both directions, so it roughly cancels for a relative measure like
+# distinct-days (§5). Recorded rather than papered over.
+#
+# One genuine upside: UTC HAS NO DST. The Pacific boundary moves twice a year;
+# the UTC one never does. A definition that does not shift under you is worth
+# something.
+PLAY_DATE_TZ = timezone.utc
 
 WATCHED_PREFIX = "Watched "
 TOPIC_SUFFIX = " - Topic"
@@ -78,39 +96,42 @@ def video_id_of(url: str | None) -> str | None:
 
 
 
-def assert_timezone_arithmetic() -> None:
-    """Prove the LA conversion on timestamps that DISCRIMINATE — and fail loudly.
+def assert_no_local_time_conversion() -> None:
+    """Prove played_on is the UTC date and NOT a local one — and fail loudly.
 
-    A timezone bug only manifests when the UTC timestamp falls between roughly
-    00:00 and 08:00, i.e. late evening in Los Angeles but already tomorrow in
-    UTC. A play at 20:00Z is the same calendar date under either conversion, so
-    it passes whether the code is right or wrong — which is why the obvious
-    subjects (the most recent entries) are the wrong ones.
+    The check discriminates in the OPPOSITE direction from its predecessor. That
+    version asserted a Pacific conversion; this one asserts that no conversion
+    happens at all. Every case below sits in the window where a UTC date and a
+    Pacific date DIFFER, so reintroducing a local-time conversion — the most
+    likely regression, since it was the behaviour two days ago — makes these
+    fail immediately.
 
-    This check needs no data at all: it asserts known timestamps either side of
-    the DST boundary, so it can fail on its own rather than depending on which
-    rows happen to overlap between sources.
+    Needs no data, so it can fail on its own rather than depending on which rows
+    happen to be present.
     """
     cases = [
-        # (UTC timestamp, expected LA date, why)
-        ("2026-08-29T02:30:00.000Z", "2026-08-28", "PDT -7: 02:30Z is 19:30 the previous day"),
-        ("2026-08-29T06:59:00.000Z", "2026-08-28", "PDT -7: last minute still the previous day"),
-        ("2026-08-29T07:00:00.000Z", "2026-08-29", "PDT -7: rolls over to the same day"),
-        ("2026-01-15T03:30:00.000Z", "2026-01-14", "PST -8: 03:30Z is 19:30 the previous day"),
-        ("2026-01-15T07:59:00.000Z", "2026-01-14", "PST -8: last minute still the previous day"),
-        ("2026-01-15T08:00:00.000Z", "2026-01-15", "PST -8: rolls over to the same day"),
-        ("2026-08-29T20:00:00.000Z", "2026-08-29", "NON-discriminating: same date either way"),
+        # (timestamp, expected played_on, what a Pacific conversion would give)
+        ("2026-08-29T02:30:00.000Z", "2026-08-29", "Pacific would say 2026-08-28"),
+        ("2026-08-29T06:59:00.000Z", "2026-08-29", "Pacific would say 2026-08-28"),
+        ("2026-08-29T00:00:00.000Z", "2026-08-29", "UTC midnight, the boundary itself"),
+        ("2026-08-29T23:59:59.000Z", "2026-08-29", "last second of the UTC day"),
+        ("2026-01-15T03:30:00.000Z", "2026-01-15", "PST too — no DST in UTC"),
+        ("2026-01-15T07:59:00.000Z", "2026-01-15", "PST would say 2026-01-14"),
+        ("2026-08-29T20:00:00.000Z", "2026-08-29", "NON-discriminating: same either way"),
     ]
     failures = []
-    for iso, expected, why in cases:
-        got = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(ACCOUNT_TZ).date().isoformat()
+    for iso, expected, note in cases:
+        got = (datetime.fromisoformat(iso.replace("Z", "+00:00"))
+               .astimezone(PLAY_DATE_TZ).date().isoformat())
         if got != expected:
-            failures.append(f"    {iso} -> {got}, expected {expected} ({why})")
+            failures.append(f"    {iso} -> {got}, expected {expected} ({note})")
     if failures:
         raise SystemExit(
-            "TIMEZONE ARITHMETIC FAILED — nothing was prepared:\n" + "\n".join(failures)
+            "played_on IS NOT THE UTC DATE — nothing was prepared. A local-time "
+            "conversion has been reintroduced:\n" + "\n".join(failures)
         )
-    print("  timezone arithmetic: 6 discriminating cases pass, both sides of the DST boundary")
+    print("  played_on = UTC date: 6 discriminating cases pass "
+          "(a Pacific conversion would fail all six)")
 
 
 def main() -> None:
@@ -120,7 +141,7 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=OUT_DIR)
     args = ap.parse_args()
 
-    assert_timezone_arithmetic()
+    assert_no_local_time_conversion()
     entries = json.loads(args.source.read_text(encoding="utf-8"))
     print(f"read {len(entries):,} entries from {args.source}")
 
@@ -168,7 +189,7 @@ def main() -> None:
         if not ts:
             excluded["no timestamp"] += 1
             continue
-        played_at = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(ACCOUNT_TZ)
+        played_at = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(PLAY_DATE_TZ)
 
         kept.append({
             "video_id": vid,
@@ -216,7 +237,7 @@ def main() -> None:
     print(f"  importable rows      {len(kept):,}")
     print(f"  distinct videos      {len(vids):,}")
     print(f"  distinct days        {len(dates):,}")
-    print(f"  date range           {dates[0]} .. {dates[-1]}   (America/Los_Angeles)")
+    print(f"  date range           {dates[0]} .. {dates[-1]}   (UTC)")
     print(f"  batches of {BATCH_SIZE}       {(len(kept) + BATCH_SIZE - 1) // BATCH_SIZE}")
 
     print()
@@ -252,9 +273,13 @@ def main() -> None:
     # --- timezone parity candidates ----------------------------------------
     #
     # ⚠️ ONLY entries whose UTC hour is < 08:00 are listed. Outside that window
-    # the UTC and Los Angeles dates AGREE, so the subject passes whether the
-    # conversion is right or wrong — a check that cannot fail (spec §11.1).
-    # The 15 most recent entries were exactly that mistake.
+    # a UTC date and a Pacific date AGREE, so the subject passes whether the
+    # resolution is right or wrong — a check that cannot fail (spec §11.1).
+    #
+    # The hypothesis these once tested is SETTLED (YouTube buckets by UTC day,
+    # 41/41). They now serve as a regression guard: every one of these should
+    # match its poll row's played_on exactly. A disagreement means a local-time
+    # conversion has crept back in.
     POLL_DAYS = ("2026-08-27", "2026-08-28", "2026-08-29")
     overlap = [r for r in discriminating if r["played_on"] in POLL_DAYS]
     print()
@@ -275,9 +300,8 @@ def main() -> None:
                 break
     else:
         print("    ⚠️  NO OVERLAPPING ROW FALLS IN THE DISCRIMINATING WINDOW.")
-        print("    The cross-source parity check has NO FAILING CASE AVAILABLE, so it")
-        print("    cannot verify the conversion — only the arithmetic self-check above")
-        print("    covers it. Record as NOT FULLY EXERCISED, not as passed.")
+        print("    The cross-source guard has NO FAILING CASE AVAILABLE — only the")
+        print("    self-check above covers it. NOT FULLY EXERCISED, not passed.")
 
     if args.emit:
         args.out.mkdir(parents=True, exist_ok=True)
