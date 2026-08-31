@@ -1627,6 +1627,31 @@ duration display must tolerate zero rather than treat it as an error.
 
 ## Phase 6 — Failure tests
 
+- [ ] 🛑 **THE DE-DUP SUPPRESSION TEST — three assertions, and the middle one can fail
+      silently.** The notification de-dup in the daily task (Step 7) is the least-exercised
+      logic in the phase, and **its failure mode is suppression** — an item that should
+      have been raised and was not. That is the invisible direction: an over-firing bug
+      announces itself, an under-firing one looks like a quiet week.
+
+      With the daily task running, break the YouTube credential deliberately, then:
+
+      1. **First failing run → exactly ONE inbox item.** Carrying the reauth ACTION.
+      2. **Second consecutive failing run → ZERO new items.** ⚠️ **This is the assertion
+         that can pass for the wrong reason:** zero items is also what a completely broken
+         notification path produces. So assertion 1 must have passed **in the same
+         sequence**, and the run must still be stamped `failed` with its `failure_kind` —
+         proving the run happened and chose not to notify, rather than not running at all.
+      3. **Fix the credential, let one `ok` run through, break it again → ONE more item**,
+         worded as new rather than ongoing.
+
+      Then the 7-day bound, which cannot be waited out in a test: verify it by reading
+      Step 7's rule against a run whose `notified_at` is backdated, or accept it as
+      unverified and **say so in the phase notes** rather than ticking it.
+
+- [ ] ⚠️ **Orphaned `running` rows** — confirm the task reports them and does NOT modify
+      them. Provoke one by killing a run mid-flight if that is possible; otherwise wait for
+      one to occur naturally and check the next run's `details.orphaned_runs`.
+
 - [ ] Workshop unreachable → inbox item, `status: failed`
 - [ ] Credential invalidated → inbox item naming the reauth tile, `status: auth_expired`
 - [ ] Skipped day → next run detects gap and backfills

@@ -20,7 +20,8 @@ cold reader needs.
 | **Record** | **every run**, success or failure | `platform_runs` — the durable log the staleness check reads |
 | **Notification** | **only** failure, `partial`, or a non-empty `artist_disagreements` | one Alfred **inbox item** |
 
-**A clean run raises nothing.** A signal that fires on the normal case teaches its reader
+A repeat of an unfixed condition is re-raised **once a week**, worded as ongoing — see
+Step 7. **A clean run raises nothing.** A signal that fires on the normal case teaches its reader
 to skip it — the same principle that stopped `artist_disagreements` firing on every
 collaboration (spec §11.7), applied to a human inbox rather than to a tool. A daily "the
 sync worked" would train exactly the reflex that makes the one broken day invisible.
@@ -107,6 +108,20 @@ in your report and carry on using the value from `get_dj_plays`.
 it confirms a play happened, never that one did not, and items have been observed leaving
 the page from the middle rather than the tail. Treat the page as **unordered**. Coverage
 comes from `dj_plays` and `covered_to`, never from how far back the page appears to reach.
+
+**While you have those runs, look for orphans.** Any run still marked `running` that
+started **more than 6 hours ago** is a run that **died without reporting** — the runtime
+killed it, or it timed out, or it hit something that was never a catchable error. Nothing
+else in this system will ever close those rows.
+
+Record their ids in this run's `details` as `orphaned_runs: [<ids>]` and mention them in
+the Step 8 report.
+
+⚠️ **DO NOT UPDATE THEM.** Do not mark them failed, do not close them, do not touch another
+run's stamp. A run editing a different run's record is exactly the improvisation rule 1
+exists to prevent, and you cannot know why that run died. **Observe and report only.**
+Phase 9's history view can render them, and if orphans start appearing regularly that is a
+real finding about the task runtime rather than about DJ.
 
 ### Step 3 — Work out the gap, and whether any of it is lost
 
@@ -224,18 +239,35 @@ Raise an inbox item if and only if one of these is true:
 wording from the step that stopped. *"The sync failed"* is an item that will be ignored;
 *"Run the reauth tile on the Surface"* is one that gets acted on.
 
-**Do not re-raise an item for a condition that is still unfixed.** Using the recent runs
-from Step 2:
+**Do not re-raise an item every day for a condition that is still unfixed — but do not go
+permanently silent about it either.** Using the recent runs from Step 2:
 
-- If the most recent run with the **same `failure_kind`** already has `notified_at` set,
-  **and there has been no `ok` run since it**, then the condition is already reported.
-  Stamp this run and raise nothing.
-- Otherwise raise the item, then call `update_platform_run` to set `notified_at` on **this**
-  run.
+Suppress the item **only if all three hold**:
 
-An `ok` run in between resets this: a thing that broke, was fixed, and broke again is new
-information and deserves a new item. One broken credential should produce one item, not
-seven — but two separate outages should produce two.
+1. The most recent run with the **same `failure_kind`** has `notified_at` set, **and**
+2. there has been **no `ok` run since** it, **and**
+3. that `notified_at` is **less than 7 days old**.
+
+Otherwise raise the item, then call `update_platform_run` to set `notified_at` on **this**
+run.
+
+**Condition 3 is a deliberate floor, not a detail.** Without it, one item is raised and then
+the condition is silent forever — so a notification missed while travelling or during a busy
+week means never hearing about it again, while the run log quietly fills with failures
+nobody sees. **Once a week for something genuinely broken is a reminder, not noise.**
+
+**Word a repeat so it reads as ongoing, not new.** When you are re-raising because of the
+7-day rule, the title and body must say so:
+
+> *"DJ sync STILL FAILING since `<date of the first failure in this streak>` — `<N>`
+> consecutive runs."*
+
+where `N` is the number of runs with this `failure_kind` since the last `ok` run. A standing
+outage and a fresh one must be distinguishable at a glance in the inbox, or the second gets
+read as the first.
+
+An `ok` run in between resets all of this: a thing that broke, was fixed, and broke again is
+new information and deserves a **new** item, worded as new.
 
 ⚠️ **If the failure was `supabase_write`, you may not be able to do any of this** — the
 inbox and `platform_runs` live behind the same connector. Report it in Step 8 and stop.
@@ -261,8 +293,10 @@ DJ daily sync — <today_utc>
 
   artist disagreements: <n>   <list them if any>
   page_full: <bool>   oldest_bucket_is_partial: <bool>
+  orphaned running rows: <none | <ids>>
   status stamped: <ok | partial | failed>
-  inbox item raised: <yes, "<title>" | no — clean run | no — already notified>
+  inbox item raised: <yes, new | yes, repeat (still failing, N runs) |
+                      no — clean run | no — already notified, <n> day(s) ago>
 ```
 
 Every number above comes from a tool response. If you do not have one, write `unknown` —
@@ -283,6 +317,11 @@ never a guess, and never a number you expected.
   of that investigation is permission to do something already ruled out.
 - **No auth inference from `credential_readable`.** See Step 1.
 - **No notification on success.** See the table at the top of this file.
+
+**Orphaned `running` rows are expected occasionally and are not an error in DJ.** The run
+stamp is opened before polling precisely so a task that dies leaves a trace; the cost is a
+row nothing closes. The task observes them and never touches them. A steady trickle is
+normal; a regular pattern is evidence about the task runtime worth investigating on its own.
 
 **The failure this task cannot report, by construction:** if the Alfred connector is down,
 the task can write neither `status: "failed"` nor an inbox item — both live on the far side
