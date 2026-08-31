@@ -80,7 +80,11 @@ const INGESTIBLE_BUCKETS = new Set(["Today", "Yesterday"]);
 // records, since the days beyond yesterday are unreachable from the live API.
 // "running" means OPEN: created before the work starts so a task that dies
 // mid-flight leaves a trace. Only update_platform_run can move a run out of it.
-const VALID_RUN_STATUS = ["running", "ok", "failed", "auth_expired", "partial"];
+// EXPORTED, and the MCP input schema in mcp/index.ts is built FROM it.
+// It was duplicated as a hand-written z.enum there, and adding "running" here
+// left that copy behind: the tool rejected the value before the handler ever
+// ran, with a message naming four statuses while this list held five.
+export const VALID_RUN_STATUS = ["running", "ok", "failed", "auth_expired", "partial"];
 
 // ---------------------------------------------------------------------------
 // Shapes

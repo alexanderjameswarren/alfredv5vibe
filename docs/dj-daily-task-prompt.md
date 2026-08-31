@@ -169,12 +169,21 @@ stamp rather than vanishing. Pass nothing else: an open run has not finished and
 covered anything, so `finished_at`, `covered_from` and `covered_to` are all rejected here.
 They are written when you close it in Step 6.
 
-> ⚠️ **If this call is rejected because `running` is not an allowed status, STOP.** It means
-> migration `006_platform_runs_running_status.sql` has not been applied. **Do not substitute
-> another status to get past it** — stamping `ok` for a run that has not done anything is a
-> lie in the durable log, and stamping `failed` before trying is no better. Report:
-> *"create_platform_run rejected status 'running'. ACTION: apply migration 006."* This
-> exact substitution happened on the first live run; see spec §11.11.
+> ⚠️ **If this call is rejected because `running` is not an allowed status, STOP.** **Do not
+> substitute another status to get past it** — stamping `ok` for a run that has not done
+> anything is a lie in the durable log, and stamping `failed` before trying is no better.
+> That exact substitution happened on the first live run; see spec §11.11.
+>
+> There are **two** possible causes and the error text tells them apart:
+> - **`MCP error -32602: Input validation error … expected one of "ok"|"failed"|…`** — the
+>   rejection came from the TOOL SCHEMA, before the database was reached. The deployed
+>   function is stale, or the connector is holding a cached manifest.
+>   **ACTION:** *"Redeploy the mcp function, then reconnect the Alfred connector so it
+>   refetches the tool manifest."*
+> - **A Postgres `check constraint` error** — the schema accepted it and the DATABASE
+>   refused. **ACTION:** *"Apply migration 006_platform_runs_running_status.sql."*
+>
+> Report which one, verbatim. They have different remedies and guessing wrong wastes a day.
 
 Then call `get_dj_history`.
 
@@ -316,6 +325,17 @@ read as the first.
 
 An `ok` run in between resets all of this: a thing that broke, was fixed, and broke again is
 new information and deserves a **new** item, worded as new.
+
+⚠️ **IF STEP 4 COULD NOT CREATE THE RUN ROW AT ALL, THERE IS NOTHING TO SET
+`notified_at` ON — so de-dup does not apply and you must raise the item unconditionally.**
+Raise it, and **say so in the item**:
+
+> *"No run row exists for this failure, so the once-per-week de-duplication does not apply.
+> Every run will raise this item until the cause is fixed."*
+
+Otherwise a persistent `create_platform_run` failure mints one identical item per day with
+nothing to explain why the usual suppression is not working — and the reader concludes the
+de-dup is broken rather than that the failure is upstream of it.
 
 ⚠️ **If the failure was `supabase_write`, you may not be able to do any of this** — the
 inbox and `platform_runs` live behind the same connector. Report it in Step 8 and stop.

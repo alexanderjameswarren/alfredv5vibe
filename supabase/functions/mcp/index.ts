@@ -19,6 +19,7 @@ import {
   createPlatformScheduleTool,
   getPlatformSchedulesTool,
   dryRunDjPlaysTool,
+  VALID_RUN_STATUS,
 } from "../_shared/tools/dj-courier.ts";
 import {
   recordDjPlaylistTool,
@@ -1036,9 +1037,8 @@ function createMcpServer(token: string) {
         app: z.enum(["dj", "sam", "alfred", "workshop"]).describe("Which app this job belongs to."),
         job: z.string().describe("Job name, e.g. 'daily_history_sync'. Stable across runs — staleness queries group on it."),
         executor: z.enum(["workshop", "claude", "alfred"]).describe("Who actually ran it. Different executors fail in different ways."),
-        status: z
-          .enum(["ok", "failed", "auth_expired", "partial"])
-          .describe("'partial' = ran and wrote something but not everything. 'auth_expired' is separate because it is the one status with a human remedy rather than a retry."),
+        status: RUN_STATUS
+          .describe("'running' = OPEN: stamp this BEFORE the work starts so a task that dies mid-flight leaves a trace; only update_platform_run can move a run out of it, and an open run may not carry finished_at or coverage. 'partial' = ran and wrote something but not everything. 'auth_expired' is separate because it is the one status with a human remedy rather than a retry."),
         host: z.string().optional().describe("Which host ran it, e.g. 'desktop' or 'surface'."),
         started_at: z.string().optional().describe("ISO timestamp of when the run BEGAN. Pass this to get a real duration — record it before the work starts. Omitted, it defaults to the same instant as finished_at (duration zero), because a run whose start is unknown should not report a made-up interval."),
         finished_at: z.string().optional().describe("ISO timestamp. Defaults to now. Must not be earlier than started_at — the call is rejected if it is."),
@@ -1061,7 +1061,7 @@ function createMcpServer(token: string) {
       inputSchema: {
         app: z.enum(["dj", "sam", "alfred", "workshop"]).optional().describe("Filter to one app."),
         job: z.string().optional().describe("Filter to one job name."),
-        status: z.enum(["ok", "failed", "auth_expired", "partial"]).optional().describe("Filter by outcome. Use 'ok' for gap detection."),
+        status: RUN_STATUS.optional().describe("Filter by outcome. Use 'ok' for gap detection; use 'running' to find ORPHANS - runs that opened and never closed because the task died mid-flight. Nothing closes those automatically."),
         unnotified_only: z.boolean().optional().describe("Only runs whose failure has not yet been surfaced (notified_at is null)."),
         limit: z.number().optional().describe("Max rows (default 20, cap 50)."),
       },
@@ -1165,13 +1165,18 @@ function createMcpServer(token: string) {
     {
       title: "Update Platform Run",
       description:
-        "Change `status` and/or `notified_at` on an existing run. DELIBERATELY NARROW — nothing else about a run is editable. platform_runs is a LOG, and a log you can rewrite is a log you cannot trust; app, job, executor, covered_from, covered_to, started_at and details are what a run ASSERTS and are not accepted here. " +
+        "CLOSE a run that is currently 'running', writing its outcome; or set `notified_at` on any run. THE RULE: a run that is OPEN can be closed, a run that is CLOSED cannot be rewritten. covered_from, covered_to, details and error_message are accepted ONLY on the transition out of 'running', and the guard is in the UPDATE's own WHERE clause so two writers cannot both win. app, job, executor and started_at are never editable — they are what the run IS. " +
+        "A 'failed' or 'auth_expired' close is REFUSED without both `error_message` and `details.failure_kind`: a failure logged without its cause is indistinguishable from one that failed for no reason, and asking for it in a prompt was not enough (spec §11.11). " +
         "The field that genuinely must change after the fact is `notified_at`: it is set once a failure has actually been surfaced to the human, which is necessarily after the row exists, and it is what stops one broken credential minting an identical inbox item every day. Doing that by insert-order instead (notify first, stamp second) fails where it matters — if the stamp then fails, a notification exists describing a run with no row. " +
         "An id matching no run is an ERROR, not a silent no-op. Returns the full row plus a `changed` before/after, which is the only record of the edit since platform_runs is registered with audit off. Tier 2.",
       inputSchema: {
         id: z.string().describe("UUID of the run, from get_platform_runs."),
-        status: z.enum(["ok", "failed", "auth_expired", "partial"]).optional().describe("'partial' = ran and wrote something but not everything — what a run with an unfillable gap records, since days beyond yesterday are unreachable from the live API."),
-        notified_at: z.string().optional().describe("ISO timestamp: when this failure was surfaced to the human. Set it AFTER the inbox item exists."),
+        status: RUN_STATUS.optional().describe("CLOSES a run that is currently 'running'. Cannot be set to 'running' — this tool closes runs, it cannot reopen one. 'partial' = ran and wrote something but not everything, what a run with an unfillable gap records."),
+        notified_at: z.string().optional().describe("ISO timestamp: when this failure was surfaced to the human. Set it AFTER the inbox item exists. This is the ONE field settable on an already-closed run."),
+        covered_from: z.string().optional().describe("YYYY-MM-DD, earliest day this run covered. Only accepted while CLOSING a running run."),
+        covered_to: z.string().optional().describe("YYYY-MM-DD, latest day this run covered. Only accepted while CLOSING a running run."),
+        details: z.record(z.any()).optional().describe("Free-form jsonb: by_bucket, page_full, artist_disagreements, orphaned_runs, manual, and failure_kind. REQUIRED to contain failure_kind when status is 'failed' or 'auth_expired'. Only accepted while CLOSING a running run."),
+        error_message: z.string().optional().describe("The failure's own words, verbatim, plus the HTTP status if there was one. REQUIRED when status is 'failed' or 'auth_expired' — the write is refused without it. Only accepted while CLOSING a running run."),
       },
     },
     async (args) => runToolForMcp(updatePlatformRunTool, args, token),

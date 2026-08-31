@@ -1281,6 +1281,43 @@ once, and a confident wrong key is unrepairable by the same argument. **The poin
 "we can fix it later when better data arrives" is FALSE here**, and any design leaning on it
 in an insert-only table is leaning on nothing.
 
+### 11.14 A constraint written in two places is a constraint that will be enforced in one
+
+`platform_runs.status` gained `running` in three places, and I updated two of them:
+
+| where | what it is | updated |
+|---|---|---|
+| the Postgres `CHECK` constraint | the database's rule | ✅ migration 006 |
+| `VALID_RUN_STATUS` in `dj-courier.ts` | the handler's rule | ✅ |
+| a hand-written `z.enum` in `mcp/index.ts` | **the MCP input schema** | ❌ missed |
+
+The third rejects the call **before the handler runs**, so the live task failed with:
+
+```
+MCP error -32602: Input validation error … expected one of "ok"|"failed"|"auth_expired"|"partial"
+```
+
+while two other copies of the same list said five. I had reported the function as deployed
+and "only the constraint outstanding" — **the deploy was real and the claim was still
+wrong**, because the thing I deployed was not the thing rejecting the call.
+
+Two lessons, and the second is the load-bearing one.
+
+**1. Derive, do not duplicate.** The zod enum is now built from the exported
+`VALID_RUN_STATUS`, so a list that exists once cannot disagree with itself. The same pass
+found `get_platform_runs` unable to filter `status: "running"` — which would have silently
+broken the orphan sweep the daily task depends on, a second victim of the same duplication.
+
+**2. "I deployed it" is not "the caller can reach it".** A tool has at least four layers
+that can each reject a call — the client's cached manifest, the server's input schema, the
+handler's own validation, and the database constraint — and a change to one is not a change
+to the others. ⚠️ **Verify at the layer the caller actually hits, not the layer you edited.**
+Where that cannot be done from here (the deployed MCP schema is not introspectable without a
+client), **say so** rather than reporting a deploy as a fix.
+
+Related to §11.11 but distinct: there, a rule was ASKED for and not enforced. Here it was
+ENFORCED, correctly, by a copy nobody had updated.
+
 ---
 
 ## 9. Reference
