@@ -1460,6 +1460,22 @@ depend on evaluation order, which is the very class of silent input the map exis
       any entry means two vocabularies disagree about one act and a new alias-map entry is
       owed (spec §4.1.4). **A signal nobody looks at is the exact shape this project keeps
       finding** — the detector is free, but only if something reads it.
+      - [ ] ⚠️ **NEW 2026-08-31 — AN EMPTY LIST IS NOT EVIDENCE THAT NO SPLIT EXISTS, and
+            the task prompt must not word it as if it were.** The detector fires only when
+            the **same `video_id`** carries a different stored artist. A split spread
+            across **different videos** is invisible to it — and that is exactly what Red
+            Garland was. *The detector built to catch future splits would not have caught
+            the one that prompted it.* The prompt may say "no same-video disagreements";
+            it may **not** say "no vocabulary drift".
+      - [ ] ⚠️ **NEW — the task must NOT re-implement the comparison.** It compares
+            normalised PRIMARY artists, both read from `match_key`. An earlier version
+            compared the joined `artist` column and fired on every collaboration
+            (spec §11.7). A prompt that eyeballs `artist` strings would reintroduce it.
+      - [ ] The real safeguard is the periodic hand-run split scan across the whole artist
+            vocabulary — run with the stored alias targets seeded as a **positive
+            control**, since both known splits are cross-source and a one-sided scan
+            returns 0 whether or not it works. Not automated; decide in Phase 9 whether it
+            should be.
 
 - [ ] 🛑 **HOST CHECK, EVERY RUN.** The task prompt begins by calling
       `get_workshop_status` and confirming `host` is `"surface"`, and STOPS if it is not.
@@ -1538,6 +1554,27 @@ depend on evaluation order, which is the very class of silent input the map exis
       was renamed from `auth_valid`; a task prompt that reads it as an auth gate would
       reintroduce the misreading the rename existed to prevent, and would report a healthy
       run while polling nothing.
+- [ ] 🛑 **NEW 2026-08-31 — A FAILED RUN MUST RECORD WHAT THE FAILURE SAID, verbatim.**
+      `platform_runs.details` gets the actual error text and, where there is one, the HTTP
+      status — never just `status: "failed"`.
+      **Learned the expensive way during the Phase 8 import.** The importer's error path
+      printed a property that is empty under PowerShell 5.1, so every failure rendered as
+      a blank line while the server was returning
+      `{"error":"platform_check_call_budget failed: JWT expired"}` every single time. That
+      blank cost a bisect of the batch files, a character-encoding investigation, a
+      transport measurement and two void experiments — to find an expired token
+      (spec §11.10).
+      **A daily task is worse**, because nobody is watching it live: a month of
+      `status: "failed"` with no message is a month of nothing to act on.
+      - [ ] ⚠️ Distinguish **expired credential** from **genuine failure** in the stamp.
+            They need different responses — one is "re-auth", the other is "investigate" —
+            and a run log that conflates them trains its reader to ignore both.
+- [ ] ⚠️ **NEW — beware time-correlated failures presenting as data-specific ones**
+      (spec §11.10). In a sequential job, elapsed time correlates with position, so an
+      expiring credential looks exactly like "these particular plays are bad". If a run
+      starts failing partway through, **re-try something already known to have succeeded**
+      before investigating the payload. That control answered the import question in four
+      requests after two void runs without it.
 - [ ] Observe two consecutive successful days
 
 **Notes:**
@@ -1629,7 +1666,7 @@ duration display must tolerate zero rather than treat it as an error.
 
 ---
 
-## Phase 8 — Takeout backfill
+## Phase 8 — Takeout backfill ✅ COMPLETE
 
 > 🛑 **PRECONDITIONS. All three are decided BEFORE the import, not during it.**
 > `dj_tracks` is insert-only, so anything written wrong here can never be corrected —
@@ -1692,7 +1729,43 @@ duration display must tolerate zero rather than treat it as an error.
       Nothing lost, nothing duplicated.
 - [x] **How far back history actually reaches: 2024-09-19 to 2026-08-29** - 673 distinct
       days across 23.3 months, 4,732 distinct tracks.
-- [ ] Re-run canonical grouping across the enlarged track set
+- [x] **Canonical grouping verified across the enlarged track set, 2026-08-31.**
+      `scripts/dj-grouping-check.js`. All four failure lists empty:
+      `UNDER_FIRED`, `CROSS_KEY`, `CHAINED`, `DANGLING`.
+
+      | | actual | predicted offline |
+      |---|---|---|
+      | `match_keys` with >1 track | **256** | 255 |
+      | tracks inside those groups | **558** | 556 |
+      | canonical links | **302** | 301 |
+
+      One pair over, in the predicted direction: poll-only tracks absent from the export.
+      2 null `match_key` rows, the two symbol-only titles.
+
+      **The clean result is informative, not vacuous** - had grouping never run, all 256
+      multi-track keys would have appeared under `UNDER_FIRED`. The counts alone could
+      not have failed, so the invariant was checked per group and the links counted
+      separately.
+
+      Over-firing reviewed by eye on the 15 largest groups and accepted: live, acoustic
+      and remaster variants folding into one group is the intended behaviour, and the
+      feat.-stripping cases (Charli XCX *Girl, so confusing* with the Lorde feature; Dua
+      Lipa *Levitating* with the DaBaby feature) are different recordings correctly
+      folded for familiarity purposes. No group is large enough to hide a runaway merge -
+      219 pairs, 29 triples, 5 quads, one 5, one 6.
+
+      ⚠️ **The canonical MEMBER is arbitrary and this is now concrete, not theoretical.**
+      Import order picked every leader and the export landed newest-first, so the crown
+      went to whichever variant was heard most recently: Wes Montgomery leads with *West
+      Coast Blues (Live)*, Lady Gaga with *Die With A Smile (Live in Las Vegas)*, Coldplay
+      with *Jupiter (Single Version)*. `get_dj_plays` `familiarity` returns
+      `canonical_title` / `canonical_artist` / `canonical_video_id` **and sorts by
+      `canonical_title`**, so a cram list will carry those labels.
+      **Decision: leave it.** `canonical_track_id` is insert-only, so changing the rule is
+      a backfill migration; and a "best member" rule is a judgment call worth making on
+      evidence. Revisit after seeing a real Phase 5/7 cram list. If it reads badly the fix
+      is a **display-time** rule - e.g. shortest title in the group - which touches no
+      insert-only column and is reversible.
 
 ### 2026-08-31 - `header` was never a music test. 1,581 plays were being dropped.
 
