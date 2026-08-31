@@ -1679,14 +1679,19 @@ duration display must tolerate zero rather than treat it as an error.
 
 - [x] Takeout export downloaded 2026-08-29 — **18,188 entries, 2024-09-19 → 2026-08-29,
       ~23.3 months unbroken.** Measured only; nothing parsed. See the arrival note above.
-- [ ] Parser for `watch-history.json` → `precision: 'exact'`
-- [ ] Music filter (`- Topic` channels); **review classification before committing** — see
-      precondition 3, already sampled
-- [ ] **Takeout has NO album field.** Confirmed: the complete key set across all 18,188
+- [x] Parser for `watch-history.json` -> `precision: 'exact'` - `dj_takeout_prepare.py`
+- [x] Music filter (`- Topic` channels), classification reviewed before committing.
+      **`header` is NOT part of it** - it records which client played the audio, and
+      gating on it silently dropped 1,581 plays (see 2026-08-31 above).
+- [x] **Takeout has NO album field.** Confirmed: the complete key set across all 18,188
       entries is `activityControls, header, products, subtitles, time, title, titleUrl`.
-      Phase 8 rows get `album = null` **by necessity, not policy** — the album question only
-      ever applied to poll-sourced rows and is already handled (Block F).
-- [ ] Import; record how far back history actually reaches
+      Phase 8 rows get `album = null` **by necessity, not policy** - the album question
+      only ever applied to poll-sourced rows and is already handled (Block F).
+- [x] **IMPORT COMPLETE, 2026-08-31.** `dj_plays` holds **16,766** rows with
+      `source = 'takeout'`, **exactly** the number of music entries in the export.
+      Nothing lost, nothing duplicated.
+- [x] **How far back history actually reaches: 2024-09-19 to 2026-08-29** - 673 distinct
+      days across 23.3 months, 4,732 distinct tracks.
 - [ ] Re-run canonical grouping across the enlarged track set
 
 ### 2026-08-31 - `header` was never a music test. 1,581 plays were being dropped.
@@ -1786,6 +1791,32 @@ some of the same tracks.
 Only **4 adjacent pairs sit under 300s** (min 23s), the range where "one play logged
 twice" is even plausible - and those are equally consistent with a restart. Out of
 16,766 rows, not a reason to exclude anything.
+
+### 2026-08-31 - PHASE 8 IMPORT COMPLETE. 16,766 rows.
+
+Batches 30 and 32 went in on a fresh token, first attempt, no errors: 500 + 500 rows,
+302 tracks created, 34 canonical links made. Nothing about them was ever wrong.
+
+**VERIFIED, not assumed:**
+
+| | |
+|---|---|
+| `dj_plays` where `source = 'takeout'` | **16,766** |
+| Music entries in the export | **16,766** |
+| Difference | **0** |
+
+Batch 30's exclusive date range (2024-11-17 .. 2024-12-11), which held **0** rows while
+it was failing, now holds **475**.
+
+Coverage: **2024-09-19 to 2026-08-29**, 673 distinct days, 4,732 distinct tracks.
+
+`artist_disagreements` was **empty on every batch** - no third vocabulary split surfaced
+across the whole import.
+
+**Still open (deliberately, not forgotten):** re-run canonical grouping across the
+enlarged track set. 4,732 tracks now exist where the grouping rules were last exercised
+over a few hundred, and 11.6 applies - import order is a silent input to identity in an
+insert-only table.
 
 ### 2026-08-31 - RESOLVED: the batch 30/32 500 was AN EXPIRED TOKEN.
 
