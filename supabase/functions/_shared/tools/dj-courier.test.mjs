@@ -519,14 +519,128 @@ test("update_platform_run sets notified_at and reports before/after", async () =
   assert.equal(upd.changed.status, undefined, "status untouched when not passed");
 });
 
-test("update_platform_run can move a run to 'partial'", async () => {
+test("update_platform_run closes a RUNNING run and carries the outcome", async () => {
+  const db = makeDb();
+  const ctx = { db, userId: USER };
+  const run = await toolByName.create_platform_run.handler(
+    { app: "dj", job: "j", executor: "claude", status: "running" }, ctx);
+  assert.equal(run.finished_at, null, "an open run has not finished");
+  const upd = await toolByName.update_platform_run.handler({
+    id: run.id, status: "partial",
+    covered_from: "2026-08-30", covered_to: "2026-08-31",
+    details: { by_bucket: { Today: { submitted: 3 } } },
+  }, ctx);
+  assert.deepEqual(upd.changed.status, { from: "running", to: "partial" });
+  assert.equal(upd.run.covered_to, "2026-08-31");
+  assert.ok(upd.run.finished_at, "closing sets finished_at");
+});
+
+test("A CLOSED RUN CANNOT BE RE-STAMPED - the whole point of the log", async () => {
+  const db = makeDb();
+  const ctx = { db, userId: USER };
+  const run = await toolByName.create_platform_run.handler(
+    { app: "dj", job: "j", executor: "claude", status: "running" }, ctx);
+  await toolByName.update_platform_run.handler({ id: run.id, status: "ok" }, ctx);
+  // Re-stamp to `partial`, not `failed`: a failed close is rejected earlier for
+  // missing error_message, which would pass this test for the wrong reason.
+  await assert.rejects(
+    () => toolByName.update_platform_run.handler({ id: run.id, status: "partial" }, ctx),
+    /has status "ok", not "running"/);
+});
+
+test("a run created already-closed cannot be closed again", async () => {
+  // The manual-stamp path: create with a final status, no open phase at all.
   const db = makeDb();
   const ctx = { db, userId: USER };
   const run = await toolByName.create_platform_run.handler(
     { app: "dj", job: "j", executor: "claude", status: "ok" }, ctx);
+  await assert.rejects(
+    () => toolByName.update_platform_run.handler({ id: run.id, status: "partial" }, ctx),
+    /not "running"/);
+});
+
+test("notified_at IS settable on a closed run - it is not a claim about the run", async () => {
+  // §6 sets it once a failure has been surfaced, which is necessarily after the
+  // row is closed. Gating it like the outcome fields would break the de-dup.
+  const db = makeDb();
+  const ctx = { db, userId: USER };
+  const run = await toolByName.create_platform_run.handler(
+    { app: "dj", job: "j", executor: "claude", status: "running" }, ctx);
+  await toolByName.update_platform_run.handler({
+    id: run.id, status: "failed",
+    error_message: "boom", details: { failure_kind: "youtube_auth" },
+  }, ctx);
   const upd = await toolByName.update_platform_run.handler(
-    { id: run.id, status: "partial" }, ctx);
-  assert.deepEqual(upd.changed.status, { from: "ok", to: "partial" });
+    { id: run.id, notified_at: "2026-08-31T20:00:00.000Z" }, ctx);
+  assert.equal(upd.run.notified_at, "2026-08-31T20:00:00.000Z");
+});
+
+test("A FAILED STAMP MUST SAY WHY - enforced by the tool, not asked for", async () => {
+  // The first live scheduled run stamped `failed` with empty details, a null
+  // error_message and no failure_kind. The prompt asked for them; asking was not
+  // enough. See spec §11.11.
+  const db = makeDb();
+  const ctx = { db, userId: USER };
+  const mk = async () => (await toolByName.create_platform_run.handler(
+    { app: "dj", job: "j", executor: "claude", status: "running" }, ctx)).id;
+  // One fresh OPEN run per attempt: a rejected close leaves the run open, but
+  // reusing one would make a later failure ambiguous between the rule under
+  // test and "already closed".
+  const [a, b, c, d, e] = [await mk(), await mk(), await mk(), await mk(), await mk()];
+
+  await assert.rejects(
+    () => toolByName.update_platform_run.handler({ id: a, status: "failed" }, ctx),
+    /MUST carry `error_message`/);
+  await assert.rejects(
+    () => toolByName.update_platform_run.handler(
+      { id: b, status: "failed", error_message: "   " }, ctx),
+    /MUST carry `error_message`/);
+  await assert.rejects(
+    () => toolByName.update_platform_run.handler(
+      { id: c, status: "failed", error_message: "boom" }, ctx),
+    /MUST carry `details.failure_kind`/);
+  await assert.rejects(
+    () => toolByName.update_platform_run.handler(
+      { id: d, status: "auth_expired", error_message: "boom", details: {} }, ctx),
+    /MUST carry `details.failure_kind`/);
+
+  // ...and the same call with both present goes through, so the rule above is
+  // rejecting the omission rather than the status.
+  const ok = await toolByName.update_platform_run.handler({
+    id: e, status: "failed",
+    error_message: "auth_expired: cookie rejected",
+    details: { failure_kind: "youtube_auth" },
+  }, ctx);
+  assert.equal(ok.run.status, "failed");
+});
+
+test("an OPEN run cannot claim coverage or a finish time", async () => {
+  const db = makeDb();
+  const ctx = { db, userId: USER };
+  await assert.rejects(
+    () => toolByName.create_platform_run.handler(
+      { app: "dj", job: "j", executor: "claude", status: "running",
+        finished_at: "2026-08-31T20:00:00.000Z" }, ctx),
+    /cannot have `finished_at`/);
+  await assert.rejects(
+    () => toolByName.create_platform_run.handler(
+      { app: "dj", job: "j", executor: "claude", status: "running",
+        covered_to: "2026-08-31" }, ctx),
+    /cannot assert coverage yet/);
+});
+
+test("update_platform_run cannot REOPEN a run, and cannot edit a closed one's outcome", async () => {
+  const db = makeDb();
+  const ctx = { db, userId: USER };
+  const run = await toolByName.create_platform_run.handler(
+    { app: "dj", job: "j", executor: "claude", status: "running" }, ctx);
+  await assert.rejects(
+    () => toolByName.update_platform_run.handler({ id: run.id, status: "running" }, ctx),
+    /cannot set status to `running`/);
+  await assert.rejects(
+    () => toolByName.update_platform_run.handler(
+      { id: run.id, covered_to: "2026-08-31" }, ctx),
+    /only be written while CLOSING/);
 });
 
 test("update_platform_run ERRORS on an unknown id rather than no-opping", async () => {
@@ -551,7 +665,7 @@ test("update_platform_run refuses a no-op and an invalid status", async () => {
     /nothing to change/);
   await assert.rejects(
     () => toolByName.update_platform_run.handler({ id: run.id, status: "done" }, ctx),
-    /must be one of ok, failed, auth_expired, partial/);
+    /must be one of running, ok, failed, auth_expired, partial/);
 });
 
 test("timestamps never invert when both are defaulted", async () => {

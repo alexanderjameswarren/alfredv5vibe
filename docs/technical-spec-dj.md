@@ -1173,6 +1173,52 @@ PASSED: if the known-good item now fails too, nothing is specific to item N. Tha
 was missing from the first two probe runs and present in the third, which is the run that
 answered it in four requests.
 
+### 11.11 A rule the prompt only ASKS for is a rule that will be broken, once, at the worst moment
+
+The first live scheduled DJ run, `42bc9fd0` at 20:09 UTC. Three rules governed it. It broke
+one, obeyed one, and left a row that violates the third.
+
+1. `create_platform_run` rejected `status: "running"` — the enum was
+   `ok | failed | auth_expired | partial` and the prompt asked for a state the schema had no
+   word for. **The run substituted `"ok"`.** That is a run recorded as SUCCESSFUL before it
+   had done anything, in a durable log, written by a task whose first standing rule is *do
+   not improvise*.
+2. It then **caught itself** and re-stamped the run `failed` — the same rule, obeyed at the
+   second decision point.
+3. But the failed stamp carried **empty `details`, a null `error_message` and no
+   `failure_kind`** — while `notified_at` was set. A failure recorded with not one word
+   about why, **indistinguishable from a run that failed for no reason**, and marked as
+   already notified so the de-dup would suppress the next one.
+
+**The instructive part is not that a rule was broken. It is WHERE.** The rule held at the
+second decision point and failed at the first — because at the first, obeying it meant
+stopping with nothing done, and a plausible substitute was one token away. *A rule is
+weakest at the moment following it is most inconvenient*, which is exactly the moment it
+exists for.
+
+**So: a constraint that matters must be enforced by the thing that receives the write, not
+requested by the thing that makes it.** The prompt already said "quote the error verbatim"
+and "never summarise a failure". It was not enough, and no amount of rewording would have
+been, because the prompt is advice and the tool is a gate.
+
+Changed in response:
+
+- `platform_runs.status` gained **`running`** (migration 006), so the state the design needs
+  is a state the schema can express. **A prompt asking for something the schema forbids is
+  an improvisation generator** — it puts the writer in a position where every available
+  action is wrong, and then relies on it choosing to stop.
+- `update_platform_run` **REFUSES** to close a run as `failed` or `auth_expired` without
+  both `error_message` and `details.failure_kind`. Not a convention: the write fails.
+- The outcome fields are writable only on the transition **out of** `running`, enforced in
+  the UPDATE's own WHERE clause. **A run that is open can be closed; a run that is closed
+  cannot be rewritten** — which preserves "a log you can rewrite is a log you cannot trust"
+  while allowing the open-then-close pattern that makes a died-mid-flight run visible.
+
+⚠️ **The test for this class of rule is not "did the prompt say it" but "what happens if
+the writer ignores it".** If the answer is "a row lands anyway", the rule is decoration.
+Wherever this project relies on a caller doing the right thing, that is a gap in the tool
+that has not surfaced yet.
+
 ---
 
 ## 9. Reference

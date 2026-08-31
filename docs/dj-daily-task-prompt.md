@@ -128,18 +128,53 @@ real finding about the task runtime rather than about DJ.
 Let `today_utc` be today's date in **UTC** — not local, not Pacific. Compute
 `gap_days = today_utc - newest_played_on_you_hold`.
 
-| gap | meaning | what to do |
-|---|---|---|
-| 0 or 1 day | normal | Nothing special. The `Yesterday` bucket covers it — this is why the cadence is daily. |
-| 2+ days | **permanently lost** | Everything older than yesterday is unreachable from the live API. Coarse buckets are rejected by `record_dj_plays`. **Do not attempt a backfill** — it is guaranteed to fail and is only noise. Continue with Steps 4–6; the run ends `partial` and Step 7 notifies. |
+**Do the arithmetic explicitly — do not re-derive the threshold from memory.** Let `D` be
+the newest `played_on` you hold.
 
-**The data is gone. Your job is to record that accurately, not to pretend otherwise.**
+- The `Today` bucket covers **`today_utc`**.
+- The `Yesterday` bucket covers **`today_utc - 1`**.
+- The missing days are `D+1 … today_utc`.
+
+So this poll can reach back to `today_utc - 1`, and **anything older than that is lost**:
+
+| `gap_days` | missing days | reachable? |
+|---|---|---|
+| 0 | none | — |
+| 1 | `today_utc` | Today covers it |
+| 2 | `today_utc-1`, `today_utc` | Yesterday + Today cover **both** |
+| **3** | `today_utc-2` … | **`today_utc-2` is unreachable** — first lost day |
+| 4+ | more | more lost |
+
+| gap | what to do |
+|---|---|
+| **0, 1 or 2 days** | **Normal, and fully recoverable.** Nothing special — the two buckets cover it. This is why the cadence is daily: a single missed run is self-healing, and even two are. |
+| **3 or more days** | Everything older than `today_utc - 1` is **permanently lost**. It is unreachable from the live API, and coarse buckets are rejected by `record_dj_plays`. **Do not attempt a backfill** — it is guaranteed to fail and is only noise. Continue with Steps 4–6; the run ends `partial` and Step 7 notifies with the lost range `D+1 … today_utc-2`. |
+
+> ⚠️ **This threshold was wrong once.** The table originally said "2+ days = permanently
+> lost", which would have raised a **false permanent-loss item** at gap 2 — a day the
+> `Yesterday` bucket covers perfectly well. **A false alarm about unrecoverable data is
+> expensive**: it says the archive has a hole that it does not have. The arithmetic is
+> written out above so the threshold is read, not remembered.
+
+**When days genuinely are lost: the data is gone. Your job is to record that accurately,
+not to pretend otherwise.**
 
 ### Step 4 — Open the run stamp, then poll YouTube
 
 Call `create_platform_run` with `app: "dj"`, `job: "daily_history_sync"`,
-`status: "running"`. Do this **before** polling, so a task that dies mid-run leaves a
-started-but-never-finished stamp — which is itself a signal. Keep the run id.
+`executor: "claude"`, `status: "running"`. **Keep the run id — every later step needs it.**
+
+Do this **before** polling, so a task that dies mid-run leaves a started-but-never-finished
+stamp rather than vanishing. Pass nothing else: an open run has not finished and has not
+covered anything, so `finished_at`, `covered_from` and `covered_to` are all rejected here.
+They are written when you close it in Step 6.
+
+> ⚠️ **If this call is rejected because `running` is not an allowed status, STOP.** It means
+> migration `006_platform_runs_running_status.sql` has not been applied. **Do not substitute
+> another status to get past it** — stamping `ok` for a run that has not done anything is a
+> lie in the durable log, and stamping `failed` before trying is no better. Report:
+> *"create_platform_run rejected status 'running'. ACTION: apply migration 006."* This
+> exact substitution happened on the first live run; see spec §11.11.
 
 Then call `get_dj_history`.
 
@@ -183,10 +218,13 @@ own OAuth client'** with client_id `2804f812-ea1a-4827-9443-3421fc4771f5` and a 
 secret. Do NOT use 'No client ID — register one automatically'; dynamic registration fails
 on reconnect."*
 
-Then `update_platform_run` on the run id from Step 4, carrying **from the tool's response,
-not from memory**:
+Then **close the run**: `update_platform_run` with the run id from Step 4. This is the only
+call that can move a run out of `running`, and it is the only place the outcome fields can
+be written. **A closed run cannot be re-stamped**, so get it right in one call.
 
-- `status` — `ok` normally; `partial` if Step 3 found a 2+ day gap; `failed` if a step
+Carry these **from the tool's response, not from memory**:
+
+- `status` — `ok` normally; `partial` if Step 3 found a 3+ day gap; `failed` if a step
   stopped.
   ⚠️ **A day with zero plays is `ok` with zeros. It is NEVER `failed`.** A quiet day is a
   normal outcome, and marking it failed makes the staleness signal cry wolf — which is how
@@ -200,12 +238,22 @@ not from memory**:
   - `page_full`, `oldest_bucket_is_partial`
   - `artist_disagreements` — **copy the array whole, even when empty.**
   - Any disagreement found in Step 2 between the data and the previous `covered_to`.
-  - On a failure: the **verbatim error text** and the HTTP status if there was one. Never
-    just `status: "failed"` — a month of unexplained failures is a month with nothing to
-    act on.
-  - `failure_kind`, one of `wrong_host`, `workshop_unreachable`, `youtube_auth`,
-    `supabase_write`, `unknown` — Step 7 uses it to tell a still-broken thing from a newly
-    broken one.
+  - `failure_kind` on any failure, one of `wrong_host`, `workshop_unreachable`,
+    `youtube_auth`, `supabase_write`, `unknown` — Step 7 uses it to tell a still-broken
+    thing from a newly broken one.
+- `error_message` — **on a failure, the verbatim error text**, plus the HTTP status if
+  there was one.
+
+> 🛑 **A `failed` or `auth_expired` close REQUIRES both `error_message` and
+> `details.failure_kind`. The tool rejects the write without them** — this is not a
+> convention you can skip when the error seems obvious. If the write is rejected for this
+> reason, the fix is to supply them, never to downgrade the status to something that does
+> not need them.
+>
+> The first live scheduled run stamped `failed` with empty `details`, a null
+> `error_message` and no `failure_kind`: a failure recorded with not one word about why,
+> indistinguishable from a run that failed for no reason. Asking for it in a prompt was not
+> enough, so the tool now enforces it (spec §11.11).
   - If this run was started by hand rather than by the schedule, set `manual: true`.
     The staleness check uses this to ask *"is the automation alive?"* separately from
     *"is the data current?"* — without it, a manual run masks a dead scheduler.
@@ -232,7 +280,7 @@ Raise an inbox item if and only if one of these is true:
 | condition | inbox item |
 |---|---|
 | The run **failed** | Title names the failure kind. Body: the verbatim error, then the **ACTION** from the step that stopped. |
-| The run is **`partial`** (2+ day gap) | Names the lost date range. Body: *"These days are permanently unreachable from the live API. Google Takeout is the only recovery path."* |
+| The run is **`partial`** (3+ day gap) | Names the lost date range. Body: *"These days are permanently unreachable from the live API. Google Takeout is the only recovery path."* |
 | `artist_disagreements` is **non-empty** | Lists each `video_id` with its stored and submitted artist. Body: *"Two vocabularies disagree about one act. A new alias-map entry may be owed — see spec §4.1.4."* |
 
 **Every item carries a specific remedy, never a generic alert.** Use the exact ACTION

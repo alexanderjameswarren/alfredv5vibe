@@ -78,7 +78,9 @@ const INGESTIBLE_BUCKETS = new Set(["Today", "Yesterday"]);
 // platform_runs.status CHECK vocabulary. 'partial' means it ran and wrote
 // something but not everything — which is what a run with an unfillable gap
 // records, since the days beyond yesterday are unreachable from the live API.
-const VALID_RUN_STATUS = ["ok", "failed", "auth_expired", "partial"];
+// "running" means OPEN: created before the work starts so a task that dies
+// mid-flight leaves a trace. Only update_platform_run can move a run out of it.
+const VALID_RUN_STATUS = ["running", "ok", "failed", "auth_expired", "partial"];
 
 // ---------------------------------------------------------------------------
 // Shapes
@@ -505,8 +507,34 @@ export const createPlatformRunTool = defineTool({
     // timestamps are the honest answer to that, not a negative interval.
     const now = new Date().toISOString();
     const startedAt = (args.started_at as string | undefined) ?? now;
-    const finishedAt = (args.finished_at as string | undefined) ?? now;
-    if (finishedAt < startedAt) {
+
+    // A RUNNING row has NOT finished, so finished_at must be null.
+    //
+    // Defaulting it to `now` (which is right for every other status) would give
+    // every open run a finish time: durations would read as zero rather than
+    // "still going", and the orphan sweep in the daily task - which looks for
+    // rows still `running` well after they started - would be reading a row
+    // that claims to have ended.
+    if (status === "running") {
+      if (args.finished_at !== undefined) {
+        throw new Error(
+          "create_platform_run: a `running` run cannot have `finished_at`. It has " +
+            "not finished. Close it with update_platform_run, which sets " +
+            "finished_at at the moment it closes.",
+        );
+      }
+      if (args.covered_from !== undefined || args.covered_to !== undefined) {
+        throw new Error(
+          "create_platform_run: a `running` run cannot assert coverage yet - it has " +
+            "not polled anything. Pass covered_from/covered_to to " +
+            "update_platform_run when closing it.",
+        );
+      }
+    }
+    const finishedAt = status === "running"
+      ? null
+      : ((args.finished_at as string | undefined) ?? now);
+    if (finishedAt !== null && finishedAt < startedAt) {
       throw new Error(
         `create_platform_run: finished_at (${finishedAt}) is before started_at ` +
           `(${startedAt}). Nothing was written. A run cannot end before it begins — ` +
@@ -585,9 +613,19 @@ export const updatePlatformRunTool = defineTool({
 
     const status = args.status as string | undefined;
     const notifiedAt = args.notified_at as string | undefined;
-    if (status === undefined && notifiedAt === undefined) {
+    const coveredFrom = args.covered_from as string | null | undefined;
+    const coveredTo = args.covered_to as string | null | undefined;
+    const details = args.details as Record<string, unknown> | undefined;
+    const errorMessage = args.error_message as string | null | undefined;
+
+    const closing = status !== undefined;
+    const outcomeFields = coveredFrom !== undefined || coveredTo !== undefined ||
+      details !== undefined || errorMessage !== undefined;
+
+    if (!closing && notifiedAt === undefined && !outcomeFields) {
       throw new Error(
-        "update_platform_run: nothing to change — pass `status`, `notified_at`, or both.",
+        "update_platform_run: nothing to change — pass `status` (to close a running " +
+          "run), `notified_at`, or both.",
       );
     }
     if (status !== undefined && !VALID_RUN_STATUS.includes(status)) {
@@ -595,15 +633,71 @@ export const updatePlatformRunTool = defineTool({
         `update_platform_run: \`status\` must be one of ${VALID_RUN_STATUS.join(", ")}.`,
       );
     }
+    if (status === "running") {
+      throw new Error(
+        "update_platform_run: cannot set status to `running`. This tool CLOSES a run " +
+          "that is already open; it cannot reopen one.",
+      );
+    }
+    if (outcomeFields && !closing) {
+      throw new Error(
+        "update_platform_run: covered_from/covered_to/details/error_message may only " +
+          "be written while CLOSING a run, i.e. together with `status`. They are what " +
+          "the run asserts, and a closed run's assertions are not editable.",
+      );
+    }
 
-    // DELIBERATELY NARROW: status and notified_at only.
+    // A FAILURE MUST SAY WHY. Enforced here rather than asked for in a prompt.
+    //
+    // The first live scheduled run stamped `failed` with empty details, a null
+    // error_message and no failure_kind - a failure recorded with not one word
+    // about the cause, indistinguishable from a run that failed for no reason.
+    // A prompt asking nicely did not prevent it; a tool that refuses the write
+    // does. See spec §11.11.
+    if (status === "failed" || status === "auth_expired") {
+      const kind = details?.failure_kind;
+      if (!errorMessage || !String(errorMessage).trim()) {
+        throw new Error(
+          `update_platform_run: a \`${status}\` run MUST carry \`error_message\`. ` +
+            `Nothing was changed. Pass the failure's own words, verbatim - a failure ` +
+            `logged without its cause is indistinguishable from one that failed for ` +
+            `no reason, and nobody can act on it later.`,
+        );
+      }
+      if (!kind || typeof kind !== "string" || !kind.trim()) {
+        throw new Error(
+          `update_platform_run: a \`${status}\` run MUST carry ` +
+            `\`details.failure_kind\` (e.g. wrong_host, workshop_unreachable, ` +
+            `youtube_auth, supabase_write, unknown). Nothing was changed. Without it ` +
+            `the notification de-dup cannot tell a still-broken thing from a newly ` +
+            `broken one, and will either spam or go silent.`,
+        );
+      }
+    }
+
+    // STILL NARROW, BUT NOW IT CAN CLOSE A RUN.
     //
     // platform_runs is a LOG, and a log you can rewrite is a log you cannot
     // trust — §11.4 is about records drifting from the thing they describe, and
-    // a general "edit any run" tool would make that drift a feature. app, job,
-    // executor, covered_from, covered_to, started_at and details are what a run
-    // ASSERTS; they are not editable here and are absent from the input schema
-    // rather than merely ignored.
+    // a general "edit any run" tool would make that drift a feature.
+    //
+    // The rule that keeps that true while allowing the open-then-close pattern:
+    // A RUN THAT IS OPEN CAN BE CLOSED. A RUN THAT IS CLOSED CANNOT BE REWRITTEN.
+    // The outcome fields are writable ONLY on a transition out of `running`, and
+    // the filter that enforces it is part of the UPDATE statement itself
+    // (`.eq("status", "running")`), so it is atomic rather than a check-then-act
+    // that two writers could interleave through.
+    //
+    // app, job, executor and started_at are never editable — they are what the
+    // run IS, fixed when it opened.
+    //
+    // notified_at is the exception and is settable on a CLOSED run, because it
+    // records OUR NOTIFICATION BEHAVIOUR rather than anything about the run:
+    // §6 sets it once a failure has actually been surfaced, which is necessarily
+    // after the row exists. Rewriting it cannot make the log disagree with what
+    // happened. Doing it by insert-order instead — notify first, then stamp with
+    // notified_at preset — fails exactly where it matters: if the stamp then
+    // fails, a notification exists describing a run with no row.
     //
     // The one field that genuinely has to change after the fact is notified_at:
     // §6 sets it once a failure has actually been surfaced, which is necessarily
@@ -626,17 +720,44 @@ export const updatePlatformRunTool = defineTool({
       );
     }
 
-    const patch: Record<string, unknown> = {};
-    if (status !== undefined) patch.status = status;
-    if (notifiedAt !== undefined) patch.notified_at = notifiedAt;
+    if (closing && (before as Record<string, unknown>).status !== "running") {
+      throw new Error(
+        `update_platform_run: run ${id} has status ` +
+          `"${(before as Record<string, unknown>).status}", not "running". A run that ` +
+          `has already been closed cannot be re-stamped — that is the property that ` +
+          `makes this log trustworthy. Nothing was changed. If the outcome was ` +
+          `recorded wrongly, write a NEW run rather than editing this one.`,
+      );
+    }
 
-    const { data, error } = await ctx.db
-      .from("platform_runs")
-      .update(patch)
-      .eq("id", id)
+    const patch: Record<string, unknown> = {};
+    if (status !== undefined) {
+      patch.status = status;
+      // Closing IS finishing, and the moment is now — not whenever the caller
+      // remembers to pass one.
+      patch.finished_at = new Date().toISOString();
+    }
+    if (notifiedAt !== undefined) patch.notified_at = notifiedAt;
+    if (coveredFrom !== undefined) patch.covered_from = coveredFrom;
+    if (coveredTo !== undefined) patch.covered_to = coveredTo;
+    if (details !== undefined) patch.details = details;
+    if (errorMessage !== undefined) patch.error_message = errorMessage;
+
+    let q = ctx.db.from("platform_runs").update(patch).eq("id", id);
+    // Atomic guard, not a re-check: two writers racing to close the same run
+    // cannot both win, because the second one's WHERE matches nothing.
+    if (closing) q = q.eq("status", "running");
+    const { data, error } = await q
       .select("id, app, job, executor, host, status, started_at, finished_at, covered_from, covered_to, details, error_message, notified_at")
-      .single();
+      .maybeSingle();
     if (error) throw new Error(`update_platform_run: ${error.message}`);
+    if (!data) {
+      throw new Error(
+        `update_platform_run: run ${id} was not closed — its status changed between ` +
+          `the read and the write, so something else closed it first. Nothing was ` +
+          `changed. Re-read it with get_platform_runs before deciding what to do.`,
+      );
+    }
 
     const prev = before as Record<string, unknown>;
     return {
@@ -649,6 +770,10 @@ export const updatePlatformRunTool = defineTool({
         ...(notifiedAt !== undefined
           ? { notified_at: { from: prev.notified_at, to: notifiedAt } }
           : {}),
+        ...(coveredFrom !== undefined ? { covered_from: { to: coveredFrom } } : {}),
+        ...(coveredTo !== undefined ? { covered_to: { to: coveredTo } } : {}),
+        ...(details !== undefined ? { details: { to: details } } : {}),
+        ...(errorMessage !== undefined ? { error_message: { to: errorMessage } } : {}),
       },
     };
   },
