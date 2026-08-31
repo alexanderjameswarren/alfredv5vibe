@@ -1,11 +1,26 @@
-# DJ Takeout bulk import — per-batch dry-run-then-confirm.
+﻿# DJ Takeout bulk import - per-batch dry-run-then-confirm.
+#
+# ASCII ONLY IN THIS FILE, AND IT IS SAVED AS UTF-8 WITH BOM. Both, deliberately.
+#
+# Without a BOM, PowerShell 5.1 reads a .ps1 as Windows-1252. An em-dash (U+2014
+# = E2 80 94) and a box-drawing char (U+2500 = E2 94 80) both contain byte 0x94,
+# which in Windows-1252 is U+201D RIGHT DOUBLE QUOTATION MARK - and PowerShell
+# accepts curly quotes as string delimiters. Each one inside a Write-Host string
+# therefore injects a phantom closing quote. An earlier version of this file had
+# 39 of them, an odd number, so the final string never closed and the parser
+# failed at the last line with a misleading "missing terminator" plus knock-on
+# brace errors 70 lines earlier.
+#
+# The BOM alone would fix it. ASCII alone would fix it. Keep both: the BOM is
+# easy to lose to an editor or a git filter, and ASCII output is what a Windows
+# console renders correctly anyway.
 #
 # The batch files go straight from disk to the Edge Function. The data never
-# passes through a model, which is the entire point: ~15,000 rows cannot travel
+# passes through a model, which is the entire point: ~16,800 rows cannot travel
 # through a conversation's context, and a model acting as transport can corrupt
 # a title into an insert-only match_key.
 #
-# The endpoint calls record_dj_plays itself — it never reimplements it — so the
+# The endpoint calls record_dj_plays itself - it never reimplements it - so the
 # single-implementation guarantee that ruled out a direct PostgREST write holds.
 #
 # GET THE TOKEN (browser console, on the Alfred tab, signed in):
@@ -16,12 +31,12 @@
 #
 # USAGE, from the repo root:
 #
-#   .\scripts\dj-import-takeout.ps1 -Token "<paste>"                 # batch 1 only
-#   .\scripts\dj-import-takeout.ps1 -Token "<paste>" -From 1 -To 31  # all of them
 #   .\scripts\dj-import-takeout.ps1 -Token "<paste>" -DryRunOnly     # never writes
+#   .\scripts\dj-import-takeout.ps1 -Token "<paste>"                 # batch 1 only
+#   .\scripts\dj-import-takeout.ps1 -Token "<paste>" -From 1 -To 34  # all of them
 #
 # Each batch: dry run, print the numbers, then ASK. Nothing is written without a
-# keypress. 31 confirmations is a keypress each, not a transcription risk each —
+# keypress. 34 confirmations is a keypress each, not a transcription risk each -
 # solving transport by removing the review gate would be a bad trade.
 
 param(
@@ -48,23 +63,23 @@ function Invoke-Batch($file, $mode) {
         Write-Host ""
         Write-Host "  If this was a CONFIRM, read the message above carefully: a" -ForegroundColor Yellow
         Write-Host "  part-way failure reports exactly how many rows COMMITTED, and" -ForegroundColor Yellow
-        Write-Host "  re-running the same batch is safe — the unique index absorbs" -ForegroundColor Yellow
+        Write-Host "  re-running the same batch is safe. The unique index absorbs" -ForegroundColor Yellow
         Write-Host "  what already landed." -ForegroundColor Yellow
         throw
     }
 }
 
 Write-Host ""
-Write-Host "  DJ Takeout import — batches $From..$To" -ForegroundColor Cyan
-if ($DryRunOnly) { Write-Host "  DRY RUN ONLY — nothing will be written" -ForegroundColor Yellow }
+Write-Host "  DJ Takeout import - batches $From..$To" -ForegroundColor Cyan
+if ($DryRunOnly) { Write-Host "  DRY RUN ONLY - nothing will be written" -ForegroundColor Yellow }
 Write-Host ""
 
 foreach ($i in $From..$To) {
     $name = "batch_{0:D3}.json" -f $i
     $file = Join-Path $BatchDir $name
-    if (-not (Test-Path $file)) { Write-Host "  $name  MISSING — skipped" -ForegroundColor Yellow; continue }
+    if (-not (Test-Path $file)) { Write-Host "  $name  MISSING - skipped" -ForegroundColor Yellow; continue }
 
-    Write-Host "  ── $name ─────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  ---- $name ----------------------------------" -ForegroundColor DarkGray
     $d = Invoke-Batch $file "dry_run"
 
     Write-Host ("     submitted {0}   would insert {1}   already held {2}" -f `
@@ -73,7 +88,7 @@ foreach ($i in $From..$To) {
         $d.tracks_seen, $d.tracks_would_create, $d.tracks_already_known)
     Write-Host ("     covers {0} .. {1}" -f $d.covered_from, $d.covered_to)
 
-    # Per batch, not aggregated at the end: a third split act among the ~1,190
+    # Per batch, not aggregated at the end: a third split act among the ~1,241
     # artists the alias map cannot anticipate should be visible in the batch
     # that surfaced it, while there is still a decision to make about it.
     if ($d.artist_disagreements -and $d.artist_disagreements.Count -gt 0) {
