@@ -1787,6 +1787,68 @@ Only **4 adjacent pairs sit under 300s** (min 23s), the range where "one play lo
 twice" is even plausible - and those are equally consistent with a restart. Out of
 16,766 rows, not a reason to exclude anything.
 
+### 2026-08-31 - batches 30 and 32 fail with a 500. CAUSE NOT YET KNOWN.
+
+Batches 30 and 32 return a 500 on the **dry run**, reproducibly. 31, 33 and 34 pass.
+Batches 1-29, 31, 33, 34 are written; **30 and 32 are outstanding.**
+
+**THE FAILURE IS ATOMIC. THERE IS NO PARTIAL STATE.** This is the property that makes
+the situation recoverable rather than a mess, so it was verified three independent
+ways rather than inferred once:
+
+1. Batch 30's **exclusive** date range (2024-11-17 .. 2024-12-11) holds **0 rows**. The
+   65 rows in the overlapping window are batch 31's, on the shared 2024-11-16 boundary.
+2. **25 videos exclusive to batch 30, spread across insert positions 13-311**, all come
+   back `known_track: false`. No tracks were created either.
+3. Replaying batches 1-29 through the real `record_dj_plays` into the test harness's
+   fake DB lands on **exactly 14,500 plays**, matching the live count.
+
+**Re-running batch 30 or 32 is therefore safe** once the cause is known - nothing to
+clean up, nothing to reconcile.
+
+⚠️ **THE 40-ROW "PARTIAL COMMIT" WAS AN ARITHMETIC SLIP, NOT A PARTIAL WRITE.** 14,500
+looked like 40 rows too many because the count of batches 1-29 omitted the **40 tranche
+rows that existed before batch 1**: 40 + 460 + (28 x 500) = 14,500 exactly. A suspicious
+round number invited a story about chunked writes; it was a missing term.
+
+⚠️ **AND THE FIRST PROBE OF IT PROVED NOTHING.** It sampled the *alphabetically* first 20
+exclusive videos, which says nothing about **insert order** - the order that decides what
+a partial write would have committed. It was re-run positionally before being believed.
+A sample has to be drawn on the axis the hypothesis is about (spec 11.1).
+
+**ELIMINATED** - none of these distinguishes 30 and 32 from 31:
+
+| Hypothesis | Result |
+|---|---|
+| Malformed rows | Identical key sets, no duplicate dedupe keys, no empty/null fields, no control characters, comparable payload sizes |
+| Normaliser/`prepareRows` throws | The **real** function run over all 34 batches: 0 throw |
+| Null `match_key` (the `inf` and heart titles) | Present in 30 **and** 31 - 12 vs 15 |
+| DB state left by the failed confirm | Nothing was written, so nothing changed |
+| Shares videos with a failed batch | 31 shares 71 with batch 30 and passes; 32 shares 83 and fails |
+| Known-track count, query count, `.in()` URL size | 30: 174 known, 31: 139, 32: 108 - not monotonic |
+| Tool logic end to end | Replayed 1-29 then dry-ran 30-34 against the fake DB: **all five pass** |
+
+⚠️ **THE LOCAL REPLAY IS NOT EVIDENCE ABOUT 30 AND 32.** It passes batch 32, which really
+fails. A harness that cannot fail on a known failure says nothing about the unknown ones,
+and it was explicitly NOT used to claim 33 and 34 were safe (spec 11.1).
+
+**A CORRELATION WAS PROPOSED AND IS DEAD.** New-tracks-created ordered the known results
+(31: 117 passes, 30: 139 fails, 32: 180 fails) and predicted a threshold near 130. Alex
+tested it: **batch 33 has 145 new tracks and passes**, 34 has 80 and passes. Not
+monotonic, no threshold. Recorded because it was stated as a falsifiable prediction and
+was killed by one measurement - which is the point of stating it that way. It was never
+recorded as a cause, and no fix was built on it.
+
+**NEXT: does the failure track SIZE or CONTENT.** `dj_split_batch.py` emits each failing
+batch as halves **plus the unchanged 500-row original as a control**. The control matters:
+"both halves passed" is also what a transient fault looks like once it has stopped, so
+without the original still failing in the same session the split is a check that cannot
+fail. Both halves pass -> size or time limit. One half fails -> bisect it.
+
+**⚠️ DO NOT change the import path to make this go away before the cause is known.** A
+workaround that removes the symptom without an explanation is how a silent failure gets
+built into an insert-only table.
+
 ### 2026-08-31 - verification done before regenerating
 
 - **Transport is faithful.** Every `(video_id, artist, title)` in the batch files is

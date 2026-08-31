@@ -44,6 +44,11 @@ param(
     [int]$From = 1,
     [int]$To = 1,
     [switch]$DryRunOnly,
+    # Diagnostic only, and DELIBERATELY INERT unless -DryRunOnly is also set:
+    # continuing past a failure is safe when nothing writes, and is exactly what
+    # you must not do mid-import, where a failed batch may have committed part
+    # of itself and the next batch would bury the evidence.
+    [switch]$ContinueOnError,
     [string]$BatchDir = "workshop\data\dj\takeout-batches",
     [string]$Url = "https://zuqjyfqnvhddnchhpbcz.supabase.co/functions/v1/mcp/import-takeout"
 )
@@ -65,9 +70,16 @@ function Invoke-Batch($file, $mode) {
         Write-Host "  part-way failure reports exactly how many rows COMMITTED, and" -ForegroundColor Yellow
         Write-Host "  re-running the same batch is safe. The unique index absorbs" -ForegroundColor Yellow
         Write-Host "  what already landed." -ForegroundColor Yellow
+        if ($script:ContinueOnError -and $script:DryRunOnly) {
+            Write-Host "  -ContinueOnError: recording the failure and moving on." -ForegroundColor DarkGray
+            return $null
+        }
         throw
     }
 }
+
+$failed = @()
+$passed = @()
 
 Write-Host ""
 Write-Host "  DJ Takeout import - batches $From..$To" -ForegroundColor Cyan
@@ -81,6 +93,8 @@ foreach ($i in $From..$To) {
 
     Write-Host "  ---- $name ----------------------------------" -ForegroundColor DarkGray
     $d = Invoke-Batch $file "dry_run"
+    if ($null -eq $d) { $failed += $name; Write-Host ""; continue }
+    $passed += $name
 
     Write-Host ("     submitted {0}   would insert {1}   already held {2}" -f `
         $d.plays_submitted, $d.would_insert, $d.already_held)
@@ -126,4 +140,9 @@ foreach ($i in $From..$To) {
 }
 
 Write-Host ""
+if ($failed.Count -gt 0 -or ($ContinueOnError -and $DryRunOnly)) {
+    Write-Host "  SUMMARY" -ForegroundColor Cyan
+    Write-Host "    passed: $($passed -join ', ')" -ForegroundColor Green
+    Write-Host "    FAILED: $($failed -join ', ')" -ForegroundColor Red
+}
 Write-Host "  done." -ForegroundColor Cyan
