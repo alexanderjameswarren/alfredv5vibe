@@ -14,7 +14,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  ARTIST_ALIASES,
   buildMatchKey,
+  canonicalArtist,
   normalisePart,
   resolvePlayDate,
   shiftDate,
@@ -214,4 +216,74 @@ test("an unknown bucket throws and names the alternative", () => {
     () => resolvePlayDate("Fortnight ago", "2026-08-27"),
     /unknown played_bucket .* played_on and precision explicitly/s,
   );
+});
+
+
+// ---------------------------------------------------------------------------
+// Artist aliases — one act, two vocabularies (spec §4.1.4)
+// ---------------------------------------------------------------------------
+
+test("aliases translate toward the POLL vocabulary, in both directions", () => {
+  // The direction REVERSES between entries, which is the whole reason no
+  // automatic rule works: "prefer the longer form" fixes one and breaks the
+  // other.
+  assert.equal(canonicalArtist("Eddie Higgins"), "Eddie Higgins Trio");
+  assert.equal(canonicalArtist("The Red Garland Trio"), "Red Garland");
+});
+
+test("an alias makes both spellings produce the SAME match_key", () => {
+  // The point of the map. Without it these are two acts.
+  assert.equal(
+    buildMatchKey(["Eddie Higgins"], "Detour Ahead"),
+    buildMatchKey(["Eddie Higgins Trio"], "Detour Ahead"),
+  );
+  assert.equal(
+    buildMatchKey(["The Red Garland Trio"], "Hey Now"),
+    buildMatchKey(["Red Garland"], "Hey Now"),
+  );
+  assert.equal(buildMatchKey(["Eddie Higgins"], "Detour Ahead"),
+    "eddie higgins trio|detour ahead");
+});
+
+test("matching is case- and whitespace-insensitive but not fuzzy", () => {
+  assert.equal(canonicalArtist("  eddie higgins  "), "Eddie Higgins Trio");
+  assert.equal(canonicalArtist("EDDIE HIGGINS"), "Eddie Higgins Trio");
+  // NOT fuzzy: a near-miss is left alone rather than guessed at.
+  assert.equal(canonicalArtist("Eddie Higgins Quartet"), "Eddie Higgins Quartet");
+});
+
+test("unknown artists pass through untouched", () => {
+  for (const a of ["Weezer", "Coldplay", "Miles Davis", "The Miles Davis Quintet"]) {
+    assert.equal(canonicalArtist(a), a);
+  }
+});
+
+test("Miles Davis is deliberately NOT an alias", () => {
+  // The case that shows the map cannot be automated: whether the Quintet is the
+  // same act for familiarity purposes is a judgment call, and it has not arisen.
+  const froms = ARTIST_ALIASES.map((a) => a.from.toLowerCase());
+  assert.ok(!froms.includes("miles davis"));
+  assert.ok(!froms.includes("the miles davis quintet"));
+  assert.notEqual(
+    buildMatchKey(["Miles Davis"], "So What"),
+    buildMatchKey(["The Miles Davis Quintet"], "So What"),
+  );
+});
+
+test("every alias records WHY it is correct", () => {
+  // Hand-curation only beats a derived rule if the reasoning survives for the
+  // next person to add an entry.
+  for (const a of ARTIST_ALIASES) {
+    assert.ok(a.why && a.why.length > 60, `${a.from}: missing or thin rationale`);
+    assert.notEqual(a.from.toLowerCase(), a.to.toLowerCase(), "alias must change something");
+  }
+});
+
+test("no alias chains — a `to` is never another entry's `from`", () => {
+  // A chain would make the result depend on evaluation order, which is exactly
+  // the class of silent input to identity the map exists to remove.
+  const froms = new Set(ARTIST_ALIASES.map((a) => a.from.toLowerCase()));
+  for (const a of ARTIST_ALIASES) {
+    assert.ok(!froms.has(a.to.toLowerCase()), `${a.to} is both a target and a key`);
+  }
 });

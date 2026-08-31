@@ -36,6 +36,7 @@ import { clampLimit, defineTool } from "../platform.ts";
 import { resolveTrackIds } from "./dj-tracks.ts";
 import {
   buildMatchKey,
+  canonicalArtist,
   ISO_DATE_RE,
   resolvePlayDate,
   VALID_PRECISION,
@@ -257,7 +258,14 @@ export const recordDjPlaysTool = defineTool({
       prepared.push({
         video_id: p.video_id,
         title: p.title,
-        artist: artists.length > 0 ? artists.join(", ") : null,
+        // The stored column gets the canonical primary too — it is what an
+        // artist-level query reads, and it is where the split actually
+        // hurt: nothing was mis-GROUPED (match_key is artist|title, and 0
+        // same-title pairs existed), but 'when did I last hear Red
+        // Garland' read two different strings for one act.
+        artist: artists.length > 0
+          ? [canonicalArtist(artists[0]), ...artists.slice(1)].join(", ")
+          : null,
         album: source === "poll" ? null : albumIn,
         duration_seconds: p.duration_seconds ?? null,
         match_key: buildMatchKey(artists, p.title),
@@ -282,7 +290,8 @@ export const recordDjPlaysTool = defineTool({
     // via dj-tracks.ts — one implementation, because a divergence between two
     // copies would silently group one import path differently from the other
     // and dj_tracks is insert-only, so the rows could never be corrected.
-    const { idByVideoId, videoIds, createdVideoIds, linked } = await resolveTrackIds(
+    const { idByVideoId, videoIds, createdVideoIds, linked, artistDisagreements } =
+      await resolveTrackIds(
       prepared.map((p) => ({
         video_id: p.video_id,
         title: p.title,
@@ -366,6 +375,11 @@ export const recordDjPlaysTool = defineTool({
       // Returned so grouping decisions can be reviewed — auto-linking is only
       // ever on EXACT normalised match_key equality (spec §4.1.3).
       canonical_links: linked.slice(0, 50),
+      // Same video, two artist spellings = two vocabularies disagreeing about
+      // one act. Empty is the normal case; ANY entry means a new alias-map
+      // candidate. Phase 5's task prompt must read this into the run stamp —
+      // a signal nobody looks at is the shape this project keeps finding.
+      artist_disagreements: artistDisagreements,
       plays_submitted: playRows.length,
       plays_inserted: inserted,
       plays_already_held: playRows.length - inserted,

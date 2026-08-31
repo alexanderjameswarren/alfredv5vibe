@@ -27,8 +27,19 @@ export interface TrackRow {
   id: string;
   video_id: string;
   title: string;
+  /** Carried so a vocabulary disagreement can be DETECTED. Same video, two
+   *  artist spellings, means two naming systems disagree about one act — the
+   *  exact condition the alias map exists for, and the only way a THIRD such
+   *  act gets noticed before it silently splits (spec §4.1.4). */
+  artist: string | null;
   match_key: string | null;
   canonical_track_id: string | null;
+}
+
+export interface ArtistDisagreement {
+  video_id: string;
+  stored: string | null;
+  submitted: string | null;
 }
 
 export interface CanonicalLink {
@@ -45,6 +56,10 @@ export interface ResolveResult {
   videoIds: string[];
   createdVideoIds: string[];
   linked: CanonicalLink[];
+  /** Videos already stored whose incoming artist differs from the stored one.
+   *  Costs nothing — the existing rows are fetched anyway — and turns silent
+   *  vocabulary drift into something the run log shows the day it happens. */
+  artistDisagreements: ArtistDisagreement[];
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -100,7 +115,7 @@ export async function resolveTrackIds(
   for (const ids of chunk(videoIds, IN_CHUNK)) {
     const { data, error } = await ctx.db
       .from("dj_tracks")
-      .select("id, video_id, title, match_key, canonical_track_id")
+      .select("id, video_id, title, artist, match_key, canonical_track_id")
       .in("video_id", ids);
     if (error) throw new Error(`${label}: track lookup failed: ${error.message}`);
     for (const row of (data ?? []) as TrackRow[]) {
@@ -130,7 +145,7 @@ export async function resolveTrackIds(
   for (const keys of chunk(newKeys, IN_CHUNK)) {
     const { data, error } = await ctx.db
       .from("dj_tracks")
-      .select("id, video_id, title, match_key, canonical_track_id, created_at")
+      .select("id, video_id, title, artist, match_key, canonical_track_id, created_at")
       .in("match_key", keys)
       .order("created_at", { ascending: true });
     if (error) throw new Error(`${label}: match_key lookup failed: ${error.message}`);
@@ -192,7 +207,7 @@ export async function resolveTrackIds(
     for (const ids of chunk(waveLeader, IN_CHUNK)) {
       const { data, error } = await ctx.db
         .from("dj_tracks")
-        .select("id, video_id, title, match_key, canonical_track_id")
+        .select("id, video_id, title, artist, match_key, canonical_track_id")
         .in("video_id", ids);
       if (error) throw new Error(`${label}: leader re-read failed: ${error.message}`);
       for (const row of (data ?? []) as TrackRow[]) {
@@ -253,5 +268,23 @@ export async function resolveTrackIds(
     );
   }
 
-    return { idByVideoId, videoIds, createdVideoIds: newVideoIds, linked };
+    // Detect vocabulary disagreement on tracks we ALREADY hold. Insert-only
+  // means the stored spelling wins, so without this the incoming one is
+  // discarded in silence — and a third split act would appear months later
+  // with nothing having flagged it.
+  const artistDisagreements: ArtistDisagreement[] = [];
+  for (const p of prepared) {
+    const known = existing.get(p.video_id);
+    if (known && p.artist && known.artist && known.artist !== p.artist) {
+      artistDisagreements.push({
+        video_id: p.video_id,
+        stored: known.artist,
+        submitted: p.artist,
+      });
+    }
+  }
+
+  return {
+    idByVideoId, videoIds, createdVideoIds: newVideoIds, linked, artistDisagreements,
+  };
   }

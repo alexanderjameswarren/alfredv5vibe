@@ -1324,6 +1324,41 @@ field over. Without it, two groups for one act look like two different songs, wh
 precisely the shape this limitation produces.
 
 
+
+### Artist alias map built 2026-08-30 — verified before batch 2
+
+Two-entry constant in `dj-normalise.ts`, canonicalising toward the poll's vocabulary.
+Full write-up in spec §4.1.4.
+
+**Verification against the export and all 94 poll tracks:**
+
+```
+EXPORT after the map:
+    30 videos   Eddie Higgins        ->  Eddie Higgins Trio
+    16 videos   The Red Garland Trio ->  Red Garland
+   total translated: 46 of 4,563 videos
+
+POLL vs TAKEOUT match_key, all 94 poll videos, WITH the map:
+   identical: 94  |  differing: 0     (was 77 / 17)
+
+Eddie Higgins:        30 export videos -> "Eddie Higgins Trio"  | stored 5  | NEW 25
+The Red Garland Trio: 16 export videos -> "Red Garland"         | stored 12 | NEW 4
+```
+
+**The 25 new Eddie Higgins videos land as `Eddie Higgins Trio`, matching the 5 already
+stored. The 4 new Red Garland videos land as `Red Garland`, matching the 12.** The
+poll/Takeout disagreement goes from 17 to zero.
+
+**The 40 rows already committed need no correction.** Three were Eddie Higgins tracks
+submitted with the channel spelling, and insert-only meant the stored `Eddie Higgins Trio`
+row won — so they were already canonical. No row written so far is wrong.
+
+**107 Alfred-side tests**, including: the direction reverses between entries; matching is
+case- and whitespace-insensitive but **not fuzzy** (`Eddie Higgins Quartet` passes through
+untouched); Miles Davis is asserted absent; every entry must carry a rationale; and **no
+alias chains** — a `to` may never be another entry's `from`, since that would make the result
+depend on evaluation order, which is the very class of silent input the map exists to remove.
+
 ---
 
 ## Phase 4 — Surface deployment ⚠️ FULL PHASE, NOT A STEP
@@ -1420,6 +1455,12 @@ precisely the shape this limitation produces.
       run where the bucket was empty. Same shape as the lossy-feed finding: the failure is
       invisible after the fact unless the run records what it SUBMITTED, not just what
       landed.
+- [ ] 🛑 **THE TASK PROMPT MUST READ `artist_disagreements`** from every
+      `record_dj_plays` response and carry it into `platform_runs.details`. Empty is normal;
+      any entry means two vocabularies disagree about one act and a new alias-map entry is
+      owed (spec §4.1.4). **A signal nobody looks at is the exact shape this project keeps
+      finding** — the detector is free, but only if something reads it.
+
 - [ ] 🛑 **HOST CHECK, EVERY RUN.** The task prompt begins by calling
       `get_workshop_status` and confirming `host` is `"surface"`, and STOPS if it is not.
       Promoted out of the drafting parenthetical it used to live in, because anything

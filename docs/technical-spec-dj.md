@@ -204,6 +204,62 @@ because a reprise is a different piece of music.
 instrumental cut is plausibly a distinct recording worth counting separately. Revisit
 with evidence, not by assumption.
 
+
+#### 4.1.4 Artist aliases — one act, two vocabularies
+
+**The precise diagnosis: nothing is mis-GROUPED. The damage was in `dj_tracks.artist`.**
+
+`match_key` is `artist|title`, so two tracks group only if BOTH halves match — and there are
+**0 same-title-different-video pairs** for either affected act. So the differing artist
+prefixes never caused a wrong grouping. What they did cause is **two strings for one act in
+the `artist` column**, which is what an artist-level query reads. "You haven't listened to
+Red Garland in a while" was the thing that broke: a confident wrong answer, not a
+mis-merged track.
+
+**Measured 2026-08-30, across all 94 poll tracks and all 4,563 export videos:**
+
+| | Poll (YouTube Music metadata) | Takeout (`- Topic` channel) | Stored | Export-only |
+|---|---|---|---|---|
+| Eddie Higgins | `Eddie Higgins Trio` | `Eddie Higgins` | 5 | 25 |
+| Red Garland | `Red Garland` | `The Red Garland Trio` | 12 | 4 |
+
+**⚠️ The direction REVERSES between the two.** For Eddie Higgins the metadata carries the
+ensemble name; for Red Garland the channel does. **That is why no automatic rule works** —
+"prefer the longer form" or "strip a trailing Trio/Quartet" fixes one and breaks the other.
+
+**Both vocabularies are internally consistent.** 0 split pairs among the export's 1,206
+artists, 0 among the poll's. This is not a naming mess; it is two consistent systems meeting
+at one boundary, which is why a map needs so few entries.
+
+**The map is a CONSTANT in `dj-normalise.ts`, not a table.** A table is read at runtime while
+`match_key` is frozen at write, so an edit on a Tuesday would make rows written Monday and
+Wednesday differ — no code change, no deploy, nothing recording why. That is §11.6 with its
+worst axis: table state as a silent input to identity, leaving no trace. A constant is in git
+and versioned with its reader. **Changing it is a migration (§4.1.2), not a deploy.**
+
+**Direction: canonicalise to the POLL's vocabulary**, even though the export is the larger
+population. **"Which source keeps writing" beats "larger population":** Takeout is a one-time
+import, the poll runs forever. Translating toward the poll applies the map once at import and
+never again, and leaves the 17 already-stored rows **already correct — no UPDATE needed**,
+so the insert-only guarantee is never bent.
+
+**Every entry records WHY it is correct**, not just the mapping. Hand-curation is only better
+than a derived rule if the reasoning survives for whoever adds the third entry.
+
+**⚠️ MILES DAVIS IS DELIBERATELY NOT AN ENTRY — the case that shows this cannot be
+automated.** He is the export's largest artist at 132 videos, and led quintets, sextets and
+large ensembles across four decades. Whether `Miles Davis` and `The Miles Davis Quintet` are
+one act *for familiarity purposes* is a genuine judgment call — someone deep in *Kind of
+Blue* has not thereby heard *Bitches Brew*. **No such split exists in the data today.** If one
+arises it needs deciding, not inferring.
+
+**Detection, so the third split is not silent.** `resolveTrackIds` already fetches existing
+tracks by `video_id`; it now carries `artist` too and returns **`artist_disagreements`** —
+same video, two spellings — in every `record_dj_plays` response. Empty is the normal case;
+any entry is a new alias candidate. **Phase 5's task prompt must read it into the run stamp**,
+because a signal nobody looks at is the failure this project keeps finding. This also covers
+the ~1,190 export artists the map cannot anticipate.
+
 #### 4.1.2 Consequence of write-once: a normaliser change is a migration
 
 `dj_tracks` writes are insert-only (`ON CONFLICT (user_id, video_id) DO NOTHING`), and
@@ -1010,39 +1066,15 @@ more than was asked for, so the library never paginated and never trimmed.
 **A declared cap is enforced by slicing in the handler or it is not enforced at all.**
 Assume it of every ytmusicapi call that takes a `limit`, including ones not yet used.
 
-**⚠️ KNOWN LIMITATION — ONE ARTIST, TWO IDENTITIES, DECIDED BY IMPORT ORDER.**
-
-The poll takes YouTube Music's artist metadata; the Takeout import takes the `- Topic`
-channel name. Where those differ **in the PRIMARY artist**, the same act produces two
-`match_key` groups and can never be merged, because `dj_tracks` is insert-only and
-`match_key` is written once (§4.1.2).
-
-**Multi-artist collaborations are NOT affected.** `buildMatchKey` uses `artists[0]` only,
-and both sources agree on the primary — the poll stores the joined string
-(`Coldplay, BTS`) in `dj_tracks.artist` but keys on `Coldplay`, exactly as Takeout does.
-
-**Measured 2026-08-30:** of 12 both-sides pairs compared, 9 produced identical keys and 3
-differed — all the same artist:
-
-| | Poll | Takeout | Videos in export |
-|---|---|---|---|
-| Eddie Higgins | `Eddie Higgins Trio` | `Eddie Higgins` | 3 poll-first, **27 further** |
-| Red Garland | `The Red Garland Trio` | `The Red Garland Trio` | 16, consistent — no split |
-
-Neither source is reliably richer: the export already carries 40 artists **with** ensemble
-suffixes (`Dave Brubeck Quartet` ×25, `Glenn Miller Orchestra` ×5), so "the channel is the
-bare name" is not a rule. Exposure is bounded by how many artists the poll has touched at
-all — about 16 of the export's **1,206** distinct artists.
-
-**Deliberately NOT fixed.** A suffix-stripping rule (`Trio`, `Quartet`, …) cannot be
-validated and would merge genuinely distinct acts, which is the §4.1.2 trap the vocabulary
-approach exists to avoid. "Prefer the poll spelling" fires for ~16 of 1,206 artists while
-adding a permanent second code path. A bounded, measured, recorded inconsistency is the
-better trade.
-
-**`dj_artists.mbid` is the eventual real answer** — a MusicBrainz identifier is stable
-across spellings, and phase 7 needs it anyway because setlist.fm keys artist queries by it
-rather than by name. That is where this gets solved, not in the normaliser.
+**⚠️ ARTIST VOCABULARY SPLIT — RESOLVED by the alias map (§4.1.4).** The poll reads YouTube
+Music's artist metadata; Takeout reads the `- Topic` channel name. Two acts differed —
+Eddie Higgins and Red Garland — and the direction reversed between them, so no automatic
+rule could fix both. Now handled by a two-entry hand-curated constant canonicalising toward
+the poll's vocabulary, with `artist_disagreements` surfacing any future case. Verified: all
+94 poll videos now produce identical `match_key`s to their Takeout counterparts, and 46 of
+4,563 export videos are translated on import. **`dj_artists.mbid` remains the eventual real
+answer** and phase 7 needs it anyway for setlist.fm, but it would have meant fuzzy-matching
+1,206 artists to solve a two-row problem.
 
 **⚠️ THE HISTORY FEED IS LOSSY, NOT MERELY TRUNCATED.** Three independent observations:
 items leave the page from the MIDDLE rather than the tail (`Today` 28→29 while `This week`
