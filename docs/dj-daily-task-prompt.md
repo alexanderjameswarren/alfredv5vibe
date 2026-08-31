@@ -13,6 +13,21 @@ cold reader needs.
 - **Edit rule:** change this file, then paste it into the task. Never edit the task alone,
   or this file becomes a description of something that no longer exists.
 
+## The record and the notification are SEPARATE, deliberately
+
+| | when | where |
+|---|---|---|
+| **Record** | **every run**, success or failure | `platform_runs` — the durable log the staleness check reads |
+| **Notification** | **only** failure, `partial`, or a non-empty `artist_disagreements` | one Alfred **inbox item** |
+
+**A clean run raises nothing.** A signal that fires on the normal case teaches its reader
+to skip it — the same principle that stopped `artist_disagreements` firing on every
+collaboration (spec §11.7), applied to a human inbox rather than to a tool. A daily "the
+sync worked" would train exactly the reflex that makes the one broken day invisible.
+
+The inbox is the surface actually checked daily. **The task's chat output is not a
+notification channel** — assume nobody reads it.
+
 ---
 
 ## THE PROMPT — everything below the line goes into the task
@@ -45,23 +60,28 @@ improvise.**
    files, character encodings and HTTP transports — to find an expired token that the
    server had been naming in every single response.
 
+**Whenever a step below says STOP: go to Step 7, then Step 8, then finish.** Stopping still
+means stamping the run and raising an inbox item. It does not mean going quiet.
+
 ---
 
 ### Step 1 — Confirm you are on the right Workshop host
 
 Call `get_workshop_status`.
 
-- **`host` must be `"surface"`.** If it is anything else (`"dev"`, or missing), **STOP
-  IMMEDIATELY** and report: *"Wrong Workshop host: got `<value>`, expected `surface`. The
-  dev host was reachable instead of the Surface. Nothing was polled."*
+- **`host` must be `"surface"`.** If it is anything else (`"dev"`, or missing), **STOP.**
+  Failure reason: *"Wrong Workshop host: got `<value>`, expected `surface`."*
+  **ACTION for the inbox item:** *"The dev host answered instead of the Surface. Check
+  which Workshop instance the connector is pointed at."*
 
-  Why this matters enough to stop: both hosts expose **identically named tools**. If the
-  dev desktop answers, the task silently polls a machine that is sometimes off, and the
-  failure looks like "quiet listening days" for a week before anyone notices.
+  Why this is worth stopping for: both hosts expose **identically named tools**. If the dev
+  desktop answers, the task silently polls a machine that is sometimes off, and the failure
+  looks like "quiet listening days" for a week before anyone notices.
 
-- If Workshop is **unreachable entirely**, STOP and report:
-  *"Workshop is unreachable. ACTION: check the Surface is powered on and the Workshop
-  service is running on it."* Quote the error verbatim.
+- If Workshop is **unreachable entirely**, **STOP.**
+  Failure reason: the verbatim error.
+  **ACTION:** *"Check the Surface is powered on and the Workshop service is running on
+  it."*
 
 ⚠️ `credential_readable: true` **IS NOT AN AUTH CHECK.** It proves a credential file exists
 and can be read. It does not prove YouTube still accepts the cookie. An expired credential
@@ -74,8 +94,10 @@ Two calls, and they answer different questions:
 
 1. `get_dj_plays` with `mode: "plays"`, `limit: 1` → the newest `played_on` in the data.
    **This is the authority.**
-2. `get_platform_runs` for `app: "dj"`, `job: "daily_history_sync"`, newest `ok` run →
-   its `covered_to`. **This is a claim.**
+2. `get_platform_runs` for `app: "dj"`, `job: "daily_history_sync"` → the newest `ok` run
+   and its `covered_to`. **This is a claim.**
+   Also keep the last few runs from this call — Step 7 needs them to decide whether an
+   inbox item has already been raised for a condition that is still unfixed.
 
 **Where they disagree, THE DATA WINS.** The run log asserts coverage and nothing can check
 that assertion — there is no link from a run to the rows it produced. Note any disagreement
@@ -94,24 +116,27 @@ Let `today_utc` be today's date in **UTC** — not local, not Pacific. Compute
 | gap | meaning | what to do |
 |---|---|---|
 | 0 or 1 day | normal | Nothing special. The `Yesterday` bucket covers it — this is why the cadence is daily. |
-| 2+ days | **permanently lost** | Everything older than yesterday is unreachable from the live API. Coarse buckets are rejected by `record_dj_plays`. **Do not attempt a backfill** — it is guaranteed to fail and is only noise. Continue with Steps 4–6, then do Step 7. |
+| 2+ days | **permanently lost** | Everything older than yesterday is unreachable from the live API. Coarse buckets are rejected by `record_dj_plays`. **Do not attempt a backfill** — it is guaranteed to fail and is only noise. Continue with Steps 4–6; the run ends `partial` and Step 7 notifies. |
 
 **The data is gone. Your job is to record that accurately, not to pretend otherwise.**
 
-### Step 4 — Poll YouTube
+### Step 4 — Open the run stamp, then poll YouTube
 
-Call `create_platform_run` first, with `app: "dj"`, `job: "daily_history_sync"`,
+Call `create_platform_run` with `app: "dj"`, `job: "daily_history_sync"`,
 `status: "running"`. Do this **before** polling, so a task that dies mid-run leaves a
-started-but-never-finished stamp — which is itself a signal.
+started-but-never-finished stamp — which is itself a signal. Keep the run id.
 
 Then call `get_dj_history`.
 
-- If it returns an **`auth_expired:` error**, STOP and report:
-  *"YouTube credential expired. ACTION: run the reauth tile on the Surface to refresh
-  `browser.json`. Nothing was polled or written."*
-  Then update the run to `status: "failed"` with the verbatim error in `details`. **This is
-  the failure that proves Step 1's credential note.**
-- Any other error: STOP, quote it verbatim, stamp the run failed.
+- **`auth_expired:` error → STOP.**
+  Failure reason: the verbatim error.
+  **ACTION:** *"YouTube credential expired. Run the reauth tile on the Surface to refresh
+  `browser.json`."*
+  This is the failure Step 1's credential note predicts: `credential_readable` was true and
+  the credential was dead anyway.
+- **Any other error → STOP**, with the verbatim error and no invented ACTION. If you cannot
+  name a specific remedy, say so: *"No known remedy for this error — needs investigation."*
+  A made-up instruction is worse than an honest gap.
 
 ### Step 5 — Filter to Today and Yesterday, and only those
 
@@ -137,15 +162,17 @@ Call `record_dj_plays` with the filtered plays and **`poll_date` = `today_utc`**
 > bucket *label* and never learns time-of-day, so a poll row can never be converted to a
 > local date. The information does not exist in the feed.
 
-If the write fails, STOP and report verbatim. If the error mentions **JWT, token, auth or
-connector**, add: *"ACTION: reconnect the Alfred v5 connector. Use **'Use your own OAuth
-client'** with client_id `2804f812-ea1a-4827-9443-3421fc4771f5` and a **blank** secret. Do
-NOT use 'No client ID — register one automatically'; dynamic registration fails on
-reconnect."*
+If the write fails, **STOP** with the verbatim error. If the error mentions **JWT, token,
+auth or connector**, the ACTION is: *"Reconnect the Alfred v5 connector. Use **'Use your
+own OAuth client'** with client_id `2804f812-ea1a-4827-9443-3421fc4771f5` and a **blank**
+secret. Do NOT use 'No client ID — register one automatically'; dynamic registration fails
+on reconnect."*
 
-Then `update_platform_run`, carrying **from the tool's response, not from memory**:
+Then `update_platform_run` on the run id from Step 4, carrying **from the tool's response,
+not from memory**:
 
-- `status` — `ok` normally; `partial` only if Step 3 found a 2+ day gap.
+- `status` — `ok` normally; `partial` if Step 3 found a 2+ day gap; `failed` if a step
+  stopped.
   ⚠️ **A day with zero plays is `ok` with zeros. It is NEVER `failed`.** A quiet day is a
   normal outcome, and marking it failed makes the staleness signal cry wolf — which is how
   people learn to ignore it.
@@ -158,12 +185,18 @@ Then `update_platform_run`, carrying **from the tool's response, not from memory
   - `page_full`, `oldest_bucket_is_partial`
   - `artist_disagreements` — **copy the array whole, even when empty.**
   - Any disagreement found in Step 2 between the data and the previous `covered_to`.
+  - On a failure: the **verbatim error text** and the HTTP status if there was one. Never
+    just `status: "failed"` — a month of unexplained failures is a month with nothing to
+    act on.
+  - `failure_kind`, one of `wrong_host`, `workshop_unreachable`, `youtube_auth`,
+    `supabase_write`, `unknown` — Step 7 uses it to tell a still-broken thing from a newly
+    broken one.
   - If this run was started by hand rather than by the schedule, set `manual: true`.
     The staleness check uses this to ask *"is the automation alive?"* separately from
     *"is the data current?"* — without it, a manual run masks a dead scheduler.
 
 > **On `artist_disagreements`:** a non-empty array means two vocabularies disagree about
-> one act, and a new alias-map entry may be owed. Report it prominently.
+> one act, and a new alias-map entry may be owed.
 >
 > ⚠️ **An empty array is NOT evidence that no split exists**, and do not word it as if it
 > were. The detector only fires when the **same video** carries a different stored artist.
@@ -175,17 +208,45 @@ Then `update_platform_run`, carrying **from the tool's response, not from memory
 > artists. Eyeballing the `artist` strings yourself will fire on every collaboration,
 > because a collaboration stores a joined string and submits one name.
 
-### Step 7 — Only if Step 3 found a 2+ day gap
+### Step 7 — Notify, but ONLY if something needs attention
 
-Raise **ONE** inbox item naming the lost date range and saying plainly that **Google
-Takeout is the only recovery path**. Then call `update_platform_run` to set `notified_at`,
-so this does not repeat every day for a gap that will never close.
+**A clean run raises NOTHING here. Skip straight to Step 8.**
 
-One item. Not one per missing day.
+Raise an inbox item if and only if one of these is true:
 
-### Step 8 — Report
+| condition | inbox item |
+|---|---|
+| The run **failed** | Title names the failure kind. Body: the verbatim error, then the **ACTION** from the step that stopped. |
+| The run is **`partial`** (2+ day gap) | Names the lost date range. Body: *"These days are permanently unreachable from the live API. Google Takeout is the only recovery path."* |
+| `artist_disagreements` is **non-empty** | Lists each `video_id` with its stored and submitted artist. Body: *"Two vocabularies disagree about one act. A new alias-map entry may be owed — see spec §4.1.4."* |
 
-Structure it exactly like this, so six months of these are skimmable and comparable:
+**Every item carries a specific remedy, never a generic alert.** Use the exact ACTION
+wording from the step that stopped. *"The sync failed"* is an item that will be ignored;
+*"Run the reauth tile on the Surface"* is one that gets acted on.
+
+**Do not re-raise an item for a condition that is still unfixed.** Using the recent runs
+from Step 2:
+
+- If the most recent run with the **same `failure_kind`** already has `notified_at` set,
+  **and there has been no `ok` run since it**, then the condition is already reported.
+  Stamp this run and raise nothing.
+- Otherwise raise the item, then call `update_platform_run` to set `notified_at` on **this**
+  run.
+
+An `ok` run in between resets this: a thing that broke, was fixed, and broke again is new
+information and deserves a new item. One broken credential should produce one item, not
+seven — but two separate outages should produce two.
+
+⚠️ **If the failure was `supabase_write`, you may not be able to do any of this** — the
+inbox and `platform_runs` live behind the same connector. Report it in Step 8 and stop.
+**This is the one failure the task cannot record**, and it is covered instead by the
+staleness check noticing that no run arrived at all.
+
+### Step 8 — Report to the chat
+
+Nobody may read this; the inbox item from Step 7 is the real channel. Write it anyway, in
+exactly this shape, so that when someone does go looking, six months of runs are skimmable
+and comparable:
 
 ```
 DJ daily sync — <today_utc>
@@ -201,6 +262,7 @@ DJ daily sync — <today_utc>
   artist disagreements: <n>   <list them if any>
   page_full: <bool>   oldest_bucket_is_partial: <bool>
   status stamped: <ok | partial | failed>
+  inbox item raised: <yes, "<title>" | no — clean run | no — already notified>
 ```
 
 Every number above comes from a tool response. If you do not have one, write `unknown` —
@@ -220,19 +282,28 @@ never a guess, and never a number you expected.
   trusting the feed *more* — and the feed cannot prove absence, so the best possible outcome
   of that investigation is permission to do something already ruled out.
 - **No auth inference from `credential_readable`.** See Step 1.
+- **No notification on success.** See the table at the top of this file.
 
 **The failure this task cannot report, by construction:** if the Alfred connector is down,
-the task cannot write `status: "failed"` — `platform_runs` is on the far side of the thing
-that is broken. **Connector death is detectable only by ABSENCE**, i.e. no new run
-appearing at all. That is what makes the Phase 6 staleness mitigations load-bearing rather
-than a nicety, and it is why the staleness query must alarm on *nothing arriving*, not only
-on runs stamped failed.
+the task can write neither `status: "failed"` nor an inbox item — both live on the far side
+of the thing that is broken. **Connector death is detectable only by ABSENCE**, i.e. no new
+run appearing at all. That is what makes the Phase 6 staleness mitigations load-bearing
+rather than a nicety, and it is why the staleness query must alarm on *nothing arriving*,
+not only on runs stamped failed.
 
-**Open question, to answer on day one rather than assume:** whether the scheduled-task
-runtime refreshes the connector's OAuth access token transparently. The hourly token expiry
-seen during the Phase 8 import was a **hand-copied browser session JWT** used only by the
-import script — nothing in this task path uses it — and the connector holds a refresh token
-that the platform is responsible for exchanging. That is expected to be transparent but has
-not been observed here. **Let the first scheduled run fire unattended, then check
-`get_platform_runs` for a stamped run.** Success means refresh works. An auth error on day
-one costs nothing and settles it.
+**On the connector's OAuth token — expected to work, and here is why.** The hourly token
+expiry hit during the Phase 8 import was a **hand-copied browser session JWT**, used only by
+the import script and pasted in by hand. **Nothing in this task path uses it.** The
+connector authenticates by OAuth and holds a **refresh token**; minting fresh access tokens
+is the platform's responsibility, not the task's. Different credential, different path, and
+the import's failure mode does not transfer.
+
+That reasoning cannot be *proved* before the first unattended run, and it does not need to
+be: **the cost of being wrong is one skipped day and an unambiguous auth error**, which
+Step 7 will put in the inbox with the reconnect instructions already written. So this is
+recorded as *expected to work*, to be **confirmed or refuted by the first unattended run** —
+not as an unknown blocking the phase.
+
+**Day-one check:** after the first scheduled firing, call `get_platform_runs` for
+`dj`/`daily_history_sync` and confirm a run was stamped. A stamped run means refresh works.
+An auth error means it does not, and settles the question at the cost of one day.
