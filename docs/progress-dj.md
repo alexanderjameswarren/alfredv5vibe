@@ -1689,6 +1689,131 @@ duration display must tolerate zero rather than treat it as an error.
 - [ ] Import; record how far back history actually reaches
 - [ ] Re-run canonical grouping across the enlarged track set
 
+### 2026-08-31 - `header` was never a music test. 1,581 plays were being dropped.
+
+`dj_takeout_prepare.py` gated on `header == "YouTube Music"`. That excluded **1,581
+entries on `- Topic` channels** - Bill Evans, Thelonious Monk, the Dave Brubeck
+Quartet, The Red Garland Trio - whose only disqualification was carrying header
+`"YouTube"`, i.e. having been played from the YouTube client rather than the
+YouTube Music one. **1,277 of them fell in 2025.** Importable rows: 15,185 ->
+**16,766**; batches 31 -> **34**.
+
+`header` records WHICH CLIENT played the audio. It says nothing about whether the
+audio is music. Precondition 3 already answers that and answers it better: a
+`- Topic` channel is an auto-generated per-artist channel, so it is music by
+construction. The header test added no information and cost rows.
+
+**The asymmetry is what settles it, and it generalises.** A wrongly-INCLUDED play is
+one deletable row. A wrongly-EXCLUDED play is not recoverable by re-running the
+import - `dj_plays` is insert-only, so restoring it is a backfill migration. When
+the two error directions cost that differently, a filter belongs on the
+over-including side. **Any filter feeding an insert-only table should be read this
+way.**
+
+### 2026-08-31 - CORRECTION: I claimed Takeout collapses repeat plays. It does not.
+
+**What I did.** I measured 9 rows with `occurrence > 1` across the export, compared
+that against the poll's known inability to see repeats, and concluded Takeout
+collapses repeats the same way - proposing to record that true play counts are
+unrecoverable from the export.
+
+**Why it was wrong.** I had *myself* measured **342 same-day repeat pairs under
+Pacific dates**, and had *myself* explained the drop to 9: UTC midnight is 17:00
+Pacific, so 333 pairs straddle the boundary and land on two different UTC days. I
+then argued from the 9 as though the 342 did not exist. Had Takeout collapsed
+repeats, the Pacific figure would also have been ~9.
+
+`occurrence > 1` measures **how often two plays share a UTC day** - a property of
+where the day boundary sits, not of what the source records.
+
+**The refutation is a count, not an argument** (Alex's instruction: *"Check that
+before recording anything"*):
+
+| | |
+|---|---|
+| Music entries in the export | **16,766** |
+| Distinct `(video_id, timestamp)` pairs | **16,766** |
+| Duplicate rows | **0** |
+
+Every play has its own row. **Nothing is collapsed.**
+
+**Sec 11.5 SHAPE - why this one was dangerous.** "Takeout can't restore play counts"
+is a claim about what data MEANS. It is unfalsifiable everywhere the alternatives
+agree, and under UTC bucketing the alternatives agree almost everywhere - 9 vs. 342
+is the only place they diverge. It would have become documented truth, cited later
+as settled, with the measurement that refutes it sitting unread in the same file.
+**A claim about meaning must be stated as a count that could have come out
+differently.**
+
+### 2026-08-31 - CAPABILITY GAINED: true play counts are recoverable.
+
+Not a caveat - a capability, and it should be recorded as available rather than lost.
+
+| | |
+|---|---|
+| Distinct tracks | 4,732 |
+| **Tracks played more than once** | **1,644** |
+| Mean rows per track | **3.54** |
+| Max rows for one track | **85** (*Weightless Part 1*) |
+
+Next four: *Bali Rain* 73, *Adventure of a Lifetime* 72, *Paradise* 71, *The
+Scientist* 68.
+
+This is the replay behaviour Sec 5 assumed was unmeasurable. **It does not change
+distinct-days as the cram proxy** - the POLL still cannot see counts, so a proxy
+that depends on counts would work on history and fail on everything arriving after
+the import. Sec 5 stands as written.
+
+What changes is that the STORED record can now answer **"what do I actually play
+over and over"**, by counting `dj_plays` rows for `source = 'takeout'`. That is a
+real input for discovery and for the Friday review. WARNING: any such query MUST
+filter to `source = 'takeout'`: mixing poll rows in produces a count that is part
+true frequency and part polling artefact, which is worse than either alone.
+
+### 2026-08-31 - the 167 UTC-day collisions are real second sessions, not double logging
+
+Including the 1,581 took `occurrence > 1` from 9 pairs to **167**, and 158 of those
+are cross-header. I suspected one session logged twice under both clients, because
+offsets cluster tightly within a day (2025-01-11: sixteen collisions all ~68,960s).
+
+**Wrong, and the offsets say so.** A constant offset across many tracks is what
+REPLAYING AN ALBUM IN THE SAME ORDER looks like - track *n* of the second listen
+sits a fixed distance from track *n* of the first. A 19-hour constant offset is not
+a logging delay. Reading 2025-01-11 track by track confirms it: a YouTube Music
+session 00:28-04:32, then a separate YouTube-client session from 19:37 replaying
+some of the same tracks.
+
+Only **4 adjacent pairs sit under 300s** (min 23s), the range where "one play logged
+twice" is even plausible - and those are equally consistent with a restart. Out of
+16,766 rows, not a reason to exclude anything.
+
+### 2026-08-31 - verification done before regenerating
+
+- **Transport is faithful.** Every `(video_id, artist, title)` in the batch files is
+  byte-identical to the export: 4,563 distinct, **0 drift in either direction**.
+  Checked because `match_key` is insert-only, so drift here is permanent.
+- **No encoding damage.** 85 non-ASCII strings, **0** carrying U+FFFD or a
+  latin-1-as-UTF-8 signature. (An earlier apparent mojibake in an artist name was
+  the Windows console, not the data. The first mojibake test was itself invalid -
+  its comparison string passed through the same console; it was rebuilt from
+  codepoints.)
+- **No third artist split.** Candidate splits across all 1,241 export artists plus
+  the stored alias targets: **exactly the two known ones**, no others. 35 artists
+  arrive only with the new rows (Yuja Wang, Alice Coltrane, Ryo Fukui, Sonny
+  Clark...), 1-2 rows each, none a variant of a stored name.
+  - WARNING: **the within-export scan alone could not have failed.** Both known
+    splits are CROSS-source - the export holds one side, `dj_tracks` the other - so
+    a scan of export artists returns 0 whether or not it works. It was re-run with
+    the two stored names seeded as a positive control and fired on both before the
+    0 was believed.
+  - WARNING, **still unclosed:** `artist_disagreements` only fires when the SAME
+    `video_id` carries a different stored artist. A split across DIFFERENT videos
+    (which is what Red Garland was) is invisible to it. Closing that needs the full
+    stored artist vocabulary compared against the export - not done here.
+- **Batch 1 prediction: 40 already held / 460 new** - unchanged by the regeneration.
+  All 40 stored takeout keys still fall inside the new batch 1; range still
+  2026-08-29 .. 2026-08-11; 0 rows with `occurrence > 1`.
+
 **Notes:**
 - Verify the export was **Export once**, not recurring — a two-day delay suggested it
   may have been scheduled as repeating.

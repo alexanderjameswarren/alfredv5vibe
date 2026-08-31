@@ -81,6 +81,26 @@ PLAY_DATE_TZ = timezone.utc
 
 WATCHED_PREFIX = "Watched "
 TOPIC_SUFFIX = " - Topic"
+# `header` IS NOT A MUSIC TEST — IT RECORDS WHICH CLIENT PLAYED THE AUDIO.
+#
+# This was a gate until 2026-08-31, and it silently excluded 1,581 plays that
+# were music by every test that matters: Bill Evans, Thelonious Monk, the Dave
+# Brubeck Quartet and The Red Garland Trio, all on "- Topic" channels, all
+# carrying header "YouTube" because they were played from the YouTube client
+# rather than the YouTube Music one. 1,277 of them fell in 2025.
+#
+# Precondition 3 below is the stronger test and it already does this job: a
+# "- Topic" channel is an auto-generated per-artist channel, so it is music BY
+# CONSTRUCTION. Requiring the header on top of it added no information about
+# whether a row was music and threw away rows on a fact about client choice.
+#
+# THE ASYMMETRY IS WHY THIS IS NOT A CLOSE CALL. A wrongly-INCLUDED play is one
+# deletable row. A wrongly-EXCLUDED play is unrecoverable by re-running: dj_plays
+# is insert-only, so restoring it is a backfill migration, not a second import.
+# When the two error directions cost that differently, the filter belongs on the
+# side that over-includes.
+#
+# Kept as a diagnostic so the report can still show the split.
 MUSIC_HEADER = "YouTube Music"
 VIDEO_ID_RE = re.compile(r"[?&]v=([A-Za-z0-9_-]{6,})")
 
@@ -147,13 +167,16 @@ def main() -> None:
 
     kept: list[dict] = []
     excluded: Counter[str] = Counter()
+    by_header: Counter[str] = Counter()
+    kept_by_header: Counter[str] = Counter()
     non_topic_channels: Counter[str] = Counter()
     no_artist_titles: list[str] = []
 
     for e in entries:
-        if e.get("header") != MUSIC_HEADER:
-            excluded["not a YouTube Music entry"] += 1
-            continue
+        # NOT a gate. Counted, so the report shows the client split, and so
+        # that if a future export stops emitting "- Topic" the change is
+        # visible here rather than as a silent drop in row count.
+        by_header[e.get("header") or "(none)"] += 1
 
         subs = e.get("subtitles") or []
         if not subs or not subs[0].get("name"):
@@ -200,6 +223,7 @@ def main() -> None:
         #     honest value is null. An earlier version stuffed the ISO date in
         #     here, which predates Block F: it would have put a date into a
         #     column whose documented meaning is "the label YouTube returned".
+        kept_by_header[e.get("header") or "(none)"] += 1
         kept.append({
             "video_id": vid,
             "title": title,
@@ -211,8 +235,21 @@ def main() -> None:
         })
 
     # --- occurrence, per (video_id, played_on), oldest first ----------------
-    # The only source that will ever produce occurrence > 1: the live feed
-    # carries one entry per track per bucket, so repeats do not stack there.
+    #
+    # ⚠️ occurrence > 1 IS NOT A MEASURE OF HOW OFTEN TRACKS ARE REPLAYED.
+    # It counts how often two plays fall inside the SAME UTC DAY, which is a
+    # property of where the day boundary sits, not of the data. Measured on
+    # Pacific dates the same export yields 342 such pairs; on UTC dates, 9.
+    # 333 pairs straddle UTC midnight, which is 17:00 Pacific — the middle of
+    # an evening listening session.
+    #
+    # Reading the low UTC figure as "Takeout collapses repeats like the poll
+    # does" is exactly the error this comment exists to prevent, and it was
+    # actually made (see docs/progress-dj.md, 2026-08-31). The refutation is a
+    # count, not an argument: the export holds 16,766 music entries and 16,766
+    # distinct (video_id, timestamp) pairs. Zero duplicates. Nothing collapsed.
+    #
+    # THE REPLAY MEASURE IS ROWS PER VIDEO_ID, and it is reported below.
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in kept:
         groups[(r["video_id"], r["played_on"])].append(r)
@@ -247,13 +284,39 @@ def main() -> None:
     print(f"  batches of {BATCH_SIZE}       {(len(kept) + BATCH_SIZE - 1) // BATCH_SIZE}")
 
     print()
+    print("  CLIENT SPLIT (header) — diagnostic only, NOT a filter:")
+    for h, n in by_header.most_common():
+        k = kept_by_header.get(h, 0)
+        print(f"    {n:>6,} seen  {k:>6,} kept   header={h!r}")
+    print("    header records WHICH CLIENT played the audio, not whether it is")
+    print("    music. The '- Topic' test below is the real one.")
+
+    print()
     print("  EXCLUDED:")
     for reason, n in excluded.most_common():
         print(f"    {n:>6,}  {reason}")
     print(f"    {sum(excluded.values()):>6,}  total excluded")
 
     print()
-    print("  REPLAYS — occurrence > 1 (the question the live feed cannot answer):")
+    print("  REPLAYS — rows per video_id. THIS is the replay measure.")
+    per_video: Counter[str] = Counter(r["video_id"] for r in kept)
+    multi = [n for n in per_video.values() if n > 1]
+    print(f"    distinct tracks                   {len(per_video):,}")
+    print(f"    tracks played more than once      {len(multi):,}")
+    print(f"    mean rows per track               {len(kept) / len(per_video):.2f}")
+    print(f"    max rows for one track            {max(per_video.values()):,}")
+    print("    most-played:")
+    for vid, n in per_video.most_common(5):
+        title = next(r["title"] for r in kept if r["video_id"] == vid)
+        print(f"      {n:>4}  {title[:52]}")
+    print("    The live feed CANNOT answer this — it carries one entry per track")
+    print("    per bucket. The export can, by counting rows. Distinct-days stays")
+    print("    the cram proxy (spec §5) because the POLL still cannot see counts,")
+    print("    but the stored rows can answer 'what do I play over and over'.")
+
+    print()
+    print("  UTC-DAY COLLISIONS — occurrence > 1. NOT a replay measure; see the")
+    print("  comment above. It counts plays sharing a UTC day:")
     print(f"    (video, day) pairs with >1 play   {repeat_days:,}")
     print(f"    rows belonging to those pairs     {repeat_rows:,}")
     total_pairs = len(groups)
