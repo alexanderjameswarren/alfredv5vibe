@@ -57,7 +57,18 @@ $ErrorActionPreference = "Stop"
 $headers = @{ Authorization = "Bearer $Token"; "Content-Type" = "application/json" }
 
 function Invoke-Batch($file, $mode) {
-    $body = [System.IO.File]::ReadAllText($file)
+    # BYTES, NOT A STRING. Measured with a local HttpListener: Invoke-RestMethod
+    # given a STRING body encodes it as Latin-1 and mangles every non-ASCII
+    # character - U+221E becomes "?", U+00E9 becomes a lone 0xE9 that is invalid
+    # UTF-8 - and "charset=utf-8" in the Content-Type does NOT prevent it. With a
+    # byte[] body the request is byte-identical to the file.
+    #
+    # The batch files happen to be pure ASCII (json.dumps escapes non-ASCII as
+    # \uXXXX by default), so this has corrupted nothing that was imported. It is
+    # fixed anyway: relying on "the payload never contains a non-ASCII byte" is a
+    # silent dependency on a serialiser default, and this feeds an INSERT-ONLY
+    # table where a mangled title is a permanently wrong match_key.
+    $body = [System.IO.File]::ReadAllBytes($file)
     try {
         return Invoke-RestMethod -Uri "$Url`?mode=$mode" -Method Post -Headers $headers -Body $body
     } catch {

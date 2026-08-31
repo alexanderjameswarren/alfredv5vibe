@@ -1101,6 +1101,35 @@ The general form: **an encoding is a silent input to a parser.** A file that is 
 the encoding it was written in can be invalid under the one it is read in, and the resulting
 error points at where the parser gave up, not at what broke.
 
+### 11.9 A control must be a COPY, not a reconstruction
+
+Bisecting a server-side 500, the failing batch was split into halves and the **unchanged
+original** was emitted alongside them as a control - precisely so that "both halves
+passed" could not be misread as a size limit when it might just be a transient fault
+that had stopped.
+
+The control was **rebuilt** with `json.dumps`, not copied. It carried the same data and
+different bytes: the real batch files are pure ASCII because `json.dumps` escapes
+non-ASCII by default, while the rebuilt file carried raw UTF-8. PowerShell 5.1 corrupts
+non-ASCII in a string request body, so the probe files were mangled in transit and the
+real ones could not be. **Every result in that run measured the splitter.**
+
+The control was the one component whose whole job was to make the run falsifiable, and
+it was the component that was wrong.
+
+**The rule: reconstructing an artefact re-runs the code that produced it, and that code
+is part of what is under test.** Copy the bytes. Then assert the copy is identical -
+`dj_split_batch.py` now aborts if any emitted file contains a byte over 127.
+
+Generalises past encoding: any control regenerated from source rather than captured
+verbatim silently swaps "is this input broken?" for "does my generator reproduce this
+input?" Those differ exactly when the generator is involved in the bug - which is when a
+control matters.
+
+⚠️ **Related but distinct from 11.8.** There, an encoding was a silent input to a
+*parser*. Here it was a silent input to a *comparison*: two artefacts that compared equal
+as data were not equal as bytes, and only the bytes travelled.
+
 ---
 
 ## 9. Reference

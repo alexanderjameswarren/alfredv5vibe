@@ -1787,6 +1787,63 @@ Only **4 adjacent pairs sit under 300s** (min 23s), the range where "one play lo
 twice" is even plausible - and those are equally consistent with a restart. Out of
 16,766 rows, not a reason to exclude anything.
 
+### 2026-08-31 - THE FIRST BISECT RUN WAS VOID. The splitter re-encoded the files.
+
+**Every result from that probe run has been discarded.** It appeared to show that
+batch 30's second half was content-specific and that batch 32 had recovered. It showed
+neither.
+
+`dj_split_batch.py` rebuilt its files with `json.dumps(..., ensure_ascii=False)`.
+`dj_takeout_prepare.py` uses the DEFAULT `ensure_ascii=True`. So:
+
+| file | bytes > 127 |
+|---|---|
+| `batch_030.json` (real) | **0** - pure ASCII, non-ASCII escaped as backslash-uXXXX |
+| `batch_001.json` (the "unchanged control") | **74** - raw UTF-8 |
+
+Same decoded data, different bytes. And that difference is load-bearing, because
+**PowerShell 5.1's `Invoke-RestMethod` corrupts non-ASCII in a STRING body** - measured
+with a local HttpListener: U+221E becomes `?`, U+00E9 becomes a lone `0xE9` which is
+invalid UTF-8, and `charset=utf-8` in the Content-Type does not prevent it. The probe
+files were therefore corrupted in transit; the real batch files, containing no byte over
+127, never could be.
+
+That also explains the one piece of evidence that looked like corruption reaching
+Supabase - a dry run reporting `submitted=Michael Bubl<U+FFFD>`. Real, and caused
+entirely by the probe file.
+
+**⚠️ THE CONTROL WAS THE PART THAT FAILED.** It was added specifically so the run could
+not be misread - "both halves passed" is also what a transient fault looks like once it
+has stopped. But it was REBUILT rather than COPIED, so it was not the file that failed.
+It tested the splitter.
+
+**A control must be a byte-for-byte copy, not a semantically equal reconstruction.**
+Reconstructing re-runs the serialiser, and the serialiser is part of what is under test.
+Recorded as spec 11.9.
+
+Fixed: the control is now `shutil.copyfile`, slices use the identical serialisation to
+`dj_takeout_prepare.py` (`indent=1`, default `ensure_ascii`), and the script **aborts**
+if any emitted file contains a byte over 127. Verified: the control is now byte-identical
+to `batch_030.json`, and all three probe files are pure ASCII.
+
+**STILL UNEXPLAINED: why batch 30 and batch 32 returned a 500.** The bisect has to be
+re-run on files that are actually the batch.
+
+### 2026-08-31 - transport hardened: byte[] body, not a string
+
+`dj-import-takeout.ps1` now sends `[System.IO.File]::ReadAllBytes($file)`. Re-measured:
+byte-identical for every file, string or bytes.
+
+**This corrupted nothing that was imported** - the audit over `dj_tracks` returned zero
+corrupted rows (48 matches, every one a legitimate question mark in a title: "What's
+Up?", "Where Is My Mind?", "Do I Wanna Know?"), and the batch files are pure ASCII so the
+defect could never fire on them.
+
+It is fixed anyway, because "the payload happens to contain no non-ASCII byte" is a
+**silent dependency on a serialiser default**. Change `ensure_ascii`, or hand-edit a
+batch file, and an insert-only `match_key` is written wrong with no error. The fix
+removes the dependency rather than documenting it.
+
 ### 2026-08-31 - batches 30 and 32 fail with a 500. CAUSE NOT YET KNOWN.
 
 Batches 30 and 32 return a 500 on the **dry run**, reproducibly. 31, 33 and 34 pass.
