@@ -254,11 +254,46 @@ Blue* has not thereby heard *Bitches Brew*. **No such split exists in the data t
 arises it needs deciding, not inferring.
 
 **Detection, so the third split is not silent.** `resolveTrackIds` already fetches existing
-tracks by `video_id`; it now carries `artist` too and returns **`artist_disagreements`** —
-same video, two spellings — in every `record_dj_plays` response. Empty is the normal case;
-any entry is a new alias candidate. **Phase 5's task prompt must read it into the run stamp**,
-because a signal nobody looks at is the failure this project keeps finding. This also covers
-the ~1,190 export artists the map cannot anticipate.
+tracks by `video_id`; it also carries `artist` and `match_key`, and returns
+**`artist_disagreements`** in every `record_dj_plays` and `dry_run_dj_plays` response. Empty
+is the normal case; any entry is a new alias candidate. **Phase 5's task prompt must read it
+into the run stamp**, because a signal nobody looks at is the failure this project keeps
+finding. This also covers the ~1,241 export artists the map cannot anticipate.
+
+**⚠️ THE COMPARISON IS ON NORMALISED PRIMARY ARTISTS, BOTH READ FROM `match_key`.** Not on
+`dj_tracks.artist`, which holds the *joined display string* (`artists.join(", ")`). The first
+version compared that column against a Takeout submission and fired on **all six
+collaborations in batch 1** — `"Coldplay, BTS"` vs `"Coldplay"` — where nothing was wrong:
+`match_key` uses `artists[0]`, both sides agreed on the primary, and the rows grouped
+identically. Two representations of one fact, not a vocabulary split.
+
+*A detector that fires on every collaboration is one its reader learns to ignore, and then it
+will not catch the real case* — the same shape as marking an empty day `failed`.
+
+Splitting the joined column on `", "` is **not** an equivalent fix: artist names contain
+commas (*Earth, Wind & Fire*; *Crosby, Stills & Nash*; *Tyler, The Creator*), so it would
+produce a wrong primary and reintroduce the same false positive somewhere harder to see.
+`tidy` replaces every non-letter/non-digit run, so a `|` cannot survive normalisation and the
+**first `|` in a `match_key` is unambiguously the separator** — the text before it is the
+stored primary exactly as the grouping rules saw it. Both sides are read the same way, so
+they cannot drift apart.
+
+**⚠️ KNOWN GAP, UNCHANGED BY THAT FIX — AND IT IS THE IMPORTANT ONE.** `artist_disagreements`
+fires **only when the SAME `video_id` carries a different stored artist.** A split spread
+across **different videos** is invisible to it.
+
+**That is precisely what Red Garland was.** `Red Garland` and `The Red Garland Trio` were
+never two spellings on one video; they were two channels holding *different recordings*. So
+**the detector built to catch future splits would not have caught the one that prompted
+it.** Stated plainly because the reassuring reading — "detection is handled" — is wrong, and
+an empty `artist_disagreements` is not evidence that no split exists.
+
+Closing the gap needs the full stored artist vocabulary compared against incoming artists on
+a normalised basis, independent of `video_id`. **Not built.** Until then the real safeguard
+is the periodic split scan run by hand (progress log, 2026-08-31), which found exactly the
+two known entries across all 1,241 export artists. ⚠️ That scan must be run with the stored
+alias targets seeded as a **positive control**: both known splits are cross-source, so a scan
+of export artists alone returns 0 whether or not it works.
 
 #### 4.1.2 Consequence of write-once: a normaliser change is a migration
 
@@ -1019,6 +1054,52 @@ because of a listening session's date. See §9.
 **Not the same as §11.4.** There, a record disagreed with the thing it described. Here every
 record is accurate and mutually consistent; it is the **choice between them** that was never
 made deliberately.
+
+### 11.7 A detector that fires on the normal case will be ignored, and then it is worse than none
+
+`artist_disagreements` compared `dj_tracks.artist` — a *joined* display string — against a
+Takeout submission carrying one artist, and reported all six collaborations in batch 1 as
+disagreements. Every one was correct data: `match_key` uses `artists[0]`, both sides agreed
+on the primary, the rows grouped identically.
+
+The cost is not the six lines. It is that **a signal which fires on the normal case teaches
+its reader to skip it**, and it is then reliably silent about the abnormal one. Alex, on
+seeing them: *"A detector that fires on every collaboration is one I'll learn to ignore, and
+then it won't catch the real case."*
+
+Same shape as marking an empty day `failed` (§11.2): both dress a routine state as an
+exception, and both are repaired the same way — **compare on the same basis the system
+actually uses to decide.** Here that meant comparing the normalised primary artist, read from
+`match_key` on both sides, rather than two representations of the same fact.
+
+⚠️ **The repair needs its own failing case.** "It reports nothing now" is satisfied equally by
+a correct detector and a broken one. The fix ships with a test that a genuinely different
+primary artist *is* still reported (§11.1).
+
+### 11.8 Generated scripts: ASCII in console output, and save as UTF-8 with BOM
+
+**Rule, for every generated `.ps1`/`.cmd`/`.bat`: ASCII only in anything printed to a
+console, and write the file as UTF-8 *with* BOM.** Both, not either.
+
+Non-ASCII has now broken three separate things in this build — console output on the `∞`
+track, an artist name misread as mojibake during the Takeout encoding check, and an import
+script that would not parse at all. The third is the instructive one:
+
+Without a BOM, PowerShell 5.1 reads a `.ps1` as Windows-1252. `—` (U+2014) is `E2 80 94` and
+`─` (U+2500) is `E2 94 80` — **both contain byte `0x94`, which is `U+201D RIGHT DOUBLE
+QUOTATION MARK` in Windows-1252, and PowerShell accepts curly quotes as string delimiters.**
+Each one inside a `Write-Host` string injects a phantom closing quote. One script had 39, an
+odd number, so the final string never closed; the parser reported a missing terminator on the
+**last line of the file** plus brace errors 70 lines earlier, none of them near the cause.
+
+Why both halves of the rule: the BOM alone fixes parsing but is easy to lose to an editor, a
+`.gitattributes` filter, or a copy-paste; ASCII alone fixes it but a future dash reintroduces
+it. **Verify with the parser, not by eye** — `PSParser::Tokenize` plus
+`[Language.Parser]::ParseFile`, and a byte check that nothing exceeds 127.
+
+The general form: **an encoding is a silent input to a parser.** A file that is valid under
+the encoding it was written in can be invalid under the one it is read in, and the resulting
+error points at where the parser gave up, not at what broke.
 
 ---
 

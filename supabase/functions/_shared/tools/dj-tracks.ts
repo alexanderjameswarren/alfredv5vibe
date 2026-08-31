@@ -9,7 +9,12 @@
 // failure the spec warns about, so there is one implementation and both callers
 // take it.
 
-import { buildMatchKey } from "./dj-normalise.ts";
+import {
+  buildMatchKey,
+  detectArtistDisagreement,
+  type ArtistDisagreement,
+} from "./dj-normalise.ts";
+export type { ArtistDisagreement };
 
 // PostgREST `.in()` builds a query string; keep each one short.
 const IN_CHUNK = 100;
@@ -34,12 +39,6 @@ export interface TrackRow {
   artist: string | null;
   match_key: string | null;
   canonical_track_id: string | null;
-}
-
-export interface ArtistDisagreement {
-  video_id: string;
-  stored: string | null;
-  submitted: string | null;
 }
 
 export interface CanonicalLink {
@@ -275,13 +274,11 @@ export async function resolveTrackIds(
   const artistDisagreements: ArtistDisagreement[] = [];
   for (const p of prepared) {
     const known = existing.get(p.video_id);
-    if (known && p.artist && known.artist && known.artist !== p.artist) {
-      artistDisagreements.push({
-        video_id: p.video_id,
-        stored: known.artist,
-        submitted: p.artist,
-      });
-    }
+    if (!known) continue;
+    const d = detectArtistDisagreement(
+      p.video_id, known.artist, known.match_key, p.artist, p.match_key,
+    );
+    if (d) artistDisagreements.push(d);
   }
 
   return {

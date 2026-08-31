@@ -37,6 +37,8 @@ import { resolveTrackIds } from "./dj-tracks.ts";
 import {
   buildMatchKey,
   canonicalArtist,
+  detectArtistDisagreement,
+  type ArtistDisagreement,
   ISO_DATE_RE,
   resolvePlayDate,
   VALID_PRECISION,
@@ -805,13 +807,16 @@ export const dryRunDjPlaysTool = defineTool({
     for (const p of prepared) if (!byVideoId.has(p.video_id)) byVideoId.set(p.video_id, p);
     const videoIds = [...byVideoId.keys()];
 
-    const known = new Map<string, { id: string; artist: string | null }>();
+    // match_key is fetched because the disagreement check compares PRIMARY
+    // artists, and the stored primary is only recoverable from the key - the
+    // artist column is the joined display string.
+    const known = new Map<string, { id: string; artist: string | null; match_key: string | null }>();
     for (const ids of chunk(videoIds, 100)) {
       const { data, error } = await ctx.db
-        .from("dj_tracks").select("id, video_id, artist").in("video_id", ids);
+        .from("dj_tracks").select("id, video_id, artist, match_key").in("video_id", ids);
       if (error) throw new Error(`dry_run_dj_plays: track lookup failed: ${error.message}`);
-      for (const r of (data ?? []) as Array<{ id: string; video_id: string; artist: string | null }>) {
-        known.set(r.video_id, { id: r.id, artist: r.artist });
+      for (const r of (data ?? []) as Array<{ id: string; video_id: string; artist: string | null; match_key: string | null }>) {
+        known.set(r.video_id, { id: r.id, artist: r.artist, match_key: r.match_key });
       }
     }
     const wouldCreate = videoIds.filter((v) => !known.has(v));
@@ -819,12 +824,15 @@ export const dryRunDjPlaysTool = defineTool({
     // Same detector the write runs. Reported PER BATCH, not aggregated at the
     // end — a third split act among the ~1,190 artists the alias map cannot
     // anticipate should be visible in the batch that surfaced it.
-    const artistDisagreements: Array<{ video_id: string; stored: string | null; submitted: string | null }> = [];
+    // THE SAME detector the write path runs - imported, not re-expressed.
+    const artistDisagreements: ArtistDisagreement[] = [];
     for (const p of prepared) {
       const k = known.get(p.video_id);
-      if (k && p.artist && k.artist && k.artist !== p.artist) {
-        artistDisagreements.push({ video_id: p.video_id, stored: k.artist, submitted: p.artist });
-      }
+      if (!k) continue;
+      const d = detectArtistDisagreement(
+        p.video_id, k.artist, k.match_key, p.artist, p.match_key,
+      );
+      if (d) artistDisagreements.push(d);
     }
 
     // --- plays: check the derived keys against the SAME unique index --------

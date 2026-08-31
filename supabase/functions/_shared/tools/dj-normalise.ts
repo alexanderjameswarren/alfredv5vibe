@@ -218,6 +218,92 @@ export function buildMatchKey(
 }
 
 // ---------------------------------------------------------------------------
+// Artist-vocabulary disagreement - spec 4.1.4
+// ---------------------------------------------------------------------------
+//
+// ONE implementation, used by the write path AND the dry run. If the two
+// compared on different bases the dry run would predict disagreements the write
+// would not report, which is the failure mode the shared prepareRows exists to
+// prevent.
+//
+// WHY NOT COMPARE dj_tracks.artist DIRECTLY. That column holds the JOINED
+// display string - `artists.join(", ")`. A poll row for a collaboration stores
+// "Coldplay, BTS"; a Takeout row for the same video submits "Coldplay", because
+// the export carries only the "- Topic" channel and so knows exactly one artist.
+// Comparing those two strings fires on EVERY collaboration while nothing is
+// actually wrong: match_key uses artists[0] alone, both sides agree on the
+// primary, and the two rows group identically.
+//
+// A detector that fires on every collaboration is one its reader learns to
+// ignore, and then it will not catch the real case. Same shape as marking an
+// empty day "failed".
+//
+// WHY THE MATCH KEY AND NOT A SPLIT OF THE JOINED COLUMN. Splitting
+// "Coldplay, BTS" on ", " looks equivalent and is not: artist names contain
+// commas. "Earth, Wind & Fire", "Crosby, Stills & Nash" and "Tyler, The
+// Creator" would each yield a wrong primary and a false disagreement - the
+// exact bug being fixed, moved somewhere harder to see.
+//
+// match_key is `normalisePart(canonicalArtist(artists[0])) + "|" + normalisePart(title)`,
+// and `tidy` replaces every non-letter/non-digit run, so a "|" CANNOT survive
+// normalisation. The first "|" is therefore unambiguously the separator, and
+// the text before it is the stored primary artist exactly as the grouping rules
+// saw it. No parsing guess involved.
+//
+// The comparison is on NORMALISED primaries, deliberately. Two spellings that
+// normalise identically group identically, so they are not a split and there is
+// nothing to report.
+
+/** The stored primary artist, normalised, recovered from a match_key. Returns
+ *  null when there is no key or the artist half is empty (a track stored with
+ *  no artist at all). */
+export function primaryArtistOfMatchKey(matchKey: string | null | undefined): string | null {
+  if (!matchKey) return null;
+  const i = matchKey.indexOf("|");
+  if (i <= 0) return null;
+  return matchKey.slice(0, i);
+}
+
+export interface ArtistDisagreement {
+  video_id: string;
+  /** Human-readable, for the report: the full joined strings. */
+  stored: string | null;
+  submitted: string | null;
+  /** What actually differs, and what the comparison was made on. */
+  stored_primary: string;
+  submitted_primary: string;
+}
+
+/** Returns a disagreement only when the NORMALISED PRIMARY artists differ.
+ *  Null when they agree, or when either side cannot be determined.
+ *
+ *  BOTH primaries are read out of a match_key, so both have been through the
+ *  identical derivation - alias translation, qualifier stripping, tidy - by
+ *  construction rather than by two call sites remembering to agree. Passing the
+ *  submitted artists[] here instead would re-derive it a second way, which is
+ *  how a detector starts reporting differences that are its own. */
+export function detectArtistDisagreement(
+  videoId: string,
+  storedArtistDisplay: string | null,
+  storedMatchKey: string | null | undefined,
+  submittedArtistDisplay: string | null,
+  submittedMatchKey: string | null | undefined,
+): ArtistDisagreement | null {
+  const storedPrimary = primaryArtistOfMatchKey(storedMatchKey);
+  const submittedPrimary = primaryArtistOfMatchKey(submittedMatchKey);
+  // Cannot compare is NOT the same as agrees; report neither.
+  if (!storedPrimary || !submittedPrimary) return null;
+  if (storedPrimary === submittedPrimary) return null;
+  return {
+    video_id: videoId,
+    stored: storedArtistDisplay,
+    submitted: submittedArtistDisplay,
+    stored_primary: storedPrimary,
+    submitted_primary: submittedPrimary,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Bucket → date + precision — spec §4.2
 // ---------------------------------------------------------------------------
 

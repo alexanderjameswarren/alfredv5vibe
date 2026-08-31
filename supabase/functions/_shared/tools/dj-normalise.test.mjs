@@ -17,6 +17,8 @@ import {
   ARTIST_ALIASES,
   buildMatchKey,
   canonicalArtist,
+  detectArtistDisagreement,
+  primaryArtistOfMatchKey,
   normalisePart,
   resolvePlayDate,
   shiftDate,
@@ -286,4 +288,95 @@ test("no alias chains — a `to` is never another entry's `from`", () => {
   for (const a of ARTIST_ALIASES) {
     assert.ok(!froms.has(a.to.toLowerCase()), `${a.to} is both a target and a key`);
   }
+});
+
+
+// ---------------------------------------------------------------------------
+// detectArtistDisagreement — spec 4.1.4
+// ---------------------------------------------------------------------------
+//
+// The first version compared dj_tracks.artist (the JOINED display string)
+// against a Takeout submission carrying one artist, and fired on all six
+// collaborations in batch 1 while nothing was wrong. These tests exist so that
+// cannot come back silently.
+
+test("COLLABORATIONS DO NOT FIRE — the joined column is not the primary artist", () => {
+  // Exactly the six false positives from the batch-1 dry run: the poll stored a
+  // joined string, Takeout submits the "- Topic" channel, which is artists[0].
+  const cases = [
+    [["Coldplay", "BTS"], ["Coldplay"], "My Universe"],
+    [["Coldplay", "Ayra Starr"], ["Coldplay"], "GOOD FEELiNGS"],
+    [["The Chainsmokers", "Coldplay"], ["The Chainsmokers"], "Something Just Like This"],
+    [["Lionel Loueke", "Herbie Hancock"], ["Lionel Loueke"], "Kanou"],
+    [["Coldplay", "We Are KING", "Jacob Collier"], ["Coldplay"], "\u2661"],
+    [["Coldplay", "Little Simz", "Burna Boy", "Elyanna"], ["Coldplay"], "WE PRAY"],
+  ];
+  for (const [storedArtists, submittedArtists, title] of cases) {
+    const d = detectArtistDisagreement(
+      "vid",
+      storedArtists.join(", "),
+      buildMatchKey(storedArtists, title),
+      submittedArtists.join(", "),
+      buildMatchKey(submittedArtists, title),
+    );
+    assert.equal(d, null, `${storedArtists.join(", ")} vs ${submittedArtists[0]} must not fire`);
+  }
+});
+
+test("A REAL SPLIT STILL FIRES — the check can fail", () => {
+  // Without this, the test above is satisfied by a detector that never fires.
+  const d = detectArtistDisagreement(
+    "vid",
+    "Eddie Higgins Trio",
+    buildMatchKey(["Eddie Higgins Trio"], "Detour Ahead"),
+    "Bill Evans Trio",
+    buildMatchKey(["Bill Evans Trio"], "Detour Ahead"),
+  );
+  assert.ok(d, "a genuinely different primary artist must be reported");
+  assert.equal(d.stored_primary, "eddie higgins trio");
+  assert.equal(d.submitted_primary, "bill evans trio");
+});
+
+test("ARTIST NAMES CONTAINING COMMAS — why the match_key and not a split", () => {
+  // Splitting the joined column on ", " looks equivalent and is not. Each of
+  // these would yield a wrong primary and a false disagreement.
+  for (const name of ["Earth, Wind & Fire", "Crosby, Stills & Nash", "Tyler, The Creator"]) {
+    const key = buildMatchKey([name], "Song");
+    assert.equal(
+      primaryArtistOfMatchKey(key),
+      normalisePart(name),
+      `${name} must survive whole`,
+    );
+    assert.equal(
+      detectArtistDisagreement("vid", name, key, name, key),
+      null,
+      `${name} must not disagree with itself`,
+    );
+  }
+});
+
+test("a pipe cannot survive normalisation, so the first one is always the separator", () => {
+  // This is what makes splitting the match_key exact rather than a guess.
+  const key = buildMatchKey(["AC|DC | Weird"], "Back | In Black");
+  assert.equal(key.split("|").length, 2, "exactly one pipe in a match_key");
+  assert.ok(!primaryArtistOfMatchKey(key).includes("|"));
+});
+
+test("the alias map is applied on BOTH sides, so an alias is not a disagreement", () => {
+  const d = detectArtistDisagreement(
+    "vid",
+    "Red Garland",
+    buildMatchKey(["Red Garland"], "Willow Weep for Me"),
+    "The Red Garland Trio",
+    buildMatchKey(["The Red Garland Trio"], "Willow Weep for Me"),
+  );
+  assert.equal(d, null, "the alias map resolves this; it must not be reported as a split");
+});
+
+test("cannot-compare is not the same as agrees", () => {
+  const key = buildMatchKey(["Coldplay"], "Yellow");
+  assert.equal(detectArtistDisagreement("vid", null, null, "Coldplay", key), null);
+  assert.equal(detectArtistDisagreement("vid", "Coldplay", key, null, null), null);
+  // An artist-less track: match_key is "|title", so there is no primary to compare.
+  assert.equal(primaryArtistOfMatchKey(buildMatchKey([], "Yellow")), null);
 });
