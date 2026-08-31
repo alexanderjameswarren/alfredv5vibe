@@ -1420,6 +1420,16 @@ depend on evaluation order, which is the very class of silent input the map exis
 >
 > This is a design constraint, not a footnote. Either understand the behaviour first, or
 > build gap detection on `platform_runs.covered_to` alone and treat the page as unordered.
+>
+> **RESOLVED 2026-08-31 — the second option, and the tail question is DELIBERATELY
+> UNRESOLVED rather than pending.** Gap detection is built on `covered_to` +
+> `dj_plays` and treats the page as unordered.
+>
+> **Understanding the tail could only ever license trusting the feed MORE.** But §11.3
+> already establishes that the feed cannot prove absence, so the experiment's best
+> possible outcome is permission to do something we have decided not to do. It is not
+> worth a week of feed observation, and it must not sit on a list as "pending" where a
+> later reader might treat it as a blocker or, worse, resolve it and act on the answer.
 
 - [ ] ⚠️ **Verify the coarse-bucket rejection LIVE** — `record_dj_plays` refusing
       `This week` / `Last week` is unit-tested (`dj-courier.test.mjs:321`) but the live
