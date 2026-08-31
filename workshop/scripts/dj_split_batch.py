@@ -53,6 +53,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("batches", type=int, nargs="+", help="batch numbers to split")
     ap.add_argument("--parts", type=int, default=2, help="slices per batch (default 2)")
+    ap.add_argument("--head", type=int, default=0,
+                    help="instead of parts, emit ONE slice of the first N rows")
     ap.add_argument("--out", type=Path, default=OUT)
     args = ap.parse_args()
 
@@ -72,11 +74,15 @@ def main() -> None:
         n += 1
         shutil.copyfile(src, args.out / f"batch_{n:03d}.json")
         manifest.append(f"batch_{n:03d}.json = batch {b} UNCHANGED, {len(plays)} rows "
-                        f"-- CONTROL, expected to FAIL")
+                        f"-- CONTROL, must reproduce its previous result")
 
-        size = (len(plays) + args.parts - 1) // args.parts
-        for i in range(args.parts):
-            slice_ = plays[i * size:(i + 1) * size]
+        if args.head:
+            slices = [plays[:args.head]]
+            size = args.head
+        else:
+            size = (len(plays) + args.parts - 1) // args.parts
+            slices = [plays[i * size:(i + 1) * size] for i in range(args.parts)]
+        for i, slice_ in enumerate(slices):
             if not slice_:
                 continue
             n += 1
