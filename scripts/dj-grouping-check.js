@@ -10,6 +10,18 @@
 // canonical_track_id = null (the leader, earliest inserted) and every other row
 // points directly at it.
 //
+// !! WHAT THIS CHECK CANNOT TELL YOU (spec 11.12). It proves the grouping is
+//    INTERNALLY CONSISTENT given the match_keys. It cannot prove the match_keys
+//    are RIGHT, because it derives its expectation from the same column it is
+//    checking. A wrong match_key, consistently applied, passes everything below.
+//
+//    That is not hypothetical: `release|deck the halls` groups two different
+//    acts under a YouTube fallback channel label, has exactly one leader, no
+//    chains and no cross-key pointers - and this check passed it.
+//
+//    Correctness needs a source OUTSIDE dj_tracks. Do not report a clean run
+//    here as "grouping verified".
+//
 // This check FAILS, loudly and by name, if any of these is non-empty:
 //
 //   UNDER-FIRED  a match_key with 2+ tracks that has more than one leader.
@@ -115,9 +127,18 @@
     else console.log(`${name}: 0  ok`);
   }
   console.log(bad === 0
-    ? "%cGROUPING VERIFIED - invariant holds for every group"
+    ? "%cGROUPING IS INTERNALLY CONSISTENT - the invariant holds for every group"
     : `%cGROUPING BROKEN - ${bad} violation(s) above`,
     `color:${bad === 0 ? "green" : "red"};font-weight:bold`);
+  if (bad === 0) {
+    console.log("%cThis is NOT a correctness result. See spec 11.12.",
+      "color:#b58900;font-weight:bold");
+    console.log("A WRONG match_key, consistently applied, passes every check above:");
+    console.log("  e.g. `release|deck the halls` groups two different acts, has exactly");
+    console.log("  one leader, no chains and no cross-key pointers - and is wrong.");
+    console.log("Correctness needs a source OUTSIDE dj_tracks: the channel id, YouTube");
+    console.log("Music's own artist metadata, or a human reading the groups below.");
+  }
 
   console.log("\n=== THE 15 LARGEST GROUPS - eyeball these for OVER-FIRING ===");
   console.log("Live/acoustic/remaster folding into the studio track is intended.");

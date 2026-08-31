@@ -1777,6 +1777,15 @@ duration display must tolerate zero rather than treat it as an error.
       One pair over, in the predicted direction: poll-only tracks absent from the export.
       2 null `match_key` rows, the two symbol-only titles.
 
+      ⚠️ **THIS IS A CONSISTENCY RESULT, NOT A CORRECTNESS ONE (spec 11.12).** An hour
+      after it passed, a real wrong merge surfaced that it had passed over:
+      `release|deck the halls` groups two different acts under a YouTube fallback channel
+      label, with exactly one leader, no chains and no cross-key pointers. It satisfies
+      every invariant tested. **A wrong `match_key`, consistently applied, is invisible to
+      this check** - it derives its expectation from the column it is checking. The eyeball
+      pass over the 15 largest groups was the only correctness check, and a 2-member group
+      was far below it.
+
       **The clean result is informative, not vacuous** - had grouping never run, all 256
       multi-track keys would have appeared under `UNDER_FIRED`. The counts alone could
       not have failed, so the invariant was checked per group and the links counted

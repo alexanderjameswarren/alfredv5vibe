@@ -1219,6 +1219,39 @@ the writer ignores it".** If the answer is "a row lands anyway", the rule is dec
 Wherever this project relies on a caller doing the right thing, that is a gap in the tool
 that has not surfaced yet.
 
+### 11.12 An invariant check proves CONSISTENCY, not CORRECTNESS. Say which one you have.
+
+`dj-grouping-check.js` passed cleanly across 4,732 tracks: 256 groups, zero `UNDER_FIRED`,
+zero `CROSS_KEY`, zero `CHAINED`, zero `DANGLING`. It was reported as **"GROUPING
+VERIFIED"**.
+
+**An hour later a real wrong merge surfaced that the check had passed over.** Two different
+acts sit in one canonical group under `release|deck the halls`, because both arrived with
+the artist `Release` — a YouTube fallback channel label, not an act (§4.1.4). The group has
+exactly one leader, no chains, no cross-key pointers, no dangling ids. **It satisfies every
+invariant the check tests, and it is wrong.**
+
+The check asks: *given these `match_key`s, is the grouping structurally sound?* It cannot
+ask: *are these `match_key`s right?* — because it derives the expectation from the same
+column it is checking. **A check built from the data it validates can only ever report
+self-consistency.**
+
+That is not a flaw in the check; it is its scope. The flaw was the label. **"Grouping
+verified" reads as the stronger claim** and would have been cited later as evidence that
+merges had been reviewed. It now reports **"grouping is internally consistent"**, and the
+two claims are named separately wherever they appear.
+
+**Correctness needs an outside source.** Here, three, none derivable from `dj_tracks`:
+the channel id (one real artist maps to exactly one channel; `Release` spans **20**),
+YouTube Music's own artist metadata, and a human reading the largest groups. The eyeball
+pass over the 15 largest groups was the only correctness check performed — and it did not
+reach `Deck the Halls`, a 2-member group far down the list.
+
+⚠️ **The general form: when a check and the thing it checks share a source, the check
+reports agreement with itself.** Before believing a green result, name what could have been
+wrong and still passed. For this check that list is short and worth stating: *a wrong
+`match_key`, consistently applied.* Which is exactly what happened.
+
 ---
 
 ## 9. Reference
