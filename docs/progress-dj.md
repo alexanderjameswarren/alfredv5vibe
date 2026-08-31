@@ -1787,6 +1787,62 @@ Only **4 adjacent pairs sit under 300s** (min 23s), the range where "one play lo
 twice" is even plausible - and those are equally consistent with a restart. Out of
 16,766 rows, not a reason to exclude anything.
 
+### 2026-08-31 - RESOLVED: the batch 30/32 500 was AN EXPIRED TOKEN.
+
+```
+{"mode":"dry_run","error":"platform_check_call_budget failed: JWT expired"}
+```
+
+All four probe files returned it - batch 30, batch 31 (**known good**), and 10-row
+slices of each. Not size, not content, not batch 30. **A Supabase access token lasts
+about an hour and a 34-batch import runs longer than that.**
+
+**⚠️ THE MESSAGE WAS IN EVERY FAILED RESPONSE FROM THE FIRST 500. THE IMPORT SCRIPT
+THREW IT AWAY.** Its catch block printed `$_.ErrorDetails.Message`, which is EMPTY for
+these responses under PowerShell 5.1, so every failure rendered as a blank line. The
+server had been saying exactly what was wrong, every time.
+
+Everything that followed was caused by that: a bisect of batch 30, a hunt through
+character encodings, a transport measurement with a local HttpListener, two probe runs
+whose results were void, and a spec principle written about a mistake
+(11.9) that would never have been made had the error been visible.
+
+**⚠️ WHY IT LOOKED DATA-SPECIFIC, AND THIS IS THE PART TO REMEMBER.** In a long
+sequential job, **elapsed time correlates with position**, so any time-based failure
+impersonates a position-based one. Batches 1-29 passed and 30 failed because batch 30 is
+where the hour ran out. 31 then passed on a fresh token; 32 failed on the next stale one;
+32 "recovered" later on another fresh one. Every one of those reads as "specific rows are
+bad" and none of it was about rows. Recorded as spec 11.10.
+
+**Fixed in `dj-import-takeout.ps1`:**
+
+1. **The response body is now read properly** - falling back to the response stream when
+   `ErrorDetails` is empty - and the HTTP status is printed with it. An expiry is called
+   out by name: *"THE TOKEN HAS EXPIRED. Nothing is wrong with this batch."*
+2. **The token's own `exp` claim is decoded before anything is sent.** Already expired ->
+   refuse to start. Under 10 minutes left -> warn that it may not cover the run.
+3. **Expiry is re-checked before every batch**, so a long import stops cleanly with
+   `re-run with -From N` instead of emitting a wall of identical 500s.
+
+Verified against synthetic tokens at -60s, +5min and +50min.
+
+**NOT a data problem, and nothing about batches 30 and 32 needs investigating.** They are
+still unimported; they simply need running with a valid token.
+
+### 2026-08-31 - what the false trail did produce
+
+Two things worth keeping, both unrelated to the actual fault:
+
+- **The string-body corruption is real** and is fixed (`ReadAllBytes`). It never affected
+  the import, because the batch files are pure ASCII, and the `dj_tracks` audit returned
+  zero corrupted rows. Fixed because depending on "the payload happens to be ASCII" is a
+  silent dependency on a serialiser default feeding an insert-only `match_key`.
+- **Spec 11.9** (a control must be a copy, not a reconstruction) stands on its own.
+
+Both were found while chasing the wrong thing. Neither justifies the chase: the cost was
+several hours and two void experiments, and the whole of it was avoidable by printing the
+response body.
+
 ### 2026-08-31 - THE FIRST BISECT RUN WAS VOID. The splitter re-encoded the files.
 
 **Every result from that probe run has been discarded.** It appeared to show that

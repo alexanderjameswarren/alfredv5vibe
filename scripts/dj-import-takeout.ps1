@@ -56,6 +56,43 @@ param(
 $ErrorActionPreference = "Stop"
 $headers = @{ Authorization = "Bearer $Token"; "Content-Type" = "application/json" }
 
+# The token carries its own expiry. Read it rather than discovering it as a 500
+# thirty batches in - the failure looks like a data problem and is not one.
+function Get-TokenExpiry([string]$jwt) {
+    $parts = $jwt.Split(".")
+    if ($parts.Count -lt 2) { return $null }
+    $p = $parts[1].Replace("-", "+").Replace("_", "/")
+    switch ($p.Length % 4) { 2 { $p += "==" } 3 { $p += "=" } }
+    try {
+        $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p))
+        $exp = (ConvertFrom-Json $json).exp
+        if ($exp) { return [DateTimeOffset]::FromUnixTimeSeconds([int64]$exp).LocalDateTime }
+    } catch { return $null }
+    return $null
+}
+
+$expiry = Get-TokenExpiry $Token
+if ($expiry) {
+    $left = $expiry - (Get-Date)
+    if ($left.TotalSeconds -le 0) {
+        Write-Host ""
+        Write-Host "  TOKEN ALREADY EXPIRED at $expiry. Get a fresh one; nothing was sent." -ForegroundColor Red
+        exit 1
+    }
+    $mins = [int]$left.TotalMinutes
+    $colour = if ($mins -lt 10) { "Yellow" } else { "DarkGray" }
+    Write-Host ""
+    Write-Host ("  token valid for {0} more minute(s), until {1:HH:mm:ss}" -f $mins, $expiry) -ForegroundColor $colour
+    if ($mins -lt 10) {
+        Write-Host "  That may not cover this run. A mid-run expiry is safe - it stops" -ForegroundColor Yellow
+        Write-Host "  cleanly and re-running is absorbed by the unique index - but a" -ForegroundColor Yellow
+        Write-Host "  fresh token now saves the interruption." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host ""
+    Write-Host "  (could not read an expiry from this token - continuing)" -ForegroundColor DarkGray
+}
+
 function Invoke-Batch($file, $mode) {
     # BYTES, NOT A STRING. Measured with a local HttpListener: Invoke-RestMethod
     # given a STRING body encodes it as Latin-1 and mangles every non-ASCII
@@ -72,10 +109,42 @@ function Invoke-Batch($file, $mode) {
     try {
         return Invoke-RestMethod -Uri "$Url`?mode=$mode" -Method Post -Headers $headers -Body $body
     } catch {
+        # READ THE RESPONSE BODY PROPERLY.
+        #
+        # $_.ErrorDetails.Message is EMPTY for these responses under PowerShell
+        # 5.1, and an earlier version of this script printed only that. The
+        # server was returning {"error":"... JWT expired"} on every failure and
+        # this script discarded it, which sent an entire investigation into
+        # bisecting batch files, comparing encodings and measuring the HTTP
+        # transport - to find a token that had timed out. Never report that a
+        # request failed without reporting what the response said.
         $resp = $_.ErrorDetails.Message
+        $code = $null
+        if ($_.Exception.Response) {
+            $code = [int]$_.Exception.Response.StatusCode
+            if (-not $resp) {
+                try {
+                    $stream = $_.Exception.Response.GetResponseStream()
+                    $stream.Position = 0
+                    $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+                    $resp = $reader.ReadToEnd()
+                    $reader.Dispose()
+                } catch { $resp = "(response body could not be read: $($_.Exception.Message))" }
+            }
+        }
+        if (-not $resp) { $resp = $_.Exception.Message }
+
         Write-Host ""
-        Write-Host "  REQUEST FAILED ($mode)" -ForegroundColor Red
+        Write-Host ("  REQUEST FAILED ($mode)" + $(if ($code) { " - HTTP $code" } else { "" })) -ForegroundColor Red
         Write-Host "  $resp" -ForegroundColor Red
+
+        if ($resp -match "JWT expired|token is expired|PGRST301|invalid JWT") {
+            Write-Host ""
+            Write-Host "  >>> THE TOKEN HAS EXPIRED. Nothing is wrong with this batch. <<<" -ForegroundColor Yellow
+            Write-Host "  Supabase access tokens last about an hour; a full import runs" -ForegroundColor Yellow
+            Write-Host "  longer than that. Get a fresh one from the browser console and" -ForegroundColor Yellow
+            Write-Host "  re-run from this batch - re-running is safe either way." -ForegroundColor Yellow
+        }
         Write-Host ""
         Write-Host "  If this was a CONFIRM, read the message above carefully: a" -ForegroundColor Yellow
         Write-Host "  part-way failure reports exactly how many rows COMMITTED, and" -ForegroundColor Yellow
@@ -101,6 +170,17 @@ foreach ($i in $From..$To) {
     $name = "batch_{0:D3}.json" -f $i
     $file = Join-Path $BatchDir $name
     if (-not (Test-Path $file)) { Write-Host "  $name  MISSING - skipped" -ForegroundColor Yellow; continue }
+
+    # Stop BEFORE a request that cannot succeed, so a long import ends with a
+    # clear reason rather than a wall of identical 500s.
+    if ($expiry -and (Get-Date) -ge $expiry.AddSeconds(-5)) {
+        Write-Host ""
+        Write-Host "  TOKEN EXPIRED at $expiry - stopping before $name." -ForegroundColor Yellow
+        Write-Host "  Get a fresh token and re-run with -From $i. Nothing is lost:" -ForegroundColor Yellow
+        Write-Host "  every batch already confirmed is committed, and re-running any" -ForegroundColor Yellow
+        Write-Host "  batch is absorbed by the unique index." -ForegroundColor Yellow
+        break
+    }
 
     Write-Host "  ---- $name ----------------------------------" -ForegroundColor DarkGray
     $d = Invoke-Batch $file "dry_run"

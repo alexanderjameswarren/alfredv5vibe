@@ -1130,6 +1130,49 @@ control matters.
 *parser*. Here it was a silent input to a *comparison*: two artefacts that compared equal
 as data were not equal as bytes, and only the bytes travelled.
 
+### 11.10 Never report that a call failed without reporting what it said
+
+The import script's error path printed `$_.ErrorDetails.Message`, which is empty for
+these responses under PowerShell 5.1. Every failure therefore rendered as:
+
+```
+  REQUEST FAILED (dry_run)
+
+```
+
+The response body, present on every one of those requests, said:
+
+```
+{"error":"platform_check_call_budget failed: JWT expired"}
+```
+
+**An hour of token lifetime, diagnosed as a data corruption problem.** What followed: a
+bisect of the failing batch, a character-encoding investigation, a transport measurement
+against a local HttpListener, and two probe runs whose results were void - all to find a
+token that had timed out. The answer was in the first failed response.
+
+**The rule: a failure report that omits the failure's own explanation is worse than no
+report**, because it looks like diagnosis. It licenses exactly the kind of inference that
+followed here - "reproducible, and only on these batches, so it must be their content."
+
+Concretely: read the response body, print the status code, and fall back to the response
+stream when the convenience property is empty. Test the error path with a real error - it
+is the path least likely to have been exercised and most likely to be needed.
+
+⚠️ **AND THE REASON IT LOOKED LIKE DATA: in a long sequential job, elapsed time correlates
+with position.** Any time-based failure - an expiring credential, a rotating key, a
+rate-limit window, a lease - impersonates a position-based one. Batches 1-29 passed and
+30 failed because batch 30 is where the hour ran out; 31 passed on a fresh token; 32
+failed on the next stale one and "recovered" later on another fresh one. That pattern
+reads as *these specific rows are bad* and is entirely an artefact of when each request
+was sent.
+
+**Before concluding that item N is special, check what else changes monotonically with
+N.** Here it was the clock. The cheap discriminator is to re-run an item known to have
+PASSED: if the known-good item now fails too, nothing is specific to item N. That control
+was missing from the first two probe runs and present in the third, which is the run that
+answered it in four requests.
+
 ---
 
 ## 9. Reference
