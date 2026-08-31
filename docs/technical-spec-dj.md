@@ -1252,6 +1252,35 @@ reports agreement with itself.** Before believing a green result, name what coul
 wrong and still passed. For this check that list is short and worth stating: *a wrong
 `match_key`, consistently applied.* Which is exactly what happened.
 
+### 11.13 Insert-only means a defect cannot heal itself, even when the correct value arrives
+
+`dj_tracks` inserts use `ON CONFLICT (user_id, video_id) DO NOTHING`. So when the poll
+submits the right artist for a track already stored with a wrong one, **the existing row
+wins and the correct value is discarded.** It surfaces only as an `artist_disagreements`
+entry - every time that track is played, forever, and it never repairs anything.
+
+This was worth checking rather than assuming, because the intuition runs the other way. The
+`Release` defect is takeout-only: YouTube Music's own metadata is correct and only the
+Takeout channel name is the fallback label, so **any of those tracks played today would be
+written correctly - if it were not already stored.** It looks self-healing and is not.
+Insert-only converts "the right answer will turn up eventually" into "the right answer will
+be discarded on arrival, repeatedly".
+
+**The consequences to hold on to:**
+
+1. **A defect in an insert-only table has a permanent floor.** It can only be repaired by a
+   reviewed migration; time and use will not erode it.
+2. **`artist_disagreements` is therefore not only a detector, it is a standing symptom.** The
+   12 unrepaired `Release` rows will keep firing it. A reader who does not know that will
+   read recurring entries as new drift.
+3. **The cost of leaving a row unresolved is not zero**, and it is not just wrongness: it is
+   recurring noise in the one signal built to catch a different problem.
+
+That said, leaving 12 rows honestly wrong still beat guessing them - `match_key` is written
+once, and a confident wrong key is unrepairable by the same argument. **The point is that
+"we can fix it later when better data arrives" is FALSE here**, and any design leaning on it
+in an insert-only table is leaning on nothing.
+
 ---
 
 ## 9. Reference
