@@ -191,14 +191,20 @@ def main() -> None:
             continue
         played_at = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(PLAY_DATE_TZ)
 
+        # Only the fields the handler actually needs. Deliberately omitted:
+        #   album, duration_seconds — Takeout carries neither, and the handler
+        #     defaults both to null. Sending explicit nulls is 40 bytes a row of
+        #     nothing, over ~15k rows.
+        #   played_bucket — Block F removed it from the dedupe key and made it
+        #     diagnostic only. There WAS no bucket for a Takeout row, so the
+        #     honest value is null. An earlier version stuffed the ISO date in
+        #     here, which predates Block F: it would have put a date into a
+        #     column whose documented meaning is "the label YouTube returned".
         kept.append({
             "video_id": vid,
             "title": title,
             "artists": [channel[: -len(TOPIC_SUFFIX)]],
-            "album": None,          # Takeout has no album field at all.
-            "duration_seconds": None,
             "played_on": played_at.date().isoformat(),
-            "played_bucket": played_at.date().isoformat(),
             "precision": "exact",
             "_utc": ts,
             "_utc_hour": played_at.astimezone(timezone.utc).hour,

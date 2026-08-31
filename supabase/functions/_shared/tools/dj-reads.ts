@@ -324,6 +324,12 @@ export const getDjPlaysTool = defineTool({
         canonical_track_id: gid,
         canonical_title: canonical?.title ?? null,
         canonical_video_id: canonical?.video_id ?? null,
+        // Exposed for the same reason album was: a field nobody can read is a
+        // field nobody can check. The poll and Takeout can disagree on an
+        // artist's spelling ("Eddie Higgins Trio" vs "Eddie Higgins"), which
+        // silently splits one act into two match_key groups — and familiarity
+        // is exactly where that split becomes visible.
+        canonical_artist: canonical?.artist ?? null,
         distinct_days: days.length,
         estimated_days: estimated,
         play_rows: g.rows,
@@ -350,6 +356,7 @@ export const getDjPlaysTool = defineTool({
         canonical_track_id: null as unknown as string,
         canonical_title: null,
         canonical_video_id: v,
+        canonical_artist: null,
         distinct_days: 0,
         estimated_days: 0,
         play_rows: 0,
@@ -469,6 +476,7 @@ function zeroOnlyResult(
         canonical_track_id: null,
         canonical_title: null,
         canonical_video_id: v,
+        canonical_artist: null,
         distinct_days: 0,
         estimated_days: 0,
         play_rows: 0,

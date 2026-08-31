@@ -938,6 +938,32 @@ The tell: **a documented meaning that has never been checked against a case wher
 alternatives diverge.** Everywhere the candidate interpretations agree, the documentation is
 unfalsifiable, and unfalsifiable documentation drifts silently.
 
+### 11.6 In an insert-only table, IMPORT ORDER IS A SILENT INPUT TO IDENTITY
+
+Sixth variety of the same family, and the least visible yet.
+
+`dj_tracks` is insert-only: whichever spelling of an artist arrives **first** becomes that
+track's `match_key`, permanently. So when two sources disagree about a name — the poll takes
+YouTube Music's artist metadata, Takeout takes the `- Topic` channel name — **the winner is
+decided by which day the user happened to listen**, not by any property of the data.
+
+Nothing errors. Nothing disagrees. Both spellings are correct in their own source. The
+arbitrariness is **invisible after the fact**: looking at the stored rows later, there is no
+trace that the outcome could have gone the other way, and no signal distinguishing "this is
+the right name" from "this one merely arrived on a Tuesday".
+
+**Measured instance:** `Eddie Higgins Trio` (poll, 3 tracks, written 2026-08-27) versus
+`Eddie Higgins` (Takeout channel, 27 further videos). One act, two `match_key` groups,
+because of a listening session's date. See §9.
+
+**The tell:** any field written once, derived from a source that is not the only source. Ask
+*which source arrives first, and does anything make that the right one?* If the answer is
+"whichever happens to run first", identity is being decided by scheduling.
+
+**Not the same as §11.4.** There, a record disagreed with the thing it described. Here every
+record is accurate and mutually consistent; it is the **choice between them** that was never
+made deliberately.
+
 ---
 
 ## 9. Reference
@@ -983,6 +1009,40 @@ not a per-method quirk.** Confirmed three times across three different methods:
 more than was asked for, so the library never paginated and never trimmed.
 **A declared cap is enforced by slicing in the handler or it is not enforced at all.**
 Assume it of every ytmusicapi call that takes a `limit`, including ones not yet used.
+
+**⚠️ KNOWN LIMITATION — ONE ARTIST, TWO IDENTITIES, DECIDED BY IMPORT ORDER.**
+
+The poll takes YouTube Music's artist metadata; the Takeout import takes the `- Topic`
+channel name. Where those differ **in the PRIMARY artist**, the same act produces two
+`match_key` groups and can never be merged, because `dj_tracks` is insert-only and
+`match_key` is written once (§4.1.2).
+
+**Multi-artist collaborations are NOT affected.** `buildMatchKey` uses `artists[0]` only,
+and both sources agree on the primary — the poll stores the joined string
+(`Coldplay, BTS`) in `dj_tracks.artist` but keys on `Coldplay`, exactly as Takeout does.
+
+**Measured 2026-08-30:** of 12 both-sides pairs compared, 9 produced identical keys and 3
+differed — all the same artist:
+
+| | Poll | Takeout | Videos in export |
+|---|---|---|---|
+| Eddie Higgins | `Eddie Higgins Trio` | `Eddie Higgins` | 3 poll-first, **27 further** |
+| Red Garland | `The Red Garland Trio` | `The Red Garland Trio` | 16, consistent — no split |
+
+Neither source is reliably richer: the export already carries 40 artists **with** ensemble
+suffixes (`Dave Brubeck Quartet` ×25, `Glenn Miller Orchestra` ×5), so "the channel is the
+bare name" is not a rule. Exposure is bounded by how many artists the poll has touched at
+all — about 16 of the export's **1,206** distinct artists.
+
+**Deliberately NOT fixed.** A suffix-stripping rule (`Trio`, `Quartet`, …) cannot be
+validated and would merge genuinely distinct acts, which is the §4.1.2 trap the vocabulary
+approach exists to avoid. "Prefer the poll spelling" fires for ~16 of 1,206 artists while
+adding a permanent second code path. A bounded, measured, recorded inconsistency is the
+better trade.
+
+**`dj_artists.mbid` is the eventual real answer** — a MusicBrainz identifier is stable
+across spellings, and phase 7 needs it anyway because setlist.fm keys artist queries by it
+rather than by name. That is where this gets solved, not in the normaliser.
 
 **⚠️ THE HISTORY FEED IS LOSSY, NOT MERELY TRUNCATED.** Three independent observations:
 items leave the page from the MIDDLE rather than the tail (`Today` 28→29 while `This week`

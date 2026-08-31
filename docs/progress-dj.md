@@ -1277,6 +1277,53 @@ The 15 subjects that previously resolved to `2026-08-27` under Pacific now resol
 different answer, so reintroducing one fails all six immediately.
 
 
+
+### Takeout tranche 1 — 40 rows committed 2026-08-30
+
+| | |
+|---|---|
+| submitted / inserted / already held | **40 / 40 / 0** |
+| `tracks_created` vs already known | **4 vs 36** — the assertion that mattered |
+| `canonical_links_made` | 0 (all distinct songs; not evidence at volume) |
+| `by_bucket` | `Today: 0`, `Yesterday: 0`, `(no bucket): 40/40` ✅ |
+| covered | 2026-08-25 → 2026-08-29 |
+| `occurrence > 1` | none in tranche — **NOT EXERCISED** |
+
+**Readback diff: 0 mismatches across 40 rows, byte-identical**, including all three
+non-ASCII titles — `Köln…` (U+00F6), `∞` (U+221E), `♡` (U+2661). That was the specific risk
+of a model acting as transport, tested and clear.
+
+**Check A passed.** `AUAxlOfw2O0` resolved to track `d3eb3393-…` — the **same track id** as
+the existing poll row. Insert-only reused it; no second group.
+
+**The ∞ and ♡ tracks inserted cleanly with `match_key` null.** A null key is filtered out of
+grouping, so they stand alone — the empty-title guard, written blind, meeting its first real
+case. Had the fallback produced `coldplay|` instead, every symbol-titled Coldplay track
+would have merged into one group. **Two of 4,563 permanently ungroupable is the right
+outcome; recorded, not fixed.**
+
+### ⚠️ ARTIST SPELLING SPLIT — measured, recorded, deliberately not fixed
+
+See spec §9 for the full write-up and §11.6 for the general form. In brief: the poll and
+Takeout disagree on some primary artist names, and insert-only means **whichever arrived
+first wins permanently — decided by which day listening happened.**
+
+**The narrowing that matters:** `buildMatchKey` uses `artists[0]` only, so multi-artist
+collaborations are unaffected (9 of 12 pairs identical). Only a differing PRIMARY name
+splits. Measured: 3 tracks stranded as `Eddie Higgins Trio` against 27 further videos that
+will arrive as `Eddie Higgins`.
+
+- [ ] 🛑 **MEASURE ALL 93 POLL TRACKS BEFORE THE BULK IMPORT.** The 3-of-12 figure is a
+      SAMPLE presented as a shape; it must not be presented as the total. If the real number
+      is ~3, proceed. If it is ~30, this is a different decision.
+      Query: `get_dj_plays mode:"plays" source:"poll"`, paged by date, reporting only
+      `video_id` + `track.artist`.
+
+**`canonical_artist` added to `familiarity` mode output** — the same gap as `album`, one
+field over. Without it, two groups for one act look like two different songs, which is
+precisely the shape this limitation produces.
+
+
 ---
 
 ## Phase 4 — Surface deployment ⚠️ FULL PHASE, NOT A STEP

@@ -71,8 +71,8 @@ const run = (tables, args) =>
 const runMp = (tables, args) =>
   tool.get_dj_managed_playlists.handler(args, { db: makeDb(tables), userId: "u1" });
 
-const track = (id, video_id, title, canonical = null, album = null) =>
-  ({ id, video_id, title, artist: "Weezer", album, canonical_track_id: canonical });
+const track = (id, video_id, title, canonical = null, album = null, artist = "Weezer") =>
+  ({ id, video_id, title, artist, album, canonical_track_id: canonical });
 const play = (track_id, played_on, precision = "day", source = "poll") =>
   ({ id: `p-${track_id}-${played_on}-${Math.random()}`, track_id, played_on,
      precision, played_bucket: "Today", occurrence: 1, source,
@@ -468,4 +468,27 @@ test("plays mode exposes album on the inlined track", async () => {
   };
   const r = await run(tables, { mode: "plays", limit: 10 });
   assert.equal(r.data.plays[0].track.album, "Some Album");
+});
+
+test("familiarity exposes canonical_artist — the field a spelling split hides behind", async () => {
+  // "Eddie Higgins Trio" (poll) vs "Eddie Higgins" (Takeout channel) produce
+  // different match_keys and therefore different groups. Without the artist on
+  // the group, two entries for one act look like two different songs.
+  const tables = {
+    dj_tracks: [
+      track("t1", "v1", "Detour Ahead", null, null, "Eddie Higgins Trio"),
+      track("t2", "v2", "Detour Ahead", null, null, "Eddie Higgins"),
+    ],
+    dj_plays: [play("t1", "2026-08-27"), play("t2", "2026-08-28")],
+  };
+  const r = await run(tables, { mode: "familiarity", video_ids: ["v1", "v2"] });
+  assert.equal(r.data.returned, 2, "different primary artist = different group");
+  const arts = r.data.groups.map((g) => g.canonical_artist).sort();
+  assert.deepEqual(arts, ["Eddie Higgins", "Eddie Higgins Trio"]);
+});
+
+test("an unknown id carries canonical_artist null, not undefined", async () => {
+  const r = await run({ dj_tracks: [], dj_plays: [] },
+    { mode: "familiarity", video_ids: ["ghost"] });
+  assert.equal(r.data.groups[0].canonical_artist, null);
 });
