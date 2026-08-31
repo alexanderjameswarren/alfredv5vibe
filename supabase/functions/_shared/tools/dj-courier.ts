@@ -100,39 +100,62 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// record_dj_plays — tier 1
-// ---------------------------------------------------------------------------
 
-export const recordDjPlaysTool = defineTool({
-  name: "record_dj_plays",
-  tier: 1,
-  handler: async (args: Record<string, unknown>, ctx) => {
-    const plays = args.plays as PlayInput[] | undefined;
-    const pollDate = args.poll_date as string | undefined;
-    const source = (args.source as string | undefined) ?? "poll";
+// ---------------------------------------------------------------------------
+// prepareRows — SHARED by the write and the dry run
+// ---------------------------------------------------------------------------
+//
+// Extracted so a dry run cannot predict by different logic than the write does.
+// A dry run built on a separate estimator is a record that cannot be checked
+// against the thing it describes (spec §11.4) — it would agree with the write
+// right up until it didn't.
+//
+// ⚠️ WHAT A DRY RUN STILL CANNOT EXERCISE: the insert itself. ctx.db is
+// supabase-js over PostgREST, where every upsert is its own transaction, so
+// there is no way to write and roll back. The dry run shares row DERIVATION and
+// checks the derived keys against the same unique index the write relies on;
+// it does not prove the write succeeds. Stated in its output rather than left
+// to read as a full rehearsal.
 
-    if (!Array.isArray(plays) || plays.length === 0) {
-      throw new Error("record_dj_plays: `plays` must be a non-empty array.");
-    }
-    if (plays.length > PLAYS_CAP) {
-      // Reject, never truncate — see PLAYS_CAP.
-      throw new Error(
-        `record_dj_plays: ${plays.length} plays exceeds the per-call cap of ` +
-          `${PLAYS_CAP}. Nothing was written. Split into batches of ${PLAYS_CAP} ` +
-          `or fewer and call once per batch.`,
-      );
-    }
-    if (!VALID_SOURCE.includes(source)) {
-      throw new Error(
-        `record_dj_plays: invalid source "${source}"; must be one of ${VALID_SOURCE.join(", ")}.`,
-      );
-    }
-    if (pollDate !== undefined && !ISO_DATE_RE.test(pollDate)) {
-      throw new Error(
-        `record_dj_plays: poll_date "${pollDate}" must be YYYY-MM-DD.`,
-      );
-    }
+export interface PreparedRow {
+  video_id: string;
+  title: string;
+  artist: string | null;
+  album: string | null;
+  duration_seconds: number | null;
+  match_key: string | null;
+  played_on: string;
+  precision: string;
+  played_bucket: string | null;
+  occurrence: number;
+}
+
+export interface PrepareResult {
+  prepared: PreparedRow[];
+  albumsDiscarded: number;
+  source: string;
+}
+
+export function prepareRows(args: Record<string, unknown>, label: string): PrepareResult {
+  const plays = args.plays as PlayInput[] | undefined;
+  const pollDate = args.poll_date as string | undefined;
+  const source = (args.source as string | undefined) ?? "poll";
+
+  if (!Array.isArray(plays) || plays.length === 0) {
+    throw new Error(`${label}: \`plays\` must be a non-empty array.`);
+  }
+  if (plays.length > PLAYS_CAP) {
+    throw new Error(
+      `${label}: ${plays.length} plays exceeds the per-call cap of ${PLAYS_CAP}. ` +
+        `Nothing was written. Split into batches of ${PLAYS_CAP} or fewer.`,
+    );
+  }
+  if (!VALID_SOURCE.includes(source)) {
+    throw new Error(`${label}: invalid source "${source}"; must be one of ${VALID_SOURCE.join(", ")}.`);
+  }
+  if (pollDate !== undefined && !ISO_DATE_RE.test(pollDate)) {
+    throw new Error(`${label}: poll_date "${pollDate}" must be YYYY-MM-DD.`);
+  }
 
     // --- Normalise every play up front. Reject the whole batch on any
     // problem, with all problems listed, so the caller fixes them in one pass
@@ -286,6 +309,30 @@ export const recordDjPlaysTool = defineTool({
       );
     }
 
+  if (errors.length > 0) {
+    const shown = errors.slice(0, 20);
+    const more = errors.length - shown.length;
+    throw new Error(
+      `${label}: ${errors.length} validation error(s). No rows written. ` +
+        `Fix these and re-invoke:\n` + shown.join("\n") +
+        (more > 0 ? `\n(+${more} more)` : ""),
+    );
+  }
+  return { prepared, albumsDiscarded, source };
+}
+
+// ---------------------------------------------------------------------------
+// record_dj_plays — tier 1
+// ---------------------------------------------------------------------------
+
+export const recordDjPlaysTool = defineTool({
+  name: "record_dj_plays",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const { prepared, albumsDiscarded, source } = prepareRows(args, "record_dj_plays");
+    const pollDate = args.poll_date as string | undefined;
+    void pollDate;
+
     // --- Track identity + canonical grouping. Shared with record_dj_playlist
     // via dj-tracks.ts — one implementation, because a divergence between two
     // copies would silently group one import path differently from the other
@@ -325,6 +372,7 @@ export const recordDjPlaysTool = defineTool({
 
     let inserted = 0;
     const insertedByBucket: Record<string, number> = {};
+    let rowsAttempted = 0;
     for (const batch of chunk(playRows, 200)) {
       const { data, error } = await ctx.db
         .from("dj_plays")
@@ -335,7 +383,25 @@ export const recordDjPlaysTool = defineTool({
         // played_bucket comes back so inserts can be attributed to a bucket.
         // Counting them any other way would mean inferring which rows landed.
         .select("id, played_bucket");
-      if (error) throw new Error(`record_dj_plays: play insert failed: ${error.message}`);
+      if (error) {
+        // FAIL LOUDLY AND SAY EXACTLY WHERE.
+        //
+        // Chunks before this one have COMMITTED — PostgREST gives one
+        // transaction per call, so there is no rollback across them. Resuming
+        // from an unknown position into an insert-only table is the worst state
+        // to be in; dedupe absorbing a re-run is the mitigation, but only if
+        // the caller knows to re-run. So the message carries the exact counts.
+        throw new Error(
+          `record_dj_plays: play insert FAILED PART-WAY. ` +
+            `${inserted} row(s) were COMMITTED before the failure (rows 1..` +
+            `${rowsAttempted} of ${playRows.length} attempted); the remaining ` +
+            `${playRows.length - rowsAttempted} were NOT written. ` +
+            `RE-RUN THIS EXACT BATCH — the unique index on ` +
+            `(${PLAYS_CONFLICT_TARGET}) absorbs what already landed, so a re-run ` +
+            `is safe and completes the batch. Upstream said: ${error.message}`,
+        );
+      }
+      rowsAttempted += batch.length;
       for (const row of (data ?? []) as Array<{ played_bucket: string | null }>) {
         const k = row.played_bucket ?? NO_BUCKET;
         insertedByBucket[k] = (insertedByBucket[k] ?? 0) + 1;
@@ -718,6 +784,99 @@ export const getPlatformSchedulesTool = defineTool({
       meta: rows.length < total
         ? { truncated: true, total, limit_applied: limit, count: rows.length }
         : {},
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// dry_run_dj_plays — tier 1, READ-ONLY
+// ---------------------------------------------------------------------------
+
+export const dryRunDjPlaysTool = defineTool({
+  name: "dry_run_dj_plays",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    // Same derivation the write uses — see prepareRows. A separate estimator
+    // would agree with the write right up until it didn't.
+    const { prepared, albumsDiscarded, source } = prepareRows(args, "dry_run_dj_plays");
+
+    // --- tracks: look up, never create ------------------------------------
+    const byVideoId = new Map<string, PreparedRow>();
+    for (const p of prepared) if (!byVideoId.has(p.video_id)) byVideoId.set(p.video_id, p);
+    const videoIds = [...byVideoId.keys()];
+
+    const known = new Map<string, { id: string; artist: string | null }>();
+    for (const ids of chunk(videoIds, 100)) {
+      const { data, error } = await ctx.db
+        .from("dj_tracks").select("id, video_id, artist").in("video_id", ids);
+      if (error) throw new Error(`dry_run_dj_plays: track lookup failed: ${error.message}`);
+      for (const r of (data ?? []) as Array<{ id: string; video_id: string; artist: string | null }>) {
+        known.set(r.video_id, { id: r.id, artist: r.artist });
+      }
+    }
+    const wouldCreate = videoIds.filter((v) => !known.has(v));
+
+    // Same detector the write runs. Reported PER BATCH, not aggregated at the
+    // end — a third split act among the ~1,190 artists the alias map cannot
+    // anticipate should be visible in the batch that surfaced it.
+    const artistDisagreements: Array<{ video_id: string; stored: string | null; submitted: string | null }> = [];
+    for (const p of prepared) {
+      const k = known.get(p.video_id);
+      if (k && p.artist && k.artist && k.artist !== p.artist) {
+        artistDisagreements.push({ video_id: p.video_id, stored: k.artist, submitted: p.artist });
+      }
+    }
+
+    // --- plays: check the derived keys against the SAME unique index --------
+    // A play for a video with no track cannot already exist (dj_plays.track_id
+    // is a FK), so it is necessarily new — no query needed for those.
+    const heldKeys = new Set<string>();
+    const trackIds = [...new Set([...known.values()].map((k) => k.id))];
+    if (trackIds.length > 0) {
+      const dates = prepared.map((p) => p.played_on).sort();
+      for (const ids of chunk(trackIds, 100)) {
+        const { data, error } = await ctx.db
+          .from("dj_plays")
+          .select("track_id, played_on, occurrence, source")
+          .in("track_id", ids)
+          .gte("played_on", dates[0])
+          .lte("played_on", dates[dates.length - 1])
+          .eq("source", source);
+        if (error) throw new Error(`dry_run_dj_plays: play lookup failed: ${error.message}`);
+        for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+          heldKeys.add(`${r.track_id}|${r.played_on}|${r.occurrence}|${r.source}`);
+        }
+      }
+    }
+
+    let alreadyHeld = 0;
+    for (const p of prepared) {
+      const k = known.get(p.video_id);
+      if (!k) continue;                       // no track -> no play -> new
+      if (heldKeys.has(`${k.id}|${p.played_on}|${p.occurrence}|${source}`)) alreadyHeld++;
+    }
+
+    const dates = prepared.map((p) => p.played_on).sort();
+    return {
+      mode: "dry_run",
+      nothing_written: true,
+      source,
+      plays_submitted: prepared.length,
+      would_insert: prepared.length - alreadyHeld,
+      already_held: alreadyHeld,
+      tracks_seen: videoIds.length,
+      tracks_would_create: wouldCreate.length,
+      tracks_already_known: videoIds.length - wouldCreate.length,
+      albums_would_discard: albumsDiscarded,
+      artist_disagreements: artistDisagreements,
+      covered_from: dates[0] ?? null,
+      covered_to: dates[dates.length - 1] ?? null,
+      caveat:
+        "Shares row DERIVATION with the write (prepareRows) and checks the derived " +
+        "keys against the same unique index. It does NOT exercise the insert: " +
+        "PostgREST gives one transaction per call, so a write-and-roll-back dry run " +
+        "is not possible. Treat this as an accurate prediction of WHAT would be " +
+        "written, not proof that writing succeeds.",
     };
   },
 });

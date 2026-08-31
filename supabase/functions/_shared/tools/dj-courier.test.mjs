@@ -75,6 +75,8 @@ function makeDb() {
       in(col, vals) { filters.push((r) => vals.includes(r[col])); return api; },
       eq(col, v) { filters.push((r) => r[col] === v); return api; },
       is(col, v) { filters.push((r) => r[col] === v); return api; },
+      gte(col, v) { filters.push((r) => r[col] >= v); return api; },
+      lte(col, v) { filters.push((r) => r[col] <= v); return api; },
       order(col, o) { order = { col, asc: o?.ascending !== false }; return api; },
       limit(n) { limit = n; return api; },
       single() { single = true; return api; },
@@ -144,6 +146,7 @@ function makeDb() {
 }
 
 const run = (db, args) => toolByName.record_dj_plays.handler(args, { db, userId: USER });
+const dry = (db, args) => toolByName.dry_run_dj_plays.handler(args, { db, userId: USER });
 
 const play = (o) => ({
   video_id: o.v, title: o.t, artists: o.a ?? ["Weezer"],
@@ -665,4 +668,78 @@ test("get_platform_schedules filters and says staleness is not computed here", a
   assert.equal(dj.data.returned, 1);
   assert.match(dj.data.reading, /Staleness is NOT computed here/);
   assert.match(dj.data.reading, /0 = SUNDAY/);
+});
+
+
+// ---------------------------------------------------------------------------
+// dry_run_dj_plays — must PREDICT the write, not estimate separately
+// ---------------------------------------------------------------------------
+
+const tk = (v, t, d) => ({ video_id: v, title: t, artists: ["Weezer"],
+                           played_on: d, precision: "exact", occurrence: 1 });
+
+test("THE PARTIAL-BATCH CASE: a dry run over a half-imported batch splits it correctly", async () => {
+  // The first real test of takeout-source dedupe — every previous dedupe test
+  // was poll-sourced. If it reports everything as new, the `source` component
+  // of the key is not doing what we think.
+  const db = makeDb();
+  const first = [tk("v1","A","2026-08-28"), tk("v2","B","2026-08-28")];
+  const rest  = [tk("v3","C","2026-08-28"), tk("v4","D","2026-08-28")];
+  await run(db, { source: "takeout", plays: first });
+
+  const d = await dry(db, { source: "takeout", plays: [...first, ...rest] });
+  assert.equal(d.nothing_written, true);
+  assert.equal(d.plays_submitted, 4);
+  assert.equal(d.already_held, 2, "the two already imported must be recognised");
+  assert.equal(d.would_insert, 2);
+  assert.equal(d.tracks_already_known, 2);
+  assert.equal(d.tracks_would_create, 2);
+});
+
+test("a dry run WRITES NOTHING", async () => {
+  const db = makeDb();
+  await dry(db, { source: "takeout", plays: [tk("v1","A","2026-08-28")] });
+  assert.equal(db._tables.dj_plays.length, 0);
+  assert.equal(db._tables.dj_tracks.length, 0);
+});
+
+test("dry run and write AGREE on the same batch", async () => {
+  // They share prepareRows; this asserts the prediction matches the outcome.
+  const db = makeDb();
+  const plays = [tk("v1","A","2026-08-28"), tk("v2","B","2026-08-27"), tk("v3","C","2026-08-27")];
+  const d = await dry(db, { source: "takeout", plays });
+  const w = await run(db, { source: "takeout", plays });
+  assert.equal(d.would_insert, w.plays_inserted);
+  assert.equal(d.already_held, w.plays_already_held);
+  assert.equal(d.tracks_would_create, w.tracks_created);
+  assert.equal(d.covered_from, w.covered_from);
+  assert.equal(d.covered_to, w.covered_to);
+});
+
+test("source is part of the key — poll rows do not mask takeout ones", async () => {
+  const db = makeDb();
+  await run(db, { poll_date: "2026-08-28",
+    plays: [{ video_id:"v1", title:"A", artists:["Weezer"], played_bucket:"Today" }] });
+  const d = await dry(db, { source: "takeout", plays: [tk("v1","A","2026-08-28")] });
+  assert.equal(d.already_held, 0, "a poll row must NOT count as holding the takeout row");
+  assert.equal(d.would_insert, 1);
+  assert.equal(d.tracks_would_create, 0, "the track itself is already known");
+});
+
+test("dry run surfaces artist_disagreements per batch", async () => {
+  const db = makeDb();
+  await run(db, { source: "takeout",
+    plays: [{ ...tk("v1","Detour Ahead","2026-08-27"), artists:["Eddie Higgins Trio"] }] });
+  const d = await dry(db, { source: "takeout",
+    plays: [{ ...tk("v1","Detour Ahead","2026-08-28"), artists:["Some Other Name"] }] });
+  assert.equal(d.artist_disagreements.length, 1);
+  assert.equal(d.artist_disagreements[0].stored, "Eddie Higgins Trio");
+  assert.equal(d.artist_disagreements[0].submitted, "Some Other Name");
+});
+
+test("dry run states what it cannot exercise", async () => {
+  const db = makeDb();
+  const d = await dry(db, { source: "takeout", plays: [tk("v1","A","2026-08-28")] });
+  assert.match(d.caveat, /does NOT exercise the insert/);
+  assert.match(d.caveat, /one transaction per call/);
 });

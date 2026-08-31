@@ -18,6 +18,7 @@ import {
   updatePlatformRunTool,
   createPlatformScheduleTool,
   getPlatformSchedulesTool,
+  dryRunDjPlaysTool,
 } from "../_shared/tools/dj-courier.ts";
 import {
   recordDjPlaylistTool,
@@ -1237,6 +1238,61 @@ app.all("/", async (c) => {
   const transport = new StreamableHTTPTransport();
   await server.connect(transport);
   return transport.handleRequest(c);
+});
+
+// ---------------------------------------------------------------------------
+// Bulk Takeout import — an HTTP endpoint, deliberately NOT an MCP tool
+// ---------------------------------------------------------------------------
+//
+// ~15,000 rows cannot pass through a model's context: pasting them costs a
+// batch's worth of tokens each way, and it makes the model the transport, which
+// can corrupt a title into an insert-only match_key. This endpoint takes the
+// batch as a request body straight off disk, so the data never enters a model
+// at all.
+//
+// ⚠️ IT CALLS THE SAME HANDLERS, NEVER REIMPLEMENTS THEM. That is the whole
+// reason a direct PostgREST write was rejected: match_key and canonical
+// grouping must have ONE implementation across every import path (spec §4.1).
+// A second write path that re-derived anything would be that mistake wearing a
+// different hat.
+//
+//   POST /mcp/import-takeout?mode=dry_run   -> predicts, writes nothing
+//   POST /mcp/import-takeout?mode=confirm   -> writes, via record_dj_plays
+//
+// Per-batch dry-run-then-confirm is deliberate. A single call that imported all
+// 15,185 rows would solve transport by removing the review gate that made
+// transport tolerable — 31 confirmations is a keypress each, not a
+// transcription risk each.
+app.post("/import-takeout", async (c) => {
+  const auth = c.req.header("authorization");
+  if (!auth?.startsWith("Bearer ")) return c.json({ error: "Missing bearer token" }, 401);
+
+  const mode = c.req.query("mode") ?? "dry_run";
+  if (mode !== "dry_run" && mode !== "confirm") {
+    return c.json({ error: "mode must be 'dry_run' or 'confirm'" }, 400);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = await c.req.json();
+  } catch (e) {
+    return c.json({ error: `body must be JSON: ${(e as Error).message}` }, 400);
+  }
+  if (!Array.isArray(body?.plays)) {
+    return c.json({ error: "body must be { source, plays: [...] }" }, 400);
+  }
+
+  try {
+    // Confirm goes through record_dj_plays itself — the same tool, the same
+    // validation, the same tier gate, the same envelope.
+    const tool = mode === "confirm" ? recordDjPlaysTool : dryRunDjPlaysTool;
+    const result = await tool(body, c.req.raw);
+    return c.json({ mode, ...(result.data as Record<string, unknown>) });
+  } catch (e) {
+    // Verbatim. A partial-batch failure carries its own committed-row counts
+    // and must not be reworded on the way out.
+    return c.json({ mode, error: (e as Error).message }, 500);
+  }
 });
 
 // Serve
