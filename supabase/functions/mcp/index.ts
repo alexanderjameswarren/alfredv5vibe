@@ -552,6 +552,17 @@ async function runToolForMcp(
   }
 }
 
+// ONE list of run statuses, derived from the tool's own export so the two cannot
+// drift. A hand-written copy of this enum lived here and was not updated when
+// "running" was added, so the MCP layer rejected a valid status before the
+// handler ever ran (spec 11.14).
+//
+// Defined HERE, above every use. `const` is not hoisted: declared after
+// createMcpServer() it is still in the temporal dead zone when that function
+// runs, which throws ReferenceError at first dispatch - a module that boots
+// cleanly and dies on the first request.
+const RUN_STATUS = z.enum(VALID_RUN_STATUS as [string, ...string[]]);
+
 const app = new Hono().basePath("/mcp");
 
 // --- OAuth Protected Resource Metadata ---
@@ -566,7 +577,11 @@ app.get("/.well-known/oauth-protected-resource", (c) => {
 });
 
 // --- Helper: create an MCP server with user token baked into tool closures ---
-function createMcpServer(token: string) {
+// Exported so index.test.mjs can EXECUTE the registration body. Nothing in
+// production imports this module, so without the export the only thing that
+// ever ran this code was a live request - which is how a ReferenceError in
+// it reached production behind 125 green tests (spec 11.15).
+export function createMcpServer(token: string) {
   const server = new McpServer({
     name: "alfred-mcp",
     version: "0.1.0",
