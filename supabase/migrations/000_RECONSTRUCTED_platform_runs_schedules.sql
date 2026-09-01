@@ -1,3 +1,45 @@
+-- ###########################################################################
+-- ##  DO NOT COPY THE register_table() CALLS IN THIS FILE. THEY ARE WRONG.  ##
+-- ###########################################################################
+--
+-- This file's register_table() invocations were GUESSED. They use a signature
+-- that DOES NOT EXIST:
+--
+--     select platform.register_table('platform_runs',
+--            audited => false, exempt => false);          -- WRONG. Will error.
+--
+-- The real one is schema-qualified, p_-prefixed, and takes a policy mode this
+-- file omits entirely:
+--
+--     select platform.register_table(
+--       'public.platform_runs',
+--       p_policy_mode => 'owner',
+--       p_audited     => false,
+--       p_exempt      => false,
+--       p_notes       => '...'
+--     );
+--
+-- ⚠️ THE HEADER BELOW ALREADY SAID "BEST-EFFORT", AND THAT WAS NOT ENOUGH.
+-- Migration 009 was written by copying from this file anyway, and failed with
+--     ERROR: function platform.register_table(unknown, audited => boolean,
+--     exempt => boolean) does not exist
+-- A "best-effort" label describes the file's confidence; it does not tell a
+-- reader WHICH parts are guessed, so the reader treats the concrete-looking
+-- parts as fact. A file that is wrong in a specific way must say which way.
+--
+-- WHERE THE TRUTH LIVES: the database. Call `get_platform_contract` - the
+-- contract is stored as the platform schema's comment precisely so there is no
+-- copy to keep in sync.
+--
+-- ⚠️ AND THERE IS NO WORKING EXAMPLE IN THIS DIRECTORY TO COPY INSTEAD. No
+-- migration in this repo creates a table: 001-005 alter and add, and every
+-- CREATE TABLE in this system was run outside the migrations directory (the
+-- known gap - nine DJ tables exist only in the database). So the only
+-- register_table calls on disk are the wrong ones below and the correct one in
+-- 009. That is exactly why the database, not a file, is the authority.
+--
+-- ###########################################################################
+
 -- ===========================================================================
 -- DJ Migration Block D — platform_runs + platform_schedules
 --
@@ -76,6 +118,9 @@ comment on column public.platform_runs.notified_at is
 
 -- Audit intentionally OFF: this is high-volume observability telemetry, and
 -- auditing a log produces a log of a log.
+-- ⚠️ GUESSED SIGNATURE - DOES NOT EXIST. See the banner at the top of this file.
+--    Real form: select platform.register_table('public.platform_runs',
+--      p_policy_mode => 'owner', p_audited => false, p_exempt => false, p_notes => '...');
 select platform.register_table('platform_runs', audited => false, exempt => false);
 
 
@@ -123,6 +168,9 @@ comment on column public.platform_schedules.grace_hours is
 comment on column public.platform_schedules.enabled is
   'False suspends staleness checking without deleting the definition — a paused job should not alarm, and should not have to be reconstructed from memory later.';
 
+-- ⚠️ GUESSED SIGNATURE - DOES NOT EXIST. See the banner at the top of this file.
+--    Real form: select platform.register_table('public.platform_schedules',
+--      p_policy_mode => 'owner', p_audited => true, p_exempt => false, p_notes => '...');
 select platform.register_table('platform_schedules', audited => true, exempt => false);
 
 

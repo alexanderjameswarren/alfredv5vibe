@@ -1388,6 +1388,50 @@ check works.**
 **A check with neither is a check nobody has tested.** And when a negative control passes,
 the first hypothesis is that the injection is wrong — not that the defect is uncatchable.
 
+### 11.17 When the authority is queryable, never copy it into a file
+
+Migration 009 called `platform.register_table()` with a signature that does not exist:
+
+```
+ERROR: function platform.register_table(unknown, audited => boolean, exempt => boolean)
+does not exist
+```
+
+It was copied from `000_RECONSTRUCTED_platform_runs_schedules.sql`, **a file whose own header
+says its `register_table` invocations are best-effort guesses.** The real signature is
+schema-qualified, `p_`-prefixed, and takes a `p_policy_mode` the reconstructed file omits
+entirely.
+
+⚠️ **And there was no correct example on disk to have copied instead.** No migration in this
+repo creates a table — every `CREATE TABLE` in this system was run outside the migrations
+directory — so the reconstructed guesses were the *only* `register_table` calls present.
+**Checking a second file would not have helped. Only asking the database would.**
+
+**The contract is stored in the database, as the `platform` schema's comment, specifically so
+there is no copy to keep in sync.** `get_platform_contract` returns it, along with the live
+registry and a conformance report. One call would have been right; reading a file was wrong.
+
+**Two lessons, and the second is the one worth generalising.**
+
+**1. A "best-effort" label describes a file's confidence. It does not say WHICH parts are
+guessed** — so a reader treats the concrete-looking parts as fact, because they look exactly
+like the correct parts. The header had said best-effort since the day it was written, and it
+did not stop either of us. It now carries a banner naming the specific wrong thing, and each
+call is annotated inline beside the real form. **A file that is wrong in a specific way must
+say which way**, at the place the reader will actually look.
+
+**2. Prefer the queryable authority to any transcription of it.** Where a fact can be asked
+for at the moment it is needed — a function signature, a schema, a tool manifest, a live
+config — reading a file *about* that fact adds a copy that can drift and gives no signal when
+it has. This is the same failure as §11.14's duplicated enum, one level up: there, two copies
+of a list; here, a copy of an interface. **Derive, or ask. Do not transcribe.**
+
+⚠️ Corollary, and this is what made it expensive: the wrong copy was in a **migration**, which
+is the one artefact class that looks most authoritative. A reader reasonably assumes a file
+under `migrations/` describes something that actually ran. `000_RECONSTRUCTED` does not — it
+exists so the schema has a source outside the database — and that distinction is invisible
+from the filename alone.
+
 ---
 
 ## 9. Reference

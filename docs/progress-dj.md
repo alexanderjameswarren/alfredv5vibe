@@ -1630,6 +1630,31 @@ depend on evaluation order, which is the very class of silent input the map exis
       inversion bug. A caller-supplied `started_at` remains legitimate for an
       **after-the-fact** stamp, where the caller genuinely does know when the work began.
 
+- [ ] ⚠️ **THE PLATFORM CONTRACT IS IN THE DATABASE — call `get_platform_contract`.**
+      Not in any file. It is the `platform` schema's comment, exposed by that tool along with
+      the live registry and conformance report, precisely so there is no copy to keep in
+      sync. The registration call is:
+
+      ```sql
+      select platform.register_table(
+        'public.my_table',              -- SCHEMA-QUALIFIED: the param is regclass, and an
+                                        -- unqualified name resolves via search_path, which
+                                        -- works in the SQL editor and drifts elsewhere
+        p_policy_mode => 'owner',       -- 'none' for custom RLS or no user_id column
+        p_audited     => true,          -- false ONLY for high-volume append-only telemetry
+        p_exempt      => false,
+        p_notes       => 'App: what this table is'
+      );
+      ```
+
+      ⚠️ **`000_RECONSTRUCTED` shows a DIFFERENT, NON-EXISTENT signature** and migration 009
+      was written by copying it, failing with *"function ... does not exist"*. That file now
+      carries a banner and inline annotations naming the specific error.
+      ⚠️ **There is no correct example on disk either** — no migration in this repo creates
+      a table, so those guesses are the only `register_table` calls present. Checking a
+      second file would not have helped; only asking the database would. Recorded as
+      spec §11.17.
+
 - [ ] 🛑 **MIGRATION 008 BYPASSED THE PLATFORM CONTRACT** - caught by
       `check_platform_conformance`, not by me. Raw `create table` plus a hand-written RLS
       policy, no `platform.register_table()`, so the table was live and **outside the
