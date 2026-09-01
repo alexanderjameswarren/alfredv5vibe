@@ -1,0 +1,160 @@
+// dj_artists — read and upsert. The Phase 7 gate.
+//
+// The table has existed since Block A and had NO TOOLS AT ALL until now: mbid
+// could be neither read nor written, and Phase 7 keys entirely on it. That is
+// the same finding every phase in this project has produced first — the data
+// model runs ahead of the tool surface, and the gap is invisible until
+// something needs to cross it.
+//
+// ⚠️ dj_artists is NOT insert-only. Unlike dj_tracks, nothing here is written
+// once and frozen: an artist's mbid, tags and notes are exactly the kind of
+// thing that gets corrected as better information arrives. So upsert is the
+// right shape here and would be the wrong shape there, and the difference is
+// not stylistic - it is whether the column is an IDENTITY or an ANNOTATION.
+
+import { clampLimit, defineTool } from "../platform.ts";
+
+const MBID_LEN = 36;
+
+interface ArtistRow {
+  id: string;
+  name: string;
+  mbid: string | null;
+  yt_channel_id: string | null;
+  tags: string[] | null;
+  notes: string | null;
+  last_explored_at: string | null;
+}
+
+const COLS = "id, name, mbid, yt_channel_id, tags, notes, last_explored_at";
+
+// ---------------------------------------------------------------------------
+// get_dj_artists — tier 1 read
+// ---------------------------------------------------------------------------
+
+export const getDjArtistsTool = defineTool({
+  name: "get_dj_artists",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const name = args.name as string | undefined;
+    const missingMbid = args.missing_mbid === true;
+    const limit = clampLimit(args.limit as number | undefined);
+
+    let q = ctx.db.from("dj_artists").select(COLS);
+    // Exact match first, so "Live" the band cannot be reached by a fuzzy search
+    // that also matches "Live at the Apollo" - the same class of wrong-match the
+    // mbid rule exists to prevent one layer up.
+    if (name) q = q.ilike("name", name);
+    if (missingMbid) q = q.is("mbid", null);
+    q = q.order("name", { ascending: true }).limit(limit);
+
+    const { data, error } = await q;
+    if (error) throw new Error(`get_dj_artists: ${error.message}`);
+    const rows = (data ?? []) as ArtistRow[];
+
+    return {
+      artists: rows,
+      returned: rows.length,
+      limit_applied: limit,
+      without_mbid: rows.filter((r) => !r.mbid).length,
+      reading:
+        "`mbid` is the MusicBrainz id and it is what setlist.fm keys on. An " +
+        "artist with mbid null CANNOT have setlists read: name search matches " +
+        "the wrong band, so get_dj_setlists refuses names outright. Use " +
+        "`missing_mbid: true` to find the gaps. An empty result for a name you " +
+        "expected means the artist row does not exist yet, NOT that it has no " +
+        "mbid - those need different fixes, so check `returned` before " +
+        "concluding anything about mbid.",
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// upsert_dj_artist — tier 2
+// ---------------------------------------------------------------------------
+//
+// Tier 2, not tier 1: it can UPDATE an existing row. Creating an artist is
+// append-only and would be tier 1 on its own, but one tool that can do either
+// takes the higher tier - the blast radius of the worst thing it can do, which
+// is overwriting an mbid that was right.
+
+export const upsertDjArtistTool = defineTool({
+  name: "upsert_dj_artist",
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const name = (args.name as string | undefined)?.trim();
+    if (!name) throw new Error("upsert_dj_artist: `name` is required.");
+
+    const mbid = args.mbid as string | null | undefined;
+    if (mbid !== undefined && mbid !== null && mbid !== "") {
+      const m = String(mbid).trim();
+      if (m.length !== MBID_LEN || m.split("-").length !== 5) {
+        throw new Error(
+          `upsert_dj_artist: ${JSON.stringify(m)} is not a MusicBrainz id. Expected ` +
+            `36 characters in 8-4-4-4-12 form. Nothing was written. A malformed ` +
+            `mbid does not fail loudly later - it 404s at setlist.fm and reads as ` +
+            `"this artist has no setlists", which is a different and much more ` +
+            `misleading answer.`,
+        );
+      }
+    }
+
+    const { data: before, error: findErr } = await ctx.db
+      .from("dj_artists").select(COLS).ilike("name", name).maybeSingle();
+    if (findErr) throw new Error(`upsert_dj_artist: lookup failed: ${findErr.message}`);
+
+    const patch: Record<string, unknown> = { name };
+    for (const k of ["mbid", "yt_channel_id", "notes", "last_explored_at"]) {
+      if (args[k] !== undefined) patch[k] = args[k];
+    }
+    if (args.tags !== undefined) patch.tags = args.tags;
+
+    // ⚠️ OVERWRITING A NON-NULL mbid IS REFUSED unless replace_mbid is passed.
+    // Setting one that was missing is routine; CHANGING one that was already
+    // there means either the first was wrong or this one is, and silently
+    // picking the newer would repoint every future setlist read at a different
+    // band with nothing recording that it happened.
+    const prev = before as ArtistRow | null;
+    if (prev?.mbid && patch.mbid && patch.mbid !== prev.mbid && args.replace_mbid !== true) {
+      throw new Error(
+        `upsert_dj_artist: "${name}" already has mbid ${prev.mbid} and this call ` +
+          `would change it to ${patch.mbid}. REFUSED — nothing was written. One of ` +
+          `the two is wrong, and picking the newer silently would repoint every ` +
+          `future setlist read at a different band. Verify against MusicBrainz, ` +
+          `then pass replace_mbid: true if the new one is right.`,
+      );
+    }
+
+    let row: ArtistRow;
+    if (prev) {
+      const { data, error } = await ctx.db
+        .from("dj_artists").update(patch).eq("id", prev.id).select(COLS).single();
+      if (error) throw new Error(`upsert_dj_artist: update failed: ${error.message}`);
+      row = data as ArtistRow;
+    } else {
+      const { data, error } = await ctx.db
+        .from("dj_artists").insert(patch).select(COLS).single();
+      if (error) throw new Error(`upsert_dj_artist: insert failed: ${error.message}`);
+      row = data as ArtistRow;
+    }
+
+    return {
+      artist: row,
+      created: !prev,
+      // dj_artists IS audited, so the audit trigger has the authoritative
+      // record. This before/after is for the caller reading the response now.
+      changed: prev
+        ? Object.fromEntries(
+          Object.keys(patch)
+            .filter((k) => k !== "name" &&
+              JSON.stringify((prev as Record<string, unknown>)[k]) !== JSON.stringify(patch[k]))
+            .map((k) => [k, { from: (prev as Record<string, unknown>)[k], to: patch[k] }]),
+        )
+        : {},
+      reading: prev
+        ? "Updated an existing artist. `changed` lists only fields that actually differ."
+        : "Created a new artist row. Setting `mbid` now avoids a second call later — " +
+          "without it, setlist reads are impossible rather than merely degraded.",
+    };
+  },
+});

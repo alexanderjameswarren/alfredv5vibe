@@ -188,7 +188,8 @@ test("update_platform_run accepts the outcome fields", () => {
 
 test("the DJ tool surface is registered", () => {
   for (const name of ["record_dj_plays", "get_dj_plays",
-                      "get_dj_managed_playlists", "create_platform_schedule"]) {
+                      "get_dj_managed_playlists", "create_platform_schedule",
+                      "get_dj_artists", "upsert_dj_artist"]) {
     assert.ok(registered.some((r) => r.name === name), `${name} not registered`);
   }
 });

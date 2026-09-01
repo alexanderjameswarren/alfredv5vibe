@@ -26,6 +26,7 @@ import {
   createDjConcertTool,
 } from "../_shared/tools/dj-playlists.ts";
 import { getDjPlaysTool, getDjManagedPlaylistsTool } from "../_shared/tools/dj-reads.ts";
+import { getDjArtistsTool, upsertDjArtistTool } from "../_shared/tools/dj-artists.ts";
 import {
   getItems,
   searchItems,
@@ -1195,6 +1196,43 @@ export function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(updatePlatformRunTool, args, token),
+  );
+
+  server.registerTool(
+    "get_dj_artists",
+    {
+      title: "Get DJ Artists",
+      description:
+        "Read artist identity rows for the DJ app. `mbid` is the MusicBrainz id and it is what setlist.fm keys its queries on — an artist with mbid null CANNOT have setlists read at all, because name search matches the wrong band and get_dj_setlists refuses names outright. " +
+        "Pass `missing_mbid: true` to find the gaps. ⚠️ An empty result for a name you expected means THE ARTIST ROW DOES NOT EXIST, not that it lacks an mbid — those need different fixes, so check `returned` before concluding anything. Tier 1, read-only.",
+      inputSchema: {
+        name: z.string().optional().describe("Exact artist name (case-insensitive). Omit to list."),
+        missing_mbid: z.boolean().optional().describe("Only artists with no mbid — the ones setlist reads cannot reach."),
+        limit: z.number().optional().describe("Max rows (default 20, cap 50)."),
+      },
+    },
+    async (args) => runToolForMcp(getDjArtistsTool, args, token),
+  );
+
+  server.registerTool(
+    "upsert_dj_artist",
+    {
+      title: "Upsert DJ Artist",
+      description:
+        "Create an artist row or update an existing one, matched on name. This is how `mbid` gets set, and without an mbid setlist.fm reads are impossible rather than merely degraded. " +
+        "⚠️ CHANGING an mbid that is already set is REFUSED unless `replace_mbid: true`: one of the two is wrong, and silently taking the newer would repoint every future setlist read at a different band with nothing recording it. Setting one that was missing is routine and needs no flag. " +
+        "A malformed mbid is rejected here rather than 404ing at setlist.fm, where it would read as 'this artist has no setlists' — a different and much more misleading answer. Tier 2: it can update an existing row.",
+      inputSchema: {
+        name: z.string().describe("Artist name. Matched case-insensitively; creates the row if absent."),
+        mbid: z.string().optional().describe("MusicBrainz id, 8-4-4-4-12 hex. From musicbrainz.org, not guessed."),
+        yt_channel_id: z.string().optional().describe("YouTube channel id, if known."),
+        tags: z.array(z.string()).optional().describe("Free descriptors: era, genre, anything worth filtering on."),
+        notes: z.string().optional().describe("Standing notes. NOT a stance or rating — those live in dj_feedback."),
+        last_explored_at: z.string().optional().describe("YYYY-MM-DD: when a discovery pass last went deep on this artist."),
+        replace_mbid: z.boolean().optional().describe("Required to overwrite an mbid that is already set. Verify against MusicBrainz first."),
+      },
+    },
+    async (args) => runToolForMcp(upsertDjArtistTool, args, token),
   );
 
   server.registerTool(
