@@ -1432,6 +1432,165 @@ under `migrations/` describes something that actually ran. `000_RECONSTRUCTED` d
 exists so the schema has a source outside the database — and that distinction is invisible
 from the filename alone.
 
+## 12. Concert playlists — the body of work (phase 7)
+
+A concert playlist is **what to learn before the lights go down.** It is built from what the
+act has ACTUALLY been playing, not from their catalogue and not from what I already know.
+
+### 12.1 Source and identity
+
+**setlist.fm, keyed on `dj_artists.mbid`.** Never on name: there is more than one act called
+*Live*, more than one *Nirvana*, and a setlist for the wrong band is worse than no setlist.
+`get_dj_setlists` refuses a name outright rather than falling back to search, so the failure
+is *"you have not set the mbid"* and never *"here is somebody else's show"*.
+
+### 12.2 The window is the LAST 10 SHOWS, and it is INCLUSIVE
+
+A song appearing in **any** of those 10 goes in.
+
+**⚠️ DO NOT QUIETLY TIGHTEN THIS LATER.** The asymmetry is the whole argument, and it is the
+same one that settled the Takeout `header` gate: **an extra song costs one listen. A missing
+song is a song I do not know when the lights go down.** Those are not comparable, so the
+filter belongs on the over-including side. A future reader looking at a 40-song playlist and
+thinking "we could raise the threshold to 3 of 10" is optimising the cheap direction.
+
+**Empty setlists are skipped, not counted.** setlist.fm returns UPCOMING shows in the same
+feed with no songs — on 2026-09-01 the Weezer feed held sixteen future dates ahead of a single
+played one. A window taken naively would be mostly empties, each consuming a slot and
+contributing nothing, and the diff would silently compare against far less than it claimed.
+`get_dj_setlists` skips them and returns `empty_entries_skipped` separately, because *"we read
+10 shows"* and *"we read 10 entries, 6 of them empty"* are different claims.
+
+### 12.3 DECIDED 2026-09-01: promo appearances COUNT as shows
+
+TV slots, radio sessions and corporate one-offs are shows for this purpose. Under the
+inclusive rule they are in, and that is right on the merits: when Weezer played *C.E.O.* and
+*Hoops* on the Today Show in August 2026, those were the new album's live debuts and certain
+to appear on the tour.
+
+**Recorded as a DECISION rather than left as a side effect of whatever the source returns** —
+because for a band between tours it can be the *entire* window. Measured on 2026-09-01, the
+last 10 Weezer setlists spanned six and a half months and were four promo spots, two
+corporate gigs, a café show, a festival and a stadium slot. Not one tour show.
+
+⚠️ **THE CONSEQUENCE: `N of 10` IS NOT COMPARABLE ACROSS SHOWS OF DIFFERENT LENGTH.** A song
+in a 1-song *Tonight Show* slot scores exactly like one in a 24-song stadium set. So
+`get_dj_setlists` returns `song_count` per show, and **any proposal quoting "appeared in N of
+10" must show the shape of the denominator.** The number was requested to make an inbox item
+actionable; unqualified, it would mislead instead.
+
+### 12.4 Covers resolve against the PERFORMING artist
+
+Weezer's *Happy Together*, not The Turtles'. **If YouTube Music does not have their version,
+it is not in the playlist** — no judgement about whether a cover "counts". This already worked
+in Phase 3b, where the Teal Album cut resolved correctly and disproved the live-only hazard
+note that had been written against it. `cover_of` is returned by the tool as information for a
+human, never as a gate.
+
+### 12.5 PROPOSAL ONLY — nothing writes to YouTube unattended
+
+The weekly job reads setlists, diffs against the recorded body, and raises **one** inbox item.
+Acting on it is a separate, human step.
+
+⚠️ **A CONSEQUENCE THAT MUST NOT READ AS CLOSED:** §5's interleaving rule and the
+known-but-unplayed zero-play case **stay deferred**. Both need a cram row to exist, and under
+proposal-only a cram row appears only when a suggestion is accepted. They are open, not done.
+
+### 12.6 DECIDED 2026-09-01: the acceptance test runs NOW, against Foo Fighters
+
+Weezer was the original subject and is the wrong one **today**: The Gathering opens 8
+September 2026, so on 1 September zero tour shows exist and the window is entirely promo.
+
+Foo Fighters are mid-tour on *Take Cover*, playing 18–24 song sets, so their last 10 setlists
+are real full-length shows — which makes the window genuinely tour-shaped **and** makes
+`N of 10` comparable, dissolving 12.3's caveat rather than working around it. Subject
+playlist: `PLV2XoCH1Pv5y4eryZrOdxG2XlSxfdW32l`, 30 tracks.
+
+**Weezer remains a second, later test with a known answer.** Re-run around 20 September, once
+The Gathering has 10 shows behind it, and check that *C.E.O.*, *Hoops* and *We Might as Well
+Be Strangers* surface from **real tour sets** rather than from the August TV appearances.
+**If the diff surfaces nothing once the tour is underway, the diff logic is wrong.**
+
+### 12.7 Title → `video_id` carries the Phase 8 rule
+
+A setlist gives a title; familiarity and playlists need a `video_id`. Each proposed song is
+resolved through `search_dj_music`, and **each resolution is a place a wrong match enters**.
+
+**Match on the exact `video_id` or treat it as NOT FOUND. Never a plausible-looking result.**
+That rule is what made the Takeout artist repair safe — it can only answer *found* or *not
+found*, never *probably*. One search for *Happy Together* returned six different recordings.
+
+---
+
+## 13. The concert-playlist skill (planned, not built)
+
+**Do not build until the weekly diff works.** Recorded now while the reasoning is fresh.
+
+### 13.1 Three phrasings, three different setlist queries
+
+| what I say | window | `dj_concerts.status` |
+|---|---|---|
+| "Metallica is coming to the Sphere, build a concert playlist" | last 10 shows | `screening` |
+| "I missed Third Eye Blind, make a concert playlist" | last 10 shows | `missed` |
+| "I saw Adele at the Colosseum in October 2023, make a playlist" | **THAT show** | `attended` |
+
+The first two are the same query. **The third is a different one, and it has no tool yet.**
+
+### 13.2 🛑 The third phrasing needs a lookup `get_dj_setlists` cannot do
+
+As built, the tool reads `/artist/{mbid}/setlists` — newest first, paginated. A show from
+October 2023 is hundreds of entries back.
+
+**setlist.fm's API does support it**, via `/search/setlists` with `artistMbid`, `year`,
+`venueName`, `cityName`, `date`. So this is a second mode or a second Workshop tool, and
+therefore **another manifest change and another fresh conversation.** Naming it now so it is
+not discovered mid-build.
+
+**THE FALLBACK, and it must never substitute silently:**
+
+1. **Search by `artistMbid` + `year` + `venueName`** — not by exact date. *"October 2023"* is
+   a memory, and memories are wrong by a month more often than by a venue.
+2. **Exactly one match → use it.**
+3. **No match, or several → STOP AND ASK.** Present the nearest shows by date with their
+   dates and venues, and let a human pick. **Do not take the nearest one.** A show three
+   weeks later on the same tour is an excellent proxy; one from a different tour is a
+   different setlist entirely, and nothing in the data distinguishes them.
+4. **⚠️ "Listed but empty" is a THIRD outcome and needs its own words.** setlist.fm may hold
+   the show with no songs, because nobody submitted it. That is not *"the show did not
+   happen"* and must not be reported as *"not found"*. Say so, then offer the nearest dated
+   show from the same tour **as an explicitly labelled substitute**.
+
+This is 12.7's rule at the level of a whole show: **exact match or ask. Never plausible.**
+
+### 13.3 The skill creates the concert row too, and `missed` carries a second write
+
+The skill writes the `dj_concerts` row as well as the playlist. Status per the table above.
+
+⚠️ **`missed` is not merely a status.** The column comment is explicit: *"missed = did not go
+BUT still want to see them. The lingering want in missed is a fact about the ARTIST, so it is
+recorded as artist feedback; this column only records what happened that night."*
+
+**So "I missed Third Eye Blind" implies a `dj_feedback` row against the artist, not just a
+concert row.** Recording only the concert loses exactly the part that makes it actionable
+later — the wanting is why the playlist is worth building at all.
+
+### 13.4 Prerequisites that do not exist yet
+
+- **`dj_venues` has no tools**, and `dj_concerts.venue_id` points at it. "Metallica at the
+  Sphere" implies a venue row. Same gap `dj_artists` had, one table over.
+- **`create_dj_concert`'s behaviour when the artist or venue is absent is unverified.**
+  `artist_id` is `not null` with `on delete restrict`, so the chain is
+  **artist → (venue) → concert**, and the skill must not assume the first two exist.
+
+### 13.5 Naming: concert playlists are `"<Act> Concert"`, exactly
+
+**Not a style preference — a functional constraint.** Google Assistant has to find these by
+voice in the car, and it matches on the spoken name. `"Metallica Concert"`. Not *"Metallica —
+Concert Prep"*, not *"Metallica (Sphere 2026)"*.
+
+**Everything else Claude names by suggestion, and I confirm.** Concert playlists are the one
+case where the name is dictated by a consumer outside this system.
+
 ---
 
 ## 9. Reference

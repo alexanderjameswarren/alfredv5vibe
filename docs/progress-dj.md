@@ -1802,13 +1802,97 @@ duration display must tolerate zero rather than treat it as an error.
 > both are currently marked NOT EXERCISED rather than passed.
 
 
-- [ ] Obtain setlist.fm API key
-- [ ] Populate `dj_artists.mbid` for artists with upcoming concerts
-- [ ] Setlist fetch + diff against playlist body
+### The gate — built 2026-09-01, NOT YET USABLE
+
+- [x] **`get_dj_setlists`** (Workshop, tier 1, read-only). mbid only — a name is refused
+      outright, since setlist.fm name search matches the wrong band. Empty/upcoming setlists
+      skipped and counted separately; pagination driven by the FILTERED count; `song_count`
+      per show; `cover_of` informational.
+- [x] **`get_dj_artists`** (tier 1) and **`upsert_dj_artist`** (tier 2). The table had
+      existed since Block A with **no tools at all** — mbid could be neither read nor
+      written, and this phase keys entirely on it. Changing a set mbid is REFUSED without
+      `replace_mbid`.
+- [ ] 🛑 **RECONNECT THE ALFRED CONNECTOR AND START A FRESH CONVERSATION.** The MCP manifest
+      is frozen at conversation start, so the three new tools are deployed and unreachable.
+      Expect **36** tools, not 34.
+- [ ] Obtain setlist.fm API key → `workshop/data/dj/setlistfm.json` as `{"api_key": "..."}`.
+      ⚠️ Same rules as `browser.json`: gitignored, never pasted into a chat, never logged.
+
+### Before building the diff — three checks, in order
+
+- [ ] `get_dj_artists` — does a **Foo Fighters** row exist at all? Does Weezer's have an
+      `mbid`? ⚠️ Not found and no-mbid are different answers needing different fixes.
+- [ ] `upsert_dj_artist` to set Foo Fighters' mbid. ⚠️ **`bd6893a` is a setlist.fm id, NOT a
+      MusicBrainz id** — look up the real 8-4-4-4-12 mbid; the tool rejects anything else,
+      deliberately, because a malformed id 404s upstream and reads as *"this artist has no
+      setlists"*.
+- [ ] `get_dj_setlists` for Foo Fighters, limit 10. **Report `song_count` per show and
+      `empty_entries_skipped` BEFORE concluding anything about the window.**
+
+### The acceptance test — known answer, runs NOW (spec §12.6)
+
+- [ ] Diff the last 10 **Foo Fighters** setlists against `PLV2XoCH1Pv5y4eryZrOdxG2XlSxfdW32l`
+      (30 tracks, via `get_dj_managed_playlists` tracks mode). Mid-tour on *Take Cover*,
+      18–24 song sets, so the window is real full-length shows and `N of 10` is comparable.
+- [ ] ⚠️ **Second, later test — Weezer, around 20 September**, once The Gathering has 10 shows
+      behind it. *C.E.O.*, *Hoops* and *We Might as Well Be Strangers* must surface from
+      **real tour sets**, not the August TV appearances they currently come from.
+      **If the diff surfaces nothing once the tour is underway, the diff logic is wrong.**
+
+### The diff and the proposal
+
+- [ ] Setlist fetch + diff against playlist body. **INCLUSIVE** (spec §12.2) — a song in any
+      of the 10 goes in. ⚠️ Do not quietly tighten this later; the asymmetry is the argument.
+- [ ] 🛑 **Title → `video_id` carries the Phase 8 rule (spec §12.7): exact `video_id` match or
+      NOT FOUND. Never a plausible-looking result.** Each resolution is a place a wrong match
+      enters, and one search for *Happy Together* returned six different recordings.
+- [ ] 🛑 **The inbox item must be actionable WITHOUT LEAVING THE INBOX.** Per song: title,
+      artist, how many of the 10 setlists it appeared in, and `distinct_days` from
+      `get_dj_plays` familiarity mode. *"Add these six songs?"* is unanswerable if answering
+      means opening YouTube.
+- [ ] ⚠️ Quote the denominator honestly — `N of 10` alongside the shows' `song_count`
+      (spec §12.3). Unqualified it treats a 1-song TV slot as a 24-song set.
+- [ ] **PROPOSAL ONLY.** One inbox item. Nothing writes to YouTube unattended.
+- [ ] Weekly `platform_schedules` row — seeded **last**, per §7 phase 5.
+
+### Cram logic — blocked until a suggestion is accepted
+
 - [ ] Cram insertion (both zones for `new_setlist`)
 - [ ] Cram ordering by canonical-group play count
 - [ ] "Clear the cram list" path
 - [ ] Neglected-song proposal with user confirmation
+- [ ] 🛑 **§5 INTERLEAVING AND THE ZERO-PLAY CASE STAY DEFERRED — recorded as OPEN, not
+      done.** Both need a cram row to exist, and under proposal-only a cram row appears only
+      when a suggestion is accepted. See the block at the top of this phase; nothing below it
+      has been exercised on real data.
+
+### The concert-playlist skill — planned, NOT to be built yet (spec §13)
+
+- [ ] ⚠️ **Build only after the weekly diff works.** Recorded now while the reasoning is
+      fresh.
+- [ ] Three phrasings, three queries: *"X is coming to the Sphere"* → last 10, `screening`;
+      *"I missed X"* → last 10, `missed`; *"I saw X at the Colosseum in October 2023"* →
+      **that show**, `attended`.
+- [ ] 🛑 **The third has no tool.** `get_dj_setlists` reads newest-first and cannot reach a
+      2023 show. setlist.fm's `/search/setlists` supports it (`artistMbid` + `year` +
+      `venueName`), so it is **another Workshop mode and another manifest change.**
+      **Fallback: search by year and venue, not exact date** — a remembered month is wrong
+      more often than a remembered venue. One match → use it. **No match or several → STOP
+      AND ASK**, showing nearest shows with dates and venues. **Never take the nearest
+      silently**; a show from the same tour is a fine proxy, one from a different tour is a
+      different setlist, and nothing in the data tells them apart.
+      ⚠️ **"Listed but empty" is a THIRD outcome** — setlist.fm has the show, nobody
+      submitted the songs. That is not "not found" and must not be reported as such.
+- [ ] 🛑 **`missed` implies a `dj_feedback` row, not just a concert row.** The column comment
+      is explicit: the lingering want is a fact about the ARTIST. Recording only the concert
+      drops the part that makes it actionable later.
+- [ ] ⚠️ **`dj_venues` has no tools** and `dj_concerts.venue_id` points at it — the same gap
+      `dj_artists` had, one table over. And `create_dj_concert`'s behaviour when the artist
+      or venue is absent is **unverified**: `artist_id` is `not null on delete restrict`, so
+      the chain is artist → (venue) → concert.
+- [ ] **Naming: concert playlists are `"<Act> Concert"`, exactly.** Not style — Google
+      Assistant matches on the spoken name in the car. Everything else: Claude suggests, Alex
+      confirms.
 - [ ] **Acceptance test:** Weezer diff surfaces C.E.O., Hoops, We Might as Well Be
       Strangers (or whatever the real Gathering setlists show). If it surfaces
       nothing once the tour is underway, the diff logic is wrong.
