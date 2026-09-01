@@ -290,7 +290,7 @@ async def get_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
             f"only future dates listed — but nothing can be diffed against it."
         )
 
-    return {
+    data = {
         "mbid": mbid,
         "setlists": kept,
         "returned": len(kept),
@@ -312,3 +312,22 @@ async def get_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
             "artist's version, never to exclude them."
         ),
     }
+
+    # meta is DELIBERATELY EMPTY, and that is not an oversight.
+    #
+    # The house `meta["truncated"] = (shown, total)` makes the MCP layer prepend
+    # "showing X of Y" — a claim about a result that was CUT SHORT. Nothing here
+    # is cut short in that sense:
+    #
+    #   * Returning `limit` shows out of `total_upstream` 1614 is the tool doing
+    #     its job, not truncating. Flagging it would fire on EVERY call, and a
+    #     detector that fires on the normal case is worse than none (spec §11.7).
+    #   * Returning FEWER than `limit` means the feed ran out of played shows
+    #     within MAX_PAGES — "there are only 8" not "we are showing 8 of 10".
+    #     `truncated` would state the second, which is false.
+    #
+    # The shortfall is already legible in the payload: `returned`,
+    # `limit_applied`, `pages_read` and `empty_entries_skipped` together say
+    # exactly what was read and what was passed over.
+    meta: dict[str, Any] = {}
+    return {"data": data, "meta": meta}

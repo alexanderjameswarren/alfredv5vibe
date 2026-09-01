@@ -1844,6 +1844,12 @@ duration display must tolerate zero rather than treat it as an error.
       Expect **36** tools, not 34.
 - [x] Obtain setlist.fm API key → `workshop/data/dj/setlistfm.json` as `{"api_key": "..."}`.
       ⚠️ Same rules as `browser.json`: gitignored, never pasted into a chat, never logged.
+      ⚠️ **THE KEY IS PER-HOST AND THE JOB RUNS ON SURFACE.** It was on Dev only, so Surface
+      could not read a single setlist. Placed on Surface 2026-09-01.
+- [x] 🛑 **Envelope fixed — the handler returned a bare dict and every real MCP call failed.**
+      `tests/test_tool_envelopes.py` now drives all 10 tools through `call_tool` rather than
+      through their handlers. Third instance of one-layer verification in this tool; the
+      pattern is written up below.
 
 ### Before building the diff — three checks, in order
 
@@ -1873,14 +1879,112 @@ duration display must tolerate zero rather than treat it as an error.
       **`input_schema` declares `mbid` (required) and `limit`**, per the parity rule.
 - [x] `get_dj_setlists` for Foo Fighters, limit 10. **Report `song_count` per show and
       `empty_entries_skipped` BEFORE concluding anything about the window.**
-      **DONE 2026-09-01** (handler invoked directly as the dispatcher calls it, since the
-      hosts were still down): `returned: 10`, **`empty_entries_skipped: 0`**, 1 page read,
+      **DONE 2026-09-01** (handler invoked directly, since the hosts were still down).
+      ⚠️ **THAT PHRASING WAS WRONG AND IT COST A SHIPPED BUG** — see "THE ENVELOPE BUG"
+      below. Direct invocation matches the dispatcher's ARGUMENT CONVENTION, not its CALL
+      PATH: it skips `_validate_envelope`, and the tool was failing every real MCP call
+      while these numbers came back correct. **Pending re-confirmation through a real MCP
+      call.** `returned: 10`, **`empty_entries_skipped: 0`**, 1 page read,
       `total_upstream: 1614`. All ten are *Take Cover 2026* stadium shows, 08-07-2026 to
       22-08-2026. `song_count`: **15, 25, 26, 25, 26, 27, 27, 26, 24, 25.**
       ⚠️ **The window is genuinely tour-shaped** — zero empties, no promo slots, so §12.3's
       incomparable-denominator caveat does dissolve here as §12.6 predicted. But the range is
       **15–27, not the 18–24 assumed**: the 22-08 Hollywood Bowl show is 15 songs against a
       25–27 median, so an *N of 10* still needs the per-show counts shown beside it.
+
+### 🛑 THE ENVELOPE BUG, AND WHY THREE VERIFICATIONS IN A ROW MISSED IT — 2026-09-01
+
+`get_dj_setlists` returned a **bare dict**. `platform.call_tool` runs
+`_validate_envelope` on every handler return, so every real MCP call failed with
+*"Tool 'get_dj_setlists' envelope is missing 'data'. Handlers must return
+{'data': ..., 'meta': ...} even for trivial payloads."* Fixed to `{"data": ..., "meta": ...}`
+matching `get_dj_history` and `get_dj_playlists`.
+
+**WHY IT SURVIVED CHECK 3.** Check 3 was reported as passing, with the right ten setlists
+and the right per-show `song_count`. Those numbers were correct. The tool was still
+completely broken, because the check invoked the handler directly:
+
+```python
+res = await get_dj_setlists({"mbid": ..., "limit": 10}, ctx)
+```
+
+The claim written down was *"invoked directly as the dispatcher calls it"*. That was true
+about the **argument convention** — `handler(args, ctx)` positionally — and false about the
+**call path**. The dispatcher does not merely call the handler; it validates what comes back.
+Direct invocation skips that step, so a broken tool returned correct numbers and the check
+went green.
+
+⚠️ **INVOKING THE HANDLER IS NOT MAKING THE CALL.** The handler is the middle of the dispatch
+path, not the whole of it. Around it sit registration, the tier gate, schema parity and
+envelope validation — and a handler can satisfy every assertion made about it while a call
+*through* it fails.
+
+⚠️ **THIS IS THE THIRD INSTANCE OF THE SAME SHAPE IN ONE TOOL.** Recorded together because the
+pattern is the finding, not any one of the three:
+
+| # | The verification | What it actually proved | What was reported |
+|---|---|---|---|
+| 1 | `ast.parse` | the module is syntactically valid | "parses cleanly" — it did not **import**; `@define_tool` was missing `input_schema` and raised `TypeError` at startup |
+| 2 | schema-parity assertion | nothing — it inspects `args[...]` / `args.get(...)`, and the `(ctx, mbid, limit)` signature read neither | a passing parity check, **vacuously** |
+| 3 | direct handler invocation | the handler computes the right answer | "the tool works" — every real call failed envelope validation |
+
+**Each one tested a single layer and reported on the whole tool.** That is the generalisation,
+and it is the same failure mode as §11.15 (an operation that reports success without verifying
+its EFFECT is a check that cannot fail) and §11.18 (a check that reads the SOURCE cannot prove
+the module LOADS — and, by the same argument, importing the module cannot prove a CALL through
+it works).
+
+**THE REPAIR: `tests/test_tool_envelopes.py`, which drives every tool through `call_tool`.**
+Not through the handler. Only the outermost I/O boundary is stubbed — `dj._call` (every
+ytmusicapi method funnels through it) and setlists' `_read_api_key` / `_fetch_page`.
+Registration, the tier gate, argument handling, projection and `_validate_envelope` all run
+for real; stubbing further in would start testing the stub.
+
+- `test_every_registered_tool_is_covered_here` — the registry and the case table must agree,
+  so a new tool cannot ship with a bare-dict return and a green suite.
+- `test_all_tools_return_a_valid_envelope` — all 10 tools, dispatched, `(data, meta)` asserted.
+- `test_get_dj_setlists_envelope_carries_the_payload` — the tool that broke, checked on its
+  real fields: played show kept, upcoming show skipped **and counted**.
+- **Negative control** — a handler returning a bare dict of correct-looking data (the actual
+  2026-09-01 defect, per §11.16, not a plausible neighbour). `call_tool` rejects it;
+  `test_direct_invocation_would_have_passed` asserts that the *same handler* is perfectly
+  happy when invoked directly. The lesson is an assertion, not a comment.
+
+⚠️ Tier 3 (`remove_from_dj_playlist`) is driven with `confirmed: true` deliberately — without
+it `call_tool` short-circuits to a proposal and never runs the handler, so the envelope would
+go unexercised.
+
+**VERIFIED THE TEST CAN FAIL (§11.1).** Reverted `dj_setlists.py` to `return data`, re-ran:
+2 errors with the exact production message. Restored: 73/73 pass.
+
+⚠️ **TWO TRAPS HIT WHILE WRITING THE CONTROL, both worth keeping:**
+- `ToolEntry` is a **frozen dataclass** — the handler is swapped with
+  `dataclasses.replace`, not `setattr`.
+- `get_registry()` returns a **defensive copy**. The first version patched that copy, so
+  dispatch ran the real handler and the control reported *"ValueError not raised"*. It failed
+  loudly rather than passing vacuously — but a control patched one level further out would
+  have passed while testing nothing. Patch `workshop.platform._REGISTRY`.
+- `test_platform.py` calls `_reset_registry_for_tests()`, so the envelope tests passed alone
+  and failed under `discover`. Restored from a snapshot taken **at import time** (discovery
+  imports every module before running any test), with an `assert` that the snapshot is
+  non-empty so it cannot silently degrade into testing nothing.
+
+**⚠️ NONE OF THIS IS A SUBSTITUTE FOR A REAL MCP CALL.** The suite now covers the layer that
+was missed, but it is still in-process with a stubbed boundary. The only check that would have
+caught all three is a call through the deployed connector from a fresh conversation.
+
+### ⚠️ The setlist.fm key was on Dev only — Surface could not read setlists at all
+
+`get_dj_setlists` on Surface failed with *"API key not found at
+`C:\workshop-repo\workshop\data\dj\setlistfm.json`"*. The key existed only in the Dev working
+tree. **The weekly job runs on Surface**, so as built the Phase 7 job could not have read a
+single setlist — a blocker that would have surfaced at the first scheduled run, with no
+console to see it. Key now placed on Surface with the right ACLs.
+
+⚠️ Consequence for the acceptance test that follows: the 10 setlists were read by invoking the
+handler on **Dev**, which is what let defect 3 above through. Numbers reproduced the gate run
+exactly (15/25/26/25/26/27/27/26/24/25, `empty_entries_skipped: 0`), but **they were obtained
+off the dispatch path and are pending re-confirmation through a real MCP call.**
 
 ### The acceptance test — known answer, runs NOW (spec §12.6)
 
