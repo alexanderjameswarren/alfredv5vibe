@@ -253,6 +253,11 @@ one act *for familiarity purposes* is a genuine judgment call — someone deep i
 Blue* has not thereby heard *Bitches Brew*. **No such split exists in the data today.** If one
 arises it needs deciding, not inferring.
 
+**⚠️ KNOWN-PERMANENT DISAGREEMENTS ARE LISTED IN `docs/dj-known-disagreements.md`.** Some
+entries are decided and will fire forever — `AbbzAPXvNZ8` (a Clark Terry collaboration, not
+a spelling variant) and the 12 unrepaired `Release` rows. Check that page before
+investigating: an entry on it has been decided, an entry not on it is new.
+
 **Detection, so the third split is not silent.** `resolveTrackIds` already fetches existing
 tracks by `video_id`; it also carries `artist` and `match_key`, and returns
 **`artist_disagreements`** in every `record_dj_plays` and `dry_run_dj_plays` response. Empty
@@ -1317,6 +1322,71 @@ client), **say so** rather than reporting a deploy as a fix.
 
 Related to §11.11 but distinct: there, a rule was ASKED for and not enforced. Here it was
 ENFORCED, correctly, by a copy nobody had updated.
+
+### 11.15 An operation that reports success without verifying its EFFECT is a check that cannot fail
+
+Three instances in a single day, all the same shape, each one sending an investigation to
+the wrong place:
+
+| # | what reported success | what it actually confirmed | what it did not |
+|---|---|---|---|
+| 1 | a script's `catch` printing `$_.ErrorDetails.Message` | that a request failed | **what the failure said** — the property is empty under PowerShell 5.1, so every failure rendered blank |
+| 2 | `supabase functions deploy` returning `Deployed Functions.` | that the upload succeeded | **that the caller could reach the change** — a stale enum in a different layer still rejected the call |
+| 3 | a Python patch script's `.replace()` | that it produced a string | **that it matched anything** — the anchor was wrong, so the edit silently vanished |
+
+**The common defect: the success signal is decoupled from the effect.** A deploy reports the
+upload. A replace returns a string whether or not it matched. A catch reports that something
+threw. None of them report that the thing you wanted is now true — and each was read as
+though it had.
+
+Instance 3 is the sharpest, because the same script got it right eleven times: every other
+edit used `assert OLD in s`, and that one used `if ... not in ...` instead. **One guard
+downgraded from an assertion to a conditional, and a whole deploy went out with a missing
+binding.**
+
+**The rule: assert on the postcondition, not on the operation.**
+- Patch scripts: **every** `replace` asserts its anchor exists, with no exceptions — a
+  conditional edit is an edit you have not verified.
+- Deploys: verify by exercising the deployed thing, at the layer the caller hits (§11.14).
+- Error paths: print the response body, and test the error path with a real error.
+
+⚠️ **The tell is a report phrased in terms of the ACTION rather than the STATE.** "Deployed",
+"patched", "request failed" — versus "the enum now contains five values", "the file now
+defines RUN_STATUS", "the server said JWT expired". If a report cannot be false when the
+work did not happen, it is decoration.
+
+### 11.16 A negative control must reproduce the ACTUAL defect, not a plausible neighbour
+
+A control exists to prove a check can fail. **It only does that if the thing it injects is
+the thing that was wrong.** Three instances, and the third was caught only by luck of
+checking twice:
+
+1. **Check C** (zero-play familiarity). Subjects were twelve tracks that all had plays, so
+   the check would have returned twelve whether or not zero-fill worked. It could not fail.
+2. **The alias split scan.** Both known splits are CROSS-source — the export holds one side,
+   `dj_tracks` the other — so a scan of export artists alone returns 0 regardless. Fixed by
+   a **positive** control: seed the two stored names and require both to fire before
+   believing a 0.
+3. **The `RUN_STATUS` regression test.** The control moved the `const` below its first use,
+   expecting a temporal-dead-zone error. **It passed.** Module evaluation completes before
+   any request, so by the time `createMcpServer` runs the binding is initialised. The real
+   defect was that the definition **did not exist at all** — and reproducing *that* failed
+   all six tests.
+
+In case 3 the control was green and the test was good; the near-miss was concluding "the
+test cannot catch this" from a control that tested the wrong thing. **A green control is not
+reassurance — it is a failed reproduction, and it means you do not yet know whether the
+check works.**
+
+**The two controls, and they answer different questions:**
+
+| control | how | proves |
+|---|---|---|
+| **negative** | inject the real defect; the check must FAIL | the check is sensitive to what actually went wrong |
+| **positive** | seed a known-true case; the check must FIRE | the check is capable of firing at all |
+
+**A check with neither is a check nobody has tested.** And when a negative control passes,
+the first hypothesis is that the injection is wrong — not that the defect is uncatchable.
 
 ---
 

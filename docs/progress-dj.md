@@ -1363,6 +1363,18 @@ depend on evaluation order, which is the very class of silent input the map exis
 
 ## Phase 4 — Surface deployment ⚠️ FULL PHASE, NOT A STEP
 
+> ⚠️ **THIS CHECKLIST DISAGREES WITH REALITY AND HAS NOT BEEN RECONCILED.** Every box below
+> is unticked, but run `69f9457e` on 2026-09-01 confirmed `host: surface` via
+> `get_workshop_status` and polled real YouTube data through it — which cannot happen unless
+> most of this phase actually got done.
+>
+> **Deliberately NOT ticked from that inference.** A record corrected by assumption is
+> exactly what §11.4 warns about, and the two items that would NOT be proven by a working
+> poll are the ones worth confirming: **file ownership of `browser.json` (readable by
+> `alexa`, not just `rdpuser`)** and **whether the Workshop (Dev) connector is actually
+> disabled** — a 502 from it was seen this session, which suggests it is still configured.
+> Confirm those two by hand, then tick the rest.
+
 - [x] Pin `ytmusicapi==1.12.2` in `workshop/requirements.txt`
 - [x] Commit and push — phases 1–3b, 24 files
 - [ ] Tap **Refresh Workshop** tile on the Surface
@@ -1585,7 +1597,33 @@ depend on evaluation order, which is the very class of silent input the map exis
       starts failing partway through, **re-try something already known to have succeeded**
       before investigating the payload. That control answered the import question in four
       requests after two void runs without it.
+- [x] **FIRST FULL CLEAN RUN — `69f9457e`, 2026-09-01.** End to end, no improvisation.
+      Opened a `running` stamp, confirmed `host: surface`, gap 1 day (normal), polled,
+      filtered to **21 Today + 27 Yesterday**, wrote **39 rows** (18 Yesterday new, 9
+      already held from a manual sync), closed `ok` carrying the outcome fields, raised one
+      inbox item, set `notified_at`.
+
+      **It exercised four paths that had never run before:**
+      - the `running` status end to end — open, then close
+      - `update_platform_run` carrying `covered_from` / `covered_to` / `details`
+      - `by_bucket` on a run that **actually inserts** (every prior check was a no-op run,
+        so insert attribution was unexercised)
+      - the notification firing **for a real reason** rather than on a schedule
+
+- [ ] **DAY-ONE CHECK — the last genuinely unknown thing.** Let it fire unattended at 17:00
+      UTC and confirm a run gets stamped. This settles whether a scheduled run holds
+      connector auth with nobody present. Reasoned to be fine (the hourly expiry during the
+      import was a hand-copied browser JWT, not the connector's refresh token) but never
+      observed. Cost of being wrong: one skipped day and an unambiguous auth error.
 - [ ] Observe two consecutive successful days
+- [ ] ⚠️ **Coarse-bucket rejection, LIVE — still unexercised.** The task filtered correctly,
+      so `record_dj_plays`'s rejection path was never hit. Unit-tested is not exercised.
+- [ ] 🛑 **THE CLEAN-RUN SUPPRESSION PATH — untested, and its failure mode is SILENCE.**
+      This run legitimately raised an item, so "raises nothing when nothing is wrong" has
+      never been observed. It needs a run that SHOULD be silent. ⚠️ Note the asymmetry: a
+      suppression bug that over-fires announces itself; one that under-fires looks like a
+      quiet week. Pair it with the Phase 6 de-dup test, which has the same failure
+      direction.
 
 **Notes:**
 
