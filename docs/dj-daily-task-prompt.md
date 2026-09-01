@@ -13,6 +13,27 @@ cold reader needs.
 - **Edit rule:** change this file, then paste it into the task. Never edit the task alone,
   or this file becomes a description of something that no longer exists.
 
+> ## 🛑 A CHANGE TO THIS FILE DOES NOTHING UNTIL IT IS PASTED INTO THE TASK
+>
+> The task runs the text that was pasted, not the text in this repo. Editing here and
+> stopping is a change that appears done and is not — the same shape as a deploy that
+> reports success without the caller being able to reach it (spec §11.15).
+>
+> **It has already happened.** The `known disagreements` line was added to Step 8 to make a
+> silent run distinguishable from a broken one, and the very next run did not print it,
+> because the task was still running the previous text. **The one line whose job was to
+> prove the pipeline ran was itself absent for the reason it exists to detect.**
+>
+> **So the prompt now carries a version, and the task must echo it.**
+>
+> ### `PROMPT VERSION: 2026-09-01c`
+>
+> Step 8 prints this string. If the report shows an older version — or none — **the task is
+> running stale text and its output cannot be trusted to reflect these rules.** That makes a
+> forgotten paste visible in the report instead of discoverable weeks later.
+>
+> Bump the date-letter whenever this file changes below the line.
+
 ## The record and the notification are SEPARATE, deliberately
 
 | | when | where |
@@ -395,6 +416,7 @@ and comparable:
 
 ```
 DJ daily sync — <today_utc>
+  prompt version: 2026-09-01c
   host: surface           run id: <id>
   held through:  <newest played_on from get_dj_plays>
   log claimed:   <covered_to from the previous ok run>   [AGREES | DISAGREES]
@@ -415,6 +437,9 @@ DJ daily sync — <today_utc>
 
 Every number above comes from a tool response. If you do not have one, write `unknown` —
 never a guess, and never a number you expected.
+
+⚠️ **Print `prompt version` exactly as written at the top of this prompt.** It is how a
+forgotten paste becomes visible. If you are reading this, the version is `2026-09-01c`.
 
 ⚠️ **The `known disagreements` line is not decoration — it is what makes a silent run
 verifiable.** A run that raises nothing because everything was decided and a run that raises

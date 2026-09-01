@@ -617,6 +617,26 @@ test("A FAILED STAMP MUST SAY WHY - enforced by the tool, not asked for", async 
   assert.equal(ok.run.status, "failed");
 });
 
+test("an OPEN run cannot claim its own start time either", async () => {
+  // A run stamped started_at as midnight rather than wall-clock, making its
+  // duration nonsense and unfixable - started_at is not editable once set.
+  const db = makeDb();
+  const ctx = { db, userId: USER };
+  await assert.rejects(
+    () => toolByName.create_platform_run.handler(
+      { app: "dj", job: "j", executor: "claude", status: "running",
+        started_at: "2026-09-01T00:00:00.000Z" }, ctx),
+    /cannot carry `started_at`/);
+
+  // ...but an after-the-fact stamp still may, because there the caller DOES
+  // know when the work began.
+  const r = await toolByName.create_platform_run.handler(
+    { app: "dj", job: "j", executor: "claude", status: "ok",
+      started_at: "2026-09-01T10:00:00.000Z",
+      finished_at: "2026-09-01T10:05:00.000Z" }, ctx);
+  assert.equal(r.started_at, "2026-09-01T10:00:00.000Z");
+});
+
 test("an OPEN run cannot claim coverage or a finish time", async () => {
   const db = makeDb();
   const ctx = { db, userId: USER };

@@ -1618,6 +1618,29 @@ depend on evaluation order, which is the very class of silent input the map exis
 - [ ] Observe two consecutive successful days
 - [ ] ⚠️ **Coarse-bucket rejection, LIVE — still unexercised.** The task filtered correctly,
       so `record_dj_plays`'s rejection path was never hit. Unit-tested is not exercised.
+- [ ] ⚠️ **A run mis-stamped `started_at` as `2026-09-01T00:00:00Z` rather than wall-clock.**
+      That run's duration is wrong and **unfixable** - `started_at` is not editable once set,
+      which is the property that makes the log trustworthy and also the property that makes
+      this permanent. **Fixed forward:** `create_platform_run` now REJECTS `started_at` on a
+      `running` run. A run that is opening starts now; the caller cannot know better, and a
+      timestamp the caller can get wrong, in a log used for durations and staleness, is a
+      value that will eventually be wrong silently.
+      ⚠️ Still taken from the Edge runtime's clock rather than `now()`: `finished_at` is set
+      from that same runtime at close, and two clocks with any skew reproduce the phase-2a
+      inversion bug. A caller-supplied `started_at` remains legitimate for an
+      **after-the-fact** stamp, where the caller genuinely does know when the work began.
+
+- [ ] 🛑 **MIGRATION 008 BYPASSED THE PLATFORM CONTRACT** - caught by
+      `check_platform_conformance`, not by me. Raw `create table` plus a hand-written RLS
+      policy, no `platform.register_table()`, so the table was live and **outside the
+      contract**: unregistered and unaudited. Migration 009 registers it with
+      `audited => true` and drops the hand-written policy, since `register_table` owns RLS
+      and two policies on one table are OR'd - the hand-written one could silently widen
+      access the paved path intended to narrow.
+      **The lesson: a migration that does everything except join the system is not a careful
+      migration.** 008 had detailed comments, RLS, a seed and verification blocks, and
+      skipped the single line that puts it under the rules.
+
 - [ ] 🛑 **STEP 7'S DE-DUP DOES NOT COVER DISAGREEMENT ITEMS — found 2026-09-01.**
       The suppression rule is written entirely in terms of `failure_kind`. An
       `artist_disagreements` item on an **`ok`** run has no `failure_kind`, so **nothing

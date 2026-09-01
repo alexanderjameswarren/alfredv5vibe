@@ -525,6 +525,29 @@ export const createPlatformRunTool = defineTool({
     // rows still `running` well after they started - would be reading a row
     // that claims to have ended.
     if (status === "running") {
+      // A RUN THAT IS OPENING STARTS NOW. The caller cannot know better, and a
+      // timestamp the caller CAN get wrong - in a log used to compute durations
+      // and staleness - is a value that will eventually be wrong silently.
+      //
+      // It already happened: a run stamped started_at as 2026-09-01T00:00:00Z
+      // rather than wall-clock, so its duration is nonsense and unfixable,
+      // because started_at is not editable once set.
+      //
+      // ⚠️ STILL FROM THE EDGE RUNTIME'S CLOCK, NOT now(). Using the database
+      // clock here would reintroduce the inversion bug from phase 2a:
+      // finished_at is set from THIS runtime when the run closes, and two clocks
+      // with any skew can produce a run that ended before it began.
+      //
+      // A caller-supplied started_at remains legitimate for an AFTER-THE-FACT
+      // stamp (any other status), where the caller genuinely does know when the
+      // work began. It is only meaningless when opening a run.
+      if (args.started_at !== undefined) {
+        throw new Error(
+          "create_platform_run: a `running` run cannot carry `started_at` - it is " +
+            "starting now, and the server records that. Pass started_at only when " +
+            "stamping a run AFTER the fact, where you actually know when it began.",
+        );
+      }
       if (args.finished_at !== undefined) {
         throw new Error(
           "create_platform_run: a `running` run cannot have `finished_at`. It has " +
