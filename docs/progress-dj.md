@@ -1618,9 +1618,40 @@ depend on evaluation order, which is the very class of silent input the map exis
 - [ ] Observe two consecutive successful days
 - [ ] ⚠️ **Coarse-bucket rejection, LIVE — still unexercised.** The task filtered correctly,
       so `record_dj_plays`'s rejection path was never hit. Unit-tested is not exercised.
+- [ ] 🛑 **STEP 7'S DE-DUP DOES NOT COVER DISAGREEMENT ITEMS — found 2026-09-01.**
+      The suppression rule is written entirely in terms of `failure_kind`. An
+      `artist_disagreements` item on an **`ok`** run has no `failure_kind`, so **nothing
+      mechanical applies to it.** The task reasoned its way to the right answer — same
+      video, reported 17 minutes earlier, do not duplicate — and **flagged that it was a
+      judgment call rather than hiding it.** Correct outcome, but it is improvisation, which
+      is the thing the prompt exists to prevent.
+
+      ⚠️ **The consequence is not a one-off.** `AbbzAPXvNZ8` is now recorded as
+      permanently decided, and under the current prompt it raises an item **every day
+      forever**. The 12 unrepaired `Release` rows do the same whenever one is played. That
+      is exactly the alarm fatigue the silent-on-success design was built to avoid — arriving
+      through the one channel that had no de-dup.
+
+      Two fixes, and they are **complementary, not alternatives** — see the proposal of
+      2026-09-01. A decided disagreement should never notify; an undecided one should notify
+      once and then not daily. Neither rule alone gives both.
+
+- [ ] ⚠️ **Nothing prevents two runs for the same UTC day.** Two `daily_history_sync` runs
+      fired 17 minutes apart on 2026-09-01, both `manual: true`. **Harmless** — dedupe
+      absorbed all 48 plays, which is the property that makes re-running safe at all — and
+      Step 2's "is the data current" check passed correctly, because the data *was* current.
+      **Not proposing a guard:** a second poll later in the day is legitimately useful, since
+      more plays exist by then, and refusing would break the manual re-run after a partial.
+      Recorded so that a future reader seeing two `ok` rows for one day does not read it as a
+      defect. ⚠️ The one thing to watch: any staleness or coverage query must not treat two
+      rows for one day as two days of coverage.
+
 - [ ] 🛑 **THE CLEAN-RUN SUPPRESSION PATH — untested, and its failure mode is SILENCE.**
       This run legitimately raised an item, so "raises nothing when nothing is wrong" has
-      never been observed. It needs a run that SHOULD be silent. ⚠️ Note the asymmetry: a
+      never been observed. ⚠️ **The 2026-09-01 second run does NOT count either**: it raised
+      nothing because the disagreement was de-duplicated, not because there was nothing to
+      raise. A run that is silent for the wrong reason looks identical to one that is silent
+      for the right one — which is the whole problem. It needs a run that SHOULD be silent. ⚠️ Note the asymmetry: a
       suppression bug that over-fires announces itself; one that under-fires looks like a
       quiet week. Pair it with the Phase 6 de-dup test, which has the same failure
       direction.
