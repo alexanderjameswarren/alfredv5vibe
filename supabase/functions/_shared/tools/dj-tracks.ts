@@ -59,6 +59,15 @@ export interface ResolveResult {
    *  Costs nothing — the existing rows are fetched anyway — and turns silent
    *  vocabulary drift into something the run log shows the day it happens. */
   artistDisagreements: ArtistDisagreement[];
+  /** Disagreements that are DECIDED and deliberately not raised. Returned for
+   *  REPORTING only - a run that is silent because everything was decided must
+   *  not look identical to one that is silent because the notifier broke. */
+  knownDisagreements: KnownDisagreement[];
+}
+
+export interface KnownDisagreement extends ArtistDisagreement {
+  reason: string;
+  decided_at: string;
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -94,6 +103,74 @@ export function toTrackInput(
  *
  * `label` prefixes error messages with the calling tool's name.
  */
+/**
+ * Split detected disagreements into UNDECIDED (notify) and DECIDED (report only).
+ *
+ * This is the whole point of dj_known_disagreements: the daily task's rule -
+ * "artist_disagreements non-empty -> raise an inbox item" - stays literally
+ * unchanged and becomes correct, because the array no longer carries things
+ * already decided. The filtering lives HERE rather than in the prompt for the
+ * same reason as spec §11.7: a comparison left to the caller fired on every
+ * collaboration and taught its reader to skip the signal.
+ *
+ * Without it, AbbzAPXvNZ8 and the 12 unrepaired 'Release' rows raise an item
+ * EVERY time they are played, forever - insert-only means the correct incoming
+ * value is discarded rather than applied (spec §11.13).
+ *
+ * Exported and shared by BOTH the write path and the dry run, so the two cannot
+ * disagree about what would be reported.
+ */
+export async function partitionDisagreements(
+  ctx: { db: { from: (t: string) => any } },
+  all: ArtistDisagreement[],
+  label: string,
+): Promise<{ artistDisagreements: ArtistDisagreement[]; knownDisagreements: KnownDisagreement[] }> {
+  if (all.length === 0) return { artistDisagreements: [], knownDisagreements: [] };
+
+  const ids = [...new Set(all.map((d) => d.video_id))];
+  const decided = new Map<string, { reason: string; decided_at: string }>();
+  for (const batch of chunk(ids, IN_CHUNK)) {
+    const { data, error } = await ctx.db
+      .from("dj_known_disagreements")
+      .select("video_id, stored_artist, submitted_artist, reason, decided_at")
+      .in("video_id", batch);
+    if (error) {
+      // FAIL rather than proceed. Treating the lookup as empty would raise an
+      // inbox item for every decided disagreement - the exact alarm fatigue
+      // this table exists to prevent - and it would look like a real finding.
+      throw new Error(
+        `${label}: known-disagreement lookup failed: ${error.message}. Nothing was ` +
+          `written. Proceeding as if nothing were decided would re-raise every ` +
+          `settled disagreement as though it were news.`,
+      );
+    }
+    for (const r of (data ?? []) as Array<Record<string, string | null>>) {
+      decided.set(
+        `${r.video_id}|${r.stored_artist ?? ""}|${r.submitted_artist ?? ""}`,
+        { reason: r.reason ?? "", decided_at: r.decided_at ?? "" },
+      );
+    }
+  }
+
+  const artistDisagreements: ArtistDisagreement[] = [];
+  const knownDisagreements: KnownDisagreement[] = [];
+  for (const d of all) {
+    // The key includes BOTH artists. A decision covers the pair that was
+    // decided; if this video later reports a DIFFERENT submitted artist that is
+    // new information and must still notify.
+    //
+    // A seeded row may leave submitted_artist null, meaning "any submitted value
+    // for this stored artist". The specific pair is checked FIRST so a precise
+    // decision always beats the wildcard, never the reverse.
+    const exact = decided.get(`${d.video_id}|${d.stored ?? ""}|${d.submitted ?? ""}`);
+    const wildcard = decided.get(`${d.video_id}|${d.stored ?? ""}|`);
+    const hit = exact ?? wildcard;
+    if (hit) knownDisagreements.push({ ...d, reason: hit.reason, decided_at: hit.decided_at });
+    else artistDisagreements.push(d);
+  }
+  return { artistDisagreements, knownDisagreements };
+}
+
 export async function resolveTrackIds(
   prepared: TrackInput[],
   ctx: { db: { from: (t: string) => any } },
@@ -271,17 +348,24 @@ export async function resolveTrackIds(
   // means the stored spelling wins, so without this the incoming one is
   // discarded in silence — and a third split act would appear months later
   // with nothing having flagged it.
-  const artistDisagreements: ArtistDisagreement[] = [];
+  const allDisagreements: ArtistDisagreement[] = [];
   for (const p of prepared) {
     const known = existing.get(p.video_id);
     if (!known) continue;
     const d = detectArtistDisagreement(
       p.video_id, known.artist, known.match_key, p.artist, p.match_key,
     );
-    if (d) artistDisagreements.push(d);
+    if (d) allDisagreements.push(d);
   }
 
+  // Shared with the dry run - see partitionDisagreements. A dry run that
+  // reported decided disagreements while the write suppressed them would be a
+  // prediction that disagrees with the thing it describes (spec §11.4).
+  const { artistDisagreements, knownDisagreements } =
+    await partitionDisagreements(ctx, allDisagreements, label);
+
   return {
-    idByVideoId, videoIds, createdVideoIds: newVideoIds, linked, artistDisagreements,
+    idByVideoId, videoIds, createdVideoIds: newVideoIds, linked,
+    artistDisagreements, knownDisagreements,
   };
   }

@@ -97,8 +97,14 @@ Two calls, and they answer different questions:
    **This is the authority.**
 2. `get_platform_runs` for `app: "dj"`, `job: "daily_history_sync"` → the newest `ok` run
    and its `covered_to`. **This is a claim.**
-   Also keep the last few runs from this call — Step 7 needs them to decide whether an
-   inbox item has already been raised for a condition that is still unfixed.
+   Also keep the last few runs from this call — Step 7 needs them, and **not for
+   judgement: for LOOKUP.** From every run with `notified_at` set in the last 7 days,
+   collect two things:
+   - its `details.failure_kind` — the failure de-dup key
+   - its `details.notified_video_ids` — the disagreement de-dup key
+
+   That second list is what stops a decided-but-not-yet-recorded disagreement being
+   re-reported daily. **Read it; do not reason about what you probably reported.**
 
 **Where they disagree, THE DATA WINS.** The run log asserts coverage and nothing can check
 that assertion — there is no link from a run to the rows it produced. Note any disagreement
@@ -245,7 +251,16 @@ Carry these **from the tool's response, not from memory**:
     submitted that bucket."* Stored row counts alone cannot tell those apart, and a run
     that silently skips a bucket is invisible afterwards.
   - `page_full`, `oldest_bucket_is_partial`
-  - `artist_disagreements` — **copy the array whole, even when empty.**
+  - `artist_disagreements` — **copy the array whole, even when empty.** It now contains
+    **only UNDECIDED** disagreements; the tool filters decided ones out before you see them.
+  - `known_disagreements` — **copy it too, even when empty.** These were suppressed
+    deliberately, and recording the count is what makes a silent run distinguishable from a
+    broken one.
+  - `notified_video_ids` — the `video_id`s you are about to raise in Step 7, i.e. those in
+    `artist_disagreements` that survive the 7-day check below.
+    ⚠️ **Work this out BEFORE closing the run.** `details` can only be written while
+    closing, so the decision has to be made here and acted on in Step 7 — not the other way
+    round. The next run reads this list instead of guessing what you told the human.
   - Any disagreement found in Step 2 between the data and the previous `covered_to`.
   - `failure_kind` on any failure, one of `wrong_host`, `workshop_unreachable`,
     `youtube_auth`, `supabase_write`, `unknown` — Step 7 uses it to tell a still-broken
@@ -270,6 +285,14 @@ Carry these **from the tool's response, not from memory**:
 > **On `artist_disagreements`:** a non-empty array means two vocabularies disagree about
 > one act, and a new alias-map entry may be owed.
 >
+> ⚠️ **DECIDED disagreements are already filtered out by the tool** — they arrive in
+> `known_disagreements` instead, each with the reason it was decided. `AbbzAPXvNZ8` (a
+> Clark Terry collaboration, not a spelling variant) and the 12 unrepaired `Release` rows
+> are in there permanently, because insert-only means the correct incoming value is
+> discarded rather than applied (spec §11.13). **They are not news. Do not raise them, and
+> do not investigate them** — see `docs/dj-known-disagreements.md`, which is a rendering of
+> the `dj_known_disagreements` table.
+>
 > ⚠️ **An empty array is NOT evidence that no split exists**, and do not word it as if it
 > were. The detector only fires when the **same video** carries a different stored artist.
 > A split spread across **different videos** is invisible to it — which is exactly what the
@@ -290,13 +313,35 @@ Raise an inbox item if and only if one of these is true:
 |---|---|
 | The run **failed** | Title names the failure kind. Body: the verbatim error, then the **ACTION** from the step that stopped. |
 | The run is **`partial`** (3+ day gap) | Names the lost date range. Body: *"These days are permanently unreachable from the live API. Google Takeout is the only recovery path."* |
-| `artist_disagreements` is **non-empty** | Lists each `video_id` with its stored and submitted artist. Body: *"Two vocabularies disagree about one act. A new alias-map entry may be owed — see spec §4.1.4."* |
+| `artist_disagreements` is **non-empty** *after the video-id check below* | Lists each `video_id` with its stored and submitted artist. Body: *"Two vocabularies disagree about one act. A new alias-map entry may be owed — see spec §4.1.4."* |
+
+⚠️ **`known_disagreements` NEVER raises an item, however long it is.** Those are decided.
+Report the count in Step 8 and nothing else.
 
 **Every item carries a specific remedy, never a generic alert.** Use the exact ACTION
 wording from the step that stopped. *"The sync failed"* is an item that will be ignored;
 *"Run the reauth tile on the Surface"* is one that gets acted on.
 
-**Do not re-raise an item every day for a condition that is still unfixed — but do not go
+**DISAGREEMENT ITEMS DE-DUP BY `video_id`, NOT BY `failure_kind`.** An
+`artist_disagreements` item appears on an `ok` run, which has no `failure_kind` at all, so
+the failure rule below does not reach it. Use the video ids:
+
+> **Drop any `video_id` that appears in `details.notified_video_ids` of a run with
+> `notified_at` set in the last 7 days.** If nothing survives, raise no item. If something
+> does, raise an item listing only the survivors.
+
+**This is a lookup against the run log, not a judgement.** A previous version of this prompt
+had no rule here at all, and the task correctly reasoned "same video, reported 17 minutes
+ago, do not duplicate" — the right answer, arrived at by improvising, which is what rule 1
+exists to prevent. The list is written to the log in Step 6 precisely so the next run can
+read it instead of reasoning.
+
+The same **7-day floor** applies and for the same reason: a genuinely unresolved
+disagreement should resurface weekly, not vanish after one mention.
+
+---
+
+**Do not re-raise an item every day for a FAILURE that is still unfixed — but do not go
 permanently silent about it either.** Using the recent runs from Step 2:
 
 Suppress the item **only if all three hold**:
@@ -359,7 +404,8 @@ DJ daily sync — <today_utc>
     Today      submitted <n>  inserted <n>  already_held <n>
     Yesterday  submitted <n>  inserted <n>  already_held <n>
 
-  artist disagreements: <n>   <list them if any>
+  artist disagreements: <n> new   <list them if any>
+  known disagreements (decided, not raised): <n>
   page_full: <bool>   oldest_bucket_is_partial: <bool>
   orphaned running rows: <none | <ids>>
   status stamped: <ok | partial | failed>
@@ -369,6 +415,12 @@ DJ daily sync — <today_utc>
 
 Every number above comes from a tool response. If you do not have one, write `unknown` —
 never a guess, and never a number you expected.
+
+⚠️ **The `known disagreements` line is not decoration — it is what makes a silent run
+verifiable.** A run that raises nothing because everything was decided and a run that raises
+nothing because the notifier is broken produce identical inboxes. A non-zero suppressed count
+on a silent run proves the pipeline ran and CHOSE silence. Without it, silence proves nothing
+at all.
 
 ---
 

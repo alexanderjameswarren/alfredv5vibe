@@ -33,7 +33,7 @@
 //    key is inseparable from INGESTIBLE_BUCKETS below.
 
 import { clampLimit, defineTool } from "../platform.ts";
-import { resolveTrackIds } from "./dj-tracks.ts";
+import { resolveTrackIds, partitionDisagreements } from "./dj-tracks.ts";
 import {
   buildMatchKey,
   canonicalArtist,
@@ -345,7 +345,8 @@ export const recordDjPlaysTool = defineTool({
     // via dj-tracks.ts — one implementation, because a divergence between two
     // copies would silently group one import path differently from the other
     // and dj_tracks is insert-only, so the rows could never be corrected.
-    const { idByVideoId, videoIds, createdVideoIds, linked, artistDisagreements } =
+    const { idByVideoId, videoIds, createdVideoIds, linked, artistDisagreements,
+            knownDisagreements } =
       await resolveTrackIds(
       prepared.map((p) => ({
         video_id: p.video_id,
@@ -454,6 +455,10 @@ export const recordDjPlaysTool = defineTool({
       // candidate. Phase 5's task prompt must read this into the run stamp —
       // a signal nobody looks at is the shape this project keeps finding.
       artist_disagreements: artistDisagreements,
+      // Decided, and deliberately NOT raised. Reported so that a silent run
+      // proves the pipeline ran and CHOSE silence, rather than looking
+      // identical to a run whose notifier is broken.
+      known_disagreements: knownDisagreements,
       plays_submitted: playRows.length,
       plays_inserted: inserted,
       plays_already_held: playRows.length - inserted,
@@ -954,15 +959,20 @@ export const dryRunDjPlaysTool = defineTool({
     // end — a third split act among the ~1,190 artists the alias map cannot
     // anticipate should be visible in the batch that surfaced it.
     // THE SAME detector the write path runs - imported, not re-expressed.
-    const artistDisagreements: ArtistDisagreement[] = [];
+    const allDisagreements: ArtistDisagreement[] = [];
     for (const p of prepared) {
       const k = known.get(p.video_id);
       if (!k) continue;
       const d = detectArtistDisagreement(
         p.video_id, k.artist, k.match_key, p.artist, p.match_key,
       );
-      if (d) artistDisagreements.push(d);
+      if (d) allDisagreements.push(d);
     }
+    // ...and the SAME partitioner. A dry run reporting decided disagreements
+    // while the write suppressed them would be a prediction that disagrees with
+    // the thing it describes (spec §11.4).
+    const { artistDisagreements, knownDisagreements } =
+      await partitionDisagreements(ctx, allDisagreements, "dry_run_dj_plays");
 
     // --- plays: check the derived keys against the SAME unique index --------
     // A play for a video with no track cannot already exist (dj_plays.track_id
@@ -1006,6 +1016,7 @@ export const dryRunDjPlaysTool = defineTool({
       tracks_already_known: videoIds.length - wouldCreate.length,
       albums_would_discard: albumsDiscarded,
       artist_disagreements: artistDisagreements,
+      known_disagreements: knownDisagreements,
       covered_from: dates[0] ?? null,
       covered_to: dates[dates.length - 1] ?? null,
       caveat:

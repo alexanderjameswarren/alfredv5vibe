@@ -1,5 +1,14 @@
 # Known-permanent `artist_disagreements` — do not re-investigate these
 
+> ## ⚠️ THE TABLE IS AUTHORITATIVE. THIS PAGE IS ITS RENDERING.
+>
+> The code reads **`public.dj_known_disagreements`**. This page explains those rows for a
+> human. **If the two ever disagree, the table is right and this page is stale.**
+>
+> Seeded by `supabase/migrations/008_dj_known_disagreements.sql`. Adding a decision means
+> inserting a row **by hand**, reviewed — no tool writes this table, because a tool that
+> could silence its own alarms is the wrong shape. Then update this page to match.
+
 **Purpose: stop the same three things being investigated repeatedly.**
 
 `artist_disagreements` fires whenever a play is submitted for a track already stored under a
@@ -13,6 +22,12 @@ migration changes them.
 
 **If a disagreement is on this page, it has been decided. Nothing to do.**
 **If it is NOT on this page, it is new — read it.**
+
+In practice you will rarely see the decided ones at all: `record_dj_plays` partitions against
+the table and returns them as **`known_disagreements`**, separately from
+`artist_disagreements`, so the daily task never raises an inbox item for them. The count is
+still reported — a run that is silent because everything was decided must not look identical
+to one that is silent because the notifier broke.
 
 ---
 

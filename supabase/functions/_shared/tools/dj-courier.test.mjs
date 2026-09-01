@@ -55,7 +55,8 @@ const toolByName = Object.fromEntries(globalThis.__tools.map((t) => [t.name, t])
 const USER = "user-1";
 
 function makeDb() {
-  const tables = { dj_tracks: [], dj_plays: [], platform_runs: [], platform_schedules: [] };
+  const tables = { dj_tracks: [], dj_plays: [], platform_runs: [], platform_schedules: [],
+                   dj_known_disagreements: [] };
   let seq = 0;
   const uniq = {
     dj_tracks: (r) => `${r.user_id}|${r.video_id}`,
@@ -63,6 +64,8 @@ function makeDb() {
     // No unique constraint beyond the PK — it is an append-only run log.
     platform_runs: (r) => r.id,
     platform_schedules: (r) => `${r.user_id}|${r.app}|${r.job}`,
+    dj_known_disagreements: (r) =>
+      `${r.user_id}|${r.video_id}|${r.stored_artist ?? ""}|${r.submitted_artist ?? ""}`,
   };
 
   function builder(table) {
@@ -856,4 +859,119 @@ test("dry run states what it cannot exercise", async () => {
   const d = await dry(db, { source: "takeout", plays: [tk("v1","A","2026-08-28")] });
   assert.match(d.caveat, /does NOT exercise the insert/);
   assert.match(d.caveat, /one transaction per call/);
+});
+
+
+// ---------------------------------------------------------------------------
+// dj_known_disagreements - decided disagreements must stop notifying
+// ---------------------------------------------------------------------------
+//
+// Without this, AbbzAPXvNZ8 and the 12 unrepaired 'Release' rows raise an inbox
+// item EVERY time they are played, forever: insert-only discards the correct
+// incoming artist rather than applying it (spec §11.13).
+
+const decide = (db, o) => db._tables.dj_known_disagreements.push({
+  id: `d-${db._tables.dj_known_disagreements.length + 1}`,
+  user_id: USER, video_id: o.v, stored_artist: o.stored ?? null,
+  submitted_artist: o.submitted ?? null, reason: o.reason ?? "decided",
+  decided_at: "2026-09-01T00:00:00.000Z",
+});
+
+// Store a track under one artist, then submit the same video under another.
+async function disagree(db, storedArtists, submittedArtists) {
+  await run(db, { poll_date: "2026-09-01", plays: [
+    { video_id: "vX", title: "Roundalay", artists: storedArtists, played_bucket: "Today" }] });
+  return await run(db, { poll_date: "2026-09-01", plays: [
+    { video_id: "vX", title: "Roundalay", artists: submittedArtists, played_bucket: "Today" }] });
+}
+
+test("an UNDECIDED disagreement is reported - the check can fire", async () => {
+  const db = makeDb();
+  const r = await disagree(db, ["Oscar Peterson"], ["Clark Terry"]);
+  assert.equal(r.artist_disagreements.length, 1, "an undecided disagreement must notify");
+  assert.equal(r.known_disagreements.length, 0);
+});
+
+test("a DECIDED disagreement is suppressed and reported separately", async () => {
+  const db = makeDb();
+  await run(db, { poll_date: "2026-09-01", plays: [
+    { video_id: "vX", title: "Roundalay", artists: ["Oscar Peterson"], played_bucket: "Today" }] });
+  decide(db, { v: "vX", stored: "Oscar Peterson", submitted: "Clark Terry",
+               reason: "a collaboration, not a spelling variant" });
+  const r = await run(db, { poll_date: "2026-09-01", plays: [
+    { video_id: "vX", title: "Roundalay", artists: ["Clark Terry"], played_bucket: "Today" }] });
+
+  assert.deepEqual(r.artist_disagreements, [], "a decided disagreement must NOT notify");
+  assert.equal(r.known_disagreements.length, 1, "but it must still be REPORTED");
+  assert.equal(r.known_disagreements[0].reason, "a collaboration, not a spelling variant");
+  // The reason it is reported at all: a run silent because everything was
+  // decided must not look identical to one silent because the notifier broke.
+});
+
+test("A DIFFERENT submitted artist on a decided video STILL notifies", async () => {
+  // Deciding "this pair is fine" must not silence "this video now reports
+  // something else entirely" - which is why the key includes both artists.
+  const db = makeDb();
+  await run(db, { poll_date: "2026-09-01", plays: [
+    { video_id: "vX", title: "Roundalay", artists: ["Oscar Peterson"], played_bucket: "Today" }] });
+  decide(db, { v: "vX", stored: "Oscar Peterson", submitted: "Clark Terry" });
+  const r = await run(db, { poll_date: "2026-09-01", plays: [
+    { video_id: "vX", title: "Roundalay", artists: ["Someone Else Entirely"], played_bucket: "Today" }] });
+  assert.equal(r.artist_disagreements.length, 1,
+    "an unrecorded submitted artist is new information");
+  assert.equal(r.known_disagreements.length, 0);
+});
+
+test("a NULL submitted_artist decides any submission for that stored artist", async () => {
+  // How the 12 'Release' rows are seeded: the poll submits the CORRECT artist,
+  // which differs every time, so the decision cannot enumerate it.
+  const db = makeDb();
+  await run(db, { poll_date: "2026-09-01", plays: [
+    { video_id: "vR", title: "So What", artists: ["Release"], played_bucket: "Today" }] });
+  decide(db, { v: "vR", stored: "Release", submitted: null, reason: "unrepaired Release row" });
+  const r = await run(db, { poll_date: "2026-09-01", plays: [
+    { video_id: "vR", title: "So What", artists: ["Miles Davis"], played_bucket: "Today" }] });
+  assert.deepEqual(r.artist_disagreements, []);
+  assert.equal(r.known_disagreements.length, 1);
+});
+
+test("a decision for ANOTHER video does not suppress this one", async () => {
+  const db = makeDb();
+  await run(db, { poll_date: "2026-09-01", plays: [
+    { video_id: "vX", title: "Roundalay", artists: ["Oscar Peterson"], played_bucket: "Today" }] });
+  decide(db, { v: "vOTHER", stored: "Oscar Peterson", submitted: "Clark Terry" });
+  const r = await run(db, { poll_date: "2026-09-01", plays: [
+    { video_id: "vX", title: "Roundalay", artists: ["Clark Terry"], played_bucket: "Today" }] });
+  assert.equal(r.artist_disagreements.length, 1);
+});
+
+test("the dry run partitions IDENTICALLY to the write", async () => {
+  // A dry run reporting a decided disagreement while the write suppressed it
+  // would be a prediction that disagrees with the thing it describes (§11.4).
+  const db = makeDb();
+  await run(db, { poll_date: "2026-09-01", plays: [
+    { video_id: "vX", title: "Roundalay", artists: ["Oscar Peterson"], played_bucket: "Today" }] });
+  decide(db, { v: "vX", stored: "Oscar Peterson", submitted: "Clark Terry" });
+  const args = { source: "takeout", plays: [
+    { video_id: "vX", title: "Roundalay", artists: ["Clark Terry"],
+      played_on: "2026-09-01", precision: "exact", occurrence: 1 }] };
+  const d = await dry(db, args);
+  assert.deepEqual(d.artist_disagreements, []);
+  assert.equal(d.known_disagreements.length, 1);
+});
+
+test("a FAILED lookup throws rather than treating nothing as decided", async () => {
+  // Proceeding as if nothing were decided would re-raise every settled
+  // disagreement as though it were news - and it would look like a finding.
+  const db = makeDb();
+  await run(db, { poll_date: "2026-09-01", plays: [
+    { video_id: "vX", title: "Roundalay", artists: ["Oscar Peterson"], played_bucket: "Today" }] });
+  const realFrom = db.from.bind(db);
+  db.from = (t) => t === "dj_known_disagreements"
+    ? { select: () => ({ in: () => Promise.resolve({ data: null, error: { message: "boom" } }) }) }
+    : realFrom(t);
+  await assert.rejects(
+    () => run(db, { poll_date: "2026-09-01", plays: [
+      { video_id: "vX", title: "Roundalay", artists: ["Clark Terry"], played_bucket: "Today" }] }),
+    /known-disagreement lookup failed/);
 });
