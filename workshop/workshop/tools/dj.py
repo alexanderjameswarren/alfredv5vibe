@@ -337,21 +337,62 @@ def _project_playlist_track(t: dict, position: int) -> dict:
     }
 
 
-def _truncation_hint(returned: int, total: int, cap: int) -> str | None:
+def _truncation_hint(
+    returned: int, total: int, cap: int, limit_applied: int | None = None
+) -> str | None:
     """The remedy, stated in the payload, when a result was cut by `limit`.
 
     The platform's own truncation note says "Narrow the query or request a
-    specific subset" — correct for a database read, backwards for these tools.
+    specific subset" - correct for a database read, backwards for these tools.
     Nothing was narrowed: the caller asked for a playlist's contents and got
     part of it, and the fix is a HIGHER limit, not a tighter one. The platform
     note is shared by every tool and is not this module's to reword, so the
     accurate advice rides in the data instead.
+
+    THREE OUTCOMES, NOT TWO - AND THIS FUNCTION USED TO GUESS
+    ---------------------------------------------------------
+    ⚠️ IT INFERRED THE CAUSE FROM ONE SYMPTOM AND STATED A REMEDY AS FACT.
+    `returned < total` was read as "cut by limit", always. Measured 2026-09-01
+    on Jazz songs Mix: YouTube reports trackCount 108, ytmusicapi returns 107
+    entries at limit 200. The hint said:
+
+        "Cut by `limit`, not by an upstream page boundary - all 108 are
+         reachable. Re-call with limit: 108 (cap 200) to get them in one call."
+
+    Every clause of that is wrong. It was not cut by limit; all 108 are NOT
+    reachable; and re-calling changes nothing. Someone would have spent an
+    afternoon chasing a track that cannot be fetched by any call - the missing
+    entry is deleted or fully private, counted by YouTube and never serialised.
+    (Unplayable-but-present tracks DO come back, with is_available false; three
+    of them did.)
+
+    ⚠️ A DIAGNOSTIC THAT INFERS A CAUSE FROM ONE SYMPTOM AND ASSERTS A REMEDY IS
+    WORSE THAN NO DIAGNOSTIC. It is believed precisely when the reader has least
+    context, and it sends the investigation somewhere confident and wrong. So
+    where the cause is genuinely unknown this now SAYS SO instead of picking the
+    likely one.
+
+    `limit_applied` is what distinguishes them: a result short of BOTH the total
+    and the requested limit was not cut by the limit, whatever else is true.
     """
     if returned >= total:
         return None
+
+    if limit_applied is not None and returned < limit_applied:
+        # Not truncation at all. Upstream served fewer rows than it counted.
+        return (
+            f"{returned} returned but upstream reports {total}, and the limit "
+            f"({limit_applied}) was NOT reached - so this was not cut by `limit` "
+            f"and a higher one will not help. CAUSE UNKNOWN. The usual reason is "
+            f"an entry that is deleted or private: YouTube counts it and does not "
+            f"serialise it. Note that merely unplayable tracks are still returned, "
+            f"with is_available false, so this is not those. Treat "
+            f"{returned} as everything obtainable, not as a partial read to retry."
+        )
+
     if total <= cap:
         return (
-            f"Cut by `limit`, not by an upstream page boundary — all {total} are "
+            f"Cut by `limit`, not by an upstream page boundary - all {total} are "
             f"reachable. Re-call with limit: {total} (cap {cap}) to get them in "
             f"one call."
         )
@@ -499,7 +540,7 @@ async def get_dj_history(args: dict, ctx: Ctx) -> dict:
         "returned": len(plays),
         "matched": matched,
         "limit_applied": limit,
-        "truncation_hint": _truncation_hint(len(plays), matched, cap=200),
+        "truncation_hint": _truncation_hint(len(plays), matched, cap=200, limit_applied=limit),
     }
 
     meta: dict[str, Any] = {}
@@ -579,7 +620,7 @@ async def get_dj_playlists(args: dict, ctx: Ctx) -> dict:
             "returned": len(kept),
             "total": total,
             "limit_applied": limit,
-            "truncation_hint": _truncation_hint(len(kept), total, cap=50),
+            "truncation_hint": _truncation_hint(len(kept), total, cap=50, limit_applied=limit),
         }
         meta: dict[str, Any] = {}
         if len(kept) < total:
@@ -629,7 +670,7 @@ async def get_dj_playlists(args: dict, ctx: Ctx) -> dict:
         "tracks": tracks,
         "returned": len(tracks),
         "limit_applied": limit,
-        "truncation_hint": _truncation_hint(len(tracks), total, cap=200),
+        "truncation_hint": _truncation_hint(len(tracks), total, cap=200, limit_applied=limit),
     }
     meta: dict[str, Any] = {}
     if len(tracks) < total:
