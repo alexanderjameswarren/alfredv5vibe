@@ -23,6 +23,33 @@ Next: fresh-conversation check of the new handler behaviour, then phase 3.
 - [x] Probe successful: 43 playlists, 200 history items, field shape captured
 - [x] Recovery window measured: ~2 weeks (Today / Yesterday / This week / Last week)
 
+### What the 502 cost, and the two checks added because of it
+
+- [x] **`tests/test_tools_import.py`** — imports `workshop.tools` in a FRESH SUBPROCESS and
+      asserts the registered tool set (10, named individually so a failure says *which*).
+      ⚠️ **`ast.parse` VERIFIED SYNTAX, NOT IMPORTABILITY** (spec §11.18). The module parsed
+      cleanly and died on import; that check could never have caught it, and reporting
+      *"dj_setlists.py parses"* was §11.15 — success reported without verifying the effect
+      anyone cared about. **Alfred closed this gap in `index.test.mjs` after the RUN_STATUS
+      crash. Workshop had no equivalent, and it is WORSE here:** Workshop autostarts under
+      `pythonw.exe` with no console, so the traceback is invisible and presents as *"the
+      tunnel is up but nothing is listening"*.
+      **Subprocess, not in-process:** `test_platform.py` calls `_reset_registry_for_tests()`
+      and Python caches modules, so an in-process re-import re-runs no decorators and the
+      registry reads empty — the test would pass or fail on TEST ORDER.
+      **Negative control reproduces the REAL defect** (§11.16): `@define_tool` missing
+      `input_schema`, asserting both that `ast.parse` ACCEPTS it and that importing FAILS.
+      Not a syntax error — that would be caught by the check that already failed.
+      **Checked by reverting the fix:** 68 passing → `FAILED (failures=2, errors=1)`.
+- [ ] ⚠️ **THE HEALTH CHECK REPORTED UNHEALTHY AND IT READ AS NOISE** (spec §11.19). The
+      signal was there; the log tail printed beside it was **historical uvicorn lines from
+      before the crash**, which look like normal activity. A tail answers *"last N lines of
+      this file"*, never *"what did this process say when it just tried to start"* — and a
+      process that dies before logging leaves the PREVIOUS run's lines in place.
+      **Fix, not yet done: bound the tail to the current attempt** (timestamp against the
+      restart, or a start-marker line written on boot) **and make a failed verdict the
+      loudest thing on screen.** Unbounded, it is evidence about a different run.
+
 **Notes:**
 - Twice-daily polling dropped — the two-week window makes daily comfortably safe.
 - `python` on PATH resolves to system Python 3.12, not the venv. Use
@@ -1812,25 +1839,59 @@ duration display must tolerate zero rather than treat it as an error.
       existed since Block A with **no tools at all** — mbid could be neither read nor
       written, and this phase keys entirely on it. Changing a set mbid is REFUSED without
       `replace_mbid`.
-- [ ] 🛑 **RECONNECT THE ALFRED CONNECTOR AND START A FRESH CONVERSATION.** The MCP manifest
+- [x] 🛑 **RECONNECT THE ALFRED CONNECTOR AND START A FRESH CONVERSATION.** The MCP manifest
       is frozen at conversation start, so the three new tools are deployed and unreachable.
       Expect **36** tools, not 34.
-- [ ] Obtain setlist.fm API key → `workshop/data/dj/setlistfm.json` as `{"api_key": "..."}`.
+- [x] Obtain setlist.fm API key → `workshop/data/dj/setlistfm.json` as `{"api_key": "..."}`.
       ⚠️ Same rules as `browser.json`: gitignored, never pasted into a chat, never logged.
 
 ### Before building the diff — three checks, in order
 
-- [ ] `get_dj_artists` — does a **Foo Fighters** row exist at all? Does Weezer's have an
+- [x] `get_dj_artists` — does a **Foo Fighters** row exist at all? Does Weezer's have an
       `mbid`? ⚠️ Not found and no-mbid are different answers needing different fixes.
-- [ ] `upsert_dj_artist` to set Foo Fighters' mbid. ⚠️ **`bd6893a` is a setlist.fm id, NOT a
+      **DONE 2026-09-01: NO Foo Fighters row existed** (`returned: 0` — the not-found
+      answer, not the no-mbid one). Weezer exists (`d6b872f1-77fd-4561-9ea9-d40f9f231e82`)
+      with **`mbid: null`**, so Weezer's later test is blocked on an mbid it still lacks.
+- [x] `upsert_dj_artist` to set Foo Fighters' mbid. ⚠️ **`bd6893a` is a setlist.fm id, NOT a
       MusicBrainz id** — look up the real 8-4-4-4-12 mbid; the tool rejects anything else,
       deliberately, because a malformed id 404s upstream and reads as *"this artist has no
       setlists"*.
-- [ ] `get_dj_setlists` for Foo Fighters, limit 10. **Report `song_count` per show and
+      **DONE 2026-09-01: `created: true`** — the row was absent, so this CREATED it with
+      `mbid 67f66c07-6e61-4026-ade5-7e782fad3a5d` (musicbrainz.org/artist/67f66c07-...).
+      No `replace_mbid` needed: nothing was being overwritten.
+- [x] 🛑 **THE 502 WAS `dj_setlists.py`, NOT THE TUNNEL OR THE DEPLOY — fixed
+      2026-09-01.** `@define_tool(...)` was missing its required `input_schema`, which raises
+      `TypeError` AT IMPORT; `tools/__init__.py` imports every tool module eagerly, so the
+      whole server died at startup and the tunnel served 502 with nothing behind it.
+      ⚠️ **A SECOND BUG WAS HIDDEN BEHIND THE FIRST:** the handler was declared
+      `(ctx, mbid, limit)`, but the dispatcher calls `handler(args, ctx)` POSITIONALLY
+      (`platform.py:432`, `jobs.py:226`). Fixing only the import error would have produced a
+      tool that registered cleanly and mis-bound every argument on first call. Now
+      house-style `(args: dict, ctx: Ctx)` reading `args.get(...)`, which also makes the
+      schema-parity assertion non-vacuous — it only inspects `args[...]` / `args.get(...)`,
+      so the typed signature had been passing it by reading nothing.
+      **`input_schema` declares `mbid` (required) and `limit`**, per the parity rule.
+- [x] `get_dj_setlists` for Foo Fighters, limit 10. **Report `song_count` per show and
       `empty_entries_skipped` BEFORE concluding anything about the window.**
+      **DONE 2026-09-01** (handler invoked directly as the dispatcher calls it, since the
+      hosts were still down): `returned: 10`, **`empty_entries_skipped: 0`**, 1 page read,
+      `total_upstream: 1614`. All ten are *Take Cover 2026* stadium shows, 08-07-2026 to
+      22-08-2026. `song_count`: **15, 25, 26, 25, 26, 27, 27, 26, 24, 25.**
+      ⚠️ **The window is genuinely tour-shaped** — zero empties, no promo slots, so §12.3's
+      incomparable-denominator caveat does dissolve here as §12.6 predicted. But the range is
+      **15–27, not the 18–24 assumed**: the 22-08 Hollywood Bowl show is 15 songs against a
+      25–27 median, so an *N of 10* still needs the per-show counts shown beside it.
 
 ### The acceptance test — known answer, runs NOW (spec §12.6)
 
+- [ ] 🛑 **THE SUBJECT PLAYLIST HAS NEVER BEEN RECORDED — found 2026-09-01.**
+      `get_dj_managed_playlists mode=tracks` on `PLV2XoCH1Pv5y4eryZrOdxG2XlSxfdW32l` returns
+      *no managed playlist matches*. The **only** recorded managed playlist is Weezer Concert
+      2026 (13 body / 0 cram). ⚠️ **The "30 tracks" in spec §9 is from the 2026-08-27
+      YouTube probe — a fact about YOUTUBE, never written to Supabase.** So the diff has no
+      recorded body to diff against, and this is a SECOND blocker that outlives the 502:
+      seeding it needs `get_dj_playlists mode=contents` (Workshop) then `record_dj_playlist`.
+      Reading the count from the spec instead would compare against a number, not a body.
 - [ ] Diff the last 10 **Foo Fighters** setlists against `PLV2XoCH1Pv5y4eryZrOdxG2XlSxfdW32l`
       (30 tracks, via `get_dj_managed_playlists` tracks mode). Mid-tour on *Take Cover*,
       18–24 song sets, so the window is real full-length shows and `N of 10` is comparable.

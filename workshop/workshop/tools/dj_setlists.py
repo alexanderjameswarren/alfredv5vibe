@@ -190,12 +190,36 @@ def _songs_of(setlist: dict[str, Any]) -> list[dict[str, Any]]:
         "not comparable evidence, and any 'appeared in N of 10' figure that hides "
         "that is misleading. Tier 1."
     ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "mbid": {
+                "type": "string",
+                "description": (
+                    "MusicBrainz id, 8-4-4-4-12 hex, from dj_artists.mbid. "
+                    "REQUIRED and the only accepted identity — this tool does "
+                    "not take an artist name, because setlist.fm's name search "
+                    "matches the wrong band and a setlist for the wrong act is "
+                    "worse than no setlist."
+                ),
+            },
+            "limit": {
+                "type": "integer",
+                "description": (
+                    "Max setlists WITH SONGS to return (default 10, cap 25). "
+                    "Counts kept shows, not entries read: upcoming and empty "
+                    "setlists are skipped without consuming a slot, and are "
+                    "reported separately as `empty_entries_skipped`."
+                ),
+            },
+        },
+        "required": ["mbid"],
+    },
 )
-async def get_dj_setlists(
-    ctx: Ctx,
-    mbid: str,
-    limit: int = 10,
-) -> dict[str, Any]:
+async def get_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
+    mbid = args.get("mbid")
+    limit = args.get("limit")
+
     if not mbid or not str(mbid).strip():
         raise GuardrailError(
             "get_dj_setlists: `mbid` is required. This tool does NOT accept an "

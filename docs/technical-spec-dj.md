@@ -1432,6 +1432,86 @@ under `migrations/` describes something that actually ran. `000_RECONSTRUCTED` d
 exists so the schema has a source outside the database — and that distinction is invisible
 from the filename alone.
 
+### 11.18 A check that reads the SOURCE cannot prove the module LOADS
+
+`dj_setlists.py` was verified with `ast.parse` and reported as *"parses cleanly"*. It did.
+It also raised at the first line of the decorator the moment anything imported it:
+
+```
+TypeError: define_tool() missing 1 required keyword-only argument: 'input_schema'
+```
+
+**Both statements are true, and only one of them was the question.** `ast.parse` answers *is
+this valid Python?* Nobody wanted to know that. The question was *does the server start?* —
+and a missing required argument, an undefined name, a decorator that raises, a bad constant
+at module scope are all perfectly valid Python that fail at import.
+
+⚠️ **THE ONLY CHECK FOR "DOES IT IMPORT" IS IMPORTING IT.** This is §11.15 in its purest
+form: an operation reported success without verifying the effect anyone cared about. It is
+also §11.9 — a parse is a *reconstruction* of what the interpreter does, not a copy of it.
+
+**Why it was expensive here rather than merely wrong:**
+
+- `tools/__init__.py` imports every tool module **eagerly** — deliberately, so a missing
+  import is an import-time error rather than a silently-absent tool. The same property makes
+  **one bad module kill the whole server.**
+- Workshop autostarts under **`pythonw.exe`, which has no console.** The traceback goes
+  nowhere. Running `run.py` under `python.exe` is what finally showed it.
+- So the symptom is not "Workshop crashed". It is **a 502 from the tunnel** — the tunnel is
+  up, nothing is listening behind it — which reads as a network or deploy fault and sends the
+  investigation to Cloudflare, to the deploy, to anywhere but the traceback.
+
+**The fix is a test, not more care.** `tests/test_tools_import.py` imports `workshop.tools`
+in a **fresh subprocess** and asserts the registry contains the expected tool set. Alfred
+closed exactly this gap in `index.test.mjs` after the RUN_STATUS crash; Workshop had no
+equivalent until now. Same fix, same reasoning, other language.
+
+Two details that are load-bearing rather than incidental:
+
+1. **A subprocess, not an in-process import.** `test_platform.py` calls
+   `_reset_registry_for_tests()`, and Python caches modules — so an in-process
+   `import workshop.tools` after that reset re-binds an already-imported package **without
+   re-running a single decorator**, and the registry reads empty. The test would then pass or
+   fail on TEST ORDER. A fresh interpreter also *is* what the server does, so the test
+   reproduces startup instead of approximating it.
+2. **The negative control reproduces the ACTUAL defect** (§11.16): a `@define_tool` call
+   missing `input_schema`. Not a syntax error — a syntax error would be caught by the very
+   `ast.parse` check that failed here, so a control built on one would prove nothing about
+   the gap. The suite asserts **both** that `ast.parse` accepts the broken module **and**
+   that importing it fails. Those two assertions next to each other are the lesson.
+
+**Verified by reverting the fix and re-running:** the suite drops from 68 passing to
+`FAILED (failures=2, errors=1)` and prints the real traceback. A test that has never been
+seen to fail is a test that has not been checked (§11.1).
+
+### 11.19 A failure signal surrounded by reassuring output is a failure signal that will be missed
+
+The deploy looked successful. Commit, push, refresh tile, health check — and **the health
+check did report unhealthy.** It was not missed because it was absent. It was missed because
+of what was printed beside it: the log tail showed **historical `uvicorn` lines from before
+the crash**, which read as ordinary healthy activity.
+
+⚠️ **A tail is not timestamped against the event it is supposed to describe.** `tail -n 20`
+answers *"what are the last 20 lines in this file?"*, never *"what did this process say when
+it just tried to start?"* — and when the process died before logging anything, those are
+**the previous run's lines**, indistinguishable from the current run's by inspection.
+
+This is §11.15 one level out. There, an operation reported success without checking its
+effect. Here, a check correctly reported failure and **the surrounding output made the
+failure look like noise** — which costs the same as not checking, while feeling like
+diligence.
+
+**Two rules, and the second is the general one:**
+
+1. **The log tail accompanying a health check must be bounded to the current attempt** — by
+   timestamp against the restart, or by a start-marker line written on boot. Unbounded, it is
+   evidence about a different run.
+2. **When a check fails, its verdict must be the LOUDEST thing on screen.** Supporting output
+   exists to explain a verdict, never to sit at the same visual weight as one. This is
+   §11.7's argument in reverse: there, a detector that fires on the normal case gets ignored;
+   here, a detector that fires correctly gets ignored anyway because the page around it looks
+   normal. **Either way the outcome is a real signal that nobody acts on.**
+
 ## 12. Concert playlists — the body of work (phase 7)
 
 A concert playlist is **what to learn before the lights go down.** It is built from what the
