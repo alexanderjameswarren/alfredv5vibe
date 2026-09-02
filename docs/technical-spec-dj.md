@@ -2670,3 +2670,265 @@ as one on 2026-09-02.
 ⚠️ **Recorded because the next reader will notice the same thing.** A plausible-looking anomaly
 that has already been checked costs nothing to write down and an investigation to rediscover —
 and the honest version of "it looked wrong" is "it looked wrong and it is fine."
+
+---
+
+## 14bis. The second review run — 2026-09-02, after the first round of fixes
+
+The first run found nine problems. Three were fixed (§14.5, §14.6, §14.7) and the second run was
+pulled to check them **by behaviour rather than by SHA**. All three hold, with arithmetic rather
+than an absence of complaints:
+
+- **§14.5 (row cap).** Body counts across 41 playlists now sum to **2194**, not exactly 1000.
+  Smashing Pumpkins 15 (was 0), Motley Crue 14 (was 0), Weezer 13 (was 4). The one remaining
+  zero — *The Weeknd Concert* — was checked against YouTube directly and is a genuinely empty
+  playlist, not a residual.
+- **§14.6 (normaliser).** Smashing Pumpkins `in_body` moved **12 → 15 of 32**; Today, Luna and
+  Cherub Rock are in the body and no longer proposed. Weezer `in_body` moved **12 → 13 of 13**
+  when setlist *"Go Away"* matched the body row *"Go Away (feat. Best Coast)"*.
+- **§14.7 (article fold).** **Disarm** resolves to `x5GG_fr8WyM` with
+  `artist_match: article_insensitive` and the widening stated in `why`. Played at 7 of 10 shows.
+
+It then found six more. Two were wrong data and are fixed in migration 016.
+
+### 14.12 🛑 `touch_days` counted the LEFT JOIN's null row — FIXED 016
+
+Migration 015 wrote `coalesce(count(*), 0) as touch_days` over a `left join day_hits`. When a
+playlist has no matching rows the join still emits one, with every `dh` column null — and
+`count(*)` counts **rows**, not values. Twelve playlists reported:
+
+```
+touch_days: 1, last_touched_on: null, touch_days_recent: 0, touch_days_prior: 0
+```
+
+Contradictory **three ways in one row**: 1 ≠ 0 + 0, and a playlist touched once has a date.
+
+⚠️ **THE REST OF THE ROW WAS RIGHT, WHICH IS WHY IT READ AS AN ODD NUMBER RATHER THAN A BUG.**
+The filtered counts use `filter (where dh.played_on …)` and a null satisfies no comparison, so
+they correctly returned 0. `runs` and `went_quiet` were right for the same reason. Only the
+unfiltered total was wrong.
+
+**The harm is exactly the distinction the metric exists to draw.** *Post Malone Concert* has
+genuinely been touched once (2026-06-14). *Chicago Concert* has never been touched. They printed
+identically — and the null-vs-zero distinction is deliberate everywhere else in this system.
+
+🛑 **AND 015's OWN VERIFY BLOCK COULD NOT HAVE CAUGHT IT. THIS IS THE §11.1 SHAPE INSIDE A
+VERIFICATION BLOCK WRITTEN TO ENFORCE §11.1.** Five checks shipped under a stern note that they
+are "the point of the migration block, not decoration". They were run and they passed. Step 1
+asserted `touch_days > runs` on **partially listened** playlists; step 2 was the seasonal
+control for `went_quiet`, which reads the correct half; step 3 checked rows with `runs > 0`;
+steps 4–5 were about the artist rollup. **Every step selected a playlist that had plays in it.
+The bug lives only where there are none.** Writing the rule at the top of the file does not apply
+it to the file.
+
+**Fixed** with `count(dh.played_on)`. The `coalesce` is dropped rather than kept — `count()`
+never returns null, so it was dead code that *read* like a null guard, which is the belief that
+let this through. The new control is an **invariant over every row**
+(`touch_days = touch_days_recent + touch_days_prior`) plus a negative control on
+`last_touched_on is null` — arithmetic a wrong answer cannot satisfy, on the population the old
+checks could not reach.
+
+### 14.13 🛑 The jazz definition described a mechanism that cannot do what it claims — FIXED 016
+
+Migration 013, and the Edge Function repeating it to every caller, said:
+
+> *"Membership alone would miss most of it — the heavily-played pianists (Herbie Hancock, Red
+> Garland, Oscar Peterson, Bill Evans, Thelonious Monk, Wes Montgomery) arrived through PLAYS
+> rather than through either playlist."*
+
+`dj_jazz_activity(90)` returned **two of those six**.
+
+**It is not a tuning problem.** The artist arm reads `t.artist in (select artist from
+jazz_artists)`, and `jazz_artists` is derived **from tracks already in a jazz playlist**. The arm
+widens membership from track-level to artist-level and cannot reach outside the playlists at all.
+An artist with no track in either playlist is unreachable however much he is played.
+
+**Thelonious Monk: 20 distinct days, 206 play rows, 81 distinct canonical groups — the broadest
+repertoire of any artist in the library, Weezer included.** He beats the tool's own top row (Wes
+Montgomery, 13 days) and Section 3 could not see him.
+
+⚠️ **IT SURVIVED BECAUSE IT WAS PHRASED AS A JUSTIFICATION.** It reads as the *reason* the artist
+arm exists, and a rationale does not invite anyone to check it against output. It was a
+falsifiable claim about what the data means, and it was false (§11.5).
+
+**Fixed** with a third arm sourced from `dj_artist_tags`, and `source` on every row saying which
+arm caught it. `by_source` totals them, so a thin tag set is visible in the payload rather than
+read as a thin listening habit.
+
+#### 🛑 Why `dj_artist_tags` and NOT `dj_artists.tags`
+
+`dj_artists.tags` is the obvious home and it is the wrong one, for a reason already recorded in
+this repo. `upsert_dj_artist` carries a comment written to stop the question being reopened:
+*"`dj_artists.name` is a different system entirely … **NOTHING JOINS THE TWO**"* — the two being
+`dj_artists.name` and `dj_tracks.artist`.
+
+- `dj_artists` holds 22 rows, every one an **mbid-keyed concert act**. `get_dj_artists` warns
+  that a null mbid means setlists cannot be read at all. Jazz artists have no mbid and need none;
+  the table would hold two kinds of row under two contracts.
+- The tag must be applied to **the string as `dj_tracks` spells it**, because that is the only
+  join key available (§14.1). That means rows reading *"Eddie Higgins Trio"* and *"Oscar Peterson
+  Trio"* — display strings, not identities — which would make `dj_artists.name` mean two things.
+
+⚠️ **THIS DOES NOT CLOSE §14.1 AND MUST NOT BE DESCRIBED AS DOING SO.** It is a curated
+allowlist over play strings, the same shape as §4.1.4's `ARTIST_ALIASES` and hand-curated for the
+same reason §14.7 gives: *"prefer the longer form"* fixes Eddie Higgins and breaks Red Garland in
+the same stroke.
+
+⚠️ **THE MIGRATION IS HALF-APPLIED UNTIL THE TAGS ARE SEEDED**, and its verify block says so with
+a `notice` rather than passing quietly. Until then the tool answers the old, narrower question.
+
+### 14.14 A promo appearance and a stadium set counted the same — FIXED 016
+
+Six of the ten Weezer shows in the window were 1–6 song promo spots (Fallon 1, Today Show 2,
+SiriusXM 5, Apple Music 5, Snap 5, Hinano Cafe 6). The other four were real sets (Halifax 24,
+Yellowstone 24, Allegiant 13, Amazon MGM 12). So *"We Might as Well Be Strangers — 4 shows"* was
+three television appearances and one concert: a true number reading as four times the evidence it
+is.
+
+⚠️ **§12.3 DECIDED PROMOS COUNT AND THEY STILL DO. This labels them; it excludes nothing.**
+
+⚠️ **SHIPPING `song_count` PER SHOW WAS NOT ENOUGH.** It made the fact *recoverable*, which means
+every consumer re-derives it, differently — and §12.12 forbids explaining it in a paragraph. A
+number the report needs is a number the payload carries.
+
+`full_set_min_songs` is **8**, in the payload rather than in prose. A TV spot is 1–3 songs and a
+radio session 4–6; a concert is rarely under 8. It is **absolute rather than a fraction of the
+window's median**, because the median is dragged down by the promos themselves — Weezer's is 5.5,
+so "half the median" would certify the five-song SiriusXM session as a full set. **The boundary
+case is named rather than hidden:** Smashing Pumpkins played 7 songs at the LA Memorial Coliseum
+and is classed a short set. That is the row that moves if anyone retunes this, and it is pinned
+by a test.
+
+`missing` now sorts on full sets first — the raw count put the weakest evidence at the top of the
+list a human reads first.
+
+### 14.15 `not_found` had one shape for four different answers — FIXED 016
+
+Classifying not-founds meant **reading the `why` prose**, which will break silently the first
+time a sentence is reworded — and did break immediately: the first report counted five Foo
+Fighters medley parts where there were six, missing *"Happy Birthday to You"* at a single show,
+and that number went into a coverage figure.
+
+`not_found_cause` is now a field:
+
+| cause | closeable? | |
+|---|---|---|
+| `medley_part` | never | one part of a `' / '`-joined row; rarely has a studio recording |
+| `other_artists_only` | never | the title exists, by someone else (§12.4) |
+| `no_such_title` | never | YouTube Music has nothing under that title |
+| `variant_only` | 🛑 **yes** | the artist HAS the song; only a studio cut is missing |
+
+⚠️ **A MEDLEY PART IS CLASSIFIED BY WHAT IT IS, NOT BY WHICH BRANCH IT FELL OUT OF.** *One
+Headlight* finds The Wallflowers; *Seven* finds nothing. Both are structurally unavailable for
+the same reason, and splitting them across two buckets would quietly shrink the uncloseable
+count.
+
+**`coverage` now carries two denominators and neither replaces the other.** `total` is every
+distinct song in the window — what he will hear, the right denominator beside any
+`cram_complete` (§12.10). `gettable` subtracts the three uncloseable causes — the right
+denominator for *"is this playlist finished"*. Foo Fighters measured **27/40 total and 27/32
+gettable**. Reporting only `gettable` would improve the number by redefining the show.
+
+⚠️ **`variant_only` IS DELIBERATELY NOT SUBTRACTED.** Folding it into "unobtainable" would hide
+the only not-found anyone can act on.
+
+### 14.16 A major song's NOT FOUND looked identical to a hopeless one — FIXED 016
+
+**Mayonaise** (Smashing Pumpkins, 5 of 10 shows) and **Muzzle** returned `not_found` with
+`other_artists_found: []` and a sentence of prose — byte-identical in **shape** to *A320*, where
+piano covers genuinely are all that exists. One is a ten-second decision; the other is nothing.
+
+The verdict was right: §12.11 rule 2 drops variant cuts and §12.7 is exact-match-or-not-found.
+**What was wrong is that the payload was shaped like the hopeless cases**, and §12.11 requires
+that an ambiguity never escalate without a recommendation and a way to resolve it.
+`duplicate_titles_in_cram` got that treatment; this did not.
+
+`variant_only` now carries `variant_candidates` (with album and duration — the two fields that
+distinguish a released live album from a loose upload) and `recommended_video_id`, picked by
+*album present, then longest cut*, with the rule stated in `why`.
+
+⚠️ **IT REMAINS `not_found`.** Promoting it to `resolved` would put a live recording into a
+playlist by machine, which is precisely what rule 2 exists to prevent. The recommendation is for
+a human, and taking it means learning the song from a live cut — a real cost, and his call.
+
+### 14.17 Section 1's question had no field, so the thresholds were invented — FIXED 016
+
+`went_quiet` is a **change** detector built for Section 4 (§11.7). Section 1 asks a **level**
+question: *was this ever decided?* Oasis — one of the two cases §12.8 names — does **not** fire
+`went_quiet`, because two touch days inside the recent window keep it warm. The first run
+surfaced it anyway by hand-applying *"runs low and last_run_on old"* with cutoffs chosen by eye
+that exist in no file and would be chosen differently the following week.
+
+**`get_dj_concerts mode="undecided"`** returns undated `screening` rows with their playlist
+engagement joined. ⚠️ **NO THRESHOLD, DELIBERATELY.** The population is tiny and **self-clearing**
+— answering moves the row out of `screening` and it never returns — so §11.7's "fires on the
+normal case" risk does not apply, and a cutoff would only shrink a list that is already short.
+It orders by `quiet_for_days`, which falls back to the **concert row's own age** when the
+playlist has never been touched: a watchlist entry unplayed since creation is the strongest case
+for asking, and a null would sort arbitrarily.
+
+### 14.18 A dated `screening` row is a decision with a deadline, and nothing asked — FIXED 016
+
+Smashing Pumpkins sat at `screening` for a show on 2026-10-30, 58 days out. `needs_status` fires
+only once a date has **passed**, so the question surfaces on the first day it can no longer be
+answered.
+
+**`decision_pending`** is now on every row: `true` when the status is `screening` and the date is
+still ahead, with `days_until` beside it. ⚠️ **THIS IS A SECTION 2 LINE, NOT A SECTION 1 ONE**,
+and §12.8 already records the first run getting exactly this wrong. Three questions share the
+word *screening* — `needs_status` (*did you go?*), `undecided` (*still interested?*),
+`decision_pending` (*you have not decided and the show is in N days*) — and the shared word is
+what merges them. The partition is asserted by a test rather than described.
+
+### 14.19 Two fields one word apart meant different things — FIXED 016
+
+Section 3 printed `in_playlist: false` for Wes Montgomery; Section 4 printed
+`in_any_playlist: true` for the same artist. **Both were correct** — one asks about the two
+`kind='jazz'` playlists, the other about every managed playlist — and side by side they read as
+the tool contradicting itself. `dj_jazz_activity` now returns **`in_jazz_playlist`**, and both
+tools' guidance names the other field explicitly.
+
+### 14.20 The cram/diff join the spec REQUIRES was the one that would fail — FIXED 016
+
+`get_dj_managed_playlists mode=cram` reports the raw `dj_tracks` title
+(*"Jellybelly (Remastered 2012)"*); `diff_dj_setlists` reports setlist.fm's (*"Jellybelly"*).
+Both are right for their source and they will never match. §12.10 **requires** reading the two
+together — `cram_complete` may not be printed without `in_body / distinct_setlist_songs` beside
+it — so the one join the spec mandates is the one that would have failed silently on titles.
+
+`in_body` entries now carry **`video_id`**. Join on that, never on the title.
+
+### 14.21 Recorded, no action taken
+
+- **Migration 015's verify step 5 is only half-satisfied.** It expects the split names *and*
+  §14.9's scraped byline visible in `dj_artist_activity(90, 50)`. Split names are there (Eddie
+  Higgins Trio, Dave Brubeck Quartet, Enzo Orefice trio). The *"…1.7M views"* row is **below the
+  cut, not absent** — so the limitation is described rather than demonstrated, which is what that
+  step was written to avoid. A wider limit would show it.
+- **§14.10 unchanged.** 58 body rows read across the three concert playlists on 2026-09-02; zero
+  carried a `canonical_track_id`.
+- **`The Weeknd Concert` is an empty playlist against a `rejected` concert**, verified live on
+  YouTube. Nothing flags it. Harmless, and its engagement row returns nulls across every field
+  including `touch_days` — a *different* null from §14.12's wrong 1, and indistinguishable to a
+  reader who does not know why.
+- **`cram_stale` still cannot fire.** `current_cram_size: 0` on all three upcoming playlists and
+  zero cram rows library-wide. §12.8's decision to keep it in the payload and out of the printed
+  item stands, confirmed rather than assumed.
+- **`'Harrison'` (4 distinct days) is deliberately untagged.** It may be a truncated or scraped
+  byline (§14.9) rather than an artist. Tagging an unknown to make a list longer is how a curated
+  allowlist stops being curated.
+
+### 14.22 🛑 OPEN, AND IT IS THE FINDING RATHER THAN A DEFECT: jazz is half the listening and almost none of it is managed
+
+Six of the top twenty artists by distinct days are jazz artists **in no playlist at all** —
+Thelonious Monk (20 days, 81 songs), Eddie Higgins Trio (16), Bill Evans (11), Herbie Hancock
+(8), Red Garland (7), Keith Jarrett (7) — plus Green Day (16) and The All-American Rejects (7),
+neither jazz nor in any playlist.
+
+**Section 3 reports on two playlists. The question actually being asked of it is "what am I
+listening to and what am I missing", and Section 4's rollup is closer to that than Section 3 is.**
+
+Migration 016 makes the merge *available* without making it: `dj_artist_activity` takes a
+`p_tag` filter, so the jazz section can **be** the rollup filtered by tag — same numbers, one
+definition — rather than a second definition that has to agree with it. **Whether §12.8's section
+list changes is a spec decision and is not taken here.**

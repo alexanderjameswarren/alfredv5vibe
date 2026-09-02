@@ -118,6 +118,8 @@ const run = (tables, args, opts) =>
   tool.get_dj_plays.handler(args, { db: makeDb(tables, opts), userId: "u1" });
 const runMp = (tables, args, opts) =>
   tool.get_dj_managed_playlists.handler(args, { db: makeDb(tables, opts), userId: "u1" });
+const runJazz = (tables, args = {}, opts) =>
+  tool.get_dj_jazz_activity.handler(args, { db: makeDb(tables, opts), userId: "u1" });
 
 const track = (id, video_id, title, canonical = null, album = null, artist = "Weezer") =>
   ({ id, video_id, title, artist, album, canonical_track_id: canonical });
@@ -969,4 +971,130 @@ test("artists mode clamps its limit like every other bounded read", async () => 
   await run(tables, { mode: "artists", limit: 500 });
   assert.equal(seen.p_limit, 50, "hard cap, server-side");
   assert.equal(seen.p_window_days, 90, "default window");
+});
+
+// --- the tag arm (added 016) ------------------------------------------------
+
+test("artists mode passes the tag filter through, and defaults to null", async () => {
+  let seen = null;
+  const tables = {
+    __rpcs: { dj_artist_activity: (params) => { seen = params; return []; } },
+  };
+  await run(tables, { mode: "artists" });
+  assert.equal(seen.p_tag, null, "unfiltered is the default — every artist");
+
+  await run(tables, { mode: "artists", tag: "jazz" });
+  assert.equal(seen.p_tag, "jazz");
+});
+
+test("artists mode counts the UNTAGGED rows, which is how a thin tag set shows", async () => {
+  // ⚠️ WITHOUT THIS THE TWO FAILURE MODES ARE INDISTINGUISHABLE. A short jazz
+  // section can mean "he barely listens to jazz" or "almost nothing is tagged",
+  // and on 2026-09-02 it meant the second: Thelonious Monk was the fourth-most
+  // played artist in the library and invisible to the jazz report.
+  const tables = {
+    __rpcs: {
+      dj_artist_activity: () => [
+        { artist: "Thelonious Monk", distinct_days: 20, tags: [] },
+        { artist: "Wes Montgomery", distinct_days: 13, tags: ["jazz"] },
+        { artist: "Green Day", distinct_days: 16 },   // no tags key at all
+      ],
+    },
+  };
+  const r = await run(tables, { mode: "artists" });
+  assert.equal(r.data.untagged_in_result, 2, "an absent tags key counts as untagged");
+  assert.equal(r.data.tag_filter, null);
+});
+
+test("artists mode warns that in_any_playlist is NOT the jazz tool's field", async () => {
+  // 🛑 THE 2026-09-02 TRAP. Section 3 printed `in_playlist: false` for Wes
+  // Montgomery and Section 4 printed `in_any_playlist: true` for the same
+  // artist. Both were correct — one asks about the two JAZZ playlists, the other
+  // about every managed playlist — and side by side they read as the tool
+  // contradicting itself. The jazz field is renamed in 016; this is the other
+  // half of that fix.
+  const tables = { __rpcs: { dj_artist_activity: () => [] } };
+  const r = await run(tables, { mode: "artists" });
+  assert.match(r.data.definition, /in_jazz_playlist/);
+  assert.match(r.data.definition, /NOT the same field/);
+});
+
+// ---------------------------------------------------------------------------
+// get_dj_jazz_activity — the definition that was FALSE (added 016)
+// ---------------------------------------------------------------------------
+//
+// 🛑 THE DEFINITION STRING NAMED SIX PIANISTS AS PROOF OF THE ARTIST ARM AND THE
+// TOOL RETURNED TWO OF THEM. Herbie Hancock, Red Garland, Bill Evans and
+// Thelonious Monk were unreachable BY CONSTRUCTION: the artist arm derives its
+// artist list from tracks already in a jazz playlist, so it widens membership
+// from track-level to artist-level and cannot reach outside the playlists at all.
+//
+// ⚠️ IT SURVIVED BECAUSE IT READ AS A JUSTIFICATION. A sentence explaining WHY a
+// mechanism exists does not invite anyone to check it against that mechanism's
+// output — but it was a falsifiable claim about what the data means, and it was
+// false (§11.5). These tests pin the claim to the output.
+
+test("the jazz definition no longer asserts what the arms cannot deliver", async () => {
+  const tables = { __rpcs: { dj_jazz_activity: () => [] } };
+  const r = await runJazz(tables);
+  for (const name of ["Herbie Hancock", "Red Garland", "Bill Evans",
+                      "Thelonious Monk"]) {
+    assert.ok(
+      !r.data.definition.includes(name),
+      `the definition still names ${name} as evidence for an arm that cannot reach him`,
+    );
+  }
+  assert.match(r.data.definition, /dj_artist_tags/, "the third arm is stated");
+});
+
+test("by_source totals the arms, so a thin tag set is visible in the payload", async () => {
+  const tables = {
+    __rpcs: {
+      dj_jazz_activity: () => [
+        { artist: "Art Blakey", distinct_days: 1, in_jazz_playlist: true,
+          source: "playlist" },
+        { artist: "Wes Montgomery", distinct_days: 13, in_jazz_playlist: false,
+          source: "artist_in_playlist" },
+        { artist: "Oscar Peterson", distinct_days: 12, in_jazz_playlist: false,
+          source: "artist_in_playlist" },
+        { artist: "Thelonious Monk", distinct_days: 20, in_jazz_playlist: false,
+          source: "tagged" },
+      ],
+    },
+  };
+  const r = await runJazz(tables);
+  assert.deepEqual(r.data.by_source,
+    { playlist: 1, artist_in_playlist: 2, tagged: 1 });
+});
+
+test("with no tags seeded, tagged is 0 and the reading says the arm is inert", async () => {
+  // ⚠️ THE HALF-APPLIED CASE, WHICH IS THE STATE THIS SHIPS IN. Migration 016
+  // makes the arm live; the tags are a separate human step. Until they exist the
+  // tool answers the OLD, narrower question, and reporting its numbers bare
+  // would repeat the exact failure 016 exists to fix.
+  const tables = {
+    __rpcs: {
+      dj_jazz_activity: () => [
+        { artist: "Wes Montgomery", distinct_days: 13, source: "artist_in_playlist" },
+      ],
+    },
+  };
+  const r = await runJazz(tables);
+  assert.equal(r.data.by_source.tagged, 0);
+  assert.match(r.data.reading, /by_source\.tagged` is 0/);
+  assert.match(r.data.gaps, /COVERAGE IS ONLY AS GOOD AS THE TAGS/);
+});
+
+test("the jazz field is in_jazz_playlist, and the reading names the trap", async () => {
+  // 🛑 RENAMED IN 016. `in_playlist` sat beside get_dj_plays mode=artists'
+  // `in_any_playlist` in one report, reading contradictorily for Wes Montgomery.
+  // Both were right and the names were one word apart.
+  const tables = { __rpcs: { dj_jazz_activity: () => [] } };
+  const r = await runJazz(tables);
+  assert.match(r.data.reading, /in_jazz_playlist/);
+  assert.match(r.data.reading, /in_any_playlist/);
+  assert.ok(
+    !/`in_playlist`/.test(r.data.reading),
+    "the old ambiguous name must not survive in the guidance",
+  );
 });

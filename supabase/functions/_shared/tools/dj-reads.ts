@@ -203,9 +203,13 @@ export const getDjPlaysTool = defineTool({
     if (mode === "artists") {
       const windowDays = (args.window_days as number | undefined) ?? 90;
       const artistLimit = clampLimit(args.limit as number | undefined);
+      // ADDED 016: optional tag filter, backed by dj_artist_tags. null = every
+      // artist, which is the pre-016 behaviour and stays the default.
+      const tag = (args.tag as string | undefined)?.trim() || null;
       const { data: act, error: actErr } = await ctx.db.rpc("dj_artist_activity", {
         p_window_days: windowDays,
         p_limit: artistLimit,
+        p_tag: tag,
       });
       if (actErr) {
         // Operational, and legitimately retryable once the migration is in — so
@@ -216,18 +220,29 @@ export const getDjPlaysTool = defineTool({
         );
       }
       const artistRows = (act ?? []) as Array<Record<string, unknown>>;
+      // Untagged artists high in the list are the only visible evidence that the
+      // curated tag set is incomplete, so the count travels with the rows rather
+      // than being left for the reader to notice.
+      const untagged = artistRows.filter(
+        (r) => !Array.isArray(r.tags) || (r.tags as unknown[]).length === 0,
+      ).length;
       return { data: {
         mode: "artists",
         artists: artistRows,
         returned: artistRows.length,
         window_days: windowDays,
         limit_applied: artistLimit,
+        tag_filter: tag,
+        untagged_in_result: untagged,
         definition:
           "One row per DISTINCT ARTIST STRING on dj_tracks, over plays in the " +
           "window. `distinct_days` is DISTINCT DAYS PLAYED, not a play count — the " +
           "feed carries one entry per track per bucket, so repeats do not stack " +
           "(§5). `in_any_playlist` says whether that artist appears in any managed " +
-          "playlist at all.",
+          "playlist at all — ⚠️ NOT the same field as get_dj_jazz_activity's " +
+          "`in_jazz_playlist`, which asks only about the two jazz playlists. The " +
+          "two legitimately disagree for the same artist. " +
+          "`tags` comes from dj_artist_tags and `tag` filters on it (null = all).",
         gaps:
           "🛑 THIS IS NOT AN ARTIST IDENTITY AND DOES NOT CLOSE §14.1. Grouping is " +
           "on dj_tracks.artist as an EXACT STRING. (1) SPLITS ARE REAL AND PRESENT: " +
@@ -1279,15 +1294,32 @@ export const getDjManagedPlaylistsTool = defineTool({
 // ---------------------------------------------------------------------------
 //
 // 🛑 JAZZ IS A PROXY AND THE REPORT MUST SAY SO. Nothing marks a track as jazz:
-// dj_tracks has no genre, its tags are unpopulated, and dj_artists — which does
-// have tags — holds 22 concert acts against 1,206 distinct artists in the play
-// history (spec §14.1, §14.3). So "jazz" is DERIVED from the two kind='jazz'
-// playlists: a play counts if the track is in one, OR its artist appears in one.
+// dj_tracks has no genre, and dj_artists — which does have tags — holds 22
+// mbid-keyed concert acts and joins to nothing (spec §14.1, §14.3).
 //
 // ⚠️ THE DEFINITION IS PART OF THE FINDING. A jazz summary that does not say
 // what counted as jazz invites the reader to assume a genre model exists, and
 // the numbers move if the definition does. `definition` ships with the rows for
 // that reason, not as decoration.
+//
+// 🛑 AND ON 2026-09-02 THE DEFINITION STRING WAS ITSELF WRONG, WHICH IS THE
+// REASON THIS COMMENT IS LONGER THAN IT LOOKS LIKE IT NEEDS TO BE.
+//
+// It read: "Membership alone would miss most of it — the heavily-played pianists
+// (Herbie Hancock, Red Garland, Oscar Peterson, Bill Evans, Thelonious Monk, Wes
+// Montgomery) arrived through PLAYS rather than through either playlist." The
+// tool returned TWO of those six. The artist arm derives its artist list FROM
+// tracks already in a jazz playlist, so it widens membership from track-level to
+// artist-level and cannot reach outside the playlists at all — the four missing
+// pianists were unreachable by construction, Monk among them at 20 distinct days
+// and 81 distinct groups, more repertoire than any artist in the library.
+//
+// ⚠️ IT SURVIVED BECAUSE IT WAS PHRASED AS A JUSTIFICATION. A sentence that
+// explains WHY a mechanism exists does not invite anyone to check it against
+// that mechanism's output. It was a falsifiable claim about what the data means,
+// and it was false (§11.5). Migration 016 adds a third arm with a real source
+// (dj_artist_tags) so the claim can be true; until the tags are seeded,
+// `by_source.tagged` is 0 and this tool answers the OLD, narrower question.
 export const getDjJazzActivityTool = defineTool({
   name: "get_dj_jazz_activity",
   tier: 1,
@@ -1302,6 +1334,17 @@ export const getDjJazzActivityTool = defineTool({
     const all = (data ?? []) as Array<Record<string, unknown>>;
     const rows = all.slice(0, LIMIT);
 
+    // ⚠️ COVERAGE IS PART OF THE ANSWER, NOT A DIAGNOSTIC. The tag arm is only
+    // as complete as the tags, so a small jazz section and a small jazz habit
+    // look identical without this. Counted from the rows returned by the tag
+    // arm rather than asserted.
+    const bySource = { playlist: 0, artist_in_playlist: 0, tagged: 0 } as
+      Record<string, number>;
+    for (const r of all) {
+      const s = String(r.source ?? "");
+      if (s in bySource) bySource[s] += 1;
+    }
+
     return { data: {
       artists: rows,
       returned: rows.length,
@@ -1309,30 +1352,42 @@ export const getDjJazzActivityTool = defineTool({
       window_days: windowDays,
       limit_applied: LIMIT,
       truncated: all.length > rows.length,
+      by_source: bySource,
       definition:
-        "A play counts as jazz if its track is in a kind='jazz' playlist, OR its " +
-        "artist appears in one. Membership alone would miss most of it — the " +
-        "heavily-played pianists (Herbie Hancock, Red Garland, Oscar Peterson, " +
-        "Bill Evans, Thelonious Monk, Wes Montgomery) arrived through PLAYS " +
-        "rather than through either playlist.",
+        "A play counts as jazz if (1) its track is in a kind='jazz' playlist, " +
+        "(2) its artist appears on a track in one, or (3) its artist string is " +
+        "tagged 'jazz' in dj_artist_tags. `source` on each row says which arm " +
+        "caught it, and `by_source` totals them.",
       gaps:
         "⚠️ STATE THESE IN THE REPORT rather than letting the thread infer a " +
         "source that does not exist (spec §14): " +
-        "(1) SUBGENRE IS UNAVAILABLE — tags live on dj_artists, which covers 22 " +
-        "concert acts against 1,206 distinct artists played; dj_tracks has no " +
-        "link to it at all. " +
-        "(2) UNPLAYED ALBUMS CANNOT BE COMPUTED — dj_albums has no writer tool " +
+        "(1) COVERAGE IS ONLY AS GOOD AS THE TAGS. Arms 1 and 2 cannot reach " +
+        "outside the two jazz playlists at all — arm 2 is derived FROM tracks " +
+        "already in one, so it widens membership from track-level to " +
+        "artist-level and no further. An untagged jazz artist in no playlist is " +
+        "still invisible. That is now a DATA gap the reader can close, not a " +
+        "structural one they cannot; say how many rows came from `tagged`. " +
+        "(2) SUBGENRE IS UNAVAILABLE — nothing records it. " +
+        "(3) UNPLAYED ALBUMS CANNOT BE COMPUTED — dj_albums has no writer tool " +
         "and no data, so there is nothing to compare listening against. " +
-        "(3) THE ARTIST ARM IS AN EXACT STRING MATCH, so 'Oscar Peterson Trio' " +
-        "and 'Oscar Peterson' do not unify (§4.1.4). " +
+        "(4) EVERY ARM IS AN EXACT STRING MATCH on dj_tracks.artist, so 'Oscar " +
+        "Peterson Trio' and 'Oscar Peterson' do not unify (§4.1.4). The tag arm " +
+        "shares that property by design and is curated for it. " +
         "⚠️ THIS TOOL CANNOT PROPOSE NEW ARTISTS. It reports what was played and " +
         "what is missing from the data; 'try Andrew Hill' comes from the thread, " +
         "never from listening history — there is no source for it here.",
       reading:
         "`distinct_days` is DISTINCT DAYS PLAYED, not a play count (spec §5). " +
-        "`in_playlist` false means the artist reached this list through the " +
-        "artist arm of the definition rather than through membership — those are " +
-        "the plays a membership-only definition would have missed.",
+        "⚠️ `in_jazz_playlist` asks ONLY about the two kind='jazz' playlists. It " +
+        "is NOT get_dj_plays mode=artists' `in_any_playlist`, which asks about " +
+        "every managed playlist — the two legitimately disagree for the same " +
+        "artist, and reading them side by side as one idea is a trap. " +
+        "⚠️ ADDED 016 AND WORTH THE SPACE: before the tag arm existed, this " +
+        "tool's own definition string named six pianists as proof of the artist " +
+        "arm and returned two of them. Thelonious Monk — the broadest repertoire " +
+        "in the library — was invisible to it. If `by_source.tagged` is 0 the " +
+        "tags have not been seeded and this tool is answering the OLD, narrower " +
+        "question; say so rather than reporting the numbers bare.",
     }, meta: { truncated: all.length > rows.length } };
   },
 });

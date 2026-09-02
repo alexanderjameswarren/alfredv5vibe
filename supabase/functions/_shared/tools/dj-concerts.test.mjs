@@ -32,7 +32,8 @@ const TODAY = new Date().toISOString().slice(0, 10);
 const PAST = "2024-01-01";
 const FUTURE = "2099-01-01";
 
-function makeDb(concerts = [], artists = [{ id: "art-1", name: "Weezer" }]) {
+function makeDb(concerts = [], artists = [{ id: "art-1", name: "Weezer" }],
+                opts = {}) {
   const tables = {
     dj_concerts: concerts.map((c, i) => ({
       id: c.id ?? `con-${i + 1}`, artist_id: "art-1", venue_id: null,
@@ -41,7 +42,14 @@ function makeDb(concerts = [], artists = [{ id: "art-1", name: "Weezer" }]) {
     })),
     dj_artists: artists,
     dj_feedback: [],
+    // mode=undecided joins these. Empty by default so every existing test is
+    // unaffected.
+    dj_playlists: opts.playlists ?? [],
   };
+  // dj_playlist_engagement, keyed by playlist id. Only the fields the handler
+  // reads are stubbed; a missing key returns no row, which is the real
+  // behaviour for a playlist with no members.
+  const engagement = opts.engagement ?? {};
   let seq = 0;
   function builder(table) {
     const filters = [];
@@ -84,7 +92,21 @@ function makeDb(concerts = [], artists = [{ id: "art-1", name: "Weezer" }]) {
     };
     return api;
   }
-  return { from: (t) => builder(t), _tables: tables };
+  return {
+    from: (t) => builder(t),
+    rpc: async (name, params) => {
+      if (name !== "dj_playlist_engagement") {
+        return { data: null, error: { message: `unstubbed rpc ${name}` } };
+      }
+      const ids = params.p_playlist_ids ?? [];
+      return {
+        data: ids.filter((id) => id in engagement)
+                 .map((id) => ({ playlist_id: id, ...engagement[id] })),
+        error: null,
+      };
+    },
+    _tables: tables,
+  };
 }
 
 const ctx = (db) => ({ db, userId: "user-1" });
@@ -115,6 +137,157 @@ test("an UNDATED screening row is NOT a 'did you go?' — the watchlist is exclu
   ]);
   const out = await get(db, { mode: "needs_status" });
   assert.deepEqual(out.concerts.map((c) => c.id), ["past"]);
+});
+
+// --- mode=undecided, and decision_pending (added 016) ------------------------
+//
+// 🛑 THE 2026-09-02 RUN HAD NO FIELD FOR EITHER QUESTION AND ANSWERED BOTH BY
+// HAND. That is what these tests pin.
+
+test("undecided returns undated screening rows — the ones no other mode can see", async () => {
+  const db = makeDb([
+    { id: "oasis", starts_on: null, status: "screening" },
+    { id: "bep", starts_on: null, status: "screening" },
+    { id: "alanis", starts_on: null, status: "missed" },     // decided
+    { id: "goo", starts_on: null, status: "rejected" },      // decided
+    { id: "sp", starts_on: FUTURE, status: "screening" },    // dated — Section 2
+    { id: "gone", starts_on: PAST, status: "screening" },    // needs_status
+  ]);
+  const out = await get(db, { mode: "undecided" });
+  assert.deepEqual(out.concerts.map((c) => c.id).sort(), ["bep", "oasis"]);
+});
+
+test("undecided applies NO threshold — a warm watchlist row still appears", async () => {
+  // 🛑 THE OASIS CASE, AND THE REASON THIS MODE EXISTS AT ALL.
+  //
+  // Oasis is one of the two rows §12.8 names, and it does NOT fire went_quiet:
+  // two touch days inside the recent window keep it warm. The first run reached
+  // for went_quiet anyway, found it false, and fell back to "runs low and
+  // last_run_on old" with cutoffs chosen by eye that exist in no file.
+  //
+  // If anyone ever adds a filter here, this test is what fails.
+  const db = makeDb(
+    [{ id: "oasis", starts_on: null, status: "screening" }],
+    undefined,
+    {
+      playlists: [{ id: "pl-oasis", name: "Oasis Concert", concert_id: "oasis" }],
+      engagement: {
+        "pl-oasis": {
+          runs: 1, last_run_on: "2026-08-04", touch_days: 9,
+          touch_days_recent: 2, last_touched_on: "2026-08-22", went_quiet: false,
+        },
+      },
+    },
+  );
+  const out = await get(db, { mode: "undecided" });
+  assert.equal(out.concerts.length, 1);
+  assert.equal(out.concerts[0].went_quiet, false, "warm, and still surfaced");
+  assert.equal(out.concerts[0].playlist_name, "Oasis Concert");
+  assert.equal(out.concerts[0].runs, 1);
+});
+
+test("undecided sorts by quiet_for_days, so the coldest asks first", async () => {
+  const db = makeDb(
+    [
+      { id: "oasis", starts_on: null, status: "screening" },
+      { id: "bep", starts_on: null, status: "screening" },
+    ],
+    undefined,
+    {
+      playlists: [
+        { id: "pl-oasis", name: "Oasis Concert", concert_id: "oasis" },
+        { id: "pl-bep", name: "Black Eyed Peas Concert", concert_id: "bep" },
+      ],
+      engagement: {
+        "pl-oasis": { runs: 1, last_touched_on: "2026-08-22", went_quiet: false },
+        "pl-bep": { runs: 1, last_touched_on: "2026-07-11", went_quiet: true },
+      },
+    },
+  );
+  const out = await get(db, { mode: "undecided" });
+  assert.deepEqual(out.concerts.map((c) => c.id), ["bep", "oasis"]);
+});
+
+test("a NEVER-touched playlist falls back to the row's age, not to a null", async () => {
+  // ⚠️ NEGATIVE CONTROL FOR THE SORT KEY. A watchlist entry created long ago and
+  // never played is the strongest case for asking. A null last_touched_on would
+  // sort to whichever end the comparator happens to put NaN, which is silently
+  // either "most urgent" or "invisible" depending on the engine.
+  const db = makeDb(
+    [
+      { id: "never", starts_on: null, status: "screening",
+        created_at: "2020-01-01T00:00:00Z" },
+      { id: "recent", starts_on: null, status: "screening",
+        created_at: "2026-01-01T00:00:00Z" },
+    ],
+    undefined,
+    {
+      playlists: [
+        { id: "pl-never", name: "Never Concert", concert_id: "never" },
+        { id: "pl-recent", name: "Recent Concert", concert_id: "recent" },
+      ],
+      engagement: {
+        "pl-never": { runs: 0, last_touched_on: null, went_quiet: false },
+        "pl-recent": { runs: 0, last_touched_on: null, went_quiet: false },
+      },
+    },
+  );
+  const out = await get(db, { mode: "undecided" });
+  assert.deepEqual(out.concerts.map((c) => c.id), ["never", "recent"]);
+  assert.equal(out.concerts[0].never_touched, true);
+  assert.ok(out.concerts[0].quiet_for_days > out.concerts[1].quiet_for_days);
+});
+
+test("decision_pending fires on a DATED screening row that is still ahead", async () => {
+  // 🛑 THE SMASHING PUMPKINS CASE. 2026-10-30, status screening, 58 days out on
+  // 2026-09-02 — and nothing asked about it, because needs_status fires only
+  // once the date has PASSED. The question surfaces on the first day it can no
+  // longer be answered.
+  const db = makeDb([{ id: "sp", starts_on: FUTURE, status: "screening" }]);
+  const out = await get(db, { mode: "list" });
+  assert.equal(out.concerts[0].decision_pending, true);
+  assert.ok(out.concerts[0].days_until > 0);
+});
+
+test("decision_pending does NOT fire where the decision is already made", async () => {
+  // The §11.7 control: a flag that fires on the normal case is worse than none.
+  // Committed and past-screening rows must both stay quiet — the second is
+  // needs_status's job and double-reporting it merges two questions.
+  const db = makeDb([
+    { id: "committed", starts_on: FUTURE, status: "committed" },
+    { id: "past", starts_on: PAST, status: "screening" },
+    { id: "watch", starts_on: null, status: "screening" },
+  ]);
+  const out = await get(db, { mode: "list" });
+  const by = Object.fromEntries(out.concerts.map((c) => [c.id, c]));
+  assert.equal(by.committed.decision_pending, false, "already committed");
+  assert.equal(by.past.decision_pending, false, "that is needs_status's row");
+  assert.equal(by.watch.decision_pending, false, "that is undecided's row");
+});
+
+test("the three screening questions never select the same row", async () => {
+  // 🛑 §12.8 RECORDS THE FIRST RUN MERGING TWO OF THESE. The shared status word
+  // is what does it, so the partition is asserted rather than described.
+  const rows = [
+    { id: "watch", starts_on: null, status: "screening" },
+    { id: "ahead", starts_on: FUTURE, status: "screening" },
+    { id: "gone", starts_on: PAST, status: "screening" },
+  ];
+  const undecided = await get(makeDb(rows), { mode: "undecided" });
+  const needs = await get(makeDb(rows), { mode: "needs_status" });
+  const listed = await get(makeDb(rows), { mode: "list" });
+  const pending = listed.concerts.filter((c) => c.decision_pending).map((c) => c.id);
+
+  assert.deepEqual(undecided.concerts.map((c) => c.id), ["watch"]);
+  assert.deepEqual(needs.concerts.map((c) => c.id), ["gone"]);
+  assert.deepEqual(pending, ["ahead"]);
+});
+
+test("an unknown mode is refused by name", async () => {
+  await assert.rejects(
+    () => get(makeDb([]), { mode: "quiet" }),
+    /must be 'list', 'needs_status' or 'undecided'/,
+  );
 });
 
 test("undated: true returns the watchlist, and `when` says undated", async () => {

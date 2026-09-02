@@ -14,7 +14,13 @@ import json
 import unittest
 from pathlib import Path
 
-from workshop.tools.dj_setlists import _norm_title, _resolve_one, _VARIANT_RE
+from workshop.tools.dj_setlists import (
+    _FULL_SET_MIN_SONGS,
+    _UNCLOSEABLE_CAUSES,
+    _norm_title,
+    _resolve_one,
+    _VARIANT_RE,
+)
 
 FF = "Foo Fighters"
 # The act as setlist.fm bills it, from the mbid. YouTube Music drops the article.
@@ -295,6 +301,172 @@ class MedleyCoverTests(unittest.TestCase):
         self.assertEqual(out["resolution"], "not_found")
         self.assertIn("spec 12.4", out["why"])
         self.assertNotIn("MEDLEY", out["why"])
+
+
+class NotFoundCauseTests(unittest.TestCase):
+    """ADDED 2026-09-02: WHY a song was not found, as a field rather than prose.
+
+    🛑 THE FIRST WEEKLY RUN CLASSIFIED THESE BY READING `why` STRINGS, AND GOT IT
+    WRONG ON THE FIRST ATTEMPT. It reported five Foo Fighters medley parts where
+    there were six — "Happy Birthday to You" appeared at a single show and was
+    missed by eye — and that number went into a coverage figure. Prose parsing
+    does not fail loudly; it fails by one.
+
+    The four causes are not the same kind of answer. Three are structural and no
+    decision can close them. The fourth is a question.
+    """
+
+    def test_nothing_titled_that_is_no_such_title(self):
+        results = [r("Everlong", [FF], "The Colour and the Shape", 250)]
+        out = _resolve_one(results, "Manimal", FF)
+        self.assertEqual(out["resolution"], "not_found")
+        self.assertEqual(out["not_found_cause"], "no_such_title")
+
+    def test_right_title_wrong_artist_is_other_artists_only(self):
+        results = [r("London Calling", ["The Clash"], "London Calling", 201)]
+        out = _resolve_one(results, "London Calling", FF)
+        self.assertEqual(out["not_found_cause"], "other_artists_only")
+
+    def test_a_medley_part_is_classified_by_WHAT_IT_IS_not_by_its_branch(self):
+        # 🛑 THE PRECEDENCE RULE, AND IT IS THE ONE THAT MATTERS.
+        #
+        # A medley part can fall out of EITHER not-found branch: "One Headlight"
+        # finds The Wallflowers (the wrong-artist branch), "Seven" finds nothing
+        # at all (the no-title branch). Both are structurally unavailable for the
+        # SAME reason — a medley part rarely has a studio recording — and
+        # classifying them by which branch they hit would split one cause across
+        # two buckets and quietly shrink the uncloseable count.
+        wrong_artist = [r("One Headlight", ["The Wallflowers"], "Bringing Down the Horse", 313)]
+        out = _resolve_one(wrong_artist, "One Headlight", FF, cover_of_known=False)
+        self.assertEqual(out["not_found_cause"], "medley_part")
+
+        no_title = [r("Everlong", [FF], "The Colour and the Shape", 250)]
+        out = _resolve_one(no_title, "Seven", FF, cover_of_known=False)
+        self.assertEqual(out["not_found_cause"], "medley_part")
+
+    def test_every_cause_is_either_uncloseable_or_variant_only(self):
+        # A cause that is neither would be silently dropped from BOTH the
+        # coverage subtraction and the escalation path — present in the payload
+        # and counted by nothing.
+        known = set(_UNCLOSEABLE_CAUSES) | {"variant_only"}
+        self.assertEqual(
+            known,
+            {"medley_part", "other_artists_only", "no_such_title", "variant_only"},
+        )
+
+    def test_variant_only_is_NOT_subtracted_from_gettable(self):
+        # 🛑 THE NEGATIVE CONTROL FOR THE COVERAGE DENOMINATOR.
+        #
+        # Mayonaise is a Smashing Pumpkins song played at 5 of the 10 shows read
+        # on 2026-09-02, and it resolves to nothing only because every cut is
+        # live. Folding it into "uncloseable" would improve the coverage number
+        # by hiding the one gap he can actually do something about.
+        self.assertNotIn("variant_only", _UNCLOSEABLE_CAUSES)
+
+
+class VariantOnlyEscalationTests(unittest.TestCase):
+    """🛑 A MAJOR SONG RETURNING NOT_FOUND MUST NOT LOOK LIKE A DEAD END.
+
+    On 2026-09-02 Mayonaise (5 of 10 shows) and Muzzle both came back as
+    not_found with `other_artists_found: []` and a sentence of prose — byte
+    identical in SHAPE to A320, where piano covers genuinely are all that exists.
+    One is a ten-second decision; the other is nothing. They printed the same.
+
+    §12.11: never escalate an ambiguity without a recommendation and a way to
+    resolve it. `duplicate_titles_in_cram` got that treatment. This did not.
+    """
+
+    MAYO = [
+        r("Mayonaise (Live at the Riviera)", [SP_EXACT], None, 320, vid="live_loose"),
+        r("Mayonaise - Live", [SP_EXACT], "Rotten Apples: Live", 300, vid="live_album_short"),
+        r("Mayonaise (Live)", [SP_EXACT], "Earphoria", 355, vid="live_album_long"),
+    ]
+
+    def test_the_verdict_is_unchanged(self):
+        # ⚠️ THE FIX IS THE PAYLOAD, NOT THE RULING. §12.11 rule 2 still drops
+        # variant cuts and §12.7 is still exact-match-or-not-found. Promoting
+        # this to `resolved` would put a live recording into a playlist by
+        # machine, which is precisely what rule 2 exists to prevent.
+        out = _resolve_one(self.MAYO, "Mayonaise", SP_EXACT)
+        self.assertEqual(out["resolution"], "not_found")
+        self.assertEqual(out["not_found_cause"], "variant_only")
+
+    def test_it_carries_candidates_and_a_named_recommendation(self):
+        out = _resolve_one(self.MAYO, "Mayonaise", SP_EXACT)
+        self.assertEqual(len(out["variant_candidates"]), 3)
+        self.assertTrue(out["recommended_video_id"])
+        for c in out["variant_candidates"]:
+            # Album and duration are what distinguish a released live album from
+            # a loose upload, so they travel with the question (§12.11).
+            self.assertIn("album", c)
+            self.assertIn("duration_seconds", c)
+
+    def test_the_pick_prefers_a_released_album_then_the_longest_cut(self):
+        # The rule is stated in the `why`, so it must be the rule applied.
+        # Earphoria (355s, on an album) beats the loose 320s upload and the
+        # shorter album cut.
+        out = _resolve_one(self.MAYO, "Mayonaise", SP_EXACT)
+        self.assertEqual(out["recommended_video_id"], "live_album_long")
+
+    def test_it_says_the_song_EXISTS_rather_than_reading_as_absent(self):
+        out = _resolve_one(self.MAYO, "Mayonaise", SP_EXACT)
+        self.assertIn("DECISION, NOT A DEAD END", out["why"])
+        self.assertIn("live recording", out["why"])
+
+    def test_a_playlist_holding_only_a_live_cut_is_a_DIFFERENT_shape_from_A320(self):
+        # NEGATIVE CONTROL. The genuinely hopeless case must NOT acquire a
+        # recommendation, or the distinction this class exists to draw is gone.
+        a320 = [r("A320", ["Piano Project"], "Piano Renditions of Foo Fighters", 320)]
+        out = _resolve_one(a320, "A320", FF)
+        self.assertEqual(out["not_found_cause"], "other_artists_only")
+        self.assertNotIn("variant_candidates", out)
+        self.assertIsNone(out.get("recommended_video_id"))
+
+
+class FullSetThresholdTests(unittest.TestCase):
+    """§12.3 DECIDED PROMOS COUNT. This labels them; it excludes nothing.
+
+    Six of ten Weezer shows in the 2026-09-02 window were 1-6 song television and
+    radio spots, so "We Might as Well Be Strangers, 4 shows" was three TV
+    appearances and one concert — a true number reading as four times the
+    evidence it is.
+    """
+
+    # The real window, 2026-09-02.
+    WEEZER = [5, 5, 2, 1, 24, 5, 12, 13, 6, 24]
+    FOO = [15, 25, 26, 25, 26, 27, 27, 26, 24, 25]
+    PUMPKINS = [17, 24, 7, 15, 13, 14, 21, 21, 13, 22]
+
+    def full(self, counts):
+        return sum(1 for c in counts if c >= _FULL_SET_MIN_SONGS)
+
+    def test_it_separates_weezers_promos_from_its_concerts(self):
+        # Halifax 24, Yellowstone 24, Allegiant 13, Amazon MGM 12. The other six
+        # are Fallon, Today Show, SiriusXM, Apple Music, Snap and Hinano Cafe.
+        self.assertEqual(self.full(self.WEEZER), 4)
+
+    def test_it_does_not_misfire_on_an_act_that_only_plays_full_sets(self):
+        # ⚠️ THE CONTROL FOR THE THRESHOLD ITSELF. A rule tuned on Weezer that
+        # started discarding Foo Fighters shows would be worse than no rule —
+        # the Hollywood Bowl show is 15 songs and is a real concert.
+        self.assertEqual(self.full(self.FOO), 10)
+
+    def test_the_boundary_case_is_the_one_that_moves(self):
+        # Smashing Pumpkins played SEVEN songs at the LA Memorial Coliseum,
+        # one under the line, and is classed a short set. That is intended — a
+        # festival slot is weaker evidence than a 24-song headline show — but it
+        # is the row that flips if anyone retunes this, so it is pinned.
+        self.assertEqual(self.full(self.PUMPKINS), 9)
+        self.assertEqual(min(self.PUMPKINS), _FULL_SET_MIN_SONGS - 1)
+
+    def test_a_median_based_rule_would_have_certified_a_radio_session(self):
+        # 🛑 WHY THE CONSTANT IS ABSOLUTE AND NOT A FRACTION OF THE WINDOW.
+        # Weezer's median is 5.5 because the promos themselves drag it down, so
+        # "half the median" is 2.75 and the five-song SiriusXM session passes.
+        # A self-scaling threshold is the obvious idea and it is wrong here.
+        ordered = sorted(self.WEEZER)
+        median = (ordered[4] + ordered[5]) / 2
+        self.assertLess(median / 2, 5, "the trap this constant avoids")
 
 
 if __name__ == "__main__":

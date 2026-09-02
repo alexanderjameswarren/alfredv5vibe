@@ -46,13 +46,42 @@ export const getDjConcertsTool = defineTool({
   handler: async (args: Record<string, unknown>, ctx) => {
     const LIMIT = clampLimit(args.limit as number | undefined);
     const mode = (args.mode as string | undefined) ?? "list";
-    if (mode !== "list" && mode !== "needs_status") {
-      throw new Error("get_dj_concerts: `mode` must be 'list' or 'needs_status'.");
+    if (mode !== "list" && mode !== "needs_status" && mode !== "undecided") {
+      throw new Error(
+        "get_dj_concerts: `mode` must be 'list', 'needs_status' or 'undecided'.",
+      );
     }
 
     let q = ctx.db.from("dj_concerts").select(CONCERT_COLS);
 
-    if (mode === "needs_status") {
+    if (mode === "undecided") {
+      // -------------------------------------------------------------------
+      // §12.8's "I never decided" signal — ADDED 016, because it had no field
+      // -------------------------------------------------------------------
+      // `needs_status` asks "did you go?" and correctly cannot see these: an
+      // undated row is neither past nor upcoming. So a standing `screening` row
+      // against a playlist nobody plays was invisible forever.
+      //
+      // 🛑 THE 2026-09-02 RUN SURFACED THESE BY HAND, AND THAT IS THE DEFECT
+      // THIS MODE FIXES. There was no field for the question, so the report
+      // reached for `went_quiet` — which is a CHANGE detector for Section 4 and
+      // does not fire for Oasis (two touch days inside the recent window). Oasis
+      // is one of the two cases §12.8 names by name. It was then surfaced by
+      // applying "runs low and last_run_on old" with thresholds chosen by eye,
+      // which exist in no file and would be chosen differently next week.
+      //
+      // ⚠️ SO THERE IS NO THRESHOLD HERE AT ALL, DELIBERATELY. The population is
+      // tiny (two rows on 2026-09-02) and SELF-CLEARING: answering "still
+      // interested?" moves the row out of `screening` and it never returns. A
+      // filter would be inventing a cutoff to shrink a list that is already
+      // short, and §11.7's "fires on the normal case" risk does not apply to a
+      // section that empties itself the moment it is read.
+      //
+      // The engagement numbers are joined so the caller never picks a threshold
+      // either: `quiet_for_days` orders the list, and the raw metrics are there
+      // to say WHY in one line.
+      q = q.is("starts_on", null).eq("status", "screening");
+    } else if (mode === "needs_status") {
       // §12.8 Section 1: the show has happened and the status still says it
       // hasn't been decided.
       //
@@ -104,30 +133,134 @@ export const getDjConcertsTool = defineTool({
       }
     }
 
-    const concerts = rows.map((r) => ({
-      ...r,
-      artist_name: names.get(r.artist_id as string) ?? null,
-      // Stated rather than left to the reader: an undated row is neither past
-      // nor upcoming, and callers doing their own date maths get this wrong.
-      when: r.starts_on === null
+    const today = new Date().toISOString().slice(0, 10);
+    const daysBetween = (from: string, to: string) =>
+      Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
+
+    // ⚠️ TYPED WIDE ON PURPOSE. `undecided` bolts the engagement fields onto
+    // these rows below, and an inferred narrow type would reject the widened
+    // object literal at compile time — which the .mjs suites cannot catch,
+    // because Node STRIPS types rather than checking them.
+    let concerts: Array<Record<string, unknown>> = rows.map((r) => {
+      const startsOn = r.starts_on as string | null;
+      const when = startsOn === null
         ? "undated"
-        : (r.starts_on as string) < new Date().toISOString().slice(0, 10)
-          ? "past" : "upcoming",
-    }));
+        : startsOn < today ? "past" : "upcoming";
+      return {
+        ...r,
+        artist_name: names.get(r.artist_id as string) ?? null,
+        // Stated rather than left to the reader: an undated row is neither past
+        // nor upcoming, and callers doing their own date maths get this wrong.
+        when,
+        days_until: when === "upcoming" ? daysBetween(today, startsOn!) : null,
+        // -----------------------------------------------------------------
+        // ADDED 016 — §12.8's OTHER invisible decision, and it has a DEADLINE
+        // -----------------------------------------------------------------
+        // Smashing Pumpkins sat at `screening` for a show on 2026-10-30, 58 days
+        // out, on 2026-09-02. Nothing asks about it: `needs_status` fires only
+        // once the date has PASSED, so the question surfaces on the first day it
+        // can no longer be answered.
+        //
+        // ⚠️ THIS IS NOT THE `undecided` MODE'S ROW AND MUST NOT BE MERGED WITH
+        // IT. §12.8 is explicit that the first run got this wrong by reading the
+        // dated row as if it were a watchlist entry. An undated screening asks
+        // "still interested?" in Section 1; a DATED screening with the date
+        // approaching is a Section 2 line about a show he is probably going to —
+        // Smashing Pumpkins has 10 runs in 90 days. Same status word, two
+        // different sentences, and the shared word is what merges them.
+        decision_pending: when === "upcoming" && r.status === "screening",
+      };
+    });
+
+    // --- undecided: join the engagement numbers so nobody re-derives them ---
+    let engagementNote: string | null = null;
+    if (mode === "undecided" && concerts.length > 0) {
+      const ids = concerts.map((c) => c.id as string);
+      const { data: pls, error: pErr } = await ctx.db
+        .from("dj_playlists").select("id, name, concert_id").in("concert_id", ids);
+      if (pErr) {
+        throw new Error(`get_dj_concerts: playlist lookup failed: ${pErr.message}`);
+      }
+      const playlists = (pls ?? []) as Array<
+        { id: string; name: string; concert_id: string }
+      >;
+      const engByPlaylist = new Map<string, Record<string, unknown>>();
+      if (playlists.length > 0) {
+        const { data: eng, error: eErr } = await ctx.db.rpc(
+          "dj_playlist_engagement",
+          { p_playlist_ids: playlists.map((p) => p.id), p_window_days: 90 },
+        );
+        if (eErr) {
+          // Operational and retryable — no do-not-retry wording, per the
+          // platform error contract.
+          throw new Error(
+            `get_dj_concerts: engagement failed: ${eErr.message}. If this says ` +
+              `the function does not exist, migration 016 is not applied yet.`,
+          );
+        }
+        for (const e of (eng ?? []) as Array<Record<string, unknown>>) {
+          engByPlaylist.set(e.playlist_id as string, e);
+        }
+      }
+      concerts = concerts.map((c) => {
+        const pl = playlists.find((p) => p.concert_id === c.id);
+        const e = pl ? engByPlaylist.get(pl.id) : undefined;
+        const lastTouched = (e?.last_touched_on as string | null) ?? null;
+        // ⚠️ NEVER-TOUCHED FALLS BACK TO THE ROW'S OWN AGE, NOT TO A NULL THAT
+        // SORTS ANYWHERE. A watchlist entry created 90 days ago and never played
+        // is the STRONGEST case for asking, and a null would float it to
+        // whichever end the sort happens to put nulls.
+        const since = lastTouched ?? ((c.created_at as string)?.slice(0, 10) ?? today);
+        return {
+          ...c,
+          playlist_name: pl?.name ?? null,
+          runs: (e?.runs as number | null) ?? null,
+          last_run_on: (e?.last_run_on as string | null) ?? null,
+          touch_days: (e?.touch_days as number | null) ?? null,
+          touch_days_recent: (e?.touch_days_recent as number | null) ?? null,
+          last_touched_on: lastTouched,
+          went_quiet: (e?.went_quiet as boolean | null) ?? null,
+          quiet_for_days: daysBetween(since, today),
+          never_touched: lastTouched === null,
+        };
+      });
+      concerts.sort((a, b) =>
+        (b.quiet_for_days as number) - (a.quiet_for_days as number)
+      );
+      engagementNote =
+        "Engagement is joined at a fixed 90-day window. `quiet_for_days` counts " +
+        "from `last_touched_on`, or from the concert row's own creation date " +
+        "when the playlist has NEVER been touched (`never_touched: true`) — a " +
+        "watchlist entry that has sat unplayed since it was created is the " +
+        "strongest case for asking, and a null would sort arbitrarily.";
+    }
 
     return {
       mode,
       concerts,
       returned: concerts.length,
       limit_applied: LIMIT,
+      ...(engagementNote ? { engagement_note: engagementNote } : {}),
       reading:
         "`starts_on` may be NULL, and that is legitimate in two shapes " +
         "(migration 010): a historical show whose date is lost, and an undated " +
         "`screening` row — a standing watchlist entry for an act worth seeing " +
         "whenever they tour. ⚠️ UNDATED ROWS ARE NEITHER PAST NOR UPCOMING and " +
-        "are excluded from `needs_status` by construction; use `undated: true` " +
-        "to see the watchlist. `interested` and `committed` cannot be undated at " +
-        "all. To change a status use update_dj_concert — this table was " +
+        "are excluded from `needs_status` by construction; use `mode=undecided` " +
+        "for the ones that need a decision, or `undated: true` for the raw " +
+        "watchlist. `interested` and `committed` cannot be undated at all. " +
+        "🛑 THREE DIFFERENT QUESTIONS, AND THE SHARED WORD 'screening' MERGES " +
+        "THEM IF YOU LET IT. `needs_status` = the date has passed, 'did you " +
+        "go?'. `mode=undecided` = undated screening, 'still interested?'. " +
+        "`decision_pending` = a DATED screening still ahead, 'you have " +
+        "not decided and the show is in `days_until` days' — that one belongs " +
+        "in the upcoming-concerts section, not the watchlist, because it is a " +
+        "show he is probably going to (§12.8 records the first run getting " +
+        "exactly this wrong for Smashing Pumpkins). " +
+        "⚠️ `decision_pending` FIRES BEFORE THE DEADLINE; `needs_status` fires " +
+        "only after it. A screening row with a future date is answerable now " +
+        "and unanswerable later, so nothing else will ever raise it. " +
+        "To change a status use update_dj_concert — this table was " +
         "write-once through MCP until 2026-09-01 and asking 'did you go?' " +
         "without a write path is theatre.",
     };

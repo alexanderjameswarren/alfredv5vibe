@@ -380,6 +380,65 @@ _MEDLEY_SEP = " / "
 # In Your Honor and 4:53 on Catch And Release.
 _SAME_MASTER_SECONDS = 2
 
+# ---------------------------------------------------------------------------
+# ADDED 2026-09-02: A FULL SET AND A PROMO APPEARANCE ARE NOT COMPARABLE EVIDENCE
+# ---------------------------------------------------------------------------
+# §12.3 DECIDED that promo appearances COUNT as shows, and they still do — this
+# constant excludes nothing. It LABELS.
+#
+# Six of the ten Weezer shows in the 2026-09-02 window were promo spots of one to
+# six songs: Fallon (1), Today Show (2), SiriusXM (5), Apple Music (5), Snap (5),
+# Hinano Cafe (6). The other four were real sets: Halifax (24), Yellowstone (24),
+# Allegiant (13), Amazon MGM (12). So "We Might as Well Be Strangers, 4 shows"
+# was three television appearances and one concert — a true number that reads as
+# four times the evidence it is.
+#
+# ⚠️ THE TOOL ALREADY SHIPPED song_count PER SHOW AND THAT WAS NOT ENOUGH. It made
+# the fact RECOVERABLE, which means every consumer re-derives it, differently, and
+# §12.12 forbids explaining it in a paragraph. A number the report needs is a
+# number the payload should carry.
+#
+# WHY 8, AND WHAT IT COSTS. A television spot is one to three songs and a radio
+# session four to six; a concert is rarely under eight. Eight separates all three
+# acts in the current window cleanly. It is an ABSOLUTE constant rather than a
+# fraction of the window's median because the median is dragged down by the promos
+# themselves — Weezer's is 5.5, so "half the median" would certify the five-song
+# SiriusXM session as a full set.
+#
+# ⚠️ THE BOUNDARY CASE IS NAMED RATHER THAN HIDDEN: Smashing Pumpkins played SEVEN
+# songs at the LA Memorial Coliseum on 2026-07-04 and is classed here as a short
+# set. That is a festival or support slot, and treating it as weaker evidence than
+# a 24-song headline show is the intended behaviour — but it sits one song under
+# the line, and anyone retuning this should know that is the row that moves.
+_FULL_SET_MIN_SONGS = 8
+
+# ---------------------------------------------------------------------------
+# ADDED 2026-09-02: WHY a song was not found, as a FIELD rather than as prose
+# ---------------------------------------------------------------------------
+# The first weekly run had to classify not-founds by READING the `why` strings to
+# work out which gaps could ever be closed. That is prose parsing, it will break
+# silently the first time a sentence is reworded, and it got the count wrong on
+# the very first attempt — six Foo Fighters medley parts were reported as five,
+# because "Happy Birthday to You" appeared at one show and was missed by eye.
+#
+# ⚠️ THE FOUR CAUSES ARE NOT THE SAME KIND OF ANSWER, WHICH IS THE WHOLE POINT:
+#
+#   medley_part        Structural. One part of a ' / '-joined setlist.fm row.
+#                      Rarely has a studio recording at all. NEVER closeable.
+#   other_artists_only The title exists, by somebody else. §12.4: the performing
+#                      artist's version is what goes in, and it does not exist.
+#                      NEVER closeable.
+#   no_such_title      YouTube Music returned nothing under that title at all.
+#                      NEVER closeable.
+#   variant_only       The artist HAS this song; only a studio cut is missing.
+#                      🛑 CLOSEABLE — it is a judgement for a human, and it
+#                      carries candidates and a recommendation. See _resolve_one.
+#
+# The first three make a gap that no decision can close, and they are what
+# `coverage.gettable` subtracts. The fourth is a question, and subtracting it
+# would hide the only not-found worth reading.
+_UNCLOSEABLE_CAUSES = ("medley_part", "other_artists_only", "no_such_title")
+
 # Variant markers. A live or acoustic cut is not the studio recording, and the
 # setlist entry is never asking for one.
 _VARIANT_RE = re.compile(
@@ -622,6 +681,11 @@ def _resolve_one(
     if not titled:
         return {
             "resolution": "not_found",
+            # ADDED 016: see the _NOT_FOUND_CAUSES note above. A medley part is
+            # classified by WHAT IT IS, not by which branch it fell out of - the
+            # structural fact that it has no studio recording is the same whether
+            # the search found nothing or found somebody else.
+            "not_found_cause": "medley_part" if not cover_of_known else "no_such_title",
             "video_id": None,
             "artist_match": None,
             "why": (
@@ -692,6 +756,9 @@ def _resolve_one(
             )
         return {
             "resolution": "not_found",
+            "not_found_cause": (
+                "medley_part" if not cover_of_known else "other_artists_only"
+            ),
             "video_id": None,
             "artist_match": None,
             "why": why,
@@ -700,15 +767,62 @@ def _resolve_one(
 
     studio = [r for r in by_artist if not _VARIANT_RE.search(r.get("title") or "")]
     if not studio:
+        # ----------------------------------------------------------------
+        # 🛑 VARIANT-ONLY IS A JUDGEMENT, NOT A DEAD END, AND IT USED TO LOOK
+        #    EXACTLY LIKE ONE.
+        # ----------------------------------------------------------------
+        # The verdict is unchanged and correct: §12.11 rule 2 drops variant cuts,
+        # §12.7 is exact-match-or-NOT-FOUND, and nothing is written automatically.
+        # What was wrong is that the payload was SHAPED like the hopeless cases.
+        #
+        # On 2026-09-02 this branch returned Mayonaise - a Smashing Pumpkins song
+        # played at 5 of the 10 shows read - with `other_artists_found: []` and a
+        # sentence of prose, byte-identical in shape to A320, where piano covers
+        # genuinely are all that exists. One is a real decision Alex can make in
+        # ten seconds; the other is nothing. They printed the same.
+        #
+        # ⚠️ §12.11's RULE IS THAT AN AMBIGUITY NEVER ESCALATES WITHOUT A
+        # RECOMMENDATION AND A WAY TO RESOLVE IT. `duplicate_titles_in_cram` got
+        # that treatment; this did not. So the candidates travel with the verdict,
+        # carrying album and duration - the two fields that distinguish a released
+        # live album from a phone recording - plus a named pick.
+        #
+        # ⚠️ IT REMAINS not_found. The recommendation is a SUGGESTION for a human,
+        # never a resolution: taking it means learning the song from a live cut,
+        # which is a real cost and his call to accept. Promoting this to
+        # `resolved` would put a live recording into a playlist by machine, which
+        # is the exact thing rule 2 exists to prevent.
+        cands = sorted(
+            by_artist,
+            # A cut on a released album beats a loose upload; among those, the
+            # longest is the complete performance rather than an excerpt. Stated
+            # so the pick is checkable rather than "the first one".
+            key=lambda r: (r.get("album") is None, -(r.get("duration_seconds") or 0)),
+        )
+        pick = cands[0]
         return {
             "resolution": "not_found",
+            "not_found_cause": "variant_only",
             "video_id": None,
             "artist_match": match_kind,
             "why": (
                 f"{performing} has results for this title but every one is a live, "
-                f"acoustic or otherwise variant cut. The setlist entry is not "
-                f"asking for a variant." + fold_note
+                f"acoustic or otherwise variant cut, so nothing resolves "
+                f"automatically (spec 12.11 rule 2). ⚠️ THIS IS A DECISION, NOT A "
+                f"DEAD END: the song exists and only a studio recording is missing. "
+                f"Recommend {pick.get('title')!r}"
+                + (f" from {pick['album']}" if pick.get("album") else "")
+                + " — the longest cut on a released album, which is the closest "
+                  "thing to a studio version available. Taking it means learning "
+                  "the song from a live recording." + fold_note
             ),
+            "variant_candidates": [
+                {"video_id": r.get("video_id"), "title": r.get("title"),
+                 "album": r.get("album"),
+                 "duration_seconds": r.get("duration_seconds")}
+                for r in cands[:5]
+            ],
+            "recommended_video_id": pick.get("video_id"),
             "other_artists_found": [],
         }
 
@@ -861,6 +975,22 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
     body_titles = {_norm_title(t.get("title") or "") for t in body}
     body_titles.discard("")
 
+    # ⚠️ ADDED 2026-09-02: carry the body's video_id through to `in_body`, so
+    # nothing downstream has to join these entries on TITLE.
+    #
+    # get_dj_managed_playlists mode=cram reports the raw dj_tracks title
+    # ("Jellybelly (Remastered 2012)"); this tool reports the setlist.fm title
+    # ("Jellybelly"). Both are correct for their source and they will never
+    # match. §12.10 REQUIRES reading the two together — cram_complete may not be
+    # printed without in_body/distinct_setlist_songs beside it — so the one join
+    # the spec mandates is the one that would have failed silently on titles.
+    # video_id is stable across both. Join on that, never on the title.
+    body_video_by_title: dict[str, str] = {}
+    for t in body:
+        k = _norm_title(t.get("title") or "")
+        if k and t.get("video_id") and k not in body_video_by_title:
+            body_video_by_title[k] = t["video_id"]
+
     # --- Fold the window into one entry per distinct song ------------------
     songs: dict[str, dict[str, Any]] = {}
     for show in shows:
@@ -920,12 +1050,24 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                         "event_date": show["event_date"],
                         "venue": show["venue"],
                         "song_count": show["song_count"],
+                        # Computed here, once, rather than left for every caller
+                        # to re-derive from song_count differently.
+                        "full_set": show["song_count"] >= _FULL_SET_MIN_SONGS,
                     })
                     seen_here.add(key)
 
-    in_body = [e for k, e in songs.items() if k in body_titles]
+    # `full_set_shows` alongside the raw count, because they answer different
+    # questions and only one of them is comparable across acts.
+    for e in songs.values():
+        e["full_set_shows"] = sum(1 for s in e["shows"] if s["full_set"])
+
+    in_body = [(k, e) for k, e in songs.items() if k in body_titles]
     missing = [e for k, e in songs.items() if k not in body_titles]
-    missing.sort(key=lambda e: (-len(e["shows"]), e["title"].lower()))
+    # Sort on FULL SETS first. A song at four promo spots outranking one played
+    # at every stadium show is the ordering the raw count produced, and it put
+    # the weakest evidence at the top of the list a human reads first.
+    missing.sort(key=lambda e: (-e["full_set_shows"], -len(e["shows"]),
+                                e["title"].lower()))
 
     # --- Resolve what is missing -------------------------------------------
     searches = 0
@@ -958,8 +1100,34 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
             e.update({"resolution": "not_attempted", "video_id": None})
 
     counts: dict[str, int] = {}
+    cause_counts: dict[str, int] = {}
     for e in missing:
         counts[e["resolution"]] = counts.get(e["resolution"], 0) + 1
+        cause = e.get("not_found_cause")
+        if cause:
+            cause_counts[cause] = cause_counts.get(cause, 0) + 1
+
+    # ----------------------------------------------------------------------
+    # COVERAGE, WITH THE UNCLOSEABLE GAPS TAKEN OUT OF THE DENOMINATOR
+    # ----------------------------------------------------------------------
+    # 🛑 `in_body / distinct_setlist_songs` IS THE FIGURE §12.10 REQUIRES BESIDE
+    # EVERY `cram_complete`, AND ON ITS OWN IT UNDERSTATES. Foo Fighters read
+    # 27/40 on 2026-09-02 while six of the thirteen gaps were medley parts with
+    # no studio recording and two were songs only other artists have recorded.
+    # Eight of those forty could never be in the playlist however much anyone
+    # wanted them there.
+    #
+    # ⚠️ BOTH NUMBERS SHIP, AND NEITHER REPLACES THE OTHER. `total` is what he
+    # will hear on the night — the honest denominator for "do I know this set".
+    # `gettable` is what the playlist could ever contain — the honest denominator
+    # for "is the playlist finished". Reporting only `gettable` would quietly
+    # improve the number by redefining the show.
+    #
+    # ⚠️ variant_only IS DELIBERATELY NOT SUBTRACTED. Mayonaise is a real gap
+    # with a real decision behind it; folding it into "unobtainable" would hide
+    # the only kind of not_found that anyone can act on.
+    uncloseable = sum(cause_counts.get(c, 0) for c in _UNCLOSEABLE_CAUSES)
+    gettable = len(songs) - uncloseable
 
     return {
         "data": {
@@ -967,19 +1135,40 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
             "mbid": sl["mbid"],
             "window": [
                 {"event_date": s["event_date"], "venue": s["venue"],
-                 "song_count": s["song_count"], "tour": s.get("tour")}
+                 "song_count": s["song_count"], "tour": s.get("tour"),
+                 "full_set": s["song_count"] >= _FULL_SET_MIN_SONGS}
                 for s in shows
             ],
             "shows_read": sl["returned"],
+            "full_sets_read": sum(
+                1 for s in shows if s["song_count"] >= _FULL_SET_MIN_SONGS),
+            # In the payload, never in prose, and named so it can be argued with.
+            "full_set_min_songs": _FULL_SET_MIN_SONGS,
             "empty_entries_skipped": sl["empty_entries_skipped"],
             "body_size": len(body),
             "distinct_setlist_songs": len(songs),
+            "coverage": {
+                "in_body": len(in_body),
+                "total": len(songs),
+                "gettable": gettable,
+                "uncloseable": uncloseable,
+                "uncloseable_by_cause": {
+                    c: cause_counts[c] for c in _UNCLOSEABLE_CAUSES
+                    if c in cause_counts
+                },
+            },
             "in_body": [
-                {"title": e["title"], "shows": len(e["shows"])}
-                for e in sorted(in_body, key=lambda e: -len(e["shows"]))
+                # video_id travels so callers join on it rather than on title.
+                {"title": e["title"], "shows": len(e["shows"]),
+                 "full_set_shows": e["full_set_shows"],
+                 "video_id": body_video_by_title.get(k)}
+                for k, e in sorted(
+                    in_body, key=lambda kv: (-kv[1]["full_set_shows"],
+                                             -len(kv[1]["shows"])))
             ],
             "missing": missing,
             "resolution_counts": counts,
+            "not_found_causes": cause_counts,
             "searches_made": searches,
             "reading": (
                 "INCLUSIVE (12.2): a song in ANY show counts as missing if the "
@@ -988,6 +1177,39 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 "and a 27-song set are different evidence (12.3) - quote the shape "
                 "or say it in words: 'only at the Hollywood Bowl show' rather than "
                 "'1 of 10'. "
+                "⚠️ QUOTE `full_set_shows`, NOT `shows`, WHEREVER ONE "
+                "NUMBER HAS TO STAND ALONE. A show counts as a full set at "
+                "`full_set_min_songs` songs or more. §12.3 decided promo "
+                "appearances COUNT and they still do - this labels them, it "
+                "excludes nothing. Six of ten Weezer shows in the 2026-09-02 "
+                "window were 1-6 song television and radio spots, so 'We Might as "
+                "Well Be Strangers, 4 shows' was three TV appearances and one "
+                "concert. `missing` is now sorted by full sets first for the same "
+                "reason. "
+                "🛑 `coverage` CARRIES TWO DENOMINATORS AND NEITHER "
+                "REPLACES THE OTHER. `total` is every distinct song in the window "
+                "- what he will actually hear, and the right denominator for 'do I "
+                "know this set'. `gettable` subtracts the gaps NO decision can "
+                "close (medley parts, songs only other artists have recorded, "
+                "titles YouTube Music does not have) - the right denominator for "
+                "'is this playlist finished'. Foo Fighters read 27/40 total and "
+                "27/32 gettable on 2026-09-02. Report `total` beside any "
+                "cram_complete (§12.10); report `gettable` when the question "
+                "is whether to add anything. "
+                "⚠️ `not_found_cause` CLASSIFIES EVERY not_found, so "
+                "nobody has to parse `why` prose to tell a dead end from a "
+                "decision: medley_part | other_artists_only | no_such_title are "
+                "structural and uncloseable; variant_only is a JUDGEMENT - the "
+                "artist has the song and only a studio cut is missing, so it "
+                "ships `variant_candidates` and `recommended_video_id` (§12.11: "
+                "never escalate without a recommendation and a way to resolve it). "
+                "Mayonaise, at 5 of 10 Smashing Pumpkins shows, is that case. "
+                "⚠️ `in_body` CARRIES `video_id`. JOIN ON IT, NEVER ON "
+                "TITLE - get_dj_managed_playlists mode=cram reports the raw "
+                "dj_tracks title ('Jellybelly (Remastered 2012)') and this tool "
+                "reports setlist.fm's ('Jellybelly'). Both are right for their "
+                "source and they will never match, and §12.10 requires reading "
+                "the two together. "
                 "`medley: true` means the entry was one ' / '-joined setlist.fm "
                 "row split into parts; those parts frequently have no studio "
                 "recording at all, and NOT FOUND is the correct answer for them "
