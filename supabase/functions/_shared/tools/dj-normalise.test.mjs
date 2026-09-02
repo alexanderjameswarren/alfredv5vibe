@@ -12,6 +12,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 import {
   ARTIST_ALIASES,
@@ -19,6 +24,7 @@ import {
   canonicalArtist,
   detectArtistDisagreement,
   primaryArtistOfMatchKey,
+  isVariantCut,
   normalisePart,
   resolvePlayDate,
   shiftDate,
@@ -379,4 +385,66 @@ test("cannot-compare is not the same as agrees", () => {
   assert.equal(detectArtistDisagreement("vid", "Coldplay", key, null, null), null);
   // An artist-less track: match_key is "|title", so there is no primary to compare.
   assert.equal(primaryArtistOfMatchKey(buildMatchKey([], "Yellow")), null);
+});
+
+// ---------------------------------------------------------------------------
+// The shared vocabulary — asserted here AND in workshop/tests/test_dj_diff.py
+// ---------------------------------------------------------------------------
+//
+// 🛑 THIS RULE LIVES TWICE AND HAS TO. dj_setlists.py needs it at read time, in
+// Python, on the other side of the courier boundary, over setlist.fm titles that
+// never reach Alfred. match_key needs it here, frozen at write. Neither can call
+// the other.
+//
+// On 2026-09-02 the two disagreed and the diff reported three songs as missing
+// from a playlist that contained them. Neither implementation is checked against
+// the other's SOURCE — both are checked against these CASES, so a vocabulary
+// entry added on one side and not the other fails a test in the runtime nobody
+// edited (spec §11.14).
+
+const CASES = JSON.parse(
+  readFileSync(join(HERE, "..", "..", "..", "..", "shared", "dj-title-cases.json"), "utf-8"),
+);
+
+test("shared title-normalisation cases — the SAME file the Python suite asserts", () => {
+  assert.ok(CASES.shared.length >= 20, "fixture shrank; cases are removed only with a reason");
+  for (const c of CASES.shared) {
+    assert.equal(
+      normalisePart(c.input), c.expect,
+      `${JSON.stringify(c.input)} -> expected ${JSON.stringify(c.expect)}. ${c.why}`,
+    );
+  }
+});
+
+test("the documented divergence is pinned, not drifting", () => {
+  // ⚠️ A DIFFERENCE THAT IS ALLOWED MUST STILL BE ASSERTED, or "deliberate" and
+  // "unnoticed" become indistinguishable the first time someone edits either
+  // normaliser.
+  for (const d of CASES.divergences) {
+    assert.equal(normalisePart(d.input), d.typescript,
+      `divergence row ${JSON.stringify(d.input)} changed on the TypeScript side`);
+  }
+});
+
+test("variant-cut vocabulary — the SAME cases the Python resolver asserts", () => {
+  // ⚠️ TWO RUNTIMES AGAIN. `_VARIANT_RE` in dj_setlists.py refuses to resolve a
+  // setlist entry to a live or karaoke recording; this decides §12.10's cram
+  // tie-break. Exactly the duplication that let the qualifier vocabulary drift
+  // (§14.6), so it is pinned the same way rather than trusted.
+  for (const c of CASES.variant_cuts.cases) {
+    assert.equal(
+      isVariantCut(c.input), c.variant,
+      `${JSON.stringify(c.input)} -> expected variant=${c.variant}. ${c.why}`,
+    );
+  }
+});
+
+test("the variant vocabulary is NOT the qualifier vocabulary", () => {
+  // They answer different questions and are allowed to disagree — but only
+  // deliberately. "instrumental" is a variant cut and is NOT a grouping
+  // qualifier: a distinct recording worth counting, still not what a setlist
+  // entry asks for.
+  assert.equal(isVariantCut("Song (Instrumental)"), true);
+  assert.equal(normalisePart("Song (Instrumental)"), "song instrumental",
+    "grouping keeps it, so it does not merge onto the vocal cut");
 });

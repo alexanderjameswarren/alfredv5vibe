@@ -388,13 +388,93 @@ _VARIANT_RE = re.compile(
     re.IGNORECASE,
 )
 
-_PAREN_RE = re.compile(
-    r"\s*[\(\[](?:live|acoustic|remaster(?:ed)?|remix|mono|stereo|single|album)"
-    r"[^\)\]]*[\)\]]",
-    re.IGNORECASE,
-)
-_TAIL_RE = re.compile(r"\s*-\s*(?:live|acoustic|remaster(?:ed)?).*$", re.IGNORECASE)
-_PUNCT_RE = re.compile(r"[^a-z0-9 ]+")
+# ---------------------------------------------------------------------------
+# Title normalisation — A SECOND COPY OF A RULE TYPESCRIPT ALREADY OWNS
+# ---------------------------------------------------------------------------
+#
+# 🛑 THE AUTHORITY IS `supabase/functions/_shared/tools/dj-normalise.ts`. What
+# follows is a PORT of its vocabulary, not an independent design, and the port is
+# the whole hazard: on 2026-09-02 this file recognised "(Remastered 2012)" and
+# missed "(2011 Remaster)", so the Smashing Pumpkins diff reported Today, Luna
+# and Cherub Rock as MISSING while all three sat in the playlist body. Two of
+# them then resolved to the exact video_id already recorded there. The suffix
+# list looked complete because the cases it missed had not appeared yet — and
+# the complete list already existed, in the other language.
+#
+# ⚠️ WHY THERE CANNOT BE ONE IMPLEMENTATION. dj-normalise.ts feeds `match_key`,
+# which is FROZEN AT WRITE and never updated (spec §4.1.2) — changing it is a
+# backfill migration, not a deploy. This runs at read time, on a different host,
+# in a different language, over titles that never pass through Alfred at all
+# (setlist.fm's side of the diff). Neither can call the other across the courier
+# boundary, so the duplication is structural rather than lazy.
+#
+# ⚠️ WHAT MAKES IT SAFE IS THE SHARED FIXTURE, NOT CARE.
+# `shared/dj-title-cases.json` is asserted by BOTH suites — tests/test_dj_diff.py
+# here and dj-normalise.test.mjs there. A rule added to one vocabulary and not
+# the other fails a test in the runtime nobody edited, which is the only
+# arrangement that survives a reader who does not know this comment exists.
+
+# The ONLY tokens that trigger stripping. Anything unrecognised is KEPT.
+# Mirrors QUALIFIER_RES in dj-normalise.ts, entry for entry.
+_QUALIFIER_RES = [
+    re.compile(r"^(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?$"),
+    re.compile(r"^live(?:\s+(?:at|from|in)\b.*)?$"),
+    re.compile(r"^(?:deluxe|anniversary|expanded)(?:\s+edition)?$"),
+    re.compile(r"^(?:single|album)\s+version$"),
+    re.compile(r"^radio\s+(?:edit|version)$"),
+    re.compile(r"^extended(?:\s+(?:version|mix))?$"),
+    re.compile(r"^(?:mono|stereo)$"),
+    re.compile(r"^bonus\s+track$"),
+    re.compile(r"^(?:explicit|clean|acoustic|demo)$"),
+]
+
+# `with` marks a feature ONLY inside a parenthetical — "Go Away (with Bethany
+# Cosentino)". Bare, it is ordinary English ("Sitting With You"), and stripping
+# on it would eat real titles.
+_FEATURE_PAREN_RE = re.compile(r"^(?:feat\.?|ft\.?|featuring|with)\b", re.IGNORECASE)
+_FEATURE_INLINE_RE = re.compile(r"\s+(?:feat\.?|ft\.?|featuring)\s+.*$", re.IGNORECASE)
+
+_PAREN_GROUP_RE = re.compile(r"[(\[]([^)\]]*)[)\]]")
+_DASH_TAIL_RE = re.compile(r"\s[-–—]\s*([^-–—]+)$")
+_APOSTROPHE_RE = re.compile(r"['’`]")
+_PUNCT_RE = re.compile(r"[\W_]+", re.UNICODE)
+
+
+def _is_qualifier(inner: str) -> bool:
+    return any(rx.match(inner) for rx in _QUALIFIER_RES)
+
+
+def _strip_qualifier_groups(s: str) -> str:
+    """Drop (…) and […] groups whose contents match the vocabulary. Others stay.
+
+    ⚠️ BY VOCABULARY, NEVER BY POSITION. "Strip whatever is in the last bracket"
+    would eat "(Reprise)", which is different music. "(feat. Best Coast)" goes
+    because a feature marker is IN the vocabulary, not because of where it sits.
+    """
+    def repl(m):
+        inner = (m.group(1) or "").strip()
+        if _is_qualifier(inner) or _FEATURE_PAREN_RE.match(inner):
+            return " "
+        return m.group(0)
+    return _PAREN_GROUP_RE.sub(repl, s)
+
+
+def _strip_dash_qualifiers(s: str) -> str:
+    """Drop a trailing " - <qualifier>", repeatedly: "Song - Live - Remaster 2011".
+
+    ⚠️ A RULE LIKE "strip everything after a dash" DESTROYS "Undone - The Sweater
+    Song", a real title in the Weezer playlist where the dashed half IS the song
+    name. It matches nothing in the vocabulary, so it survives.
+    """
+    out = s
+    while True:
+        m = _DASH_TAIL_RE.search(out)
+        if not m:
+            return out
+        inner = m.group(1).strip()
+        if not _is_qualifier(inner) and not _FEATURE_PAREN_RE.match(inner):
+            return out
+        out = out[: m.start()]
 
 
 def _norm_title(title: str) -> str:
@@ -404,16 +484,88 @@ def _norm_title(title: str) -> str:
     aggressive normaliser would merge two genuinely different songs, and this
     feeds a diff whose false negatives cost one listen while its false positives
     cost a song Alex does not know when the lights go down (spec §12.2).
+
+    ⚠️ ONE DELIBERATE DIVERGENCE FROM dj-normalise.ts, AND IT IS NOT AN OVERSIGHT.
+    This folds accents (NFKD, after which the combining marks fall to the
+    punctuation rule) so "Algés" and "Alges" compare equal; the TypeScript keeps
+    them distinct. That side compares YouTube against YouTube, where ONE
+    vocabulary wrote both strings. This side compares SETLIST.FM against YOUTUBE
+    MUSIC — two independent editorial systems that disagree about diacritics —
+    and an unfolded compare there reports a song missing over an acute accent.
+    The divergence is pinned in the shared fixture rather than left to be
+    rediscovered as a bug.
     """
-    t = unicodedata.normalize("NFKD", title or "").lower()
-    t = _PAREN_RE.sub(" ", t)
-    t = _TAIL_RE.sub(" ", t)
+    # ⚠️ COMBINING MARKS ARE DROPPED EXPLICITLY, NOT LEFT TO THE PUNCTUATION RULE.
+    # NFKD turns "é" into "e" + U+0301, and U+0301 is non-word, so `_PUNCT_RE`
+    # would replace it with a SPACE — folding "Algés" to "alge s" rather than
+    # "alges" and splitting the word it was meant to join. The fold has to be
+    # stated to be right; getting there by side effect is how it silently was not.
+    t = "".join(
+        c for c in unicodedata.normalize("NFKD", title or "")
+        if not unicodedata.combining(c)
+    )
+    t = t.lower().strip()
+    t = _strip_qualifier_groups(t)
+    t = _strip_dash_qualifiers(t)
+    t = _FEATURE_INLINE_RE.sub("", t)
     t = t.replace("&", " and ")
+    t = _APOSTROPHE_RE.sub("", t)      # ain't -> aint, closing up as tidy() does
     t = _PUNCT_RE.sub(" ", t)
     return " ".join(t.split())
 
 
-def _artist_matches(result_artists: list[str], performing: str) -> bool:
+# ---------------------------------------------------------------------------
+# Artist matching — spec §4.1.4's two-vocabularies problem, in the resolver
+# ---------------------------------------------------------------------------
+#
+# 🛑 SETLIST.FM AND YOUTUBE MUSIC DISAGREE ABOUT THE LEADING ARTICLE. setlist.fm
+# bills the act as "The Smashing Pumpkins" — and that name comes from the mbid,
+# so it is the verified identity. YouTube Music's artist metadata says "Smashing
+# Pumpkins". An exact compare called that a non-match and dropped THREE songs on
+# 2026-09-02: two resolved to video ids already sitting in the playlist body, and
+# Disarm was genuinely absent and played at 7 of 10 shows.
+#
+# ⚠️ THIS IS NOT THE ALIAS MAP'S JOB, and reaching for it would be the wrong fix.
+# ARTIST_ALIASES in dj-normalise.ts translates TAKEOUT channel names into the
+# POLL's vocabulary, applied once at import, to a column frozen at write. This is
+# a different boundary (setlist.fm to YouTube Music), evaluated at read time, on
+# another host, about a systematic orthographic difference rather than a per-act
+# fact. The map is explicit that it is hand-curated because rules like "prefer
+# the longer form" break Red Garland the moment they fix Eddie Higgins. A leading
+# article is precisely the case where a rule DOES hold, and the map has no entry
+# that would help.
+#
+# ⚠️ IT WIDENS THE COLLISION SURFACE §14.4 ALREADY NAMES, SO IT IS REPORTED.
+# "The Killers" and Paul Di'Anno's "Killers" are two real acts, and folding the
+# article is what lets one stand in for the other. So the fold is never silent:
+# every resolution carries WHICH kind of match it made, and a folded one says so
+# in `why`. A widened rule that announces itself is checkable; the same rule
+# applied quietly is the §14.4 failure arriving through the front door.
+_LEADING_ARTICLE_RE = re.compile(r"^(?:the|a|an)\s+")
+
+EXACT = "exact"
+ARTICLE_INSENSITIVE = "article_insensitive"
+
+
+def _artist_match_kind(result_artists, performing: str):
+    """How this result's artist matches the performing act, or None for no match.
+
+    Returns EXACT or ARTICLE_INSENSITIVE. Callers must carry the distinction into
+    their answer rather than collapsing it to a boolean — see the note above.
+    """
+    want = _norm_title(performing)
+    if not want:
+        return None
+    normed = [_norm_title(a) for a in (result_artists or [])]
+    if any(a == want for a in normed):
+        return EXACT
+    bare = _LEADING_ARTICLE_RE.sub("", want)
+    if bare and any(_LEADING_ARTICLE_RE.sub("", a) == bare for a in normed):
+        return ARTICLE_INSENSITIVE
+    return None
+
+
+def _artist_matches(result_artists, performing: str) -> bool:
     """Is this search result BY the act that played it?
 
     ⚠️ MATCHED, NOT MERELY NOTICED (spec §12.7). A result whose artist does not
@@ -421,15 +573,36 @@ def _artist_matches(result_artists: list[str], performing: str) -> bool:
     kept the Takeout repair safe, and one search for "Happy Together" returned
     six different recordings.
     """
-    want = _norm_title(performing)
-    return any(_norm_title(a) == want for a in result_artists)
+    return _artist_match_kind(result_artists, performing) is not None
 
 
-def _resolve_one(results: list[dict], title: str, performing: str) -> dict:
+def _fold_note(performing: str, matched_artists: list[str]) -> str:
+    """The sentence that keeps an article-insensitive match honest."""
+    shown = ", ".join(sorted({a for a in matched_artists if a})) or "the same name"
+    return (
+        f" ⚠️ ARTIST MATCHED ONLY AFTER DROPPING A LEADING ARTICLE: setlist.fm bills "
+        f"this act as {performing!r} and YouTube Music returned {shown}. They are the "
+        f"same act — but this is the one rule that could let two real bands sharing a "
+        f"name stand in for each other (spec 14.4), so it is stated rather than assumed."
+    )
+
+
+def _resolve_one(
+    results: list[dict],
+    title: str,
+    performing: str,
+    cover_of_known: bool = True,
+) -> dict:
     """Apply spec §12.11's tie-break to one song's search results.
 
     Returns a `resolution` the caller can act on WITHOUT re-deriving anything:
     resolved | not_found | ambiguous_same_artist | ambiguous_multi_artist.
+
+    `cover_of_known` is False for a MEDLEY PART. setlist.fm records one cover
+    marker for the whole medley row, so whether this particular part was the
+    act's own song or somebody else's is not in the source. NOT FOUND is still
+    the right verdict — but it must not be justified with a cover judgement the
+    data cannot support (spec §12.4).
     """
     # 🛑 TITLE FIRST, AND THIS WAS MISSING ON THE FIRST BUILD.
     #
@@ -450,6 +623,7 @@ def _resolve_one(results: list[dict], title: str, performing: str) -> dict:
         return {
             "resolution": "not_found",
             "video_id": None,
+            "artist_match": None,
             "why": (
                 f"Nothing titled {title!r} came back. Search returned "
                 f"{len(results)} result(s), all with other titles — YouTube "
@@ -460,7 +634,20 @@ def _resolve_one(results: list[dict], title: str, performing: str) -> dict:
             "other_artists_found": [],
         }
 
-    by_artist = [r for r in titled if _artist_matches(r.get("artists") or [], performing)]
+    # ⚠️ EXACT ARTIST MATCHES WIN OUTRIGHT. The article fold only ever decides a
+    # case that would otherwise be NOT FOUND — it can never displace a result the
+    # strict rule already accepted, so widening the rule cannot change an answer
+    # that was previously right.
+    kinds = [(r, _artist_match_kind(r.get("artists") or [], performing)) for r in titled]
+    exact = [r for r, k in kinds if k == EXACT]
+    folded = [r for r, k in kinds if k == ARTICLE_INSENSITIVE]
+    by_artist = exact or folded
+    match_kind = EXACT if exact else (ARTICLE_INSENSITIVE if folded else None)
+    fold_note = ""
+    if match_kind == ARTICLE_INSENSITIVE:
+        fold_note = _fold_note(
+            performing, [a for r in folded for a in (r.get("artists") or [])],
+        )
 
     if not by_artist:
         # ⚠️ NOT FOUND IS AN ANSWER, NOT A FAILURE (spec §12.4). If YouTube Music
@@ -479,15 +666,35 @@ def _resolve_one(results: list[dict], title: str, performing: str) -> dict:
             for r in titled[:5]
         ]
         names = sorted({a for r in titled for a in (r.get("artists") or [])})
+        why = (
+            f"{len(titled)} result(s) titled {title!r}, none by {performing}. "
+            f"Found instead: {', '.join(names[:4])}. "
+        )
+        if cover_of_known:
+            why += (
+                f"Their version is what goes in the playlist (spec 12.4); if it "
+                f"does not exist, the song does not."
+            )
+        else:
+            # 🛑 THE VERDICT IS RIGHT AND THE OLD REASON WAS NOT. Reading "none by
+            # Foo Fighters, found The Wallflowers" as a §12.4 cover ruling asserts
+            # something the source never said: this is one part of a ' / '-joined
+            # medley, and setlist.fm carries a single cover marker for the whole
+            # row. A right answer reached wrongly is the one that breaks when the
+            # case changes.
+            why += (
+                f"⚠️ THIS IS ONE PART OF A MEDLEY, and setlist.fm records a single "
+                f"cover marker for the whole medley row — so whether {performing} "
+                f"played their own song here or somebody else's is NOT IN THE SOURCE. "
+                f"NOT FOUND is right either way, because a medley part rarely has a "
+                f"studio recording at all; it is right for that reason, not because "
+                f"a cover was ruled on."
+            )
         return {
             "resolution": "not_found",
             "video_id": None,
-            "why": (
-                f"{len(titled)} result(s) titled {title!r}, none by {performing}. "
-                f"Found instead: {', '.join(names[:4])}. Their version is what "
-                f"goes in the playlist (spec 12.4); if it does not exist, the "
-                f"song does not."
-            ),
+            "artist_match": None,
+            "why": why,
             "other_artists_found": others,
         }
 
@@ -496,10 +703,11 @@ def _resolve_one(results: list[dict], title: str, performing: str) -> dict:
         return {
             "resolution": "not_found",
             "video_id": None,
+            "artist_match": match_kind,
             "why": (
                 f"{performing} has results for this title but every one is a live, "
                 f"acoustic or otherwise variant cut. The setlist entry is not "
-                f"asking for a variant."
+                f"asking for a variant." + fold_note
             ),
             "other_artists_found": [],
         }
@@ -507,8 +715,9 @@ def _resolve_one(results: list[dict], title: str, performing: str) -> dict:
     if len(studio) == 1:
         r = studio[0]
         return {"resolution": "resolved", "video_id": r.get("video_id"),
+                "artist_match": match_kind,
                 "album": r.get("album"), "duration_seconds": r.get("duration_seconds"),
-                "why": "One studio recording by the performing artist."}
+                "why": "One studio recording by the performing artist." + fold_note}
 
     # Several studio cuts by the right artist. Rule 3: within two seconds is the
     # same master, so the choice does not matter and must not be escalated.
@@ -518,13 +727,14 @@ def _resolve_one(results: list[dict], title: str, performing: str) -> dict:
         return {
             "resolution": "resolved",
             "video_id": pick.get("video_id"),
+            "artist_match": match_kind,
             "album": pick.get("album"),
             "duration_seconds": pick.get("duration_seconds"),
             "why": (
                 f"{len(studio)} studio recordings within {_SAME_MASTER_SECONDS}s of "
                 f"each other — the same master. Took "
                 f"{pick.get('album') or 'the first'}; the choice does not change "
-                f"what is heard, so it is not worth a question."
+                f"what is heard, so it is not worth a question." + fold_note
             ),
             "same_master_alternatives": [
                 {"video_id": r.get("video_id"), "album": r.get("album"),
@@ -538,10 +748,11 @@ def _resolve_one(results: list[dict], title: str, performing: str) -> dict:
     return {
         "resolution": "ambiguous_same_artist",
         "video_id": None,
+        "artist_match": match_kind,
         "why": (
             f"{len(studio)} studio recordings by {performing}, differing by more "
             f"than {_SAME_MASTER_SECONDS}s — genuinely different recordings, so "
-            f"this is a real choice rather than a tie to break."
+            f"this is a real choice rather than a tie to break." + fold_note
         ),
         "candidates": [
             {"video_id": r.get("video_id"), "title": r.get("title"),
@@ -656,23 +867,48 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
         seen_here: set[str] = set()
         for sg in show["songs"]:
             raw = sg["name"]
+            is_medley = _MEDLEY_SEP in raw
             parts = (
                 [p.strip() for p in raw.split(_MEDLEY_SEP)]
-                if _MEDLEY_SEP in raw else [raw]
+                if is_medley else [raw]
             )
             for part in parts:
                 key = _norm_title(part)
                 if not key:
                     continue
+                # 🛑 A MEDLEY PART'S COVER STATUS IS UNKNOWN, NOT NULL, AND THE
+                # DIFFERENCE IS NOT COSMETIC. setlist.fm carries ONE cover marker
+                # for the whole ' / '-joined row. Copying it onto every part
+                # invents an attribution for the parts it does not describe;
+                # copying its absence asserts "not a cover" just as wrongly. On
+                # 2026-09-02 that made the resolver explain One Headlight — a
+                # Wallflowers song — as though Foo Fighters simply had no version
+                # of their own. The verdict was right and the reason was invented,
+                # which is the pairing that breaks when the case changes.
                 e = songs.setdefault(key, {
                     "title": part,
-                    "cover_of": sg.get("cover_of"),
-                    "medley": len(parts) > 1,
+                    "cover_of": None if is_medley else sg.get("cover_of"),
+                    "cover_of_known": not is_medley,
+                    "medley": is_medley,
+                    # Informational: what the medley AS A WHOLE was billed as,
+                    # kept because it is real data about the row even though it
+                    # cannot be attributed to this part.
+                    "medley_cover_marker": sg.get("cover_of") if is_medley else None,
                     "encore": False,
                     "shows": [],
                 })
-                if sg.get("cover_of") and not e["cover_of"]:
-                    e["cover_of"] = sg["cover_of"]
+                if is_medley:
+                    if sg.get("cover_of") and not e.get("medley_cover_marker"):
+                        e["medley_cover_marker"] = sg["cover_of"]
+                else:
+                    # The same song standing ALONE somewhere in the window carries
+                    # a real per-song marker. That is better evidence than a
+                    # medley's silence, so it upgrades the entry — and the entry
+                    # stops being a medley part at all.
+                    e["medley"] = False
+                    e["cover_of_known"] = True
+                    if sg.get("cover_of") and not e["cover_of"]:
+                        e["cover_of"] = sg["cover_of"]
                 if sg.get("encore"):
                     e["encore"] = True
                 if key not in seen_here:
@@ -713,7 +949,10 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 "duration_seconds": r.get("duration_seconds"),
                 "duration": r.get("duration"),
             } for r in raw]
-            e.update(_resolve_one(results, e["title"], performing))
+            e.update(_resolve_one(
+                results, e["title"], performing,
+                cover_of_known=e["cover_of_known"],
+            ))
     else:
         for e in missing:
             e.update({"resolution": "not_attempted", "video_id": None})
@@ -753,9 +992,22 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 "row split into parts; those parts frequently have no studio "
                 "recording at all, and NOT FOUND is the correct answer for them "
                 "rather than a gap to chase. "
+                "⚠️ `cover_of_known: false` accompanies EVERY medley part and it is "
+                "not a null cover - setlist.fm records ONE cover marker for the "
+                "whole medley row, so whether a given part was the act's own song "
+                "or somebody else's IS NOT IN THE SOURCE. Do not report a medley "
+                "part as 'they have no version of it'; the honest line is that the "
+                "part has no studio recording. `medley_cover_marker` carries what "
+                "the medley as a whole was billed as, which is real data about the "
+                "row and still not an attribution for the part. "
                 "`cover_of` is informational - resolution targets the PERFORMING "
                 "artist's version (12.4), and if YouTube Music has not got it then "
-                "it is not in the playlist."
+                "it is not in the playlist. "
+                "⚠️ `artist_match` is 'exact' or 'article_insensitive'. The second "
+                "means the act matched only after dropping a leading 'The' - "
+                "setlist.fm and YouTube Music disagree about it - and it WIDENS the "
+                "artist-identity collision surface named below. It is reported on "
+                "every resolution rather than folded away silently."
             ),
             "limits": (
                 "ARTIST-IDENTITY COLLISIONS ARE NOT DETECTABLE HERE (spec 14.4). "

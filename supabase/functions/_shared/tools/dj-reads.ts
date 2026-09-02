@@ -25,6 +25,7 @@
 // `play_rows` rides alongside so the difference stays visible.
 
 import { clampLimit, defineTool } from "../platform.ts";
+import { isVariantCut, normalisePart } from "./dj-normalise.ts";
 
 // The caller's enumerated subject. Bounded so the scan below is bounded.
 const VIDEO_IDS_CAP = 50;
@@ -37,6 +38,11 @@ const VIDEO_IDS_CAP = 50;
 // sorts by it and gets a confidently incorrect cram order. Same reasoning as
 // record_dj_plays rejecting over 500 plays rather than writing a partial batch.
 const SCAN_CAP = 5000;
+
+// §12.10(b)'s definition of a learned song, named once and used by BOTH the
+// stale check and the COMPLETE check. Two constants that both mean "learned" is
+// a constraint written twice, and it would be enforced in one.
+const LEARNED_DISTINCT_DAYS = 5;
 
 const IN_CHUNK = 100;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -73,6 +79,81 @@ function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Paged reads — and the 2026-09-02 wrong answer
+// ---------------------------------------------------------------------------
+//
+// 🛑 POSTGREST CAPS EVERY RESPONSE AT `db-max-rows` AND SAYS SO NOWHERE IN THE
+// BODY. There is no error, no flag, no short-count field: the rows simply stop.
+// A `.select()` that returns 1000 rows and a `.select()` that returns 1000 of
+// 2400 are byte-identical to the caller.
+//
+// ⚠️ THIS IS NOT A PERFORMANCE DETAIL. It produced a confidently wrong answer.
+// Measured 2026-09-02, get_dj_managed_playlists mode=list reported: Smashing
+// Pumpkins Concert 0 tracks against a real 15, Motley Crue 0 against 14, Weezer
+// 4 against 13 — and the reported body counts across all 41 playlists summed to
+// EXACTLY 1000. The read stopped mid-playlist, and every playlist after the cut
+// became a zero. A weekly job trusting it says "your concert playlist is empty"
+// six weeks before the show.
+//
+// ⚠️ IT HID BECAUSE ONLY THE FAN-OUT PATH CROSSES THE CAP. mode=tracks reads ONE
+// playlist (≤379 rows) and mode=engagement does its arithmetic in SQL, so both
+// were right — which made the disagreement look like a question about which mode
+// to trust rather than a defect in one of them. Two modes agreeing is not
+// corroboration when they share no code path with the third (spec §11.9).
+//
+// Every unbounded read in this file now goes through here, so the next mode
+// added cannot forget.
+const PAGE_ROWS = 1000;
+
+// A guard against an unterminated loop, NOT a data limit. Hit, it THROWS: a
+// silently short answer is the failure being removed here, and it must not be
+// reintroduced by the fix for it.
+const MAX_PAGES = 200;
+
+/**
+ * Read EVERY row a filter selects, paging past PostgREST's row cap.
+ *
+ * ⚠️ ORDER IS LOAD-BEARING, NOT COSMETIC. Without a stable sort, consecutive
+ * ranges may overlap or skip rows — pagination over an unordered result is a
+ * different wrong answer, not a fix. Every table read through here has an `id`
+ * primary key, so it is always available.
+ *
+ * 🛑 TERMINATION IS ON AN EMPTY PAGE, NEVER ON A SHORT ONE, AND THE DIFFERENCE
+ * IS THE ENTIRE BUG A SECOND TIME. "Short page means last page" assumes the
+ * server returns everything asked for — which is exactly the assumption that
+ * failed. Ask for 1000 against a cap of 500 and every page is short, so the
+ * loop stops on the first one and reproduces the defect it was written to fix,
+ * now wearing pagination. Advancing by the rows ACTUALLY RETURNED costs one
+ * empty round-trip at the end and cannot be defeated by a cap this code does
+ * not know the value of.
+ */
+async function selectAllRows<T>(
+  ctx: any,
+  label: string,
+  table: string,
+  cols: string,
+  filter: (q: any) => any = (q) => q,
+): Promise<T[]> {
+  const out: T[] = [];
+  let from = 0;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { data, error } = await filter(ctx.db.from(table).select(cols))
+      .order("id", { ascending: true })
+      .range(from, from + PAGE_ROWS - 1);
+    if (error) throw new Error(`${label}: ${error.message}`);
+    const rows = (data ?? []) as T[];
+    if (rows.length === 0) return out;
+    out.push(...rows);
+    from += rows.length;
+  }
+  throw new Error(
+    `${label}: still returning rows after ${MAX_PAGES} pages (${out.length} read). ` +
+      `Refusing to return a partial read — a short answer here is indistinguishable ` +
+      `from a complete one, and the caller would act on it.`,
+  );
 }
 
 /** Group id for familiarity. A null canonical_track_id means this row IS the
@@ -260,18 +341,21 @@ export const getDjPlaysTool = defineTool({
     let playRows: PlayRow[] = [];
     if (videoIds?.length) {
       for (const ids of chunk(memberIds, IN_CHUNK)) {
-        let q = ctx.db.from("dj_plays").select(PLAY_COLS).in("track_id", ids);
-        q = applyPlayFilters(q);
-        const { data, error } = await q;
-        if (error) throw new Error(`get_dj_plays: ${error.message}`);
-        playRows.push(...((data ?? []) as PlayRow[]));
+        playRows.push(...await selectAllRows<PlayRow>(
+          ctx, "get_dj_plays", "dj_plays", PLAY_COLS,
+          (q) => applyPlayFilters(q.in("track_id", ids)),
+        ));
       }
     } else {
-      let q = ctx.db.from("dj_plays").select(PLAY_COLS).limit(SCAN_CAP);
-      q = applyPlayFilters(q);
-      const { data, error } = await q;
-      if (error) throw new Error(`get_dj_plays: ${error.message}`);
-      playRows = (data ?? []) as PlayRow[];
+      // ⚠️ `.limit(SCAN_CAP)` WAS A CEILING THAT COULD NOT BE REACHED. PostgREST
+      // caps the response at db-max-rows (1000) regardless of what the query
+      // asks for, so a 3,000-row window passed the count guard above and then
+      // silently read a third of itself. The guard measured the right thing and
+      // the read did not honour it — spec §11.15, an operation reporting success
+      // without verifying its effect. Paged, the cap above is now the real one.
+      playRows = await selectAllRows<PlayRow>(
+        ctx, "get_dj_plays", "dj_plays", PLAY_COLS, applyPlayFilters,
+      );
       members = await fetchTracksByIds(ctx, [...new Set(playRows.map((r) => r.track_id))]);
       const groupIds = [...new Set(members.map(groupIdOf))];
       members = await fetchGroupMembers(ctx, groupIds);
@@ -352,10 +436,13 @@ async function fetchGroupMembers(ctx: any, groupIds: string[]): Promise<TrackRow
   for (const t of await fetchTracksByIds(ctx, groupIds)) byId.set(t.id, t);
   for (const batch of chunk(groupIds, IN_CHUNK)) {
     if (batch.length === 0) continue;
-    const { data, error } = await ctx.db
-      .from("dj_tracks").select(TRACK_COLS).in("canonical_track_id", batch);
-    if (error) throw new Error(`get_dj_plays: group member lookup failed: ${error.message}`);
-    for (const t of (data ?? []) as TrackRow[]) byId.set(t.id, t);
+    // Paged: one canonical group can have many variants, and a truncated member
+    // list undercounts distinct_days for the group it belongs to.
+    const variants = await selectAllRows<TrackRow>(
+      ctx, "get_dj_plays: group member lookup failed", "dj_tracks", TRACK_COLS,
+      (q) => q.in("canonical_track_id", batch),
+    );
+    for (const t of variants) byId.set(t.id, t);
   }
   return [...byId.values()];
 }
@@ -622,24 +709,32 @@ export const getDjManagedPlaylistsTool = defineTool({
         );
       }
 
-      const { data: mem, error: mErr } = await ctx.db
-        .from("dj_playlist_tracks")
-        .select("track_id, role, position")
-        .eq("playlist_id", playlist.id as string);
-      if (mErr) throw new Error(`get_dj_managed_playlists: ${mErr.message}`);
-      const membership = (mem ?? []) as Array<Record<string, unknown>>;
+      const membership = await selectAllRows<Record<string, unknown>>(
+        ctx,
+        "get_dj_managed_playlists: cram membership read failed",
+        "dj_playlist_tracks",
+        "id, track_id, role, position",
+        (q) => q.eq("playlist_id", playlist.id as string),
+      );
 
       const trackIds = [...new Set(membership.map((m) => m.track_id as string))];
       const memberTracks = await fetchTracksByIds(ctx, trackIds);
       const groupIds = [...new Set(memberTracks.map(groupIdOf))];
       const allMembers = await fetchGroupMembers(ctx, groupIds);
 
-      let plays: PlayRow[] = [];
+      // ⚠️ PAGED, AND THE STAKES ARE HIGHER HERE THAN IN THE COUNTS. A capped
+      // plays read yields a distinct_days that is WRONG rather than short, and
+      // §12.10 sorts the cram list by it — a well-known song would surface as
+      // least familiar with nothing in the response to show why.
+      const plays: PlayRow[] = [];
       for (const ids of chunk(allMembers.map((t) => t.id), IN_CHUNK)) {
-        const { data, error } = await ctx.db
-          .from("dj_plays").select(PLAY_COLS).in("track_id", ids);
-        if (error) throw new Error(`get_dj_managed_playlists: ${error.message}`);
-        plays.push(...((data ?? []) as PlayRow[]));
+        plays.push(...await selectAllRows<PlayRow>(
+          ctx,
+          "get_dj_managed_playlists: cram plays read failed",
+          "dj_plays",
+          PLAY_COLS,
+          (q) => q.in("track_id", ids),
+        ));
       }
 
       const asOf = (args.as_of as string | undefined) ??
@@ -671,7 +766,67 @@ export const getDjManagedPlaylistsTool = defineTool({
         (bodyPos.get(b.canonical_track_id as string) ?? 1e9));
 
       const cap = (playlist.cram_cap as number) ?? 8;
-      const proposed = inPlaylist.slice(0, cap).map((g, i) => ({
+
+      // --- §12.10 D: A VARIANT CUT NEVER TAKES A SLOT FROM ITS OWN STUDIO CUT
+      //
+      // 🛑 THE RULE WORKED AND THE OUTCOME WAS WRONG. Measured 2026-09-02, two of
+      // the Foo Fighters playlist's eight cram slots were Marigold: Nirvana's
+      // studio original at body position 12, and the 2006 Pantages live cut at
+      // 29. They are genuinely different recordings by different artists, so the
+      // canonical-group dedupe correctly declined to merge them — and the result
+      // was eight slots teaching seven songs.
+      //
+      // ⚠️ THE FIX REUSES `isVariantCut`, WHICH ALREADY EXISTS, rather than
+      // inventing a cram-specific rule. You learn a song from the studio cut, not
+      // from a live recording of it, so when two candidates share a title and one
+      // of them is a variant, the variant stands down.
+      //
+      // ⚠️ IT NEVER MERGES TWO STUDIO RECORDINGS, WHICH IS THE WHOLE REASON IT IS
+      // SAFE. Deduping on title alone would collapse Weezer's Happy Together onto
+      // The Turtles' — a cover and its original are two songs to learn, and one of
+      // them would then never be crammed. This rule cannot do that: it only ever
+      // drops a cut that is MARKED as a variant, and only when a non-variant
+      // sibling is present in the same playlist. A playlist holding only a live
+      // cut still crams it.
+      //
+      // When the tie is NOT a variant tie — two real recordings sharing a title —
+      // nothing is suppressed and `duplicate_titles_in_cram` reports it instead.
+      // That case is a judgement about this library, not one to make silently.
+      const titleKeyOf = (g: Record<string, unknown>) =>
+        normalisePart((g.canonical_title as string) ?? "");
+      const byTitle = new Map<string, Array<Record<string, unknown>>>();
+      for (const g of inPlaylist) {
+        const k = titleKeyOf(g);
+        if (!k) continue;
+        const arr = byTitle.get(k);
+        if (arr) arr.push(g);
+        else byTitle.set(k, [g]);
+      }
+
+      const variantsSuppressed: Array<Record<string, unknown>> = [];
+      const candidates = inPlaylist.filter((g) => {
+        const siblings = byTitle.get(titleKeyOf(g));
+        if (!siblings || siblings.length < 2) return true;
+        const studioSiblings = siblings.filter(
+          (s) => !isVariantCut(s.canonical_title as string),
+        );
+        if (studioSiblings.length > 0 && isVariantCut(g.canonical_title as string)) {
+          variantsSuppressed.push({
+            title: g.canonical_title,
+            video_id: g.canonical_video_id,
+            distinct_days: g.distinct_days,
+            kept_instead: studioSiblings.map((s) => ({
+              title: s.canonical_title,
+              artist: s.canonical_artist,
+              video_id: s.canonical_video_id,
+            })),
+          });
+          return false;
+        }
+        return true;
+      });
+
+      const proposed = candidates.slice(0, cap).map((g, i) => ({
         rank: i,
         canonical_track_id: g.canonical_track_id,
         title: g.canonical_title,
@@ -683,6 +838,26 @@ export const getDjManagedPlaylistsTool = defineTool({
         in_cram_now: cramGroups.has(g.canonical_track_id as string),
       }));
 
+      // The C fallthrough. Two candidates sharing a title where neither is a
+      // variant is a real choice about this library — reported, never resolved
+      // here, and the entries carry artist and video_id so it is settleable.
+      const titleCounts = new Map<string, number>();
+      for (const p of proposed) {
+        const k = normalisePart((p.title as string) ?? "");
+        titleCounts.set(k, (titleCounts.get(k) ?? 0) + 1);
+      }
+      const duplicateTitlesInCram = [...titleCounts.entries()]
+        .filter(([, n]) => n > 1)
+        .map(([k]) => ({
+          title: proposed.find((p) => normalisePart((p.title as string) ?? "") === k)?.title,
+          entries: proposed
+            .filter((p) => normalisePart((p.title as string) ?? "") === k)
+            .map((p) => ({
+              title: p.title, artist: p.artist, video_id: p.video_id,
+              distinct_days: p.distinct_days, body_position: p.body_position,
+            })),
+        }));
+
       // ⚠️ cram_stale FIRES ON A STATE, NEVER ON SORT DRIFT (§12.10, §11.7). On a
       // playlist being actively listened to, a recomputed top-N differs most
       // weeks; a flag keyed on that would be noise inside a month and then
@@ -691,8 +866,29 @@ export const getDjManagedPlaylistsTool = defineTool({
         (g.distinct_days as number) === 0 &&
         !cramGroups.has(g.canonical_track_id as string));
       const learnedStillCrammed = inPlaylist.filter((g) =>
-        (g.distinct_days as number) >= 5 &&
+        (g.distinct_days as number) >= LEARNED_DISTINCT_DAYS &&
         cramGroups.has(g.canonical_track_id as string));
+      const cramStale =
+        unlearnedNotCrammed.length > 0 || learnedStillCrammed.length > 0;
+
+      // --- ADDED 2026-09-02: COMPLETE — the state §12.10 did not have ---------
+      //
+      // 🛑 NOT STALE, NOT FRESH. Measured 2026-09-02, the Weezer playlist held
+      // thirteen songs whose LEAST familiar had eight distinct days. The ordering
+      // was real and its purpose had evaporated: a cram list of songs he already
+      // knows. `cram_stale` read false, correctly and uselessly.
+      //
+      // ⚠️ IT REUSES §12.10(b)'s EXISTING DEFINITION OF LEARNED rather than
+      // introducing a second threshold. Two constants both meaning "learned" is a
+      // constraint written twice, and it would be enforced in one (§11.14).
+      //
+      // ⚠️ IT SELF-HEALS, WHICH IS WHY A FLOOR IS SAFE HERE. Accept one song from
+      // a §12.2 diff and the playlist stops being complete, because the new song
+      // sits at distinct_days 0. The state cannot latch.
+      const unlearnedAnywhere = inPlaylist.filter(
+        (g) => (g.distinct_days as number) < LEARNED_DISTINCT_DAYS,
+      );
+      const cramComplete = inPlaylist.length > 0 && unlearnedAnywhere.length === 0;
 
       return { data: {
         mode: "cram",
@@ -700,9 +896,24 @@ export const getDjManagedPlaylistsTool = defineTool({
           id: playlist.id, name: playlist.name, kind: playlist.kind,
           cram_cap: cap, concert_id: playlist.concert_id,
         },
-        proposed_cram: proposed,
+        // Nothing to cram when every song is learned. The cram block should be
+        // CLEARED, not reordered — which `learned_still_crammed` already says,
+        // since under COMPLETE every cram row is by definition a learned one.
+        proposed_cram: cramComplete ? [] : proposed,
+        cram_complete: cramComplete,
+        cram_state: cramComplete ? "complete" : (cramStale ? "stale" : "working"),
+        // The floor, always — so "complete" is a CHECKABLE claim rather than an
+        // assertion (§11.12). These are the songs that would be crammed next.
+        least_familiar: inPlaylist.slice(0, 3).map((g) => ({
+          title: g.canonical_title,
+          distinct_days: g.distinct_days,
+          days_since_last: g.days_since_last,
+        })),
+        learned_threshold: LEARNED_DISTINCT_DAYS,
+        variants_suppressed: variantsSuppressed,
+        duplicate_titles_in_cram: duplicateTitlesInCram,
         current_cram_size: cramGroups.size,
-        cram_stale: unlearnedNotCrammed.length > 0 || learnedStillCrammed.length > 0,
+        cram_stale: cramStale,
         stale_reasons: {
           unlearned_not_crammed: unlearnedNotCrammed.map((g) => ({
             title: g.canonical_title, distinct_days: 0,
@@ -719,9 +930,25 @@ export const getDjManagedPlaylistsTool = defineTool({
           "once since migration 012, and without deduping one song could take " +
           "several of the " + cap + " slots with identical familiarity. " +
           "⚠️ `cram_stale` is a STATE, not a sort comparison: it fires when an " +
-          "unplayed track holds no cram row, or a track played on 5+ days is still " +
-          "occupying a slot. A flag keyed on the order changing would fire most " +
-          "weeks and be ignored by the third one.",
+          "unplayed track holds no cram row, or a track played on " +
+          LEARNED_DISTINCT_DAYS + "+ days is still occupying a slot. A flag keyed " +
+          "on the order changing would fire most weeks and be ignored by the third " +
+          "one. " +
+          "⚠️ `cram_complete` means EVERY song in the playlist is learned (" +
+          LEARNED_DISTINCT_DAYS + "+ distinct days), so there is nothing to cram " +
+          "and any existing cram rows should be cleared. `least_familiar` carries " +
+          "the floor so the claim can be checked rather than taken. " +
+          "🛑 NEVER REPORT `cram_complete` WITHOUT SETLIST COVERAGE BESIDE IT — " +
+          "`in_body` / `distinct_setlist_songs` from diff_dj_setlists. This tool " +
+          "cannot compute that and will not imply it: a COMPLETE playlist of 13 " +
+          "songs covering 12 of 34 distinct setlist songs means 'you know a third " +
+          "of it', and printing 'you know this one' alone would wrong-foot him on " +
+          "the night. Complete is a fact about the PLAYLIST, never about the SHOW. " +
+          "⚠️ `variants_suppressed` lists cuts that stood down because a studio " +
+          "recording of the same title is in the playlist — you learn a song from " +
+          "the studio cut. `duplicate_titles_in_cram` is the case that rule does " +
+          "NOT resolve: two non-variant recordings sharing a title, reported " +
+          "because it is a judgement about this library rather than a tie to break.",
       }, meta: {} };
     }
 
@@ -830,16 +1057,18 @@ export const getDjManagedPlaylistsTool = defineTool({
       }
       for (const batch of chunk(ids, IN_CHUNK)) {
         if (batch.length === 0) continue;
-        const { data: mem, error: memErr } = await ctx.db
-          .from("dj_playlist_tracks")
-          .select("playlist_id, role, track_id")
-          .in("playlist_id", batch);
-        if (memErr) {
-          throw new Error(
-            `get_dj_managed_playlists: membership count failed: ${memErr.message}`,
-          );
-        }
-        for (const m of (mem ?? []) as Array<{ playlist_id: string; role: string; track_id: string }>) {
+        // ⚠️ PAGED. This is the read that returned exactly 1000 rows for a
+        // library holding roughly 2,400 — see selectAllRows. Counting a
+        // truncated membership does not produce a short count, it produces a
+        // ZERO for every playlist past the cut.
+        const mem = await selectAllRows<{ playlist_id: string; role: string; track_id: string }>(
+          ctx,
+          "get_dj_managed_playlists: membership count failed",
+          "dj_playlist_tracks",
+          "id, playlist_id, role, track_id",
+          (q) => q.in("playlist_id", batch),
+        );
+        for (const m of mem) {
           const c = counts.get(m.playlist_id);
           if (!c) continue;
           if (m.role === "cram") c.cram += 1;
@@ -898,14 +1127,13 @@ export const getDjManagedPlaylistsTool = defineTool({
     }
     const playlist = pl as Record<string, unknown>;
 
-    const { data: mem, error: memErr } = await ctx.db
-      .from("dj_playlist_tracks")
-      .select(MEMBER_COLS)
-      .eq("playlist_id", playlist.id as string);
-    if (memErr) {
-      throw new Error(`get_dj_managed_playlists: membership read failed: ${memErr.message}`);
-    }
-    const members = (mem ?? []) as MemberRow[];
+    const members = await selectAllRows<MemberRow>(
+      ctx,
+      "get_dj_managed_playlists: membership read failed",
+      "dj_playlist_tracks",
+      MEMBER_COLS,
+      (q) => q.eq("playlist_id", playlist.id as string),
+    );
 
     const tracks = await fetchTracksByIds(ctx, [...new Set(members.map((m) => m.track_id))]);
     const trackById = new Map(tracks.map((t) => [t.id, t]));

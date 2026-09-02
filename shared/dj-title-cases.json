@@ -1,0 +1,237 @@
+{
+  "purpose": "One title-normalisation vocabulary, asserted by BOTH runtimes that implement it.",
+  "why_this_file_exists": [
+    "The rule lives twice, and it has to. supabase/functions/_shared/tools/dj-normalise.ts",
+    "owns it for match_key, which is frozen at write (spec 4.1.2) - changing it is a backfill",
+    "migration, not a deploy. workshop/workshop/tools/dj_setlists.py needs the same rule at",
+    "read time, in Python, on the other side of the courier boundary, over setlist.fm titles",
+    "that never pass through Alfred at all. Neither can call the other.",
+    "",
+    "On 2026-09-02 the two disagreed. The Python copy recognised '(Remastered 2012)' and",
+    "missed '(2011 Remaster)', so diff_dj_setlists reported Today, Luna and Cherub Rock as",
+    "MISSING from the Smashing Pumpkins playlist while all three were sitting in its body -",
+    "and two of them then resolved to the exact video_id already recorded there. The suffix",
+    "list looked complete because the cases it missed had not appeared yet. The complete list",
+    "already existed, in the other language.",
+    "",
+    "So: neither implementation is checked against the other's SOURCE, which drifts. Both are",
+    "checked against these CASES. A vocabulary entry added on one side and not the other fails",
+    "a test in the runtime nobody edited - the only arrangement that survives someone who has",
+    "not read either file (spec 11.14).",
+    "",
+    "Asserted by:  supabase/functions/_shared/tools/dj-normalise.test.mjs  (normalisePart)",
+    "              workshop/tests/test_dj_diff.py                          (_norm_title)"
+  ],
+  "shared": [
+    {
+      "input": "Today (2011 Remaster)",
+      "expect": "today",
+      "why": "THE 2026-09-02 DEFECT. '(YYYY Remaster)' - the word order the Python copy missed."
+    },
+    {
+      "input": "Luna (2011 Remaster)",
+      "expect": "luna",
+      "why": "Same defect, second of the three false 'missing' entries."
+    },
+    {
+      "input": "Cherub Rock (2011 Remaster)",
+      "expect": "cherub rock",
+      "why": "Same defect, third. All three were in the playlist body."
+    },
+    {
+      "input": "Bullet With Butterfly Wings (Remastered 2012)",
+      "expect": "bullet with butterfly wings",
+      "why": "The word order that DID work, kept so a fix cannot trade one for the other."
+    },
+    {
+      "input": "Landslide (Remastered)",
+      "expect": "landslide",
+      "why": "Bare 'Remastered', no year on either side."
+    },
+    {
+      "input": "1979 (Remastered 2012)",
+      "expect": "1979",
+      "why": "A title that is entirely digits must survive its qualifier being stripped."
+    },
+    {
+      "input": "Everlong (Remastered 2011)",
+      "expect": "everlong",
+      "why": "Regression case from the original Python suite."
+    },
+    {
+      "input": "Go Away (feat. Best Coast)",
+      "expect": "go away",
+      "why": "THE SECOND HALF OF THE DEFECT. Weezer's body carries the feature suffix and the setlist does not, so the diff called a song in the playlist missing and then failed to resolve it."
+    },
+    {
+      "input": "Go Away (with Bethany Cosentino)",
+      "expect": "go away",
+      "why": "'with' is a feature marker INSIDE a parenthetical - the same recording, billed differently."
+    },
+    {
+      "input": "Sitting With You",
+      "expect": "sitting with you",
+      "why": "NEGATIVE CONTROL for the line above. Bare 'with' is ordinary English; stripping on it would eat real titles."
+    },
+    {
+      "input": "Song feat. Someone",
+      "expect": "song",
+      "why": "Inline feature marker, no parentheses."
+    },
+    {
+      "input": "Undone - The Sweater Song",
+      "expect": "undone the sweater song",
+      "why": "🛑 THE CASE THAT KILLS 'strip everything after a dash'. A real title in the Weezer playlist where the dashed half IS the song name."
+    },
+    {
+      "input": "Rope - Live",
+      "expect": "rope",
+      "why": "A dash tail that IS in the vocabulary, so it goes."
+    },
+    {
+      "input": "Song - Radio Edit",
+      "expect": "song",
+      "why": "Dash tail, multi-word qualifier."
+    },
+    {
+      "input": "Song - Live - Remaster 2011",
+      "expect": "song",
+      "why": "Repeated stripping, right to left."
+    },
+    {
+      "input": "Marigold (Live at the Pantages Theatre, Los Angeles, CA - August 2006)",
+      "expect": "marigold",
+      "why": "A live qualifier carrying commas, a dash and a year. Real row in the Foo Fighters body."
+    },
+    {
+      "input": "Pinkerton (Deluxe Edition)",
+      "expect": "pinkerton",
+      "why": "Edition qualifier."
+    },
+    {
+      "input": "Track (Mono)",
+      "expect": "track",
+      "why": "Single-word qualifier."
+    },
+    {
+      "input": "Song (Bonus Track)",
+      "expect": "song",
+      "why": "Two-word qualifier."
+    },
+    {
+      "input": "Song (Reprise)",
+      "expect": "song reprise",
+      "why": "NEGATIVE CONTROL. A reprise is different music. The bracket is NOT in the vocabulary so its contents survive - and must not collapse onto 'song'."
+    },
+    {
+      "input": "The Pretender",
+      "expect": "the pretender",
+      "why": "NEGATIVE CONTROL for the artist-article rule: titles keep their article. 'The Pretender' and 'Pretender' are different songs."
+    },
+    {
+      "input": "Say It Ain't So",
+      "expect": "say it aint so",
+      "why": "Apostrophes close up rather than becoming a space, or this would be 'say it ain t so'."
+    },
+    {
+      "input": "Echoes, Silence, Patience & Grace",
+      "expect": "echoes silence patience and grace",
+      "why": "Ampersand spells out; commas fall to whitespace."
+    },
+    {
+      "input": "  Big   Me  ",
+      "expect": "big me",
+      "why": "Whitespace collapses and trims."
+    }
+  ],
+  "divergences": [
+    {
+      "input": "Alges",
+      "typescript": "alges",
+      "python": "alges",
+      "why": "Control: with no diacritic the two agree, so the row below isolates the fold rather than the input."
+    },
+    {
+      "input": "Algés",
+      "typescript": "algés",
+      "python": "alges",
+      "why": [
+        "DELIBERATE, DOCUMENTED, AND NOT AN OVERSIGHT - the one place the two implementations",
+        "are allowed to differ, pinned here so it cannot be rediscovered as a bug.",
+        "",
+        "TypeScript feeds match_key, which compares YouTube against YouTube: one editorial",
+        "vocabulary wrote both strings, so folding accents would only merge things that vocabulary",
+        "already keeps apart. Python compares SETLIST.FM against YOUTUBE MUSIC - two independent",
+        "editors that disagree about diacritics - and an unfolded compare there reports a song as",
+        "missing over an acute accent.",
+        "",
+        "They cannot simply be unified: match_key is frozen at write, so changing the TypeScript",
+        "side is a backfill migration over every stored row, not a code change (spec 4.1.2)."
+      ]
+    }
+  ],
+  "variant_cuts": {
+    "note": [
+      "Asserted by BOTH runtimes: isVariantCut() in dj-normalise.ts, _VARIANT_RE in",
+      "dj_setlists.py. Same duplication that let the qualifier vocabulary drift (spec 14.6),",
+      "pinned the same way so it does not get a second chance.",
+      "",
+      "SEPARATE FROM THE QUALIFIER VOCABULARY ABOVE, AND THEY DISAGREE ON PURPOSE.",
+      "Qualifiers answer 'are these the same song for GROUPING' and are frozen at write.",
+      "This answers 'is this recording a variant cut' at READ time. 'instrumental' is here",
+      "and deliberately absent there: an instrumental cut is plausibly a distinct recording",
+      "worth counting on its own, and is still not what a setlist entry is asking for.",
+      "",
+      "Two callers: the resolver refuses to resolve a setlist entry to a variant (12.11 rule 2),",
+      "and 12.10's cram tie-break makes a variant stand down when a studio cut of the same",
+      "title is in the playlist - you learn a song from the studio recording."
+    ],
+    "cases": [
+      {
+        "input": "Marigold (Live at the Pantages Theatre, Los Angeles, CA - August 2006)",
+        "variant": true,
+        "why": "THE LIVE CASE. Body position 29 in the Foo Fighters playlist, holding a cram slot against Nirvana's studio Marigold at position 12."
+      },
+      {
+        "input": "Marigold",
+        "variant": false,
+        "why": "Nirvana's studio original. Deliberately in a Foo Fighters playlist - Grohl wrote it, it is a Nirvana B-side. NOT a resolution error."
+      },
+      {
+        "input": "Razor (Originally Performed By The Foo Fighters) {Karaoke}",
+        "variant": true,
+        "why": "Karaoke, and 'originally performed' - two markers, either sufficient."
+      },
+      {
+        "input": "Song (Acoustic)",
+        "variant": true,
+        "why": "Acoustic cut."
+      },
+      {
+        "input": "Track (Remix)",
+        "variant": true,
+        "why": "Remix."
+      },
+      {
+        "input": "Happy Together",
+        "variant": false,
+        "why": "NEGATIVE CONTROL, and the reason the cram rule may never dedupe on title alone. Weezer's cover and The Turtles' original are two songs to learn."
+      },
+      {
+        "input": "Everlong",
+        "variant": false,
+        "why": "Plain studio title."
+      },
+      {
+        "input": "The Sky Is A Neighborhood",
+        "variant": false,
+        "why": "NEGATIVE CONTROL: contains no marker despite being long and multi-word."
+      },
+      {
+        "input": "Live and Let Die",
+        "variant": true,
+        "why": "⚠️ A KNOWN FALSE POSITIVE, RECORDED RATHER THAN HIDDEN. The word 'live' is in the title, so the marker fires on a song that is not a variant of anything. It is tolerable because BOTH callers degrade safely: 12.10's rule only suppresses a candidate when a NON-variant sibling shares its title, and a second recording of this song would also contain 'live' - so nothing is suppressed and the duplicate is reported instead. The resolver is the exposed one: a setlist entry genuinely titled 'Live and Let Die' resolves to not_found rather than to a recording. Fix it with a positional rule (a marker inside brackets or after a dash) if it ever bites; do not widen the vocabulary."
+      }
+    ]
+  }
+}

@@ -40,7 +40,15 @@ export const getDjArtistsTool = defineTool({
     const missingMbid = args.missing_mbid === true;
     const limit = clampLimit(args.limit as number | undefined);
 
-    let q = ctx.db.from("dj_artists").select(COLS);
+    // ⚠️ COUNTED, BECAUSE THIS TOOL TRUNCATES AND USED TO DO IT IN SILENCE.
+    // Measured 2026-09-02: 22 artist rows exist, the default limit is 20, and an
+    // unfiltered call returned exactly 20 with nothing to say so — Weezer fell
+    // off the end alphabetically, after Styx. A job that lists artists once and
+    // iterates therefore skips everything after "S", and the mbid it needs for
+    // the setlist diff is simply absent rather than reported missing. `count`
+    // costs one extra clause and is what lets the envelope raise the truncation
+    // note the house style already defines.
+    let q = ctx.db.from("dj_artists").select(COLS, { count: "exact" });
     // Exact match first, so "Live" the band cannot be reached by a fuzzy search
     // that also matches "Live at the Apollo" - the same class of wrong-match the
     // mbid rule exists to prevent one layer up.
@@ -48,23 +56,37 @@ export const getDjArtistsTool = defineTool({
     if (missingMbid) q = q.is("mbid", null);
     q = q.order("name", { ascending: true }).limit(limit);
 
-    const { data, error } = await q;
+    const { data, error, count } = await q;
     if (error) throw new Error(`get_dj_artists: ${error.message}`);
     const rows = (data ?? []) as ArtistRow[];
+    const total = count ?? rows.length;
+    const truncated = rows.length < total;
 
     return {
-      artists: rows,
-      returned: rows.length,
-      limit_applied: limit,
-      without_mbid: rows.filter((r) => !r.mbid).length,
-      reading:
-        "`mbid` is the MusicBrainz id and it is what setlist.fm keys on. An " +
-        "artist with mbid null CANNOT have setlists read: name search matches " +
-        "the wrong band, so get_dj_setlists refuses names outright. Use " +
-        "`missing_mbid: true` to find the gaps. An empty result for a name you " +
-        "expected means the artist row does not exist yet, NOT that it has no " +
-        "mbid - those need different fixes, so check `returned` before " +
-        "concluding anything about mbid.",
+      data: {
+        artists: rows,
+        returned: rows.length,
+        total,
+        limit_applied: limit,
+        without_mbid: rows.filter((r) => !r.mbid).length,
+        reading:
+          "`mbid` is the MusicBrainz id and it is what setlist.fm keys on. An " +
+          "artist with mbid null CANNOT have setlists read: name search matches " +
+          "the wrong band, so get_dj_setlists refuses names outright. Use " +
+          "`missing_mbid: true` to find the gaps. An empty result for a name you " +
+          "expected means the artist row does not exist yet, NOT that it has no " +
+          "mbid - those need different fixes, so check `returned` before " +
+          "concluding anything about mbid. " +
+          "⚠️ COMPARE `returned` AGAINST `total`. This list is ordered by name " +
+          "and cut at the limit, so a short read drops the END OF THE ALPHABET - " +
+          "not a random sample. Iterating one unfiltered call is how Weezer goes " +
+          "missing while every row it needs is present in the table.",
+      },
+      // Raises the house truncation note (platform.ts): "results truncated to N
+      // of M". Without it a clamped read and a complete one are byte-identical.
+      meta: truncated
+        ? { truncated: true, total, limit_applied: limit, count: rows.length }
+        : {},
     };
   },
 });

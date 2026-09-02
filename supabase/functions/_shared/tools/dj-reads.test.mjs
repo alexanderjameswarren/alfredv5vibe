@@ -35,10 +35,25 @@ const tool = Object.fromEntries(globalThis.__tools.map((t) => [t.name, t]));
 
 // --- a small PostgREST fake ------------------------------------------------
 
-function makeDb(tables) {
+// ⚠️ THIS FAKE ENFORCES A SERVER ROW CAP, AND THAT IS THE POINT.
+//
+// PostgREST caps every response at `db-max-rows` and reports the cut NOWHERE —
+// no error, no flag, no short-count field. A fake without that cap cannot fail
+// on the defect it is meant to catch, and this one could not: on 2026-09-02
+// get_dj_managed_playlists mode=list reported 0 tracks for playlists holding 15,
+// with every test in this file green. The suite was measuring a database that
+// does not exist (spec §11.16 — a negative control must reproduce the ACTUAL
+// defect, not a plausible neighbour).
+//
+// `maxRows` defaults to the real cap. Pass a smaller one to make a test cross it
+// without building thousands of fixture rows.
+const DEFAULT_MAX_ROWS = 1000;
+
+function makeDb(tables, { maxRows = DEFAULT_MAX_ROWS } = {}) {
   function builder(table) {
     const filters = [];
     let head = false, wantCount = false, limit = null, single = false;
+    let orderCol = null, orderAsc = true, rangeFrom = null, rangeTo = null;
     const api = {
       select(_cols, opts = {}) {
         wantCount = opts.count === "exact";
@@ -49,14 +64,34 @@ function makeDb(tables) {
       eq(c, v) { filters.push((r) => r[c] === v); return api; },
       gte(c, v) { filters.push((r) => r[c] >= v); return api; },
       lte(c, v) { filters.push((r) => r[c] <= v); return api; },
-      order() { return api; },
+      // Ordering is applied for real. Paging over an unordered result is a
+      // different wrong answer, so a fake that ignored order could not tell a
+      // sound implementation from an unsound one.
+      order(c, opts = {}) {
+        orderCol = c;
+        orderAsc = opts.ascending !== false;
+        return api;
+      },
+      range(from, to) { rangeFrom = from; rangeTo = to; return api; },
       limit(n) { limit = n; return api; },
       single() { single = true; return api; },
       maybeSingle() { single = true; return api; },
       then(resolve) {
         let rows = (tables[table] ?? []).filter((r) => filters.every((f) => f(r)));
         const count = rows.length;
+        if (orderCol != null) {
+          rows = rows.slice().sort((a, b) => {
+            const x = a[orderCol], y = b[orderCol];
+            if (x === y) return 0;
+            if (x === undefined || x === null) return 1;
+            if (y === undefined || y === null) return -1;
+            return (x < y ? -1 : 1) * (orderAsc ? 1 : -1);
+          });
+        }
+        if (rangeFrom != null) rows = rows.slice(rangeFrom, rangeTo + 1);
         if (limit != null) rows = rows.slice(0, limit);
+        // The server cap, applied LAST and silently — exactly as PostgREST does.
+        if (maxRows != null) rows = rows.slice(0, maxRows);
         if (single) return resolve({ data: rows[0] ?? null, error: null, count: null });
         return resolve({ data: head ? null : rows, error: null, count: wantCount ? count : null });
       },
@@ -66,10 +101,10 @@ function makeDb(tables) {
   return { from: (t) => builder(t) };
 }
 
-const run = (tables, args) =>
-  tool.get_dj_plays.handler(args, { db: makeDb(tables), userId: "u1" });
-const runMp = (tables, args) =>
-  tool.get_dj_managed_playlists.handler(args, { db: makeDb(tables), userId: "u1" });
+const run = (tables, args, opts) =>
+  tool.get_dj_plays.handler(args, { db: makeDb(tables, opts), userId: "u1" });
+const runMp = (tables, args, opts) =>
+  tool.get_dj_managed_playlists.handler(args, { db: makeDb(tables, opts), userId: "u1" });
 
 const track = (id, video_id, title, canonical = null, album = null, artist = "Weezer") =>
   ({ id, video_id, title, artist, album, canonical_track_id: canonical });
@@ -588,4 +623,277 @@ test("cram refuses a non-concert playlist", async () => {
   };
   await assert.rejects(() => runMp(tables, { mode: "cram", playlist_id: "p2" }),
     /cram applies to kind 'concert' only/);
+});
+
+// ---------------------------------------------------------------------------
+// The server row cap — the 2026-09-02 wrong answer
+// ---------------------------------------------------------------------------
+//
+// 🛑 THESE FAIL AGAINST THE UNPAGED READ AND PASS AGAINST THE PAGED ONE. That is
+// the whole requirement: the old code returned a plausible number, not an error,
+// so a test that only asserted "counts look sane" stayed green while mode=list
+// reported 0 tracks for a playlist holding 15.
+//
+// The cap is set low here rather than building 1,000 fixture rows. The defect
+// does not care about the absolute number — it is "the read stopped and nothing
+// said so", and it reproduces identically at 3 rows or 1,000.
+
+test("membership counts survive a server row cap — the mode=list wrong answer", async () => {
+  // Three playlists, 6 membership rows, cap of 4. The playlist list itself is
+  // bounded by clampLimit and is not at risk; the MEMBERSHIP read is. Unpaged it
+  // returns the first 4 rows, so p3 comes back as ZERO tracks and p2 as a
+  // partial — which is exactly what "Smashing Pumpkins 0" and "Weezer 4" were.
+  const tables = {
+    dj_playlists: [pl("p1", "One"), pl("p2", "Two"), pl("p3", "Three")],
+    dj_playlist_tracks: [
+      cmem("p1", "t1", "body", 0), cmem("p1", "t2", "body", 1),
+      cmem("p2", "t3", "body", 0), cmem("p2", "t4", "body", 1),
+      cmem("p3", "t5", "body", 0), cmem("p3", "t6", "body", 1),
+    ],
+    dj_tracks: [track("t1", "v1", "A"), track("t2", "v2", "B"), track("t3", "v3", "C"),
+                track("t4", "v4", "D"), track("t5", "v5", "E"), track("t6", "v6", "F")],
+    dj_plays: [],
+  };
+  const r = await runMp(tables, { mode: "list" }, { maxRows: 4 });
+  const byName = Object.fromEntries(r.data.playlists.map((p) => [p.name, p]));
+  assert.equal(r.data.playlists.length, 3);
+  for (const name of ["One", "Two", "Three"]) {
+    assert.equal(byName[name].track_counts.body, 2,
+      `${name} lost rows to the row cap — an empty playlist is not a short answer, ` +
+      `it is a different claim`);
+    assert.equal(byName[name].distinct_tracks, 2);
+  }
+});
+
+test("the counts sum to the real total, not to the cap", async () => {
+  // ⚠️ THE SHAPE OF THE LIVE SYMPTOM. The tell on 2026-09-02 was that every
+  // reported body count summed to EXACTLY 1000 — the cap itself, showing through
+  // as data. A test that only checked one playlist would have missed it.
+  const tables = {
+    dj_playlists: [pl("p1", "One"), pl("p2", "Two")],
+    dj_playlist_tracks: [
+      cmem("p1", "t1", "body", 0), cmem("p1", "t2", "body", 1), cmem("p1", "t3", "body", 2),
+      cmem("p2", "t4", "body", 0), cmem("p2", "t5", "body", 1),
+    ],
+    dj_tracks: [track("t1", "v1", "A"), track("t2", "v2", "B"), track("t3", "v3", "C"),
+                track("t4", "v4", "D"), track("t5", "v5", "E")],
+    dj_plays: [],
+  };
+  const r = await runMp(tables, { mode: "list" }, { maxRows: 3 });
+  const total = r.data.playlists.reduce((n, p) => n + p.track_counts.body, 0);
+  assert.equal(total, 5, "the sum equalling the cap is the signature of a truncated read");
+});
+
+test("one playlist's membership survives the cap too — mode=tracks", async () => {
+  // mode=tracks was RIGHT on 2026-09-02 only because no single playlist exceeded
+  // the cap. That is a property of today's data, not of the code, and it is the
+  // reason the two modes disagreed rather than both being wrong.
+  const tables = {
+    dj_playlists: [PL],
+    dj_playlist_tracks: [mem("t1", "body", 1), mem("t2", "body", 2), mem("t3", "body", 3)],
+    dj_tracks: [track("t1", "v1", "A"), track("t2", "v2", "B"), track("t3", "v3", "C")],
+    dj_plays: [],
+  };
+  const r = await runMp(tables, { mode: "tracks", yt_playlist_id: "PLxyz" }, { maxRows: 2 });
+  assert.equal(r.data.counts.body, 3);
+  assert.equal(r.data.tracks.length, 3);
+});
+
+test("a capped plays read would corrupt cram order, so it is paged", async () => {
+  // ⚠️ THE HIGHEST-STAKES INSTANCE. distinct_days comes out WRONG rather than
+  // short, and §12.10 sorts the cram list by it: a song played on four days
+  // reads as never played and takes a slot from one that is genuinely unlearned.
+  const tables = {
+    dj_playlists: [pl("p1", "Concert")],
+    dj_playlist_tracks: [cmem("p1", "t1", "body", 0), cmem("p1", "t2", "body", 1)],
+    dj_tracks: [track("t1", "v1", "Known"), track("t2", "v2", "Unknown")],
+    dj_plays: [
+      play("t1", "2026-08-01"), play("t1", "2026-08-02"),
+      play("t1", "2026-08-03"), play("t1", "2026-08-04"),
+    ],
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1", as_of: "2026-08-10" },
+    { maxRows: 2 });
+  const byTitle = Object.fromEntries(r.data.proposed_cram.map((c) => [c.title, c]));
+  assert.equal(byTitle.Known.distinct_days, 4, "two of four play rows were dropped");
+  assert.equal(byTitle.Unknown.distinct_days, 0);
+  assert.equal(r.data.proposed_cram[0].title, "Unknown",
+    "never-played must still sort first — a capped read inverts this silently");
+});
+
+test("familiarity honours its own scan cap instead of PostgREST's", async () => {
+  // The count guard measured the right thing and the read did not honour it:
+  // `.limit(SCAN_CAP)` asked for 5,000 and the server returned 1,000, so a scan
+  // that passed the guard was already truncated (spec §11.15).
+  const tables = {
+    dj_tracks: [track("t1", "v1", "A")],
+    dj_plays: [play("t1", "2026-08-01"), play("t1", "2026-08-02"), play("t1", "2026-08-03")],
+  };
+  const r = await run(tables, { mode: "familiarity", from_date: "2026-01-01", to_date: "2026-12-31" },
+    { maxRows: 2 });
+  assert.equal(r.data.rows_scanned, 3);
+  assert.equal(r.data.groups[0].distinct_days, 3);
+});
+
+// ---------------------------------------------------------------------------
+// §12.10 D — a variant cut never takes a slot from its own studio recording
+// ---------------------------------------------------------------------------
+
+const days = (n) => Array.from({ length: n }, (_, i) => `2026-08-${String(i + 1).padStart(2, "0")}`);
+
+test("Marigold takes ONE slot, not two — the 2026-09-02 cram outcome", async () => {
+  // 🛑 THE RULE WORKED AND THE OUTCOME WAS WRONG. Two genuinely different
+  // recordings, so the canonical-group dedupe correctly declined to merge them —
+  // and eight slots taught seven songs. Nine candidates here against a cap of
+  // eight, so the suppressed variant must be REPLACED by a real ninth song
+  // rather than simply dropped.
+  const titles = [
+    ["t0", "Marigold", "Nirvana"],
+    ["t1", "Marigold (Live at the Pantages Theatre, Los Angeles, CA - August 2006)", "Foo Fighters"],
+    ["t2", "Wheels", "Foo Fighters"], ["t3", "Window", "Foo Fighters"],
+    ["t4", "Run", "Foo Fighters"], ["t5", "The Teacher", "Foo Fighters"],
+    ["t6", "Stacked Actors", "Foo Fighters"], ["t7", "Aurora", "Foo Fighters"],
+    ["t8", "La Dee Da", "Foo Fighters"],
+  ];
+  const tables = {
+    dj_playlists: [pl("p1", "Foo Fighters Concert")],
+    dj_playlist_tracks: titles.map(([id], i) => cmem("p1", id, "body", i)),
+    dj_tracks: titles.map(([id, title, artist]) => track(id, `v-${id}`, title, null, null, artist)),
+    dj_plays: [],
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1", as_of: "2026-09-02" });
+
+  const names = r.data.proposed_cram.map((c) => c.title);
+  assert.equal(names.filter((t) => t.startsWith("Marigold")).length, 1,
+    "eight slots must teach eight songs");
+  assert.equal(names[0], "Marigold", "the STUDIO cut is the one that stays");
+  assert.equal(r.data.proposed_cram.length, 8);
+  assert.ok(names.includes("La Dee Da"),
+    "the freed slot goes to a real ninth song, or the fix only hides the problem");
+
+  assert.equal(r.data.variants_suppressed.length, 1);
+  assert.match(r.data.variants_suppressed[0].title, /^Marigold \(Live/);
+  assert.equal(r.data.variants_suppressed[0].kept_instead[0].artist, "Nirvana",
+    "the report must name what stood in for it — Alex put that row there deliberately");
+});
+
+test("a playlist holding ONLY a live cut still crams it", async () => {
+  // ⚠️ NEGATIVE CONTROL. The rule fires only when a NON-VARIANT sibling shares
+  // the title. Without this, "prefer the studio cut" silently becomes "never
+  // cram a live recording", and a song would drop out of cram entirely.
+  const tables = {
+    dj_playlists: [pl("p1", "Concert")],
+    dj_playlist_tracks: [cmem("p1", "t1", "body", 0)],
+    dj_tracks: [track("t1", "v1", "Marigold (Live at the Pantages Theatre)", null, null, "Foo Fighters")],
+    dj_plays: [],
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1" });
+  assert.equal(r.data.proposed_cram.length, 1);
+  assert.equal(r.data.variants_suppressed.length, 0);
+});
+
+test("two STUDIO recordings sharing a title are reported, never merged", async () => {
+  // 🛑 THE C FALLTHROUGH, AND THE REASON D IS SAFE. Deduping on title alone would
+  // collapse Weezer's Happy Together onto The Turtles' — a cover and its original
+  // are two songs to learn, and one would then never be crammed. Neither is
+  // marked a variant, so nothing stands down and the duplication is reported as
+  // the judgement it is.
+  const tables = {
+    dj_playlists: [pl("p1", "Concert")],
+    dj_playlist_tracks: [cmem("p1", "t1", "body", 0), cmem("p1", "t2", "body", 1)],
+    dj_tracks: [track("t1", "v1", "Happy Together", null, null, "Weezer"),
+                track("t2", "v2", "Happy Together", null, null, "The Turtles")],
+    dj_plays: [],
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1" });
+  assert.equal(r.data.variants_suppressed.length, 0, "neither is a variant cut");
+  assert.equal(r.data.proposed_cram.length, 2, "both stay — they are two songs");
+  assert.equal(r.data.duplicate_titles_in_cram.length, 1);
+  const artists = r.data.duplicate_titles_in_cram[0].entries.map((e) => e.artist).sort();
+  assert.deepEqual(artists, ["The Turtles", "Weezer"],
+    "the entries must carry what distinguishes them, or it is not settleable");
+});
+
+// ---------------------------------------------------------------------------
+// COMPLETE — the state §12.10 did not have
+// ---------------------------------------------------------------------------
+
+test("a playlist whose every song is learned is COMPLETE, not stale and not fresh", async () => {
+  // The live Weezer case: thirteen songs, least familiar at eight distinct days.
+  // The ordering was real and its purpose had evaporated.
+  const ids = ["t1", "t2", "t3"];
+  const tables = {
+    dj_playlists: [pl("p1", "Weezer Concert 2026")],
+    dj_playlist_tracks: ids.map((id, i) => cmem("p1", id, "body", i)),
+    dj_tracks: ids.map((id, i) => track(id, `v${i}`, `Song ${i}`)),
+    dj_plays: ids.flatMap((id) => days(6).map((d) => play(id, d))),
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1", as_of: "2026-09-02" });
+  assert.equal(r.data.cram_complete, true);
+  assert.equal(r.data.cram_state, "complete");
+  assert.deepEqual(r.data.proposed_cram, [], "nothing to cram when everything is learned");
+  assert.equal(r.data.learned_threshold, 5, "reuses §12.10(b)'s definition, not a second one");
+  // ⚠️ The claim has to be CHECKABLE, not asserted (§11.12).
+  assert.equal(r.data.least_familiar.length, 3);
+  assert.ok(r.data.least_familiar.every((g) => g.distinct_days >= 5));
+});
+
+test("COMPLETE self-heals — one accepted song and it is gone", async () => {
+  // 🛑 THE PROPERTY THAT MAKES A FLOOR SAFE HERE. Accept one song from a §12.2
+  // diff and the playlist stops being complete, because the new song sits at
+  // distinct_days 0. The state cannot latch.
+  const learned = ["t1", "t2", "t3"];
+  const tables = {
+    dj_playlists: [pl("p1", "Weezer Concert 2026")],
+    dj_playlist_tracks: [...learned.map((id, i) => cmem("p1", id, "body", i)),
+                         cmem("p1", "t_new", "body", 3)],
+    dj_tracks: [...learned.map((id, i) => track(id, `v${i}`, `Song ${i}`)),
+                track("t_new", "v_new", "C.E.O.")],
+    dj_plays: learned.flatMap((id) => days(6).map((d) => play(id, d))),
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1", as_of: "2026-09-02" });
+  assert.equal(r.data.cram_complete, false);
+  assert.equal(r.data.cram_state, "stale", "an unlearned song holding no cram row IS stale");
+  assert.equal(r.data.proposed_cram[0].title, "C.E.O.", "the new song is what to cram");
+});
+
+test("one song just under the threshold keeps a playlist off COMPLETE", async () => {
+  // NEGATIVE CONTROL on the boundary. 4 distinct days is not learned; 5 is.
+  const tables = {
+    dj_playlists: [pl("p1", "Concert")],
+    dj_playlist_tracks: [cmem("p1", "t1", "body", 0), cmem("p1", "t2", "body", 1)],
+    dj_tracks: [track("t1", "v1", "Known"), track("t2", "v2", "Nearly")],
+    dj_plays: [...days(6).map((d) => play("t1", d)), ...days(4).map((d) => play("t2", d))],
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1", as_of: "2026-09-02" });
+  assert.equal(r.data.cram_complete, false);
+  assert.equal(r.data.proposed_cram[0].title, "Nearly");
+
+  // And the same playlist with that song at 5 days IS complete.
+  const bumped = {
+    ...r && {},
+    dj_playlists: [pl("p1", "Concert")],
+    dj_playlist_tracks: [cmem("p1", "t1", "body", 0), cmem("p1", "t2", "body", 1)],
+    dj_tracks: [track("t1", "v1", "Known"), track("t2", "v2", "Nearly")],
+    dj_plays: [...days(6).map((d) => play("t1", d)), ...days(5).map((d) => play("t2", d))],
+  };
+  const r2 = await runMp(bumped, { mode: "cram", playlist_id: "p1", as_of: "2026-09-02" });
+  assert.equal(r2.data.cram_complete, true);
+});
+
+test("COMPLETE never implies readiness — the tool says so itself", async () => {
+  // 🛑 THE CAVEAT IS THE IMPORTANT HALF. Weezer's thirteen learned songs cover 12
+  // of 34 distinct setlist songs. "You know this one" would wrong-foot him on the
+  // night. This tool cannot compute coverage, so it must not imply it — and the
+  // requirement travels with the flag rather than living only in the spec.
+  const tables = {
+    dj_playlists: [pl("p1", "Concert")],
+    dj_playlist_tracks: [cmem("p1", "t1", "body", 0)],
+    dj_tracks: [track("t1", "v1", "Known")],
+    dj_plays: days(6).map((d) => play("t1", d)),
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1", as_of: "2026-09-02" });
+  assert.equal(r.data.cram_complete, true);
+  assert.match(r.data.reading, /NEVER REPORT `cram_complete` WITHOUT SETLIST COVERAGE/);
+  assert.match(r.data.reading, /distinct_setlist_songs/);
 });

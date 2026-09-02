@@ -96,6 +96,38 @@ export function normalisePart(raw: string): string {
 
 
 // ---------------------------------------------------------------------------
+// Variant cuts — A READ-TIME RULE, AND IT DOES NOT FEED match_key
+// ---------------------------------------------------------------------------
+//
+// ⚠️ SEPARATE FROM QUALIFIER_RES ABOVE, DELIBERATELY, BECAUSE THEY ANSWER
+// DIFFERENT QUESTIONS. QUALIFIER_RES asks "are these the same song for
+// GROUPING" and is frozen at write (§4.1.2). This asks "is this recording a
+// variant cut" at READ time — nothing here is stored, so editing it is a deploy
+// and not a backfill.
+//
+// It mirrors `_VARIANT_RE` in workshop/workshop/tools/dj_setlists.py, which uses
+// it to refuse resolving a setlist entry to a live or karaoke recording. The
+// same vocabulary now decides §12.10's per-title cram tie-break: you learn a
+// song from the studio cut, not from a 2006 live recording of it.
+//
+// ⚠️ TWO RUNTIMES AGAIN, SO IT IS PINNED THE SAME WAY. `shared/dj-title-cases.json`
+// carries a `variant_cuts` block asserted by BOTH suites. This is the exact
+// duplication that let the qualifier vocabulary drift (§14.6); it does not get a
+// second chance to do it quietly.
+//
+// `instrumental` IS here and is deliberately ABSENT from QUALIFIER_RES. An
+// instrumental cut is plausibly a distinct recording worth counting on its own
+// (grouping), and is still not what a setlist entry is asking for (resolution).
+// The two rules disagree because the two questions do.
+export const VARIANT_MARKER_RE =
+  /\b(live|acoustic|remix|karaoke|instrumental|demo|radio edit|session|cover|tribute|originally performed)\b/i;
+
+/** Is this title a variant cut rather than the studio recording? */
+export function isVariantCut(title: string | null | undefined): boolean {
+  return VARIANT_MARKER_RE.test(title ?? "");
+}
+
+// ---------------------------------------------------------------------------
 // Artist aliases — one act, two vocabularies
 // ---------------------------------------------------------------------------
 //

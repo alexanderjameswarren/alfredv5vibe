@@ -1713,6 +1713,57 @@ today. It is correct, not dead: libraries grow, and the ceiling is still real. D
 correct guard because the data has not reached it yet is how the next 200-track surprise
 arrives unannounced.
 
+### 11.23 A LIMIT THAT SHOWS UP AS DATA RATHER THAN AS AN ERROR WILL BE READ AS DATA
+
+PostgREST caps every response at `db-max-rows` and reports the cut **nowhere in the body** — no
+error, no flag, no short-count field. A response holding 1000 rows and one holding 1000 of 2400
+are byte-identical to the caller.
+
+On 2026-09-02 `get_dj_managed_playlists` mode=list reported *Smashing Pumpkins Concert: 0 tracks*
+against a real 15. **The tell was not in the failing case. It was that the reported body counts
+across all 41 playlists summed to EXACTLY 1000** — the cap wearing the costume of a measurement.
+Nobody looking at the Pumpkins row alone would have seen it; the number was plausible, and "that
+playlist is empty" is a thing that can be true.
+
+⚠️ **THIS IS THE SAME SHAPE AS THE 200-TRACK PLAYLIST CAP, ONE LAYER DOWN.** A boundary that
+truncates and returns 200 looks exactly like a playlist with 200 tracks. Both are limits that
+arrive as content, and content is what a caller acts on.
+
+**So: any limit that can silently shorten a result must be either PAGED PAST or REPORTED.** Never
+left to be inferred, and never trusted to look wrong — it will look right. `get_dj_artists`
+returning exactly 20 of 22 artists was the same defect, quieter, and it dropped Weezer off the
+end of the alphabet.
+
+⚠️ **AND IT DEFEATS GUARDS BUILT ON TOP OF IT.** `get_dj_plays` familiarity counted first, refused
+above `SCAN_CAP` = 5000, then read with `.limit(5000)` — and was served 1000. The guard measured
+the right thing and the read did not honour it (§11.15). A cap below your own ceiling makes the
+ceiling decorative.
+
+**A test suite cannot catch this unless its fake enforces the cap.** Ours did not, and stayed
+green through all of the above: it was measuring a database that does not exist (§11.16).
+
+### 11.24 THE FIX FOR A SILENT TRUNCATION CAN REPRODUCE IT, WEARING PAGINATION
+
+The first pager written for §11.23 terminated when a page came back **shorter than the page
+size** — the standard idiom, and wrong here for the exact reason the original was wrong.
+
+**"Short page means last page" assumes the server returns what you asked for.** That is precisely
+the assumption that failed. Ask for 1000 rows against a cap of 500 and *every* page is short, so
+the loop stops after the first one and returns the same truncated answer — now with a pager in
+front of it, which reads as evidence the problem was handled.
+
+It was caught only because the test fake had been taught to enforce a cap **smaller than the page
+size**, which the real server's cap is not. A fake that mirrored production exactly would have
+passed.
+
+**So: terminate on an EMPTY page, and advance by the rows ACTUALLY RETURNED.** It costs one extra
+round-trip at the end and cannot be defeated by a cap whose value the code does not know.
+
+⚠️ **THE GENERAL FORM.** When fixing a failure caused by an assumption, check whether the fix
+rests on the same assumption. It usually can, and it will look like progress: the mechanism
+changed, the defect did not, and the visible presence of a remedy makes the next reader stop
+looking.
+
 ## 12. Concert playlists — the body of work (phase 7)
 
 A concert playlist is **what to learn before the lights go down.** It is built from what the
@@ -1845,9 +1896,35 @@ one-field update.
 If no concert needs a status, **the section is omitted entirely.** Not "nothing to report" —
 omitted. A section that appears every week saying nothing trains him to skip it (§11.7).
 
+#### ADDED 2026-09-02: UNDATED `screening` ROWS THAT HAVE GONE QUIET
+
+⚠️ **THE "I NEVER DECIDED" SIGNAL APPEARS NOWHERE TODAY, AND IT IS A DIFFERENT QUESTION FROM
+"DID YOU GO?"** `needs_status` excludes undated rows by construction, and correctly — a watchlist
+entry is not a show he might have attended. But that leaves a standing `screening` row with an
+untouched playlist invisible forever: not past, not upcoming, not `needs_status`.
+
+Measured 2026-09-02: **Oasis** (playlist run once, 2026-08-04) and **Black Eyed Peas** (run once,
+2026-06-20, 74 days) — two acts worth seeing whenever they tour, against playlists barely
+listened to. Neither has ever appeared in a weekly item.
+
+**Surface an undated `screening` row when its playlist has gone quiet** — `runs` low and
+`last_run_on` old, or never run at all. One line each: act, how much the playlist has been
+played, when. The question is *"still interested?"*, not *"did you go?"*.
+
+⚠️ **THE FIRST RUN GOT THE LIVE CASE WRONG BY LOOKING AT THE DATED ROW INSTEAD.** Smashing
+Pumpkins (2026-10-30, `screening`) reads like the same shape and is not: 10 runs in 90 days, and
+its least-familiar track has 7 distinct days. **It is not an undecided screening — it is a
+playlist that went quiet 28 days ago**, which is a Section 2 observation about a show he is
+probably going to. Two different sentences; do not let the shared status word merge them.
+
+⚠️ **ALSO INVISIBLE, AND NAMED HERE RATHER THAN SOLVED: an undated `missed` row.** Alanis
+Morissette is one. Per §12.8 `missed` implies a `dj_feedback` write (§13.3); if that write never
+happened, **nothing will ever surface it again** — undated, so not past, not upcoming, not
+`needs_status`. Hers was written and nothing is owed. The next one is a silent loss.
+
 #### SECTION 2 — UPCOMING CONCERTS
 
-One block per upcoming concert. Each block shows exactly six things:
+One block per upcoming concert. Each block shows exactly five things:
 
 | field | source |
 |---|---|
@@ -1856,7 +1933,19 @@ One block per upcoming concert. Each block shows exactly six things:
 | how often he has listened to that playlist | `runs` — §12.9 |
 | when he last listened to it | `last_run_on` — §12.9 |
 | songs missing from recent setlists | the §12.2 diff |
-| whether the cram list needs updating | `cram_stale` — §12.10 |
+
+⚠️ **REVISED 2026-09-02: `cram_stale` STAYS IN THE PAYLOAD AND LEAVES THE PRINTED ITEM.** It
+cannot fire yet. §12.10 state (b) needs a track *in* the cram block, and under proposal-only
+(§12.5) a cram row exists only once a suggestion has been accepted — there are **zero cram rows
+in the entire library**. State (a) needs a `distinct_days: 0` track and no upcoming playlist has
+one. So the field reads `false` every week, for a reason that has nothing to do with the cram
+list being healthy.
+
+**That is §11.7 inverted: not a flag that fires on the normal case, a flag that cannot fire at
+all.** A line saying `false` for two months teaches him to skip the section it is in, and then it
+is worse than absent when it finally means something. **Bring it back the week there is a cram
+row to be stale.** The tool keeps returning it — a field nobody can read is a field nobody can
+check (§11.4) — the weekly item simply does not print it.
 
 **Both halves are required and they answer different questions.** The diff asks *"what is in
 the setlist that is not in my playlist?"* The cram list asks *"what is in my playlist that I
@@ -1950,6 +2039,74 @@ Archived Weezer all do; Archived Weezer is 160 rows and roughly 50 distinct song
 rows and slicing would let **one song take several of the eight slots**, all with identical
 familiarity because they resolve to the same canonical group — a cram list that looks full and
 is teaching three songs. Collapse to one entry per canonical group first, then take the top N.
+
+#### ADDED 2026-09-02: `cram_complete` — the state §12.10 did not have
+
+**Not stale, not fresh. COMPLETE.** Measured 2026-09-02, the Weezer playlist held thirteen songs
+whose *least* familiar had eight distinct days. The ordering was real and its purpose had
+evaporated: a cram list of songs he already knows. `cram_stale` read `false` — correctly, and
+uselessly.
+
+```
+COMPLETE = every canonical group in the playlist has distinct_days >= 5
+```
+
+⚠️ **THE 5 IS §12.10(b)'s EXISTING DEFINITION OF LEARNED, REUSED ON PURPOSE.** Two constants that
+both mean "learned" is a constraint written twice, and it would be enforced in one (§11.14).
+
+⚠️ **IT SELF-HEALS, WHICH IS WHY A FLOOR IS SAFE HERE.** Accept one song from a §12.2 diff and
+the playlist stops being complete, because the new song sits at `distinct_days: 0`. The state
+cannot latch on, which is the failure mode a threshold usually has.
+
+**Three exhaustive states**, and the tool returns which: `complete` → nothing to cram, and any
+existing cram rows should be CLEARED (under COMPLETE every cram row is by definition a learned
+song holding a slot, which is state (b)); `stale` → (a) or (b) holds; `working` → neither.
+
+Against the 2026-09-02 data: Weezer floor 8 → complete. Smashing Pumpkins floor 7 → complete.
+Foo Fighters floor 2 → working.
+
+##### 🛑 `cram_complete` NEVER APPEARS WITHOUT SETLIST COVERAGE BESIDE IT. THIS IS A RULE, NOT A NOTE.
+
+**COMPLETE is a fact about the PLAYLIST. It is not a fact about the SHOW.** Weezer's thirteen
+learned songs sit against **34 distinct songs** across the last ten setlists — `in_body` was 12.
+*"You know this one"* is true of the playlist and false of the evening, and printing it alone
+would wrong-foot him on the night.
+
+**So every appearance of COMPLETE carries `in_body / distinct_setlist_songs` from the §12.2
+diff**, which the diff already returns and which needs no new tool. Measured 2026-09-02: Weezer
+12/34, Smashing Pumpkins 12/32, Foo Fighters 27/40.
+
+**A complete playlist covering a third of the setlist is a WARNING, not a reassurance**, and the
+sentence must read that way. `get_dj_managed_playlists mode=cram` cannot compute coverage, so it
+states the requirement in its own `reading` rather than leaving it to the prompt — a rule the
+prompt only asks for is a rule that will be broken, once, at the worst moment (§11.11).
+
+#### ADDED 2026-09-02: a VARIANT CUT never takes a cram slot from its own studio recording
+
+**The rule worked and the outcome was wrong.** Two of the Foo Fighters playlist's eight cram
+slots were *Marigold*: Nirvana's studio original at body position 12, and the 2006 Pantages live
+cut at 29. Genuinely different recordings by different artists, so the canonical-group dedupe
+above correctly declined to merge them — and eight slots taught seven songs.
+
+⚠️ **THE NIRVANA ROW IS DELIBERATE AND IS NOT A RESOLUTION ERROR.** Grohl wrote *Marigold*; it is
+a Nirvana B-side, and Alex put it in the Foo Fighters playlist years ago. Any rule here must
+leave it alone.
+
+**The rule.** Within one playlist, when two cram candidates share a normalised title and at least
+one of them is NOT a variant cut, the variant ones stand down. Variant is `isVariantCut` /
+`_VARIANT_RE` — the same vocabulary §12.11 rule 2 already uses to refuse resolving a setlist entry
+to a live recording. **You learn a song from the studio cut.**
+
+⚠️ **IT NEVER MERGES TWO STUDIO RECORDINGS, WHICH IS THE ONLY REASON IT IS SAFE.** Deduping on
+title alone would collapse Weezer's *Happy Together* onto The Turtles' — a cover and its original
+are two songs to learn, and one of them would then never be crammed. This rule can only ever drop
+a cut that is *marked* a variant, and only when a non-variant sibling is present in the same
+playlist. **A playlist holding only a live cut still crams it.**
+
+**When the tie is not a variant tie — two non-variant recordings sharing a title — nothing stands
+down and `duplicate_titles_in_cram` reports it**, carrying artist and video_id so it is
+settleable. That case is a judgement about this library, not a tie to break, and it is not made
+silently.
 
 #### `cram_stale` — the flag, and why it is NOT "the sort changed"
 
@@ -2387,3 +2544,129 @@ Sphere"* resolves by name, and the skill cannot ask about an ambiguity it cannot
 (`/ws/2/artist?query=`, which returns disambiguation text and needs no JavaScript) is a
 prerequisite for that skill**, and any tool that resolves an artist must state this gap rather
 than imply coverage it lacks.
+
+### 14.5 🛑 A PostgREST read stops at `db-max-rows` and says so NOWHERE — FIXED 2026-09-02, and it was a WRONG ANSWER, not a short one
+
+`get_dj_managed_playlists` mode=list reported **Smashing Pumpkins Concert: 0 tracks** against a
+real 15, Motley Crue 0 against 14, Weezer 4 against 13. The tell: **every reported body count
+across all 41 playlists summed to EXACTLY 1000** — the row cap showing through as data. The read
+stopped mid-playlist and every playlist past the cut became a zero.
+
+⚠️ **THE FAILURE MODE IS THE POINT.** There is no error, no flag, no short-count field. A
+response holding 1000 rows and one holding 1000 of 2400 are byte-identical. A weekly job that
+trusted it would say *"your concert playlist is empty"* six weeks before the show.
+
+⚠️ **IT HID BECAUSE ONLY THE FAN-OUT PATH CROSSED THE CAP.** mode=tracks reads ONE playlist
+(≤379 rows) and mode=engagement does its arithmetic in SQL — both were right, which made the
+disagreement look like a question about which mode to trust rather than a defect in the third.
+**Two modes agreeing is not corroboration when they share no code path with the one that is
+wrong** (§11.9).
+
+**Fixed** by routing every unbounded read in `dj-reads.ts` through `selectAllRows`, which pages
+with a stable `order("id")`. ⚠️ **Termination is on an EMPTY page, never a SHORT one.** "Short
+page means last page" assumes the server returns what was asked for — the exact assumption that
+failed. Against a cap smaller than the page size every page is short, and the loop reproduces
+the defect wearing pagination.
+
+⚠️ **THE SAME CAP DEFEATED `SCAN_CAP`.** `get_dj_plays` familiarity counted first, refused above
+5,000 rows, then read with `.limit(5000)` — which the server silently served 1,000 of. The guard
+measured the right thing and the read did not honour it (§11.15). Cram order sorts on the
+`distinct_days` that came out of it.
+
+**The test fake now enforces a row cap.** Without one the suite was measuring a database that
+does not exist, and stayed green through all of the above (§11.16).
+
+### 14.6 A rule implemented in two runtimes drifted — FIXED 2026-09-02, and the complete version already existed
+
+`diff_dj_setlists` reported **Today**, **Luna** and **Cherub Rock** as missing from the Smashing
+Pumpkins playlist while all three sat in its body; two then resolved to the exact `video_id`
+already recorded there. Weezer's **Go Away** did the same against a body row reading *Go Away
+(feat. Best Coast)*.
+
+**Cause:** `dj_setlists.py` recognised `(Remastered 2012)` and missed `(2011 Remaster)`, and had
+no feature-suffix rule at all. **`dj-normalise.ts` already handled both.** The suffix list looked
+complete because the cases it missed had not appeared yet — and the complete list existed, in
+the other language.
+
+⚠️ **THE DUPLICATION CANNOT BE REMOVED.** `dj-normalise.ts` feeds `match_key`, frozen at write
+(§4.1.2) — changing it is a backfill migration, not a deploy. The Python copy runs at read time,
+on another host, over setlist.fm titles that never pass through Alfred. Neither can call the
+other across the courier boundary.
+
+**So the invariant is a shared fixture, not care.** `shared/dj-title-cases.json` is asserted by
+`dj-normalise.test.mjs` AND `workshop/tests/test_dj_diff.py`. A vocabulary entry added on one
+side and not the other fails a test in the runtime nobody edited (§11.14). **One deliberate
+divergence is pinned in the same file**: Python folds accents because it compares two
+independent editorial systems; TypeScript does not, because it compares YouTube to YouTube.
+
+### 14.7 The artist compare was exact-string, across two vocabularies — FIXED 2026-09-02
+
+setlist.fm bills the act as **"The Smashing Pumpkins"** (from the mbid, so it is the verified
+identity). YouTube Music's metadata says **"Smashing Pumpkins"**. An exact compare called that a
+non-match and dropped three songs — two already in the body, and **Disarm**, genuinely absent and
+played at 7 of 10 shows.
+
+⚠️ **THIS IS NOT §4.1.4's ALIAS MAP, AND REACHING FOR IT WOULD BE THE WRONG FIX.**
+`ARTIST_ALIASES` translates *Takeout channel names* into the *poll's* vocabulary, applied once at
+import to a column frozen at write. This is a different boundary (setlist.fm ↔ YouTube Music),
+evaluated at read time, on another host, about a systematic orthographic difference rather than a
+per-act fact. The map is explicit that it is hand-curated because rules like *"prefer the longer
+form"* break Red Garland the moment they fix Eddie Higgins — **a leading article is precisely the
+case where a rule does hold**, and the map holds no entry that would have helped.
+
+⚠️ **IT WIDENS §14.4's COLLISION SURFACE, SO IT IS REPORTED, NEVER SILENT.** "The Killers" and
+Paul Di'Anno's "Killers" are two real acts, and folding the article is what lets one stand in for
+the other. Every resolution now carries `artist_match: exact | article_insensitive`, and a folded
+match says so in `why`. **An exact match always wins outright**, so the fold can only ever decide
+a case that would otherwise have been NOT FOUND — widening the rule cannot change an answer that
+was already right. A widened rule that announces itself is checkable; the same rule applied
+quietly is §14.4 arriving through the front door.
+
+### 14.8 Medley parts have no cover attribution, and the resolver used to invent one — FIXED 2026-09-02
+
+setlist.fm records **one** cover marker for a whole `' / '`-joined medley row. Copying it onto
+every split part invents an attribution for the parts it does not describe; copying its *absence*
+asserts "not a cover" just as wrongly.
+
+The visible symptom was reasoning, not verdict: **One Headlight** — a Wallflowers song — was
+explained as though Foo Fighters simply had no version of their own, citing §12.4. NOT FOUND was
+right; the reason was fabricated. **A right answer reached wrongly is the one that breaks when
+the case changes.**
+
+Every medley part now carries `cover_of_known: false` and, where the row had one,
+`medley_cover_marker` as information about the *row* rather than the part. The not-found text
+says the attribution is not in the source. A part that also appears standalone elsewhere in the
+window is upgraded — a real per-song marker is better evidence than a medley's silence.
+
+### 14.9 Recorded so it is not re-raised: `dj_tracks.artist` carries scraped bylines
+
+At least one row stores the artist as **`"Jazz and Blues Experience, 1.7M views"`**, with the
+title `"Oscar Peterson, Ben Webster - During This Time (Full Live Concert Video)"` — a YouTube
+channel byline with a view count baked in. Because §14.3's jazz arm and any future artist rollup
+match artist strings **exactly**, a row like this can never unify with anything.
+
+**Not fixed, and deliberately.** `dj_tracks` is insert-only and `artist` is written once (§4.1.2,
+§11.13) — repairing it is a migration with a hand-built value table, the shape of migration 007,
+not a code change. Recorded here so the next artist-level feature knows the population is not
+clean before it assumes it is.
+
+### 14.10 Recorded so it is not re-raised: `dj_playlist_tracks.canonical_track_id` is unpopulated
+
+Across every playlist body read on 2026-09-02, **one** row carried a `canonical_track_id`; the
+rest were null. Nothing is broken — `mode=cram` and `mode=engagement` resolve canonical groups at
+query time and never read the column — but **anything that reads it directly will get nulls and
+no error.** Either populate it or drop it; leaving a column that looks authoritative and is empty
+is the §11.4 shape.
+
+### 14.11 CHECKED AND NOT A DEFECT: the 13-character YouTube playlist id
+
+`Weezer Concert 2026` is stored as **`PLGhCMggoJnIc`** — 13 characters, where every other
+playlist in the library is 34 (`PLV2XoCH1Pv5…`). It reads as a truncated value and it was flagged
+as one on 2026-09-02.
+
+**It is genuine.** A live `get_dj_playlists mode=library` read returns that exact id, titled
+*Weezer Concert 2026*, 13 tracks, owned. YouTube issues short ids as well as long ones.
+
+⚠️ **Recorded because the next reader will notice the same thing.** A plausible-looking anomaly
+that has already been checked costs nothing to write down and an investigation to rediscover —
+and the honest version of "it looked wrong" is "it looked wrong and it is fine."

@@ -36,13 +36,14 @@ function makeDb(seed = []) {
   let seq = rows.length;
   function builder() {
     const filters = [];
-    let updates = null, inserts = null, single = false, lim = null;
+    let updates = null, inserts = null, single = false, lim = null, wantCount = false;
+    let orderBy = null;
     const api = {
-      select() { return api; },
+      select(_cols, opts = {}) { wantCount = opts.count === "exact"; return api; },
       ilike(col, v) { filters.push((r) => String(r[col]).toLowerCase() === String(v).toLowerCase()); return api; },
       is(col, v) { filters.push((r) => r[col] === v); return api; },
       eq(col, v) { filters.push((r) => r[col] === v); return api; },
-      order() { return api; },
+      order(col, opts = {}) { orderBy = { col, asc: opts.ascending !== false }; return api; },
       limit(n) { lim = n; return api; },
       single() { single = true; return api; },
       maybeSingle() { single = true; return api; },
@@ -61,8 +62,19 @@ function makeDb(seed = []) {
           return resolve({ data: single ? { ...full } : [{ ...full }], error: null });
         }
         let out = rows.filter((r) => filters.every((f) => f(r))).map((r) => ({ ...r }));
+        // The count is of the MATCH, before the limit — that is what makes a
+        // truncated read distinguishable from a complete one.
+        const matched = out.length;
+        if (orderBy) {
+          out.sort((a, b) => {
+            const x = a[orderBy.col], y = b[orderBy.col];
+            if (x === y) return 0;
+            return (x < y ? -1 : 1) * (orderBy.asc ? 1 : -1);
+          });
+        }
         if (lim != null) out = out.slice(0, lim);
-        return resolve({ data: single ? (out[0] ?? null) : out, error: null });
+        return resolve({ data: single ? (out[0] ?? null) : out, error: null,
+                         count: wantCount ? matched : null });
       },
     };
     return api;
@@ -70,7 +82,9 @@ function makeDb(seed = []) {
   return { from: () => builder(), _rows: rows };
 }
 
-const get = (db, args) => mod.getDjArtistsTool.handler(args, { db, userId: USER });
+// The handler returns the house envelope; these assertions are about the payload.
+const getEnvelope = (db, args) => mod.getDjArtistsTool.handler(args, { db, userId: USER });
+const get = async (db, args) => (await getEnvelope(db, args)).data;
 const put = (db, args) => mod.upsertDjArtistTool.handler(args, { db, userId: USER });
 
 // ---------------------------------------------------------------------------
@@ -219,4 +233,44 @@ test("without rename_to the name is untouched — the path is opt-in", async () 
   const db = makeDb([{ name: "Killers" }]);
   const out = await put(db, { name: "Killers", mbid: VALID });
   assert.equal(out.artist.name, "Killers");
+});
+
+// ---------------------------------------------------------------------------
+// Silent truncation — the 2026-09-02 near-miss
+// ---------------------------------------------------------------------------
+
+test("a truncated artist list SAYS it was truncated", async () => {
+  // 🛑 22 rows, default limit 20, and the old handler returned exactly 20 with
+  // nothing in the payload to distinguish that from a complete answer. The
+  // truncation note the house style defines (platform.ts) is raised from
+  // meta.truncated, and this tool never set it.
+  const names = Array.from({ length: 22 }, (_, i) => ({ name: `Artist ${String(i).padStart(2, "0")}` }));
+  const env = await getEnvelope(makeDb(names), {});
+  assert.equal(env.data.returned, 20);
+  assert.equal(env.data.total, 22, "the caller must be able to see what it did not get");
+  assert.equal(env.meta.truncated, true);
+});
+
+test("a complete artist list is NOT flagged truncated", async () => {
+  // NEGATIVE CONTROL. A flag that fires on the normal case gets ignored, and
+  // then it is worse than none (spec §11.7).
+  const env = await getEnvelope(makeDb([{ name: "Weezer" }, { name: "Oasis" }]), {});
+  assert.equal(env.data.returned, 2);
+  assert.equal(env.data.total, 2);
+  assert.equal(env.meta.truncated, undefined);
+});
+
+test("truncation drops the END OF THE ALPHABET, which is why it hid", async () => {
+  // ⚠️ NOT A RANDOM SAMPLE. The list is ordered by name, so the rows lost are
+  // the last ones alphabetically — on 2026-09-02 that was Weezer, whose mbid the
+  // setlist diff needs, sitting one place past the cut after Styx.
+  const names = [...Array.from({ length: 20 }, (_, i) => ({ name: `A${String(i).padStart(2, "0")}` })),
+                 { name: "Styx" }, { name: "Weezer" }];
+  const r = await get(makeDb(names), {});
+  assert.equal(r.returned, 20);
+  assert.ok(!r.artists.some((a) => a.name === "Weezer"),
+    "fixture must reproduce the real cut, or the assertion below proves nothing");
+  // And the escape hatch that does work, so the fix is not merely a warning.
+  const byName = await get(makeDb(names), { name: "Weezer" });
+  assert.equal(byName.returned, 1);
 });
