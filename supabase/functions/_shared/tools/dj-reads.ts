@@ -277,105 +277,7 @@ export const getDjPlaysTool = defineTool({
       members = await fetchGroupMembers(ctx, groupIds);
     }
 
-    // 3. Aggregate by canonical group.
-    const trackById = new Map(members.map((t) => [t.id, t]));
-    const groups = new Map<string, {
-      members: TrackRow[];
-      days: Map<string, string[]>;   // played_on -> precisions seen that day
-      rows: number;
-    }>();
-    const ensure = (gid: string) => {
-      let g = groups.get(gid);
-      if (!g) { g = { members: [], days: new Map(), rows: 0 }; groups.set(gid, g); }
-      return g;
-    };
-    for (const t of members) ensure(groupIdOf(t)).members.push(t);
-    for (const r of playRows) {
-      const t = trackById.get(r.track_id);
-      if (!t) continue;
-      const g = ensure(groupIdOf(t));
-      g.rows += 1;
-      const list = g.days.get(r.played_on) ?? [];
-      list.push(r.precision);
-      g.days.set(r.played_on, list);
-    }
-
-    const requestedFor = new Map<string, string[]>();
-    if (videoIds?.length) {
-      const wanted = new Set(videoIds);
-      for (const t of members) {
-        if (!wanted.has(t.video_id)) continue;
-        const gid = groupIdOf(t);
-        requestedFor.set(gid, [...(requestedFor.get(gid) ?? []), t.video_id]);
-      }
-    }
-
-    const out = [...groups.entries()].map(([gid, g]) => {
-      const canonical = trackById.get(gid) ?? g.members[0];
-      const days = [...g.days.keys()].sort();
-      // A day is ESTIMATED when every row on it is a coarse-bucket guess.
-      // Expected to be 0 — the poll writes only `day` and Takeout writes
-      // `exact` — which is precisely why it should be visible if it ever isn't.
-      const estimated = days.filter((d) =>
-        (g.days.get(d) ?? []).every((p) => p === "week" || p === "fortnight")
-      ).length;
-      const last = days.length ? days[days.length - 1] : null;
-      return {
-        canonical_track_id: gid,
-        canonical_title: canonical?.title ?? null,
-        canonical_video_id: canonical?.video_id ?? null,
-        // Exposed for the same reason album was: a field nobody can read is a
-        // field nobody can check. The poll and Takeout can disagree on an
-        // artist's spelling ("Eddie Higgins Trio" vs "Eddie Higgins"), which
-        // silently splits one act into two match_key groups — and familiarity
-        // is exactly where that split becomes visible.
-        canonical_artist: canonical?.artist ?? null,
-        distinct_days: days.length,
-        estimated_days: estimated,
-        play_rows: g.rows,
-        first_played_on: days.length ? days[0] : null,
-        last_played_on: last,
-        days_since_last: last ? daysBetween(last, asOf) : null,
-        member_video_ids: g.members.map((m) => m.video_id).sort(),
-        requested_video_ids: requestedFor.get(gid) ?? [],
-        known_track: true,
-      };
-    });
-
-    // ZERO-PLAY TRACKS ARE THE POINT, NOT AN EDGE CASE.
-    //
-    // familiarity reads dj_plays, so a never-played track produces no row — and
-    // those are exactly the songs that belong at the TOP of a cram list, since
-    // §5 orders least-familiar first and nothing is less familiar than never
-    // heard. Leaving the caller to notice which ids came back missing is
-    // reconstruction logic that gets written once, forgotten, and then quietly
-    // wrong. A video_id unknown to dj_tracks entirely — a newly discovered
-    // setlist song — is included too, with known_track: false.
-    for (const v of unknownVideoIds) {
-      out.push({
-        canonical_track_id: null as unknown as string,
-        canonical_title: null,
-        canonical_video_id: v,
-        canonical_artist: null,
-        distinct_days: 0,
-        estimated_days: 0,
-        play_rows: 0,
-        first_played_on: null,
-        last_played_on: null,
-        days_since_last: null,
-        member_video_ids: [v],
-        requested_video_ids: [v],
-        known_track: false,
-      });
-    }
-
-    // Least familiar first — this IS cram order (§5). Never-played sort to the
-    // top; among equals, the one heard longest ago comes first.
-    out.sort((a, b) =>
-      a.distinct_days - b.distinct_days ||
-      (a.last_played_on ?? "").localeCompare(b.last_played_on ?? "") ||
-      (a.canonical_title ?? "").localeCompare(b.canonical_title ?? "")
-    );
+    const out = buildFamiliarity(members, playRows, unknownVideoIds, asOf, videoIds);
 
     // When the caller enumerated its subject it gets every entry back — a
     // clamped familiarity result would recreate the reconstruction problem the
@@ -463,6 +365,131 @@ async function resolveTrackIdsForVideoIds(ctx: any, videoIds: string[]): Promise
   if (seeds.length === 0) return [];
   const groupIds = [...new Set(seeds.map(groupIdOf))];
   return (await fetchGroupMembers(ctx, groupIds)).map((t) => t.id);
+}
+
+/**
+ * Aggregate plays into canonical groups, LEAST FAMILIAR FIRST.
+ *
+ * ⚠️ EXTRACTED SO CRAM ORDER HAS EXACTLY ONE IMPLEMENTATION. This block already
+ * carried the comment "this IS cram order (§5)" — and §12.10's cram list needs
+ * the same ordering over a playlist's membership. Recomputing it in a second
+ * place would put spec §12.10 in two files, which is §11.14 inside one module:
+ * the sort would agree today and drift on the next change to either copy.
+ *
+ * Pure given its inputs. The FETCHING stays with each caller, because
+ * get_dj_plays supports a date-range subject and cram mode never does.
+ */
+export function buildFamiliarity(
+  members: TrackRow[],
+  playRows: PlayRow[],
+  unknownVideoIds: string[],
+  asOf: string,
+  // Which ids the caller ENUMERATED, echoed back per group as
+  // requested_video_ids. Undefined for the date-range subject, and for cram
+  // mode, where the subject is a playlist rather than a list of ids.
+  videoIds?: string[],
+): Array<Record<string, unknown>> {
+  // 3. Aggregate by canonical group.
+  const trackById = new Map(members.map((t) => [t.id, t]));
+  const groups = new Map<string, {
+    members: TrackRow[];
+    days: Map<string, string[]>;   // played_on -> precisions seen that day
+    rows: number;
+  }>();
+  const ensure = (gid: string) => {
+    let g = groups.get(gid);
+    if (!g) { g = { members: [], days: new Map(), rows: 0 }; groups.set(gid, g); }
+    return g;
+  };
+  for (const t of members) ensure(groupIdOf(t)).members.push(t);
+  for (const r of playRows) {
+    const t = trackById.get(r.track_id);
+    if (!t) continue;
+    const g = ensure(groupIdOf(t));
+    g.rows += 1;
+    const list = g.days.get(r.played_on) ?? [];
+    list.push(r.precision);
+    g.days.set(r.played_on, list);
+  }
+
+  const requestedFor = new Map<string, string[]>();
+  if (videoIds?.length) {
+    const wanted = new Set(videoIds);
+    for (const t of members) {
+      if (!wanted.has(t.video_id)) continue;
+      const gid = groupIdOf(t);
+      requestedFor.set(gid, [...(requestedFor.get(gid) ?? []), t.video_id]);
+    }
+  }
+
+  const out = [...groups.entries()].map(([gid, g]) => {
+    const canonical = trackById.get(gid) ?? g.members[0];
+    const days = [...g.days.keys()].sort();
+    // A day is ESTIMATED when every row on it is a coarse-bucket guess.
+    // Expected to be 0 — the poll writes only `day` and Takeout writes
+    // `exact` — which is precisely why it should be visible if it ever isn't.
+    const estimated = days.filter((d) =>
+      (g.days.get(d) ?? []).every((p) => p === "week" || p === "fortnight")
+    ).length;
+    const last = days.length ? days[days.length - 1] : null;
+    return {
+      canonical_track_id: gid,
+      canonical_title: canonical?.title ?? null,
+      canonical_video_id: canonical?.video_id ?? null,
+      // Exposed for the same reason album was: a field nobody can read is a
+      // field nobody can check. The poll and Takeout can disagree on an
+      // artist's spelling ("Eddie Higgins Trio" vs "Eddie Higgins"), which
+      // silently splits one act into two match_key groups — and familiarity
+      // is exactly where that split becomes visible.
+      canonical_artist: canonical?.artist ?? null,
+      distinct_days: days.length,
+      estimated_days: estimated,
+      play_rows: g.rows,
+      first_played_on: days.length ? days[0] : null,
+      last_played_on: last,
+      days_since_last: last ? daysBetween(last, asOf) : null,
+      member_video_ids: g.members.map((m) => m.video_id).sort(),
+      requested_video_ids: requestedFor.get(gid) ?? [],
+      known_track: true,
+    };
+  });
+
+  // ZERO-PLAY TRACKS ARE THE POINT, NOT AN EDGE CASE.
+  //
+  // familiarity reads dj_plays, so a never-played track produces no row — and
+  // those are exactly the songs that belong at the TOP of a cram list, since
+  // §5 orders least-familiar first and nothing is less familiar than never
+  // heard. Leaving the caller to notice which ids came back missing is
+  // reconstruction logic that gets written once, forgotten, and then quietly
+  // wrong. A video_id unknown to dj_tracks entirely — a newly discovered
+  // setlist song — is included too, with known_track: false.
+  for (const v of unknownVideoIds) {
+    out.push({
+      canonical_track_id: null as unknown as string,
+      canonical_title: null,
+      canonical_video_id: v,
+      canonical_artist: null,
+      distinct_days: 0,
+      estimated_days: 0,
+      play_rows: 0,
+      first_played_on: null,
+      last_played_on: null,
+      days_since_last: null,
+      member_video_ids: [v],
+      requested_video_ids: [v],
+      known_track: false,
+    });
+  }
+
+  // Least familiar first — this IS cram order (§5). Never-played sort to the
+  // top; among equals, the one heard longest ago comes first.
+  out.sort((a, b) =>
+    a.distinct_days - b.distinct_days ||
+    (a.last_played_on ?? "").localeCompare(b.last_played_on ?? "") ||
+    (a.canonical_title ?? "").localeCompare(b.canonical_title ?? "")
+  );
+
+  return out;
 }
 
 function zeroOnlyResult(
@@ -553,11 +580,224 @@ export const getDjManagedPlaylistsTool = defineTool({
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const mode = (args.mode as string | undefined) ?? "list";
-    if (mode !== "list" && mode !== "tracks") {
+    if (!["list", "tracks", "engagement", "cram"].includes(mode)) {
       throw new Error(
-        `get_dj_managed_playlists: \`mode\` must be 'list' or 'tracks' ` +
-          `(got ${JSON.stringify(mode)}).`,
+        `get_dj_managed_playlists: \`mode\` must be 'list', 'tracks', ` +
+          `'engagement' or 'cram' (got ${JSON.stringify(mode)}).`,
       );
+    }
+
+    // --- cram (spec §12.10) ----------------------------------------------
+    //
+    // ⚠️ THE ORDER IS buildFamiliarity's, NOT A SECOND SORT. That function
+    // already returns one row per CANONICAL GROUP, least-familiar-first — which
+    // is both §12.10's dedupe and its primary sort. Re-sorting here would be the
+    // spec living in two places.
+    //
+    // §12.10 adds only what familiarity cannot know: the playlist's own body
+    // position as a final tie-break, and the two staleness STATES.
+    if (mode === "cram") {
+      const ytId = args.yt_playlist_id as string | undefined;
+      const plId = args.playlist_id as string | undefined;
+      if (!ytId && !plId) {
+        throw new Error(
+          "get_dj_managed_playlists: mode 'cram' requires `yt_playlist_id` or `playlist_id`.",
+        );
+      }
+      let q0 = ctx.db.from("dj_playlists").select(PLAYLIST_COLS);
+      q0 = ytId ? q0.eq("yt_playlist_id", ytId) : q0.eq("id", plId as string);
+      const { data: pl0, error: e0 } = await q0.maybeSingle();
+      if (e0) throw new Error(`get_dj_managed_playlists: ${e0.message}`);
+      if (!pl0) throw new Error("get_dj_managed_playlists: no such playlist.");
+      const playlist = pl0 as Record<string, unknown>;
+
+      // ⚠️ CONCERT ONLY. §5: "Only kind=concert has a setlist body and therefore
+      // a cram block." Returning an order for a jazz or utility playlist would
+      // invent a concept that playlist does not have.
+      if (playlist.kind !== "concert") {
+        throw new Error(
+          `get_dj_managed_playlists: cram applies to kind 'concert' only; ` +
+            `"${playlist.name}" is '${playlist.kind}'. Only a concert playlist has ` +
+            `a cram block (spec §5) — the others are flat.`,
+        );
+      }
+
+      const { data: mem, error: mErr } = await ctx.db
+        .from("dj_playlist_tracks")
+        .select("track_id, role, position")
+        .eq("playlist_id", playlist.id as string);
+      if (mErr) throw new Error(`get_dj_managed_playlists: ${mErr.message}`);
+      const membership = (mem ?? []) as Array<Record<string, unknown>>;
+
+      const trackIds = [...new Set(membership.map((m) => m.track_id as string))];
+      const memberTracks = await fetchTracksByIds(ctx, trackIds);
+      const groupIds = [...new Set(memberTracks.map(groupIdOf))];
+      const allMembers = await fetchGroupMembers(ctx, groupIds);
+
+      let plays: PlayRow[] = [];
+      for (const ids of chunk(allMembers.map((t) => t.id), IN_CHUNK)) {
+        const { data, error } = await ctx.db
+          .from("dj_plays").select(PLAY_COLS).in("track_id", ids);
+        if (error) throw new Error(`get_dj_managed_playlists: ${error.message}`);
+        plays.push(...((data ?? []) as PlayRow[]));
+      }
+
+      const asOf = (args.as_of as string | undefined) ??
+        new Date().toISOString().slice(0, 10);
+      const fam = buildFamiliarity(allMembers, plays, [], asOf);
+
+      // Group -> the playlist rows that belong to it, so body position can break
+      // ties and cram membership can be read off.
+      const groupOfTrack = new Map(memberTracks.map((t) => [t.id, groupIdOf(t)]));
+      const bodyPos = new Map<string, number>();
+      const cramGroups = new Set<string>();
+      for (const m of membership) {
+        const gid = groupOfTrack.get(m.track_id as string);
+        if (!gid) continue;
+        if (m.role === "cram") cramGroups.add(gid);
+        else {
+          const p = m.position as number;
+          if (!bodyPos.has(gid) || p < (bodyPos.get(gid) as number)) bodyPos.set(gid, p);
+        }
+      }
+
+      const inPlaylist = fam.filter((g) =>
+        groupIds.includes(g.canonical_track_id as string));
+      // Final tie-break only — familiarity's own ordering is preserved above it.
+      inPlaylist.sort((a, b) =>
+        (a.distinct_days as number) - (b.distinct_days as number) ||
+        ((a.last_played_on as string) ?? "").localeCompare((b.last_played_on as string) ?? "") ||
+        (bodyPos.get(a.canonical_track_id as string) ?? 1e9) -
+        (bodyPos.get(b.canonical_track_id as string) ?? 1e9));
+
+      const cap = (playlist.cram_cap as number) ?? 8;
+      const proposed = inPlaylist.slice(0, cap).map((g, i) => ({
+        rank: i,
+        canonical_track_id: g.canonical_track_id,
+        title: g.canonical_title,
+        artist: g.canonical_artist,
+        video_id: g.canonical_video_id,
+        distinct_days: g.distinct_days,
+        days_since_last: g.days_since_last,
+        body_position: bodyPos.get(g.canonical_track_id as string) ?? null,
+        in_cram_now: cramGroups.has(g.canonical_track_id as string),
+      }));
+
+      // ⚠️ cram_stale FIRES ON A STATE, NEVER ON SORT DRIFT (§12.10, §11.7). On a
+      // playlist being actively listened to, a recomputed top-N differs most
+      // weeks; a flag keyed on that would be noise inside a month and then
+      // ignored the once it mattered.
+      const unlearnedNotCrammed = inPlaylist.filter((g) =>
+        (g.distinct_days as number) === 0 &&
+        !cramGroups.has(g.canonical_track_id as string));
+      const learnedStillCrammed = inPlaylist.filter((g) =>
+        (g.distinct_days as number) >= 5 &&
+        cramGroups.has(g.canonical_track_id as string));
+
+      return { data: {
+        mode: "cram",
+        playlist: {
+          id: playlist.id, name: playlist.name, kind: playlist.kind,
+          cram_cap: cap, concert_id: playlist.concert_id,
+        },
+        proposed_cram: proposed,
+        current_cram_size: cramGroups.size,
+        cram_stale: unlearnedNotCrammed.length > 0 || learnedStillCrammed.length > 0,
+        stale_reasons: {
+          unlearned_not_crammed: unlearnedNotCrammed.map((g) => ({
+            title: g.canonical_title, distinct_days: 0,
+          })),
+          learned_still_crammed: learnedStillCrammed.map((g) => ({
+            title: g.canonical_title, distinct_days: g.distinct_days,
+          })),
+        },
+        reading:
+          "Order is least-familiar-first over CANONICAL GROUPS (§12.10): " +
+          "distinct_days ascending, then longest-unheard, then body position as a " +
+          "deterministic tie-break so the list does not reshuffle between runs for " +
+          "no reason. Groups, not rows — a body may hold the same song more than " +
+          "once since migration 012, and without deduping one song could take " +
+          "several of the " + cap + " slots with identical familiarity. " +
+          "⚠️ `cram_stale` is a STATE, not a sort comparison: it fires when an " +
+          "unplayed track holds no cram row, or a track played on 5+ days is still " +
+          "occupying a slot. A flag keyed on the order changing would fire most " +
+          "weeks and be ignored by the third one.",
+      }, meta: {} };
+    }
+
+    // --- engagement (spec §12.9) -----------------------------------------
+    //
+    // ⚠️ THE ARITHMETIC IS IN SQL, NOT HERE. dj_playlist_engagement (migration
+    // 013) owns the definition of `runs`; this mode resolves ids and shapes the
+    // answer. A second implementation in TypeScript would agree with the first
+    // until one of them changed.
+    if (mode === "engagement") {
+      const windowDays = (args.window_days as number | undefined) ?? 90;
+      let idq = ctx.db.from("dj_playlists").select("id, name, kind, yt_playlist_id");
+      if (args.kind !== undefined) idq = idq.eq("kind", args.kind as string);
+      if (args.playlist_ids !== undefined) {
+        idq = idq.in("id", args.playlist_ids as string[]);
+      }
+      const { data: pls, error: pErr } = await idq;
+      if (pErr) throw new Error(`get_dj_managed_playlists: ${pErr.message}`);
+      const rows = (pls ?? []) as Array<Record<string, unknown>>;
+      if (rows.length === 0) {
+        return { data: { mode: "engagement", playlists: [], returned: 0, window_days: windowDays }, meta: {} };
+      }
+
+      const { data: eng, error: eErr } = await ctx.db.rpc("dj_playlist_engagement", {
+        p_playlist_ids: rows.map((r) => r.id as string),
+        p_window_days: windowDays,
+      });
+      if (eErr) {
+        throw new Error(`get_dj_managed_playlists: engagement failed: ${eErr.message}`);
+      }
+      const byId = new Map<string, Record<string, unknown>>();
+      for (const e of (eng ?? []) as Array<Record<string, unknown>>) {
+        byId.set(e.playlist_id as string, e);
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      const days = (d: string | null) =>
+        d === null ? null
+          : Math.round((Date.parse(today) - Date.parse(d)) / 86400000);
+
+      const playlists = rows.map((r) => {
+        const e = byId.get(r.id as string) ?? {};
+        const runs = (e.runs as number) ?? 0;
+        const lastRun = (e.last_run_on as string | null) ?? null;
+        const lastTouched = (e.last_touched_on as string | null) ?? null;
+        return {
+          ...r,
+          distinct_groups: e.distinct_groups ?? 0,
+          threshold_used: e.threshold ?? null,
+          window_days: windowDays,
+          runs,
+          last_run_on: lastRun,
+          days_since_last_run: days(lastRun),
+          // Shown only when there has never been a run — see §12.9. A bare
+          // "never" on a partly-heard playlist is wrong in feel.
+          last_touched_on: runs === 0 ? lastTouched : null,
+        };
+      });
+
+      return { data: {
+        mode: "engagement",
+        playlists,
+        returned: playlists.length,
+        window_days: windowDays,
+        reading:
+          "`runs` counts DAYS on which at least `threshold_used` distinct " +
+          "canonical groups from the playlist were played — NOT sessions and NOT " +
+          "plays. dj_plays buckets by UTC day and the feed carries one entry per " +
+          "track per bucket, so two runs in one day are indistinguishable from " +
+          "one. threshold_used = clamp(ceil(0.5 * distinct_groups), 4, 20); the " +
+          "cap of 20 stops a 379-track playlist needing 190 songs in a day, which " +
+          "would be a guarantee of zero rather than a threshold. " +
+          "⚠️ `last_touched_on` is populated ONLY when runs is 0 — it means 'never " +
+          "run it, but some of its songs came up', which is a different statement " +
+          "from a run. ⚠️ A track in two playlists counts toward both.",
+      }, meta: {} };
     }
 
     if (mode === "list") {
@@ -578,24 +818,34 @@ export const getDjManagedPlaylistsTool = defineTool({
       // call that gets skipped.
       const ids = rows.map((r) => r.id as string);
       const counts = new Map<string, { body: number; cram: number; total: number }>();
-      for (const id of ids) counts.set(id, { body: 0, cram: 0, total: 0 });
+      // ⚠️ DISTINCT SONGS IS NOT ROW COUNT — migration 012. A body may hold the
+      // same track more than once (Archived Weezer: 160 rows, ~50 distinct), so
+      // "30 tracks" and "30 different songs" stopped being the same statement.
+      // Both are reported, because a caller sizing a cram list wants the second
+      // and a caller checking against YouTube wants the first.
+      const distinct = new Map<string, Set<string>>();
+      for (const id of ids) {
+        counts.set(id, { body: 0, cram: 0, total: 0 });
+        distinct.set(id, new Set<string>());
+      }
       for (const batch of chunk(ids, IN_CHUNK)) {
         if (batch.length === 0) continue;
         const { data: mem, error: memErr } = await ctx.db
           .from("dj_playlist_tracks")
-          .select("playlist_id, role")
+          .select("playlist_id, role, track_id")
           .in("playlist_id", batch);
         if (memErr) {
           throw new Error(
             `get_dj_managed_playlists: membership count failed: ${memErr.message}`,
           );
         }
-        for (const m of (mem ?? []) as Array<{ playlist_id: string; role: string }>) {
+        for (const m of (mem ?? []) as Array<{ playlist_id: string; role: string; track_id: string }>) {
           const c = counts.get(m.playlist_id);
           if (!c) continue;
           if (m.role === "cram") c.cram += 1;
           else c.body += 1;
           c.total += 1;
+          distinct.get(m.playlist_id)!.add(m.track_id);
         }
       }
 
@@ -604,6 +854,7 @@ export const getDjManagedPlaylistsTool = defineTool({
         return {
           ...r,
           track_counts: c,
+          distinct_tracks: (distinct.get(r.id as string) ?? new Set()).size,
           cram_headroom: (r.cram_cap as number) - c.cram,
         };
       });
@@ -688,6 +939,9 @@ export const getDjManagedPlaylistsTool = defineTool({
           body: ordered.length - cram,
           cram,
           total: ordered.length,
+          // Rows, then songs. A body may repeat a track (012), so these diverge
+          // and the difference is real rather than a bug to reconcile.
+          distinct_tracks: new Set(ordered.map((t) => t.video_id)).size,
           missing_set_video_id: missingHandles,
         },
         cram_headroom: (playlist.cram_cap as number) - cram,
@@ -705,5 +959,68 @@ export const getDjManagedPlaylistsTool = defineTool({
       },
       meta: {},
     };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// get_dj_jazz_activity — tier 1
+// ---------------------------------------------------------------------------
+//
+// 🛑 JAZZ IS A PROXY AND THE REPORT MUST SAY SO. Nothing marks a track as jazz:
+// dj_tracks has no genre, its tags are unpopulated, and dj_artists — which does
+// have tags — holds 22 concert acts against 1,206 distinct artists in the play
+// history (spec §14.1, §14.3). So "jazz" is DERIVED from the two kind='jazz'
+// playlists: a play counts if the track is in one, OR its artist appears in one.
+//
+// ⚠️ THE DEFINITION IS PART OF THE FINDING. A jazz summary that does not say
+// what counted as jazz invites the reader to assume a genre model exists, and
+// the numbers move if the definition does. `definition` ships with the rows for
+// that reason, not as decoration.
+export const getDjJazzActivityTool = defineTool({
+  name: "get_dj_jazz_activity",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const windowDays = (args.window_days as number | undefined) ?? 90;
+    const LIMIT = clampLimit(args.limit as number | undefined);
+
+    const { data, error } = await ctx.db.rpc("dj_jazz_activity", {
+      p_window_days: windowDays,
+    });
+    if (error) throw new Error(`get_dj_jazz_activity: ${error.message}`);
+    const all = (data ?? []) as Array<Record<string, unknown>>;
+    const rows = all.slice(0, LIMIT);
+
+    return { data: {
+      artists: rows,
+      returned: rows.length,
+      total: all.length,
+      window_days: windowDays,
+      limit_applied: LIMIT,
+      truncated: all.length > rows.length,
+      definition:
+        "A play counts as jazz if its track is in a kind='jazz' playlist, OR its " +
+        "artist appears in one. Membership alone would miss most of it — the " +
+        "heavily-played pianists (Herbie Hancock, Red Garland, Oscar Peterson, " +
+        "Bill Evans, Thelonious Monk, Wes Montgomery) arrived through PLAYS " +
+        "rather than through either playlist.",
+      gaps:
+        "⚠️ STATE THESE IN THE REPORT rather than letting the thread infer a " +
+        "source that does not exist (spec §14): " +
+        "(1) SUBGENRE IS UNAVAILABLE — tags live on dj_artists, which covers 22 " +
+        "concert acts against 1,206 distinct artists played; dj_tracks has no " +
+        "link to it at all. " +
+        "(2) UNPLAYED ALBUMS CANNOT BE COMPUTED — dj_albums has no writer tool " +
+        "and no data, so there is nothing to compare listening against. " +
+        "(3) THE ARTIST ARM IS AN EXACT STRING MATCH, so 'Oscar Peterson Trio' " +
+        "and 'Oscar Peterson' do not unify (§4.1.4). " +
+        "⚠️ THIS TOOL CANNOT PROPOSE NEW ARTISTS. It reports what was played and " +
+        "what is missing from the data; 'try Andrew Hill' comes from the thread, " +
+        "never from listening history — there is no source for it here.",
+      reading:
+        "`distinct_days` is DISTINCT DAYS PLAYED, not a play count (spec §5). " +
+        "`in_playlist` false means the artist reached this list through the " +
+        "artist arm of the definition rather than through membership — those are " +
+        "the plays a membership-only definition would have missed.",
+    }, meta: { truncated: all.length > rows.length } };
   },
 });

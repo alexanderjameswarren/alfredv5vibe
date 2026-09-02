@@ -1805,6 +1805,432 @@ duration display must tolerate zero rather than treat it as an error.
 
 ---
 
+## Phase 6b — Library import ✅ COMPLETE 2026-09-01
+
+> 🛑 **"NO RECORDED BODY" WAS THE NORMAL CASE, NOT AN EDGE CASE.** Only 2 of 44
+> playlists were ever recorded in Supabase — Weezer from Phase 3b and Foo Fighters from the
+> 2026-09-01 diff. Nothing imported the rest. Building the weekly job first would have meant
+> building it around a workaround for missing setup, and that workaround would have outlived
+> the setup gap by years.
+
+### ✅ THE RESULT — one clean run, 2026-09-01
+
+**41 of 41 playlists recorded with membership.**
+
+- **First run: 35 of 35**, zero failures, `stale_rows` 0 everywhere, 7.3 min of pacing. Jazz
+  songs Mix at 107 with its shortfall note.
+- **Second run: Elise's fun list (379) and General Running (223)**, once the 200 read cap turned
+  out to be ours rather than YouTube's (§11.22). `record_dj_playlist_bulk` confirmed by the
+  endpoint on both — the first execution of that path, and verified rather than assumed.
+
+⚠️ **THE TWO LARGE PLAYLISTS ARRIVED IN A SECOND RUN AND THAT IS FINE**, for a reason worth
+stating rather than glossing: their bodies were individually empty, so `stale_rows: 0` still
+carried its meaning for them. The property that mattered was never "one run" for its own sake —
+it was that no body being written had prior rows to be stale against. Splitting the FIRST 35
+would have broken that; adding two untouched playlists later does not.
+
+⚠️ **THE SINGLE-RUN PROPERTY IS WHAT MAKES `stale_rows: 0` MEAN ANYTHING.** Every body started
+empty in the same run, so there was nothing for a stale row to be stale *against* — a non-zero
+reading would have been a genuine finding rather than noise. Confirming the 23 that survived
+the budget refusal and handling the other 12 separately would have destroyed exactly that, and
+permanently: the second run's bodies would no longer have started empty. **The import report IS
+the verification**, which is why it had to be one table.
+
+**Library read 2026-09-01: 44 playlists, not the 43 in spec §9** — that number came from the
+2026-08-27 probe and the library has grown since. 41 owned, 3 not.
+
+### The three excluded, and why exclusion is the right answer
+
+- **Liked Music** and **Episodes for Later** — auto-playlists. Membership is derived, not
+  authored; "Liked Music" would drift on every like.
+- **All-Time Alt** (161) — YouTube Music's own, saved to the library. ⚠️ **Its contents change
+  underneath us**, so every weekly re-record would show drift, and §12.8's drift detection
+  would be firing on a stranger's edits. Recording it would manufacture exactly the alarm the
+  drift check exists to make meaningful.
+
+### ⚠️ TWO PLAYLISTS WERE NOT WHAT THEIR NAMES SAID — found by reading, not guessing
+
+- **"Coldplay Opening Concert"** (6) is **entirely WILLOW**. It is the support act's set, named
+  after the headliner. A concert row built from the title would have been filed against the
+  wrong artist. → record as `artist`, no concert row, **rename to "WILLOW" on YouTube**.
+- **"I Heart Radio Concert"** (38) and **"2024 I Heart Radio Concert"** (18) are **festivals**,
+  not single shows — The Offspring ×5 then GloRilla ×3; A$AP Rocky ×3, Paramore ×2, Dua Lipa
+  ×2, Shaboozey. Blocks of 3–5 songs per act. 🛑 **`dj_concerts.artist_id` is NOT NULL and
+  singular, so a festival cannot be one concert row.** → record as `artist`, no concert row.
+  Multi-act shows are **not** being modelled now; recorded as a known gap.
+
+**The lesson generalises: sampling three playlists changed three classifications.** A worksheet
+built from titles alone would have been wrong in three places out of five flagged, and two of
+those errors (wrong artist, impossible artist_id) would have been written into `dj_concerts`
+where they are expensive to unpick.
+
+### The concert table — DECIDED 2026-09-01
+
+| playlist | tracks | status | date |
+|---|---|---|---|
+| Weezer Concert 2026 | 13 | committed | 2026-10-23 (Vegas) |
+| Foo Fighters Concert | 30 | committed | 2026-09-26 |
+| Smashing Pumpkins Concert | 15 | screening | 2026-10-30 |
+| No Doubt Concert | 29 | attended | 2026-06-05 |
+| Blues Traveler Concert | 27 | attended | 2025-08-14 |
+| Coldplay Concert | 24 | attended | 2025-06-07 |
+| Jelly Roll Concert | 21 | attended | 2025-05-03 |
+| Post Malone Concert | 30 | attended | 2025-05-03 |
+| Killers Concert | 21 | attended | 2024-08-31 |
+| Alanis Morissette Concert | 23 | missed | — |
+| Oasis Concert | 19 | screening | — (not touring) |
+| Black Eyed Peas Concert | 20 | screening | — (not touring) |
+| Goo Goo Dolls / Ed Sheeran / Kenny Chesney / Chicago / Styx / Motley Crue | 23/29/26/18/17/14 | rejected | — |
+| The Weeknd Concert | **0** | rejected | — |
+
+**Three concerts with NO playlist — rows created anyway:** Lady Gaga (attended 2024-06-25),
+Adele (attended 2023-10-13), Katy Perry (attended 2023-10-14).
+
+⚠️ **THAT IS THE GENERAL RULE, NOT AN EXCEPTION: a concert row can exist without a playlist.**
+The weekly job's Section 2 should offer to BUILD one for **upcoming** concerts that lack it.
+Past concerts are history, not prep — **never offer**.
+
+**Two same-night pairs, one show each:** Jelly Roll + Post Malone (2025-05-03), and Coldplay +
+WILLOW (2025-06-07). Same shape both times: two playlists, one concert.
+
+**The Weeknd (0 tracks) resolves to `rejected`, undated.** Empty means screening was started
+and abandoned — which *is* the rejected answer, not missing data.
+
+### 🛑 DECISION: `screening` COVERS "INTERESTED IN PRINCIPLE, NO DATE YET" — not a new status
+
+`screening` already meant *"deciding whether it is worth going"*. **With** a date that is a
+specific show; **without** one it is an act worth considering whenever they tour. Same
+question, different specificity — so it is the same status, not a sixth one.
+
+**This is deliberately load-bearing for the future Vegas-scanner project:** undated screening
+rows **are** the standing watchlist, and the scanner fills in `starts_on` when a show appears.
+Oasis and Black Eyed Peas are the first two — both wanted, neither touring.
+
+⚠️ **THIS BROKE THE CHECK CONSTRAINT AS FIRST PROPOSED.** The original was
+`starts_on IS NOT NULL OR status IN ('attended','missed','rejected')` — undated means
+historical. That would have rejected the entire watchlist. **The constraint's real purpose is
+narrower:** an undated concert cannot be `interested` or `committed`, because those two imply a
+SPECIFIC show. Widened accordingly, and **the redefinition is recorded on the column comment**,
+where it is read — not only here.
+
+### 🛑 DECISION: seeing an act twice → rename the old playlist to "Archived &lt;Act&gt;"
+
+`dj_playlists.concert_id` already ties a playlist to a specific concert, so **the database
+handles a second show fine.** The collision is entirely Google Assistant: §13.5 requires
+`"<Act> Concert"` exactly, and two playlists cannot both be that.
+
+So when a new concert playlist is created for an act that already has one, the old becomes
+**`"Archived <Act>"`** — *"Archived Weezer"*, not *"Weezer Concert (old)"*.
+
+⚠️ **THAT RENAME IS A WRITE TO YOUTUBE.** It belongs in the concert-playlist skill's flow
+**explicitly, with confirmation** — never as a side effect of creating the new playlist.
+
+🛑 **AND THE LAST RENAME DID NOT STICK.** The 160-track playlist was renamed "Weezer Concert
+(old)"; the 2026-09-01 library read still reports it as **"Weezer Concert"**. So today
+*"play Weezer Concert"* in the car is ambiguous between it and "Weezer Concert 2026".
+**Whatever went wrong there must be understood before this rule is relied on** — a rename rule
+built on a rename that silently reverts is a rule that will fail in the car, months later,
+with no error anywhere.
+
+### Migrations — WRITTEN 2026-09-01, NOT YET RUN
+
+- [ ] **`010_dj_concerts_undated.sql`** — `starts_on` → nullable, plus
+      `dj_concerts_undated_status`:
+      `check (starts_on is not null or status not in ('interested','committed'))`.
+      Column comments updated for both `starts_on` and `status`.
+      ⚠️ **Undated rows are inert for date filters BY CONSTRUCTION** — `NULL < today` and
+      `NULL >= today` are both NULL, so such a row falls out of *both* halves of the weekly
+      job. **That guarantee survives only while queries compare the column directly**;
+      `coalesce(starts_on, '1900-01-01')` would sweep the watchlist into the past. Recorded on
+      the column comment.
+- [ ] **`011_dj_playlists_utility_kind.sql`** — `kind` gains `utility`.
+      ⚠️ Filing the 15 activity playlists under `discovery` would have typechecked and
+      **silently destroyed the category DJ uses to find new artists** — a discovery set that is
+      60% running playlists is a wrong signal, not a weak one.
+      `kind` now decides how much of DJ applies: `concert` → full weekly treatment;
+      `artist`/`jazz`/`discovery` → metrics and occasional proposals; `utility` → metrics only.
+- [ ] ⚠️ **Both migrations verify by ATTEMPTING THE FORBIDDEN WRITE**, not by checking that
+      `pg_constraint` holds a row — that assertion passes just as happily against
+      `check (true)` (§11.1). 011 additionally probes that the widened CHECK still **rejects**
+      a nonsense kind, because dropping and re-adding a constraint is exactly where a typo
+      produces a constraint that checks nothing.
+- [ ] ⚠️ **Two bugs were caught in review of 010 before it was shown**, both worth keeping in
+      mind for the next migration: a trailing `rollback;` that would have reverted the whole
+      migration, and a `raise exception` placed INSIDE a `begin/exception` block, where its own
+      `when others` handler would have downgraded the failure to a notice — a failure signal
+      swallowed by the handler meant to describe it (§11.19).
+- [ ] **Baseline taken before writing: `check_platform_conformance` → CONFORMANT, 28 tables.**
+      So any red afterwards was introduced here. Both files end by asserting
+      `platform.conformance_failures` is empty.
+- [ ] ⚠️ **The tools do not know about any of this yet, and the migrations are inert without
+      them:** `create_dj_concert` (`starts_on` no longer required, and it must refuse undated
+      `interested`/`committed` with a readable GuardrailError rather than letting the DB
+      constraint surface raw), `record_dj_playlist` (`kind` enum + `utility`),
+      `get_dj_managed_playlists` (`kind` filter enum + `utility`). Then
+      `npx supabase functions deploy mcp --no-verify-jwt`.
+
+### 🛑 THE IMPORTER EXCEEDED THE PLATFORM'S OWN CALL BUDGET — 2026-09-01
+
+The first `--confirm` run **died at playlist 23 of 35**: 60 calls per 300 seconds, ~2 platform
+calls per playlist. **23 written cleanly, 12 blocked, nothing partial** — a budget refusal
+happens in `enforceBudget` *before* the handler runs, so there is no half-written playlist.
+
+⚠️ **THE GUARD WAS RIGHT AND THE SCRIPT WAS WRONG.** The refusal named its own limit, said do
+NOT retry, and stopped the write — exactly the behaviour §4's error taxonomy asks for. Recorded
+because the instinct on seeing a run die is to loosen the thing that stopped it. **A bulk
+importer that exceeds the platform's own rate limit by design is a script that can never
+complete a run**, however many times it is restarted.
+
+**Fixed with pacing, not with `--resume`.** Pacing makes the script correct; resume would
+require a human to know how to recover from a partial run. And resume would reintroduce the
+split-report problem this phase already argued against: the import report **is** the
+verification, and `stale_rows` is only interpretable when every body starts empty in one run.
+
+- `--seconds-between`, default **15s** (~9 minutes for 35 playlists). Even spacing rather than
+  a token bucket, so this script's contribution to the rolling window is the same whenever it
+  starts.
+- ⚠️ **THE LIMIT IS NOT COPIED INTO THE SCRIPT.** It lives in
+  `platform.check_call_budget`, the queryable authority (§11.17). The script holds a *target
+  below* it, for two reasons worth keeping: **the budget is per-user and shared** — any open
+  Claude conversation spends the same window, so pacing at exactly the limit would make the
+  import succeed by making everything else fail — and **the rolling window does not start
+  empty**, which is why "sprint until refused" fails at an unpredictable playlist. The dry run
+  minutes earlier still occupied it.
+- A budget refusal **stops the run**; it is not treated as one more failed playlist. Continuing
+  would spend the remaining window on calls certain to be refused and bury the one line that
+  explains the run. The guard's message is reprinted **verbatim**, for the same reason
+  `platform.ts` refuses to reword it.
+- Re-running after a refusal is safe and is the recommended recovery: re-recording an imported
+  playlist is an upsert on `(playlist_id, role, position)`, so it rewrites the same rows and
+  reports `stale_rows: 0`.
+
+### The import itself — after the migrations and the tool deploy
+
+- [ ] Record all 41 owned playlists. 23 concert-named, of which 18 get `dj_concerts` rows.
+- [ ] 3 concert rows with no playlist: Lady Gaga, Adele, Katy Perry.
+- [ ] `artist`: Journey Songs, Weezer Concert (160, the discography), Coldplay Opening (WILLOW),
+      both I Heart Radio festivals.
+- [ ] `jazz`: Jazz songs Mix (108), Christmas jazz (83).
+- [ ] `utility`: the 15 activity, mix and soundtrack playlists.
+- [ ] **YouTube renames, each a confirmed write:** "Coldplay Opening Concert" → "WILLOW";
+      "Weezer Concert" (160) → "Archived Weezer". ⚠️ **Verify both stuck by re-reading the
+      library** — the previous rename silently did not.
+- [ ] ⚠️ **§12.9's threshold gained a cap of 20 because of this phase** —
+      `clamp(ceil(0.5n), 4, 20)`. Half of General Running (223) is 112 and half of Elise's fun
+      list (379) is 190; those are not thresholds, they are guarantees of zero.
+
+---
+
+## Phase 6c — Step 2: the three missing tools ✅ COMPLETE 2026-09-01
+
+> **Batched into ONE deploy on purpose.** Each of the three is a manifest change, and a manifest
+> change costs a connector reconnect and a fresh conversation. Three separate deploys would have
+> spent three reconnects to save none. Ordering by the scarce resource beat ordering by
+> importance — `get_dj_concerts` is the most important of the three and still went in the batch.
+>
+> **Tool count 36 → 39.**
+
+### 🛑 dj_concerts WAS WRITE-ONCE THROUGH MCP — the gap was absent, not degraded
+
+Nothing could list concert rows and nothing could change one. **Every row was frozen at the
+status it was born with.** Smashing Pumpkins was `screening` for 2026-10-30 and could never
+become `attended`; Foo Fighters was `committed` for 2026-09-26 and could never be closed out.
+
+⚠️ **§12.8's Section 1 exists to ASK "did you go?" and record the answer. Asking a question
+whose answer cannot be written down is theatre.** The read gap was the visible half; the write
+gap was the one that mattered.
+
+- [x] **`get_dj_concerts`** (tier 1). Modes `list` and `needs_status`.
+      ⚠️ **`needs_status` compares `starts_on` DIRECTLY**, so undated rows fall out by
+      construction — migration 010's column comment says why. An undated `screening` row is a
+      **watchlist** entry ("worth seeing whenever they tour"); asking whether Alex attended a
+      show that was never scheduled would be nonsense. Test covers it explicitly.
+      Rows carry `artist_name` joined in and `when` (past | upcoming | undated), so callers do
+      not redo date maths and get the null case wrong.
+- [x] **`update_dj_concert`** (tier 2). Not tier 3: a status change is the ordinary operation
+      this table exists for, and gating the weekly job's whole purpose behind a confirmation
+      would make Section 1 two round trips to answer one question.
+      ⚠️ **VALIDITY IS JUDGED ON THE RESULTING ROW, NOT THE PATCH.** A status change and a date
+      change can arrive in separate calls, so validating the patch alone would let an undated
+      row become `committed` and hit `dj_concerts_undated_status` with a constraint name
+      instead of an explanation.
+      ⚠️ **It will NOT create a row.** A typo'd id that silently created a second concert is
+      exactly how a wrong date gets duplicated instead of corrected.
+      Absent vs explicit null handled as in `record_dj_playlist` — omitting leaves alone,
+      passing null clears.
+- [x] **`record_dj_feedback`** (tier 1 — an append to an append-only log, per the table
+      comment "Never updated; a changed opinion is a new row").
+      🛑 **THE VOCABULARY WAS ALREADY THERE AND WAS ALREADY RIGHT.** `dj_feedback.sentiment`
+      has carried `love | like | neutral | dislike | curious` since Block A, and the column
+      comment already described the exact case the tool was requested for: *"curious means
+      wanting more rather than having judged. For an artist you missed live but still want to
+      see, that lingering want is recorded here, not on the concert row."* **Checked before
+      writing (§11.17 — the authority was queryable and was queried); inventing a second
+      vocabulary beside a correct one would have been the mistake.** A negative-control test
+      asserts an invented sentiment is refused with `curious` explained.
+- [x] **`upsert_dj_artist` gains `rename_to`** — an in-place UPDATE that keeps the `id`, so
+      every `dj_concerts.artist_id` link survives. Renaming onto an occupied name is refused as
+      a **MERGE**: two rows with their own concerts, mbid and feedback becoming one is a
+      decision nothing in a tool can make.
+      ⚠️ **AND IT NEEDS NO SECOND WRITE — CHECKED, NOT ASSUMED.** The open question was whether
+      renaming desyncs the artist alias map. It does not: `ARTIST_ALIASES` in `dj-normalise.ts`
+      reconciles **Takeout channel names with YouTube Music metadata**, both play-derived
+      strings feeding `match_key` and `dj_tracks.artist`. `dj_artists.name` is a different
+      system, read only by `get_dj_artists`, `upsert_dj_artist` and `create_dj_concert`'s
+      by-name lookup. **Nothing joins the two.** Recorded in the tool so it is not re-opened.
+- [x] **`create_dj_concert` gains a duplicate guard** — same artist, same date, refused with
+      the existing row's id and a pointer to `update_dj_concert`. Only for DATED concerts: two
+      undated rows for one artist are legitimate, since a lost historical show and a standing
+      watchlist entry are different facts with no date to collide on.
+- [x] **204 tests pass.** Both new guards verified to BITE by neutering them and re-running:
+      the rename guard fails 3, the duplicate guard fails 1.
+
+### ⚠️ A latent bug found while testing, not by it
+
+`update_dj_concert` computed its `changed` before/after map AFTER running the update, comparing
+against a **reference** to the pre-update row. PostgREST returns a fresh object so it worked;
+a client that returned a cached row would have reported **every update as changing nothing** —
+a diff that silently always says "no change" is worse than no diff. Snapshotted with a spread,
+and the comment says why rather than leaving it looking like a stylistic copy.
+
+### 🛑 THE RENAME OPENS A NEW ORPHANING ROUTE — understand before the mbid backfill
+
+- [ ] 🛑 **`create_dj_concert` RESOLVES ARTISTS BY NAME AND CREATES IF ABSENT.** So after
+      renaming `"Killers"` → `"The Killers"`, a later call passing the OLD name **creates a
+      second artist row** rather than finding the renamed one. The new duplicate guard does
+      **not** catch it — it keys on `(artist_id, starts_on)`, and the two rows have different
+      `artist_id`s, so the guard sees no collision and correctly permits what is actually a
+      split.
+      ⚠️ **This is the same failure the rename was designed to prevent, arriving by the other
+      door.** `rename_to` exists so renaming does not orphan concert links; this orphans them
+      one call later, from a stale name in a prompt, a script or a habit.
+      ⚠️ **AND IT IS SILENT AND SELF-CONSISTENT.** Both rows are valid, both have concerts,
+      neither violates anything. The symptom appears much later as "why does Weezer have no
+      setlists" — because the mbid is on the other row.
+      **Understand this BEFORE the mbid backfill runs**, since the backfill is precisely a pass
+      of renames followed by by-name work. Options not yet decided: have `create_dj_concert`
+      refuse to create an artist whose name differs only by a leading "The" or by diacritics
+      from an existing one; add an `artist_id` parameter so callers that have one need not go
+      through the name; or record former names so a rename remains findable.
+- [x] ✅ **DONE, AND THE ORDERING WAS WRONG.** This said RENAME → MBID → DIFF. There was no
+      rename step: `get_dj_setlists` keys on mbid and never sends a name upstream, so the
+      respelling was solving a lookup that does not happen — and for Goo Goo Dolls and Black
+      Eyed Peas it would have moved the stored name AWAY from MusicBrainz canonical, which
+      uses no leading "The". **22 of 22 mbids backfilled with zero renames.**
+
+### The `feedback_owed` pattern — recorded as a PRINCIPLE, spec §11.21
+
+- [x] 🛑 **A SECOND WRITE THAT THE FIRST ONE IMPLIES IS SURFACED, NOT PERFORMED.** Setting a
+      concert to `missed` implies a `dj_feedback` row against the artist, because the column
+      comment defines `missed` in terms of something the table does not hold.
+      **`update_dj_concert` returns `feedback_owed` with a ready `record_dj_feedback` call, and
+      writes nothing.**
+      ⚠️ **Writing it automatically would be a write nobody remembers happened** — months later
+      *"why is there a `curious` row for Alanis?"* has no answer in any conversation, and
+      `dj_feedback` is a log of STATED preference. A row nobody stated is inference wearing
+      preference's clothes, and every later read treats the two identically.
+      ⚠️ **Dropping it is the §13.3 failure** — it loses the half that makes `missed`
+      actionable.
+      ⚠️ **A READY CALL, NOT A REMINDER.** "You should also record feedback" is a to-do that
+      gets agreed with and not acted on; a filled-in call is one step from done AND is
+      **checkable** — a reader can disagree with the artist or the sentiment. Prose cannot be
+      disagreed with precisely.
+      ⚠️ **NOT WHAT TIER 3 IS FOR.** A tier-3 gate asks "are you sure about the write you
+      requested?" — same write, delayed. This is a DIFFERENT write the caller never requested
+      and may not know is implied.
+      ⚠️ **AND IT MUST NOT FIRE ON THE NORMAL CASE (§11.7):** null for every status but
+      `missed`, with a test asserting it.
+      **Full statement in spec §11.21. Applies wherever a write's meaning implies a write
+      elsewhere.**
+
+---
+
+### ✅ MBID BACKFILL COMPLETE — 22 of 22, verified live 2026-09-01
+
+Every artist has an mbid, and **each was verified by an actual `get_dj_setlists` call** — zero
+came back "no setlists". Weezer is `6fe07aa5-fec0-4eca-a456-f29bff451b04`, done first and
+confirmed two ways.
+
+⚠️ **THE PHASE 7 CAVEAT ABOVE IS NOW DISCHARGED.** "The acceptance test generalises less than it
+appears to — one act of 22, and not the one Alex is seeing next" was true when written and is
+no longer. The diff works for every act, including the October Weezer show.
+
+**Verified by calling, not by reading the column.** A non-null mbid proves a string was stored;
+a setlist coming back proves it identifies the right band at the upstream that matters. Those
+are different claims (§11.12), and only the second was worth having.
+
+### 🛑 THE RENAMES WERE DROPPED — THE PREMISE WAS WRONG
+
+Five artists were queued for respelling so MusicBrainz would resolve them. **None were renamed,
+and none should have been.**
+
+`get_dj_setlists` refuses names and keys solely on mbid (§12.1), so **a display name never
+reaches setlist.fm at all.** The rename was solving a lookup that does not happen.
+
+⚠️ **AND TWO OF THE FIVE WOULD HAVE MADE THINGS WORSE.** MusicBrainz canonical uses no leading
+"The" for Goo Goo Dolls or Black Eyed Peas, so "correcting" them would have moved the stored
+name AWAY from the authority it was meant to match — while orphaning nothing only because
+nothing joins on the name. A plausible fix, applied confidently, in the wrong direction.
+
+**Nothing was renamed and no rows were duplicated.** `rename_to` remains built and tested; it
+is simply not needed for this, and the next caller should know the reason rather than
+rediscovering it.
+
+### ⚠️ THE ORPHANING GAP IS REAL BUT NO LONGER BLOCKING — re-assessed
+
+It was recorded as *"understand before the mbid backfill runs"*. **The backfill has run, with no
+renames, so the forcing function is gone.** Downgraded from blocking to open.
+
+- [ ] ⚠️ **`create_dj_concert` resolves artists BY NAME and creates if absent**, so a call
+      passing a stale name after a rename creates a SECOND artist row. The duplicate guard does
+      not catch it — it keys on `(artist_id, starts_on)` and the two rows have different
+      `artist_id`s, so it sees no collision and correctly permits what is actually a split.
+      **Still silent and self-consistent:** both rows valid, both with concerts, nothing
+      violated; the symptom appears much later as "why does this artist have no setlists",
+      because the mbid is on the other row.
+      **What changed:** no rename has happened or is planned, so nothing is queued to trigger
+      it. It becomes live again the moment any rename is performed — including one done by hand
+      outside these tools.
+      Options, still undecided: refuse to create an artist differing from an existing one only
+      by a leading "The" or by diacritics; add an `artist_id` parameter so callers holding one
+      skip the name path; or record former names so a renamed artist stays findable.
+
+### ✅ FIRST REAL dj_feedback ROW — Alanis, 2026-09-01
+
+`64325176-1f5a-4c11-8ec7-6cb92cd9389c`, sentiment `curious`, against the artist.
+
+⚠️ **THE `feedback_owed` PATTERN WORKED AS DESIGNED, AND ITS VALUE WAS IN THE GAP.** The concert
+was set to `missed` while `record_dj_feedback` did not yet exist. The implied write was
+**surfaced and left unwritten** — so it survived as a visible, answerable item across the tool
+being built, and was answered the moment it could be. Had it been written automatically it
+would have been impossible (no tool); had it been dropped it would have been forgotten. Spec
+§11.21 is the general statement; this is the case that exercised it end to end.
+
+### 🛑 MUSICBRAINZ IDS CAME FROM CROSS-REFERENCES, NOT FROM A SEARCH PAGE — a limitation to fix before the skill
+
+MusicBrainz blocks direct page fetches without JavaScript. Every one of the 21 ids was obtained
+from **Wikidata cross-references and search snippets**, never from a MusicBrainz search results
+page.
+
+**It worked** — all 21 verified live. But ⚠️ **NO EXHAUSTIVE CANDIDATE LIST WITH DISAMBIGUATION
+TEXT WAS EVER SEEN**, including for Chicago and Oasis, the two most collision-prone names in
+the set.
+
+⚠️ **THREE NEAR-MISSES WERE CAUGHT BY LUCK OF CORROBORATION, NOT BY SEEING THE FULL SET:** Paul
+Di'Anno's Killers, a Liverpool Ed Sheeran, and Skellern's 1980s Oasis. Each was noticed because
+a second source happened to disagree — which is a method that works until the day it doesn't.
+**A verification that succeeds by corroboration cannot report how close it came to failing.**
+
+- [ ] 🛑 **A ROUTE TO THE MUSICBRAINZ SEARCH API IS NEEDED BEFORE THE CONCERT-PLAYLIST SKILL
+      SHIPS.** §13.1's first phrasing — *"Metallica is coming to the Sphere, build a concert
+      playlist"* — resolves an artist BY NAME, and a genuinely close collision would not be
+      visible to the resolver at all. That is §13.2's *exact match or ask* rule applied one
+      level up: the skill cannot ask about an ambiguity it cannot see.
+      The API (`/ws/2/artist?query=`) returns candidates WITH disambiguation text and needs no
+      JavaScript, so the fix is a route, not a rethink. ⚠️ It has its own rate limit and a
+      required User-Agent — treat it like setlist.fm, with the key/UA per-host and NOT copied
+      into the repo.
+
 ## Phase 7 — setlist.fm and cram logic
 
 > 🛑 **THE FIRST CRAM ROW EXERCISES TWO DEFERRED RULES.** Both have been verified only
@@ -1999,8 +2425,25 @@ off the dispatch path and are pending re-confirmation through a real MCP call.**
 - [ ] Diff the last 10 **Foo Fighters** setlists against `PLV2XoCH1Pv5y4eryZrOdxG2XlSxfdW32l`
       (30 tracks, via `get_dj_managed_playlists` tracks mode). Mid-tour on *Take Cover*,
       18–24 song sets, so the window is real full-length shows and `N of 10` is comparable.
+- [x] ✅ **SUPERSEDED 2026-09-01 — the mbid backfill closed this. 22 of 22 artists now have an
+      mbid, each verified by a live `get_dj_setlists` call. Weezer included. Kept for the
+      reasoning; the measurement below was true when written.**
+      🛑 **THE ACCEPTANCE TEST GENERALISES LESS THAN IT APPEARS TO — measured 2026-09-01.**
+      **22 artist rows; 21 have `mbid: null`.** Foo Fighters is the ONLY artist in the database
+      that can be diffed at all, because `get_dj_setlists` refuses a name and keys solely on
+      mbid (§12.1) — correctly, since a setlist for the wrong band is worse than none.
+      ⚠️ **So "the Phase 7 diff works" currently means "it works for one act out of 22", and
+      it is not the act Alex is seeing next.** Weezer is his one committed upcoming show
+      (2026-10-23, Vegas) and **has no mbid**, so the very playlist the phase was designed
+      around still cannot be diffed. A green acceptance test on Foo Fighters says nothing
+      about the other 21 — the failure they would produce is the same *"you have not set the
+      mbid"* every time, which is a readable failure but a failure nonetheless.
+      **Backfilling mbids is a prerequisite for the weekly job being useful, not a nicety.**
+      ⚠️ Five of them also want a rename first — Killers, Motley Crue, Smashing Pumpkins, Goo
+      Goo Dolls, Black Eyed Peas need "The" or diacritics for the MusicBrainz lookup — which is
+      step-2's `upsert_dj_artist` rename path, so the ordering is: rename, then mbid, then diff.
 - [ ] ⚠️ **Second, later test — Weezer, around 20 September**, once The Gathering has 10 shows
-      behind it. *C.E.O.*, *Hoops* and *We Might as Well Be Strangers* must surface from
+      behind it. **Blocked on the mbid above.** *C.E.O.*, *Hoops* and *We Might as Well Be Strangers* must surface from
       **real tour sets**, not the August TV appearances they currently come from.
       **If the diff surfaces nothing once the tour is underway, the diff logic is wrong.**
 
@@ -2019,6 +2462,70 @@ off the dispatch path and are pending re-confirmation through a real MCP call.**
       (spec §12.3). Unqualified it treats a 1-song TV slot as a 24-song set.
 - [ ] **PROPOSAL ONLY.** One inbox item. Nothing writes to YouTube unattended.
 - [ ] Weekly `platform_schedules` row — seeded **last**, per §7 phase 5.
+
+### 🛑 THE FIRST INBOX ITEM WAS THE WRONG SHAPE — spec §12 revised 2026-09-01
+
+The 2026-09-01 item was **wrong in shape, not in content**. The four songs and *"shall I add
+them?"* were buried under three paragraphs on how to read *"1 of 10"*, and two items were
+escalated as decisions that could not be made from what was presented.
+
+⚠️ **THE CAUSE, AND BOTH INPUTS WERE CORRECT.** §12.3 requires the denominator's shape to be
+visible; §12.7 requires refusing to guess. Followed literally *in the written item*, together
+they produce 90% epistemics and 10% proposal. **The fix is not to relax either rule — it is
+that they govern the ANALYSIS while §12.12 governs the PROSE.** The denominator now goes inside
+the sentence: *"only at the Hollywood Bowl show"*, never *"1 of 10"* plus an explanation.
+
+⚠️ **AND THE CRAM HALF WAS NEVER DONE AT ALL.** The diff asked *"what is in the setlist that is
+not in my playlist?"* It never asked *"what is in my playlist that I have barely heard?"* —
+and that second question **is** the cram list. §5's least-familiar-first ordering was never
+computed, so a playlist-completeness check shipped as concert prep. Both halves are required.
+
+**Spec §12.8–§12.13 now specify the item, with a WORKED EXAMPLE in §12.13** — rules alone
+produced what shipped, so the example is what the weekly job gets written against.
+
+- [ ] **Section 1 — passed concerts needing a status.** `dj_concerts` past-dated while status
+      is `screening`/`interested`/`committed`. One line each. ⚠️ Never guess from listening: a
+      play spike is equally consistent with cramming for a show he then skipped. ⚠️ `missed`
+      implies a `dj_feedback` row, not just a status change (§13.3). Omit the section entirely
+      when empty — a weekly "nothing to report" trains him to skip it (§11.7).
+- [ ] **Section 2 — upcoming concerts**, six fields per block, no seventh: date, playlist name,
+      `runs`, `last_run_on`, songs missing from setlists, `cram_stale`.
+- [ ] 🛑 **`get_dj_managed_playlists mode=engagement` — DOES NOT EXIST, and both listening
+      metrics depend on it.** `get_dj_plays` familiarity returns per-group aggregates, not the
+      per-day co-occurrence needed. Definitions are pinned in §12.9 rather than left to
+      implementation: `runs` = days in the trailing 90 with at least
+      `max(4, ceil(0.5 * distinct_groups))` distinct groups played; `last_run_on` = the most
+      recent such day; `last_touched_on` shown only when `last_run_on` is null. ⚠️ Must return
+      `threshold_used` and `window_days` — a bare `runs: 3` is uninterpretable and would be the
+      next number needing three paragraphs of explanation.
+- [ ] 🛑 **Cram ordering across the WHOLE playlist (§12.10) — never computed on real data.**
+      `distinct_days` asc, then `days_since_last` desc (nulls first), then body position for
+      determinism. Top `cram_cap`.
+- [ ] ⚠️ **`cram_stale` fires on a STATE, never on sort drift.** Either (a) a playlist track
+      with `distinct_days: 0` holding no cram row, or (b) a cram track with
+      `distinct_days >= 5`. A recomputed top-8 differs most weeks on an actively-played
+      playlist, and that flag would be noise inside a month (§11.7).
+- [ ] 🛑 **Ambiguity resolves or drops — it is never arbitrated to Alex (§12.11).** *Razor*
+      returned two Foo Fighters studio cuts one second apart (`FBnH6sBvnl0` *In Your Honor*
+      4:54, `JSTGZqaEtkA` *Catch And Release* 4:53) and shipped as a question he had no way to
+      answer. Under the tie-break that is the same master → take the original album, one line,
+      no question. ⚠️ This does NOT weaken §12.7: *several plausible candidates* is a different
+      state from *no match*, and only the second is NOT FOUND.
+- [ ] **Tone (§12.12): end with one question — "Want me to make these changes?"** No paragraph
+      explaining how to read a number. If a number needs caveats to be read right, present a
+      different number.
+- [ ] 🛑 **A CONCERT PLAYLIST WITH NO `concert_id` IS A FINDING, NOT A NULL.** The weekly job
+      must surface `kind='concert' AND concert_id IS NULL` as something to fix, in Section 1,
+      rather than skipping the playlist because it has nothing to join to.
+      **Found the hard way 2026-09-01:** Foo Fighters had an artist row, a playlist, 30
+      recorded body rows, a full setlist diff and a drafted inbox proposal — and **no
+      `dj_concerts` row at all.** Phase 7 built and demonstrated a concert diff for a concert
+      that was not in the database, and nothing anywhere noticed for the length of a phase.
+      ⚠️ **That is the shape worth catching, and it generalises past this one row: every piece
+      present except the one that ties them together.** Each component was individually valid,
+      so no per-component check could fire; only a check on the JOIN can. The absence was
+      invisible precisely because everything that would normally be evidence of a concert —
+      the playlist, the artist, the setlists, the proposal — was present and correct.
 
 ### Cram logic — blocked until a suggestion is accepted
 

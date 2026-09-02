@@ -104,6 +104,9 @@ _SETLIST_PAGE = {
         {
             "id": "abc1234",
             "eventDate": "22-08-2026",
+            # diff_dj_setlists matches every search result against the PERFORMING
+            # artist, taken from here rather than from the caller.
+            "artist": {"name": "Foo Fighters"},
             "venue": {
                 "name": "Hollywood Bowl",
                 "city": {"name": "Los Angeles", "country": {"code": "US"}},
@@ -170,6 +173,14 @@ _CALLS: dict[str, dict] = {
         "mbid": "67f66c07-6e61-4026-ade5-7e782fad3a5d",
         "limit": 10,
     },
+    # resolve=false so the envelope case makes no search calls: this suite
+    # exercises DISPATCH, and a diff that searched would be testing ytmusicapi.
+    "diff_dj_setlists": {
+        "mbid": "67f66c07-6e61-4026-ade5-7e782fad3a5d",
+        "body": [{"title": "Everlong"}],
+        "limit": 10,
+        "resolve": False,
+    },
     "get_workshop_status": {},
     "get_job_status": {"job_id": "nope"},
     "list_jobs": {},
@@ -218,6 +229,9 @@ class ToolEnvelopeTests(unittest.TestCase):
             ),
             mock.patch("workshop.tools.dj._call", _fake_call),
             mock.patch("workshop.tools.dj_write._call", _fake_call),
+            # dj_setlists imports _call by NAME, so its module binding is a
+            # separate object from dj._call and needs its own patch.
+            mock.patch("workshop.tools.dj_setlists._call", _fake_call),
             mock.patch(
                 "workshop.tools.dj_setlists._read_api_key", lambda: "test-key"
             ),

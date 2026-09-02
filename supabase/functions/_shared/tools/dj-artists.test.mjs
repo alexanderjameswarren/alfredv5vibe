@@ -159,3 +159,64 @@ test("name matching is exact, not fuzzy", async () => {
   assert.equal(r.returned, 1);
   assert.equal(r.artists[0].name, "Live");
 });
+
+// --- rename_to: an in-place rename, which is the only safe kind -------------
+//
+// Five artists need respelling before MusicBrainz resolves them (Killers ->
+// The Killers, Motley Crue -> Mötley Crüe, and similar). Renaming by INSERTING
+// the correct spelling would orphan every concert link, because
+// dj_concerts.artist_id points at the id and not the name.
+
+test("rename_to renames IN PLACE, keeping the id every concert points at", async () => {
+  const db = makeDb([{ name: "Killers", mbid: null }]);
+  const before = db._rows[0].id;
+  const out = await put(db, { name: "Killers", rename_to: "The Killers" });
+  assert.equal(out.artist.name, "The Killers");
+  assert.equal(out.artist.id, before, "the id MUST survive — links hang off it");
+  assert.equal(db._rows.length, 1, "a rename must not create a second row");
+});
+
+test("a rename can set the mbid in the same call", async () => {
+  // The actual workflow: respell, then the MusicBrainz lookup resolves.
+  const db = makeDb([{ name: "Motley Crue" }]);
+  const out = await put(db, { name: "Motley Crue", rename_to: "Mötley Crüe", mbid: VALID });
+  assert.equal(out.artist.name, "Mötley Crüe");
+  assert.equal(out.artist.mbid, VALID);
+});
+
+test("renaming onto an EXISTING name is refused as a merge", async () => {
+  // ⚠️ The unique index on (user_id, name) would refuse this anyway. Refusing it
+  // here says WHY: two rows with their own concerts, mbid and feedback would
+  // have to become one, and which survives is a decision nothing here can make.
+  const db = makeDb([{ name: "Killers" }, { name: "The Killers" }]);
+  await assert.rejects(
+    () => put(db, { name: "Killers", rename_to: "The Killers" }),
+    /MERGE, not a rename/,
+  );
+  assert.equal(db._rows.length, 2, "nothing written");
+});
+
+test("renaming an artist that does not exist is refused, not created", async () => {
+  // Creating under the NEW name would look like a successful rename and leave
+  // any concerts still pointing at the row that was meant to be fixed.
+  const db = makeDb([]);
+  await assert.rejects(
+    () => put(db, { name: "Nobody", rename_to: "The Nobodies" }),
+    /no artist by that name exists/,
+  );
+  assert.equal(db._rows.length, 0);
+});
+
+test("a case-only rename is allowed and does not self-collide", async () => {
+  // The lookup is ilike, so "killers" already finds "Killers". A rename that
+  // differs only in case must not see ITSELF as the occupying row.
+  const db = makeDb([{ name: "the killers" }]);
+  const out = await put(db, { name: "the killers", rename_to: "The Killers" });
+  assert.equal(out.artist.name, "The Killers");
+});
+
+test("without rename_to the name is untouched — the path is opt-in", async () => {
+  const db = makeDb([{ name: "Killers" }]);
+  const out = await put(db, { name: "Killers", mbid: VALID });
+  assert.equal(out.artist.name, "Killers");
+});

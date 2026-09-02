@@ -23,9 +23,17 @@ import {
 } from "../_shared/tools/dj-courier.ts";
 import {
   recordDjPlaylistTool,
+  recordDjPlaylistBulkTool,
+  dryRunDjPlaylistTool,
+  classifyRead,
   createDjConcertTool,
 } from "../_shared/tools/dj-playlists.ts";
-import { getDjPlaysTool, getDjManagedPlaylistsTool } from "../_shared/tools/dj-reads.ts";
+import { getDjPlaysTool, getDjManagedPlaylistsTool, getDjJazzActivityTool } from "../_shared/tools/dj-reads.ts";
+import {
+  getDjConcertsTool,
+  updateDjConcertTool,
+  recordDjFeedbackTool,
+} from "../_shared/tools/dj-concerts.ts";
 import { getDjArtistsTool, upsertDjArtistTool } from "../_shared/tools/dj-artists.ts";
 import {
   getItems,
@@ -1090,11 +1098,13 @@ export function createMcpServer(token: string) {
     {
       title: "Record DJ Playlist",
       description:
-        "Record a managed playlist and its membership: writes dj_playlists and dj_playlist_tracks in ONE call, resolving every video_id to a dj_tracks row server-side (creating tracks and canonical groupings as needed, via the same shared resolver record_dj_plays uses). Re-recording the same yt_playlist_id UPDATES it — that is how the yt_set_video_id cache gets refreshed, which any later move or remove depends on. A track may hold one row per ZONE, so the same song legitimately appears in both cram and body; twice in the same zone is rejected. Rendered YouTube order is every cram row by position, then every body row by position. Tier 2.",
+        "Record a managed playlist and its membership: writes dj_playlists and dj_playlist_tracks in ONE call, resolving every video_id to a dj_tracks row server-side (creating tracks and canonical groupings as needed, via the same shared resolver record_dj_plays uses). Re-recording the same yt_playlist_id UPDATES it — that is how the yt_set_video_id cache gets refreshed, which any later move or remove depends on. A track may hold one row per ZONE, so the same song legitimately appears in both cram and body; twice in the same zone is rejected. Rendered YouTube order is every cram row by position, then every body row by position. " +
+        "⚠️ OMITTING A FIELD AND PASSING IT AS NULL ARE DIFFERENT INSTRUCTIONS. Omit `concert_id` or `description` and the stored value is left ALONE; pass either explicitly as null to CLEAR it. Omit `tracks` (or send an empty array) and membership is left alone entirely — the response says `membership_mode: \"untouched\"` rather than reporting 0 rows written, because 'nothing to do' and 'nothing given' are different answers. " +
+        "⚠️ MEMBERSHIP IS UPSERT-ONLY: NOTHING HERE EVER DELETES A ROW, so the recorded body can grow but never shrink. If a track was removed from the YouTube playlist, its row survives and the response reports it as `stale_rows` with a `stale_sample` — reported, never acted on, because silently dropping membership on a re-record is a destructive side effect and this is a tier-2 tool. Reconcile deliberately. Tier 2.",
       inputSchema: {
         yt_playlist_id: z.string().describe("YouTube's playlist id, from create_dj_playlist or get_dj_playlists."),
         name: z.string().describe("Playlist name."),
-        kind: z.enum(["concert", "artist", "jazz", "discovery"]).describe("Only 'concert' has a setlist body and a cram block; the others are flat."),
+        kind: z.enum(["concert", "artist", "jazz", "discovery", "utility"]).describe("Only 'concert' has a setlist body and a cram block; the others are flat. `kind` decides how much of DJ applies: concert gets the weekly setlist diff and cram list; artist/jazz/discovery get engagement metrics and occasional proposals; utility gets metrics ONLY and is never proposed against — running, yoga, massage, sleep, party and soundtrack playlists. ⚠️ Do not file an activity playlist as 'discovery' to avoid picking: discovery is the category DJ uses to FIND NEW ARTISTS, and filling it with running playlists makes that signal wrong rather than weak."),
         concert_id: z.string().optional().describe("UUID from create_dj_concert. Only allowed when kind is 'concert'."),
         description: z.string().optional().describe("Optional description."),
         cram_cap: z.number().optional().describe("Max songs in the cram block. Defaults to 8 — past roughly that, cram stops focusing attention and becomes the playlist again."),
@@ -1114,21 +1124,107 @@ export function createMcpServer(token: string) {
     {
       title: "Create DJ Concert",
       description:
-        "Create a concert row covering the whole pipeline from screening to attended. The artist is resolved BY NAME and created if unknown — dj_concerts.artist_id is NOT NULL with ON DELETE RESTRICT, so a concert cannot exist without one, and sequencing that is not the caller's problem. Leave ends_on null for a single night; fill it for a residency, where the run is starts_on..ends_on. Tier 2.",
+        "Create a concert row covering the whole pipeline from screening to attended. The artist is resolved BY NAME and created if unknown — dj_concerts.artist_id is NOT NULL with ON DELETE RESTRICT, so a concert cannot exist without one, and sequencing that is not the caller's problem. Leave ends_on null for a single night; fill it for a residency, where the run is starts_on..ends_on. " +
+        "⚠️ A CONCERT ROW DOES NOT NEED A PLAYLIST, AND DOES NOT NEED A DATE. `starts_on` is optional: omit it for history whose date is lost, or for an undated 'screening' row, which is a standing watchlist entry — an act worth seeing whenever they tour. Only 'interested' and 'committed' require a date, because only those mean a specific show. Undated rows are inert for past/upcoming filters by construction, so they cannot land wrongly in either. Tier 2.",
       inputSchema: {
         artist_name: z.string().describe("Artist name. Matched exactly against dj_artists, created if absent."),
         artist_tags: z.array(z.string()).optional().describe("Only used when the artist is newly created. Era and genre descriptors for discovery, e.g. ['90s','alt-rock']."),
-        starts_on: z.string().describe("YYYY-MM-DD. First (or only) night."),
+        starts_on: z.string().optional().describe("YYYY-MM-DD. First (or only) night. OPTIONAL: omit it for a show whose date is not known — either history whose date is lost, or an undated 'screening' row, which is a standing watchlist entry meaning an act worth seeing whenever they tour. ⚠️ NEVER pass an approximate date to fill the gap: once written, a guessed date is indistinguishable from a checked one, and undated rows are handled correctly everywhere by design."),
         ends_on: z.string().optional().describe("YYYY-MM-DD. Null for a single night; set for a residency."),
         status: z
           .enum(["screening", "interested", "committed", "attended", "missed", "rejected"])
-          .describe("screening = deciding. interested = want to, not committed. committed = going. attended = went. missed = did NOT go but still want to see them. rejected = not for me."),
+          .describe("screening = deciding whether it is worth going — WITH a date that is a specific show, WITHOUT one it is a standing watchlist entry for an act worth seeing whenever they tour. interested = want to, not committed. committed = going. attended = went. missed = did NOT go but still want to see them. rejected = not for me. ⚠️ 'interested' and 'committed' both mean a SPECIFIC show and are REFUSED without `starts_on`; if you do not know the date, the accurate status is 'screening', not a guessed date."),
         tour_name: z.string().optional().describe("e.g. 'WEEZER: The Gathering'."),
         venue_id: z.string().optional().describe("UUID of an existing dj_venues row. There is no venue-creation tool yet — put the location in `notes` until there is."),
         notes: z.string().optional().describe("Free text about this show."),
       },
     },
     async (args) => runToolForMcp(createDjConcertTool, args, token),
+  );
+
+  server.registerTool(
+    "get_dj_concerts",
+    {
+      title: "Get DJ Concerts",
+      description:
+        "Read concert rows — the pipeline from screening through to what happened. Two modes. `list` filters by status, artist, date range, or `undated: true`. `needs_status` returns shows whose date has PASSED while the status still says undecided (screening/interested/committed) — that is §12.8 Section 1's whole input: the shows to ask 'did you go?' about. " +
+        "Each row carries `artist_name` joined in, and `when` (past | upcoming | undated) so callers do not redo date maths. " +
+        "⚠️ `starts_on` MAY BE NULL, legitimately, in two shapes: a historical show whose date is lost, and an undated 'screening' row, which is a standing WATCHLIST entry for an act worth seeing whenever they tour. Undated rows are neither past nor upcoming and are excluded from `needs_status` by construction — a watchlist entry is not a show you might have attended. Use `undated: true` to see them. Tier 1, read-only.",
+      inputSchema: {
+        mode: z.enum(["list", "needs_status"]).optional().describe("Defaults to 'list'. 'needs_status' is the weekly job's Section 1 input."),
+        status: z.union([z.string(), z.array(z.string())]).optional().describe("list: one status or several. screening | interested | committed | attended | missed | rejected."),
+        artist_id: z.string().optional().describe("list: filter to one artist."),
+        from_date: z.string().optional().describe("list: YYYY-MM-DD, inclusive, on starts_on."),
+        to_date: z.string().optional().describe("list: YYYY-MM-DD, inclusive, on starts_on."),
+        undated: z.boolean().optional().describe("list: return ONLY rows with no starts_on — the watchlist plus undated history."),
+        limit: z.coerce.number().optional().describe("Max rows (default 20, cap 50)."),
+      },
+    },
+    async (args) => runToolForMcp(getDjConcertsTool, args, token),
+  );
+
+  server.registerTool(
+    "update_dj_concert",
+    {
+      title: "Update DJ Concert",
+      description:
+        "Change an existing concert row: status, dates, tour name, notes, venue. " +
+        "⚠️ THIS IS WHAT MAKES §12.8's SECTION 1 REAL. Until 2026-09-01 dj_concerts was write-once through MCP — every row was frozen at the status it was born with, so asking 'did you go?' had nowhere to put the answer. " +
+        "Omitting a field leaves it alone; passing it as null clears it. Validity is judged on the RESULTING row, not the patch, because a status change and a date change can arrive in separate calls: 'interested' and 'committed' both mean a specific show and are refused without a `starts_on`. " +
+        "⚠️ It will NOT create a row — a typo'd id that silently created a second concert is how a wrong date gets duplicated instead of corrected. " +
+        "When a status becomes 'missed' the response carries `feedback_owed`: per the column comment, missed means did NOT go but STILL WANT to see them, and that want is a fact about the ARTIST, so it belongs in a dj_feedback row. This tool surfaces it rather than writing it — a second write smuggled into a status change is one nobody remembers happened. Tier 2.",
+      inputSchema: {
+        concert_id: z.string().describe("UUID of the concert to change. From get_dj_concerts."),
+        status: z.enum(["screening", "interested", "committed", "attended", "missed", "rejected"]).optional().describe("screening = deciding, and undated it is a standing watchlist entry. interested = want to. committed = going. attended = went. missed = did NOT go but still want to see them. rejected = not for me."),
+        starts_on: z.string().optional().describe("YYYY-MM-DD, or null to clear. Required by 'interested' and 'committed'."),
+        ends_on: z.string().optional().describe("YYYY-MM-DD, or null. Set only for a residency."),
+        tour_name: z.string().optional().describe("e.g. 'WEEZER: The Gathering'."),
+        notes: z.string().optional().describe("Free text about this show. The place to put a venue until dj_venues has tools."),
+        venue_id: z.string().optional().describe("UUID of an existing dj_venues row."),
+      },
+    },
+    async (args) => runToolForMcp(updateDjConcertTool, args, token),
+  );
+
+  server.registerTool(
+    "record_dj_feedback",
+    {
+      title: "Record DJ Feedback",
+      description:
+        "Append a stated preference about ONE subject — an artist, concert, album, track or venue. " +
+        "⚠️ APPEND-ONLY: a changed opinion is a NEW row, never an edit. How Alex feels about something is the newest row, which is why dj_artists deliberately holds no stance column — there is exactly one place that truth lives. " +
+        "`sentiment` is love | like | neutral | dislike | curious. 'curious' means WANTING MORE rather than having judged: it is the right one for an act missed live but still wanted, which is the case update_dj_concert flags as `feedback_owed` when a concert becomes 'missed'. " +
+        "Exactly one subject id, and at least one of sentiment or note. Tier 1 — an append to an append-only log.",
+      inputSchema: {
+        artist_id: z.string().optional().describe("Subject: an artist. Exactly one subject."),
+        concert_id: z.string().optional().describe("Subject: one night."),
+        album_id: z.string().optional().describe("Subject: an album."),
+        track_id: z.string().optional().describe("Subject: one track."),
+        venue_id: z.string().optional().describe("Subject: a venue."),
+        sentiment: z.enum(["love", "like", "neutral", "dislike", "curious"]).optional().describe("'curious' = wanting more rather than having judged."),
+        note: z.string().optional().describe("Free text. Required if no sentiment."),
+        occurred_on: z.string().optional().describe("YYYY-MM-DD. Defaults to today."),
+        source: z.enum(["chat", "weekly_review", "manual", "import"]).optional().describe("Defaults to 'chat'."),
+      },
+    },
+    async (args) => runToolForMcp(recordDjFeedbackTool, args, token),
+  );
+
+  server.registerTool(
+    "get_dj_jazz_activity",
+    {
+      title: "Get DJ Jazz Activity",
+      description:
+        "What has been played in the jazz bucket, by artist, over a trailing window. " +
+        "🛑 JAZZ IS A PROXY, NOT A GENRE, AND THE REPORT MUST SAY SO. Nothing marks a track as jazz: dj_tracks has no genre column and dj_artists (which has tags) holds 22 concert acts against 1,206 distinct artists played (spec §14.1, §14.3). A play counts as jazz if its track is in a kind='jazz' playlist OR its artist appears in one. The payload ships `definition` and `gaps` for exactly this reason — a jazz summary that does not say what counted as jazz invites the reader to assume a genre model exists. " +
+        "⚠️ IT CANNOT PROPOSE NEW ARTISTS. It reports what was played and what the data cannot answer — subgenre (no link from plays to artist identity) and unplayed albums (dj_albums has no writer and no data). 'Try Andrew Hill' comes from the conversation, never from listening history; there is no source for it here. " +
+        "`distinct_days` is DISTINCT DAYS PLAYED, not a play count. `in_playlist` false means the artist reached the list through the artist arm rather than membership. Tier 1, read-only.",
+      inputSchema: {
+        window_days: z.coerce.number().optional().describe("Trailing window in days. Default 90."),
+        limit: z.coerce.number().optional().describe("Max artists (default 20, cap 50), ordered by distinct_days descending."),
+      },
+    },
+    async (args) => runToolForMcp(getDjJazzActivityTool, args, token),
   );
 
   server.registerTool(
@@ -1165,10 +1261,13 @@ export function createMcpServer(token: string) {
         "Note `position` is per-ZONE, so cram 1 and body 1 are different entries and one track may legitimately hold a row in each — that duplication is what lets a cram clear leave the setlist intact. " +
         "⚠️ `yt_set_video_id` is a CACHE: stale by default and reused across playlists for DIFFERENT songs. `counts.missing_set_video_id` tells you how many rows cannot be moved or removed without a fresh read. Tier 1, read-only.",
       inputSchema: {
-        mode: z.enum(["list", "tracks"]).optional().describe("Defaults to 'list'."),
+        mode: z.enum(["list", "tracks", "engagement", "cram"]).optional().describe("Defaults to 'list'. `engagement` returns §12.9's listening metrics per playlist; `cram` returns §12.10's least-familiar-first order for ONE concert playlist plus whether the stored cram block has gone stale."),
         yt_playlist_id: z.string().optional().describe("mode=tracks: YouTube's playlist id. Either this or playlist_id — Workshop only ever knows this one."),
         playlist_id: z.string().optional().describe("mode=tracks: the internal dj_playlists uuid."),
-        kind: z.enum(["concert", "artist", "jazz", "discovery"]).optional().describe("mode=list: filter by kind."),
+        kind: z.enum(["concert", "artist", "jazz", "discovery", "utility"]).optional().describe("mode=list or mode=engagement: filter by kind. 'utility' playlists are recorded and measured but never proposed against."),
+        playlist_ids: z.array(z.string()).optional().describe("mode=engagement: restrict to these internal playlist uuids."),
+        window_days: z.coerce.number().optional().describe("mode=engagement: trailing window, default 90."),
+        as_of: z.string().optional().describe("mode=cram: YYYY-MM-DD basis for days_since_last. Defaults to today UTC."),
         concert_id: z.string().optional().describe("mode=list: filter to playlists linked to one concert."),
         limit: z.number().optional().describe("mode=list: max playlists (default 20, cap 50)."),
       },
@@ -1350,6 +1449,150 @@ app.post("/import-takeout", async (c) => {
     // Verbatim. A partial-batch failure carries its own committed-row counts
     // and must not be reworded on the way out.
     return c.json({ mode, error: (e as Error).message }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Bulk playlist import — an HTTP endpoint, deliberately NOT an MCP tool
+// ---------------------------------------------------------------------------
+//
+// Phase 6b recorded 41 playlist rows and no membership. Filling ~1,500 tracks
+// across 34 playlists by hand means round-tripping every title, artist and
+// set_video_id through a conversation — roughly a quarter of a million tokens,
+// and it makes the model the transport, which is how a video_id gets corrupted
+// into a row that insert-only tables cannot take back.
+//
+// Same shape as /import-takeout, for the same reasons, and it CALLS THE SAME
+// TOOLS rather than reimplementing them.
+//
+//   POST /mcp/import-playlist?mode=dry_run   -> predicts, writes nothing
+//   POST /mcp/import-playlist?mode=confirm   -> writes, via record_dj_playlist
+//
+// ONE PLAYLIST PER CALL, dry-run then confirm. A single call that imported all
+// 34 would solve transport by deleting the review gate that made transport
+// tolerable.
+//
+// ⚠️ THE CALLER MUST SEND library_count — the count YouTube reports for the
+// playlist — alongside the tracks it actually read. The 200-track cap is
+// silent: get_dj_playlists mode=contents has no offset and no cursor, so a
+// 223-track playlist returns 200 rows and looks exactly like a complete read.
+// Comparing the two is the only way to catch it, and a mismatch is a STOP, not
+// a warning. Recording 200 of 223 would produce a body that is wrong in a way
+// nothing downstream could detect.
+// The import targets: what Supabase has recorded, so the script never has to
+// guess a playlist's `kind` from its YouTube title.
+//
+// ⚠️ THIS EXISTS SO THE SCRIPT NEEDS EXACTLY ONE CREDENTIAL. The obvious
+// alternative — reading dj_playlists over PostgREST from the script — needs an
+// `apikey` header as well as the bearer token, which is a second secret to
+// fetch and paste for no gain. /import-takeout established the pattern: one
+// pasted user JWT, nothing else. It calls the existing tool rather than
+// querying, so RLS and the envelope are unchanged.
+app.get("/import-playlist/targets", async (c) => {
+  const auth = c.req.header("authorization");
+  if (!auth?.startsWith("Bearer ")) return c.json({ error: "Missing bearer token" }, 401);
+  try {
+    const result = await getDjManagedPlaylistsTool({ mode: "list", limit: 50 }, c.req.raw);
+    return c.json(result.data as Record<string, unknown>);
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 500);
+  }
+});
+
+app.post("/import-playlist", async (c) => {
+  const auth = c.req.header("authorization");
+  if (!auth?.startsWith("Bearer ")) return c.json({ error: "Missing bearer token" }, 401);
+
+  const mode = c.req.query("mode") ?? "dry_run";
+  if (mode !== "dry_run" && mode !== "confirm") {
+    return c.json({ error: "mode must be 'dry_run' or 'confirm'" }, 400);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = await c.req.json();
+  } catch (e) {
+    return c.json({ error: `body must be JSON: ${(e as Error).message}` }, 400);
+  }
+  if (!body?.yt_playlist_id || !Array.isArray(body?.tracks)) {
+    return c.json(
+      { error: "body must be { yt_playlist_id, name, kind, library_count, tracks: [...] }" },
+      400,
+    );
+  }
+
+  // --- The truncation guard, before anything else.
+  const libraryCount = body.library_count;
+  if (typeof libraryCount !== "number") {
+    return c.json({
+      error:
+        "`library_count` is required — the track count YouTube reports for this " +
+        "playlist. Without it a truncated read cannot be distinguished from a " +
+        "complete one, because get_dj_playlists mode=contents caps at 200 with no " +
+        "cursor and reports no error when it clips.",
+    }, 400);
+  }
+  // ⚠️ THE CEILING COMES FROM THE CALLER, NOT FROM A CONSTANT HERE. A constant
+  // made this guard measure one path and report on another: it held 200 while
+  // the bulk path fetched 400, so every read over 200 read as clipped.
+  // Requiring the caller to state the ceiling it used makes the assumption
+  // explicit and impossible to get silently wrong — the same argument as
+  // library_count. Defaulting it would recreate the bug quietly.
+  const readCap = body.read_cap;
+  if (typeof readCap !== "number") {
+    return c.json({
+      error:
+        "`read_cap` is required — the track ceiling this caller read with. " +
+        "Without it a clipped read cannot be told from a complete one, and a " +
+        "guard holding its own copy of the number disagrees with the reader the " +
+        "moment either changes.",
+    }, 400);
+  }
+
+  const readCount = (body.tracks as unknown[]).length;
+  const verdict = classifyRead(libraryCount, readCount, readCap);
+
+  if (verdict.kind === "clipped_by_cap" || verdict.kind === "over_read") {
+    return c.json({
+      mode,
+      stop: true,
+      reason: verdict.kind,
+      yt_playlist_id: body.yt_playlist_id,
+      library_count: libraryCount,
+      read_count: readCount,
+      read_cap: readCap,
+      error: verdict.message,
+    }, 409);
+  }
+  if (verdict.kind === "shortfall") {
+    // Recorded, not refused — but never silently.
+    body.__shortfall_note = verdict.note;
+  }
+
+
+  try {
+    // ⚠️ THE BULK VARIANT, NOT THE MCP ONE. Same handler, higher track ceiling —
+    // the MCP tool's 300 exists to bound a payload a model composed, and nothing
+    // here came through a conversation. Using recordDjPlaylistTool would refuse
+    // Elise's fun list at 379 with a message about a cap that is not this path's.
+    const tool = mode === "confirm" ? recordDjPlaylistBulkTool : dryRunDjPlaylistTool;
+    const result = await tool(body, c.req.raw);
+    return c.json({
+      mode,
+      library_count: libraryCount,
+      read_count: readCount,
+      read_cap: readCap,
+      // ⚠️ ECHOED SO THE CALLER CAN VERIFY WHICH TOOL RAN. "Both tools produce
+      // identical output from identical input" proves they do not drift; it does
+      // NOT prove this endpoint picks the right one, and nothing exercised that.
+      tool_used: mode === "confirm" ? "record_dj_playlist_bulk" : "dry_run_dj_playlist",
+      ...(body.__shortfall_note ? { shortfall_note: body.__shortfall_note } : {}),
+      ...(result.data as Record<string, unknown>),
+    });
+  } catch (e) {
+    // Verbatim — a partial failure carries its own counts and must not be
+    // reworded on the way out.
+    return c.json({ mode, yt_playlist_id: body.yt_playlist_id, error: (e as Error).message }, 500);
   }
 });
 

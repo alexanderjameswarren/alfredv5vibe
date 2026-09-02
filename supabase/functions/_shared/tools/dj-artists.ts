@@ -103,7 +103,63 @@ export const upsertDjArtistTool = defineTool({
       .from("dj_artists").select(COLS).ilike("name", name).maybeSingle();
     if (findErr) throw new Error(`upsert_dj_artist: lookup failed: ${findErr.message}`);
 
-    const patch: Record<string, unknown> = { name };
+    const prevForRename = before as ArtistRow | null;
+
+    // ---------------------------------------------------------------------
+    // rename_to — an IN-PLACE rename, which is the only kind that is safe
+    // ---------------------------------------------------------------------
+    //
+    // Five artists need respelling before MusicBrainz will resolve them:
+    // Killers -> The Killers, Motley Crue -> Mötley Crüe, and similar for
+    // Smashing Pumpkins, Goo Goo Dolls and Black Eyed Peas. Doing that by
+    // creating a second row would ORPHAN every concert link, because
+    // dj_concerts.artist_id points at the id, not the name.
+    //
+    // ⚠️ AN UPDATE OF `name` KEEPS THE id, SO EVERY LINK SURVIVES. That is the
+    // whole reason this is a rename parameter and not "just insert the right
+    // spelling and move on".
+    //
+    // ⚠️ AND IT NEEDS NO SECOND WRITE — CHECKED, NOT ASSUMED. The worry was
+    // that renaming would desync the artist alias map. It does not: ARTIST_ALIASES
+    // in dj-normalise.ts reconciles TAKEOUT CHANNEL NAMES with YOUTUBE MUSIC
+    // METADATA, both of which are play-derived strings feeding match_key and
+    // dj_tracks.artist. `dj_artists.name` is a different system entirely and is
+    // read only by get_dj_artists, this tool, and create_dj_concert's by-name
+    // lookup. Nothing joins the two. Recorded here so the question is not
+    // re-opened every time someone renames an artist.
+    const renameTo = (args.rename_to as string | undefined)?.trim();
+    if (renameTo) {
+      if (!prevForRename) {
+        throw new Error(
+          `upsert_dj_artist: cannot rename "${name}" — no artist by that name ` +
+            `exists. Nothing was written. Creating one under the NEW name would ` +
+            `look like a successful rename and would leave any concerts still ` +
+            `pointing at whatever row you meant to fix.`,
+        );
+      }
+      if (renameTo.toLowerCase() !== name.toLowerCase()) {
+        const { data: clash, error: clashErr } = await ctx.db
+          .from("dj_artists").select("id, name").ilike("name", renameTo).maybeSingle();
+        if (clashErr) {
+          throw new Error(`upsert_dj_artist: rename check failed: ${clashErr.message}`);
+        }
+        // ⚠️ A rename onto an occupied name is a MERGE, and a merge is a
+        // decision about which row's concerts, mbid and feedback survive. The
+        // unique index on (user_id, name) would refuse it anyway; this refuses
+        // it in a sentence, and refuses to guess the merge.
+        if (clash && (clash as { id: string }).id !== prevForRename.id) {
+          throw new Error(
+            `upsert_dj_artist: cannot rename "${name}" to "${renameTo}" — another ` +
+              `artist already has that name (${(clash as { id: string }).id}). That ` +
+              `is a MERGE, not a rename: two rows with their own concerts, mbid and ` +
+              `feedback would have to become one, and which survives is a decision ` +
+              `nothing here can make. Nothing was written.`,
+          );
+        }
+      }
+    }
+
+    const patch: Record<string, unknown> = { name: renameTo || name };
     for (const k of ["mbid", "yt_channel_id", "notes", "last_explored_at"]) {
       if (args[k] !== undefined) patch[k] = args[k];
     }

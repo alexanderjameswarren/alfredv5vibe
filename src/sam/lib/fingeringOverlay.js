@@ -23,16 +23,17 @@ const OVERLAY_CLASS = "sam-fingering-overlay";
 // Badge (circled numeral above the stave) and ring (around the notehead), in
 // render-space px at score scale 1.0 (spec "Visual language").
 export const BADGE = {
-  radius: 9,
-  fontSize: 12,
-  aboveStaveTop: 18, // badge center sits this far above staveTop
-  collisionNudge: 16, // extra upward shift when over a measure number / chord
-  stackGap: 2, // gap between stacked badges when one event has multiple fingerings
+  radius: 11,
+  fontSize: 15,
+  border: 1.4, // violet rim around the light disc
+  aboveStaveTop: 21, // badge center sits this far above staveTop
+  collisionNudge: 20, // extra upward shift when over a measure number / chord
+  stackGap: 3, // gap between stacked badges when one event has multiple fingerings
 };
 export const RING = {
   radius: 7,
   stroke: 1.5,
-  opacity: 0.45,
+  opacity: 0.5,
 };
 
 // Draw the overlay. Idempotent: removes any prior overlay group first, so callers
@@ -43,11 +44,14 @@ export const RING = {
 //   resolvedByKey  — { "measureNum:rhIndex:noteIndex": finger } (precedence applied)
 //   opts.collisionEls — SVG text elements (measure numbers, chord symbols) whose
 //                       x-extent triggers the up-nudge for near-beat-1 badges
-//   opts.accent / opts.accentFg — CSS color strings (default to the theme tokens)
+//   opts.accent — ring color; opts.badgeBg / badgeFg / badgeBorder — the badge's
+//                 disc, numeral and rim (all default to the theme tokens)
 export function drawFingeringOverlay(svgRoot, entries, resolvedByKey, opts = {}) {
   const {
     accent = "var(--fingering-accent)",
-    accentFg = "var(--fingering-accent-fg)",
+    badgeBg = "var(--fingering-badge-bg)",
+    badgeFg = "var(--fingering-badge-fg)",
+    badgeBorder = "var(--fingering-badge-border)",
     collisionEls = [],
   } = opts;
 
@@ -101,7 +105,7 @@ export function drawFingeringOverlay(svgRoot, entries, resolvedByKey, opts = {})
       const badgeY =
         entry.staveTop - BADGE.aboveStaveTop - nudge -
         stack * (BADGE.radius * 2 + BADGE.stackGap);
-      drawBadge(layer, entry.x, badgeY, finger, accent, accentFg);
+      drawBadge(layer, entry.x, badgeY, finger, badgeBg, badgeFg, badgeBorder);
 
       stack++;
       drew++;
@@ -126,7 +130,9 @@ function drawRing(layer, cx, cy, accent) {
   layer.appendChild(c);
 }
 
-function drawBadge(layer, cx, cy, finger, accent, accentFg) {
+// Light disc + violet rim + dark violet numeral. The fill is opaque so the badge
+// stays legible over ledger lines, slurs or a neighbouring stave.
+function drawBadge(layer, cx, cy, finger, badgeBg, badgeFg, badgeBorder) {
   const g = document.createElementNS(SVG_NS, "g");
   g.setAttribute("class", "sam-fingering-badge");
 
@@ -134,7 +140,9 @@ function drawBadge(layer, cx, cy, finger, accent, accentFg) {
   circle.setAttribute("cx", cx);
   circle.setAttribute("cy", cy);
   circle.setAttribute("r", BADGE.radius);
-  circle.setAttribute("fill", accent);
+  circle.setAttribute("fill", badgeBg);
+  circle.setAttribute("stroke", badgeBorder);
+  circle.setAttribute("stroke-width", BADGE.border);
   g.appendChild(circle);
 
   const text = document.createElementNS(SVG_NS, "text");
@@ -145,7 +153,7 @@ function drawBadge(layer, cx, cy, finger, accent, accentFg) {
   text.setAttribute("font-size", BADGE.fontSize);
   text.setAttribute("font-weight", "bold");
   text.setAttribute("font-family", "sans-serif");
-  text.setAttribute("fill", accentFg);
+  text.setAttribute("fill", badgeFg);
   text.textContent = String(finger);
   g.appendChild(text);
 

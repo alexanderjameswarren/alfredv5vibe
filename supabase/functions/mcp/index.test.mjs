@@ -189,7 +189,9 @@ test("update_platform_run accepts the outcome fields", () => {
 test("the DJ tool surface is registered", () => {
   for (const name of ["record_dj_plays", "get_dj_plays",
                       "get_dj_managed_playlists", "create_platform_schedule",
-                      "get_dj_artists", "upsert_dj_artist"]) {
+                      "get_dj_artists", "upsert_dj_artist",
+                      "get_dj_concerts", "update_dj_concert",
+                      "record_dj_feedback", "get_dj_jazz_activity"]) {
     assert.ok(registered.some((r) => r.name === name), `${name} not registered`);
   }
 });
@@ -202,6 +204,26 @@ test("dry_run_dj_plays is deliberately NOT an MCP tool", () => {
   // it later, that should be a decision, not a drive-by.
   assert.ok(!registered.some((r) => r.name === "dry_run_dj_plays"),
     "dry_run_dj_plays is now registered as an MCP tool - was that deliberate?");
+});
+
+test("dry_run_dj_playlist is deliberately NOT an MCP tool either", () => {
+  // Same argument, one phase later: it exists only behind
+  // POST /mcp/import-playlist?mode=dry_run, where the payload comes off a
+  // YouTube read and never enters a model's context. Registering it would cost
+  // a connector reconnect to add a tool with no caller.
+  assert.ok(!registered.some((r) => r.name === "dry_run_dj_playlist"),
+    "dry_run_dj_playlist is now registered as an MCP tool - was that deliberate?");
+});
+
+test("the tool count is 40 after the weekly-job tools", () => {
+  // The number quoted at every reconnect. 36 through step 0 and step 1, which
+  // added an endpoint and a non-registered tool on purpose. Step 2 adds three:
+  // get_dj_concerts, update_dj_concert, record_dj_feedback - batched into ONE
+  // deploy because each manifest change costs a reconnect and a fresh
+  // conversation, and three separate deploys would spend three to save none.
+  assert.equal(registered.length, 40,
+    `expected 40 registered tools, found ${registered.length}: ` +
+    registered.map((r) => r.name).join(", "));
 });
 
 test("no duplicate tool names", () => {

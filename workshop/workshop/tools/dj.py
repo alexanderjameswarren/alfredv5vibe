@@ -549,6 +549,73 @@ async def get_dj_history(args: dict, ctx: Ctx) -> dict:
     return {"data": data, "meta": meta}
 
 
+# The context ceiling for the MCP tool. NOT a property of the read — see
+# read_playlist_contents below, and the note at the call site.
+CONTENTS_MCP_CAP = 200
+
+# What the bulk importer may read. Nothing on that path enters a conversation:
+# the script reads YouTube and POSTs to Supabase, so the only cost of a big
+# playlist is bytes over HTTP.
+#
+# ⚠️ 400 IS A CEILING, NOT A PAGE SIZE. ytmusicapi paginates internally and its
+# `limit` is a FETCH HINT, not a cap — measured 2026-09-01, asking for 200
+# returned 223 tracks from one playlist and 300 from another. So a caller can
+# receive MORE than it asked for, and the slice below is what actually enforces
+# a limit. Pagination was never needed here; the 200 was ours all along.
+CONTENTS_BULK_CAP = 400
+
+
+async def read_playlist_contents(
+    host_id: str, playlist_id: str, limit: int
+) -> dict[str, Any]:
+    """Read and project one playlist's contents. HOLDS NO POLICY.
+
+    ⚠️ SHARED BY THE MCP TOOL AND THE BULK IMPORTER, and that is the point. The
+    projection — video_id, set_video_id, position — must be identical for every
+    caller, because position is the membership identity (migration 012) and a
+    second projection would diverge from this one silently. What differs between
+    the two callers is only the LIMIT, which each supplies itself.
+
+    Same split as preparePlaylistInput on the Alfred side: one implementation of
+    the thing that must not diverge, with the policy where it means something.
+    """
+    detail = await _call(
+        host_id, "get_playlist", playlistId=playlist_id, limit=limit
+    ) or {}
+    raw_tracks = detail.get("tracks") or []
+    # ytmusicapi's `limit` is a fetch hint, not a hard cap — asking for 100 of a
+    # 160-track playlist returns all 160, and asking for 200 of a 223-track one
+    # returns all 223. So the cap is enforced HERE or it is not enforced at all.
+    tracks = [
+        _project_playlist_track(t, position=i)
+        for i, t in enumerate(raw_tracks[:limit])
+    ]
+
+    # YouTube reports trackCount for the whole playlist, so truncation is
+    # measured against the real total rather than against what we asked for.
+    # Fall back to what upstream actually handed us, NOT to len(tracks) — that
+    # has already been sliced to `limit`, so it would report a truncated read
+    # as complete.
+    total = _as_int(detail.get("trackCount"))
+    if total is None:
+        total = len(raw_tracks)
+
+    return {
+        "mode": "contents",
+        "playlist_id": detail.get("id") or playlist_id,
+        "title": detail.get("title"),
+        "privacy": detail.get("privacy"),
+        "owned": detail.get("owned"),
+        "track_count": total,
+        "tracks": tracks,
+        "returned": len(tracks),
+        "limit_applied": limit,
+        "truncation_hint": _truncation_hint(
+            len(tracks), total, cap=limit, limit_applied=limit
+        ),
+    }
+
+
 @define_tool(
     name="get_dj_playlists",
     tier=1,
@@ -634,45 +701,18 @@ async def get_dj_playlists(args: dict, ctx: Ctx) -> dict:
             "Call this tool with mode 'library' first to find one, then re-call."
         )
 
-    # Default is the cap, not a smaller convenience value. Every realistic use
-    # of contents mode wants the WHOLE playlist — diffing a setlist, reading
-    # back after a write — and the largest playlist in the library is 161, so
-    # the full payload is rarely paid in practice. A silently partial setlist
-    # is a worse failure than a large response.
-    limit = clamp_limit(args.get("limit"), default=200, cap=200)
-    detail = await _call(host_id, "get_playlist", playlistId=playlist_id, limit=limit) or {}
-    raw_tracks = detail.get("tracks") or []
-    # ytmusicapi's `limit` is a fetch hint, not a hard cap — asking for 100 of a
-    # 160-track playlist returns all 160, because the first response already
-    # held them. Verified against "Weezer Concert". So the cap is enforced here
-    # or it is not enforced at all.
-    tracks = [
-        _project_playlist_track(t, position=i)
-        for i, t in enumerate(raw_tracks[:limit])
-    ]
+    # ⚠️ THE CAP IS APPLIED HERE, AT THE MCP BOUNDARY, AND NOT INSIDE THE READER.
+    # Its purpose is bounding what enters a MODEL'S CONTEXT — 379 projected
+    # tracks is tens of thousands of tokens, and this tool is one a model calls
+    # directly. That is a property of this boundary, not of the operation of
+    # reading a playlist, so read_playlist_contents() takes the caller's limit
+    # and holds no policy of its own. The bulk importer reads through the same
+    # function with a higher ceiling, because nothing on that path passes
+    # through a conversation.
+    limit = clamp_limit(args.get("limit"), default=CONTENTS_MCP_CAP, cap=CONTENTS_MCP_CAP)
+    data = await read_playlist_contents(host_id, playlist_id, limit)
 
-    # YouTube reports trackCount for the whole playlist, so truncation is
-    # measured against the real total rather than against what we asked for.
-    # Fall back to what upstream actually handed us, NOT to len(tracks) — that
-    # has already been sliced to `limit`, so it would report a truncated read
-    # as complete.
-    total = _as_int(detail.get("trackCount"))
-    if total is None:
-        total = len(raw_tracks)
-
-    data = {
-        "mode": "contents",
-        "playlist_id": detail.get("id") or playlist_id,
-        "title": detail.get("title"),
-        "privacy": detail.get("privacy"),
-        "owned": detail.get("owned"),
-        "track_count": total,
-        "tracks": tracks,
-        "returned": len(tracks),
-        "limit_applied": limit,
-        "truncation_hint": _truncation_hint(len(tracks), total, cap=200, limit_applied=limit),
-    }
     meta: dict[str, Any] = {}
-    if len(tracks) < total:
-        meta["truncated"] = (len(tracks), total)
+    if data["returned"] < data["track_count"]:
+        meta["truncated"] = (data["returned"], data["track_count"])
     return {"data": data, "meta": meta}

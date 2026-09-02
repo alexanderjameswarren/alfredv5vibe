@@ -41,9 +41,18 @@
   /* RH fingering cues (SAM). Violet — deliberately OUTSIDE the score's live
      highlight palette (green hit #16a34a / amber partial #d97706 / red miss
      #dc2626 / blue target line #2563eb) so a fingering badge or ring can never
-     be misread as a playback state. High-contrast white numeral. */
-  --fingering-accent: #7c3aed;
+     be misread as a playback state.
+     --fingering-accent is the solid violet used for the notehead ring, the
+     tap-zone wash and the toolbar chips (white text on it). The badge above the
+     stave uses the INVERTED pair below instead: a near-white disc with a dark
+     violet numeral and a violet rim. Small glyphs read far better dark-on-light
+     than light-on-saturated (white-on-violet halates at 12px), the numeral sits
+     at ~12:1 contrast, and the opaque disc masks staff clutter behind it. */
+  --fingering-accent: #6d28d9;
   --fingering-accent-fg: #ffffff;
+  --fingering-badge-bg: #F4F0FF;
+  --fingering-badge-fg: #3B1E7A;
+  --fingering-badge-border: #6d28d9;
 }
 
 @layer base {

@@ -10,22 +10,26 @@ import, same shape of answer.
 
 WHAT IT DOES NOT DO
 -------------------
-⚠️ IT REIMPLEMENTS NOTHING. It calls Workshop's real ``get_dj_playlists``
-handler for the read (so the projection — video_id, set_video_id, position — is
-byte-identical to what every other caller sees) and POSTs to
-``/mcp/import-playlist``, which calls the real ``record_dj_playlist`` for the
-write. A script that built its own track dicts would agree with the tools right
+⚠️ IT REIMPLEMENTS NOTHING. It calls Workshop's real ``read_playlist_contents``
+for the read — the same function ``get_dj_playlists`` calls, so the projection
+(video_id, set_video_id, position) is byte-identical to what every other caller
+sees — and POSTs to ``/mcp/import-playlist``, which calls the real
+``record_dj_playlist_bulk`` for the write. Only the CEILINGS differ between the
+two paths, because a cap that bounds a model's context has no work to do here. A script that built its own track dicts would agree with the tools right
 up until it didn't, and dj_tracks is insert-only.
 
 THE FIVE RULES THIS ENFORCES
 ----------------------------
-1. THE 200-TRACK CAP IS SILENT. ``get_dj_playlists mode=contents`` has no offset
+1. THE READ CAP IS SILENT. ``get_dj_playlists mode=contents`` has no offset
    and no cursor: a 223-track playlist returns 200 rows, reports no error, and
    looks exactly like a complete read. So the LIBRARY count is carried alongside
    the READ count and the server refuses any playlist where they disagree.
    Over-cap playlists are SKIPPED and reported as skipped — never recorded
    partially. A partial body is worse than no body: §12's weekly diff would
    compare setlists against a playlist that silently isn't the playlist.
+   ⚠️ The 200 was OURS, not YouTube's — measured 2026-09-01. This path now reads
+   at CONTENTS_BULK_CAP (400) and writes through record_dj_playlist_bulk (500).
+   The cap still EXISTS on both, so a playlist above it is still skipped.
 
 2. set_video_id IS NOT AN IDENTITY. Live data confirmed spec §5's warning — two
    playlists were found holding the SAME handle string for DIFFERENT songs. This
@@ -80,19 +84,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from workshop.tools.dj import get_dj_playlists  # noqa: E402  (after sys.path)
+from workshop.tools.dj import (  # noqa: E402  (after sys.path)
+    CONTENTS_BULK_CAP,
+    get_dj_playlists,
+    read_playlist_contents,
+)
 
-# The read cap. Not a preference — get_dj_playlists refuses to go higher because
-# ytmusicapi has nothing to page with.
-CONTENTS_CAP = 200
-
-# ⚠️ SKIPPED, NOT FAILED. Over the cap and unreadable in full. Adding pagination
-# to get_dj_playlists is a separate job; until then these two are simply out of
-# reach, and saying so is the honest outcome.
-OVER_CAP = {
-    "PLV2XoCH1Pv5zhrTok7fuYtfTLtRUaS_3_": ("General Running", 223),
-    "PLV2XoCH1Pv5yj4sguHIXph0eTvIY-hFh1": ("Elise's fun list", 379),
-}
+# ⚠️ EMPTY SINCE 2026-09-01, AND KEPT ANYWAY. General Running (223) and Elise's
+# fun list (379) lived here while the 200 read cap was thought to be YouTube's.
+# It was OURS: ytmusicapi paginates internally and returns 379 when asked for
+# 400. Pagination was never needed.
+#
+# The mechanism stays because library sizes grow and CONTENTS_BULK_CAP is a real
+# ceiling — a playlist above it must still be skipped rather than recorded in
+# part, since a partial body is worse than no body.
+OVER_CAP: dict[str, tuple[str, int]] = {}
 
 # Already imported by hand in a Claude thread. Re-recording them would be
 # harmless but would muddy the per-playlist report with rows nothing here wrote.
@@ -215,12 +221,15 @@ async def read_library(ctx: Ctx) -> list[dict]:
 
 
 async def read_contents(ctx: Ctx, playlist_id: str) -> dict:
-    return _unwrap(
-        await get_dj_playlists(
-            {"mode": "contents", "playlist_id": playlist_id, "limit": CONTENTS_CAP},
-            ctx,
-        )
-    )
+    """Read via read_playlist_contents, NOT via the get_dj_playlists tool.
+
+    ⚠️ THE TOOL CLAMPS TO 200 AND IT IS RIGHT TO. That cap bounds what enters a
+    MODEL'S CONTEXT, and this path has no model in it — the script reads YouTube
+    and POSTs to Supabase. Same projection either way: the tool calls this exact
+    function, so video_id, set_video_id and position are identical. Only the
+    ceiling differs, and each caller supplies its own.
+    """
+    return await read_playlist_contents(ctx.host_id, playlist_id, CONTENTS_BULK_CAP)
 
 
 def to_payload(recorded: dict, contents: dict, library_count: int) -> dict:
@@ -250,6 +259,11 @@ def to_payload(recorded: dict, contents: dict, library_count: int) -> dict:
         "kind": recorded["kind"],
         # concert_id is DELIBERATELY ABSENT — see rule 3.
         "library_count": library_count,
+        # ⚠️ THE CEILING THIS SCRIPT ACTUALLY READ WITH, sent rather than assumed
+        # by the server. A guard holding its own copy of this number disagreed
+        # with the reader the moment the reader changed, and reported a complete
+        # 379-of-379 read as clipped.
+        "read_cap": CONTENTS_BULK_CAP,
         "tracks": tracks,
     }
 
@@ -352,7 +366,9 @@ async def main() -> int:
     for r in targets:
         pid = r["yt_playlist_id"]
         if pid in OVER_CAP:
-            skipped.append((r["name"], f"OVER CAP ({OVER_CAP[pid][1]} > {CONTENTS_CAP}) - not readable in full"))
+            skipped.append((r["name"],
+                            f"OVER CAP ({OVER_CAP[pid][1]} > {CONTENTS_BULK_CAP}) "
+                            f"- not readable in full"))
             continue
         if pid in ALREADY_DONE and not args.only:
             skipped.append((r["name"], "already imported by hand"))
@@ -410,6 +426,21 @@ async def main() -> int:
             print(f"  {r['name']:<34} {lib:>4} {read_n:>5} {'FAIL':>6} {'-':>6}")
             continue
 
+        # ⚠️ VERIFY WHICH TOOL RAN, do not assume. Nothing had exercised the
+        # record_dj_playlist_bulk path — both large playlists stopped before the
+        # write — and "the two tools behave identically" proves they do not
+        # drift, not that this endpoint picks the right one.
+        expected_tool = ("record_dj_playlist_bulk" if mode == "confirm"
+                         else "dry_run_dj_playlist")
+        used = res.get("tool_used")
+        if used != expected_tool:
+            failures.append((r["name"],
+                             f"endpoint used {used!r}, expected {expected_tool!r} - "
+                             f"the wrong write path would silently apply the wrong "
+                             f"track ceiling"))
+            print(f"  {r['name']:<34} {lib:>4} {read_n:>5} {'TOOL?':>6} {'-':>6}")
+            continue
+
         wrote = res.get("membership_rows_written", res.get("tracks_in_payload", 0))
         stale = res.get("stale_rows", res.get("predicted_stale_rows", 0))
         note = res.get("shortfall_note")
@@ -422,6 +453,9 @@ async def main() -> int:
     print()
     print(f"  ok={len(ok)}  stops={len(stops)}  failures={len(failures)}  "
           f"skipped={len(skipped)}  paced={pacer.slept / 60:.1f} min")
+    if ok:
+        print(f"  write path: {'record_dj_playlist_bulk' if mode == 'confirm' else 'dry_run_dj_playlist'}"
+              f" (confirmed by the endpoint on every row, not assumed)")
 
     if budget_hit:
         done = len(ok)

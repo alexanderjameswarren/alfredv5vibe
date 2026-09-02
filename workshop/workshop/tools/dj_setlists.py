@@ -49,12 +49,18 @@ credential: replacing the file takes effect without restarting Workshop.
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
 from anyio import to_thread
 
 from ..platform import Ctx, GuardrailError, OperationalError, clamp_limit, define_tool
+# The shared ytmusicapi call path. diff_dj_setlists searches through the SAME
+# function search_dj_music uses, so a resolution here and a resolution there
+# cannot diverge in how they reach YouTube.
+from .dj import _call
 
 _WORKSHOP_ROOT = Path(__file__).resolve().parents[2]
 DJ_DATA_DIR = _WORKSHOP_ROOT / "data" / "dj"
@@ -273,6 +279,12 @@ async def get_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 "city": city.get("name"),
                 "country": (city.get("country") or {}).get("code"),
                 "tour": (entry.get("tour") or {}).get("name"),
+                # ⚠️ ADDED FOR diff_dj_setlists, which matches every search result
+                # against the PERFORMING artist (spec §12.7). Taken from the
+                # setlist rather than from the caller: a caller-supplied name
+                # could disagree with the mbid it was looked up by, and then
+                # every resolution would be matched against the wrong act.
+                "artist": (entry.get("artist") or {}).get("name"),
                 "song_count": len(songs),
                 "songs": songs,
                 "url": entry.get("url"),
@@ -331,3 +343,431 @@ async def get_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
     # exactly what was read and what was passed over.
     meta: dict[str, Any] = {}
     return {"data": data, "meta": meta}
+
+
+# ---------------------------------------------------------------------------
+# diff_dj_setlists — tier 1
+# ---------------------------------------------------------------------------
+#
+# WHY THIS LIVES ON WORKSHOP AND NOT ON ALFRED
+# --------------------------------------------
+# The diff spans both hosts: setlists and YouTube search are here, the recorded
+# body is in Supabase, and SUPABASE CANNOT CALL WORKSHOP. So the caller reads the
+# body (about 30 titles — cheap) and passes it in, and everything deterministic
+# happens here, on the host that can actually search.
+#
+# ⚠️ THAT PLACEMENT IS ALSO WHAT SOLVES THE CALL BUDGET. Resolving ten missing
+# songs is ten ytmusicapi searches, and none of them crosses the Alfred
+# boundary — so the whole diff costs ONE platform call rather than ten. Batching
+# was the alternative and this is better: the searches never become somebody
+# else's rate limit.
+#
+# WHAT IS DELIBERATELY IN CODE RATHER THAN IN THE WEEKLY PROMPT
+# ------------------------------------------------------------
+# Medley splitting, title normalisation, the diff itself, and the §12.11
+# tie-break. A model recomputing these weekly drifts in ways no diff shows,
+# because a plausible-looking answer is indistinguishable from a correct one —
+# and §12.7's "each resolution is a place a wrong match enters" becomes a
+# standing weekly risk rather than a one-off. The prose is the part only a model
+# can do; the arithmetic is not.
+
+# setlist.fm records a medley as ONE entry with " / " between the parts. Treating
+# it as one song invents a title nobody played; splitting it is the honest read.
+_MEDLEY_SEP = " / "
+
+# Two recordings within this many seconds of each other are the same master
+# (spec §12.11 rule 3). Measured against the real case: Razor is 4:54 on
+# In Your Honor and 4:53 on Catch And Release.
+_SAME_MASTER_SECONDS = 2
+
+# Variant markers. A live or acoustic cut is not the studio recording, and the
+# setlist entry is never asking for one.
+_VARIANT_RE = re.compile(
+    r"\b(live|acoustic|remix|karaoke|instrumental|demo|radio edit|"
+    r"session|cover|tribute|originally performed)\b",
+    re.IGNORECASE,
+)
+
+_PAREN_RE = re.compile(
+    r"\s*[\(\[](?:live|acoustic|remaster(?:ed)?|remix|mono|stereo|single|album)"
+    r"[^\)\]]*[\)\]]",
+    re.IGNORECASE,
+)
+_TAIL_RE = re.compile(r"\s*-\s*(?:live|acoustic|remaster(?:ed)?).*$", re.IGNORECASE)
+_PUNCT_RE = re.compile(r"[^a-z0-9 ]+")
+
+
+def _norm_title(title: str) -> str:
+    """Fold a title to something two sources can be compared on.
+
+    Deliberately conservative: it strips VARIANT decoration, not content. An
+    aggressive normaliser would merge two genuinely different songs, and this
+    feeds a diff whose false negatives cost one listen while its false positives
+    cost a song Alex does not know when the lights go down (spec §12.2).
+    """
+    t = unicodedata.normalize("NFKD", title or "").lower()
+    t = _PAREN_RE.sub(" ", t)
+    t = _TAIL_RE.sub(" ", t)
+    t = t.replace("&", " and ")
+    t = _PUNCT_RE.sub(" ", t)
+    return " ".join(t.split())
+
+
+def _artist_matches(result_artists: list[str], performing: str) -> bool:
+    """Is this search result BY the act that played it?
+
+    ⚠️ MATCHED, NOT MERELY NOTICED (spec §12.7). A result whose artist does not
+    match is a NON-match however well the title fits — that is the rule that
+    kept the Takeout repair safe, and one search for "Happy Together" returned
+    six different recordings.
+    """
+    want = _norm_title(performing)
+    return any(_norm_title(a) == want for a in result_artists)
+
+
+def _resolve_one(results: list[dict], title: str, performing: str) -> dict:
+    """Apply spec §12.11's tie-break to one song's search results.
+
+    Returns a `resolution` the caller can act on WITHOUT re-deriving anything:
+    resolved | not_found | ambiguous_same_artist | ambiguous_multi_artist.
+    """
+    # 🛑 TITLE FIRST, AND THIS WAS MISSING ON THE FIRST BUILD.
+    #
+    # YOUTUBE SEARCH RETURNS AN ARTIST'S POPULAR TRACKS WHETHER OR NOT THEY MATCH
+    # THE QUERY. Searching "Foo Fighters A320" returns seventeen Foo Fighters
+    # songs and not one of them is A320. Filtering on artist alone therefore
+    # accepted the whole catalogue as candidates: the first run reported 13 of
+    # 13 songs "ambiguous", each with twenty alternatives — which is not a tie
+    # to break, it is a search that found nothing.
+    #
+    # ⚠️ §12.7 IS "EXACT MATCH OR NOT FOUND", AND THE TITLE IS HALF THE MATCH.
+    # Done by hand the title comparison happens by eye and is invisible; encoded,
+    # it is the step that gets left out. Both halves, in this order.
+    want = _norm_title(title)
+    titled = [r for r in results if _norm_title(r.get("title") or "") == want]
+
+    if not titled:
+        return {
+            "resolution": "not_found",
+            "video_id": None,
+            "why": (
+                f"Nothing titled {title!r} came back. Search returned "
+                f"{len(results)} result(s), all with other titles — YouTube "
+                f"answers a query it cannot match with the artist's popular "
+                f"tracks, so a long result list here means NO match rather than "
+                f"a choice."
+            ),
+            "other_artists_found": [],
+        }
+
+    by_artist = [r for r in titled if _artist_matches(r.get("artists") or [], performing)]
+
+    if not by_artist:
+        # ⚠️ NOT FOUND IS AN ANSWER, NOT A FAILURE (spec §12.4). If YouTube Music
+        # does not have the performing artist's version, it is not in the
+        # playlist — no judgement about whether a cover "counts". The other
+        # artists' results are returned so a human can see WHAT was there.
+        # ⚠️ THE RIGHT TITLE BY THE WRONG ARTIST — exactly what a human needs to
+        # see: "One Headlight exists, but only as The Wallflowers'". §12.4 — if
+        # YouTube Music has not got the PERFORMING artist's version then it is
+        # not in the playlist, and no judgement is made about whether a cover
+        # "counts".
+        others = [
+            {"video_id": r.get("video_id"), "title": r.get("title"),
+             "artists": r.get("artists"), "album": r.get("album"),
+             "duration_seconds": r.get("duration_seconds")}
+            for r in titled[:5]
+        ]
+        names = sorted({a for r in titled for a in (r.get("artists") or [])})
+        return {
+            "resolution": "not_found",
+            "video_id": None,
+            "why": (
+                f"{len(titled)} result(s) titled {title!r}, none by {performing}. "
+                f"Found instead: {', '.join(names[:4])}. Their version is what "
+                f"goes in the playlist (spec 12.4); if it does not exist, the "
+                f"song does not."
+            ),
+            "other_artists_found": others,
+        }
+
+    studio = [r for r in by_artist if not _VARIANT_RE.search(r.get("title") or "")]
+    if not studio:
+        return {
+            "resolution": "not_found",
+            "video_id": None,
+            "why": (
+                f"{performing} has results for this title but every one is a live, "
+                f"acoustic or otherwise variant cut. The setlist entry is not "
+                f"asking for a variant."
+            ),
+            "other_artists_found": [],
+        }
+
+    if len(studio) == 1:
+        r = studio[0]
+        return {"resolution": "resolved", "video_id": r.get("video_id"),
+                "album": r.get("album"), "duration_seconds": r.get("duration_seconds"),
+                "why": "One studio recording by the performing artist."}
+
+    # Several studio cuts by the right artist. Rule 3: within two seconds is the
+    # same master, so the choice does not matter and must not be escalated.
+    durs = [r.get("duration_seconds") for r in studio if r.get("duration_seconds")]
+    if durs and (max(durs) - min(durs)) <= _SAME_MASTER_SECONDS:
+        pick = studio[0]
+        return {
+            "resolution": "resolved",
+            "video_id": pick.get("video_id"),
+            "album": pick.get("album"),
+            "duration_seconds": pick.get("duration_seconds"),
+            "why": (
+                f"{len(studio)} studio recordings within {_SAME_MASTER_SECONDS}s of "
+                f"each other — the same master. Took "
+                f"{pick.get('album') or 'the first'}; the choice does not change "
+                f"what is heard, so it is not worth a question."
+            ),
+            "same_master_alternatives": [
+                {"video_id": r.get("video_id"), "album": r.get("album"),
+                 "duration_seconds": r.get("duration_seconds")} for r in studio[1:]
+            ],
+        }
+
+    # ⚠️ GENUINELY DIFFERENT RECORDINGS. Escalated WITH THE DATA TO DECIDE FROM,
+    # never as a bare "ambiguous" — album and duration are what distinguishes
+    # them, so they travel with the question.
+    return {
+        "resolution": "ambiguous_same_artist",
+        "video_id": None,
+        "why": (
+            f"{len(studio)} studio recordings by {performing}, differing by more "
+            f"than {_SAME_MASTER_SECONDS}s — genuinely different recordings, so "
+            f"this is a real choice rather than a tie to break."
+        ),
+        "candidates": [
+            {"video_id": r.get("video_id"), "title": r.get("title"),
+             "album": r.get("album"), "duration_seconds": r.get("duration_seconds"),
+             "duration": r.get("duration")} for r in studio
+        ],
+    }
+
+
+
+@define_tool(
+    name="diff_dj_setlists",
+    tier=1,
+    description=(
+        "Diff an artist's recent setlists against a recorded playlist body, and "
+        "resolve what is missing to video ids. Read-only; writes nothing anywhere. "
+        "The caller passes the RECORDED BODY (from Alfred's "
+        "get_dj_managed_playlists mode=tracks) because Supabase cannot call "
+        "Workshop - so the body travels to the host that can search, rather than "
+        "the searches crossing a boundary. "
+        "INCLUSIVE (spec 12.2): a song in ANY of the shows goes in. An extra song "
+        "costs one listen; a missing song is one you do not know when the lights "
+        "go down, and those are not comparable. "
+        "MEDLEYS ARE SPLIT - setlist.fm records a medley as one entry joined by "
+        "' / ', and treating it as a single song invents a title nobody played. "
+        "RESOLUTION IS EXACT-OR-NOT-FOUND (spec 12.7) with 12.11's tie-break: the "
+        "artist must MATCH, variants are dropped, two studio cuts within 2 seconds "
+        "are the same master and resolve silently, and only a genuinely different "
+        "recording is escalated - with album and duration attached so it can be "
+        "settled without opening anything. "
+        "IT CANNOT SEE ARTIST-IDENTITY COLLISIONS (spec 14.4): it detects that a "
+        "SEARCH returned several artists, not that two real-world acts share a "
+        "name. That needs the MusicBrainz search API, and the gap is stated in "
+        "every response rather than implied by silence. Tier 1."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "mbid": {
+                "type": "string",
+                "description": (
+                    "MusicBrainz id, 8-4-4-4-12 hex, from dj_artists.mbid. "
+                    "REQUIRED and the only accepted identity - a name search "
+                    "matches the wrong band."
+                ),
+            },
+            "body": {
+                "type": "array",
+                "description": (
+                    "The RECORDED playlist body. Each entry needs `title`; "
+                    "`video_id` and `artist` are carried through when present. "
+                    "From Alfred's get_dj_managed_playlists mode=tracks."
+                ),
+                "items": {"type": "object"},
+            },
+            "limit": {
+                "type": "integer",
+                "description": (
+                    "Max setlists WITH SONGS to diff against (default 10, cap 25). "
+                    "Empty and upcoming setlists are skipped without consuming a "
+                    "slot."
+                ),
+            },
+            "resolve": {
+                "type": "boolean",
+                "description": (
+                    "Resolve missing titles to video ids via search. Default true. "
+                    "Set false for a diff-only pass that makes no search calls."
+                ),
+            },
+        },
+        "required": ["mbid", "body"],
+    },
+)
+async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
+    body = args.get("body")
+    if not isinstance(body, list):
+        raise GuardrailError(
+            "diff_dj_setlists: `body` must be an array of the RECORDED playlist's "
+            "tracks. Pass an empty array only if the playlist genuinely has no "
+            "recorded membership - an omitted body would make every setlist song "
+            "look missing, which is a very confident wrong answer."
+        )
+
+    inner = await get_dj_setlists(
+        {"mbid": args.get("mbid"), "limit": args.get("limit")}, ctx
+    )
+    sl = inner["data"]
+    shows = sl["setlists"]
+
+    # The performing artist comes from the setlists themselves, not from the
+    # caller. It is what every resolution is matched against, and a
+    # caller-supplied name could disagree with the mbid it came from.
+    performing = None
+    for s in shows:
+        if s.get("artist"):
+            performing = s["artist"]
+            break
+    if not performing:
+        raise OperationalError(
+            "diff_dj_setlists: setlist.fm returned setlists carrying no artist "
+            "name, so nothing can be matched against a performing artist. "
+            "Resolving nothing is the safe answer here (spec 12.7)."
+        )
+
+    body_titles = {_norm_title(t.get("title") or "") for t in body}
+    body_titles.discard("")
+
+    # --- Fold the window into one entry per distinct song ------------------
+    songs: dict[str, dict[str, Any]] = {}
+    for show in shows:
+        seen_here: set[str] = set()
+        for sg in show["songs"]:
+            raw = sg["name"]
+            parts = (
+                [p.strip() for p in raw.split(_MEDLEY_SEP)]
+                if _MEDLEY_SEP in raw else [raw]
+            )
+            for part in parts:
+                key = _norm_title(part)
+                if not key:
+                    continue
+                e = songs.setdefault(key, {
+                    "title": part,
+                    "cover_of": sg.get("cover_of"),
+                    "medley": len(parts) > 1,
+                    "encore": False,
+                    "shows": [],
+                })
+                if sg.get("cover_of") and not e["cover_of"]:
+                    e["cover_of"] = sg["cover_of"]
+                if sg.get("encore"):
+                    e["encore"] = True
+                if key not in seen_here:
+                    # song_count travels WITH each appearance, because "N of 10"
+                    # is not comparable across shows of different length (spec
+                    # 12.3): a song in a 15-song set and one in a 27-song set are
+                    # different evidence, and the denominator has to come along.
+                    e["shows"].append({
+                        "event_date": show["event_date"],
+                        "venue": show["venue"],
+                        "song_count": show["song_count"],
+                    })
+                    seen_here.add(key)
+
+    in_body = [e for k, e in songs.items() if k in body_titles]
+    missing = [e for k, e in songs.items() if k not in body_titles]
+    missing.sort(key=lambda e: (-len(e["shows"]), e["title"].lower()))
+
+    # --- Resolve what is missing -------------------------------------------
+    searches = 0
+    if args.get("resolve", True):
+        for e in missing:
+            raw = await _call(
+                ctx.config.host_id,
+                "search",
+                query=f"{performing} {e['title']}",
+                filter="songs",
+                limit=10,
+            ) or []
+            searches += 1
+            results = [{
+                "video_id": r.get("videoId"),
+                "title": r.get("title"),
+                "artists": [a.get("name") for a in (r.get("artists") or [])
+                            if a.get("name")],
+                "album": (r.get("album") or {}).get("name")
+                         if isinstance(r.get("album"), dict) else r.get("album"),
+                "duration_seconds": r.get("duration_seconds"),
+                "duration": r.get("duration"),
+            } for r in raw]
+            e.update(_resolve_one(results, e["title"], performing))
+    else:
+        for e in missing:
+            e.update({"resolution": "not_attempted", "video_id": None})
+
+    counts: dict[str, int] = {}
+    for e in missing:
+        counts[e["resolution"]] = counts.get(e["resolution"], 0) + 1
+
+    return {
+        "data": {
+            "artist": performing,
+            "mbid": sl["mbid"],
+            "window": [
+                {"event_date": s["event_date"], "venue": s["venue"],
+                 "song_count": s["song_count"], "tour": s.get("tour")}
+                for s in shows
+            ],
+            "shows_read": sl["returned"],
+            "empty_entries_skipped": sl["empty_entries_skipped"],
+            "body_size": len(body),
+            "distinct_setlist_songs": len(songs),
+            "in_body": [
+                {"title": e["title"], "shows": len(e["shows"])}
+                for e in sorted(in_body, key=lambda e: -len(e["shows"]))
+            ],
+            "missing": missing,
+            "resolution_counts": counts,
+            "searches_made": searches,
+            "reading": (
+                "INCLUSIVE (12.2): a song in ANY show counts as missing if the "
+                "body lacks it. Each entry's `shows` carries that show's "
+                "`song_count`, because a bare 'N of 10' hides that a 15-song set "
+                "and a 27-song set are different evidence (12.3) - quote the shape "
+                "or say it in words: 'only at the Hollywood Bowl show' rather than "
+                "'1 of 10'. "
+                "`medley: true` means the entry was one ' / '-joined setlist.fm "
+                "row split into parts; those parts frequently have no studio "
+                "recording at all, and NOT FOUND is the correct answer for them "
+                "rather than a gap to chase. "
+                "`cover_of` is informational - resolution targets the PERFORMING "
+                "artist's version (12.4), and if YouTube Music has not got it then "
+                "it is not in the playlist."
+            ),
+            "limits": (
+                "ARTIST-IDENTITY COLLISIONS ARE NOT DETECTABLE HERE (spec 14.4). "
+                "This tool can tell that a search returned several ARTISTS; it "
+                "cannot tell that two real-world acts share one name. The "
+                "2026-09-01 mbid backfill caught three such near-misses - Paul "
+                "Di'Anno's Killers, a Liverpool Ed Sheeran, Skellern's Oasis - by "
+                "corroboration rather than by seeing candidates, and a "
+                "verification that succeeds by corroboration cannot report how "
+                "close it came to failing. A route to the MusicBrainz search API "
+                "is needed before anything resolves an artist BY NAME."
+            ),
+        },
+        "meta": {},
+    }

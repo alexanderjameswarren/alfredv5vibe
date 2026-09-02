@@ -64,6 +64,7 @@ EXPECTED_TOOLS = {
     "get_dj_history",
     "get_dj_playlists",
     "get_dj_setlists",
+    "diff_dj_setlists",
     "get_job_status",
     "get_workshop_status",
     "list_jobs",
@@ -134,10 +135,10 @@ class ToolsImportTests(unittest.TestCase):
         """The count, asserted separately from the names.
 
         Redundant with the set comparison by design: the count is the number
-        quoted when reconnecting a connector ("expect 36, not 34"), so it is
-        worth failing on its own terms.
+        quoted when reconnecting a connector, so it is worth failing on its own
+        terms. 11 since diff_dj_setlists joined the surface.
         """
-        self.assertEqual(len(EXPECTED_TOOLS), 10)
+        self.assertEqual(len(EXPECTED_TOOLS), 11)
 
 
 class ImportCheckIsNotVacuousTests(unittest.TestCase):

@@ -438,10 +438,13 @@ test("list mode reports per-role counts and cram headroom", async () => {
   assert.equal(r.data.playlists[0].cram_headroom, 7, "cram_cap 8 minus 1 cram row");
 });
 
-test("mode must be list or tracks, and tracks needs an id", async () => {
+test("mode must be a known one, and tracks needs an id", async () => {
+  // The vocabulary grew: 'engagement' (§12.9) and 'cram' (§12.10) joined it.
+  // Updated rather than loosened — the assertion still names every valid mode,
+  // so adding one silently is still a test failure.
   const empty = { dj_playlists: [], dj_playlist_tracks: [], dj_tracks: [] };
   await assert.rejects(() => runMp(empty, { mode: "everything" }),
-    /must be 'list' or 'tracks'/);
+    /must be 'list', 'tracks', 'engagement' or 'cram'/);
   await assert.rejects(() => runMp(empty, { mode: "tracks" }),
     /requires `yt_playlist_id` or `playlist_id`/);
 });
@@ -491,4 +494,98 @@ test("an unknown id carries canonical_artist null, not undefined", async () => {
   const r = await run({ dj_tracks: [], dj_plays: [] },
     { mode: "familiarity", video_ids: ["ghost"] });
   assert.equal(r.data.groups[0].canonical_artist, null);
+});
+
+// --- mode=cram (§12.10) -----------------------------------------------------
+
+const pl = (id, name, kind = "concert", cram_cap = 8) =>
+  ({ id, yt_playlist_id: `YT_${id}`, name, kind, concert_id: null,
+     description: null, cram_cap, last_synced_at: null, created_at: "2026-01-01" });
+const cmem = (playlist_id, track_id, role, position) =>
+  ({ id: `m-${track_id}-${role}`, playlist_id, track_id, role, position,
+     yt_set_video_id: null, added_reason: "import", added_at: "2026-01-01" });
+
+test("cram order is least-familiar-first, never-played at the top", async () => {
+  const tables = {
+    dj_playlists: [pl("p1", "Foo Fighters Concert")],
+    dj_playlist_tracks: [
+      cmem("p1", "t1", "body", 0), cmem("p1", "t2", "body", 1), cmem("p1", "t3", "body", 2),
+    ],
+    dj_tracks: [track("t1", "v1", "Played lots"), track("t2", "v2", "Played once"),
+                track("t3", "v3", "Never played")],
+    dj_plays: [play("t1", "2026-08-01"), play("t1", "2026-08-02"),
+               play("t1", "2026-08-03"), play("t2", "2026-08-05")],
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1", as_of: "2026-08-10" });
+  assert.deepEqual(r.data.proposed_cram.map((c) => c.title),
+    ["Never played", "Played once", "Played lots"]);
+  assert.equal(r.data.proposed_cram[0].distinct_days, 0);
+});
+
+test("a song appearing TWICE in the body takes ONE cram slot", async () => {
+  // §12.10's dedupe. Since 012 a body may repeat a track; without grouping,
+  // identical familiarity would let one song occupy several of the eight slots
+  // — a cram list that looks full and is teaching fewer songs than it says.
+  const tables = {
+    dj_playlists: [pl("p1", "X")],
+    dj_playlist_tracks: [
+      cmem("p1", "t1", "body", 0), { ...cmem("p1", "t1", "body", 5), id: "m-dup" },
+      cmem("p1", "t2", "body", 1),
+    ],
+    dj_tracks: [track("t1", "v1", "Repeated"), track("t2", "v2", "Other")],
+    dj_plays: [],
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1" });
+  const titles = r.data.proposed_cram.map((c) => c.title);
+  assert.equal(new Set(titles).size, titles.length, "no title may appear twice");
+  assert.equal(titles.length, 2);
+});
+
+test("cram_stale fires when an UNPLAYED song holds no cram row", async () => {
+  const tables = {
+    dj_playlists: [pl("p1", "X")],
+    dj_playlist_tracks: [cmem("p1", "t1", "body", 0)],
+    dj_tracks: [track("t1", "v1", "Never heard")],
+    dj_plays: [],
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1" });
+  assert.equal(r.data.cram_stale, true);
+  assert.equal(r.data.stale_reasons.unlearned_not_crammed.length, 1);
+});
+
+test("cram_stale fires when a LEARNED song is still holding a slot", async () => {
+  const tables = {
+    dj_playlists: [pl("p1", "X")],
+    dj_playlist_tracks: [cmem("p1", "t1", "cram", 0)],
+    dj_tracks: [track("t1", "v1", "Known now")],
+    dj_plays: ["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04", "2026-08-05"]
+      .map((d) => play("t1", d)),
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1" });
+  assert.equal(r.data.cram_stale, true);
+  assert.equal(r.data.stale_reasons.learned_still_crammed.length, 1);
+});
+
+test("cram_stale is FALSE when neither state holds — it is not a sort comparison", async () => {
+  // The negative control, and the point of §11.7: a flag that fires every week
+  // is ignored by the third week. A settled playlist must read false even though
+  // the computed order differs from the stored cram block.
+  const tables = {
+    dj_playlists: [pl("p1", "X")],
+    dj_playlist_tracks: [cmem("p1", "t1", "cram", 0), cmem("p1", "t2", "body", 0)],
+    dj_tracks: [track("t1", "v1", "Learning"), track("t2", "v2", "Known")],
+    dj_plays: [play("t1", "2026-08-01"),
+               ...["2026-08-01", "2026-08-02"].map((d) => play("t2", d))],
+  };
+  const r = await runMp(tables, { mode: "cram", playlist_id: "p1" });
+  assert.equal(r.data.cram_stale, false);
+});
+
+test("cram refuses a non-concert playlist", async () => {
+  const tables = {
+    dj_playlists: [pl("p2", "Jazz songs Mix", "jazz")],
+    dj_playlist_tracks: [], dj_tracks: [], dj_plays: [],
+  };
+  await assert.rejects(() => runMp(tables, { mode: "cram", playlist_id: "p2" }),
+    /cram applies to kind 'concert' only/);
 });

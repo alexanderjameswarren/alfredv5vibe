@@ -1,8 +1,12 @@
 # DJ — Technical Specification
 
-**Status:** Phases 0, 1, 2a, 2b, 3a, 3b complete. Phase 8 blocked on one SQL statement
-(the `played_on` schema comment); nothing imported. Phases 4, 5, 6, 7 outstanding.
-**Last updated:** 2026-08-29
+**Status:** Phases 0, 1, 2a, 2b, 3a, 3b, 6b, 6c, 8 complete. Phase 8 imported 16,766 rows on
+2026-08-31; Phase 6b recorded the whole 41-playlist library on 2026-09-01; Phase 6c added
+get_dj_concerts, update_dj_concert and record_dj_feedback (39 MCP tools). Phases 4, 5, 6, 7
+outstanding; Phase 7's gate is built and its proposal shape is specified in §12.8–§12.13.
+Phase 7 works for every act: 22 of 22 artists have an mbid as of 2026-09-01, each verified by
+a live setlist read.
+**Last updated:** 2026-09-01
 
 ---
 
@@ -1512,6 +1516,203 @@ diligence.
    here, a detector that fires correctly gets ignored anyway because the page around it looks
    normal. **Either way the outcome is a real signal that nobody acts on.**
 
+### 11.20 A diagnostic that infers a CAUSE from one symptom and states a REMEDY as fact is worse than no diagnostic
+
+`get_dj_playlists mode=contents` returned a `truncation_hint` whenever `returned < total`. It
+had one symptom and it named a cause:
+
+> *"Cut by `limit`, not by an upstream page boundary — all 108 are reachable. Re-call with
+> limit: 108 (cap 200) to get them in one call."*
+
+Measured on Jazz songs Mix, 2026-09-01: YouTube reports `trackCount` 108, and a read **at limit
+200** returns 107 entries. **Every clause of that hint is false.** It was not cut by `limit` —
+the limit was never reached. All 108 are not reachable. And re-calling with a higher limit
+changes nothing, because the 108th entry is deleted or fully private: counted by YouTube and
+never serialised, obtainable by no call that exists.
+
+⚠️ **THE DAMAGE IS NOT THE WRONG ANSWER, IT IS THE CONFIDENT ONE.** A hint is read exactly when
+the reader has least context — something looked odd and they went looking for an explanation.
+Handing them a specific, plausible, actionable remedy at that moment ends the investigation.
+Someone would have spent an afternoon re-calling with `limit: 108`, then chasing a track that
+does not exist, and the real finding — *this playlist can never be read completely* — would
+have been buried under a remedy that was tried and "didn't work".
+
+**Silence would have been better.** With no hint, the reader compares 107 to 108 and asks why.
+With the hint, they stop asking.
+
+**The rule.** A diagnostic may state what it OBSERVED without limit. It may state a cause only
+when it has evidence that distinguishes that cause from the alternatives. When it cannot, it
+must say **"cause unknown"** and say what was ruled out — which is genuinely useful, and is not
+the same as guessing.
+
+The distinguishing evidence here was available and simply not consulted: the requested `limit`.
+A result short of both the total **and** the requested limit was not cut by the limit, whatever
+else is true. One extra parameter separates three outcomes that had been collapsed into one:
+
+| observation | verdict |
+|---|---|
+| `returned == total` | complete |
+| `returned == limit` and `total > limit` | clipped by `limit` — a higher one helps |
+| `returned < limit` and `returned < total` | **NOT truncation. Cause unknown; a higher limit will not help.** |
+
+⚠️ **AND THE THIRD CASE HAD A NEAR-NEIGHBOUR THAT WOULD HAVE MISLED AGAIN.** The obvious guess
+is "unplayable tracks are dropped" — wrong. Three tracks in that same playlist come back with
+`is_available: false`, so unplayable entries ARE returned. Stating the plausible cause would
+have replaced one false certainty with another. The corrected hint names what was ruled out
+and stops there.
+
+**Same family as §11.19.** There, a real failure signal is lost inside reassuring output; here,
+a real anomaly is lost inside a confident explanation. Both end with a true signal that nobody
+acts on, and in both the surrounding text is what does the damage — the health check whose log
+tail reads as normal activity is the same shape as a hint whose remedy reads as a diagnosis.
+
+**Applies to:** `truncation_hint`, `reading` fields, health checks, error messages that suggest
+a fix, and any `note` a tool attaches to a payload. The test to apply before writing one:
+*could this sentence be false while the numbers beside it are true?* If yes, it needs evidence
+or it needs to say less.
+
+### 11.21 A second write that the first one IMPLIES must be SURFACED, not performed
+
+`dj_concerts.status` has a column comment that is unusually explicit: *"missed = did not go
+BUT still want to see them. The lingering want in missed is a fact about the ARTIST, so it is
+recorded as artist feedback; this column only records what happened that night."*
+
+So setting a concert to `missed` **implies a second write, in a different table** — a
+`dj_feedback` row against the artist. Two obvious answers, both wrong:
+
+**Writing it automatically is wrong.** A write smuggled into a status change is a write nobody
+remembers happened. Months later *"why is there a `curious` feedback row for Alanis dated
+2026-09-01?"* has no answer in any conversation, because no conversation ever mentioned
+creating one. The audit log records that it happened and cannot record that it was **intended**
+— and the whole value of `dj_feedback` is that it is a log of *stated* preference. A row nobody
+stated is not preference, it is inference wearing preference's clothes, and every later read
+treats the two identically.
+
+**Dropping it is also wrong**, and it is the failure §13.3 was written about: recording only
+the concert loses exactly the part that makes `missed` actionable later. The wanting is why the
+playlist is worth building at all.
+
+**The answer is to return it as a PROPOSED CALL and write nothing.** `update_dj_concert`
+responds with:
+
+```
+feedback_owed: {
+  reason: "status is now 'missed', which per the column comment means did NOT go
+           but STILL WANT to see them. That want is a fact about the artist, not
+           about this night, and it is not recorded yet.",
+  suggested_call: { tool: "record_dj_feedback", artist_id: ..., sentiment: "curious", ... }
+}
+```
+
+⚠️ **A READY CALL, NOT A REMINDER.** *"You should also record feedback"* is a to-do that will be
+read, agreed with, and not acted on. A filled-in call is one step from done, and — more
+importantly — it makes the proposal **checkable**: a reader can see which artist, which
+sentiment, and disagree with either. Prose cannot be disagreed with precisely.
+
+**⚠️ THIS IS NOT WHAT TIER 3 IS FOR, and conflating them produces the wrong design.** A tier-3
+gate asks *"are you sure about the write you requested?"* — same write, delayed. This is a
+**different** write, in a different table, that the caller never requested and may not know is
+implied. Gating the status change behind a confirmation would be answering a question nobody
+asked while still not surfacing the one that matters.
+
+**The rule generalises:** when a write's MEANING implies a write elsewhere — because a column
+comment says so, or because a status is defined in terms of something the table does not hold —
+the tool performs the write it was asked for, and returns the other as a proposal. It never
+does both, and it never silently does neither.
+
+⚠️ **AND THE FLAG MUST NOT FIRE ON THE NORMAL CASE (§11.7).** `feedback_owed` is null for
+`attended`, `rejected`, `screening` and the rest — it appears only for `missed`, the one status
+whose definition reaches outside its own table. A field that appeared on every response would
+be scrolled past by the third call, and then the one time it mattered it would be scrolled past
+too. There is a test asserting it stays null for other statuses, for exactly that reason.
+
+### 11.22 When two limits govern one operation, fixing the one that FIRED moves the failure rather than removing it
+
+Two playlists could not be imported: General Running (223 tracks) and Elise's fun list (379).
+The failure was a read capped at 200, so the question asked was *"is the 200 ours or YouTube's,
+and can it be raised?"*
+
+**It was ours** — `clamp_limit(cap=200)`, enforced by a slice. ytmusicapi paginates internally
+and returns all 379 when asked for 400. Pagination was never needed.
+
+⚠️ **AND RAISING IT ALONE WOULD HAVE PRODUCED A SECOND, DIFFERENT-LOOKING FAILURE.**
+`record_dj_playlist` carried `TRACKS_CAP = 300`. A 379-track playlist would have been fetched
+successfully and then refused on the WRITE with *"379 tracks exceeds the cap of 300. Nothing
+was written."* Same root cause — a ceiling chosen for a payload that no longer applies — but a
+different tool, a different message, and every appearance of a fresh problem discovered after
+the first was "fixed".
+
+**The shape.** An operation crossing more than one component is governed by every limit on the
+path, and only the FIRST one reached ever fires. Fixing it does not remove the constraint, it
+advances the failure to the next limit — which then presents as a new bug, in a different file,
+with no visible connection to the change that "fixed" the last one. The second investigation
+starts from scratch because nothing in the second error mentions the first.
+
+**The rule.** Before raising a limit, ENUMERATE EVERY LIMIT ON THE PATH the work takes, and say
+what each one is for. Not "is this limit correct?" but "what else is going to say no?" Read
+cap, write cap, request body size, statement timeout, rate budget — the path here had five
+plausible ceilings and two real ones. The enumeration is cheap and it is the only thing that
+turns *"raise it and see"* into a change with a predictable outcome.
+
+⚠️ **A LIMIT IS ONLY RAISABLE WHEN ITS PURPOSE IS NAMED**, and the two here had different
+purposes that a single number concealed:
+
+- The **read** cap bounds what enters a MODEL'S CONTEXT — 379 projected tracks is tens of
+  thousands of tokens, and `get_dj_playlists mode=contents` is called directly by a model.
+- The **write** cap bounds a payload a model COMPOSED and sent through a conversation.
+
+Neither purpose applies to a script that reads YouTube and POSTs to Supabase with nothing in
+between. So the answer was not a bigger number in both places: **the caps belong at the MCP
+boundary, and the underlying read and write hold no policy of their own.** `read_playlist_contents`
+takes the caller's limit; `get_dj_playlists` applies 200; the importer asks for 400. Same
+projection, different ceilings — the same split as `preparePlaylistInput` between validation
+and the thing that must not diverge.
+
+⚠️ **RAISING BOTH GLOBALLY WAS THE TEMPTING WRONG ANSWER.** It works today and removes the
+protection exactly when a model next asks for a 379-track playlist — and that failure arrives
+as a blown context window, which is an expensive way to rediscover why the number was 200.
+
+⚠️ **AND THE HIGHER CEILING MUST BE A NAMED, VISIBLE TOOL, NOT A HIDDEN PARAMETER.** An
+undocumented argument that raises a limit reads as a backdoor, and the next person adding a
+caller cannot tell which ceiling they are entitled to. `record_dj_playlist_bulk` is a separate
+export, deliberately absent from the MCP manifest — the same pattern as `dry_run_dj_plays` —
+so it costs no reconnect and is impossible to reach by accident.
+
+⚠️ **RAISING A LIMIT MEANS FINDING EVERYTHING THAT *ASSUMES* IT, NOT JUST EVERYTHING THAT
+*ENFORCES* IT — and the enumeration above only found the enforcers.** Read cap and `TRACKS_CAP`
+were the two places that said no. A THIRD site merely *read* the number: the import endpoint's
+truncation guard held its own `const CONTENTS_CAP = 200` and compared against it. It enforced
+nothing, so it did not appear in a search for enforcement — and it broke immediately, reporting
+every read over 200 as clipped.
+
+**A site that only reads a limit is harder to find and fails more confusingly than one that
+enforces it.** An enforcer that is wrong refuses work that should succeed, and says so in its
+own words. A *reader* that is wrong keeps working and produces a wrong verdict about somebody
+else's work — here, `379 of 379` reported as a cap hit, with an instruction to skip.
+
+**The fix is not a better constant, it is no constant.** The guard now takes the ceiling the
+CALLER used, as a required parameter beside the count. Any check comparing against a limit it
+did not itself apply is measuring one path and reporting on another, and it will disagree with
+the reader the moment either changes.
+
+⚠️ **AND THE ORDERING WAS A SEPARATE BUG THAT THE STALE CONSTANT HID.** The guard consulted the
+cap BEFORE checking completeness, so `read == library` — the definition of a complete read, and
+a fact needing no cap at all — lost to the cap branch. Fixing only the constant would have left
+a 400-track playlist read completely at a 400 ceiling still reported as clipped. **Check the
+unambiguous condition first; consult the limit only for the cases that are genuinely ambiguous.**
+
+⚠️ **The wrong verdict then asserted a false remedy (§11.20), for the second time in this
+project** — *"the rest is unreachable... SKIP this playlist"* when nothing was unreachable.
+Worse than the earlier case: this one **contradicted its own numbers in the same sentence**,
+having printed `379` and `379` immediately before. A diagnostic that can disagree with the data
+it just displayed is not reporting, it is narrating.
+
+**And keep the guard that is now unlikely to fire.** With the read at 400, nothing in the
+current library is over the cap, so the importer's `clipped_by_cap` branch is unreachable
+today. It is correct, not dead: libraries grow, and the ceiling is still real. Deleting a
+correct guard because the data has not reached it yet is how the next 200-track surprise
+arrives unannounced.
+
 ## 12. Concert playlists — the body of work (phase 7)
 
 A concert playlist is **what to learn before the lights go down.** It is built from what the
@@ -1559,6 +1760,10 @@ in a 1-song *Tonight Show* slot scores exactly like one in a 24-song stadium set
 10" must show the shape of the denominator.** The number was requested to make an inbox item
 actionable; unqualified, it would mislead instead.
 
+⚠️ **THIS GOVERNS THE ANALYSIS, NOT THE PROSE — see §12.12.** Followed literally in the written
+item it produced a caveat paragraph nobody could act on. The denominator goes INSIDE the
+sentence: *"only at the Hollywood Bowl show"*, not *"1 of 10"* plus an explanation.
+
 ### 12.4 Covers resolve against the PERFORMING artist
 
 Weezer's *Happy Together*, not The Turtles'. **If YouTube Music does not have their version,
@@ -1571,6 +1776,10 @@ human, never as a gate.
 
 The weekly job reads setlists, diffs against the recorded body, and raises **one** inbox item.
 Acting on it is a separate, human step.
+
+**What that item looks like is specified in §12.8–§12.13, with a worked example in §12.13.**
+The diff is half of it: §12.10's cram ordering is the other half, and the first item shipped
+without it.
 
 ⚠️ **A CONSEQUENCE THAT MUST NOT READ AS CLOSED:** §5's interleaving rule and the
 known-but-unplayed zero-play case **stay deferred**. Both need a cram row to exist, and under
@@ -1599,6 +1808,299 @@ resolved through `search_dj_music`, and **each resolution is a place a wrong mat
 **Match on the exact `video_id` or treat it as NOT FOUND. Never a plausible-looking result.**
 That rule is what made the Takeout artist repair safe — it can only answer *found* or *not
 found*, never *probably*. One search for *Happy Together* returned six different recordings.
+
+⚠️ **"SEVERAL PLAUSIBLE CANDIDATES" IS A DIFFERENT STATE FROM "NO MATCH", AND §12.11 RESOLVES
+IT.** Collapsing the two turns a resolvable tie into a question the human cannot answer — which
+is exactly what happened to *Razor* on 2026-09-01.
+
+### 12.8 REVISED 2026-09-01: the weekly proposal's SHAPE
+
+**The first weekly item was wrong in shape, not in content.** The four songs and *"shall I add
+them?"* were buried under three paragraphs on how to read *"1 of 10"*, and two items were
+escalated as decisions that could not be made from what was presented. A proposal arrived as a
+methodology paper with homework attached.
+
+⚠️ **THE CAUSE IS WORTH NAMING, BECAUSE BOTH INPUTS WERE CORRECT.** §12.3 requires the
+denominator's shape to be visible. §12.7 requires refusing to guess. Followed literally and
+together, they produce 90% epistemics and 10% proposal. The rules were right; the balance was
+not. **§12.3 and §12.7 govern the ANALYSIS. §12.12 governs what is PRINTED.** They are not the
+same document, and conflating them is what went wrong.
+
+**The weekly item has two sections, in this order, and nothing else.**
+
+#### SECTION 1 — CONCERTS THAT HAVE PASSED AND NEED A STATUS
+
+Rows in `dj_concerts` whose date is in the past while `status` is still `screening`,
+`interested` or `committed`. **One line each: act, date, venue.** Ask whether he went.
+
+⚠️ **DO NOT GUESS, AND DO NOT INFER FROM LISTENING.** `attended` vs `missed` is a fact about
+Alex that no table holds. A spike in plays around the date is not evidence — it is equally
+consistent with cramming for a show he then skipped.
+
+⚠️ **`missed` carries a second write.** Per the column comment, *missed = did not go BUT still
+want to see them*, and the lingering want is a fact about the ARTIST — so it implies a
+`dj_feedback` row, not just a status change (§13.3). Section 1 must not present `missed` as a
+one-field update.
+
+If no concert needs a status, **the section is omitted entirely.** Not "nothing to report" —
+omitted. A section that appears every week saying nothing trains him to skip it (§11.7).
+
+#### SECTION 2 — UPCOMING CONCERTS
+
+One block per upcoming concert. Each block shows exactly six things:
+
+| field | source |
+|---|---|
+| date of the concert | `dj_concerts.date` |
+| the playlist name | `dj_playlists.name` |
+| how often he has listened to that playlist | `runs` — §12.9 |
+| when he last listened to it | `last_run_on` — §12.9 |
+| songs missing from recent setlists | the §12.2 diff |
+| whether the cram list needs updating | `cram_stale` — §12.10 |
+
+**Both halves are required and they answer different questions.** The diff asks *"what is in
+the setlist that is not in my playlist?"* The cram list asks *"what is in my playlist that I
+have barely heard?"* The first item shipped only the first, which made a
+playlist-completeness check read as concert prep.
+
+---
+
+### 12.9 The two listening metrics — DEFINED HERE, because nothing stores them
+
+**Neither exists today.** Nothing records "plays of a playlist"; both are derived from
+`dj_plays` against `dj_playlist_tracks`. *"Listened to the playlist"* could mean any track in
+it, or a run through most of it, and those are very different numbers — so the definition is
+written down rather than invented in passing at implementation time.
+
+#### `runs` — how often he has listened to it
+
+**The number of DAYS in the trailing 90 on which at least `threshold` distinct canonical
+groups from the playlist were played**, where:
+
+```
+threshold = clamp(ceil(0.5 * distinct_groups_in_playlist), 4, 20)
+```
+
+- **Why days and not sessions.** `dj_plays` buckets by UTC day (§4.2) and the feed carries one
+  entry per track per bucket, so repeats do not stack (§5). Two runs in one day are
+  indistinguishable from one. The unit is days, and the field name must not imply otherwise.
+- **Why not "any track played".** *Everlong* is in the concert playlist and in general
+  rotation. One unrelated play would mark the playlist as listened, every week, forever.
+- **Why half.** Half of a 30-track playlist is about an hour of continuous listening — not
+  something that happens by coincidence.
+- **Why the floor of 4.** On a 6-track playlist, half is 3, which is comfortably reachable by
+  accident. Short playlists need a higher proportional bar, not a lower one.
+- ⚠️ **Why the CAP of 20 — added 2026-09-01, and it is not cosmetic.** Half of *General
+  Running* (223 tracks) is 112, and half of *Elise's fun list* (379) is 190. Those are not
+  thresholds, they are guarantees of zero: `runs` would read 0 forever on every large playlist
+  and the metric would look broken rather than absent. 20 distinct tracks is about an hour of
+  listening, which is the same thing "half" means on a 30-track concert playlist — so the cap
+  keeps the metric measuring one consistent idea across a library whose playlists span 1 to
+  379 tracks. **This became load-bearing the moment the whole library was recorded**, not
+  before; the original caveat about jazz and discovery was the same problem seen early.
+- **Canonical groups, not `video_id`s** — so a play of any variant counts, consistent with
+  `get_dj_plays` familiarity mode.
+
+⚠️ **A track in two playlists counts toward both.** Named, not solved. For concert playlists
+(act-specific, largely disjoint) the overlap is small; for jazz and discovery playlists it will
+not be, and this metric should not be reused there without revisiting the threshold.
+
+#### `last_run_on` — when he last listened to it
+
+The most recent day meeting that threshold. `null` if it has never been met.
+
+**When `last_run_on` is null, show `last_touched_on` instead** — the most recent day ANY track
+from the playlist was played. *"You've not run it, but three of its songs came up on 29
+August"* is useful; a bare *"never"* on a playlist he has partly heard is wrong in feel and
+invites a correction.
+
+#### Where it is computed
+
+`get_dj_plays` familiarity returns per-group aggregates, not the per-day co-occurrence this
+needs, so **neither metric is obtainable from the current tools.**
+
+**Build it as a third mode on `get_dj_managed_playlists`: `mode=engagement`.** That tool
+already resolves membership, so the join `dj_playlist_tracks → canonical group → dj_plays` is
+local to it. It returns `runs`, `last_run_on`, `last_touched_on`, and — non-negotiably —
+`threshold_used` and `window_days`, because a bare `runs: 3` is uninterpretable and would be
+the next thing to need three paragraphs of explanation.
+
+---
+
+### 12.10 The cram section — least-familiar-first ACROSS THE WHOLE PLAYLIST
+
+§5 defines cram as least-familiar-first by distinct days. **That ordering has never been
+computed on real data.** The first weekly item did not look at it at all.
+
+**A song played twice a year ago is a better cram candidate than one played weekly.** Recency
+and volume are different axes and both matter.
+
+**The order.** Every track in the playlist, both zones, sorted by:
+
+1. `distinct_days` **ascending** — never-played first (`distinct_days: 0`)
+2. then `days_since_last` **descending, nulls first** — longest unheard first
+3. then body `position` ascending — a deterministic tie-break, so the list does not reshuffle
+   between runs for no reason
+
+Take the top `cram_cap` (default 8).
+
+⚠️ **DEDUPE BY CANONICAL GROUP BEFORE TAKING THE TOP N — added 2026-09-01.** Since migration
+012 a playlist body may hold the same song more than once (Family party, Awesome, 5K, Yoga and
+Archived Weezer all do; Archived Weezer is 160 rows and roughly 50 distinct songs). Sorting
+rows and slicing would let **one song take several of the eight slots**, all with identical
+familiarity because they resolve to the same canonical group — a cram list that looks full and
+is teaching three songs. Collapse to one entry per canonical group first, then take the top N.
+
+#### `cram_stale` — the flag, and why it is NOT "the sort changed"
+
+⚠️ **A flag that fires every week is worse than no flag (§11.7).** On a playlist being actively
+listened to, familiarity moves constantly and a recomputed top-8 will differ most weeks. That
+flag would be noise inside a month.
+
+**`cram_stale` fires only on a STATE, never on sort drift. Two states, either sufficient:**
+
+- **(a) An unlearned song is not being crammed** — a playlist track with `distinct_days: 0`
+  that holds no cram row.
+- **(b) A learned song is holding a cram slot** — a track in the cram block with
+  `distinct_days >= 5`.
+
+Both mean the cram list has stopped doing its job. A changed sort order does not.
+
+---
+
+### 12.11 NEVER ESCALATE AN AMBIGUITY WITHOUT A RECOMMENDATION AND A WAY TO RESOLVE IT
+
+**"I cannot decide it, so *Razor* stays out" is a failure, not caution.** Two studio recordings
+one second apart is something the system resolves or drops. It is not something to arbitrate to
+a human who has less information than the system does.
+
+⚠️ **THIS DOES NOT WEAKEN §12.7.** *Exact match or NOT FOUND* still stands, and a wrong
+`video_id` is still the failure being guarded against. What changes is that **"several
+plausible candidates" is not the same state as "no match"**, and it gets its own resolution
+path instead of collapsing into a question.
+
+**The tie-break, in order:**
+
+1. **Artist must match** (§12.7). Covers, karaoke, tribute bands and "Originally Performed
+   By…" are non-matches however well the title fits.
+2. **Drop live / acoustic / remix variants**, unless the setlist entry is itself live-specific.
+3. **Durations within 2 seconds → the same master.** Take the one on the artist's original
+   studio album, say so in one line, do not ask.
+4. **Durations differ by more than 2 seconds → a genuinely different recording.** Only now is
+   it his call, and it arrives with **a recommendation, the reason, and a link to each so it is
+   settleable by ear in seconds.**
+5. **No artist match at all → NOT FOUND.** It goes in a one-line "couldn't find these" note,
+   never as a question.
+
+**Worked against the real case.** *Razor* returned `FBnH6sBvnl0` (*In Your Honor*, 4:54) and
+`JSTGZqaEtkA` (*Catch And Release*, 4:53). One second apart → rule 3 → *In Your Honor*, the
+original album. **One line in the item, no question asked.** What shipped instead was a
+paragraph and a decision he had no way to make.
+
+⚠️ **NEVER A QUESTION HE CANNOT ANSWER FROM WHAT IS IN FRONT OF HIM.** If answering means
+opening YouTube, the item has failed §12.8 whatever else it got right.
+
+---
+
+### 12.12 Tone
+
+**Concerts are fun. This is not a compliance report.**
+
+- Short sentences. Friendly. Write like someone who is also looking forward to the show.
+- **No paragraph explaining how to read a number correctly.** If a number needs caveats to be
+  read right, **present a different number.**
+- **This is how §12.3 is satisfied without a lecture: put the denominator in the sentence.**
+  Not *"1 of 10 — but note the 22-08 show was 15 songs against a 25–27 median, so…"*. Just
+  **"only at the Hollywood Bowl show"**. Same fact, no essay, and impossible to misread.
+  Likewise *"he plays this most nights"* rather than *"9 of 10"*.
+- No hedging. No "it may be worth considering".
+- Absence is stated plainly and moved past: *"No setlists yet — the tour opens 8 September."*
+  Not a paragraph on why the window is empty.
+- **End with one question: "Want me to make these changes?"** That is the only question in the
+  item. Everything above it is either a statement or a one-line recommendation.
+
+---
+
+### 12.13 WORKED EXAMPLE — the finished item
+
+**Rules alone produced what shipped on 2026-09-01. This example is what the weekly job is
+written against.** Numbers below are illustrative where the metric does not exist yet
+(§12.9); the Foo Fighters songs, counts and video ids are real, from the 2026-09-01 run.
+
+---
+
+> **Two concerts coming up, and one I need to ask you about.**
+>
+> **Did you go to the Smashing Pumpkins?**
+> 22 August, The Forum. It's still down as "screening" so I don't know how it went.
+> Went / missed it / didn't end up going but still want to see them?
+>
+> ---
+>
+> **Foo Fighters — 17 October, Sphere**
+> *Foo Fighters Concert* · 30 tracks · you've run it 3 times, last on 31 August
+>
+> **Five songs to add.** They've been playing these and you don't have them:
+>
+> - **Caught In The Echo** — off *Your Favorite Toy*, played at three of the last ten shows
+> - **Of All People** — also off *Your Favorite Toy*, played once
+> - **Home** — only at the Hollywood Bowl show
+> - **I Should Have Known** — also only at the Hollywood Bowl show
+> - **Razor** — also Hollywood Bowl. Two versions on YouTube Music a second apart, so it's the
+>   same master; I've taken the *In Your Honor* one.
+>
+> That Hollywood Bowl show was the odd one out — a short set full of deep cuts. Three of these
+> came from it alone.
+>
+> Couldn't find Foo Fighters versions of *London Calling*, *A320*, or the five-song jam medley
+> they've been opening with. Leaving those out.
+>
+> **Your cram list needs a refresh.** Five of these you've never heard at all, so they go
+> straight to the top:
+>
+> 1. Caught In The Echo — never played
+> 2. Home — never played
+> 3. I Should Have Known — never played
+> 4. Of All People — never played
+> 5. Razor — never played
+> 6. Marigold *(live)* — 2 days, not since 22 August
+> 7. Marigold *(Nirvana)* — 3 days
+> 8. Window — 3 days
+>
+> *Everlong*, *The Pretender* and *Best of You* you've heard 40+ days each. They're safe.
+>
+> ---
+>
+> **Weezer — 3 November, Chase Center**
+> *Weezer Concert 2026* · 13 tracks · you haven't run it since 20 July
+>
+> No setlists yet — The Gathering opens 8 September. I'll check again next week.
+>
+> Worth a listen before then, though — it's been six weeks.
+>
+> ---
+>
+> **Want me to make these changes?**
+
+---
+
+**What that example is demonstrating, point by point:**
+
+- Section 1 first, one line, a real question, three answers offered — including the one that
+  means *missed*, phrased as he'd say it rather than as a status value.
+- Six fields per concert, in the §12.8 order, and no seventh.
+- **Denominators inside sentences.** "three of the last ten shows", "only at the Hollywood Bowl
+  show", "played once". §12.3 satisfied, §12.12 respected, no caveat paragraph.
+- The Hollywood Bowl anomaly is **one sentence** — the finding survives, the essay does not.
+- *Razor* resolved by §12.11 rule 3, one clause, no question.
+- NOT FOUND items get **one line and no apology**, because they are the correct answer.
+- The cram list is **the whole playlist by familiarity**, not the diff again — and it visibly
+  connects to the add list, since never-played songs top it.
+- The reassurance line (*"they're safe"*) exists so the cram list reads as focus, not as a
+  backlog.
+- Weezer shows absence handled in one line, plus a nudge that is useful rather than a
+  paragraph on why the window is empty.
+- **One question, at the end.**
 
 ---
 
@@ -1809,3 +2311,79 @@ file. Only a Google password change invalidates a leaked one.
 - **Weekly conversation shape.** The "you played Metallica three times, how do you feel
   about them?" prompt falls out of the Friday job naturally, but its exact form —
   what it asks, how answers land in `dj_feedback` — is undesigned.
+
+---
+
+## 14. Named gaps — FOUND, NOT FIXED
+
+Recorded here rather than left in a conversation. None of these is a bug: each is a thing the
+schema does not hold, discovered while building something that wanted it. They are written down
+so the next person to want them finds a decision rather than a surprise.
+
+### 14.1 🛑 There is no link between plays and artist identity
+
+`dj_tracks.artist` is **text**. `dj_artists` has `name`, `mbid` and `tags`. **There is no
+foreign key between them**, so going from "what I played" to "what kind of act that is" means
+matching a play-derived string against an artist row.
+
+⚠️ **AND THE POPULATIONS ARE NOT COMPARABLE.** `dj_artists` holds **22 rows**, every one a
+concert act put there by Phase 6b or the mbid backfill. The Takeout import measured **1,206
+distinct artists** in the history. So for the overwhelming majority of listening there is no
+artist row at all — no tags, no mbid, no exploration state.
+
+**The consequence, stated plainly: SUBGENRE IS UNAVAILABLE FOR ALMOST EVERYTHING ALEX LISTENS
+TO.** §1 capability 5 (discovery, going deeper into artists already mildly familiar) and any
+future taste modelling both want exactly this join, and it does not exist.
+
+**Not fixed here, and the fix is not obvious.** Adding `dj_tracks.artist_id` would need
+back-filling 1,206 artists through the same two-vocabularies boundary §4.1.4's alias map
+manages, into an insert-only table. Naming it is the honest step; doing it is a phase.
+
+### 14.2 🛑 `dj_albums` has no writer and no data
+
+No MCP tool creates or updates it. `dj_tracks.album`'s own comment says albums **must** be
+populated from a real lookup or from Takeout and never from the history feed — an instruction
+that has not been carried out.
+
+⚠️ **§1 CAPABILITY 4 IS EXPLICITLY ABOUT TRACKING FAVOURITE ALBUMS**, and jazz is the case the
+table was designed for: *"albums worth tracking as whole works, which matters for jazz in a way
+it does not for rock."* So the weekly review's *"albums by artists I already play that I have
+NOT played"* is not a query written badly — it is a query with no data on one side.
+
+**Its own phase**, and it needs deciding where albums come from: a YouTube Music lookup per
+artist, or the Takeout export, or by hand as they come up.
+
+### 14.3 🛑 Nothing marks a track as jazz
+
+No genre column on `dj_tracks`; its `tags` array is unpopulated. `dj_artists.tags` exists and is
+the right home, but see §14.1 — it covers 22 acts.
+
+**So the weekly review defines jazz by PLAYLIST MEMBERSHIP**, widened to artists appearing in
+those playlists (`dj_jazz_activity`, migration 013). That is a proxy, it is derived rather than
+guessed, and it is available today.
+
+⚠️ **THE DEFINITION IS PART OF THE FINDING AND MUST BE REPORTED WITH THE NUMBERS.** A jazz
+summary that does not say what counted as jazz invites the reader to assume a genre model
+exists. It does not, and the numbers move if the definition does.
+
+⚠️ Its artist arm is an **exact string match**, so "Oscar Peterson Trio" and "Oscar Peterson"
+do not unify — §4.1.4 again, one table over.
+
+### 14.4 Artist-identity collisions are not detectable
+
+MusicBrainz blocks direct page fetches without JavaScript, so the 2026-09-01 mbid backfill drew
+every id from Wikidata cross-references and search snippets. All 22 verified against live
+setlist reads — but **no exhaustive candidate list with disambiguation text was ever seen**,
+including for Chicago and Oasis.
+
+Three near-misses were caught by corroboration rather than by seeing the candidates: Paul
+Di'Anno's Killers, a Liverpool Ed Sheeran, and Skellern's 1980s Oasis. ⚠️ **A verification that
+succeeds by corroboration cannot report how close it came to failing.**
+
+**Consequence for tools:** a resolver can detect that a SEARCH returned several artists. It
+cannot detect two real-world acts sharing one name. §13.1's *"Metallica is coming to the
+Sphere"* resolves by name, and the skill cannot ask about an ambiguity it cannot see — §13.2's
+*exact match or ask*, one level up. **A route to the MusicBrainz search API
+(`/ws/2/artist?query=`, which returns disambiguation text and needs no JavaScript) is a
+prerequisite for that skill**, and any tool that resolves an artist must state this gap rather
+than imply coverage it lacks.
