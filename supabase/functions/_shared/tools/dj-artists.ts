@@ -236,3 +236,350 @@ export const upsertDjArtistTool = defineTool({
     };
   },
 });
+
+// ---------------------------------------------------------------------------
+// record_dj_artist_tag — tier 2
+// ---------------------------------------------------------------------------
+//
+// 🛑 THIS DOES NOT WRITE dj_artists. IT WRITES dj_artist_tags, WHICH IS A
+//    DIFFERENT TABLE ABOUT A DIFFERENT KIND OF THING, AND THE FILE THEY SHARE IS
+//    THE ONLY REASON THEY LOOK RELATED.
+//
+// `dj_artists.name` is an IDENTITY: 22 mbid-keyed concert acts, where a null
+// mbid means setlists cannot be read at all. `dj_artist_tags.artist` is a MATCH
+// KEY: the exact dj_tracks.artist string, warts included — "Eddie Higgins Trio",
+// "Oscar Peterson Trio", and at least one scraped channel byline with a view
+// count in it (§14.9). Nothing joins the two (see upsert_dj_artist), and this
+// tool must never be the thing that starts.
+//
+// ⚠️ TIER 2, NOT TIER 1, AND THE REASON IS THE `status` FIELD.
+//
+// Tier 1 is for appends to append-only tables. This is not one: setting a tag to
+// 'rejected', or reversing that, UPDATES an existing row. Per the platform
+// taxonomy that is tier 2 — audited, and reversible through
+// platform.rollback_audit_entry.
+//
+// 🛑 AND AN APPEND-ONLY VERSION WOULD HAVE BEEN THE WRONG TOOL ANYWAY. The whole
+// argument for curating this list by hand is that a rule gets it wrong (§14.7)
+// and that some of these strings are not artists (§14.9). A curated allowlist
+// that cannot be UN-curated is not curated — a single mistaken approval would
+// need a migration to undo, and the flow this serves is a human saying yes or no
+// to a weekly proposal. Getting one wrong has to cost a sentence, not a deploy.
+//
+// ⚠️ NEVER A HARD DELETE. Rejection is a soft delete and it carries meaning of
+// its own: 'rejected' means ASKED AND ANSWERED NO, and dj_tag_candidates
+// excludes it so the same name is not proposed every week forever (§11.7).
+// Deleting the row would restore exactly that behaviour.
+export const recordDjArtistTagTool = defineTool({
+  name: "record_dj_artist_tag",
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tag = ((args.tag as string | undefined) ?? "jazz").trim();
+    if (!tag) throw new Error("record_dj_artist_tag: `tag` cannot be empty.");
+
+    const status = ((args.status as string | undefined) ?? "active").trim();
+    if (status !== "active" && status !== "rejected") {
+      throw new Error(
+        `record_dj_artist_tag: \`status\` must be 'active' or 'rejected' ` +
+          `(got ${JSON.stringify(status)}). 'rejected' records that the artist ` +
+          `was considered and declined, so the weekly item stops proposing him — ` +
+          `it is a decision, not a deletion.`,
+      );
+    }
+
+    const raw = args.artists ?? args.artist;
+    const artists = (Array.isArray(raw) ? raw : [raw])
+      .filter((a): a is string => typeof a === "string")
+      .map((a) => a.trim())
+      .filter(Boolean);
+    if (artists.length === 0) {
+      throw new Error(
+        "record_dj_artist_tag: pass `artists` (an array) or `artist` (one string).",
+      );
+    }
+    if (artists.length > 50) {
+      throw new Error(
+        `record_dj_artist_tag: ${artists.length} artists in one call; the cap is 50.`,
+      );
+    }
+
+    const note = (args.note as string | undefined)?.trim() || null;
+
+    // -----------------------------------------------------------------------
+    // 🛑 THE TYPO GUARD, AND IT IS THE WHOLE REASON THIS TOOL IS NOT A THIN
+    //    INSERT. Every arm of every tag definition is an EXACT STRING match on
+    //    dj_tracks.artist. A tag reading "Eddie Higgins" when the data says
+    //    "Eddie Higgins Trio" inserts perfectly, matches nothing, and leaves the
+    //    report wrong in precisely the direction §14.13 was about — while the
+    //    write reports success.
+    //
+    // ⚠️ THIS IS THE SAME CHECK MIGRATION 017 GETS FROM ITS JOIN. A tool that
+    // skipped it would be a second way in with weaker rules than the first.
+    // -----------------------------------------------------------------------
+    const { data: known, error: kErr } = await ctx.db
+      .from("dj_tracks").select("artist").in("artist", artists);
+    if (kErr) {
+      throw new Error(`record_dj_artist_tag: artist lookup failed: ${kErr.message}`);
+    }
+    const seen = new Set(
+      ((known ?? []) as Array<{ artist: string }>).map((r) => r.artist),
+    );
+    const unknown = artists.filter((a) => !seen.has(a));
+    if (unknown.length > 0) {
+      throw new Error(
+        `record_dj_artist_tag: ${unknown.map((u) => JSON.stringify(u)).join(", ")} ` +
+          `${unknown.length === 1 ? "does" : "do"} not appear as an artist string ` +
+          `in dj_tracks, so ${unknown.length === 1 ? "a tag on it" : "tags on them"} ` +
+          `would match nothing and be invisible. NOTHING WAS WRITTEN — a partial ` +
+          `write here is worse than none, because the missing rows would look ` +
+          `like a decision not to tag them. The string must be copied EXACTLY ` +
+          `from get_dj_plays mode=artists: the join is an exact match, and ` +
+          `"Eddie Higgins" and "Eddie Higgins Trio" are different artists to it.`,
+      );
+    }
+
+    // ⚠️ PROVENANCE IS DERIVED HERE, NEVER TAKEN FROM THE CALLER. `source` says
+    // whether a row is a FACT (the artist is on a track in a playlist whose kind
+    // matches the tag — migration 013's arm, stored) or a JUDGEMENT. That is a
+    // property of the data, and a caller asserting it would be able to launder a
+    // guess into a fact, which is what `source` exists to prevent.
+    const { data: plRows, error: plErr } = await ctx.db
+      .from("dj_playlists").select("id").eq("kind", tag);
+    if (plErr) {
+      throw new Error(`record_dj_artist_tag: playlist lookup failed: ${plErr.message}`);
+    }
+    const derivable = new Set<string>();
+    const plIds = ((plRows ?? []) as Array<{ id: string }>).map((p) => p.id);
+    if (plIds.length > 0) {
+      const { data: ptRows, error: ptErr } = await ctx.db
+        .from("dj_playlist_tracks").select("track_id").in("playlist_id", plIds);
+      if (ptErr) {
+        throw new Error(
+          `record_dj_artist_tag: membership lookup failed: ${ptErr.message}`,
+        );
+      }
+      const trackIds = [
+        ...new Set(
+          ((ptRows ?? []) as Array<{ track_id: string }>).map((r) => r.track_id),
+        ),
+      ];
+      if (trackIds.length > 0) {
+        const { data: tRows, error: tErr } = await ctx.db
+          .from("dj_tracks").select("artist").in("id", trackIds);
+        if (tErr) {
+          throw new Error(`record_dj_artist_tag: track lookup failed: ${tErr.message}`);
+        }
+        for (const t of (tRows ?? []) as Array<{ artist: string | null }>) {
+          if (t.artist) derivable.add(t.artist);
+        }
+      }
+    }
+
+    const now = new Date().toISOString();
+    // ⚠️ user_id IS NOT SET HERE. dj_artist_tags.user_id defaults to auth.uid()
+    // (migration 018), so the database decides the owner. `ctx.userId` is the
+    // UNVERIFIED JWT sub — fine for logging, wrong as an ownership key, and RLS
+    // catching a mismatch is a second mechanism rather than a reason to send it.
+    const rows = artists.map((artist) => ({
+      artist,
+      tag,
+      status,
+      source: derivable.has(artist) ? "playlist" : "manual",
+      note,
+      decided_at: now,
+    }));
+
+    const { data: written, error: wErr } = await ctx.db
+      .from("dj_artist_tags")
+      .upsert(rows, { onConflict: "user_id,artist,tag" })
+      .select("artist, tag, status, source, note, decided_at");
+    if (wErr) {
+      throw new Error(`record_dj_artist_tag: write failed: ${wErr.message}`);
+    }
+
+    const out = (written ?? []) as Array<Record<string, unknown>>;
+    return {
+      tags: out,
+      written: out.length,
+      tag,
+      status,
+      facts: out.filter((r) => r.source === "playlist").length,
+      judgements: out.filter((r) => r.source === "manual").length,
+      reading:
+        "⚠️ `artist` is the EXACT dj_tracks.artist string — a match key, not a " +
+        "display name. This is NOT dj_artists, which holds mbid-keyed concert-act " +
+        "identities and joins to nothing here. " +
+        "⚠️ `source` is DERIVED, never accepted from the caller: 'playlist' means " +
+        "the artist is on a track in a playlist whose kind matches the tag, which " +
+        "is a fact; 'manual' means a human decided. " +
+        "🛑 status 'rejected' is a DECISION, not a deletion — it records that the " +
+        "artist was considered and declined, and dj_tag_candidates stops " +
+        "proposing him. Reversing it is another call to this tool; nothing here " +
+        "hard-deletes, so the audit log can undo any of it.",
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// get_dj_artist_tags — tier 1
+// ---------------------------------------------------------------------------
+//
+// 🛑 A CURATED LIST YOU CANNOT READ IS A WRITE-ONLY LIST, AND IT WILL ROT.
+//
+// Until this existed, `dj_artist_tags` could be written by record_dj_artist_tag
+// and read only THROUGH dj_artist_activity — which shows `tags` on artists that
+// were PLAYED IN THE WINDOW, and nothing else. That left three things invisible:
+//
+//   * REJECTIONS. The one state whose entire purpose is to be remembered was
+//     the one nobody could look at. "What did I already say no to?" had no
+//     answer outside the SQL editor, and a decision you cannot review is a
+//     decision you will make again differently.
+//   * TAGS ON ARTISTS NOT PLAYED RECENTLY. 87 tags exist and 25 of those
+//     artists were played in the last 90 days. The other 62 were unreadable.
+//   * PROVENANCE. Which rows are derived facts and which are human judgements
+//     is what makes a resync safe, and it could not be checked.
+//
+// ⚠️ THIS IS A REVIEW SURFACE, NOT A REPORTING ONE. It answers "what is on the
+// list and who put it there", never "what am I listening to" — that is
+// get_dj_plays mode=artists, and keeping the two apart is the whole reason
+// §14.19 happened once and should not happen twice.
+export const getDjArtistTagsTool = defineTool({
+  name: "get_dj_artist_tags",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const LIMIT = clampLimit(args.limit as number | undefined);
+
+    // -----------------------------------------------------------------------
+    // mode=review — WHICH TAGS REST ON ALMOST NO EVIDENCE (added 021)
+    // -----------------------------------------------------------------------
+    // 🛑 THE DERIVED ARM WROTE GARBAGE WITH THE AUTHORITY OF A DERIVATION. After
+    // the 018/020 seeds, jazz tags included "Dec 29, 2023", "Anything_F_744",
+    // "aron!" and "Cavendish Music" — every one TRUE as a membership statement
+    // (the string really is on a track in a jazz playlist) and every one FALSE as
+    // the claim the tag makes, which is that this is an act (§14.9).
+    //
+    // ⚠️ IT MAKES NO CLAIM ABOUT WHICH STRINGS ARE REAL, AND MUST NOT BE READ AS
+    // ONE. It returns four facts — tracks, playlists, play rows, days — and
+    // orders by them. Nothing inspects the text: every rule that would is a guess
+    // about language, and §14.7 records what those cost here.
+    if ((args.mode as string | undefined) === "review") {
+      const { data, error } = await ctx.db.rpc("dj_tag_review", {
+        p_tag: (args.tag as string | undefined) ?? null,
+        p_source: (args.source as string | undefined) ?? null,
+        p_window_days: (args.window_days as number | undefined) ?? 90,
+        p_limit: LIMIT,
+      });
+      if (error) {
+        throw new Error(
+          `get_dj_artist_tags: review failed: ${error.message}. If this says the ` +
+            `function does not exist, migration 021 has not been applied yet.`,
+        );
+      }
+      const rows = (data ?? []) as Array<Record<string, unknown>>;
+      return { data: {
+        mode: "review",
+        tags: rows,
+        returned: rows.length,
+        limit_applied: LIMIT,
+        reading:
+          "🛑 ORDERED WEAKEST EVIDENCE FIRST, AND THAT IS AN ORDERING FOR A HUMAN, " +
+          "NEVER A VERDICT. `distinct_tracks`, `distinct_playlists`, `play_rows` " +
+          "and `distinct_days` are facts already in the database; NOTHING HERE " +
+          "INSPECTS THE STRING. A real act accumulates tracks, playlists and " +
+          "plays; a byline scraped onto one upload accumulates one track and " +
+          "stops — a factual asymmetry, not a linguistic judgement. " +
+          "⚠️ `source: 'playlist'` rows were written as FACTS by the seeds, which " +
+          "is exactly why they need reviewing: the derivation knows MEMBERSHIP " +
+          "and writes a CLAIM ABOUT AN ACT, and dj_tracks.artist carries scraped " +
+          "bylines, upload dates and filename fragments (§14.9). " +
+          "🛑 DO NOT REJECT ROWS FROM INSIDE A WEEKLY REVIEW. The cleanup is a " +
+          "separate hand-reviewed pass; folding an irreversible judgement about " +
+          "a hundred rows into a conversation about concerts is how it gets done " +
+          "carelessly.",
+      }, meta: { limit_applied: LIMIT } };
+    }
+
+    const status = (args.status as string | undefined)?.trim();
+    if (status && status !== "active" && status !== "rejected") {
+      throw new Error(
+        `get_dj_artist_tags: \`status\` must be 'active' or 'rejected' ` +
+          `(got ${JSON.stringify(status)}). Omit it to see both — which is the ` +
+          `point of the tool: a rejection is a decision, and reviewing the list ` +
+          `means seeing what was declined as well as what was kept.`,
+      );
+    }
+
+    const source = (args.source as string | undefined)?.trim();
+    if (source && source !== "playlist" && source !== "manual") {
+      throw new Error(
+        `get_dj_artist_tags: \`source\` must be 'playlist' or 'manual' ` +
+          `(got ${JSON.stringify(source)}).`,
+      );
+    }
+
+    // ⚠️ COUNTED BEFORE THE LIMIT, NOT AFTER. A clamped list of a curated set is
+    // the one place a short read reads as a complete one — "I have tagged 20
+    // artists" when the answer is 87 is exactly the §14.5 shape, arriving through
+    // a different door.
+    let countQ = ctx.db
+      .from("dj_artist_tags")
+      .select("id", { count: "exact", head: true });
+    if (args.tag !== undefined) countQ = countQ.eq("tag", args.tag as string);
+    if (status) countQ = countQ.eq("status", status);
+    if (source) countQ = countQ.eq("source", source);
+    const { count, error: cErr } = await countQ;
+    if (cErr) throw new Error(`get_dj_artist_tags: count failed: ${cErr.message}`);
+
+    let q = ctx.db
+      .from("dj_artist_tags")
+      .select("artist, tag, status, source, note, decided_at, created_at");
+    if (args.tag !== undefined) q = q.eq("tag", args.tag as string);
+    if (status) q = q.eq("status", status);
+    if (source) q = q.eq("source", source);
+
+    // Rejections first when both are shown: they are the rows nobody can see any
+    // other way, and burying them under 87 active tags would leave them as
+    // invisible as they were before this tool existed.
+    //
+    // ⚠️ DESCENDING, AND THE ASCENDING VERSION LOOKED CORRECT. 'active' sorts
+    // BEFORE 'rejected' alphabetically, so `ascending: true` put the rejections
+    // at the bottom — the exact behaviour this ordering exists to prevent, under
+    // a comment claiming the opposite. Caught by the test, not by reading it.
+    const { data, error } = await q
+      .order("status", { ascending: false })
+      .order("artist", { ascending: true })
+      .limit(LIMIT);
+    if (error) throw new Error(`get_dj_artist_tags: ${error.message}`);
+
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    const total = count ?? rows.length;
+    return { data: {
+      tags: rows,
+      returned: rows.length,
+      total,
+      limit_applied: LIMIT,
+      truncated: total > rows.length,
+      filters: {
+        tag: (args.tag as string | undefined) ?? null,
+        status: status ?? null,
+        source: source ?? null,
+      },
+      reading:
+        "⚠️ THIS IS THE REVIEW SURFACE FOR THE TAG LIST, not a listening report. " +
+        "For what was actually played use get_dj_plays mode=artists. " +
+        "🛑 `status: 'rejected'` ROWS ARE DECISIONS, NOT DELETIONS — an artist " +
+        "considered and declined, kept so the weekly item stops proposing him " +
+        "(§11.7). They are the rows that exist for no other reason than to be " +
+        "read back, so they sort first. " +
+        "⚠️ `source: 'playlist'` rows are DERIVED — the artist is on a track in a " +
+        "playlist whose kind matches the tag, which is migration 013's artist " +
+        "arm stored rather than recomputed. They can be re-derived safely. " +
+        "`source: 'manual'` rows are human judgements and nothing may overwrite " +
+        "them automatically. " +
+        "⚠️ `artist` is the EXACT dj_tracks.artist string — a match key, not a " +
+        "display name, and NOT dj_artists (§14.1). " +
+        "⚠️ COMPARE `returned` AGAINST `total`: this list is ordered and cut at " +
+        "the limit, so a short read drops the END of it rather than a sample.",
+    }, meta: { truncated: total > rows.length, limit_applied: LIMIT } };
+  },
+});

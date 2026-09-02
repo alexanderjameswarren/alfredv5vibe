@@ -1877,7 +1877,24 @@ together, they produce 90% epistemics and 10% proposal. The rules were right; th
 not. **§12.3 and §12.7 govern the ANALYSIS. §12.12 governs what is PRINTED.** They are not the
 same document, and conflating them is what went wrong.
 
-**The weekly item has two sections, in this order, and nothing else.**
+**REVISED 2026-09-02: the weekly item has FOUR sections, in this order, and nothing else.**
+
+⚠️ **THIS PARAGRAPH SAID "TWO" UNTIL 2026-09-02 AND THE ITEM HAD FOUR.** Sections 3 and 4 were
+being asked for in the prompt and produced every week while the spec said they did not exist —
+so the document that governs the item was not the document describing it. Recorded rather than
+quietly corrected, because a spec that has drifted once will be trusted the same way next time.
+
+| | section | source |
+|---|---|---|
+| 1 | concerts needing a status | `get_dj_concerts` — `needs_status` **and** `undecided` |
+| 2 | upcoming concerts | `get_dj_managed_playlists` + `diff_dj_setlists` |
+| 3 | jazz | `get_dj_plays mode=artists tag=jazz` |
+| 4 | everything else | `get_dj_plays mode=artists` |
+
+**The operational prompt is `docs/dj-weekly-review-prompt.md`.** ⚠️ Where it and this section disagree, THIS SECTION WINS and the prompt is stale — §14.25 records the two drifting apart once already, with neither document able to reveal it.
+
+🛑 **SECTIONS 3 AND 4 ARE ONE TOOL AND ONE DEFINITION, DECIDED 2026-09-02.** Section 3 is Section
+4 with a filter. `dj_jazz_activity` and `get_dj_jazz_activity` are **removed**. See SECTION 3 below.
 
 #### SECTION 1 — CONCERTS THAT HAVE PASSED AND NEED A STATUS
 
@@ -1951,6 +1968,95 @@ check (§11.4) — the weekly item simply does not print it.
 the setlist that is not in my playlist?"* The cram list asks *"what is in my playlist that I
 have barely heard?"* The first item shipped only the first, which made a
 playlist-completeness check read as concert prep.
+
+---
+
+#### SECTION 3 — JAZZ, AND SECTION 4 — EVERYTHING ELSE
+
+**ADDED 2026-09-02.** Both were being produced weekly while §12.8 said the item had two sections.
+
+**Both are `get_dj_plays mode=artists`.** Section 3 passes `tag: "jazz"`; Section 4 does not.
+One function, one definition, one set of field names.
+
+##### 🛑 WHY THEY WERE MERGED, AND IT WAS NOT TIDINESS
+
+The old Section 3 had its own definition — playlist membership, widened to the artists appearing
+in those playlists. It produced two failures that are the same failure:
+
+- **§14.13.** The definition could not reach outside the two jazz playlists **by construction**,
+  while its own text named six pianists as evidence that it could. **Thelonious Monk — 20
+  distinct days, 81 distinct canonical groups, the broadest repertoire of any artist in the
+  library — was invisible to the jazz section for a quarter.**
+- **§14.19.** Section 3 printed `in_playlist: false` for Wes Montgomery and Section 4 printed
+  `in_any_playlist: true` for the same artist, in the same report. **Both were correct.** That is
+  what two overlapping definitions produce, and renaming the field only fixed the instance.
+
+**One definition cannot disagree with itself.** That is the whole argument.
+
+##### ⚠️ WHAT THE MERGE COSTS, STATED BECAUSE IT IS A REAL LOSS
+
+A jazz artist who is in a jazz playlist but **untagged drops out of Section 3.** The old
+definition caught him automatically; this one does not.
+
+🛑 **BUT "WE DROPPED THE PLAYLIST ARM" IS FALSE, AND ONLY THIS IS TRUE: THE PLAYLIST ARM NOW
+WRITES TAGS INSTEAD OF BEING RECOMPUTED.** *"Is this artist on a track in a `kind='jazz'`
+playlist?"* has a definite answer that does not depend on who is asking or when — it was never a
+judgement, which is exactly why a machine could evaluate it at read time. It survives as an
+**INSERT rather than a JOIN**: migration 018 writes one `dj_artist_tags` row per such artist with
+`source = 'playlist'`.
+
+⚠️ **WHAT ACTUALLY CHANGES is that the arm no longer self-updates.** Add a track to *Christmas
+jazz* tomorrow and its artist is not tagged until something writes the row. **The cost is paid
+visibly:** `dj_tag_candidates` reports any such artist as `derivable: true`, which is drift that
+announces itself, and writing those rows requires no decision from anyone.
+
+##### 🛑 A TAG-FILTERED SECTION MUST SAY WHAT IT CANNOT SEE. THIS IS A RULE, NOT A NOTE.
+
+Section 3 reports exactly what is tagged. **A thin section and a thin listening habit are
+indistinguishable without a coverage number** — and that is precisely how §14.13 happened: a
+number describing its own reach as if it described the world.
+
+**So `coverage` is fetched with the rows, never as a separate optional call**, and Section 3 is
+not printed without `untagged_total` in it. An optional call is a call somebody skips on the week
+it matters.
+
+##### The tagging loop — the report proposes, Alex approves, the thread writes
+
+**Twelve hand-seeded rows is a seed. This is the system that stops it rotting.**
+
+`tag_candidates` splits into two kinds, and ⚠️ **THEY ARE NOT THE SAME ASK:**
+
+- **`derivable: true` is a FACT.** The artist is on a track in a playlist whose kind matches the
+  tag — the stored form of the old playlist arm. **Write it with `record_dj_artist_tag` without
+  asking.** These are ordered first, because burying a fact in a list of judgement calls invites
+  it to be treated as one.
+- **`derivable: false` is a JUDGEMENT.** Propose it with the numbers — *"you played Dizzy
+  Gillespie on 6 days, Charlie Parker 5, Wynton Kelly 5, none tagged. Jazz?"* — and let Alex
+  answer. ⚠️ **NEVER AUTOMATIC**, for §14.9's reason: at least one artist string in this data is
+  a scraped channel byline with a view count in it, and tagging an unknown to make a list longer
+  is how a curated allowlist stops being curated.
+
+🛑 **A "NO" IS A WRITE. RECORD IT WITH `status: 'rejected'`.** If declining leaves no trace, the
+same names are proposed next week and every week after — §11.7, a signal that fires on the normal
+case gets ignored, and then it is worse than none. **Absence is the only state meaning "not yet
+asked"**, and it has to stay that way to be worth anything. *Harrison* is the live case.
+
+⚠️ **NOTHING HARD-DELETES.** `rejected` is a soft delete carrying a reason, reversible by another
+call and by the audit log. `record_dj_artist_tag` is **tier 2** for exactly this: a curated
+allowlist that cannot be un-curated is not curated, and a mistaken approval must cost a sentence
+rather than a migration.
+
+##### What Section 3 does NOT gain
+
+⚠️ **THIS IS STILL NOT AN ARTIST IDENTITY AND DOES NOT CLOSE §14.1.** `dj_artist_tags.artist` is
+the exact `dj_tracks.artist` string — a match key, not a name. *"Oscar Peterson Trio"* and
+*"Oscar Peterson"* are two rows if both appear. It is a curated allowlist over play strings, the
+same shape as §4.1.4's `ARTIST_ALIASES`, hand-curated for the reason §14.7 gives: *"prefer the
+longer form"* fixes Eddie Higgins and breaks Red Garland in one stroke.
+
+⚠️ **SUBGENRE AND UNPLAYED ALBUMS REMAIN UNAVAILABLE** (§14.2, §14.3). And the section still
+cannot propose an artist nobody has played — *"try Andrew Hill"* comes from the conversation,
+never from listening history.
 
 ---
 
@@ -2176,6 +2282,19 @@ opening YouTube, the item has failed §12.8 whatever else it got right.
 - **End with one question: "Want me to make these changes?"** That is the only question in the
   item. Everything above it is either a statement or a one-line recommendation.
 
+  ⚠️ **REFINED 2026-09-02, BECAUSE THE RULE CONTRADICTED THE SECTIONS.** This was written when
+  the item had two sections and one kind of change. It now carries three kinds of answer —
+  concert statuses, artist tags, playlist adds — and Sections 1a, 1b and the tagging proposal are
+  all requests for a decision. Written naturally they produce four or five question marks under a
+  rule saying "one question".
+
+  **The rule is ONE QUESTION MARK, and it is the last line.** Decisions above it are presented as
+  **labelled items under a heading that says they are waiting on him**, not as question
+  sentences — *"<act> — playlist run once, months ago. Still interested?"* loses its question
+  mark and keeps its meaning. The closing question then **names the kinds of answer actually on
+  the table that week** and drops the clauses that do not apply: *"So: any statuses to change,
+  any of those artists to tag, and shall I add the missing songs?"*
+
 ---
 
 ### 12.13 WORKED EXAMPLE — the finished item
@@ -2264,6 +2383,26 @@ written against.** Numbers below are illustrative where the metric does not exis
 ## 13. The concert-playlist skill (planned, not built)
 
 **Do not build until the weekly diff works.** Recorded now while the reasoning is fresh.
+
+### 🛑 THE BOUNDARY AGAINST `dj-weekly-review` — STATED HERE AND THERE, ON PURPOSE
+
+The `dj-weekly-review` skill (built 2026-09-02) acts on a weekly review item: concert statuses,
+tagging answers, and **adding songs the report already resolved to an EXISTING concert playlist.**
+It stops there.
+
+**Everything else is THIS skill's job and none of it exists yet:** creating or naming a playlist,
+creating a **dated** concert row, deciding a date or venue, deciding what a new playlist should
+contain, reordering or clearing a cram block.
+
+⚠️ **REVISED 2026-09-02 — THE LINE IS *ORIGINATE* vs *COMPLETE*, NOT "never writes dj_concerts".**
+The weekly skill may create an **undated `screening`** row, because that COMPLETES a decision
+already made in the conversation: same artist, no date, no playlist, every field determined by the
+answer. The first phrasing blocked it, and blocking it meant a lingering want ended up as free
+text on a rejected row where nothing would ever read it (§14.36).
+
+⚠️ **BOTH DOCUMENTS CARRY THIS BOUNDARY.** Two skills that each assume the other handles playlist
+creation is how nobody does it — or how both do, differently. A boundary written once is a
+boundary only one side knows about (§11.14).
 
 ### 13.1 Three phrasings, three different setlist queries
 
@@ -2930,5 +3069,470 @@ listening to and what am I missing", and Section 4's rollup is closer to that th
 
 Migration 016 makes the merge *available* without making it: `dj_artist_activity` takes a
 `p_tag` filter, so the jazz section can **be** the rollup filtered by tag — same numbers, one
-definition — rather than a second definition that has to agree with it. **Whether §12.8's section
-list changes is a spec decision and is not taken here.**
+definition — rather than a second definition that has to agree with it. **§12.8's section list HAS now changed — see §14.23.** This entry stands as the
+finding that drove it.
+
+### 14.23 Section 3 merged into the rollup — DECIDED 2026-09-02, migration 018
+
+§14.22 is closed as a **decision**, not as a defect fix. Section 3 is now
+`get_dj_plays mode=artists tag=jazz` — Section 4 with a filter. `dj_jazz_activity` and
+`get_dj_jazz_activity` are dropped. The full shape is in §12.8's SECTION 3 entry; recorded here
+are the three things that would otherwise be re-litigated.
+
+**1. The tool was REMOVED, not left as a wrapper.** A wrapper keeps a second *name* for one idea
+and the next reader has to discover they are the same. A removed tool fails loudly at the call
+site — the failure worth having. `mcp/index.test.mjs` asserts its **absence**, so re-adding it as
+a convenience fails a test.
+
+**2. 🛑 THE PLAYLIST ARM WAS CONVERTED, NOT DROPPED, AND THE TWO CLAIMS ARE NOT
+INTERCHANGEABLE.** *"Is this artist on a track in a `kind='jazz'` playlist?"* has a definite
+answer independent of who asks and when. It was never a judgement — which is precisely why a
+machine could evaluate it at read time — so it survives as an INSERT rather than a JOIN.
+Migration 018 writes one row per such artist with `source = 'playlist'`. **What is genuinely lost
+is that the arm no longer self-updates**, and that loss is made visible rather than absorbed:
+`dj_tag_candidates` reports any newly-derivable artist, and writing those rows needs no
+decision. 018's verify block asserts the seed wrote rows at all, because *"the arm was converted"*
+is a claim that is false if it wrote none.
+
+**3. `source` is derived server-side and cannot be passed by a caller.** A caller asserting
+provenance could launder a guess into a fact, which is the one thing the column exists to
+prevent. `record_dj_artist_tag` computes it from playlist membership; a mutation test pins it.
+
+### 14.24 ⚠️ REJECTION IS A STATE — ADDED WITHOUT BEING ASKED FOR, SO IT IS FLAGGED HERE
+
+The requested flow was: the report proposes untagged artists, Alex approves, the thread writes.
+**As specified, a "no" leaves no trace** — so the same names return next week, and the week
+after. *Harrison* (4 distinct days, possibly a scraped byline per §14.9) would be proposed every
+week for the rest of the project.
+
+🛑 **THAT IS §11.7 EXACTLY: a proposal that fires on the normal case gets ignored, and then it is
+worse than none.** A curated allowlist whose curation cannot record a NO is not curated; it is a
+list that keeps asking.
+
+`dj_artist_tags.status` is `'active'` or `'rejected'`. **Both mean DECIDED and neither is
+proposed again.** Only `active` counts as tagged. **Absence is the only state meaning "not yet
+asked"**, and it has to stay that way to be worth reading.
+
+⚠️ **THIS IS ALSO WHY THE WRITE TOOL IS TIER 2 RATHER THAN TIER 1.** An append-only tool cannot
+express a rejection or reverse one, so a single mistaken approval would need a migration to undo
+— and the whole argument for curating by hand (§14.7) is that the automatic rules get it wrong.
+Nothing hard-deletes; `rejected` is a soft delete carrying a reason, reversible by another call
+and by `platform.rollback_audit_entry`.
+
+### 14.25 §12.8 said "two sections" while the item had four — FIXED 2026-09-02
+
+Sections 3 and 4 were requested in the weekly prompt and produced every week, while the spec
+paragraph governing the item's shape read *"The weekly item has two sections, in this order, and
+nothing else."*
+
+⚠️ **THE DOCUMENT THAT GOVERNS THE ITEM WAS NOT THE DOCUMENT DESCRIBING IT**, and nothing in
+either would have revealed that — the prompt did not cite §12.8 and §12.8 did not know about the
+prompt. Recorded rather than quietly corrected, because a spec that has drifted once will be
+trusted the same way next time.
+
+### 14.26 The tag backlog is 368 and the count is the wrong number — SHAPED 2026-09-02, migration 019
+
+Measured immediately after 018: **393 artists played in 90 days, 87 tagged, 368 untagged, 0
+derivable.** At eight proposals a week that is eighteen months, and a weekly section carrying an
+eighteen-month queue is §11.7 at a scale nothing survives.
+
+🛑 **BUT THE COUNT WILL NEVER REACH ZERO, BY CONSTRUCTION.** The candidate pool is *played in the
+trailing window*, and the window slides — new one-off artists arrive every week. Reporting
+progress as *"368 remaining"* guarantees a number that does not move however many decisions get
+made, which is the definition of decoration.
+
+**So coverage is measured in PLAY ROWS.** Every `dj_plays` row has exactly one artist string, so
+play rows **partition**: `tagged_rows + untagged_rows = played_rows`. A share computed from them
+is a real fraction of listening rather than a fraction of a name list, and it closes.
+
+⚠️ **THAT IS WHAT MAKES THE TOP OF THE LIST WORTH ANSWERING AND THE TAIL SAFE TO IGNORE.**
+Deciding Weezer moves the share by 336 rows; deciding a one-off moves it by one. The section can
+say *"these eight take you from 43% to 71%"* — true, finite, and the same arithmetic — instead of
+*"359 to go"*.
+
+⚠️ **A REJECTED ARTIST IS DECIDED BUT NOT COVERED**, so his rows are in neither bucket and the
+two stop summing once anything is rejected. Deliberate: folding rejections into "tagged" would
+inflate the share with artists deliberately excluded from the section.
+
+#### The ordering changed to `play_rows`, and the real backlog is why
+
+018 ordered candidates by `distinct_days`. Against the measured list that put five rock acts
+ahead of the only jazz artist in the top ten:
+
+| | days | songs | play rows | rank under `distinct_days` |
+|---|---|---|---|---|
+| Green Day | 16 | 20 | 27 | 5th |
+| Miles Davis | 15 | 49 | 83 | 6th |
+
+**A thin artist heard on many days outranked a deep one**, which is the opposite of the point.
+
+🛑 **`play_rows` IS THE SORT KEY BECAUSE IT IS THE SAME UNIT AS THE OBJECTIVE.** Coverage is
+measured in play rows, so the top N candidates are exactly the N decisions that buy the most
+coverage — sort key and thing-being-maximised are one quantity, with no composite score to tune
+and nothing needing a paragraph to read correctly (§12.12). It also absorbs both signals rather
+than choosing: Monk is 94 songs over 21 days = 226 rows; Green Day is 20 over 16 = 27.
+
+`distinct_days` and `distinct_groups` are still returned and belong in the printed line, because
+*"Miles Davis, 49 songs across 15 days"* is what is actually being decided.
+
+#### The cap is 8, and facts do not count against it
+
+Five reads as trivial next to a backlog this size; twelve reads as a form. Eight is also
+`cram_cap` — this project's existing answer to *how many things will a human act on in one
+sitting*. ⚠️ **They are deliberately NOT the same constant**: a cram slot and a tagging decision
+are different objects, and coupling them would be a constraint written twice (§11.14).
+
+A `derivable` candidate is written without asking, so it costs no attention and takes no slot.
+The tool requests `cap + untagged_derivable` rows, exact rather than guessed, because coverage
+has already been fetched.
+
+### 14.27 The tag list was write-only — FIXED 2026-09-02
+
+`dj_artist_tags` could be written and read only *through* `dj_artist_activity`, which shows tags
+on artists **played in the window** — 25 of the 87. Three things were invisible:
+
+- **Rejections.** The one state whose entire purpose is to be remembered had no reader. *"What
+  did I already say no to?"* had no answer outside the SQL editor, and a decision you cannot
+  review is one you will make again differently.
+- **Tags on artists not played recently** — 62 of them.
+- **Provenance.** Which rows are derived facts and which are human judgements is what makes a
+  resync safe, and it could not be checked.
+
+`get_dj_artist_tags` (tier 1) is the review surface. ⚠️ **It answers "what is on the list and who
+put it there", never "what am I listening to"** — keeping those apart is why §14.19 happened once
+and should not happen twice.
+
+⚠️ **AND ITS FIRST IMPLEMENTATION SORTED REJECTIONS LAST WHILE A COMMENT CLAIMED OTHERWISE.**
+`'active'` precedes `'rejected'` alphabetically, so `ascending: true` put the rows that exist
+purely to be read back at the bottom of the list. Caught by a test, not by reading the code — the
+comment above it asserted the correct behaviour the whole time.
+
+### 14.28 Section 1 and Section 2's new signals, verified against live data — 2026-09-02
+
+`mode=undecided` and `decision_pending` had only run against fakes. Confirmed live:
+
+- **`mode=undecided`** returns exactly Oasis and Black Eyed Peas, ordered by `quiet_for_days`
+  (53, 11), engagement joined. ⚠️ **Oasis appears despite `went_quiet: false`** — two touch days
+  inside the recent window keep it warm — which is the whole reason the mode applies no
+  threshold. Under any flag-based filter it would be invisible, and it is one of the two cases
+  §12.8 names.
+- **`decision_pending`** is `true` on Smashing Pumpkins (2026-10-30, 58 days out, `screening`)
+  and `false` on both committed shows.
+
+### 14.29 A RAISE arity mistake kills a whole migration at COMPILE time — FIXED 2026-09-02, and now checkable
+
+Migration 019 failed to apply:
+
+```
+ERROR: 42601: too many parameters specified for RAISE
+CONTEXT: compilation of PL/pgSQL function "inline_code_block" near line 27
+```
+
+The format string was `'Coverage: %/% play rows tagged (%%), % untagged ...'` with five
+arguments. **In a PL/pgSQL RAISE, `%%` is an ESCAPED LITERAL PERCENT and consumes no argument** —
+so the string carried four placeholders against five arguments.
+
+⚠️ **AND THE OBVIOUS REPAIR DOES NOT WORK EITHER.** Writing `%%%` to mean *"placeholder, then a
+percent sign"* fails: the scanner reads left to right, takes `%%` first, and renders the sign
+**before** the number. The fix is to not put a percent sign in a RAISE format string at all — the
+word *"pct"* costs nothing and cannot be got wrong.
+
+🛑 **THE FAILURE MODE IS WHY THIS IS RECORDED AT ALL.** It is a COMPILE-time error in an anonymous
+block, so it does not fail the one `RAISE` — **it rejects the entire `do $$ ... $$` block**, which
+is where every verification in every migration in this project lives. A migration's checks are
+the part most likely to contain a long interpolated message and the part least likely to be
+executed before the migration is run for real. A typo in a diagnostic takes down the diagnostics.
+
+**`scripts/check-raise-arity.py` now counts placeholders against arguments across every migration**
+(78 statements, all clean). Run it before applying anything.
+
+⚠️ **ITS FIRST VERSION PRODUCED A FALSE POSITIVE ON WORKING CODE**, and that is worth as much as
+the check. It found the statement's terminating `;` with a naive search, which landed on a
+semicolon *inside* a string literal — `'has zero touch days; "never" and …'` — truncating the
+statement and hiding its argument. Migration 016 had already applied cleanly, which is what
+exposed it. **A checker whose false positives are indistinguishable from its true ones is worse
+than no checker**, so the scanner now tracks quote state (§11.2: prefer failures that are loud
+over answers that are reassuring, and that cuts both ways).
+
+**Verified by reproducing the defect** (§11.16): reintroducing `(%%)` makes the script report
+*"4 placeholder(s), 5 argument(s)"* at the right line, and removing it returns the suite to clean.
+
+### 14.30 The prompt got CRITIQUED instead of run — FIXED 2026-09-02
+
+Handed to a fresh Claude, `docs/dj-weekly-review-prompt.md` produced a review of itself rather
+than a weekly item.
+
+🛑 **THE DOCUMENT'S FORM CONTRADICTED ITS PURPOSE.** Roughly four fifths of it was guardrails and
+rationale — *why* each rule exists, which failure it prevents, which spec section governs it. That
+is the right content for a spec and the wrong shape for an instruction: **a page that argues reads
+as a page to evaluate.** The "do this" was buried under the reasoning that justified it.
+
+**Fixed by inverting it.** The file now opens with *"YOU ARE RUNNING THIS JOB, NOT REVIEWING
+IT"*, then a call table, then the writes, then the sections. Every measurement moved to a
+**clearly-marked appendix headed "EXAMPLES, NOT CURRENT FACTS"**, and rationale is compressed to
+one clause per rule.
+
+⚠️ **THE SAME MISTAKE IS AVAILABLE EVERYWHERE IN THIS PROJECT**, whose house style is exactly this
+density of reasoning. It is right in a spec, in a migration, and in a tool's `reading` field —
+all of which are read by someone deciding whether something is correct. It is wrong in the one
+document read by someone deciding what to *do*.
+
+#### The critique's findings, all acted on
+
+**Dated facts baked in as rules.** Measurements from 2026-09-02 were written as though permanent.
+Two were load-bearing and are now **self-checking rather than asserted**: `cram_stale` is
+suppressed by testing `current_cram_size` rather than by the file claiming there are no cram rows,
+and derived tag facts are driven by `untagged_derivable` rather than by the file claiming it is 0.
+
+**The call budget assumed a small list.** Now stated as arithmetic — `8 + 3n` — with a defined
+degradation: above eight concerts, do the eight nearest in full and give the rest one line each
+from the engagement call already made, **naming what was shortened**. The fallback costs no extra
+calls.
+
+**"One question at the end" contradicted Sections 1a and 1b.** Resolved in §12.12 above.
+
+**`missed` implied an unauthorised third write.** The header authorised two writes; §13.3's
+`dj_feedback` row was a third. Now authorised explicitly, with the pairing stated: **`missed` is
+two writes, and saying so is what stops the second going missing.**
+
+**"The spec wins" was not checkable.** A Claude thread has MCP and no filesystem, so it cannot
+read the spec to apply the rule. The authority order is now: **the tool payload wins over the
+prompt** — `reading`, `gaps` and `definition` travel *with the data* and therefore cannot be stale
+relative to the numbers in hand — then the prompt for the item's shape, then the spec *if it can
+actually be read*.
+
+#### 🛑 One critique finding was WRONG, and it is the one that would have done damage
+
+It reported that only Foo Fighters had an mbid and Weezer did not. **False.** All 22 artist rows
+carry one (`without_mbid: 0`), each verified by a live setlist read during the 2026-09-01
+backfill. Its likely source is §14.1's true statement that the ~1,206 *played* artists have no
+artist row — *"no tags, no mbid, no exploration state"* — which is about the play population, not
+the 22 concert acts.
+
+⚠️ **THE FAILURE IT WOULD HAVE CAUSED IS WORTH RECORDING, BECAUSE THE TWO CAUSES LOOK IDENTICAL.**
+A missing mbid and a tour that has not started both produce an empty setlist read. Acting on the
+false claim, the item would have printed *"no setlists yet"* about an act with ten readable
+shows. The prompt now says: **if a setlist read comes back empty, check `get_dj_artists` before
+reporting absence.**
+
+⚠️ **AND THE REVIEW WAS STILL WORTH HAVING.** Six of its seven findings were real and are fixed
+above. A review that is right six times out of seven is a good review; the lesson is that its
+output is evidence, not a verdict — the same rule this project applies to every other tool.
+
+### 14.31 The tagging proposal offered Weezer as a jazz candidate — FIXED 2026-09-02, migration 020
+
+The first real weekly item's tagging table listed **Weezer, Foo Fighters, The Smashing Pumpkins,
+The Killers and No Doubt** under *"your most-played uncategorised artists"*. Three of the eight
+rows were real.
+
+⚠️ **THE QUERY AND THE HEADING MEANT DIFFERENT THINGS.** `dj_tag_candidates` excluded artists
+with a decision **for `p_tag`**, so it answered *"who has no jazz tag"* — under which Weezer is a
+correct answer and a useless one. The heading said *"uncategorised"* — under which he is simply
+wrong: the system holds a concert row, a playlist and an mbid for him.
+
+🛑 **AND IT POISONED THE HEADLINE NUMBER.** *"23.7% to 61%"* was arithmetically true and rested on
+tagging Weezer as jazz. **A projection whose path runs through decisions the reader would never
+make is worse than no projection**, because the arithmetic gives it an authority the premise has
+not earned.
+
+#### "Exclude artists with a `dj_artists` row" is the obvious fix and it is wrong three ways
+
+Recorded because it is the first thing anyone will reach for — it was the first thing *Alex*
+reached for.
+
+1. **It excludes a real candidate.** Lady Gaga has a `dj_artists` row and was one of the three
+   genuine proposals in that very run. Having been to a concert says nothing about whether the
+   system knows what kind of act someone is.
+2. **It cannot be implemented reliably.** There is no join between `dj_artists.name` and
+   `dj_tracks.artist` (§14.1), and the two disagree on exactly these acts: `dj_tracks` says *"The
+   Smashing Pumpkins"* and *"The Killers"*, `dj_artists` says *"Smashing Pumpkins"* and
+   *"Killers"*. An exact-string exclusion would **miss the two acts it was written to catch**
+   (§14.7, the same leading-article problem).
+3. **It answers the wrong question.** `dj_artists` is a setlist-lookup table keyed on mbid. Its 22
+   rows exist so setlist.fm can be queried, not to record what kind of music something is.
+
+#### What actually separates a real candidate from Weezer
+
+**Weezer is already categorised — by a CONCERT PLAYLIST.** The system holds a durable recorded
+fact about him: *an act Alex tracks as a live act*. Miles Davis, Lady Gaga and A$AP Rocky have no
+such fact attached.
+
+Two changes, which only work together:
+
+1. **A candidate is an artist with NO TAG AT ALL** — any tag, any status — not one lacking a
+   specific tag. The heading becomes literally true.
+2. **Concert-playlist membership derives a `concert` tag**, exactly as jazz-playlist membership
+   derives a `jazz` one (§14.23). Weezer is categorised by a fact the system already held and had
+   never written down.
+
+⚠️ **AND THE ASK CHANGES WITH THEM.** The question stops being *"is this jazz?"* and becomes
+*"what is this?"*, with an open vocabulary. **"Weezer → rock" is an answer; "Weezer → not jazz"
+was a rejection recorded against a question nobody would have asked.** It also drains the list:
+one answer per artist, forever, whatever the answer.
+
+#### Only two playlist kinds derive a tag, and the exclusions are the point
+
+`jazz → jazz` (a genre claim about the act) and `concert → concert` (an act tracked as a live
+act). 🛑 **`artist`, `discovery` and `utility` derive nothing.** They describe what the *playlist*
+is for, not what the *act* is. **Utility is the dangerous one:** *"Elise's fun list"* alone holds
+363 distinct groups, so deriving from it would tag several hundred artists with a word that says
+nothing about any of them — clearing the backlog by redefining *categorised* to mean *"appears in
+a playlist Alex made for the gym"*. **That is a metric improving itself.**
+
+⚠️ **Named edge case:** Nirvana is in the Foo Fighters concert playlist because Grohl wrote
+*Marigold* (§12.10 records that as deliberate), so Nirvana acquires a `concert` tag and leaves the
+candidate list. Loose, and accepted: the tag is visible in `get_dj_artist_tags` with
+`source='playlist'`, and it costs one artist a proposal rather than costing a wrong answer.
+
+#### Two coverage numbers, named apart
+
+- **CATEGORISATION** (`categorised_rows / played_rows`) — *how much of my listening does the
+  system know anything about.* It moves whatever the answer is, so it is the backlog metric and
+  **the only one a tagging projection may use.**
+- **TAG SHARE** (`tagged_rows / played_rows`) — *how much of my listening is jazz.* A **listening
+  fact, not a progress bar.** Tagging Weezer `rock` must not move it, and under the pre-020 design
+  it did.
+
+⚠️ A rejected-only artist is **decided but not categorised**, so the buckets do not sum to
+`played_rows`. Deliberate: a rejection records that a question was answered, not that the system
+learned what the act is.
+
+### 14.32 One clause fixes a contradiction that is not one
+
+Section 3 lists Monk, Eddie Higgins Trio and Bill Evans as tagged jazz. Section 4 says the same
+artists are in no playlist. **Both true, and side by side they read as the tool disagreeing with
+itself** — the same shape as §14.19, arriving through content rather than through field names.
+
+The fix is one clause where the names first appear: **a tag is not a playlist. Tagging categorises
+an artist; it does not add him to anything.** That an artist can be tagged and unplaylisted is the
+finding, not a contradiction.
+
+### 14.33 The delivery shape: three artifacts, and the third did not exist
+
+The scheduled task writes an **inbox item**; Alex pastes it into a thread and has the
+conversation. That is three artifacts:
+
+1. **`docs/dj-weekly-review-prompt.md`** — tells the scheduled task how to GENERATE the report.
+2. **The report** — the item's body.
+3. **`.claude/skills/dj-weekly-review/SKILL.md`** — tells the follow-up conversation how to ACT.
+   **Built 2026-09-02; did not exist before.**
+
+🛑 **A SKILL RATHER THAN MORE PROSE IN THE ITEM, FOR A REASON §14.25 ALREADY PROVED.** Instructions
+carried inside an item are frozen at the moment it was written, and every item already sitting in
+the inbox keeps whatever was true then — permanently, and with nothing able to reveal the drift.
+A skill lives in one place and changes without editing anything already filed.
+
+⚠️ **THE ITEM MUST SAY "LOAD THE SKILL" IN SO MANY WORDS.** Skills load by name. A thread that does
+not know to load one reads the item as a document, which is precisely how the first prompt got
+critiqued instead of run (§14.30). The item body is therefore fixed at: a dated title, the
+load-the-skill line, and the report. **Nothing else.**
+
+⚠️ **AND THE TWO INSTRUCTION FILES STAY DISTINCT.** The prompt addresses a task that GENERATES;
+the skill addresses a conversation that ACTS. Different audiences, different verbs. Merging them
+produces something that reads as a spec — §14.30 again.
+
+### 14.34 The skill assumed the report had been read — FIXED 2026-09-02
+
+The first live round trip worked: the item landed, the skill loaded, it acted rather than
+critiquing, and it **refused a wrong status** — `missed` means the show happened, so a future date
+is `rejected`, not `missed`.
+
+🛑 **BUT IT ASKED QUESTIONS ABOUT A DOCUMENT ALEX HAD NEVER OPENED.** He pasted the item in
+without reading it — pasting is not reading — so *"two songs would mean learning from a live
+recording"* and *"any of the eight artists to tag?"* had no context to land in.
+
+⚠️ **THIS IS §14.30 ONE LAYER ALONG: WRITTEN FOR SOMEONE WHO ALREADY KNOWS.** The prompt failed by
+burying its instructions under rationale; the skill failed by presenting decisions without the
+facts behind them. **Both were written from inside the system's knowledge rather than from what
+the reader arrives with.**
+
+**Fixed:** the skill's first job is now to **present the item** — headline, each concert in two or
+three lines, every decision carrying its own context — before asking anything. **The tag table
+with suggested tags goes in that first reply**, not when asked for.
+
+⚠️ **THE SUGGESTED TAG IS EXPLICITLY MARKED AS GENERAL KNOWLEDGE, NOT DERIVED.** Miles Davis →
+`jazz` comes from knowing who Miles Davis is; **nothing in the data knows what genre anything is**
+(§14.3). A suggestion presented as though it came from the listening history is precisely the
+failure that made the jazz section wrong for a quarter (§14.13). Unknown string → suggest nothing.
+
+### 14.35 🛑 The derived arm wrote garbage with the authority of a derivation — SURFACED 2026-09-02, migration 021
+
+After the 018 and 020 seeds, 118 artist strings carried tags. Among the jazz ones, written as
+FACTS with `source='playlist'`:
+
+> `"Dec 29, 2023"` · `"Anything_F_744"` · `"aron!"` · `"Cavendish Music"`
+
+**Every one is TRUE as a statement about membership** — the string really does appear as
+`dj_tracks.artist` on a track in a `kind='jazz'` playlist. **Every one is FALSE as the thing the
+tag says**, which is that this is a jazz artist.
+
+⚠️ **THE DERIVATION ASSERTS MORE THAN IT KNOWS. It knows MEMBERSHIP and writes a CLAIM ABOUT AN
+ACT.** The gap between those is §14.9, already recorded — and the derived arm propagated it with
+the authority of a fact rather than the hesitancy of a guess.
+
+🛑 **IT IS WORSE THAN THE UNTAGGED CASE IT REPLACED.** An untagged junk string sits in the
+candidate list where a human eventually looks at it. A junk string tagged `source='playlist'` is
+marked *no judgement needed*, counts toward coverage, and **will never be proposed again** — the
+pollution is now load-bearing for a number the weekly item prints.
+
+#### No rule decides which strings are real
+
+**Every such rule is a guess about text**, and this project has already priced them: §14.7's
+*"prefer the longer form"* fixes Eddie Higgins and breaks Red Garland in one stroke. A regex
+catching `"Dec 29, 2023"` also catches a band with a number in its name, and it would delete a
+curated row silently.
+
+**So: surface, do not decide.** `dj_tag_review` orders tags by **how much evidence exists that the
+string names an act**, using four facts already in the database — `distinct_tracks`,
+`distinct_playlists`, `play_rows`, `distinct_days` — weakest first.
+
+⚠️ **NOTHING IN IT INSPECTS THE STRING.** A real act accumulates tracks, playlists and plays; a
+byline scraped onto one upload accumulates one track and stops. **That asymmetry is factual, and
+it is an ordering for a human, never a verdict.** A test asserts no `suspect`-style field ever
+appears on a row.
+
+`dj_tag_coverage` gains **`tagged_single_track`** so the weekly item can qualify its own share in
+one clause without a second call.
+
+🛑 **THE CLEANUP IS A NAMED, UNSTARTED JOB.** Rejecting polluted tags is a hand-reviewed pass over
+a ranked list. Doing it inside the weekly item would put an irreversible judgement about a hundred
+rows inside a conversation about concerts, and both the tool payload and the skill forbid it.
+
+### 14.36 A lingering want needs a row that COMES BACK, not a note — FIXED 2026-09-02
+
+Asked about a show he decided against, Alex said *"we still might see them if they come back"*.
+That ended up as free text in a `notes` field on a **rejected** concert row.
+
+🛑 **NOTHING WILL EVER READ IT.** A rejected row is not past, not upcoming, and not
+`needs_status`. The want disappeared the moment the conversation ended — the exact shape §12.8
+already records for an undated `missed` row: *"the next one is a silent loss."*
+
+**The right home is an undated `screening` row**, the same shape as the standing watchlist entries
+Section 1b surfaces every week. It is the only shape that **comes back**.
+
+#### The boundary is restated as ORIGINATE vs COMPLETE
+
+§14.33's boundary said the weekly skill never creates a `dj_concerts` row. That phrasing blocked a
+write that obviously should happen, so it is replaced with the distinction that actually matters:
+
+- **COMPLETING a decision made in the conversation** — same artist, no date, `screening`, no
+  playlist involved, every field determined by his answer. **Allowed**, and `create_dj_concert`
+  touches no playlist, which is what makes it safe.
+- **ORIGINATING a concert pipeline** — a dated row, a date or venue decision, a playlist, its
+  contents, a cram block. **Still §13's job, still unbuilt.**
+
+⚠️ **THIS IS THE SECOND TIME A DECISION IMPLIED A WRITE THE SKILL COULD NOT MAKE.** §13.3's
+`missed` → `dj_feedback` was the first, and it was authorised. **Two of two suggests the pattern
+is the rule rather than the exception:** an answer that changes a status usually implies a second
+write somewhere, and the skill should be read as owning the completion of whatever it asks about.
+The skill now also **asks** — *"still want to see them sometime?"* — rather than waiting for the
+want to be volunteered.
+
+### 14.37 What worked in the first round trip, recorded so it does not get edited away
+
+- **It refused a wrong status and explained why** rather than writing what it was told.
+- **It flagged the exact-string grouping limitation unprompted**, where it was load-bearing.
+- **It said plainly that nothing had been written.**
+
+⚠️ **Recorded in the skill itself under "What must not change".** Three rounds of revision have
+each removed something; a behaviour nobody wrote down is one nobody protects.

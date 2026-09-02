@@ -28,13 +28,13 @@ import {
   classifyRead,
   createDjConcertTool,
 } from "../_shared/tools/dj-playlists.ts";
-import { getDjPlaysTool, getDjManagedPlaylistsTool, getDjJazzActivityTool } from "../_shared/tools/dj-reads.ts";
+import { getDjPlaysTool, getDjManagedPlaylistsTool } from "../_shared/tools/dj-reads.ts";
 import {
   getDjConcertsTool,
   updateDjConcertTool,
   recordDjFeedbackTool,
 } from "../_shared/tools/dj-concerts.ts";
-import { getDjArtistsTool, upsertDjArtistTool } from "../_shared/tools/dj-artists.ts";
+import { getDjArtistsTool, upsertDjArtistTool, recordDjArtistTagTool, getDjArtistTagsTool } from "../_shared/tools/dj-artists.ts";
 import {
   getItems,
   searchItems,
@@ -1214,21 +1214,48 @@ export function createMcpServer(token: string) {
   );
 
   server.registerTool(
-    "get_dj_jazz_activity",
+    "get_dj_artist_tags",
     {
-      title: "Get DJ Jazz Activity",
+      title: "Get DJ Artist Tags",
       description:
-        "What has been played in the jazz bucket, by artist, over a trailing window. " +
-        "🛑 JAZZ IS A PROXY, NOT A GENRE, AND THE REPORT MUST SAY SO. Nothing marks a track as jazz: dj_tracks has no genre column and dj_artists holds 22 mbid-keyed concert acts that join to nothing (spec §14.1, §14.3). THREE ARMS, and `source` on each row says which caught it: the track is in a kind='jazz' playlist (playlist), its artist appears on a track in one (artist_in_playlist), or its artist string is tagged 'jazz' in dj_artist_tags (tagged). The payload ships `definition`, `by_source` and `gaps` for exactly this reason — a jazz summary that does not say what counted as jazz invites the reader to assume a genre model exists. " +
-        "🛑 CHECK `by_source.tagged` BEFORE QUOTING THE NUMBERS. Arms 1 and 2 cannot reach outside the two jazz playlists — arm 2 derives its artist list FROM tracks already in one, so it widens membership from track-level to artist-level and no further. On 2026-09-02 this tool's own definition string named six pianists as proof of arm 2 and returned two of them; Thelonious Monk (20 distinct days, 81 distinct groups — the broadest repertoire in the library) was invisible to it. Migration 016 added arm 3 to fix that. If `by_source.tagged` is 0 the tags are not seeded and this is still answering the OLD, narrower question — say so rather than reporting the numbers bare. " +
-        "⚠️ IT CANNOT PROPOSE NEW ARTISTS. It reports what was played and what the data cannot answer — subgenre (no link from plays to artist identity) and unplayed albums (dj_albums has no writer and no data). 'Try Andrew Hill' comes from the conversation, never from listening history; there is no source for it here. " +
-        "`distinct_days` is DISTINCT DAYS PLAYED, not a play count. ⚠️ `in_jazz_playlist` (renamed from `in_playlist` in 016) asks ONLY about the two jazz playlists and is NOT get_dj_plays mode=artists' `in_any_playlist` — the two legitimately disagree for the same artist. Tier 1, read-only.",
+        "Review the artist tag list — the curated allowlist that Section 3 of the weekly item is built on. Filter by `tag`, `status` or `source`; omit all three to see everything. " +
+        "🛑 THIS IS THE ONLY WAY TO SEE A REJECTION. `status: 'rejected'` means an artist was considered and DECLINED, kept on purpose so the weekly item stops proposing him (§11.7). Those rows exist for no reason other than to be read back, and until this tool they could not be — 'what did I already say no to?' had no answer outside the SQL editor. They sort first. " +
+        "⚠️ IT IS A REVIEW SURFACE, NOT A LISTENING REPORT. It answers 'what is on the list and who put it there', never 'what am I playing' — that is get_dj_plays mode=artists. Keeping the two apart is why §14.19 happened once and not twice. " +
+        "⚠️ `source: 'playlist'` rows are DERIVED (the artist is on a track in a playlist whose kind matches the tag — migration 013's artist arm, stored rather than recomputed) and can be re-derived safely. `source: 'manual'` rows are human judgements and nothing may overwrite them automatically. " +
+        "⚠️ `artist` is the EXACT dj_tracks.artist string — a match key, not a display name, and NOT dj_artists (§14.1). " +
+        "⚠️ COMPARE `returned` AGAINST `total`: the list is ordered and cut at the limit, so a short read drops the END of it rather than a sample. Tier 1, read-only.",
       inputSchema: {
-        window_days: z.coerce.number().optional().describe("Trailing window in days. Default 90."),
-        limit: z.coerce.number().optional().describe("Max artists (default 20, cap 50), ordered by distinct_days descending."),
+        mode: z.enum(["list", "review"]).optional().describe("Defaults to 'list'. 🛑 'review' orders tags by HOW LITTLE EVIDENCE exists that the string names an act — distinct_tracks, distinct_playlists, play_rows, distinct_days — weakest first. It makes NO claim about which are real and inspects no text; it is an ordering for a human. Use it to find what the playlist seeds got wrong: they tagged 'Dec 29, 2023' and 'Cavendish Music' as jazz, both true as membership and false as claims about an act (spec 14.9)."),
+        window_days: z.coerce.number().optional().describe("mode=review: play window for the evidence columns. Default 90."),
+        tag: z.string().optional().describe("Filter to one tag, e.g. 'jazz'. Omit for all tags."),
+        status: z.enum(["active", "rejected"]).optional().describe("Omit to see BOTH, which is usually what you want — reviewing a curated list means seeing what was declined as well as what was kept."),
+        source: z.enum(["playlist", "manual"]).optional().describe("'playlist' = derived fact, re-derivable. 'manual' = human judgement, never overwritten automatically."),
+        limit: z.coerce.number().optional().describe("Max rows (default 20, cap 50)."),
       },
     },
-    async (args) => runToolForMcp(getDjJazzActivityTool, args, token),
+    async (args) => runToolForMcp(getDjArtistTagsTool, args, token),
+  );
+
+  server.registerTool(
+    "record_dj_artist_tag",
+    {
+      title: "Record DJ Artist Tag",
+      description:
+        "Tag (or un-tag) an artist STRING for reporting. This is what makes the weekly item's Section 3 possible: it is `get_dj_plays mode=artists tag=jazz`, so an untagged artist is an invisible one. " +
+        "🛑 THIS IS NOT dj_artists AND MUST NEVER BECOME A JOIN TO IT. `dj_artists.name` is an mbid-keyed concert-act IDENTITY (a null mbid means setlists cannot be read at all). `artist` here is a MATCH KEY: the EXACT dj_tracks.artist string, warts included — 'Eddie Higgins Trio', 'Oscar Peterson Trio', and at least one scraped channel byline reading 'Jazz and Blues Experience, 1.7M views' (§14.9). Copy the string verbatim from get_dj_plays mode=artists; the compare is exact and 'Eddie Higgins' matches nothing. " +
+        "⚠️ AN UNKNOWN ARTIST STRING IS REFUSED AND NOTHING IS WRITTEN — not even the rows that would have matched. A partial write would look like a decision not to tag the rest. " +
+        "🛑 status 'rejected' IS A DECISION, NOT A DELETION, AND YOU MUST RECORD ONE. When Alex says no to a proposed artist, write it with status='rejected' — otherwise the same name is proposed again next week and every week after, which is §11.7's flag that fires on the normal case and gets ignored. Absence means 'not yet asked'; it is the only state that does. " +
+        "⚠️ `source` IS DERIVED SERVER-SIDE AND CANNOT BE PASSED. 'playlist' means the artist is on a track in a playlist whose kind matches the tag — a FACT, and the stored form of what migration 013's artist arm used to recompute. 'manual' means a human decided. A caller asserting provenance could launder a guess into a fact. " +
+        "Nothing hard-deletes, so the audit log can reverse any of this. Tier 2 — it updates existing rows, and a curated allowlist that cannot be un-curated is not curated.",
+      inputSchema: {
+        artists: z.array(z.string()).optional().describe("Artist strings, EXACTLY as get_dj_plays mode=artists spells them. Max 50 in one call — the whole of a weekly proposal is one call and one approval."),
+        artist: z.string().optional().describe("One artist string, if you prefer. Same rules as `artists`."),
+        tag: z.string().optional().describe("Defaults to 'jazz'. A tag matching a dj_playlists.kind ('jazz') also drives the derivable/fact rule."),
+        status: z.enum(["active", "rejected"]).optional().describe("Defaults to 'active'. 'rejected' records that the artist was CONSIDERED AND DECLINED, so the weekly item stops proposing him. Write one whenever Alex says no."),
+        note: z.string().optional().describe("Why. Strongly encouraged on a rejection — 'scraped byline, not an artist' is the difference between a decision and a gap."),
+      },
+    },
+    async (args) => runToolForMcp(recordDjArtistTagTool, args, token),
   );
 
   server.registerTool(

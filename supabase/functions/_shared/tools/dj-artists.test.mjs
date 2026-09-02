@@ -274,3 +274,390 @@ test("truncation drops the END OF THE ALPHABET, which is why it hid", async () =
   const byName = await get(makeDb(names), { name: "Weezer" });
   assert.equal(byName.returned, 1);
 });
+
+// ---------------------------------------------------------------------------
+// record_dj_artist_tag — the write that turns twelve seeded rows into a system
+// ---------------------------------------------------------------------------
+//
+// 🛑 THIS TOOL WRITES A DIFFERENT TABLE FROM EVERYTHING ELSE IN THIS FILE.
+// `dj_artists.name` is an mbid-keyed IDENTITY; `dj_artist_tags.artist` is a
+// MATCH KEY — the exact dj_tracks.artist string, scraped bylines and all. They
+// share a file and nothing else, and the tests below exist partly to keep that
+// true.
+
+function makeTagDb({ tracks = [], playlists = [], members = [], tags = [] } = {}) {
+  const tables = {
+    dj_tracks: tracks,
+    dj_playlists: playlists,
+    dj_playlist_tracks: members,
+    dj_artist_tags: tags,
+  };
+  function builder(table) {
+    const filters = [];
+    let upserts = null, wantCount = false, head = false, lim = null;
+    const orders = [];
+    const api = {
+      select(_cols, opts = {}) {
+        wantCount = opts.count === "exact";
+        head = Boolean(opts.head);
+        return api;
+      },
+      eq(c, v) { filters.push((r) => r[c] === v); return api; },
+      in(c, v) { filters.push((r) => v.includes(r[c])); return api; },
+      // Multiple .order() calls compose, as PostgREST does — the read tool
+      // relies on rejections sorting before active rows.
+      order(c, opts = {}) { orders.push({ c, asc: opts.ascending !== false }); return api; },
+      limit(n) { lim = n; return api; },
+      upsert(v) { upserts = Array.isArray(v) ? v : [v]; return api; },
+      then(resolve) {
+        if (upserts) {
+          const out = [];
+          for (const raw of upserts) {
+            // ⚠️ THE FAKE APPLIES THE COLUMN DEFAULT, BECAUSE THE REAL TABLE
+            // DOES. dj_artist_tags.user_id defaults to auth.uid() (018), so the
+            // tool deliberately does NOT send one. A fake that let the row
+            // through without an owner would pass a tool that had forgotten it.
+            assert.ok(
+              !("user_id" in raw),
+              "the tool must not send user_id — the DB default owns that",
+            );
+            const row = { user_id: USER, ...raw };
+            // Real upsert semantics on (user_id, artist, tag) — the tool relies
+            // on a second call REPLACING the first, which is how a rejection
+            // reverses an approval without a hard delete.
+            const i = tables[table].findIndex(
+              (r) => r.user_id === row.user_id && r.artist === row.artist &&
+                     r.tag === row.tag);
+            if (i >= 0) tables[table][i] = { ...tables[table][i], ...row };
+            else tables[table].push({ ...row });
+            out.push({ ...row });
+          }
+          return resolve({ data: out, error: null });
+        }
+        let out = (tables[table] ?? []).filter((r) => filters.every((f) => f(r)));
+        // ⚠️ COUNT IS OF THE MATCH, BEFORE THE LIMIT. That is what makes a
+        // truncated read distinguishable from a complete one.
+        const matched = out.length;
+        for (const o of [...orders].reverse()) {
+          out = out.slice().sort((a, b) => {
+            const x = a[o.c], y = b[o.c];
+            if (x === y) return 0;
+            return (x < y ? -1 : 1) * (o.asc ? 1 : -1);
+          });
+        }
+        if (lim !== null) out = out.slice(0, lim);
+        return resolve({
+          data: head ? null : out,
+          error: null,
+          count: wantCount ? matched : null,
+        });
+      },
+    };
+    return api;
+  }
+  return { from: (t) => builder(t), _tables: tables };
+}
+
+const tagCtx = (db) => ({ db, userId: USER });
+const tagIt = (db, a) => mod.recordDjArtistTagTool.handler(a, tagCtx(db));
+
+const JAZZ_DB = () => makeTagDb({
+  tracks: [
+    { id: "t1", artist: "Thelonious Monk" },
+    { id: "t2", artist: "Eddie Higgins Trio" },
+    { id: "t3", artist: "Harrison" },
+    { id: "t4", artist: "Art Blakey" },     // in the jazz playlist
+    { id: "t5", artist: "Weezer" },
+  ],
+  playlists: [{ id: "pl-jazz", kind: "jazz" }, { id: "pl-rock", kind: "concert" }],
+  members: [{ playlist_id: "pl-jazz", track_id: "t4" },
+            { playlist_id: "pl-rock", track_id: "t5" }],
+});
+
+test("it is tier 2 — it updates existing rows and never hard-deletes", () => {
+  // Tier 1 is for appends to append-only tables. Flipping a tag to 'rejected'
+  // is an UPDATE, so tier 2 with the audit log and rollback behind it. And an
+  // append-only version would be the wrong tool anyway: a curated allowlist
+  // that cannot be un-curated is not curated (§14.7, §14.9).
+  assert.equal(mod.recordDjArtistTagTool.tier, 2);
+});
+
+test("tags several artists in one call — one approval, one write", async () => {
+  const db = JAZZ_DB();
+  const r = await tagIt(db, { artists: ["Thelonious Monk", "Eddie Higgins Trio"] });
+  assert.equal(r.written, 2);
+  assert.equal(r.tag, "jazz");
+  assert.equal(db._tables.dj_artist_tags.length, 2);
+  assert.ok(db._tables.dj_artist_tags.every((t) => t.status === "active"));
+});
+
+test("🛑 AN UNKNOWN ARTIST STRING IS REFUSED AND NOTHING IS WRITTEN", async () => {
+  // THE TYPO GUARD. Every tag arm is an exact string match on dj_tracks.artist,
+  // so "Eddie Higgins" against data saying "Eddie Higgins Trio" inserts
+  // cleanly, matches nothing, and leaves the report wrong in exactly the
+  // direction §14.13 was about — while the write reports success.
+  const db = JAZZ_DB();
+  await assert.rejects(
+    () => tagIt(db, { artists: ["Thelonious Monk", "Eddie Higgins"] }),
+    (e) => {
+      assert.match(e.message, /"Eddie Higgins"/);
+      assert.match(e.message, /NOTHING WAS WRITTEN/);
+      return true;
+    },
+  );
+  // ⚠️ NOT EVEN THE VALID ONE. A partial write would look like a decision not
+  // to tag the rest, which is a worse answer than the refusal.
+  assert.equal(db._tables.dj_artist_tags.length, 0);
+});
+
+test("source is DERIVED, never taken from the caller", async () => {
+  // ⚠️ A caller asserting provenance could launder a guess into a fact, which
+  // is the one thing `source` exists to prevent. Art Blakey is on a track in a
+  // kind='jazz' playlist, so tagging him is migration 013's arm — a fact.
+  // Thelonious Monk is in no playlist, so he is a judgement.
+  const db = JAZZ_DB();
+  const r = await tagIt(db, {
+    artists: ["Art Blakey", "Thelonious Monk"],
+    source: "manual",          // ignored on purpose
+  });
+  const by = Object.fromEntries(r.tags.map((t) => [t.artist, t]));
+  assert.equal(by["Art Blakey"].source, "playlist", "a fact, not a judgement");
+  assert.equal(by["Thelonious Monk"].source, "manual");
+  assert.equal(r.facts, 1);
+  assert.equal(r.judgements, 1);
+});
+
+test("a kind that does not match the tag does NOT make an artist derivable", async () => {
+  // NEGATIVE CONTROL for the rule above. Weezer is in a kind='concert'
+  // playlist; tagging him jazz would be a judgement (a wrong one), never a fact.
+  const db = JAZZ_DB();
+  const r = await tagIt(db, { artists: ["Weezer"] });
+  assert.equal(r.tags[0].source, "manual");
+});
+
+test("🛑 A REJECTION IS A DECISION, AND IT IS RECORDED RATHER THAN DELETED", async () => {
+  // Without this state, saying no to a proposed artist leaves no trace and the
+  // report proposes him again next week and every week after — §11.7, a signal
+  // that fires on the normal case gets ignored. 'Harrison' is the live case:
+  // 4 distinct days, possibly a scraped byline (§14.9).
+  const db = JAZZ_DB();
+  const r = await tagIt(db, {
+    artists: ["Harrison"], status: "rejected",
+    note: "Scraped byline, not an artist.",
+  });
+  assert.equal(r.tags[0].status, "rejected");
+  assert.equal(db._tables.dj_artist_tags.length, 1, "the row EXISTS — that is the point");
+  assert.match(db._tables.dj_artist_tags[0].note, /Scraped byline/);
+});
+
+test("a decision reverses in place, so nothing is ever hard-deleted", async () => {
+  const db = JAZZ_DB();
+  await tagIt(db, { artists: ["Harrison"], status: "rejected" });
+  await tagIt(db, { artists: ["Harrison"], status: "active", note: "It is a band." });
+  assert.equal(db._tables.dj_artist_tags.length, 1, "upserted, not duplicated");
+  assert.equal(db._tables.dj_artist_tags[0].status, "active");
+});
+
+test("an invented status is refused, and the message explains what rejected MEANS", async () => {
+  const db = JAZZ_DB();
+  await assert.rejects(
+    () => tagIt(db, { artists: ["Harrison"], status: "maybe" }),
+    /must be 'active' or 'rejected'/,
+  );
+  await assert.rejects(
+    () => tagIt(db, { artists: ["Harrison"], status: "maybe" }),
+    /decision, not a deletion/,
+  );
+});
+
+test("no artists at all is refused rather than silently writing nothing", async () => {
+  await assert.rejects(() => tagIt(JAZZ_DB(), {}), /pass `artists`/);
+  await assert.rejects(() => tagIt(JAZZ_DB(), { artists: [] }), /pass `artists`/);
+});
+
+test("a single `artist` string works, and the batch is capped", async () => {
+  const db = JAZZ_DB();
+  const r = await tagIt(db, { artist: "Thelonious Monk" });
+  assert.equal(r.written, 1);
+  await assert.rejects(
+    () => tagIt(db, { artists: Array(51).fill("Thelonious Monk") }),
+    /the cap is 50/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// get_dj_artist_tags — the review surface (added 019)
+// ---------------------------------------------------------------------------
+//
+// 🛑 A CURATED LIST YOU CANNOT READ IS A WRITE-ONLY LIST. Before this, tags were
+// visible only THROUGH dj_artist_activity, which shows artists PLAYED IN THE
+// WINDOW — 25 of the 87 tagged. Rejections, the one state whose entire purpose
+// is to be remembered, had no reader at all.
+
+const readTags = (db, a = {}) =>
+  mod.getDjArtistTagsTool.handler(a, tagCtx(db));
+
+const TAGGED_DB = () => makeTagDb({
+  tags: [
+    { user_id: USER, artist: "Thelonious Monk", tag: "jazz", status: "active",
+      source: "manual", note: null },
+    { user_id: USER, artist: "Art Blakey", tag: "jazz", status: "active",
+      source: "playlist", note: null },
+    { user_id: USER, artist: "Harrison", tag: "jazz", status: "rejected",
+      source: "manual", note: "Scraped byline, not an artist." },
+    { user_id: USER, artist: "Weezer", tag: "jazz", status: "rejected",
+      source: "manual", note: "Not jazz." },
+  ],
+});
+
+test("it is tier 1 — a read cannot change anything", () => {
+  assert.equal(mod.getDjArtistTagsTool.tier, 1);
+});
+
+test("REJECTIONS SORT FIRST — they are the rows nothing else can show", async () => {
+  // ⚠️ Burying them under 87 active tags would leave them as invisible as they
+  // were before the tool existed, which is the entire problem it solves.
+  const r = await readTags(TAGGED_DB());
+  assert.equal(r.data.tags[0].status, "rejected");
+  assert.equal(r.data.tags[1].status, "rejected");
+  assert.equal(r.data.total, 4);
+});
+
+test("a rejection carries its REASON, which is the whole point of keeping it", async () => {
+  const r = await readTags(TAGGED_DB(), { status: "rejected" });
+  const harrison = r.data.tags.find((t) => t.artist === "Harrison");
+  assert.match(harrison.note, /Scraped byline/);
+  assert.equal(r.data.returned, 2);
+});
+
+test("filters by status and source, and reports which were applied", async () => {
+  const active = await readTags(TAGGED_DB(), { status: "active" });
+  assert.equal(active.data.returned, 2);
+  assert.equal(active.data.filters.status, "active");
+
+  const derived = await readTags(TAGGED_DB(), { source: "playlist" });
+  assert.deepEqual(derived.data.tags.map((t) => t.artist), ["Art Blakey"]);
+  assert.equal(derived.data.filters.source, "playlist");
+});
+
+test("the count is of the MATCH, so a short read announces itself", async () => {
+  // §14.5's shape arriving through a different door: "I have tagged 2 artists"
+  // when the answer is 4 is a wrong answer, not a short one.
+  const r = await readTags(TAGGED_DB(), { limit: 2 });
+  assert.equal(r.data.returned, 2);
+  assert.equal(r.data.total, 4);
+  assert.equal(r.data.truncated, true);
+  assert.equal(r.meta.truncated, true);
+});
+
+test("an invented status is refused, and the message explains why BOTH is the default", async () => {
+  await assert.rejects(
+    () => readTags(TAGGED_DB(), { status: "maybe" }),
+    /must be 'active' or 'rejected'/,
+  );
+  await assert.rejects(
+    () => readTags(TAGGED_DB(), { status: "maybe" }),
+    /Omit it to see both/,
+  );
+});
+
+test("the reading keeps this apart from the listening report", async () => {
+  // 🛑 §14.19 HAPPENED BECAUSE TWO SURFACES ANSWERED OVERLAPPING QUESTIONS. This
+  // one answers "what is on the list"; get_dj_plays mode=artists answers "what
+  // am I playing". Saying so is cheaper than discovering it again.
+  const r = await readTags(TAGGED_DB());
+  assert.match(r.data.reading, /REVIEW SURFACE/);
+  assert.match(r.data.reading, /get_dj_plays mode=artists/);
+  assert.match(r.data.reading, /DECISIONS, NOT DELETIONS/);
+});
+
+// ---------------------------------------------------------------------------
+// mode=review — the derived arm's pollution, surfaced without a verdict (021)
+// ---------------------------------------------------------------------------
+//
+// 🛑 THE SEEDS TAGGED "Dec 29, 2023" AND "Cavendish Music" AS JAZZ. Both are TRUE
+// as membership statements — the string really is on a track in a jazz playlist —
+// and both are FALSE as the claim the tag makes, which is that this is an act
+// (§14.9). The derivation knows membership and writes an assertion about music.
+//
+// ⚠️ NO RULE DECIDES WHICH ARE REAL. A regex catching a date also catches a band
+// with a number in its name, and §14.7 records what text rules cost here.
+
+const reviewDb = (rows) => ({
+  from: () => { throw new Error("review mode must go through the RPC"); },
+  rpc: async (name, params) => {
+    if (name !== "dj_tag_review") {
+      return { data: null, error: { message: `function public.${name} does not exist` } };
+    }
+    return { data: rows.map((r) => ({ ...r, _params: params })), error: null };
+  },
+});
+
+test("mode=review goes to the RPC and passes its filters through", async () => {
+  let seen = null;
+  const db = {
+    from: () => { throw new Error("must not read the table directly"); },
+    rpc: async (_n, p) => { seen = p; return { data: [], error: null }; },
+  };
+  await mod.getDjArtistTagsTool.handler(
+    { mode: "review", tag: "jazz", source: "playlist", limit: 5 }, tagCtx(db));
+  assert.equal(seen.p_tag, "jazz");
+  assert.equal(seen.p_source, "playlist");
+  assert.equal(seen.p_limit, 5);
+  assert.equal(seen.p_window_days, 90, "default window");
+});
+
+test("it returns the EVIDENCE and passes no verdict", async () => {
+  // The four columns are facts already in the database. If a `suspect` or
+  // `looks_fake` field ever appears here, a guess about text has been promoted
+  // to a ruling and this test is where it should stop.
+  const db = reviewDb([
+    { artist: "Dec 29, 2023", tag: "jazz", status: "active", source: "playlist",
+      distinct_tracks: 1, distinct_playlists: 1, play_rows: 0, distinct_days: 0 },
+    { artist: "Thelonious Monk", tag: "jazz", status: "active", source: "manual",
+      distinct_tracks: 94, distinct_playlists: 0, play_rows: 226, distinct_days: 21 },
+  ]);
+  const r = await mod.getDjArtistTagsTool.handler({ mode: "review" }, tagCtx(db));
+  assert.equal(r.data.mode, "review");
+  assert.equal(r.data.returned, 2);
+  for (const t of r.data.tags) {
+    for (const f of ["distinct_tracks", "distinct_playlists", "play_rows",
+                     "distinct_days"]) {
+      assert.ok(f in t, `${f} must travel with the row`);
+    }
+    assert.ok(!("suspect" in t), "no verdict field may appear");
+    assert.ok(!("looks_fake" in t), "no verdict field may appear");
+  }
+});
+
+test("the reading forbids cleaning up from inside a weekly review", async () => {
+  // 🛑 An irreversible judgement about a hundred rows does not belong in a
+  // conversation about concerts. The cleanup is its own hand-reviewed pass.
+  const r = await mod.getDjArtistTagsTool.handler({ mode: "review" }, tagCtx(reviewDb([])));
+  assert.match(r.data.reading, /NEVER A VERDICT/);
+  assert.match(r.data.reading, /NOTHING HERE INSPECTS THE STRING/);
+  assert.match(r.data.reading, /DO NOT REJECT ROWS FROM INSIDE A WEEKLY REVIEW/);
+});
+
+test("a missing 021 is named, and stays retryable", async () => {
+  const db = {
+    from: () => { throw new Error("no"); },
+    rpc: async () => ({ data: null,
+                        error: { message: "function public.dj_tag_review does not exist" } }),
+  };
+  await assert.rejects(
+    () => mod.getDjArtistTagsTool.handler({ mode: "review" }, tagCtx(db)),
+    (e) => {
+      assert.match(e.message, /migration 021 has not been applied/);
+      assert.ok(!/[Dd]o NOT retry/.test(e.message));
+      return true;
+    },
+  );
+});
+
+test("the default mode still reads the table, not the RPC", async () => {
+  // NEGATIVE CONTROL: adding a mode must not reroute the existing behaviour.
+  const r = await readTags(TAGGED_DB());
+  assert.equal(r.data.total, 4);
+  assert.equal(r.data.mode, undefined, "list mode carries no mode field");
+});

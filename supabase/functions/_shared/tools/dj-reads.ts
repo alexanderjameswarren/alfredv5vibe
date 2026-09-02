@@ -44,6 +44,25 @@ const SCAN_CAP = 5000;
 // a constraint written twice, and it would be enforced in one.
 const LEARNED_DISTINCT_DAYS = 5;
 
+// ---------------------------------------------------------------------------
+// How many tagging JUDGEMENTS one weekly item may ask for.
+// ---------------------------------------------------------------------------
+// 🛑 THE BACKLOG IS 368 AND THE SECTION CANNOT CARRY IT. Eight a week is
+// eighteen months, and a weekly section holding an eighteen-month queue gets
+// skipped by the third week — §11.7 at a scale nothing survives.
+//
+// ⚠️ EIGHT, NOT FIVE, AND NOT TWELVE. Five reads as trivial next to a backlog
+// this size; twelve reads as a form. Eight is also `cram_cap`, which is this
+// project's existing answer to "how many things will a human act on in one
+// sitting" — the same question, so the same number rather than a second one
+// nobody reconciles (§11.14 in spirit; they are deliberately not the SAME
+// constant, because a cram slot and a tagging decision are different objects
+// and coupling them would be a constraint written twice).
+//
+// ⚠️ FACTS DO NOT COUNT AGAINST IT. A `derivable` candidate is written without
+// asking, so it costs no attention and takes no slot.
+const TAG_PROPOSAL_CAP = 8;
+
 const IN_CHUNK = 100;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const VALID_SOURCE = ["poll", "takeout", "manual"];
@@ -226,6 +245,65 @@ export const getDjPlaysTool = defineTool({
       const untagged = artistRows.filter(
         (r) => !Array.isArray(r.tags) || (r.tags as unknown[]).length === 0,
       ).length;
+
+      // -------------------------------------------------------------------
+      // 🛑 A TAG-FILTERED READ CANNOT SEE WHAT IS UNTAGGED, AND A SECTION BUILT
+      //    ON ONE WOULD REPORT ITS OWN COVERAGE AS IF IT WERE THE WORLD.
+      // -------------------------------------------------------------------
+      // This is the failure that produced §14.13 in the first place. The old
+      // jazz definition returned twelve artists and read as "here is the jazz
+      // listening"; it was actually "here is the jazz listening the definition
+      // could reach", and Thelonious Monk — the broadest-repertoire artist in
+      // the library — sat outside it for a quarter with nothing saying so.
+      //
+      // ⚠️ SO COVERAGE IS FETCHED WITH THE ROWS, NOT OFFERED AS AN EXTRA CALL.
+      // An optional second call is a call somebody skips on the week it matters.
+      // A thin section and a thin listening habit are indistinguishable without
+      // it, and only one of those is worth acting on.
+      let coverage: Record<string, unknown> | null = null;
+      let candidates: Array<Record<string, unknown>> = [];
+      if (tag) {
+        const { data: cov, error: covErr } = await ctx.db.rpc("dj_tag_coverage", {
+          p_tag: tag,
+          p_window_days: windowDays,
+        });
+        if (covErr) {
+          throw new Error(
+            `get_dj_plays: tag coverage failed: ${covErr.message}. If this says ` +
+              `the function does not exist, migration 018 has not been applied yet.`,
+          );
+        }
+        coverage = ((cov ?? []) as Array<Record<string, unknown>>)[0] ?? null;
+
+        // -----------------------------------------------------------------
+        // 🛑 THE CAP IS ON PROPOSALS, AND THE FACTS ARE ADDED ON TOP OF IT.
+        // -----------------------------------------------------------------
+        // Facts (`derivable: true`) are written without asking, so they cost
+        // Alex nothing and must not consume a slot in a list he has to answer.
+        // Judgements are the scarce thing. Asking for exactly
+        // TAG_PROPOSAL_CAP + (however many facts there are) returns the full
+        // fact list AND a full-length proposal list, because the SQL orders
+        // facts first.
+        //
+        // ⚠️ THE COUNT COMES FROM `coverage`, WHICH WAS JUST FETCHED — so this
+        // is exact rather than a guess at how many facts might be in the way.
+        // ⚠️ NO p_tag (020). The candidate list means UNCATEGORISED — an artist
+        // with no tag of any kind — not "lacking this tag". The old tag-scoped
+        // version proposed Weezer as a jazz candidate: correct under "who has no
+        // jazz tag", nonsense under the heading the item printed.
+        const derivableCount = Number(coverage?.uncategorised_derivable ?? 0);
+        const { data: cand, error: candErr } = await ctx.db.rpc("dj_tag_candidates", {
+          p_window_days: windowDays,
+          p_limit: TAG_PROPOSAL_CAP + derivableCount,
+        });
+        if (candErr) {
+          throw new Error(
+            `get_dj_plays: tag candidates failed: ${candErr.message}. If this says ` +
+              `the function does not exist, migration 018 has not been applied yet.`,
+          );
+        }
+        candidates = (cand ?? []) as Array<Record<string, unknown>>;
+      }
       return { data: {
         mode: "artists",
         artists: artistRows,
@@ -234,15 +312,61 @@ export const getDjPlaysTool = defineTool({
         limit_applied: artistLimit,
         tag_filter: tag,
         untagged_in_result: untagged,
+        ...(tag
+          ? {
+            coverage,
+            tag_candidates: candidates,
+            tag_proposal_cap: TAG_PROPOSAL_CAP,
+            // 🛑 THE PROJECTION MEASURES CATEGORISATION, NOT THIS TAG (fixed
+            // 020). It used `tagged_rows`, which computed JAZZ coverage while
+            // proposing artists whose true answer is "rock" — "23.7% to 61%",
+            // arithmetically true and resting on tagging Weezer as jazz. A
+            // headline number whose path runs through decisions the reader would
+            // never make is worse than no number.
+            //
+            // `categorised_rows` moves whatever the answer is, so the projection
+            // is honest for every candidate on the list. The tag's own share is
+            // reported separately, as a listening fact rather than progress.
+            //
+            // ⚠️ COMPUTED HERE, ONCE, rather than in a prompt where a model
+            // re-derives it weekly and drifts.
+            projection: coverage
+              ? (() => {
+                const played = Number(coverage.played_rows ?? 0);
+                const categorised = Number(coverage.categorised_rows ?? 0);
+                const gain = candidates
+                  .slice(0, TAG_PROPOSAL_CAP +
+                    Number(coverage.uncategorised_derivable ?? 0))
+                  .reduce((s, c) => s + Number(c.play_rows ?? 0), 0);
+                return played === 0 ? null : {
+                  categorised_now_pct:
+                    Math.round((categorised / played) * 1000) / 10,
+                  categorised_after_pct:
+                    Math.round(((categorised + gain) / played) * 1000) / 10,
+                  play_rows_on_the_table: gain,
+                  // The tag's share, named apart so it cannot be read as
+                  // progress. Tagging Weezer 'rock' must not move this.
+                  tag_share_pct: Math.round(
+                    (Number(coverage.tagged_rows ?? 0) / played) * 1000) / 10,
+                };
+              })()
+              : null,
+          }
+          : {}),
         definition:
           "One row per DISTINCT ARTIST STRING on dj_tracks, over plays in the " +
           "window. `distinct_days` is DISTINCT DAYS PLAYED, not a play count — the " +
           "feed carries one entry per track per bucket, so repeats do not stack " +
           "(§5). `in_any_playlist` says whether that artist appears in any managed " +
-          "playlist at all — ⚠️ NOT the same field as get_dj_jazz_activity's " +
-          "`in_jazz_playlist`, which asks only about the two jazz playlists. The " +
-          "two legitimately disagree for the same artist. " +
-          "`tags` comes from dj_artist_tags and `tag` filters on it (null = all).",
+          "playlist at all. " +
+          "`tags` comes from dj_artist_tags (only status='active' rows) and " +
+          "`tag` filters on it — null = all. " +
+          "🛑 THIS IS THE ONLY ARTIST-LEVEL DEFINITION. Section 4 of the weekly " +
+          "item is this unfiltered; Section 3 is this with tag='jazz'. " +
+          "get_dj_jazz_activity was REMOVED on 2026-09-02: two overlapping " +
+          "definitions produced one report in which `in_playlist` and " +
+          "`in_any_playlist` read opposite ways for Wes Montgomery, both " +
+          "correctly (§14.19).",
         gaps:
           "🛑 THIS IS NOT AN ARTIST IDENTITY AND DOES NOT CLOSE §14.1. Grouping is " +
           "on dj_tracks.artist as an EXACT STRING. (1) SPLITS ARE REAL AND PRESENT: " +
@@ -254,7 +378,58 @@ export const getDjPlaysTool = defineTool({
           "THE POPULATION: at least one artist reads 'Jazz and Blues Experience, " +
           "1.7M views' (§14.9) and will appear here looking like an artist. " +
           "⚠️ STATE THIS WITH THE NUMBERS, the same way §14.3 requires of the jazz " +
-          "definition. Insert-only means none of it can be cleaned by a deploy.",
+          "definition. Insert-only means none of it can be cleaned by a deploy. " +
+          "🛑 (4) WHEN `tag` IS SET, THIS SECTION REPORTS ONLY WHAT IS TAGGED AND " +
+          "CANNOT SEE THE REST. `coverage` says how much that is and MUST be " +
+          "reported with the numbers — a thin section and a thin listening habit " +
+          "are otherwise identical, which is exactly how Thelonious Monk stayed " +
+          "invisible for a quarter (§14.13).",
+        ...(tag
+          ? {
+            reading:
+              "🛑 QUALIFY `tag_share_pct` WITH `coverage.tagged_single_track` WHEN " +
+              "IT IS NON-ZERO. That counts active tags whose artist string appears " +
+              "on exactly ONE track — where the junk is. The playlist seeds tagged " +
+              "\"Dec 29, 2023\" and \"Cavendish Music\" as jazz: true as membership " +
+              "statements, false as claims about an act (§14.9), and they count " +
+              "toward the share. One clause — 'N of these rest on a single track " +
+              "and may not be artists' — and point at get_dj_artist_tags " +
+              "mode=review. Do NOT reject anything from inside the weekly item. " +
+              "🛑 TWO SHARES AND THEY ARE NOT INTERCHANGEABLE. " +
+              "`projection.tag_share_pct` is how much of this window's listening " +
+              "is by artists carrying THIS tag — a listening FACT, and the number " +
+              "the tag's own section reports. `projection.categorised_now_pct` is " +
+              "how much the system knows anything about — the BACKLOG metric, and " +
+              "the only one the tagging proposal may quote, because it moves " +
+              "whatever answer is given. Quoting the tag share as progress means " +
+              "promising that tagging Weezer 'rock' improves jazz coverage. " +
+              "🛑 REPORT A SHARE, NOT THE COUNT. " +
+              "`coverage.uncategorised_artists` is a count of a TAIL " +
+              "and WILL NEVER REACH ZERO: the pool is 'played in the window', the " +
+              "window slides, and new one-offs arrive weekly. Most of it is " +
+              "artists played once, which a count weighs the same as the heaviest " +
+              "act in the library. Saying 'N to go' promises a finish that does " +
+              "not exist; 'these eight take you from X% to Y%' is true, finite, " +
+              "and the same arithmetic. Quote the count only to give the tail its " +
+              "shape. " +
+              "🛑 THE ASK IS 'WHAT IS THIS?', NOT 'IS THIS <tag>?'. `tag_candidates` " +
+              "is every UNCATEGORISED artist — no tag of any kind — so the answer " +
+              "may be any tag at all. Heading the list with one tag's name is what " +
+              "made the 2026-09-02 item propose Weezer as jazz. " +
+              "⚠️ IT SPLITS INTO TWO KINDS AND THEY ARE NOT THE SAME ASK. " +
+              "`derivable_as` NON-NULL is a FACT — playlist membership implies " +
+              "that tag — so write it with record_dj_artist_tag WITHOUT asking. " +
+              "A null `derivable_as` is a JUDGEMENT: propose it, name the numbers, " +
+              "and let Alex answer. Some of these strings are scraped channel " +
+              "bylines (§14.9), so tagging them to lengthen a list is how the " +
+              "allowlist stops being curated. " +
+              "⚠️ A 'NO' IS A WRITE TOO: record it with status='rejected', or the " +
+              "same name is proposed again next week and every week after (§11.7). " +
+              "⚠️ `coverage.tagged_rejected` counts artists already declined. They " +
+              "are decided, not missing, and are absent from `tag_candidates` by " +
+              "construction.",
+          }
+          : {}),
       }, meta: {} };
     }
     const fromDate = validateDate(args.from_date, "from_date");
@@ -1290,104 +1465,28 @@ export const getDjManagedPlaylistsTool = defineTool({
 });
 
 // ---------------------------------------------------------------------------
-// get_dj_jazz_activity — tier 1
+// get_dj_jazz_activity — REMOVED 2026-09-02. Section 3 is the rollup now.
 // ---------------------------------------------------------------------------
 //
-// 🛑 JAZZ IS A PROXY AND THE REPORT MUST SAY SO. Nothing marks a track as jazz:
-// dj_tracks has no genre, and dj_artists — which does have tags — holds 22
-// mbid-keyed concert acts and joins to nothing (spec §14.1, §14.3).
+// 🛑 REMOVED RATHER THAN LEFT AS A WRAPPER. Section 3 is
+// `get_dj_plays mode=artists tag=jazz` — the SAME function as Section 4 with a
+// filter, so there is one artist-level definition and it is impossible for two
+// of them to disagree.
 //
-// ⚠️ THE DEFINITION IS PART OF THE FINDING. A jazz summary that does not say
-// what counted as jazz invites the reader to assume a genre model exists, and
-// the numbers move if the definition does. `definition` ships with the rows for
-// that reason, not as decoration.
+// ⚠️ THE FAILURE THAT FORCED IT (§14.19): Section 3 printed `in_playlist:
+// false` for Wes Montgomery while Section 4 printed `in_any_playlist: true`
+// for the same artist, in the same report. Both were correct — one asked about
+// the two jazz playlists, the other about every managed playlist — and side by
+// side they read as the tool contradicting itself. That is what two overlapping
+// definitions produce, and renaming the field only fixed the instance.
 //
-// 🛑 AND ON 2026-09-02 THE DEFINITION STRING WAS ITSELF WRONG, WHICH IS THE
-// REASON THIS COMMENT IS LONGER THAN IT LOOKS LIKE IT NEEDS TO BE.
+// ⚠️ A WRAPPER WOULD HAVE BEEN THE COMFORTABLE CHOICE AND THE WRONG ONE. It
+// keeps a second NAME for one idea, and the next reader has to discover they
+// are the same. A removed tool fails LOUDLY at the call site, which is the
+// failure worth having.
 //
-// It read: "Membership alone would miss most of it — the heavily-played pianists
-// (Herbie Hancock, Red Garland, Oscar Peterson, Bill Evans, Thelonious Monk, Wes
-// Montgomery) arrived through PLAYS rather than through either playlist." The
-// tool returned TWO of those six. The artist arm derives its artist list FROM
-// tracks already in a jazz playlist, so it widens membership from track-level to
-// artist-level and cannot reach outside the playlists at all — the four missing
-// pianists were unreachable by construction, Monk among them at 20 distinct days
-// and 81 distinct groups, more repertoire than any artist in the library.
-//
-// ⚠️ IT SURVIVED BECAUSE IT WAS PHRASED AS A JUSTIFICATION. A sentence that
-// explains WHY a mechanism exists does not invite anyone to check it against
-// that mechanism's output. It was a falsifiable claim about what the data means,
-// and it was false (§11.5). Migration 016 adds a third arm with a real source
-// (dj_artist_tags) so the claim can be true; until the tags are seeded,
-// `by_source.tagged` is 0 and this tool answers the OLD, narrower question.
-export const getDjJazzActivityTool = defineTool({
-  name: "get_dj_jazz_activity",
-  tier: 1,
-  handler: async (args: Record<string, unknown>, ctx) => {
-    const windowDays = (args.window_days as number | undefined) ?? 90;
-    const LIMIT = clampLimit(args.limit as number | undefined);
-
-    const { data, error } = await ctx.db.rpc("dj_jazz_activity", {
-      p_window_days: windowDays,
-    });
-    if (error) throw new Error(`get_dj_jazz_activity: ${error.message}`);
-    const all = (data ?? []) as Array<Record<string, unknown>>;
-    const rows = all.slice(0, LIMIT);
-
-    // ⚠️ COVERAGE IS PART OF THE ANSWER, NOT A DIAGNOSTIC. The tag arm is only
-    // as complete as the tags, so a small jazz section and a small jazz habit
-    // look identical without this. Counted from the rows returned by the tag
-    // arm rather than asserted.
-    const bySource = { playlist: 0, artist_in_playlist: 0, tagged: 0 } as
-      Record<string, number>;
-    for (const r of all) {
-      const s = String(r.source ?? "");
-      if (s in bySource) bySource[s] += 1;
-    }
-
-    return { data: {
-      artists: rows,
-      returned: rows.length,
-      total: all.length,
-      window_days: windowDays,
-      limit_applied: LIMIT,
-      truncated: all.length > rows.length,
-      by_source: bySource,
-      definition:
-        "A play counts as jazz if (1) its track is in a kind='jazz' playlist, " +
-        "(2) its artist appears on a track in one, or (3) its artist string is " +
-        "tagged 'jazz' in dj_artist_tags. `source` on each row says which arm " +
-        "caught it, and `by_source` totals them.",
-      gaps:
-        "⚠️ STATE THESE IN THE REPORT rather than letting the thread infer a " +
-        "source that does not exist (spec §14): " +
-        "(1) COVERAGE IS ONLY AS GOOD AS THE TAGS. Arms 1 and 2 cannot reach " +
-        "outside the two jazz playlists at all — arm 2 is derived FROM tracks " +
-        "already in one, so it widens membership from track-level to " +
-        "artist-level and no further. An untagged jazz artist in no playlist is " +
-        "still invisible. That is now a DATA gap the reader can close, not a " +
-        "structural one they cannot; say how many rows came from `tagged`. " +
-        "(2) SUBGENRE IS UNAVAILABLE — nothing records it. " +
-        "(3) UNPLAYED ALBUMS CANNOT BE COMPUTED — dj_albums has no writer tool " +
-        "and no data, so there is nothing to compare listening against. " +
-        "(4) EVERY ARM IS AN EXACT STRING MATCH on dj_tracks.artist, so 'Oscar " +
-        "Peterson Trio' and 'Oscar Peterson' do not unify (§4.1.4). The tag arm " +
-        "shares that property by design and is curated for it. " +
-        "⚠️ THIS TOOL CANNOT PROPOSE NEW ARTISTS. It reports what was played and " +
-        "what is missing from the data; 'try Andrew Hill' comes from the thread, " +
-        "never from listening history — there is no source for it here.",
-      reading:
-        "`distinct_days` is DISTINCT DAYS PLAYED, not a play count (spec §5). " +
-        "⚠️ `in_jazz_playlist` asks ONLY about the two kind='jazz' playlists. It " +
-        "is NOT get_dj_plays mode=artists' `in_any_playlist`, which asks about " +
-        "every managed playlist — the two legitimately disagree for the same " +
-        "artist, and reading them side by side as one idea is a trap. " +
-        "⚠️ ADDED 016 AND WORTH THE SPACE: before the tag arm existed, this " +
-        "tool's own definition string named six pianists as proof of the artist " +
-        "arm and returned two of them. Thelonious Monk — the broadest repertoire " +
-        "in the library — was invisible to it. If `by_source.tagged` is 0 the " +
-        "tags have not been seeded and this tool is answering the OLD, narrower " +
-        "question; say so rather than reporting the numbers bare.",
-    }, meta: { truncated: all.length > rows.length } };
-  },
-});
+// ⚠️ THE PLAYLIST ARM IS NOT LOST — it is stored instead of recomputed.
+// Migration 018 writes one dj_artist_tags row per artist on a track in a
+// kind='jazz' playlist, with source='playlist'. "We dropped the playlist arm"
+// and "the playlist arm now writes tags instead of being recomputed" are
+// different claims and only the second is true.

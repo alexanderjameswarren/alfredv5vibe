@@ -118,8 +118,6 @@ const run = (tables, args, opts) =>
   tool.get_dj_plays.handler(args, { db: makeDb(tables, opts), userId: "u1" });
 const runMp = (tables, args, opts) =>
   tool.get_dj_managed_playlists.handler(args, { db: makeDb(tables, opts), userId: "u1" });
-const runJazz = (tables, args = {}, opts) =>
-  tool.get_dj_jazz_activity.handler(args, { db: makeDb(tables, opts), userId: "u1" });
 
 const track = (id, video_id, title, canonical = null, album = null, artist = "Weezer") =>
   ({ id, video_id, title, artist, album, canonical_track_id: canonical });
@@ -978,7 +976,11 @@ test("artists mode clamps its limit like every other bounded read", async () => 
 test("artists mode passes the tag filter through, and defaults to null", async () => {
   let seen = null;
   const tables = {
-    __rpcs: { dj_artist_activity: (params) => { seen = params; return []; } },
+    __rpcs: {
+      dj_artist_activity: (params) => { seen = params; return []; },
+      dj_tag_coverage: () => [{ untagged_total: 0 }],
+      dj_tag_candidates: () => [],
+    },
   };
   await run(tables, { mode: "artists" });
   assert.equal(seen.p_tag, null, "unfiltered is the default — every artist");
@@ -1006,95 +1008,237 @@ test("artists mode counts the UNTAGGED rows, which is how a thin tag set shows",
   assert.equal(r.data.tag_filter, null);
 });
 
-test("artists mode warns that in_any_playlist is NOT the jazz tool's field", async () => {
-  // 🛑 THE 2026-09-02 TRAP. Section 3 printed `in_playlist: false` for Wes
-  // Montgomery and Section 4 printed `in_any_playlist: true` for the same
-  // artist. Both were correct — one asks about the two JAZZ playlists, the other
-  // about every managed playlist — and side by side they read as the tool
-  // contradicting itself. The jazz field is renamed in 016; this is the other
-  // half of that fix.
+test("there is no second field for in_any_playlist to contradict", async () => {
+  // 🛑 §14.19 IS FIXED BY REMOVAL, NOT BY WORDING. 016 renamed the jazz tool's
+  // field to `in_jazz_playlist` and warned about the pair; 018 deleted the
+  // second tool, so the pair cannot exist. This test replaced one asserting the
+  // warning text — a warning about a trap is worse than no trap.
   const tables = { __rpcs: { dj_artist_activity: () => [] } };
   const r = await run(tables, { mode: "artists" });
-  assert.match(r.data.definition, /in_jazz_playlist/);
-  assert.match(r.data.definition, /NOT the same field/);
-});
-
-// ---------------------------------------------------------------------------
-// get_dj_jazz_activity — the definition that was FALSE (added 016)
-// ---------------------------------------------------------------------------
-//
-// 🛑 THE DEFINITION STRING NAMED SIX PIANISTS AS PROOF OF THE ARTIST ARM AND THE
-// TOOL RETURNED TWO OF THEM. Herbie Hancock, Red Garland, Bill Evans and
-// Thelonious Monk were unreachable BY CONSTRUCTION: the artist arm derives its
-// artist list from tracks already in a jazz playlist, so it widens membership
-// from track-level to artist-level and cannot reach outside the playlists at all.
-//
-// ⚠️ IT SURVIVED BECAUSE IT READ AS A JUSTIFICATION. A sentence explaining WHY a
-// mechanism exists does not invite anyone to check it against that mechanism's
-// output — but it was a falsifiable claim about what the data means, and it was
-// false (§11.5). These tests pin the claim to the output.
-
-test("the jazz definition no longer asserts what the arms cannot deliver", async () => {
-  const tables = { __rpcs: { dj_jazz_activity: () => [] } };
-  const r = await runJazz(tables);
-  for (const name of ["Herbie Hancock", "Red Garland", "Bill Evans",
-                      "Thelonious Monk"]) {
-    assert.ok(
-      !r.data.definition.includes(name),
-      `the definition still names ${name} as evidence for an arm that cannot reach him`,
-    );
-  }
-  assert.match(r.data.definition, /dj_artist_tags/, "the third arm is stated");
-});
-
-test("by_source totals the arms, so a thin tag set is visible in the payload", async () => {
-  const tables = {
-    __rpcs: {
-      dj_jazz_activity: () => [
-        { artist: "Art Blakey", distinct_days: 1, in_jazz_playlist: true,
-          source: "playlist" },
-        { artist: "Wes Montgomery", distinct_days: 13, in_jazz_playlist: false,
-          source: "artist_in_playlist" },
-        { artist: "Oscar Peterson", distinct_days: 12, in_jazz_playlist: false,
-          source: "artist_in_playlist" },
-        { artist: "Thelonious Monk", distinct_days: 20, in_jazz_playlist: false,
-          source: "tagged" },
-      ],
-    },
-  };
-  const r = await runJazz(tables);
-  assert.deepEqual(r.data.by_source,
-    { playlist: 1, artist_in_playlist: 2, tagged: 1 });
-});
-
-test("with no tags seeded, tagged is 0 and the reading says the arm is inert", async () => {
-  // ⚠️ THE HALF-APPLIED CASE, WHICH IS THE STATE THIS SHIPS IN. Migration 016
-  // makes the arm live; the tags are a separate human step. Until they exist the
-  // tool answers the OLD, narrower question, and reporting its numbers bare
-  // would repeat the exact failure 016 exists to fix.
-  const tables = {
-    __rpcs: {
-      dj_jazz_activity: () => [
-        { artist: "Wes Montgomery", distinct_days: 13, source: "artist_in_playlist" },
-      ],
-    },
-  };
-  const r = await runJazz(tables);
-  assert.equal(r.data.by_source.tagged, 0);
-  assert.match(r.data.reading, /by_source\.tagged` is 0/);
-  assert.match(r.data.gaps, /COVERAGE IS ONLY AS GOOD AS THE TAGS/);
-});
-
-test("the jazz field is in_jazz_playlist, and the reading names the trap", async () => {
-  // 🛑 RENAMED IN 016. `in_playlist` sat beside get_dj_plays mode=artists'
-  // `in_any_playlist` in one report, reading contradictorily for Wes Montgomery.
-  // Both were right and the names were one word apart.
-  const tables = { __rpcs: { dj_jazz_activity: () => [] } };
-  const r = await runJazz(tables);
-  assert.match(r.data.reading, /in_jazz_playlist/);
-  assert.match(r.data.reading, /in_any_playlist/);
+  assert.equal(tool.get_dj_jazz_activity, undefined);
   assert.ok(
-    !/`in_playlist`/.test(r.data.reading),
-    "the old ambiguous name must not survive in the guidance",
+    !/in_jazz_playlist/.test(r.data.definition),
+    "nothing should still be steering readers around a field that is gone",
   );
+  assert.match(r.data.definition, /in_any_playlist/);
+});
+
+// ---------------------------------------------------------------------------
+// Section 3 is now Section 4 with a filter (merged 2026-09-02)
+// ---------------------------------------------------------------------------
+//
+// 🛑 get_dj_jazz_activity IS GONE. One artist-level definition, because two
+// overlapping ones produced §14.19 — `in_playlist` and `in_any_playlist`
+// reading opposite ways for Wes Montgomery in a single report, both correct.
+//
+// ⚠️ THE COST OF MERGING IS THAT A FILTERED SECTION IS BLIND TO WHAT IS NOT
+// TAGGED, and that blindness is the exact shape of the bug being fixed: the old
+// definition reported its own coverage as if it reported the world, and Monk sat
+// outside it for a quarter with nothing saying so. So `coverage` is not optional.
+
+test("the jazz tool is REMOVED, not renamed", () => {
+  assert.equal(
+    tool.get_dj_jazz_activity, undefined,
+    "a wrapper would restore a second name for one idea",
+  );
+});
+
+test("a tag-filtered read ALWAYS fetches coverage — it cannot be skipped", async () => {
+  // 🛑 THE POINT OF THE WHOLE MERGE. An optional second call is a call somebody
+  // skips on the week it matters, and then the section reports "3 jazz artists"
+  // where the truth is "3 tagged, 40 played, nobody has tagged the rest".
+  const calls = [];
+  const tables = {
+    __rpcs: {
+      dj_artist_activity: () => [{ artist: "Thelonious Monk", distinct_days: 20,
+                                   tags: ["jazz"] }],
+      dj_tag_coverage: (p) => {
+        calls.push(p);
+        return [{ tag: "jazz", window_days: 90, played_artists: 43,
+                  tagged_active: 13, tagged_rejected: 1, uncategorised_artists: 30,
+                  uncategorised_derivable: 0, categorised_rows: 300 }];
+      },
+      dj_tag_candidates: () => [
+        { artist: "Ahmad Jamal", distinct_days: 5, derivable: false },
+      ],
+    },
+  };
+  const r = await run(tables, { mode: "artists", tag: "jazz" });
+  assert.equal(calls.length, 1, "coverage must be fetched with the rows");
+  assert.equal(calls[0].p_tag, "jazz");
+  assert.equal(r.data.coverage.uncategorised_artists, 30);
+  assert.equal(r.data.tag_candidates.length, 1);
+});
+
+test("an UNFILTERED read does not pay for coverage it does not need", async () => {
+  // Section 4 sees every artist, so there is nothing it cannot see. Fetching
+  // coverage there would be two round-trips to answer a question nobody asked.
+  let covCalled = false;
+  const tables = {
+    __rpcs: {
+      dj_artist_activity: () => [],
+      dj_tag_coverage: () => { covCalled = true; return []; },
+      dj_tag_candidates: () => [],
+    },
+  };
+  const r = await run(tables, { mode: "artists" });
+  assert.equal(covCalled, false);
+  assert.ok(!("coverage" in r.data), "no coverage key when unfiltered");
+  assert.ok(!("tag_candidates" in r.data));
+});
+
+test("the reading separates FACTS from JUDGEMENTS in the candidate list", async () => {
+  // ⚠️ THEY ARE NOT THE SAME ASK AND MUST NOT BE PRESENTED AS ONE. `derivable`
+  // means the artist is on a track in a matching-kind playlist — the old
+  // playlist arm, which was never a judgement — so it is written without asking.
+  // The rest are judgements, and §14.9 means some of those strings are scraped
+  // channel bylines rather than artists.
+  const tables = {
+    __rpcs: {
+      dj_artist_activity: () => [],
+      dj_tag_coverage: () => [{ uncategorised_artists: 2, uncategorised_derivable: 1 }],
+      dj_tag_candidates: () => [],
+    },
+  };
+  const r = await run(tables, { mode: "artists", tag: "jazz" });
+  assert.match(r.data.reading, /derivable_as` NON-NULL is a FACT/);
+  assert.match(r.data.reading, /WITHOUT asking/);
+  assert.match(r.data.reading, /null `derivable_as` is a JUDGEMENT/);
+});
+
+test("the reading says a NO is a write, or the proposal repeats forever", async () => {
+  // 🛑 §11.7. Without a recorded rejection, 'Harrison' is proposed every week
+  // for the rest of time and the section trains him to skip it.
+  const tables = {
+    __rpcs: {
+      dj_artist_activity: () => [],
+      dj_tag_coverage: () => [{ uncategorised_artists: 0, tagged_rejected: 1 }],
+      dj_tag_candidates: () => [],
+    },
+  };
+  const r = await run(tables, { mode: "artists", tag: "jazz" });
+  assert.match(r.data.reading, /A 'NO' IS A WRITE TOO/);
+  assert.match(r.data.reading, /status='rejected'/);
+});
+
+test("a missing 018 is named as operational, and stays retryable", async () => {
+  // The platform error contract: an operational failure must NOT carry
+  // do-not-retry wording, because it becomes retryable the moment 018 lands.
+  const tables = { __rpcs: { dj_artist_activity: () => [] } };
+  await assert.rejects(
+    () => run(tables, { mode: "artists", tag: "jazz" }),
+    (e) => {
+      assert.match(e.message, /migration 018 has not been applied/);
+      assert.ok(!/[Dd]o NOT retry/.test(e.message));
+      return true;
+    },
+  );
+});
+
+test("the definition names the removal, so the merge is discoverable", async () => {
+  const tables = { __rpcs: { dj_artist_activity: () => [] } };
+  const r = await run(tables, { mode: "artists" });
+  assert.match(r.data.definition, /ONLY ARTIST-LEVEL DEFINITION/);
+  assert.match(r.data.definition, /get_dj_jazz_activity was REMOVED/);
+});
+// ---------------------------------------------------------------------------
+// The proposal cap and the coverage projection (019)
+// ---------------------------------------------------------------------------
+//
+// 🛑 THE BACKLOG IS 368 AND A COUNT IS THE WRONG WAY TO REPORT IT. At eight a
+// week that is eighteen months, and the count will never reach zero anyway: the
+// pool is "played in the trailing window", the window slides, and new one-offs
+// arrive every week. Reporting "368 to go" promises a finish that does not
+// exist. The share of PLAY ROWS does close, because every play row has exactly
+// one artist.
+
+test("the proposal cap is 8, and FACTS do not consume a slot", async () => {
+  let sentTag = "unset";
+  // ⚠️ A derivable candidate is written without asking, so it costs no
+  // attention. Asking for cap + derivable returns a full-length proposal list
+  // AND every fact, because the SQL orders facts first.
+  let askedFor = null;
+  const tables = {
+    __rpcs: {
+      dj_artist_activity: () => [],
+      dj_tag_coverage: () => [{ played_rows: 100, categorised_rows: 40, tagged_rows: 25,
+                                uncategorised_derivable: 3, uncategorised_artists: 50 }],
+      dj_tag_candidates: (p) => { askedFor = p.p_limit; sentTag = p.p_tag; return []; },
+    },
+  };
+  const r = await run(tables, { mode: "artists", tag: "jazz" });
+  assert.equal(r.data.tag_proposal_cap, 8);
+  assert.equal(askedFor, 11, "8 judgements + 3 facts");
+  // 🛑 NO p_tag (020). The candidate list means UNCATEGORISED — an artist with
+  // no tag of ANY kind. Scoping it to one tag is what proposed Weezer as jazz.
+  assert.equal(sentTag, undefined, "the candidate query must not be tag-scoped");
+});
+
+test("with no facts pending, the ask is exactly the cap", async () => {
+  let sentTag = "unset";
+  // The live 2026-09-02 case: untagged_derivable is 0, so all eight slots are
+  // judgements.
+  let askedFor = null;
+  const tables = {
+    __rpcs: {
+      dj_artist_activity: () => [],
+      dj_tag_coverage: () => [{ played_rows: 100, categorised_rows: 40, tagged_rows: 25,
+                                uncategorised_derivable: 0 }],
+      dj_tag_candidates: (p) => { askedFor = p.p_limit; sentTag = p.p_tag; return []; },
+    },
+  };
+  await run(tables, { mode: "artists", tag: "jazz" });
+  assert.equal(askedFor, 8);
+});
+
+test("the projection is COMPUTED against the play-row denominator", async () => {
+  // 🛑 "These eight take you from 43% to 71%" is only honest if the arithmetic
+  // uses the same denominator the share does. Done here once, rather than in a
+  // prompt where a model re-derives it weekly and drifts.
+  const tables = {
+    __rpcs: {
+      dj_artist_activity: () => [],
+      dj_tag_coverage: () => [{ played_rows: 1000, categorised_rows: 400, tagged_rows: 250,
+                                uncategorised_derivable: 0 }],
+      dj_tag_candidates: () => [
+        { artist: "Weezer", play_rows: 200 },
+        { artist: "Foo Fighters", play_rows: 100 },
+      ],
+    },
+  };
+  const r = await run(tables, { mode: "artists", tag: "jazz" });
+  assert.equal(r.data.projection.categorised_now_pct, 40);
+  assert.equal(r.data.projection.categorised_after_pct, 70);
+  assert.equal(r.data.projection.tag_share_pct, 25,
+    "the tag share is a listening fact and must NOT be the progress number");
+  assert.equal(r.data.projection.play_rows_on_the_table, 300);
+});
+
+test("a zero denominator yields null rather than a division artefact", async () => {
+  // NEGATIVE CONTROL. An empty window must not print "NaN%" or "0% → 0%", both
+  // of which read as facts about listening rather than absence of data.
+  const tables = {
+    __rpcs: {
+      dj_artist_activity: () => [],
+      dj_tag_coverage: () => [{ played_rows: 0, categorised_rows: 0, tagged_rows: 0,
+                                uncategorised_derivable: 0 }],
+      dj_tag_candidates: () => [],
+    },
+  };
+  const r = await run(tables, { mode: "artists", tag: "jazz" });
+  assert.equal(r.data.projection, null);
+});
+
+test("the reading says report the SHARE and warns the count never reaches zero", async () => {
+  const tables = {
+    __rpcs: {
+      dj_artist_activity: () => [],
+      dj_tag_coverage: () => [{ played_rows: 10, categorised_rows: 1, tagged_rows: 1,
+                                uncategorised_derivable: 0 }],
+      dj_tag_candidates: () => [],
+    },
+  };
+  const r = await run(tables, { mode: "artists", tag: "jazz" });
+  assert.match(r.data.reading, /REPORT A SHARE, NOT THE COUNT/);
+  assert.match(r.data.reading, /WILL NEVER REACH ZERO/);
 });

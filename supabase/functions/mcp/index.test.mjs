@@ -191,9 +191,24 @@ test("the DJ tool surface is registered", () => {
                       "get_dj_managed_playlists", "create_platform_schedule",
                       "get_dj_artists", "upsert_dj_artist",
                       "get_dj_concerts", "update_dj_concert",
-                      "record_dj_feedback", "get_dj_jazz_activity"]) {
+                      "record_dj_feedback", "record_dj_artist_tag", "get_dj_artist_tags"]) {
     assert.ok(registered.some((r) => r.name === name), `${name} not registered`);
   }
+});
+
+test("get_dj_jazz_activity is REMOVED, not renamed — one artist definition", () => {
+  // 🛑 SECTION 3 IS `get_dj_plays mode=artists tag=jazz`, THE SAME FUNCTION AS
+  // SECTION 4 WITH A FILTER. Two overlapping definitions produced §14.19:
+  // `in_playlist` and `in_any_playlist` reading opposite ways for Wes
+  // Montgomery, in one report, both correct.
+  //
+  // ⚠️ THIS ASSERTS ABSENCE ON PURPOSE. Re-registering it as a thin wrapper
+  // would restore a second NAME for one idea, and the next reader would have to
+  // discover they are the same. A removed tool fails loudly at the call site.
+  assert.ok(
+    !registered.some((r) => r.name === "get_dj_jazz_activity"),
+    "get_dj_jazz_activity is back — Section 3 must stay a filter on the rollup",
+  );
 });
 
 test("dry_run_dj_plays is deliberately NOT an MCP tool", () => {
@@ -215,14 +230,20 @@ test("dry_run_dj_playlist is deliberately NOT an MCP tool either", () => {
     "dry_run_dj_playlist is now registered as an MCP tool - was that deliberate?");
 });
 
-test("the tool count is 40 after the weekly-job tools", () => {
+test("the tool count is 41 after the tag system", () => {
   // The number quoted at every reconnect. 36 through step 0 and step 1, which
   // added an endpoint and a non-registered tool on purpose. Step 2 adds three:
   // get_dj_concerts, update_dj_concert, record_dj_feedback - batched into ONE
   // deploy because each manifest change costs a reconnect and a fresh
   // conversation, and three separate deploys would spend three to save none.
-  assert.equal(registered.length, 40,
-    `expected 40 registered tools, found ${registered.length}: ` +
+  //
+  // 2026-09-02, NET +1 AND IT IS THREE CHANGES: get_dj_jazz_activity REMOVED
+  // (Section 3 became get_dj_plays mode=artists tag=jazz — one artist-level
+  // definition, §14.19), record_dj_artist_tag and get_dj_artist_tags ADDED.
+  // ⚠️ A NET COUNT HIDES A REMOVAL, which is why the three are named here: a
+  // future reader seeing 40 -> 41 would otherwise assume one tool arrived.
+  assert.equal(registered.length, 41,
+    `expected 41 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
