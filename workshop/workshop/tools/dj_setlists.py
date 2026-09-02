@@ -155,6 +155,100 @@ def _fetch_page(mbid: str, page: int, api_key: str) -> dict[str, Any]:
         ) from None
 
 
+# ---------------------------------------------------------------------------
+# ADDED 2026-09-02: finding ONE OLD SHOW, for the third phrasing (spec §13.2)
+# ---------------------------------------------------------------------------
+# "Make me a playlist of the Adele show I went to" needs a setlist from
+# 2023-10-13. /artist/{mbid}/setlists is newest-first, so that show is hundreds
+# of entries back — reachable only by paging through two years of gigs.
+#
+# /search/setlists takes artistMbid + year + venueName and goes straight to it.
+#
+# 🛑 A 404 FROM /search/setlists MEANS "NO RESULTS", NOT "BAD MBID", AND THE TWO
+# NEED OPPOSITE RESPONSES. On /artist/{mbid}/setlists a 404 means the id is wrong
+# or the act has nothing recorded. On search it is simply an empty result set.
+# Reusing the artist-endpoint's error text here would tell the caller to go and
+# check an mbid that is perfectly correct.
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _iso_to_setlistfm(iso: str) -> str:
+    """YYYY-MM-DD -> dd-MM-yyyy.
+
+    ⚠️ WRITTEN OUT RATHER THAN FORMATTED, and asserted by a test. setlist.fm
+    serves dd-MM-yyyy and this project has already spent a day on a d/m vs m/d
+    swap in the Takeout timezone work. The two acceptance-test shows are
+    2023-10-13 and 2023-10-14 — a swap would silently turn October into the 13th
+    month for one and produce a plausible wrong answer for the other.
+    """
+    y, m, d = iso.split("-")
+    return f"{d}-{m}-{y}"
+
+
+def _setlistfm_to_iso(ev: str) -> str | None:
+    """dd-MM-yyyy -> YYYY-MM-DD. None if it is not that shape."""
+    if not ev or ev.count("-") != 2:
+        return None
+    d, m, y = ev.split("-")
+    if len(y) != 4 or len(m) != 2 or len(d) != 2:
+        return None
+    return f"{y}-{m}-{d}"
+
+
+def _days_apart(iso_a: str, iso_b: str) -> int:
+    from datetime import date
+    a = date(*(int(x) for x in iso_a.split("-")))
+    b = date(*(int(x) for x in iso_b.split("-")))
+    return abs((a - b).days)
+
+
+def _search_page(mbid: str, year: int | None, venue: str | None,
+                 page: int, api_key: str) -> dict[str, Any]:
+    """One page of /search/setlists. Synchronous; callers run it off the loop."""
+    import httpx
+
+    params: dict[str, Any] = {"artistMbid": mbid, "p": page}
+    if year:
+        params["year"] = year
+    if venue:
+        params["venueName"] = venue
+
+    try:
+        resp = httpx.get(
+            f"{API_ROOT}/search/setlists",
+            params=params,
+            headers={"x-api-key": api_key, "Accept": "application/json"},
+            timeout=20.0,
+        )
+    except httpx.HTTPError as exc:
+        raise OperationalError(f"setlist.fm search failed: {exc}") from None
+
+    # 🛑 EMPTY, NOT BROKEN. See the note above this function.
+    if resp.status_code == 404:
+        return {"setlist": [], "total": 0}
+    if resp.status_code == 403:
+        raise OperationalError(
+            "setlist.fm rejected the API key (HTTP 403). The key in "
+            f"{API_KEY_PATH} is invalid or has been revoked."
+        )
+    if resp.status_code == 429:
+        raise OperationalError(
+            "setlist.fm rate limit hit (HTTP 429). Standard keys allow roughly 2 "
+            "requests a second and 1440 a day. Wait and retry; do not loop."
+        )
+    if resp.status_code >= 400:
+        raise OperationalError(
+            f"setlist.fm search returned HTTP {resp.status_code}: {resp.text[:300]}"
+        )
+    try:
+        return resp.json()
+    except ValueError:
+        raise OperationalError(
+            f"setlist.fm search returned non-JSON (HTTP {resp.status_code}): "
+            f"{resp.text[:300]}"
+        ) from None
+
+
 def _songs_of(setlist: dict[str, Any]) -> list[dict[str, Any]]:
     """Flatten the sets -> set -> song nesting into one ordered list."""
     out: list[dict[str, Any]] = []
@@ -173,6 +267,140 @@ def _songs_of(setlist: dict[str, Any]) -> list[dict[str, Any]]:
                 "encore": bool(chunk.get("encore")),
             })
     return out
+
+
+async def _targeted_lookup(mbid: str, year: int | None, venue: str | None,
+                           on_date: str | None, limit: int,
+                           api_key: str) -> dict[str, Any]:
+    """Find ONE specific show, for spec §13.2's third phrasing.
+
+    🛑 EXACT MATCH OR ASK. The returned show's date is ASSERTED against the date
+    that was asked for, and a near miss is reported as a near miss — never
+    substituted.
+
+    ⚠️ THE ACCEPTANCE TEST IS THE REASON THAT SENTENCE IS IN CAPITALS. Adele
+    2023-10-13 and Katy Perry 2023-10-14 are one day apart. A lookup that matched
+    on artist and year and then took the first result would return a perfectly
+    plausible Adele setlist from a different night of the same residency, and
+    nothing downstream could tell. `date_match` is what makes that visible.
+    """
+    candidates: list[dict[str, Any]] = []
+    pages_read = 0
+    total_upstream: int | None = None
+
+    for page in range(1, MAX_PAGES + 1):
+        payload = await to_thread.run_sync(
+            _search_page, mbid, year, venue, page, api_key)
+        pages_read = page
+        if total_upstream is None:
+            total_upstream = payload.get("total")
+        entries = payload.get("setlist") or []
+        if not entries:
+            break
+        for entry in entries:
+            songs = _songs_of(entry)
+            v = entry.get("venue") or {}
+            city = v.get("city") or {}
+            ev = entry.get("eventDate")
+            candidates.append({
+                "setlist_id": entry.get("id"),
+                "event_date": ev,
+                "event_date_iso": _setlistfm_to_iso(ev),
+                "venue": v.get("name"),
+                "city": city.get("name"),
+                "country": (city.get("country") or {}).get("code"),
+                "tour": (entry.get("tour") or {}).get("name"),
+                "artist": (entry.get("artist") or {}).get("name"),
+                "song_count": len(songs),
+                "songs": songs,
+                "url": entry.get("url"),
+            })
+        # A page short of the API's page size is the last one. Unlike the
+        # artist feed there is no cap-shaped trap here: search returns what it
+        # has, and an empty page above ends the loop either way.
+        if len(entries) < 20:
+            break
+
+    # ⚠️ EMPTY SETLISTS ARE KEPT HERE, UNLIKE THE ARTIST FEED, AND THAT IS §13.2's
+    # THIRD OUTCOME. "The show is listed but nobody filled it in" is a different
+    # answer from "the show is not there", and skipping empties would collapse
+    # them into one. The caller needs to be able to say "setlist.fm has your
+    # night, it just has no songs" rather than "I could not find it".
+    with_songs = [c for c in candidates if c["song_count"] > 0]
+
+    matched: list[dict[str, Any]] = []
+    nearest: list[dict[str, Any]] = []
+    date_match = "not_requested"
+
+    if on_date:
+        want = _iso_to_setlistfm(on_date)
+        matched = [c for c in candidates if c["event_date"] == want]
+
+        if len(matched) == 1 and matched[0]["song_count"] == 0:
+            date_match = "found_but_empty"
+        elif len(matched) == 1:
+            date_match = "exact"
+        elif len(matched) > 1:
+            # Two setlists filed under one date. Real — a festival with two
+            # stages, or a duplicate entry. It is a judgement, not a tie.
+            date_match = "ambiguous"
+        else:
+            date_match = "not_found"
+
+        if date_match in ("not_found", "ambiguous"):
+            # Nearest by actual date distance, so the caller can see whether it
+            # missed by a day or by a year.
+            scored = [
+                (c, _days_apart(on_date, c["event_date_iso"]))
+                for c in candidates if c.get("event_date_iso")
+            ]
+            scored.sort(key=lambda p: p[1])
+            nearest = [{**c, "days_from_requested": d} for c, d in scored[:limit]]
+
+    shown = matched if matched else with_songs[:limit]
+
+    return {
+        "data": {
+            "mbid": mbid,
+            "lookup": {
+                "year": year,
+                "venue": venue,
+                "requested_date": on_date,
+                # 🛑 THE ASSERTION, AS A FIELD. exact | found_but_empty |
+                # not_found | ambiguous | not_requested.
+                "date_match": date_match,
+                "matched_date": matched[0]["event_date_iso"] if len(matched) == 1 else None,
+            },
+            "setlists": shown,
+            "returned": len(shown),
+            "candidates_in_scope": len(candidates),
+            "candidates_with_songs": len(with_songs),
+            "nearest": nearest,
+            "pages_read": pages_read,
+            "total_upstream": total_upstream,
+            "date_format": "event_date is dd-MM-yyyy as setlist.fm serves it. "
+                           "event_date_iso is the same date as YYYY-MM-DD, "
+                           "converted here so no call site has to.",
+            "reading": (
+                "🛑 CHECK `lookup.date_match` BEFORE USING `setlists`. "
+                "'exact' means the returned show's date EQUALS the date asked "
+                "for. Anything else means it does not, and the entry is NOT a "
+                "substitute: 'not_found' ships `nearest` with days_from_requested "
+                "so a human can see whether it missed by a day or a year, and "
+                "'ambiguous' means two setlists are filed under that date and it "
+                "is a judgement rather than a tie to break. "
+                "⚠️ 'found_but_empty' IS A THIRD OUTCOME AND NOT A FAILURE: "
+                "setlist.fm has the show and nobody filled in the songs. Say that "
+                "rather than 'not found' — they are different facts and only one "
+                "of them can be fixed by looking somewhere else. "
+                "⚠️ Adele 2023-10-13 and Katy Perry 2023-10-14 are one day apart; "
+                "a lookup that matched on artist and year alone would return a "
+                "plausible setlist from the wrong night and nothing downstream "
+                "could tell. That is what date_match exists for."
+            ),
+        },
+        "meta": {},
+    }
 
 
 @define_tool(
@@ -218,6 +446,39 @@ def _songs_of(setlist: dict[str, Any]) -> list[dict[str, Any]]:
                     "reported separately as `empty_entries_skipped`."
                 ),
             },
+            "on_date": {
+                "type": "string",
+                "description": (
+                    "YYYY-MM-DD — the date on the concert row. Switches to a "
+                    "TARGETED lookup of that one show via /search/setlists, "
+                    "instead of the newest-first artist feed. Use it for an old "
+                    "show: a 2023 date is hundreds of entries back in the feed. "
+                    "🛑 THE RETURNED SHOW'S DATE IS ASSERTED AGAINST THIS ONE and "
+                    "reported as `lookup.date_match` — exact | found_but_empty | "
+                    "not_found | ambiguous. A near miss is NEVER substituted: "
+                    "matching on artist and year alone would return a plausible "
+                    "setlist from the wrong night of the same residency and "
+                    "nothing downstream could tell. The dd-MM-yyyy conversion "
+                    "happens inside the tool so no call site can get it backwards."
+                ),
+            },
+            "year": {
+                "type": "integer",
+                "description": (
+                    "Targeted lookup by year. Implied by `on_date`; pass it alone "
+                    "to list a year's shows when the exact date is not known."
+                ),
+            },
+            "venue": {
+                "type": "string",
+                "description": (
+                    "Targeted lookup by venue name, as setlist.fm spells it. "
+                    "⚠️ UNTESTABLE IN PRACTICE TODAY: every dj_concerts row has "
+                    "venue_id null and create_dj_concert accepts no venue, so "
+                    "nothing in this system can supply one. Prefer `on_date`, "
+                    "which is recorded and exact (spec §13.2, corrected)."
+                ),
+            },
         },
         "required": ["mbid"],
     },
@@ -244,6 +505,28 @@ async def get_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
 
     limit = clamp_limit(limit, default=10, cap=25)
     api_key = _read_api_key()
+
+    # -----------------------------------------------------------------------
+    # TARGETED LOOKUP — one specific old show (spec §13.2)
+    # -----------------------------------------------------------------------
+    on_date = args.get("on_date")
+    year = args.get("year")
+    venue = args.get("venue")
+
+    if on_date is not None:
+        on_date = str(on_date).strip()
+        if not _ISO_DATE_RE.match(on_date):
+            raise GuardrailError(
+                f"get_dj_setlists: `on_date` must be YYYY-MM-DD (got {on_date!r}). "
+                f"It is the date stored on the concert row, and setlist.fm serves "
+                f"dd-MM-yyyy — the conversion happens here precisely so a d/m vs "
+                f"m/d swap cannot happen at a call site."
+            )
+        if year is None:
+            year = int(on_date[:4])
+
+    if year is not None or venue:
+        return await _targeted_lookup(mbid, year, venue, on_date, limit, api_key)
 
     kept: list[dict[str, Any]] = []
     skipped_empty = 0
@@ -930,6 +1213,30 @@ def _resolve_one(
                     "slot."
                 ),
             },
+            "on_date": {
+                "type": "string",
+                "description": (
+                    "YYYY-MM-DD - diff against ONE specific show instead of the "
+                    "last N. Passed straight through to get_dj_setlists' targeted "
+                    "lookup; there is no second implementation here (spec 14.6). "
+                    "REFUSES ANYTHING BUT AN EXACT DATE MATCH: the nearest night "
+                    "of the same residency would resolve cleanly into a complete "
+                    "and WRONG playlist, and nothing downstream could tell. On a "
+                    "miss it raises with the nearest shows so a human can pick."
+                ),
+            },
+            "year": {
+                "type": "integer",
+                "description": "Targeted lookup by year. Implied by `on_date`.",
+            },
+            "venue": {
+                "type": "string",
+                "description": (
+                    "Targeted lookup by venue name. Untestable today - every "
+                    "dj_concerts row has venue_id null and create_dj_concert "
+                    "accepts no venue (spec 13.2, corrected)."
+                ),
+            },
             "resolve": {
                 "type": "boolean",
                 "description": (
@@ -951,11 +1258,57 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
             "look missing, which is a very confident wrong answer."
         )
 
+    # ⚠️ ONE RESOLVER, ONE LOOKUP. The targeted params are PASSED THROUGH rather
+    # than reimplemented here — §14.6 records a rule living in two runtimes and
+    # drifting, and a second copy of the setlist fetch inside the diff would be
+    # the same shape a layer down.
     inner = await get_dj_setlists(
-        {"mbid": args.get("mbid"), "limit": args.get("limit")}, ctx
+        {
+            "mbid": args.get("mbid"),
+            "limit": args.get("limit"),
+            "on_date": args.get("on_date"),
+            "year": args.get("year"),
+            "venue": args.get("venue"),
+        },
+        ctx,
     )
     sl = inner["data"]
     shows = sl["setlists"]
+
+    # -----------------------------------------------------------------------
+    # 🛑 A TARGETED DIFF REFUSES ANYTHING BUT AN EXACT DATE MATCH.
+    # -----------------------------------------------------------------------
+    # The whole point of asking for one show is that it is THAT show. Diffing
+    # against the nearest night of the same residency would produce a complete,
+    # plausible, wrong playlist — and every song in it would resolve cleanly, so
+    # nothing further down could notice.
+    lookup = sl.get("lookup") or {}
+    if lookup.get("requested_date"):
+        dm = lookup.get("date_match")
+        if dm != "exact":
+            nearest = sl.get("nearest") or []
+            near_txt = "; ".join(
+                f"{n.get('event_date_iso')} at {n.get('venue')} "
+                f"({n.get('days_from_requested')} day(s) away, "
+                f"{n.get('song_count')} songs)"
+                for n in nearest[:5]
+            ) or "no dated candidates in scope"
+            if dm == "found_but_empty":
+                raise GuardrailError(
+                    f"diff_dj_setlists: setlist.fm HAS the show on "
+                    f"{lookup['requested_date']} and it has NO SONGS recorded. "
+                    f"That is not 'not found' and it is not something a different "
+                    f"date can fix - nobody filled this one in. Nothing was "
+                    f"diffed. Report it as an empty setlist and stop."
+                )
+            raise GuardrailError(
+                f"diff_dj_setlists: no EXACT setlist for "
+                f"{lookup['requested_date']} (date_match={dm}). Nothing was "
+                f"diffed, deliberately: the nearest show would resolve cleanly "
+                f"into a complete and wrong playlist, and nothing downstream "
+                f"could tell. Nearest: {near_txt}. Show these and ask which - "
+                f"do NOT pick one."
+            )
 
     # The performing artist comes from the setlists themselves, not from the
     # caller. It is what every resolution is matched against, and a

@@ -62,6 +62,21 @@ function makeDb(concerts = [], artists = [{ id: "art-1", name: "Weezer" }],
       lte(c, v) { filters.push((r) => r[c] !== null && r[c] <= v); return api; },
       is(c, v) { filters.push((r) => r[c] === v); return api; },
       in(c, v) { filters.push((r) => v.includes(r[c])); return api; },
+      // PostgREST `.or("a.is.null,a.lt.X")`. Implemented for real, because a
+      // fake that ignored it would pass a tool that never applied the filter —
+      // and the whole point of 022 is a filter that must NOT drop nulls.
+      or(expr) {
+        const terms = expr.split(",").map((t) => {
+          const [col, op, ...rest] = t.split(".");
+          const val = rest.join(".");
+          if (op === "is") return (r) => (val === "null" ? r[col] == null : r[col] === val);
+          if (op === "lt") return (r) => r[col] != null && r[col] < val;
+          if (op === "gte") return (r) => r[col] != null && r[col] >= val;
+          throw new Error(`fake .or() does not implement op '${op}' — add it`);
+        });
+        filters.push((r) => terms.some((f) => f(r)));
+        return api;
+      },
       order() { return api; },
       limit(n) { lim = n; return api; },
       single() { single = true; return api; },
@@ -462,4 +477,92 @@ test("source defaults to chat and is validated", async () => {
     () => fb(db, { artist_id: "art-1", sentiment: "love", source: "telepathy" }),
     /weekly_review/,
   );
+});
+
+// --- reviewed_on: confirming makes a watchlist row go quiet (022) ---------
+//
+// 🛑 OASIS AND BLACK EYED PEAS FIRED TWICE WITH THE SAME ANSWER. A QUESTION that
+// fires on the normal case is skipped exactly like a flag that does (§11.7), and
+// Section 1b is the only place an undated screening row is ever seen.
+
+const daysAgo = (n) =>
+  new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+
+test("a row confirmed recently goes quiet; one confirmed long ago comes back", async () => {
+  const db = makeDb([
+    { id: "fresh", starts_on: null, status: "screening", reviewed_on: daysAgo(10) },
+    { id: "stale", starts_on: null, status: "screening", reviewed_on: daysAgo(200) },
+  ]);
+  const out = await get(db, { mode: "undecided" });
+  assert.deepEqual(out.concerts.map((c) => c.id), ["stale"]);
+});
+
+test("🛑 A NEVER-REVIEWED ROW ALWAYS SURFACES — null is not 'recently confirmed'", async () => {
+  // ⚠️ THE BUG THIS GUARDS: `reviewed_on < cutoff` is NULL for an unreviewed row,
+  // so a bare comparison DROPS it — silencing precisely the entries nobody has
+  // ever been asked about. The same null-vs-zero distinction as everywhere else.
+  const db = makeDb([
+    { id: "never", starts_on: null, status: "screening", reviewed_on: null },
+    { id: "fresh", starts_on: null, status: "screening", reviewed_on: daysAgo(3) },
+  ]);
+  const out = await get(db, { mode: "undecided" });
+  assert.deepEqual(out.concerts.map((c) => c.id), ["never"]);
+});
+
+test("the quiet period is a parameter, not a literal", async () => {
+  const db = makeDb([
+    { id: "c1", starts_on: null, status: "screening", reviewed_on: daysAgo(40) },
+  ]);
+  assert.equal((await get(db, { mode: "undecided" })).returned, 0, "90 by default");
+  assert.equal(
+    (await get(db, { mode: "undecided", reviewed_within_days: 30 })).returned, 1,
+    "a shorter window brings it back");
+});
+
+test("🛑 IT IS NOT A THRESHOLD ON INTEREST — a warm unreviewed row still surfaces", async () => {
+  // §14.17: filtering mode=undecided on went_quiet is what made Oasis invisible.
+  // 022 filters on whether the QUESTION WAS ANSWERED, which is a record of a
+  // conversation rather than a guess about how much Alex cares. If anyone ever
+  // reintroduces an engagement filter here, this is what fails.
+  const db = makeDb(
+    [{ id: "oasis", starts_on: null, status: "screening", reviewed_on: null }],
+    undefined,
+    {
+      playlists: [{ id: "pl", name: "Oasis Concert", concert_id: "oasis" }],
+      engagement: { pl: { runs: 1, touch_days: 9, touch_days_recent: 2,
+                          last_touched_on: "2026-08-22", went_quiet: false } },
+    },
+  );
+  const out = await get(db, { mode: "undecided" });
+  assert.equal(out.returned, 1);
+  assert.equal(out.concerts[0].went_quiet, false);
+});
+
+test("`reviewed: true` stamps today and changes NOTHING else", async () => {
+  // Confirming is not a status change — "still interested" leaves the row
+  // exactly as it was. So it must count as a patch on its own, or the only way
+  // to record an answer would be to alter something the answer did not alter.
+  const db = makeDb([{ id: "c1", starts_on: null, status: "screening" }]);
+  const r = await upd(db, { concert_id: "c1", reviewed: true });
+  const row = db._tables.dj_concerts[0];
+  assert.equal(row.reviewed_on, new Date().toISOString().slice(0, 10));
+  assert.equal(row.status, "screening", "status untouched");
+  assert.equal(row.starts_on, null, "still undated");
+  assert.ok(r.changed.reviewed_on, "the write is reported");
+});
+
+test("a review date cannot be back-dated by the caller", async () => {
+  // ⚠️ A review happened when it happened. A caller supplying the date could
+  // back-date one to silence a row it did not want to be asked about.
+  const db = makeDb([{ id: "c1", starts_on: null, status: "screening" }]);
+  await upd(db, { concert_id: "c1", reviewed: true, reviewed_on: "2020-01-01" });
+  assert.equal(db._tables.dj_concerts[0].reviewed_on,
+    new Date().toISOString().slice(0, 10));
+});
+
+test("an empty patch is still refused, and the message names `reviewed`", async () => {
+  const db = makeDb([{ id: "c1", starts_on: null, status: "screening" }]);
+  await assert.rejects(
+    () => upd(db, { concert_id: "c1" }),
+    /reviewed: true/);
 });

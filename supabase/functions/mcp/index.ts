@@ -1160,6 +1160,7 @@ export function createMcpServer(token: string) {
         from_date: z.string().optional().describe("list: YYYY-MM-DD, inclusive, on starts_on."),
         to_date: z.string().optional().describe("list: YYYY-MM-DD, inclusive, on starts_on."),
         undated: z.boolean().optional().describe("list: return ONLY rows with no starts_on — the watchlist plus undated history."),
+        reviewed_within_days: z.coerce.number().optional().describe("undecided: hide rows confirmed within this many days (default 90). ⚠️ NOT a threshold on interest — §14.17 records that filtering on went_quiet is what made Oasis invisible. This hides rows whose QUESTION HAS BEEN ANSWERED. A row with reviewed_on null has never been asked and always surfaces."),
         limit: z.coerce.number().optional().describe("Max rows (default 20, cap 50)."),
       },
     },
@@ -1179,6 +1180,7 @@ export function createMcpServer(token: string) {
       inputSchema: {
         concert_id: z.string().describe("UUID of the concert to change. From get_dj_concerts."),
         status: z.enum(["screening", "interested", "committed", "attended", "missed", "rejected"]).optional().describe("screening = deciding, and undated it is a standing watchlist entry. interested = want to. committed = going. attended = went. missed = did NOT go but still want to see them. rejected = not for me."),
+        reviewed: z.boolean().optional().describe("Stamp reviewed_on with today and change NOTHING else — how 'yes, still interested' is recorded for an undated screening row. It counts as a patch on its own, because confirming a watchlist entry is not a status change. The date is set server-side so a review cannot be back-dated to silence a row. After it, get_dj_concerts mode=undecided hides the row for 90 days."),
         starts_on: z.string().optional().describe("YYYY-MM-DD, or null to clear. Required by 'interested' and 'committed'."),
         ends_on: z.string().optional().describe("YYYY-MM-DD, or null. Set only for a residency."),
         tour_name: z.string().optional().describe("e.g. 'WEEZER: The Gathering'."),

@@ -81,6 +81,27 @@ export const getDjConcertsTool = defineTool({
       // either: `quiet_for_days` orders the list, and the raw metrics are there
       // to say WHY in one line.
       q = q.is("starts_on", null).eq("status", "screening");
+
+      // ---------------------------------------------------------------------
+      // ⚠️ ADDED 022: A ROW GOES QUIET FOR A PERIOD AFTER IT IS CONFIRMED.
+      // ---------------------------------------------------------------------
+      // Oasis and Black Eyed Peas appeared in two consecutive weekly reviews and
+      // got the same answer both times. A QUESTION that fires on the normal case
+      // is skipped exactly like a flag that does (§11.7) — and this section is
+      // the only place an undated screening row is ever seen.
+      //
+      // 🛑 THIS IS NOT THE THRESHOLD §14.17 REFUSED. That one would have tested
+      // how WARM a row is, which is a guess about interest and is what made Oasis
+      // invisible. This tests whether THE QUESTION HAS BEEN ANSWERED — a record
+      // of a conversation that actually happened.
+      //
+      // ⚠️ NULL SURVIVES THE FILTER. `or` is used rather than a bare comparison
+      // because `reviewed_on < X` is NULL for an unreviewed row and would drop
+      // it — silencing precisely the rows nobody has ever been asked about.
+      const quietDays = (args.reviewed_within_days as number | undefined) ?? 90;
+      const cutoff = new Date(Date.now() - quietDays * 86_400_000)
+        .toISOString().slice(0, 10);
+      q = q.or(`reviewed_on.is.null,reviewed_on.lt.${cutoff}`);
     } else if (mode === "needs_status") {
       // §12.8 Section 1: the show has happened and the status still says it
       // hasn't been decided.
@@ -308,10 +329,27 @@ export const updateDjConcertTool = defineTool({
     for (const k of ["status", "starts_on", "ends_on", "tour_name", "notes", "venue_id"]) {
       if (args[k] !== undefined) patch[k] = args[k];
     }
+
+    // ⚠️ ADDED 022: `reviewed: true` STAMPS TODAY AND CHANGES NOTHING ELSE.
+    //
+    // Confirming a watchlist entry is not a status change — "still interested"
+    // leaves the row exactly as it was, `screening` and undated. So this has to
+    // count as a patch ON ITS OWN, or the only way to record an answer would be
+    // to alter something the answer did not alter.
+    //
+    // The date is stamped SERVER-SIDE rather than accepted from the caller: a
+    // review happened when it happened, and a caller supplying the date could
+    // back-date one to silence a row.
+    if (args.reviewed === true) {
+      patch.reviewed_on = new Date().toISOString().slice(0, 10);
+    }
+
     if (Object.keys(patch).length === 0) {
       throw new Error(
         "update_dj_concert: nothing to change. Pass at least one of status, " +
-          "starts_on, ends_on, tour_name, notes, venue_id.",
+          "starts_on, ends_on, tour_name, notes, venue_id — or `reviewed: true` " +
+          "to record that an undated screening row was confirmed as still wanted, " +
+          "which changes no other field.",
       );
     }
 

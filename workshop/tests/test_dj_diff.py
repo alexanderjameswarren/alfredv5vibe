@@ -16,6 +16,9 @@ from pathlib import Path
 
 from workshop.tools.dj_setlists import (
     _FULL_SET_MIN_SONGS,
+    _days_apart,
+    _iso_to_setlistfm,
+    _setlistfm_to_iso,
     _UNCLOSEABLE_CAUSES,
     _norm_title,
     _resolve_one,
@@ -467,6 +470,43 @@ class FullSetThresholdTests(unittest.TestCase):
         ordered = sorted(self.WEEZER)
         median = (ordered[4] + ordered[5]) / 2
         self.assertLess(median / 2, 5, "the trap this constant avoids")
+
+
+class TargetedLookupTests(unittest.TestCase):
+    """🛑 THE ACCEPTANCE TEST'S SHARP EDGE (spec §13.2, corrected 2026-09-02).
+
+    Adele 2023-10-13 and Katy Perry 2023-10-14 are ONE DAY APART. A lookup that
+    matched on artist and year and then took the first result would return a
+    perfectly plausible Adele setlist from a different night of the same
+    residency — every song would resolve cleanly, and nothing downstream could
+    tell. `date_match` is the assertion that makes a near miss visible.
+    """
+
+    def test_iso_to_setlistfm_is_written_out_not_formatted(self):
+        # ⚠️ A d/m vs m/d SWAP IS THE FAILURE THIS PROJECT ALREADY SPENT A DAY ON
+        # in the Takeout timezone work. Both acceptance dates are in October, so
+        # a swap would produce "10-13-2023" — a 13th month, which setlist.fm
+        # would simply never match, turning a wrong conversion into "not found".
+        self.assertEqual(_iso_to_setlistfm("2023-10-13"), "13-10-2023")
+        self.assertEqual(_iso_to_setlistfm("2024-06-25"), "25-06-2024")
+
+    def test_the_round_trip_is_lossless(self):
+        for iso in ("2023-10-13", "2023-10-14", "2024-06-25", "2026-01-01"):
+            self.assertEqual(_setlistfm_to_iso(_iso_to_setlistfm(iso)), iso)
+
+    def test_a_malformed_event_date_is_None_rather_than_a_guess(self):
+        # setlist.fm has served odd values. None is an answer; a guessed date is
+        # indistinguishable from a checked one once written.
+        self.assertIsNone(_setlistfm_to_iso(""))
+        self.assertIsNone(_setlistfm_to_iso("2023-10-13"))   # already ISO, wrong shape here
+        self.assertIsNone(_setlistfm_to_iso("13-10-23"))
+
+    def test_days_apart_measures_the_near_miss(self):
+        # The Adele/Katy Perry gap, and the number that tells a human whether a
+        # lookup missed by a night or by a year.
+        self.assertEqual(_days_apart("2023-10-13", "2023-10-14"), 1)
+        self.assertEqual(_days_apart("2023-10-13", "2023-10-13"), 0)
+        self.assertEqual(_days_apart("2023-10-13", "2022-10-13"), 365)
 
 
 if __name__ == "__main__":

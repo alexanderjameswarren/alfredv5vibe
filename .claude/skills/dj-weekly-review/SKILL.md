@@ -55,6 +55,7 @@ artists at all — scraped channel bylines, upload dates, filename fragments.
 
 | he says | you write | tool |
 |---|---|---|
+| **"still interested"** about a watchlist entry | `reviewed: true` — stamps today, changes nothing else | `update_dj_concert` |
 | went / didn't go / not going | the concert status | `update_dj_concert` |
 | didn't go **but still want to see them** | status **+ feedback** — two writes | `+ record_dj_feedback` |
 | **"still want to see them if they come back"** | status **+ an undated `screening` row** | `+ create_dj_concert` |
@@ -67,6 +68,40 @@ artists at all — scraped channel bylines, upload dates, filename fragments.
 ---
 
 ## 1. Concert statuses
+
+### 🛑 FIRST: A ROW WITH NO DATE HAS NO SHOW. DO NOT ASK IF IT HAPPENED.
+
+**The whole schema turns on one question: is there a date?**
+
+| | what it is | the question |
+|---|---|---|
+| **dated**, past, still undecided | a specific show that has been and gone | *did you go?* |
+| **dated**, future, still `screening` | a specific show with a deadline | *are you going?* |
+| **UNDATED `screening`** | a **standing watchlist entry** — an act worth seeing whenever they tour | *still interested?* |
+
+⚠️ **AN UNDATED SCREENING ROW IS NOT A SHOW YOU MIGHT HAVE MISSED. IT IS NOT A SHOW AT ALL.**
+Oasis and Black Eyed Peas are these. Asking *"did the show happen?"* about them, or saying you
+cannot act because you do not know the date, **is a misreading of the row** — there is no date
+because there is no show, and that is the row working as designed.
+
+**Never ask for a date to act on one. Never treat a null date as missing information.**
+
+### Confirming a watchlist entry is a write
+
+When he says *"yes, still interested"* — call **`update_dj_concert` with `reviewed: true`**. It
+stamps today and changes nothing else.
+
+🛑 **IF YOU SKIP THIS, THE SAME ROW IS PROPOSED AGAIN NEXT WEEK.** Oasis and Black Eyed Peas
+appeared in two consecutive reviews and got the same answer both times, because the first answer
+was never recorded. **A question that fires on the normal case gets skipped exactly like a flag
+that does.** After the stamp the row goes quiet for 90 days.
+
+**If he says he is no longer interested** → `status: "rejected"`. It leaves the watchlist for good.
+
+⚠️ **CONFIRMATION IS AN ANSWER AND IT MUST LAND.** "Yes" is not a no-op just because nothing about
+the row changes.
+
+### Then, for dated rows
 
 ⚠️ **`missed` MEANS THE SHOW HAPPENED AND HE DID NOT GO.** A show still in the future cannot be
 `missed` — deciding not to go to it is `rejected`. **Refuse the wrong status and say why**; this

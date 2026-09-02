@@ -2424,10 +2424,31 @@ October 2023 is hundreds of entries back.
 therefore **another manifest change and another fresh conversation.** Naming it now so it is
 not discovered mid-build.
 
-**THE FALLBACK, and it must never substitute silently:**
+#### ⚠️ CORRECTED 2026-09-02: MATCH ON THE EXACT DATE. THE VENUE ARM IS DEAD.
 
-1. **Search by `artistMbid` + `year` + `venueName`** — not by exact date. *"October 2023"* is
-   a memory, and memories are wrong by a month more often than by a venue.
+**The rule below was written before the concert rows existed**, when a remembered month was the
+best signal available. It no longer is. `dj_concerts.starts_on` holds the exact date — Adele
+**2023-10-13**, Katy Perry **2023-10-14**, Lady Gaga **2024-06-25** — recorded, not remembered.
+
+🛑 **SO: SEARCH BY `artistMbid` + `year`, THEN MATCH THE EXACT DATE.** Venue is the fallback, not
+the key.
+
+⚠️ **AND THE VENUE ARM IS UNREACHABLE IN PRACTICE — WRITTEN, UNTESTABLE, AND SAID SO RATHER THAN
+IMPLIED TO WORK.** Every one of the 22 `dj_concerts` rows has `venue_id` null, `dj_venues` has no
+tools (§13.4), and `create_dj_concert` accepts no venue at all. **Nothing in this system can
+supply a venue name.** "Colosseum" existed only in a sentence Alex typed into a chat.
+
+⚠️ **THE EXACT-DATE MATCH IS ASSERTED AND REPORTED, NOT ASSUMED.** `lookup.date_match` is
+`exact | found_but_empty | not_found | ambiguous`. **Adele and Katy Perry are one day apart**,
+which is precisely the case where a near miss is invisible: artist+year alone would return a
+plausible setlist from another night of the same residency, every song would resolve cleanly, and
+nothing downstream could tell. `diff_dj_setlists` **refuses** anything but `exact`.
+
+**THE ORIGINAL FALLBACK, kept because rules 3 and 4 still stand verbatim:**
+
+1. ~~**Search by `artistMbid` + `year` + `venueName`** — not by exact date.~~ **Superseded: match
+   the exact `starts_on`; fall back to venue only if the date misses, which it cannot do usefully
+   until a venue can be stored.**
 2. **Exactly one match → use it.**
 3. **No match, or several → STOP AND ASK.** Present the nearest shows by date with their
    dates and venues, and let a human pick. **Do not take the nearest one.** A show three
@@ -2439,6 +2460,11 @@ not discovered mid-build.
    show from the same tour **as an explicitly labelled substitute**.
 
 This is 12.7's rule at the level of a whole show: **exact match or ask. Never plausible.**
+
+⚠️ **BUILT 2026-09-02 as `on_date` on BOTH `get_dj_setlists` and `diff_dj_setlists`** — a
+parameter on the existing tools, not a third one. §14.6 records a rule living in two runtimes and
+drifting; a second setlist fetch inside the diff would be that shape one layer down. **One
+resolver stays one resolver**, and the diff passes the targeting straight through.
 
 ### 13.3 The skill creates the concert row too, and `missed` carries a second write
 
@@ -2468,6 +2494,69 @@ Concert Prep"*, not *"Metallica (Sphere 2026)"*.
 
 **Everything else Claude names by suggestion, and I confirm.** Concert playlists are the one
 case where the name is dictated by a consumer outside this system.
+
+---
+
+### 13.6 DECIDED 2026-09-02: attended shows get BODY ONLY, and archiving changes the kind
+
+**Two decisions taken before building the skill, both applying existing reasoning rather than
+inventing new.**
+
+#### An attended show's playlist has no cram block
+
+**Cram is preparation. There is nothing to prepare for a night that already happened** — the
+playlist is a record of it. Seed `role: 'body'` for every track and write no cram rows.
+
+⚠️ **THIS TAKES CRAM OFF THE ACCEPTANCE TEST**, which is fine: it was the expensive part and the
+one least related to what those three playlists are for. 🛑 **The consequence is stated rather
+than left implicit: THE CRAM WRITE PATH REMAINS UNEXERCISED. There are still zero cram rows in
+the library, and the first one written will still be the first one ever written** — with all the
+risk that carries, just deferred to the first *upcoming*-show playlist.
+
+#### 🛑 Cram is cheap ONLY at seeding time, and that changes when to do it
+
+**Adds append.** So on a NEW playlist, adding **cram-first-then-body** produces §5's rendered
+order with **zero moves**. Cram is nearly free exactly once: when the playlist is built.
+
+**Reordering an EXISTING block is the expensive case**, and the only one. `edit_dj_playlist
+mode=move` repositions **one entry per call**, each needing a **fresh contents read** because
+`set_video_id` is a per-playlist handle that is stale by default and reused across playlists for
+different songs. An eight-song block is **up to sixteen calls — more than the entire playlist
+build**, whose resolution happens inside `diff_dj_setlists` as a single MCP call.
+
+⚠️ **WHICH MEANS THE LOOP THE WEEKLY REVIEW KEEPS POINTING AT IS THE EXPENSIVE ONE.** *"The cram
+list is out of date"* on an existing playlist is precisely the reorder case. Getting the order
+right at seeding time is not an optimisation; it is the difference between free and a quarter of
+the call budget.
+
+#### Archiving sets `kind = 'artist'` and clears `concert_id`
+
+When an act is seen twice, `"<Act> Concert"` is renamed `"Archived <Act>"` — and the record
+changes with it.
+
+**Left as `kind='concert'` with a live `concert_id`, the archived playlist reappears in the weekly
+review forever, reporting on a show that already happened.** A section that fires on the normal
+case gets skipped (§11.7), and this one would fire permanently.
+
+⚠️ **PRECEDENT, NOT A NEW DECISION.** `"Archived Weezer"` is already `kind='artist'` with no
+concert link, decided in Phase 6b for this reason. This applies it.
+
+⚠️ **THE RENAME IS A YOUTUBE WRITE AND NEEDS ITS OWN CONFIRMATION**, separately from the "shall I
+build it" question.
+
+### 13.7 BUILT 2026-09-02: the two skills, and what each may write
+
+| skill | verb | may write |
+|---|---|---|
+| `dj-concert-playlist` | **ORIGINATES** | concert row (conditional), playlist, body, cram at seeding, archive rename |
+| `dj-weekly-review` | **COMPLETES** | statuses, `reviewed_on`, tags, undated screening row, adds to an existing playlist |
+
+🛑 **CONDITIONAL CREATE IS NOT OPTIONAL.** Adele, Lady Gaga and Katy Perry all have `attended`
+rows already, and `create_dj_concert` will cheerfully make a second one. Read before writing.
+
+⚠️ **NEITHER SKILL CAN RECORD A VENUE.** `create_dj_concert` accepts none and `dj_venues` has no
+tools. A venue Alex mentions goes in `notes`, and the skill must not imply it was stored as a
+venue — §13.4's gap, still open, now load-bearing for §13.2's dead fallback arm.
 
 ---
 
@@ -3536,3 +3625,82 @@ want to be volunteered.
 
 ⚠️ **Recorded in the skill itself under "What must not change".** Three rounds of revision have
 each removed something; a behaviour nobody wrote down is one nobody protects.
+
+### 14.38 The watchlist question fired twice with the same answer — FIXED 2026-09-02, migration 022
+
+Oasis and Black Eyed Peas appeared in two consecutive weekly reviews with nothing to decide. Alex
+answered *"still interested"* both times, and the second ask collected nothing the first had not.
+
+🛑 **§11.7 ARRIVING FROM THE OTHER DIRECTION.** The usual failure is a FLAG that fires on the
+normal case. This is a QUESTION that does — and Section 1b is the only place an undated screening
+row is ever surfaced, so training him to skip it costs the whole signal.
+
+**`dj_concerts.reviewed_on`**, stamped by `update_dj_concert` with `reviewed: true`, which changes
+nothing else and counts as a patch on its own — *confirming a watchlist entry is not a status
+change*, so it had to be recordable without altering something the answer did not alter.
+`mode=undecided` then hides the row for `reviewed_within_days`, default **90**.
+
+⚠️ **90 IS NOT A NEW CONSTANT.** It is already this system's window everywhere it reasons about
+listening (§12.9, tag coverage, tag candidates); a second number meaning the same thing would be
+enforced in one (§11.14). It is also right on its own terms — *do you still want to see this band*
+is a quarterly question — and **nothing is lost by waiting, because the system cannot detect a
+tour announcement.** The weekly re-ask was never what would catch one.
+
+🛑 **THIS IS NOT THE THRESHOLD §14.17 REFUSED.** That one would have tested how WARM a row is,
+which is a guess about interest and is exactly what made Oasis invisible. This tests whether **the
+question was answered** — a record of a conversation that happened.
+
+⚠️ **NULL SURVIVES THE FILTER, AND THAT NEEDED CARE.** `reviewed_on < cutoff` evaluates to NULL
+for an unreviewed row, so a bare comparison DROPS it — silencing precisely the entries nobody has
+ever been asked about. The filter is `or(is.null, lt)`, the test fake implements `.or()` for real,
+and the migration asserts no existing row was back-stamped: a default of `now()` would have
+silenced the entire watchlist for a quarter because of a migration rather than an answer.
+
+The date is stamped **server-side**; a caller supplying it could back-date a review to silence a
+row.
+
+### 14.39 The weekly skill did not understand undated screening — FIXED 2026-09-02
+
+Asked about Oasis and Black Eyed Peas, the skill said it *"can't act on"* them because it did not
+know the show dates, and asked whether the shows had happened.
+
+🛑 **THOSE ROWS HAVE NO SHOW. THE NULL DATE IS THE POINT, NOT MISSING INFORMATION.** An undated
+`screening` row is a standing watchlist entry — settled weeks ago (§12.8, §14.17) and stated in
+the prompt and the tool payload.
+
+⚠️ **THE SKILL INHERITED NEITHER, AND THAT IS THE THIRD TIME.** §14.30 (the prompt buried its
+instructions), §14.34 (the skill assumed the report had been read), and now this: **each document
+was written from inside knowledge the previous one held, for a reader who arrives without it.**
+The skill now opens Section 1 with the is-there-a-date table and the rule in one line: *never ask
+if it happened, never treat a null date as missing information.*
+
+### 14.40 BUILT 2026-09-02: the targeted setlist lookup, and the near-miss it exists to catch
+
+`/artist/{mbid}/setlists` is newest-first, so a 2023 show is hundreds of entries back.
+`on_date` (on **both** `get_dj_setlists` and `diff_dj_setlists`) switches to `/search/setlists`.
+
+🛑 **THE ASSERTION IS THE PRODUCT.** `lookup.date_match` is `exact | found_but_empty | not_found |
+ambiguous`, and `diff_dj_setlists` **refuses** anything but `exact`.
+
+⚠️ **ADELE 2023-10-13 AND KATY PERRY 2023-10-14 ARE ONE DAY APART, AND THAT IS THE CASE A LOOSE
+MATCH LOSES.** Artist+year alone would return a plausible setlist from another night of the same
+residency; **every song would resolve cleanly**, the playlist would look complete, and nothing
+downstream could tell. A near miss ships `nearest` with `days_from_requested` so a human can see
+whether it missed by a night or a year — and it is never substituted.
+
+⚠️ **`found_but_empty` IS A THIRD OUTCOME.** setlist.fm has the show and nobody filled in the
+songs. No other date fixes that, and reporting it as "not found" sends someone looking for
+something that is already there.
+
+⚠️ **A 404 FROM `/search/setlists` MEANS "NO RESULTS", NOT "BAD MBID".** The artist endpoint's 404
+means the opposite, and reusing its error text would tell a caller to go and check an mbid that is
+perfectly correct.
+
+⚠️ **EXTENDED, NOT ADDED** — a parameter on two existing tools rather than a third tool, because
+§14.6 records a rule living in two runtimes and drifting. One resolver stays one resolver; the
+diff passes the targeting straight through.
+
+⚠️ **AND THE dd-MM-yyyy CONVERSION LIVES IN THE TOOL**, asserted by a test. setlist.fm serves
+dd-MM-yyyy; this project already spent a day on a d/m swap in the Takeout timezone work, and both
+acceptance dates are in October — a swap would produce a 13th month for one and a plausible wrong
+answer for the other.
