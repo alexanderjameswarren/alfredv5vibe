@@ -98,7 +98,20 @@ function makeDb(tables, { maxRows = DEFAULT_MAX_ROWS } = {}) {
     };
     return api;
   }
-  return { from: (t) => builder(t) };
+  return {
+    from: (t) => builder(t),
+    // Postgres functions the handler calls through PostgREST. A test supplies
+    // `rpcs` keyed by function name; anything unregistered fails the way a
+    // missing migration does, which is the case worth being able to assert.
+    rpc: async (name, params) => {
+      const fn = (tables.__rpcs ?? {})[name];
+      if (!fn) {
+        return { data: null,
+                 error: { message: `function public.${name} does not exist` } };
+      }
+      return { data: fn(params), error: null };
+    },
+  };
 }
 
 const run = (tables, args, opts) =>
@@ -348,7 +361,7 @@ test("plays mode for an unknown video_id returns empty with a reason", async () 
 test("an invalid mode is rejected", async () => {
   await assert.rejects(
     () => run({ dj_tracks: [], dj_plays: [] }, { mode: "summary" }),
-    /must be 'plays' or 'familiarity'/,
+    /must be 'plays', 'familiarity' or 'artists'/,
   );
 });
 
@@ -896,4 +909,64 @@ test("COMPLETE never implies readiness — the tool says so itself", async () =>
   assert.equal(r.data.cram_complete, true);
   assert.match(r.data.reading, /NEVER REPORT `cram_complete` WITHOUT SETLIST COVERAGE/);
   assert.match(r.data.reading, /distinct_setlist_songs/);
+});
+
+
+// ---------------------------------------------------------------------------
+// mode=artists — Section 4's headline (migration 015)
+// ---------------------------------------------------------------------------
+
+test("artists mode returns the rollup and states what it is NOT", async () => {
+  // ⚠️ THE GAPS TEXT IS PART OF THE ANSWER, NOT DECORATION. This groups
+  // dj_tracks.artist as an exact string: it can say "you played a lot of Wes
+  // Montgomery" and it cannot be treated as an identity (§14.1, §4.1.4). A
+  // consumer that prints the numbers without the limitation invites the reader
+  // to assume a model that does not exist — the same failure §14.3 forced the
+  // jazz definition to avoid.
+  const tables = {
+    __rpcs: {
+      dj_artist_activity: ({ p_window_days, p_limit }) => [
+        { artist: "Wes Montgomery", distinct_days: 13, play_rows: 55,
+          distinct_groups: 33, first_played_on: "2026-06-04",
+          last_played_on: "2026-09-01", in_any_playlist: false, _w: p_window_days,
+          _l: p_limit },
+        { artist: "Oscar Peterson", distinct_days: 12, play_rows: 17,
+          distinct_groups: 13, first_played_on: "2026-06-06",
+          last_played_on: "2026-08-31", in_any_playlist: false },
+      ],
+    },
+  };
+  const r = await run(tables, { mode: "artists", window_days: 90, limit: 20 });
+  assert.equal(r.data.mode, "artists");
+  assert.equal(r.data.returned, 2);
+  assert.equal(r.data.artists[0].artist, "Wes Montgomery");
+  assert.equal(r.data.window_days, 90);
+  assert.match(r.data.gaps, /NOT AN ARTIST IDENTITY/);
+  assert.match(r.data.gaps, /Oscar Peterson Trio/, "the real split must be named");
+  assert.match(r.data.gaps, /1\.7M views/, "the scraped byline is in the population");
+  assert.match(r.data.definition, /DISTINCT DAYS PLAYED, not a play count/);
+});
+
+test("artists mode names the migration when the function is absent", async () => {
+  // ⚠️ AN OPERATIONAL FAILURE, SO IT CARRIES NO DO-NOT-RETRY WORDING — it becomes
+  // retryable the moment 015 is applied, and stamping "do not retry" on it would
+  // suppress the retry that should happen (platform error contract).
+  await assert.rejects(
+    () => run({}, { mode: "artists" }),
+    (e) => {
+      assert.match(e.message, /migration 015 has not been applied/);
+      assert.ok(!/[Dd]o NOT retry/.test(e.message));
+      return true;
+    },
+  );
+});
+
+test("artists mode clamps its limit like every other bounded read", async () => {
+  let seen = null;
+  const tables = {
+    __rpcs: { dj_artist_activity: (params) => { seen = params; return []; } },
+  };
+  await run(tables, { mode: "artists", limit: 500 });
+  assert.equal(seen.p_limit, 50, "hard cap, server-side");
+  assert.equal(seen.p_window_days, 90, "default window");
 });

@@ -184,10 +184,63 @@ export const getDjPlaysTool = defineTool({
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const mode = (args.mode as string | undefined) ?? "plays";
-    if (mode !== "plays" && mode !== "familiarity") {
+    if (mode !== "plays" && mode !== "familiarity" && mode !== "artists") {
       throw new Error(
-        `get_dj_plays: \`mode\` must be 'plays' or 'familiarity' (got ${JSON.stringify(mode)}).`,
+        `get_dj_plays: \`mode\` must be 'plays', 'familiarity' or 'artists' ` +
+          `(got ${JSON.stringify(mode)}).`,
       );
+    }
+
+    // --- artists (migration 015) ------------------------------------------
+    //
+    // Section 4's headline, and what was actually asked for. The 2026-09-02 run
+    // could not answer "a summary by artist" at all: the only artist-level
+    // aggregation in the system was dj_jazz_activity, so Section 4 fell back to
+    // a 50-row sample of 332 plays and said so.
+    //
+    // The arithmetic is in SQL for the same reason engagement's is — a second
+    // implementation here would agree with the first until one of them changed.
+    if (mode === "artists") {
+      const windowDays = (args.window_days as number | undefined) ?? 90;
+      const artistLimit = clampLimit(args.limit as number | undefined);
+      const { data: act, error: actErr } = await ctx.db.rpc("dj_artist_activity", {
+        p_window_days: windowDays,
+        p_limit: artistLimit,
+      });
+      if (actErr) {
+        // Operational, and legitimately retryable once the migration is in — so
+        // it carries no do-not-retry wording, per the platform error contract.
+        throw new Error(
+          `get_dj_plays: artist activity failed: ${actErr.message}. If this says ` +
+            `the function does not exist, migration 015 has not been applied yet.`,
+        );
+      }
+      const artistRows = (act ?? []) as Array<Record<string, unknown>>;
+      return { data: {
+        mode: "artists",
+        artists: artistRows,
+        returned: artistRows.length,
+        window_days: windowDays,
+        limit_applied: artistLimit,
+        definition:
+          "One row per DISTINCT ARTIST STRING on dj_tracks, over plays in the " +
+          "window. `distinct_days` is DISTINCT DAYS PLAYED, not a play count — the " +
+          "feed carries one entry per track per bucket, so repeats do not stack " +
+          "(§5). `in_any_playlist` says whether that artist appears in any managed " +
+          "playlist at all.",
+        gaps:
+          "🛑 THIS IS NOT AN ARTIST IDENTITY AND DOES NOT CLOSE §14.1. Grouping is " +
+          "on dj_tracks.artist as an EXACT STRING. (1) SPLITS ARE REAL AND PRESENT: " +
+          "'Oscar Peterson Trio' and 'Oscar Peterson' do not unify, nor do 'Hank " +
+          "Mobley' and 'Hank Mobley Quartet' — both pairs are in the data (§4.1.4). " +
+          "(2) COLLABORATIONS APPEAR UNDER THEIR FULL BILLING, because the column " +
+          "holds the joined display string: 'Miles Davis, Cannonball Adderley, Hank " +
+          "Jones, Sam Jones' is one row here, not four. (3) SCRAPED BYLINES ARE IN " +
+          "THE POPULATION: at least one artist reads 'Jazz and Blues Experience, " +
+          "1.7M views' (§14.9) and will appear here looking like an artist. " +
+          "⚠️ STATE THIS WITH THE NUMBERS, the same way §14.3 requires of the jazz " +
+          "definition. Insert-only means none of it can be cleaned by a deploy.",
+      }, meta: {} };
     }
     const fromDate = validateDate(args.from_date, "from_date");
     const toDate = validateDate(args.to_date, "to_date");
@@ -972,6 +1025,12 @@ export const getDjManagedPlaylistsTool = defineTool({
         return { data: { mode: "engagement", playlists: [], returned: 0, window_days: windowDays }, meta: {} };
       }
 
+      // ⚠️ TWO ARGUMENTS, NOT THREE, AND THAT IS DELIBERATE. Migration 015 adds
+      // `p_recent_days` WITH A DEFAULT, so this call resolves against the old
+      // two-arg function and the new three-arg one alike. Passing the third
+      // would break engagement for everyone between this deploy and that
+      // migration being applied — a window in which the tool errors while the
+      // deploy has been announced as done.
       const { data: eng, error: eErr } = await ctx.db.rpc("dj_playlist_engagement", {
         p_playlist_ids: rows.map((r) => r.id as string),
         p_window_days: windowDays,
@@ -1002,9 +1061,20 @@ export const getDjManagedPlaylistsTool = defineTool({
           runs,
           last_run_on: lastRun,
           days_since_last_run: days(lastRun),
-          // Shown only when there has never been a run — see §12.9. A bare
-          // "never" on a partly-heard playlist is wrong in feel.
-          last_touched_on: runs === 0 ? lastTouched : null,
+          // ⚠️ CHANGED 2026-09-02: returned ALWAYS, not only when runs is 0. The
+          // old rule was written for Section 2, where a run is the headline.
+          // Section 4 has no runs to speak of and this is its primary signal —
+          // nulling it on the playlists that DO get run hid rotation exactly
+          // where rotation is highest.
+          last_touched_on: lastTouched,
+          days_since_last_touch: days(lastTouched),
+          // ROTATION, from migration 015. Undefined until it is applied, and
+          // NULL rather than 0 so "not measured yet" cannot be read as "never
+          // played" — the same null-vs-zero distinction §12.9 makes deliberately.
+          touch_days: (e.touch_days as number | undefined) ?? null,
+          touch_days_recent: (e.touch_days_recent as number | undefined) ?? null,
+          touch_days_prior: (e.touch_days_prior as number | undefined) ?? null,
+          went_quiet: (e.went_quiet as boolean | undefined) ?? null,
         };
       });
 
@@ -1021,9 +1091,23 @@ export const getDjManagedPlaylistsTool = defineTool({
           "one. threshold_used = clamp(ceil(0.5 * distinct_groups), 4, 20); the " +
           "cap of 20 stops a 379-track playlist needing 190 songs in a day, which " +
           "would be a guarantee of zero rather than a threshold. " +
-          "⚠️ `last_touched_on` is populated ONLY when runs is 0 — it means 'never " +
-          "run it, but some of its songs came up', which is a different statement " +
-          "from a run. ⚠️ A track in two playlists counts toward both.",
+          "⚠️ `last_touched_on` is the most recent day ANY track from the playlist " +
+          "was played — a different statement from a run, and returned ALWAYS. " +
+          "🛑 `runs` AND `touch_days` ANSWER DIFFERENT QUESTIONS; DO NOT REPORT THEM " +
+          "AS ONE IDEA. `runs` asks 'have I LEARNED this set' and is the CONCERT " +
+          "metric. `touch_days` asks 'is this still in ROTATION' and counts days " +
+          "with ANY track, no threshold. On 2026-09-02 `runs` read 0 for nineteen " +
+          "consecutive non-concert playlists, fourteen of them against the threshold " +
+          "cap of 20 — that is a concert metric asked a non-concert question, not a " +
+          "library going unused. Use `touch_days` for anything that is not concert " +
+          "prep. " +
+          "⚠️ `went_quiet` is a CHANGE, not a level: warm before the last " +
+          "`recent_days` and silent within them. A cold list ranked by " +
+          "`last_touched_on` would print every seasonal playlist every week — " +
+          "Christmas jazz is flat-cold in September and must NOT appear. " +
+          "⚠️ touch_days / went_quiet are NULL until migration 015 is applied, and " +
+          "null means NOT MEASURED, never zero. " +
+          "⚠️ A track in two playlists counts toward both.",
       }, meta: {} };
     }
 

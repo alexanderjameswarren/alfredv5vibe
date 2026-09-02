@@ -1232,12 +1232,14 @@ export function createMcpServer(token: string) {
     {
       title: "Get DJ Plays",
       description:
-        "Read the durable listening record. Two modes. `plays` returns raw rows newest-first with each track inlined. `familiarity` returns one row per CANONICAL GROUP sorted LEAST FAMILIAR FIRST — which is cram order directly (spec §5). " +
+        "Read the durable listening record. Three modes. `plays` returns raw rows newest-first with each track inlined. `familiarity` returns one row per CANONICAL GROUP sorted LEAST FAMILIAR FIRST — which is cram order directly (spec §5). `artists` returns what was actually played, BY ARTIST, over a trailing window — the weekly review's Section 4 headline. " +
+        "🛑 `artists` IS NOT AN ARTIST IDENTITY (spec §14.1). It groups dj_tracks.artist as an EXACT STRING: 'Oscar Peterson Trio' and 'Oscar Peterson' do not unify, collaborations appear under their full joined billing as one row, and at least one artist in the data reads 'Jazz and Blues Experience, 1.7M views' — a scraped channel byline that will appear looking like an artist. The response ships `gaps` saying so, and any report quoting these numbers must state it too. " +
         "⚠️ `distinct_days` is DISTINCT DAYS PLAYED, NOT a play count: YouTube's feed carries one entry per track per bucket, so repeats do not stack and true counts are unobtainable by polling (spec §5). `play_rows` is returned alongside so the difference stays visible. " +
         "ZERO-PLAY TRACKS COME BACK: when you pass `video_ids`, every id gets an entry, including ids unknown to dj_tracks entirely (`known_track: false`) — a never-played song belongs at the TOP of a cram list, and making the caller reconstruct the missing ones is exactly the logic that goes quietly wrong. `distinct_days: 0` is a FACT; `days_since_last: null` means NEVER — the null-vs-zero distinction is deliberate. " +
         "`familiarity` refuses to run unbounded: pass `video_ids` or a date range. It ERRORS rather than truncates above its scan cap, because a clamped aggregate returns a distinct_days that is wrong rather than short and the caller would sort by it. `estimated_days` counts days made only of coarse-bucket guesses — expected to be 0. Tier 1, read-only.",
       inputSchema: {
-        mode: z.enum(["plays", "familiarity"]).optional().describe("Defaults to 'plays'."),
+        mode: z.enum(["plays", "familiarity", "artists"]).optional().describe("Defaults to 'plays'. `artists` is the by-artist rollup — Section 4's headline, and NOT an identity (see the description)."),
+        window_days: z.coerce.number().optional().describe("mode=artists: trailing window, default 90."),
         video_ids: z.array(z.string()).optional().describe("YouTube video ids, max 50. Resolved to canonical groups server-side, so a play by any variant counts. In familiarity mode EVERY id passed gets an entry, zero-played ones included."),
         from_date: z.string().optional().describe("YYYY-MM-DD, inclusive."),
         to_date: z.string().optional().describe("YYYY-MM-DD, inclusive."),
@@ -1261,12 +1263,12 @@ export function createMcpServer(token: string) {
         "Note `position` is per-ZONE, so cram 1 and body 1 are different entries and one track may legitimately hold a row in each — that duplication is what lets a cram clear leave the setlist intact. " +
         "⚠️ `yt_set_video_id` is a CACHE: stale by default and reused across playlists for DIFFERENT songs. `counts.missing_set_video_id` tells you how many rows cannot be moved or removed without a fresh read. Tier 1, read-only.",
       inputSchema: {
-        mode: z.enum(["list", "tracks", "engagement", "cram"]).optional().describe("Defaults to 'list'. `engagement` returns §12.9's listening metrics per playlist; `cram` returns §12.10's least-familiar-first order for ONE concert playlist plus whether the stored cram block has gone stale."),
+        mode: z.enum(["list", "tracks", "engagement", "cram"]).optional().describe("Defaults to 'list'. `engagement` returns §12.9's listening metrics per playlist — BOTH `runs` (have I learned this set: the CONCERT metric) and `touch_days` (is this still in rotation: everything else). `cram` returns §12.10's least-familiar-first order for ONE concert playlist, plus whether the block is stale, COMPLETE, or working."),
         yt_playlist_id: z.string().optional().describe("mode=tracks: YouTube's playlist id. Either this or playlist_id — Workshop only ever knows this one."),
         playlist_id: z.string().optional().describe("mode=tracks: the internal dj_playlists uuid."),
         kind: z.enum(["concert", "artist", "jazz", "discovery", "utility"]).optional().describe("mode=list or mode=engagement: filter by kind. 'utility' playlists are recorded and measured but never proposed against."),
         playlist_ids: z.array(z.string()).optional().describe("mode=engagement: restrict to these internal playlist uuids."),
-        window_days: z.coerce.number().optional().describe("mode=engagement: trailing window, default 90."),
+        window_days: z.coerce.number().optional().describe("mode=engagement: trailing window, default 90. The warm-then-cold split for `went_quiet` uses a fixed 30-day recent half."),
         as_of: z.string().optional().describe("mode=cram: YYYY-MM-DD basis for days_since_last. Defaults to today UTC."),
         concert_id: z.string().optional().describe("mode=list: filter to playlists linked to one concert."),
         limit: z.number().optional().describe("mode=list: max playlists (default 20, cap 50)."),
