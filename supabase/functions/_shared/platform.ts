@@ -168,6 +168,95 @@ interface BudgetResponse {
   message: string;
 }
 
+// ---------------------------------------------------------------------------
+// describeDbError — WHICH HOP FAILED, AND WHOSE TOKEN
+// ---------------------------------------------------------------------------
+//
+// 🛑 THIS MESSAGE COST TWO WEEKS OF FIXING THE WRONG LAYER.
+//
+// It used to read:
+//
+//     platform_check_call_budget failed: JWT expired
+//
+// Every word of that is true and the sentence as a whole misleads. It names a
+// TOOL, so it reads as a problem with the budget check. It says JWT EXPIRED,
+// which reads as "your session timed out, reconnect". Neither is where the fault
+// is, and reconnecting is what made it appear fixed for a few minutes each time.
+//
+// ⚠️ THERE ARE THREE TOKENS IN THIS REQUEST AND THE OLD MESSAGE NAMED NONE OF
+// THEM:
+//
+//   1. The bearer Claude sent to the Edge Function. If this were bad, the
+//      request would never have reached this line — `buildCtx` requires it and
+//      the function ran.
+//   2. THE SAME TOKEN, FORWARDED VERBATIM to PostgREST. This is the one being
+//      rejected. The Edge Function does not mint, cache or refresh anything:
+//      `app.all("/")` reads the header per request and hands it straight to
+//      createClient, so a rejection here is a rejection of the caller's token —
+//      not of the function's own credentials, which it does not have.
+//   3. The service-role key, used ONLY by ai-enrich. Not in this path at all.
+//
+// 🛑 SO A 401 HERE MEANS THE CALLER'S TOKEN WAS ALREADY EXPIRED WHEN IT ARRIVED,
+//    AND THAT IS A STATEMENT ABOUT THE CLIENT'S REFRESH, NOT ABOUT THIS FUNCTION.
+//
+// A healthy OAuth client refreshes BEFORE expiry. If an expired token is
+// arriving, the refresh is failing — look at POST /auth/v1/oauth/token, and at
+// whether the token response carried a `refresh_token` at all. Reconnecting
+// issues a fresh access token and appears to fix it for exactly one token
+// lifetime, which is why this has looked like a connector problem five or six
+// times running.
+//
+// ⚠️ THE FUNCTION CANNOT SEE THE REFRESH AND MUST NOT CLAIM TO. It reports what
+// it observed — a forwarded token refused — and names where to look next
+// (§11.20: a diagnostic that infers a CAUSE from one symptom and states a
+// REMEDY as fact is worse than no diagnostic).
+
+/** PostgREST codes that mean "the JWT was refused", not "the query was wrong". */
+const AUTH_CODES = new Set(["PGRST301", "PGRST302", "42501"]);
+
+function looksLikeAuthFailure(error: { code?: string; message?: string }): boolean {
+  if (error.code && AUTH_CODES.has(error.code)) return true;
+  const m = (error.message ?? "").toLowerCase();
+  // ⚠️ "jws" AS WELL AS "jwt", AND A TEST IS WHY IT IS HERE. PostgREST reports a
+  // bad signature as `JWSError JWSInvalidSignature` — JWS, the signature layer,
+  // not JWT. Matching only "jwt" sent the one auth failure that is NOT an expiry
+  // down the ordinary-error path, where it would read as a broken query.
+  return m.includes("jwt") || m.includes("jws") || m.includes("unauthorized") ||
+    m.includes("invalid claim") || m.includes("invalid token");
+}
+
+export function describeDbError(
+  rpcName: string,
+  error: { code?: string; message?: string; details?: string; hint?: string },
+): string {
+  const raw = error.message ?? "(no message)";
+
+  if (!looksLikeAuthFailure(error)) {
+    // An ordinary database error. Operational and legitimately retryable, so it
+    // carries no do-not-retry wording (platform error contract).
+    return `${rpcName} failed: ${raw}` +
+      (error.code ? ` [${error.code}]` : "") +
+      (error.details ? ` — ${error.details}` : "");
+  }
+
+  return (
+    `AUTH FAILED AT THE DATABASE HOP, NOT AT THIS FUNCTION. ` +
+    `PostgREST refused the caller's token while running ${rpcName}: "${raw}"` +
+    (error.code ? ` [${error.code}]` : "") + ". " +
+    `⚠️ THIS IS NOT A PROBLEM WITH ${rpcName} AND NOT A PROBLEM WITH THIS ` +
+    `FUNCTION'S OWN CREDENTIALS — it has none. The Edge Function reads the ` +
+    `Authorization header per request and forwards that exact token to ` +
+    `PostgREST; it never mints, caches or refreshes one. The request reached ` +
+    `here, so the token was present and well-formed. ` +
+    `🛑 AN EXPIRED TOKEN ARRIVING MEANS THE CLIENT'S REFRESH IS FAILING, ` +
+    `because a healthy client refreshes before expiry. LOOK AT ` +
+    `POST /auth/v1/oauth/token — specifically whether it is returning 400, and ` +
+    `whether the original token response carried a refresh_token at all. ` +
+    `⚠️ RECONNECTING WILL APPEAR TO FIX THIS FOR ONE ACCESS-TOKEN LIFETIME AND ` +
+    `THEN IT WILL STOP AGAIN. That symptom is the diagnosis, not a coincidence.`
+  );
+}
+
 /**
  * Ask `public.platform_check_call_budget` (the SECURITY DEFINER wrapper
  * around `platform.check_call_budget` — PostgREST does not expose the
@@ -194,7 +283,7 @@ export async function enforceBudget(
     p_args_hash: argsHash,
   });
   if (error) {
-    throw new Error(`platform_check_call_budget failed: ${error.message}`);
+    throw new Error(describeDbError("platform_check_call_budget", error));
   }
   const row: BudgetResponse = Array.isArray(data) ? data[0] : data;
   if (!row) {
