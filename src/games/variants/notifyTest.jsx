@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import { supabase } from "../../supabaseClient";
 
 // Push Notification Test — not a game, a diagnostic.
 //
@@ -36,6 +37,16 @@ const SW_URL = `${process.env.PUBLIC_URL || ""}/notify-sw.js`;
 
 const DELAY_SECONDS = 10;
 
+// Baked in at build time by CRA, which substitutes the literal text
+// `process.env.REACT_APP_VAPID_PUBLIC_KEY` — so this cannot be read from a
+// variable name and cannot change without a rebuild. A deploy that forgot the
+// Vercel variable produces `undefined` here and a `subscribe` call that fails
+// deep inside the browser with an unhelpful message, so it is checked up front
+// and stated in the panel rather than discovered at the failure.
+const VAPID_PUBLIC_KEY = process.env.REACT_APP_VAPID_PUBLIC_KEY || "";
+
+const PUSH_TABLE = "push_subscriptions";
+
 // Permission has no universal change event and the Permissions API is not
 // everywhere, so the panel polls. A string comparison once a second costs
 // nothing and is the only way the panel stays honest when permission is
@@ -50,6 +61,31 @@ const currentPermission = () =>
   hasNotification() ? Notification.permission : "unavailable";
 
 const messageOf = (err) => (err && err.message ? err.message : String(err));
+
+// `applicationServerKey` will not take the base64url string the key is stored
+// and transported as — it wants the raw 65 bytes. Passing the string through
+// gets an InvalidCharacterError or an InvalidAccessError depending on the
+// browser, neither of which mentions encoding.
+//
+// Two differences from plain base64: `-` and `_` stand in for `+` and `/`, and
+// the `=` padding is stripped, so it goes back on before atob is given it.
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  const output = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i);
+  return output;
+}
+
+// PushManager is separate from both APIs above: a browser can have service
+// workers and notifications and still not do push.
+const hasPush = () => typeof window !== "undefined" && "PushManager" in window;
+
+// The tail is enough to match a row in the dashboard by eye without putting a
+// 200-character URL on a phone screen.
+const endpointTail = (endpoint) =>
+  endpoint ? `…${endpoint.slice(-20)}` : "none";
 
 const stamp = () =>
   new Date().toLocaleTimeString([], {
@@ -80,6 +116,11 @@ export default function NotifyTest() {
   const [registered, setRegistered] = useState(false);
   const [countdown, setCountdown] = useState(null);
   const [log, setLog] = useState([]);
+  // The endpoint of the live subscription, or null. Held as a string rather
+  // than the subscription object because that is what the panel shows and what
+  // the table row is matched on; the object itself is fetched when needed.
+  const [endpoint, setEndpoint] = useState(null);
+  const [busy, setBusy] = useState(false);
 
   // The registration is held in a ref, not state: it is the handle every
   // notification call needs, and re-rendering on it would say nothing that
@@ -111,6 +152,25 @@ export default function NotifyTest() {
       append("navigator.serviceWorker is missing — cannot register a worker.", "bad");
       return;
     }
+    if (!hasPush()) {
+      append("PushManager is missing — this browser cannot do Web Push.", "bad");
+    }
+
+    // Said on every mount, whether or not push is used, because "is the key in
+    // this build?" is the first question of every failure and the answer is
+    // otherwise invisible on a phone. The first 8 characters are enough to tell
+    // one keypair from another without putting the whole key on screen.
+    if (VAPID_PUBLIC_KEY) {
+      append(
+        `VAPID public key present: ${VAPID_PUBLIC_KEY.length} chars, starts "${VAPID_PUBLIC_KEY.slice(0, 8)}"`,
+        "good"
+      );
+    } else {
+      append(
+        "REACT_APP_VAPID_PUBLIC_KEY is missing or empty in this build — push cannot be subscribed. Set it in Vercel and redeploy.",
+        "bad"
+      );
+    }
 
     (async () => {
       try {
@@ -123,6 +183,18 @@ export default function NotifyTest() {
         regRef.current = active || reg;
         setRegistered(true);
         append(`Service worker active. Scope: ${(active || reg).scope}`, "good");
+
+        // Report an existing subscription rather than assuming there is none:
+        // a subscription outlives the page, so arriving here already
+        // subscribed is the normal case on a second visit.
+        const existing = await (active || reg).pushManager.getSubscription();
+        if (!liveRef.current) return;
+        if (existing) {
+          setEndpoint(existing.endpoint);
+          append(`Existing push subscription found: ${endpointTail(existing.endpoint)}`, "good");
+        } else {
+          append("No push subscription on this browser yet.");
+        }
       } catch (err) {
         if (!liveRef.current) return;
         setRegistered(false);
@@ -235,6 +307,115 @@ export default function NotifyTest() {
     }
   };
 
+  // --- push subscription ---------------------------------------------------
+  // Subscribing is two writes that must both land: one to the browser's push
+  // service, one to the table. The browser's happens first and outlives this
+  // page, so if the row write fails the log says exactly that — a subscription
+  // the server does not know about looks identical, from the phone, to no
+  // subscription at all.
+  const subscribeToPush = async () => {
+    setBusy(true);
+    try {
+      if (!hasPush()) throw new Error("PushManager is missing — no Web Push in this browser.");
+      if (!VAPID_PUBLIC_KEY) {
+        throw new Error("No REACT_APP_VAPID_PUBLIC_KEY in this build — nothing to subscribe with.");
+      }
+      const reg = regRef.current;
+      if (!reg) throw new Error("No service worker registration yet.");
+      if (currentPermission() !== "granted") {
+        throw new Error(`Permission is "${currentPermission()}" — grant it before subscribing.`);
+      }
+
+      append("Converting VAPID key and calling pushManager.subscribe…");
+      const sub = await reg.pushManager.subscribe({
+        // Required by Chrome. It is the promise that every push becomes a
+        // visible notification, which the worker's push handler keeps.
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+      setEndpoint(sub.endpoint);
+      append(`Subscribed. Endpoint: ${endpointTail(sub.endpoint)}`, "good");
+
+      // toJSON() is the documented way to read the keys out; the subscription
+      // object itself exposes them only as ArrayBuffers via getKey().
+      const json = sub.toJSON();
+      const keys = json.keys || {};
+      if (!keys.p256dh || !keys.auth) {
+        throw new Error("Subscription came back without p256dh/auth keys — cannot store it.");
+      }
+
+      append("Upserting row into push_subscriptions…");
+      // No user_id: the column defaults to auth.uid() and the owner policy
+      // decides the row. Sending one from the client would either be ignored
+      // or rejected, and would misrepresent where the truth lives.
+      const { error } = await supabase.from(PUSH_TABLE).upsert(
+        {
+          endpoint: json.endpoint,
+          p256dh: keys.p256dh,
+          auth_key: keys.auth,
+          user_agent: navigator.userAgent,
+          // last_used_at is deliberately not sent. On conflict only the
+          // columns named here are written, so re-subscribing on this device
+          // leaves the send history intact — and step 2 owns that column.
+        },
+        { onConflict: "endpoint" }
+      );
+      if (error) throw new Error(`Row upsert failed: ${error.message}`);
+      append("Row saved. Push subscription is registered server-side.", "good");
+    } catch (err) {
+      append(`Subscribe failed: ${messageOf(err)}`, "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Unsubscribing is the same two writes in reverse. The row is deleted even
+  // if the browser call fails, and vice versa — a half-removed subscription is
+  // worse than either end being cleaned up alone, so neither failure is
+  // allowed to skip the other.
+  const unsubscribeFromPush = async () => {
+    setBusy(true);
+    try {
+      const reg = regRef.current;
+      if (!reg) throw new Error("No service worker registration yet.");
+      const sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        append("Nothing to unsubscribe — no subscription on this browser.", "bad");
+        setEndpoint(null);
+        return;
+      }
+
+      const deadEndpoint = sub.endpoint;
+      append(`Unsubscribing ${endpointTail(deadEndpoint)}…`);
+
+      let browserError = null;
+      try {
+        const gone = await sub.unsubscribe();
+        append(
+          gone ? "Browser subscription cancelled." : "Browser reported nothing to cancel.",
+          gone ? "good" : "bad"
+        );
+      } catch (err) {
+        browserError = err;
+        append(`unsubscribe() threw: ${messageOf(err)} — still removing the row.`, "bad");
+      }
+
+      const { error } = await supabase.from(PUSH_TABLE).delete().eq("endpoint", deadEndpoint);
+      if (error) {
+        append(`Row delete failed: ${error.message}`, "bad");
+      } else {
+        append("Row deleted from push_subscriptions.", "good");
+      }
+
+      setEndpoint(null);
+      if (browserError) throw browserError;
+    } catch (err) {
+      append(`Unsubscribe finished with an error: ${messageOf(err)}`, "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const permissionSettled = permission === "granted" || permission === "denied";
   const armed = countdown !== null;
 
@@ -269,6 +450,26 @@ export default function NotifyTest() {
             label="Worker registration"
             value={registered ? "active" : "none"}
             tone={registered ? "good" : "bad"}
+          />
+          <StatusRow
+            label="PushManager"
+            value={hasPush() ? "present" : "missing"}
+            tone={hasPush() ? "good" : "bad"}
+          />
+          <StatusRow
+            label="VAPID key in build"
+            value={VAPID_PUBLIC_KEY ? `${VAPID_PUBLIC_KEY.length} chars` : "MISSING"}
+            tone={VAPID_PUBLIC_KEY ? "good" : "bad"}
+          />
+          <StatusRow
+            label="Push subscription"
+            value={endpoint ? "active" : "none"}
+            tone={endpoint ? "good" : "neutral"}
+          />
+          <StatusRow
+            label="Endpoint tail"
+            value={endpointTail(endpoint)}
+            tone={endpoint ? "good" : "neutral"}
           />
         </dl>
       </div>
@@ -311,6 +512,31 @@ export default function NotifyTest() {
           Armed — lock the phone now to test delivery from the background.
         </p>
       )}
+
+      {/* Web Push — the part that survives Alfred being closed. Separated
+          from the two local tests above because it is a different mechanism
+          with a different failure surface, not a third button of the same. */}
+      <div className="pt-2 border-t border-border">
+        <h3 className="font-medium text-foreground mb-2">Web Push</h3>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={subscribeToPush}
+            disabled={busy || Boolean(endpoint)}
+            className="flex-1 px-4 py-2 min-h-[44px] rounded bg-card border border-border text-foreground disabled:opacity-50"
+          >
+            {endpoint ? "Subscribed" : "Subscribe to push"}
+          </button>
+          <button
+            type="button"
+            onClick={unsubscribeFromPush}
+            disabled={busy || !endpoint}
+            className="flex-1 px-4 py-2 min-h-[44px] rounded bg-card border border-border text-foreground disabled:opacity-50"
+          >
+            Unsubscribe
+          </button>
+        </div>
+      </div>
 
       {/* 5 — the log, which is the only debugging surface on a phone */}
       <div>
