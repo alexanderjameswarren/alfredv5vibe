@@ -416,6 +416,52 @@ export default function NotifyTest() {
     }
   };
 
+  // Ask the edge function to push to every device this account has subscribed.
+  // Unlike the two buttons above, nothing here touches the local notification
+  // API at all: the round trip is browser → function → push service → the
+  // worker's `push` handler, which is why this is the one that still works
+  // with Alfred closed.
+  const sendPush = async () => {
+    setBusy(true);
+    try {
+      append("Invoking push-send…");
+      // invoke() attaches the session's access token, which is what the
+      // function's JWT verification checks and what scopes its query by RLS.
+      const { data, error } = await supabase.functions.invoke("push-send", { body: {} });
+
+      if (error) {
+        // A non-2xx arrives as an error whose real explanation is in the
+        // response body, not in error.message — which is a generic
+        // "non-2xx status code". Unwrapping it is the difference between a
+        // diagnosable failure and a useless one.
+        let detail = "";
+        try {
+          if (error.context && typeof error.context.json === "function") {
+            detail = JSON.stringify(await error.context.json());
+          }
+        } catch {
+          /* body was not JSON; the message below still says something */
+        }
+        append(`push-send failed: ${messageOf(error)}${detail ? ` — ${detail}` : ""}`, "bad");
+        return;
+      }
+
+      // The whole envelope, not a summary: per-endpoint status codes are the
+      // reason it returns them, and this is read on a phone.
+      append(`push-send response: ${JSON.stringify(data)}`, data && data.sent > 0 ? "good" : "bad");
+
+      if (data && data.removed > 0) {
+        // A dead row usually means this device's own subscription expired.
+        append("A dead subscription was removed — re-subscribe on this device.", "bad");
+        setEndpoint(null);
+      }
+    } catch (err) {
+      append(`Send push threw: ${messageOf(err)}`, "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const permissionSettled = permission === "granted" || permission === "denied";
   const armed = countdown !== null;
 
@@ -536,6 +582,19 @@ export default function NotifyTest() {
             Unsubscribe
           </button>
         </div>
+
+        <button
+          type="button"
+          onClick={sendPush}
+          disabled={busy}
+          className="w-full mt-2 px-4 py-2 min-h-[44px] rounded bg-primary text-white shadow-sm disabled:opacity-50"
+        >
+          Send push now
+        </button>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Sends to every subscribed device on this account — this is the one
+          that works with Alfred closed.
+        </p>
       </div>
 
       {/* 5 — the log, which is the only debugging surface on a phone */}

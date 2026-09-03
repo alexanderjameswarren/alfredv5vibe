@@ -20,3 +20,13 @@ entrypoint = "./functions/ai-enrich/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/ai-enrich/*.html" ]
+
+[functions.push-send]
+enabled = true
+# JWT verification ON. This is called from the browser by a logged-in user, so
+# the user's token is the auth and RLS scopes the query to their own rows.
+# Deliberately unlike [functions.mcp], which handles its own OAuth and must set
+# verify_jwt = false.
+verify_jwt = true
+import_map = "./functions/push-send/deno.json"
+entrypoint = "./functions/push-send/index.ts"
