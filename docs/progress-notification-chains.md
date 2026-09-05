@@ -1,6 +1,6 @@
 # Progress: Chained Notifications
 
-## Status: Phase 5c.1 — stale-row reaping (Phase 6 not started)
+## Status: Phase 5c.2 — honest drill + rotation outage window (Phase 6 not started)
 
 Reference: `docs/technical-spec-notification-chains.md`
 
@@ -840,3 +840,77 @@ diagnostic on the device.
 - 9 new tests for the field failure, including `previously said already in sync
   and removed nothing` as documentation of the bug, and `STILL never touches
   another device's row` guarding the safety property under the new rule.
+
+---
+
+## Phase 5c.2 — the drill lied, and it exposed a real hole
+
+Reaping works. Two things it turned up.
+
+### The drill's predictions were wrong
+
+Predicted "Rows in table 2, Rows not this device 1". Actual: **one row, red**.
+
+Because Simulate rotation unsubscribes and resubscribes the browser but does
+**not** insert the new endpoint — insertion only happens at reconcile. So the
+table holds the dead endpoint and nothing else.
+
+A log that forecasts the wrong outcome is worse than one that forecasts nothing:
+on a phone with no console it makes a real bug and a stale expectation
+indistinguishable. The drill now states the true outcome, including the part
+that matters most — **the device is UNREACHABLE at that moment**, which is
+exactly the state a real rotation leaves.
+
+New status row: **Device reachable** — is this browser's live endpoint actually
+in the table? It is the one fact that decides whether a notification can arrive
+at all, and nothing on the screen previously said it.
+
+Also: Part A of the previous drill assumed a leftover stale row would still be
+there. The app-load reconcile had already cleaned it up before anything was
+tapped — correct behaviour, but it meant the manual **Remove** path went
+untested. The drill now creates a removable row deliberately, so that path is
+exercised on purpose rather than by leftovers.
+
+### 🛑 The rotation outage window is real
+
+Asked directly, and the answer is yes.
+
+A rotation while Alfred is **closed** leaves the device unreachable until the
+app is next opened:
+
+1. Browser fires `pushsubscriptionchange`; the worker resubscribes, so the
+   BROWSER holds a working endpoint.
+2. The worker **cannot write to Supabase** — no session in a service worker.
+3. The table still holds only the **dead** endpoint. The dispatcher sends to it,
+   FCM answers 201, steps are stamped `sent`, nothing arrives.
+4. Repaired only on the next app load.
+
+The window is **unbounded** — it lasts until the user happens to open Alfred.
+For a feature whose purpose is working while the app is closed, that is close to
+a silent outage, exactly as Alex put it.
+
+**Shipped mitigation:** when the worker rotates and finds no open window, it
+raises a notification — *"Alfred needs reconnecting"* — through the subscription
+it just created. The last message this device can still deliver. Tapping it
+opens Alfred, which reconciles on load. Visible and one tap from repair instead
+of silent and indefinite. Only when no window is open; with Alfred running the
+postMessage has already repaired it.
+
+**The complete fix, designed but NOT built:** a `push-rotate` edge function
+(`verify_jwt = false`, service role) that the worker POSTs
+`{ oldEndpoint, oldAuth, newSubscription }` to. It finds the row by old
+endpoint, **verifies the supplied `auth_key` matches the stored one**, and
+updates it in place. Possession of the endpoint plus its auth secret is the
+proof of ownership — the same pair the push service itself demands to deliver —
+so no user session is needed and the worker can do it alone. That closes the
+window entirely.
+
+Not built: a new public endpoint that writes subscriptions needs its own
+security review, deploy and SQL, and it is Alex's call whether rotations are
+frequent enough to warrant it.
+
+### Status
+
+- 606 tests across 27 suites; `CI=true` build clean.
+- 2 new worker-source guards: the rotation warning exists, and it fires only
+  when no window is open.

@@ -155,16 +155,51 @@ self.addEventListener('pushsubscriptionchange', (event) => {
       }
 
       // If Alfred is open, repair now instead of on next launch.
+      let clientCount = 0;
       try {
         const windows = await self.clients.matchAll({
           type: 'window',
           includeUncontrolled: true,
         });
+        clientCount = windows.length;
         for (const client of windows) {
           client.postMessage({ type: 'push-subscription-changed', ...record });
         }
       } catch (err) {
         /* nothing further to try from here */
+      }
+
+      /* 🛑 THE OUTAGE WINDOW, AND WHY THIS NOTIFICATION EXISTS.
+       *
+       * The worker has resubscribed, so the BROWSER now holds a working
+       * endpoint — but push_subscriptions still holds the dead one, and the
+       * worker cannot write to Supabase (no session, see the note above). So
+       * between this moment and the next time Alfred is opened, the table has
+       * NO reachable endpoint for this device: the dispatcher sends to the dead
+       * endpoint, FCM answers 201, steps are marked sent, and nothing arrives.
+       *
+       * For a feature whose entire purpose is working while the app is closed,
+       * waiting for the user to happen to open it is a silent outage. This
+       * turns it into a visible one: the notification is the last thing this
+       * subscription can still deliver, and tapping it opens Alfred, which
+       * reconciles on load and repairs the table.
+       *
+       * Only when no window is open — if Alfred is running, the postMessage
+       * above has already repaired it and this would be noise.
+       */
+      if (clientCount === 0) {
+        try {
+          await self.registration.showNotification('Alfred needs reconnecting', {
+            body: 'Notifications were reset by the browser. Open Alfred to restore them.',
+            tag: 'alfred-subscription-rotated',
+            icon: FALLBACK.icon,
+            badge: FALLBACK.icon,
+            requireInteraction: true,
+            data: { url: '/' },
+          });
+        } catch (err) {
+          /* if even this cannot be shown, the next app load is the backstop */
+        }
       }
     })()
   );

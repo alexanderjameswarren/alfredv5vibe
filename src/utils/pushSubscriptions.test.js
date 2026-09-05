@@ -196,6 +196,20 @@ describe("the service worker and the app agree on the IDB handoff", () => {
     expect(sw).toContain("options.applicationServerKey");
   });
 
+  it("warns the user when it cannot repair the table itself", () => {
+    // The worker cannot write to Supabase, so a rotation while Alfred is
+    // closed leaves the table with no reachable endpoint until the next app
+    // load. The notification is what stops that being silent.
+    expect(sw).toContain("alfred-subscription-rotated");
+    expect(sw).toContain("Open Alfred to restore them");
+  });
+
+  it("only warns when no window is open", () => {
+    // With Alfred open the postMessage has already repaired it; a notification
+    // would be noise.
+    expect(sw).toContain("clientCount === 0");
+  });
+
   it("still has no fetch handler", () => {
     // Unchanged since Phase 0: a worker with a fetch handler would start
     // intercepting requests and could serve a stale bundle.

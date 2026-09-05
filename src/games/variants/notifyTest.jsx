@@ -132,6 +132,9 @@ export default function NotifyTest() {
   // The actual rows, so each can be inspected and removed from the phone.
   const [subRows, setSubRows] = useState([]);
   const [liveEndpoint, setLiveEndpoint] = useState(null);
+  // Is this browser's live endpoint actually in the table? The one fact that
+  // decides whether a notification can arrive at all.
+  const [reachable, setReachable] = useState(null);
 
   // The registration is held in a ref, not state: it is the handle every
   // notification call needs, and re-rendering on it would say nothing that
@@ -511,6 +514,16 @@ export default function NotifyTest() {
         );
       }
       setStaleRows(others.length);
+
+      const reachable = Boolean(live) && rows.some((r) => r.endpoint === live);
+      setReachable(reachable);
+      append(
+        reachable
+          ? "Device reachable: YES — this browser's live endpoint is in the table."
+          : "Device reachable: NO — this browser's live endpoint is NOT in the table. " +
+            "Sends will go nowhere useful. Press \"Reconcile now\".",
+        reachable ? "good" : "bad"
+      );
     } catch (err) {
       append(`Could not read the table: ${messageOf(err)}`, "bad");
     }
@@ -610,11 +623,25 @@ export default function NotifyTest() {
         wrote ? "info" : "bad"
       );
 
+      // Say exactly what this leaves behind. An earlier version predicted
+      // "2 rows, 1 stale", which is wrong and worse than predicting nothing:
+      // a log that forecasts the wrong outcome makes a real bug and a stale
+      // expectation indistinguishable.
       append(
-        `Table is now STALE. It still holds ${endpointTail(staleEndpoint)}, ` +
-          `which is dead but will answer 201. Press "Reconcile now" — expect ` +
-          `1 stored and 1 removed.`,
+        `Table now holds ONE row, ${endpointTail(staleEndpoint)}, and it is DEAD. ` +
+          `The new endpoint is NOT stored yet — nothing is inserted until you ` +
+          `reconcile.`,
         "bad"
+      );
+      append(
+        `So this device is currently UNREACHABLE: a send would go to the dead ` +
+          `endpoint, return 201, and deliver nothing. This is exactly the state ` +
+          `a real rotation leaves.`,
+        "bad"
+      );
+      append(
+        `Expect "Show table rows": 1 row, red, and Device reachable = NO. ` +
+          `Then "Reconcile now" — expect 1 stored and 1 removed, leaving 1 green row.`
       );
     } catch (err) {
       append(`Rotation drill failed: ${messageOf(err)}`, "bad");
@@ -711,6 +738,11 @@ export default function NotifyTest() {
             label="Rows not this device"
             value={staleRows === null ? "not checked" : staleRows}
             tone={staleRows > 0 ? "bad" : staleRows === 0 ? "good" : "neutral"}
+          />
+          <StatusRow
+            label="Device reachable"
+            value={reachable === null ? "not checked" : reachable ? "YES" : "NO"}
+            tone={reachable === null ? "neutral" : reachable ? "good" : "bad"}
           />
         </dl>
       </div>

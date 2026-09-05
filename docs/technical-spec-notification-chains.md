@@ -413,6 +413,50 @@ Two layers, because neither is sufficient alone:
 The reconciler never registers a worker and never creates a subscription — a
 user who has not enabled push is untouched.
 
+### 🛑 The rotation outage window
+
+**A rotation while Alfred is closed leaves the device unreachable until the app
+is next opened.** This is a property of the architecture, not a bug, and it must
+be stated plainly:
+
+1. The browser invalidates the subscription and fires `pushsubscriptionchange`.
+2. The worker resubscribes — the **browser** now holds a working endpoint.
+3. The worker **cannot write to Supabase**. supabase-js keeps the session in
+   `localStorage`, which a service worker cannot read, so it has no credentials.
+4. `push_subscriptions` therefore still holds only the **dead** endpoint. The
+   dispatcher sends to it, FCM answers **201**, steps are stamped `sent` and
+   leave the queue, and nothing arrives.
+5. The table is repaired on the next app load, by the reconciler.
+
+So the window runs from the rotation until the user next opens Alfred —
+unbounded, and for a feature whose whole purpose is working while the app is
+closed, a silent outage.
+
+**Partial mitigation, shipped:** when the worker rotates and finds **no open
+window**, it raises a notification — *"Alfred needs reconnecting"* — through the
+subscription it just created. That is the one message this device can still
+deliver, and tapping it opens Alfred, which reconciles on load. The outage
+becomes visible and one tap from repair instead of silent and indefinite.
+
+It is a mitigation, not a fix. It depends on the user seeing and tapping it.
+
+**The complete fix, designed but NOT built** — an edge function the worker can
+call with no user token:
+
+- `push-rotate`, `verify_jwt = false`, service role.
+- The worker POSTs `{ oldEndpoint, oldAuth, newSubscription }`.
+- The function looks up the row by `old_endpoint`, **verifies the supplied
+  `auth_key` matches the stored one**, and updates that row in place.
+- Possession of both the endpoint URL and its auth secret is the proof of
+  ownership — the same pair the push service itself requires to deliver. No user
+  session is involved, so the worker can do it alone.
+- This closes the window entirely: the table is correct within seconds of the
+  rotation, whether or not Alfred is ever opened.
+
+Not built because it is a new public endpoint that writes subscriptions, and it
+needs its own security review, deploy and SQL. Worth doing if rotations turn out
+to be anything other than rare.
+
 ### Why did it rotate?
 
 Unresolved, and worth stating plainly rather than assuming.
