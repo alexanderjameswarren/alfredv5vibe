@@ -64,6 +64,8 @@ export function normalizePath(pathname) {
 export function pathToView(pathname) {
   // Everything under /sam is the SAM view; see the SAM section below.
   if (isSamPath(pathname)) return "sam";
+  // /schedule/execution/:id is the same view as the bare /schedule/execution.
+  if (executionIdFromPath(pathname)) return "execution-detail";
   return PATH_TO_VIEW[normalizePath(pathname)] || DEFAULT_VIEW;
 }
 
@@ -80,6 +82,10 @@ export function viewToPath(view) {
 // Step 9 uses this to redirect them to "/" so the address bar stops lying.
 export function isKnownPath(pathname) {
   if (isSamPath(pathname)) return true;
+  // Deliberately executionIdFromPath, not isExecutionPath: a malformed
+  // /schedule/execution/a/b has no extractable id and stays unknown, so it is
+  // redirected to home like any other nonsense path rather than half-served.
+  if (executionIdFromPath(pathname)) return true;
   return Boolean(PATH_TO_VIEW[normalizePath(pathname)]);
 }
 
@@ -92,9 +98,49 @@ const PARENT_OVERRIDES = {};
 export function parentPath(pathname) {
   const path = normalizePath(pathname);
   if (PARENT_OVERRIDES[path]) return PARENT_OVERRIDES[path];
+  // An id-bearing execution path falls back to the schedule list, not to the
+  // bare /schedule/execution. Stripping one segment would land on a path that
+  // is itself unrenderable cold and would redirect again — one visible
+  // correction instead of two.
+  if (executionIdFromPath(path)) return VIEW_TO_PATH.schedule;
   const cut = path.lastIndexOf("/");
   if (cut <= 0) return DEFAULT_PATH;
   return path.slice(0, cut);
+}
+
+// --- Execution sub-route (notification chains, Phase 1) ----------------------
+//
+// The first id-bearing address in Alfred, following the SAM precedent below.
+//
+// Every other detail view still carries its id in React state only, which is
+// why a pasted /collections/detail redirects to its parent. An execution
+// cannot afford that: a chained notification links back to the execution it
+// belongs to, and a tap that lands on the schedule list gives no indication of
+// which step fired. So this one view gets a real address, and Alfred fetches
+// the execution by id when the URL arrives with no state behind it.
+//
+// The view map above stays a bijection — `viewToPath("execution-detail")` is
+// always the bare "/schedule/execution" — while `pathToView` resolves both
+// forms to the same view. The bare form therefore keeps working exactly as it
+// did, which is what lets the id-bearing form be added without touching every
+// navigation at once.
+
+const EXECUTION_PREFIX = `${VIEW_TO_PATH["execution-detail"]}/`;
+
+export function executionPath(executionId) {
+  return `${EXECUTION_PREFIX}${encodeURIComponent(executionId)}`;
+}
+
+// The execution id from /schedule/execution/:id, or null for any other path —
+// including the bare /schedule/execution, which is the id-less form and is not
+// a cold-loadable address. Mirrors samSongIdFromPath: a malformed or empty id
+// degrades to null rather than throwing.
+export function executionIdFromPath(pathname) {
+  const path = normalizePath(pathname);
+  if (!path.startsWith(EXECUTION_PREFIX)) return null;
+  const id = path.slice(EXECUTION_PREFIX.length);
+  if (!id || id.includes("/")) return null;
+  return decodeURIComponent(id);
 }
 
 // --- SAM sub-routes (Step 8) -------------------------------------------------

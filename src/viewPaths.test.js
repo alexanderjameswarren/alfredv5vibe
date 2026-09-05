@@ -7,6 +7,8 @@ import {
   parentPath,
   samSongPath,
   samSongIdFromPath,
+  executionPath,
+  executionIdFromPath,
   isSamStatsPath,
   isKnownPath,
 } from "./viewPaths";
@@ -165,6 +167,59 @@ describe("SAM sub-routes (Step 8)", () => {
     // Renamed to /sam/stats. Nothing links to the old one; it falls back to
     // home like any other unknown path until Step 9 redirects it.
     expect(pathToView("/stats")).toBe("home");
+  });
+});
+
+describe("execution sub-route (notification chains, Phase 1)", () => {
+  it("round-trips an execution id", () => {
+    expect(executionIdFromPath(executionPath("abc-123"))).toBe("abc-123");
+  });
+
+  it("round-trips a uid()-shaped id", () => {
+    // uid() is Date.now().toString(36) + Math.random().toString(36).slice(2)
+    const id = "m7q2x1a9k3f8d0";
+    expect(executionIdFromPath(executionPath(id))).toBe(id);
+  });
+
+  it("resolves the id-bearing path to the execution-detail view", () => {
+    expect(pathToView("/schedule/execution/abc")).toBe("execution-detail");
+  });
+
+  it("still resolves the bare path to the same view", () => {
+    // The id-less form has to keep working: it is what viewToPath produces
+    // and what any remaining id-less navigation still uses.
+    expect(pathToView("/schedule/execution")).toBe("execution-detail");
+    expect(viewToPath("execution-detail")).toBe("/schedule/execution");
+  });
+
+  it("extracts an id only from an id-bearing execution path", () => {
+    expect(executionIdFromPath("/schedule/execution/9f8e")).toBe("9f8e");
+    expect(executionIdFromPath("/schedule/execution/9f8e/")).toBe("9f8e");
+    // The bare form is the id-less address, not an id of "".
+    expect(executionIdFromPath("/schedule/execution")).toBeNull();
+    expect(executionIdFromPath("/schedule")).toBeNull();
+    expect(executionIdFromPath("/memories/detail")).toBeNull();
+  });
+
+  it("degrades to no-id rather than throwing on a malformed path", () => {
+    expect(executionIdFromPath("/schedule/execution/")).toBeNull();
+    expect(executionIdFromPath("/schedule/execution/a/b")).toBeNull();
+  });
+
+  it("treats an id-bearing path as known", () => {
+    expect(isKnownPath("/schedule/execution/abc")).toBe(true);
+  });
+
+  it("does not rescue a malformed id-bearing path", () => {
+    // Falls through to home rather than being half-served.
+    expect(isKnownPath("/schedule/execution/a/b")).toBe(false);
+  });
+
+  it("falls back to the schedule list, not to the id-less form", () => {
+    // Stripping one segment would land on /schedule/execution, which is itself
+    // unrenderable cold and would redirect again.
+    expect(parentPath("/schedule/execution/abc")).toBe("/schedule");
+    expect(isKnownPath(parentPath("/schedule/execution/abc"))).toBe(true);
   });
 });
 

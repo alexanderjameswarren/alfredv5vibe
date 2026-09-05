@@ -30,3 +30,16 @@ enabled = true
 verify_jwt = true
 import_map = "./functions/push-send/deno.json"
 entrypoint = "./functions/push-send/index.ts"
+
+[functions.notify-dispatch]
+enabled = true
+# 🛑 JWT verification OFF. Called by pg_cron via pg_net, which has no user token
+# and cannot present one. The shared secret in the x-dispatch-secret header is
+# what stands in front of this function instead, checked before any work.
+#
+# ⚠️ THIS FLAG HAS RESET SILENTLY ON REDEPLOY IN THIS PROJECT. Re-check it after
+# every deploy — the post-deploy verification is in
+# docs/progress-notification-chains.md and takes one curl.
+verify_jwt = false
+import_map = "./functions/notify-dispatch/deno.json"
+entrypoint = "./functions/notify-dispatch/index.ts"

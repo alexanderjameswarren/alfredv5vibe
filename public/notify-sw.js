@@ -25,6 +25,7 @@ const FALLBACK = {
   body: 'Time for: squats',
   tag: 'alfred-push',
   icon: '/android-chrome-192x192.png',
+  url: '/',
 };
 
 /* Web Push. This is the handler that fires when Alfred is closed.
@@ -57,6 +58,11 @@ self.addEventListener('push', (event) => {
     badge: payload.icon || FALLBACK.icon,
     // Ignored on Android, which keeps notifications until dismissed anyway.
     requireInteraction: payload.requireInteraction !== false,
+    // Where tapping this should land. `data` is the only part of a notification
+    // that survives to the notificationclick handler, which runs in a separate
+    // invocation of the worker with none of this scope. A chained notification
+    // that opened the app's home screen would not say which step had fired.
+    data: { url: payload.url || FALLBACK.url },
   };
 
   // waitUntil keeps the worker alive until the notification is actually
@@ -64,18 +70,39 @@ self.addEventListener('push', (event) => {
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
-// Tapping the notification — on the phone or mirrored on the watch — focuses
-// the app if it is already open, and opens it if it is not.
+// Tapping the notification — on the phone or mirrored on the watch — opens the
+// app at the URL the push asked for, focusing an existing window rather than
+// piling up tabs.
+//
+// The URL is a PATH, not an absolute address. openWindow and navigate resolve
+// it against this worker's own origin, so there is no base-URL setting to get
+// wrong and no way to send someone to the wrong host.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || '/';
+
   event.waitUntil(
     self.clients
       .matchAll({ type: 'window', includeUncontrolled: true })
       .then((windows) => {
         for (const client of windows) {
-          if ('focus' in client) return client.focus();
+          if ('focus' in client) {
+            // Focus first, then move it. An already-open Alfred sitting on the
+            // home screen must still end up on the execution — focusing alone
+            // would look like the link had been ignored.
+            const focused = client.focus();
+            if ('navigate' in client) {
+              return Promise.resolve(focused)
+                .then((c) => (c && c.navigate ? c.navigate(url) : client.navigate(url)))
+                // navigate() rejects on some browsers for cross-origin or
+                // uncontrolled clients. Falling back to a new window is better
+                // than swallowing the tap.
+                .catch(() => (self.clients.openWindow ? self.clients.openWindow(url) : undefined));
+            }
+            return focused;
+          }
         }
-        return self.clients.openWindow ? self.clients.openWindow('/') : undefined;
+        return self.clients.openWindow ? self.clients.openWindow(url) : undefined;
       })
   );
 });

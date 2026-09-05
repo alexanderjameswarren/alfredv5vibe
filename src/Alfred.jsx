@@ -7,12 +7,21 @@ import {
   isKnownPath,
   parentPath,
   DEFAULT_PATH,
+  executionPath,
 } from "./viewPaths";
+import { useExecutionRoute } from "./useExecutionRoute";
 import AppLink from "./AppLink";
 import UndoMessage, { useUndo } from "./UndoMessage";
 import SortControl, { useSortPreference } from "./SortControl";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
+import { offsetPatch, isFirstStep } from "./utils/elementOffsets";
+import {
+  createNotificationSteps,
+  completeNotificationStep,
+  cancelNotificationSteps,
+  resumeNotificationSteps,
+} from "./utils/notificationStepsApi";
 import {
   parseIngredient,
   matchProduct,
@@ -1223,6 +1232,19 @@ export default function Alfred() {
     },
     [navigate, currentPath]
   );
+  // Opening an execution goes through here rather than setView, because
+  // setView can only reach the id-less /schedule/execution — it is handed a
+  // view name and has no way to know which execution is meant. Every
+  // navigation to an execution carries its id so the address stays meaningful
+  // after a refresh, a paste, or a notification tap.
+  const goToExecution = useCallback(
+    (exec) => {
+      if (!exec || !exec.id) return;
+      const path = executionPath(exec.id);
+      navigate(path, { replace: path === currentPath });
+    },
+    [navigate, currentPath]
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [contexts, setContexts] = useState([]);
   const [items, setItems] = useState([]);
@@ -1282,6 +1304,22 @@ export default function Alfred() {
   const [recycleHasMore, setRecycleHasMore] = useState(false);
   const [recycleSelected, setRecycleSelected] = useState(new Set());
 
+  // --- Execution deep link (notification chains, Phase 1) -------------------
+  //
+  // The URL is the source of truth for which execution is open. This owns the
+  // cold-load fetch, the guard suppression that keeps a deep link from being
+  // redirected away before it has been looked up, and the clearing of an
+  // execution the URL no longer names. It lives in its own module so the test
+  // exercises it rather than a copy of it.
+  const { awaitingExecutionLoad, executionForRoute } =
+    useExecutionRoute({
+      pathname: location.pathname,
+      user,
+      activeExecution,
+      setActiveExecution,
+      fetchExecution: (id) => storage.get(`execution:${id}`),
+    });
+
   // --- Cold-load redirects (Step 9, docs/technical-spec-navigation-urls.md) --
   //
   // Two things can put Alfred on a path it cannot actually render:
@@ -1304,13 +1342,23 @@ export default function Alfred() {
     "intention-detail": selectedIntentionId,
     "item-detail": selectedItemId,
     "item-add-to-collection": selectedItemId,
-    "execution-detail": activeExecution,
+    // Not `activeExecution`: the route decides which execution counts as
+    // present. See useExecutionRoute — an execution left in state from a
+    // previous visit must not satisfy this guard for a different URL.
+    "execution-detail": executionForRoute,
     "collection-detail": selectedCollectionId,
     "collection-history": selectedCollectionId,
     "collection-add-items": selectedCollectionId,
   };
+
   const detailStateMissing =
-    view in DETAIL_VIEW_STATE && !DETAIL_VIEW_STATE[view];
+    view in DETAIL_VIEW_STATE &&
+    !DETAIL_VIEW_STATE[view] &&
+    // Execution-detail is the exception to point 2 above: since Phase 1 of the
+    // notification-chain work it carries its id in the URL, so a cold load can
+    // fetch the execution instead of giving up. The guard holds its fire until
+    // that lookup has actually completed and found nothing.
+    !awaitingExecutionLoad;
 
   useEffect(() => {
     if (!isKnownPath(currentPath)) {
@@ -2858,10 +2906,11 @@ export default function Alfred() {
           progress: [],
         };
         await storage.set(`execution:${execution.id}`, execution);
+        await startNotificationChain(execution);
         setActiveExecution(execution);
         setActiveExecutions((prev) => [execution, ...prev]);
         setPreviousView(view);
-        setView("execution-detail");
+        goToExecution(execution);
         return;
       }
 
@@ -2906,10 +2955,11 @@ export default function Alfred() {
       };
 
       await storage.set(`execution:${execution.id}`, execution);
+      await startNotificationChain(execution);
       setActiveExecution(execution);
       setActiveExecutions((prev) => [execution, ...prev]);
       setPreviousView(view);
-      setView("execution-detail");
+      goToExecution(execution);
     });
   }
 
@@ -2955,11 +3005,89 @@ export default function Alfred() {
     return null;
   }
 
+  // --- Notification chain (Phase 4) -----------------------------------------
+  //
+  // Every one of these is a background concern: a chain that fails to expand
+  // must not stop an execution from starting, and a chain that fails to advance
+  // must not stop a step being ticked. So each is wrapped and logged rather
+  // than thrown — but logged loudly, because Phase 4 is verified by inspecting
+  // rows and a silent no-op would look identical to an item with no offsets.
+  //
+  // Nothing here sends anything. The dispatcher is Phase 5.
+
+  async function startNotificationChain(execution) {
+    try {
+      const rows = await createNotificationSteps(execution.id, execution.elements);
+      if (rows.length > 0) {
+        console.log(`[Chain] Expanded ${rows.length} notification step(s) for execution ${execution.id}`);
+      }
+    } catch (e) {
+      console.error("[Chain] Failed to expand notification steps:", e);
+    }
+  }
+
+  // Logged on EVERY tick, not only when something changed.
+  //
+  // The field failure was a chain that silently stopped advancing, and the
+  // three ways that can happen — the advance was never called, the rows were
+  // not visible, or the writes were refused — were indistinguishable from each
+  // other and from "the chain is simply finished". Each now says which.
+  async function advanceNotificationChain(execution, elementIndex) {
+    try {
+      const { complete, schedule, rowsSeen } = await completeNotificationStep(
+        execution.id,
+        execution.elements,
+        elementIndex
+      );
+      if (rowsSeen === 0) {
+        console.log(
+          `[Chain] Element ${elementIndex}: no notification_steps rows visible for execution ${execution.id}. ` +
+            `Either this item has no offsets, or the rows exist and RLS is hiding them.`
+        );
+        return;
+      }
+      console.log(
+        `[Chain] Element ${elementIndex} (seq ${elementIndex + 1}): saw ${rowsSeen} row(s), ` +
+          `completed ${complete.length}, scheduled ${schedule.length}.`
+      );
+    } catch (e) {
+      console.error("[Chain] Failed to advance notification chain:", e, e.failures ?? "");
+    }
+  }
+
+  async function endNotificationChain(executionId) {
+    try {
+      const cancelled = await cancelNotificationSteps(executionId);
+      if (cancelled.length > 0) {
+        console.log(`[Chain] Cancelled ${cancelled.length} remaining step(s) for execution ${executionId}`);
+      }
+    } catch (e) {
+      console.error("[Chain] Failed to cancel notification steps:", e);
+    }
+  }
+
+  async function rescheduleNotificationChain(executionId) {
+    try {
+      const moved = await resumeNotificationSteps(executionId);
+      if (moved.length > 0) {
+        console.log(`[Chain] Resume: moved ${moved.length} overdue step(s) to now`);
+      }
+    } catch (e) {
+      console.error("[Chain] Failed to reschedule notification steps on resume:", e);
+    }
+  }
+
   async function closeExecution(outcome) {
     if (!activeExecution) return;
     return withLoading('Completing...', async () => {
       // Cancel = Delete: just remove active execution, don't archive anything
       if (outcome === "cancelled") {
+        // Cancel the chain BEFORE deleting the execution: afterwards the rows
+        // would be orphans referencing a row that no longer exists. The
+        // dispatcher's join to active executions would hide them, but leaving
+        // live-looking rows behind for a run that never happened is not a
+        // state worth defending.
+        await endNotificationChain(activeExecution.id);
         await storage.delete(`execution:${activeExecution.id}`);
         setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
         setActiveExecution(null);
@@ -2976,6 +3104,7 @@ export default function Alfred() {
 
       // Archive the execution (notes and elements are preserved via spread)
       await storage.set(`execution:${closed.id}`, closed);
+      await endNotificationChain(closed.id);
 
       // Archive the event
       const event = events.find((e) => e.id === activeExecution.eventId);
@@ -3056,6 +3185,10 @@ export default function Alfred() {
     return withLoading('Resuming...', async () => {
       const activated = { ...activeExecution, status: "active" };
       await storage.set(`execution:${activated.id}`, activated);
+      // Pausing writes no rows — the dispatcher filters on execution status, so
+      // a paused chain is already silent. Only resuming needs to act, so that a
+      // due time that passed during the pause does not fire for a moment gone by.
+      await rescheduleNotificationChain(activated.id);
       setPausedExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
       setActiveExecutions((prev) => [activated, ...prev]);
       setActiveExecution(activated);
@@ -3088,6 +3221,22 @@ export default function Alfred() {
       await storage.set(`execution:${updated.id}`, updated);
     } catch (e) {
       console.error('[Execution] Failed to save element toggle:', e);
+    }
+
+    // Advance the chain only when the element is being marked COMPLETE. This
+    // is a toggle, and un-ticking must not close a row or start a clock.
+    // Re-ticking is safe: planCompletion only moves rows out of `waiting`, and
+    // a row already terminal is left alone.
+    if (!el.isCompleted) {
+      await advanceNotificationChain(updated, elementIndex);
+    } else {
+      // Un-ticking. The chain deliberately does not retreat — but say so,
+      // because "I ticked it and nothing happened" and "I un-ticked it and
+      // nothing happened" produce the same empty audit log, and the second is
+      // correct behaviour that has already been mistaken for the first.
+      console.log(
+        `[Chain] Element ${elementIndex} un-ticked — chain not advanced (by design).`
+      );
     }
   }
 
@@ -3890,7 +4039,7 @@ export default function Alfred() {
   function openExecution(exec) {
     setPreviousView(view);
     setActiveExecution(exec);
-    setView("execution-detail");
+    goToExecution(exec);
   }
 
   async function startNowFromItem(itemId) {
@@ -3963,10 +4112,11 @@ export default function Alfred() {
       };
 
       await storage.set(`execution:${execution.id}`, execution);
+      await startNotificationChain(execution);
       setActiveExecution(execution);
       setActiveExecutions((prev) => [execution, ...prev]);
       setPreviousView(view);
-      setView("execution-detail");
+      goToExecution(execution);
     });
   }
 
@@ -4012,10 +4162,11 @@ export default function Alfred() {
           progress: [],
         };
         await storage.set(`execution:${execution.id}`, execution);
+        await startNotificationChain(execution);
         setActiveExecution(execution);
         setActiveExecutions((prev) => [execution, ...prev]);
         setPreviousView(view);
-        setView("execution-detail");
+        goToExecution(execution);
         return;
       }
 
@@ -4054,10 +4205,11 @@ export default function Alfred() {
       };
 
       await storage.set(`execution:${execution.id}`, execution);
+      await startNotificationChain(execution);
       setActiveExecution(execution);
       setActiveExecutions((prev) => [execution, ...prev]);
       setPreviousView(view);
-      setView("execution-detail");
+      goToExecution(execution);
     });
   }
 
@@ -4823,12 +4975,25 @@ export default function Alfred() {
           />
         )}
 
-        {/* Execution Detail View */}
-        {view === "execution-detail" && activeExecution && (
+        {/* Opening an execution from a URL rather than from in-app state —
+            a pasted link, a refresh, or a notification tap. Without this the
+            pane is blank for the length of the fetch, which reads as a broken
+            link on the one path where the user has no other context. */}
+        {view === "execution-detail" && !executionForRoute && awaitingExecutionLoad && (
+          <div className="p-6 text-center text-muted-foreground">
+            Opening execution…
+          </div>
+        )}
+
+        {/* Execution Detail View. Rendered from executionForRoute, not
+            activeExecution: on the render after the URL changes to a different
+            execution, state still holds the previous one, and drawing it under
+            the new address would show the wrong execution. */}
+        {view === "execution-detail" && executionForRoute && (
           <ExecutionDetailView
-            execution={activeExecution}
-            intent={intents.find((i) => i.id === activeExecution.intentId)}
-            event={events.find((e) => e.id === activeExecution.eventId)}
+            execution={executionForRoute}
+            intent={intents.find((i) => i.id === executionForRoute.intentId)}
+            event={events.find((e) => e.id === executionForRoute.eventId)}
             items={items}
             contexts={contexts}
             collections={collections}
@@ -6006,7 +6171,8 @@ function InboxCard({
         displayType: el.type || 'step',
         quantity: el.quantity || '',
         description: el.description || '',
-        ...(el.collectable ? { collectable: true } : {})
+        ...(el.collectable ? { collectable: true } : {}),
+        ...offsetPatch(el)
       }
     )
   );
@@ -6084,7 +6250,8 @@ function InboxCard({
             displayType: el.type || 'step',
             quantity: el.quantity || '',
             description: el.description || '',
-            ...(el.collectable ? { collectable: true } : {})
+            ...(el.collectable ? { collectable: true } : {}),
+            ...offsetPatch(el)
           }
         ));
         setItemTags(inboxItem.suggestedTags || []);
@@ -6127,7 +6294,8 @@ function InboxCard({
             displayType: el.type || 'step',
             quantity: el.quantity || '',
             description: el.description || '',
-            ...(el.collectable ? { collectable: true } : {})
+            ...(el.collectable ? { collectable: true } : {}),
+            ...offsetPatch(el)
           }
         )
       ) ||
@@ -6185,7 +6353,13 @@ function InboxCard({
 
   function updateElement(index, field, value) {
     const newElements = [...itemElements];
-    newElements[index] = { ...newElements[index], [field]: value };
+    const next = { ...newElements[index], [field]: value };
+    // An offset is a gap before a step. Changing a row to a header or a bullet
+    // drops it rather than leaving a scheduling instruction on a row that can
+    // never be scheduled — mirroring `collectable` on bullets in the item
+    // editor's copy of this function.
+    if (field === "displayType" && value !== "step") delete next.offsetMinutes;
+    newElements[index] = next;
     setItemElements(newElements);
   }
 
@@ -6430,7 +6604,8 @@ function InboxCard({
         displayType: el.type || 'step',
         quantity: el.quantity || '',
         description: el.description || '',
-        ...(el.collectable ? { collectable: true } : {})
+        ...(el.collectable ? { collectable: true } : {}),
+        ...offsetPatch(el)
       }
     ));
     setItemTags(inboxItem.suggestedTags || []);
@@ -6902,6 +7077,46 @@ function InboxCard({
                           placeholder="Qty"
                           className="w-16 px-2 py-2 border border-border rounded text-sm"
                         />
+                        {(element.displayType || "step") === "step" && (
+                          <label
+                            className="flex items-center gap-1"
+                            title="Minutes to wait after the previous step is completed."
+                          >
+                            <span className="text-sm text-muted-foreground whitespace-nowrap">
+                              after
+                            </span>
+                            <input
+                              type="number"
+                              min={0}
+                              inputMode="numeric"
+                              value={element.offsetMinutes ?? ""}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                const parsed = parseInt(raw, 10);
+                                updateElement(
+                                  index,
+                                  "offsetMinutes",
+                                  raw === "" || Number.isNaN(parsed) ? undefined : Math.max(0, parsed),
+                                );
+                              }}
+                              placeholder="—"
+                              className="w-16 px-2 py-2 border border-border rounded text-sm"
+                            />
+                            <span className="text-sm text-muted-foreground">min</span>
+                            {/* Alongside the input, never in place of it. The value stays
+                                authorable at position one so a step created at the top can be
+                                given a gap and carry it when dragged down — which is the whole
+                                reason the offset lives on the element rather than on the item. */}
+                            {isFirstStep(itemElements, index) && (
+                              <span
+                                className="text-xs text-muted-foreground italic whitespace-nowrap"
+                                title="Not used while this step is first — the first step is scheduled when the execution starts. It applies if you move this step below another one."
+                              >
+                                at start
+                              </span>
+                            )}
+                          </label>
+                        )}
                       </div>
                     </div>
 
@@ -9070,6 +9285,7 @@ function ItemCard({
             description: el.description || "",
             ...(el.itemId || el.item_id ? { itemId: el.itemId || el.item_id } : {}),
             ...(el.collectable ? { collectable: true } : {}),
+            ...offsetPatch(el),
           },
     ),
   );
@@ -9095,6 +9311,7 @@ function ItemCard({
             description: el.description || "",
             ...(el.itemId || el.item_id ? { itemId: el.itemId || el.item_id } : {}),
             ...(el.collectable ? { collectable: true } : {}),
+            ...offsetPatch(el),
           }
     );
     const isDirty =
@@ -9193,6 +9410,8 @@ function ItemCard({
     // leaving it set on a row whose checkbox is no longer rendered: an
     // invisible flag would still surface the row in Add to Collection.
     if (field === "displayType" && value !== "bullet") delete next.collectable;
+    // Same reasoning for the scheduling gap, which only applies to steps.
+    if (field === "displayType" && value !== "step") delete next.offsetMinutes;
     newElements[index] = next;
     setElements(newElements);
   }
@@ -9458,6 +9677,46 @@ function ItemCard({
                         placeholder="Qty"
                         className="w-16 px-2 py-2 border border-border rounded text-sm"
                       />
+                      {(element.displayType || "step") === "step" && (
+                        <label
+                          className="flex items-center gap-1"
+                          title="Minutes to wait after the previous step is completed."
+                        >
+                          <span className="text-sm text-muted-foreground whitespace-nowrap">
+                            after
+                          </span>
+                          <input
+                            type="number"
+                            min={0}
+                            inputMode="numeric"
+                            value={element.offsetMinutes ?? ""}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              const parsed = parseInt(raw, 10);
+                              updateElement(
+                                index,
+                                "offsetMinutes",
+                                raw === "" || Number.isNaN(parsed) ? undefined : Math.max(0, parsed),
+                              );
+                            }}
+                            placeholder="—"
+                            className="w-16 px-2 py-2 border border-border rounded text-sm"
+                          />
+                          <span className="text-sm text-muted-foreground">min</span>
+                          {/* Alongside the input, never in place of it. The value stays
+                              authorable at position one so a step created at the top can be
+                              given a gap and carry it when dragged down — which is the whole
+                              reason the offset lives on the element rather than on the item. */}
+                          {isFirstStep(elements, index) && (
+                            <span
+                              className="text-xs text-muted-foreground italic whitespace-nowrap"
+                              title="Not used while this step is first — the first step is scheduled when the execution starts. It applies if you move this step below another one."
+                            >
+                              at start
+                            </span>
+                          )}
+                        </label>
+                      )}
                       {(element.displayType || "step") === "bullet" && (
                         <label
                           className="flex items-center gap-2 min-h-[44px] cursor-pointer"
