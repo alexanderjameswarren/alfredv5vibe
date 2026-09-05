@@ -1,6 +1,6 @@
 # Progress: Chained Notifications
 
-## Status: Phase 5b — completion bug diagnosed, write layer hardened, `no_subscription` added
+## Status: Phase 5c — subscription rotation repair (Phase 6 not started)
 
 Reference: `docs/technical-spec-notification-chains.md`
 
@@ -680,3 +680,77 @@ sets no `x-actor` header and falls through to the default.
 - 578 tests across 26 suites; `CI=true` build clean.
 - Write layer hardened (`.select("id")` + independent `applyPatches`), read
   layer audited and closed by test, completion path instrumented.
+
+---
+
+## Phase 5c — a dead subscription that reported success
+
+The chain logic was fine; the completion failures were a stale build. The real
+defect was underneath it.
+
+**An FCM endpoint returned 201 for three consecutive sends and delivered
+nothing.** The subscription died mid-session while the stored row went on
+looking healthy. Every send reported success, every step was stamped `sent_at`
+and left the queue, and nothing arrived — with no error at any layer.
+
+### The structural consequence
+
+**404/410 pruning cannot be relied on.** A dead FCM registration can answer 201
+indefinitely rather than the 410 that would delete the row. `push_subscriptions`
+does not correct itself, so something outside the send path has to keep it
+honest.
+
+And `sent` can never mean "delivered" — Web Push has no delivery receipt. Now
+stated outright in the spec so nobody later tries to make it mean more.
+
+### Built
+
+- [x] **`pushsubscriptionchange` handler** in `public/notify-sw.js`. Resubscribes
+      with the **same** application server key (a different key produces a
+      subscription the dispatcher's VAPID pair cannot send to), records
+      `{ oldEndpoint, newEndpoint }` in IndexedDB, postMessages open clients.
+- [x] **App-load reconcile** — `src/utils/pushSubscriptions.js`. Compares
+      `pushManager.getSubscription()` against the table and repairs. Never
+      registers a worker, never creates a subscription: a user who has not
+      enabled push is untouched.
+- [x] **Live repair** when the worker messages an open client.
+- [x] **Rotation drill** in the Games diagnostic — forces the exact state a
+      rotation leaves behind, without waiting for Chrome.
+- [x] Spec: `sent` = accepted, not delivered; rotation causes; stale pruning
+      considered and declined with reasons.
+
+### Why the worker does not write to Supabase
+
+supabase-js keeps the session in `localStorage`, which a service worker cannot
+read. It has no credentials. So the worker does the half it can — resubscribe —
+and hands the database swap to the app via IndexedDB, the only store both
+contexts share.
+
+⚠️ **That handoff is a twin site.** The DB, store and key names are duplicated
+in `notify-sw.js` because a worker cannot import from `src/`. If they drift, the
+worker writes a record the app never reads and the repair silently stops working
+with nothing failing anywhere. Three tests read the worker's source and assert
+the literals match.
+
+### The dangerous mistake, avoided and pinned
+
+"Delete every row that is not the current endpoint" would silently unsubscribe
+the user's **other devices**. Only the endpoint the worker explicitly recorded
+as rotated away from is removed. Test: `NEVER deletes another device's row`.
+
+### Why it rotated — unresolved, deliberately
+
+The redeploy is the obvious suspect, but **a service worker update does not
+normally invalidate push subscriptions**: a subscription belongs to the
+registration, not the script version, and `skipWaiting()` / `clients.claim()`
+change which script is active, not the registration. Suspect, not cause.
+
+The repair was built before the cause was known because it makes the failure
+survivable either way. To settle it: note the endpoint tail before a deploy and
+check it after.
+
+### Status
+
+- 595 tests across 27 suites; `CI=true` build clean.
+- 17 new tests: the reconcile planner including the other-device case, and the
+  worker/app twin-site guard.

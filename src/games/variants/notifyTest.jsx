@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { supabase } from "../../supabaseClient";
+import { reconcilePushSubscription } from "../../utils/pushSubscriptions";
 
 // Push Notification Test — not a game, a diagnostic.
 //
@@ -462,6 +463,65 @@ export default function NotifyTest() {
     }
   };
 
+  // --- Rotation drill (Phase 5c) -------------------------------------------
+  //
+  // Chrome rotates a subscription on its own schedule, which is no use for
+  // verifying that rotation is detected and repaired. This forces the exact
+  // state a rotation leaves behind — the browser holding a NEW endpoint while
+  // the table still holds the OLD one — without waiting for Chrome and without
+  // touching the table, so the reconciler has something real to find.
+  //
+  // It deliberately does NOT clean up after itself. The whole point is to walk
+  // away with the table stale and see whether "Reconcile now" repairs it.
+  const simulateRotation = async () => {
+    setBusy(true);
+    try {
+      const reg = regRef.current;
+      if (!reg) throw new Error("No service worker registration yet.");
+      const before = await reg.pushManager.getSubscription();
+      if (!before) throw new Error("Nothing to rotate — subscribe first.");
+
+      const staleEndpoint = before.endpoint;
+      append(`Rotation drill: current endpoint ${endpointTail(staleEndpoint)}`);
+      append("Unsubscribing in the browser WITHOUT touching the table…");
+      await before.unsubscribe();
+
+      const after = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+      setEndpoint(after.endpoint);
+      append(`New endpoint: ${endpointTail(after.endpoint)}`, "good");
+      append(
+        `Table is now STALE: it still holds ${endpointTail(staleEndpoint)}. ` +
+          `Sending would return 201 and deliver nothing. Now press "Reconcile now".`,
+        "bad"
+      );
+    } catch (err) {
+      append(`Rotation drill failed: ${messageOf(err)}`, "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // The same function the app runs on load. Exposed so a repair can be
+  // observed on demand rather than inferred from a page refresh.
+  const reconcileNow = async () => {
+    setBusy(true);
+    try {
+      append("Reconciling browser subscription against the table…");
+      const outcome = await reconcilePushSubscription();
+      append(
+        `Reconcile: ${outcome.reason} (inserted: ${outcome.inserted}, removed: ${outcome.deleted})`,
+        outcome.inserted || outcome.deleted > 0 ? "good" : "info"
+      );
+    } catch (err) {
+      append(`Reconcile failed: ${messageOf(err)}`, "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const permissionSettled = permission === "granted" || permission === "denied";
   const armed = countdown !== null;
 
@@ -594,6 +654,29 @@ export default function NotifyTest() {
         <p className="mt-2 text-sm text-muted-foreground">
           Sends to every subscribed device on this account — this is the one
           that works with Alfred closed.
+        </p>
+
+        <div className="flex gap-2 mt-3 pt-3 border-t border-border">
+          <button
+            type="button"
+            onClick={simulateRotation}
+            disabled={busy || !endpoint}
+            className="flex-1 px-4 py-2 min-h-[44px] rounded bg-card border border-border text-foreground disabled:opacity-50"
+          >
+            Simulate rotation
+          </button>
+          <button
+            type="button"
+            onClick={reconcileNow}
+            disabled={busy}
+            className="flex-1 px-4 py-2 min-h-[44px] rounded bg-card border border-border text-foreground disabled:opacity-50"
+          >
+            Reconcile now
+          </button>
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Rotation leaves the table pointing at a dead endpoint that still
+          answers 201. Simulate one, then reconcile, then send.
         </p>
       </div>
 

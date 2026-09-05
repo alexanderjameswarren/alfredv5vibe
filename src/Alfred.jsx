@@ -10,6 +10,7 @@ import {
   executionPath,
 } from "./viewPaths";
 import { useExecutionRoute } from "./useExecutionRoute";
+import { reconcilePushSubscription } from "./utils/pushSubscriptions";
 import AppLink from "./AppLink";
 import UndoMessage, { useUndo } from "./UndoMessage";
 import SortControl, { useSortPreference } from "./SortControl";
@@ -1303,6 +1304,54 @@ export default function Alfred() {
   const [recycleLoading, setRecycleLoading] = useState(false);
   const [recycleHasMore, setRecycleHasMore] = useState(false);
   const [recycleSelected, setRecycleSelected] = useState(new Set());
+
+  // --- Push subscription self-healing (Phase 5c) ----------------------------
+  //
+  // A push subscription can die while its stored row still looks healthy. In
+  // the field an endpoint returned 201 from FCM and delivered nothing, for
+  // three consecutive sends. There is no delivery receipt in Web Push, so a
+  // 201 means "the push service accepted it" and never "the phone showed it" —
+  // and a dead FCM registration can answer 201 forever rather than the 404/410
+  // that would have pruned the row.
+  //
+  // So the table cannot be trusted to correct itself. The browser's own
+  // getSubscription() is the authority, and this reconciles against it once per
+  // load. It never registers a worker or creates a subscription: a user who has
+  // not enabled push sees no change at all.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      const outcome = await reconcilePushSubscription();
+      if (cancelled || !outcome.ran) return;
+      if (outcome.inserted || outcome.deleted > 0) {
+        console.log(
+          `[Push] Subscription reconciled — ${outcome.reason} ` +
+            `(inserted: ${outcome.inserted}, removed: ${outcome.deleted})`
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  // The worker postMessages a rotation when Alfred is open, so it is repaired
+  // immediately rather than waiting for the next load.
+  useEffect(() => {
+    if (!user || typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+      return undefined;
+    }
+    const onMessage = (event) => {
+      if (!event.data || event.data.type !== "push-subscription-changed") return;
+      console.log("[Push] Service worker reported a subscription rotation; repairing.");
+      reconcilePushSubscription().then((outcome) => {
+        console.log(`[Push] Rotation repair: ${outcome.reason}`);
+      });
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, [user]);
 
   // --- Execution deep link (notification chains, Phase 1) -------------------
   //

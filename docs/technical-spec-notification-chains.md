@@ -363,6 +363,94 @@ cadence vocabulary is daily/weekly, so it can describe the dispatcher job but
 cannot express the per-step scheduling; that lives entirely in
 `notification_steps.due_at`.
 
+## Delivery is not guaranteed, and `sent` does not mean delivered
+
+> 🛑 **`sent` means "the push service accepted this request". It does not mean
+> the phone showed anything.** Web Push has **no delivery receipt**. There is no
+> mechanism, anywhere in the protocol, by which Alfred can learn that a
+> notification was displayed. Do not add one; do not make `sent` imply one.
+
+Observed in the field, and the reason this section exists: an FCM endpoint
+returned **201 for three consecutive sends and delivered nothing**. The
+subscription had died mid-session while the stored row went on looking healthy.
+Every send reported success, every step was stamped `sent_at` and left the
+queue, and the user got nothing — with no error at any layer.
+
+The consequence is structural: **the 404/410 pruning cannot be relied on.** A
+dead FCM registration can answer 201 indefinitely rather than the 410 that would
+delete the row. So `push_subscriptions` does not correct itself, and something
+outside the send path has to keep it honest.
+
+### Subscription rotation and repair
+
+`pushsubscriptionchange` fires in the service worker when the browser
+invalidates a subscription. Without a handler, a rotated subscription becomes a
+dead letterbox: the old endpoint stays in the table, the dispatcher keeps
+sending to it, FCM keeps answering 201, and the only recovery is a user noticing
+and resubscribing by hand.
+
+Two layers, because neither is sufficient alone:
+
+1. **The worker handles `pushsubscriptionchange`.** It resubscribes with the
+   **same** application server key — a subscription made with a different key
+   cannot be sent to with the old one — and records `{ oldEndpoint,
+   newEndpoint }` in IndexedDB, then postMessages any open client.
+
+   The worker deliberately does **not** write to Supabase. supabase-js keeps the
+   session in `localStorage`, which a service worker cannot read, so it has no
+   credentials to write with.
+
+2. **The app reconciles on load.** `pushManager.getSubscription()` is the only
+   authority on what this device actually holds. It is compared against the
+   table and repaired. This is the backstop for a rotation that happened while
+   Alfred was closed, and for one where the worker never got to run.
+
+> ⚠️ **The reconciler must never delete "every row that is not the current
+> endpoint".** Other rows belong to the user's OTHER DEVICES. Only the endpoint
+> the worker explicitly recorded as rotated away from is removed. Pinned by
+> test: `NEVER deletes another device's row`.
+
+The reconciler never registers a worker and never creates a subscription — a
+user who has not enabled push is untouched.
+
+### Why did it rotate?
+
+Unresolved, and worth stating plainly rather than assuming.
+
+The obvious suspect is the frontend redeploy between tests, which updated
+`notify-sw.js` for the deep link. **But a service worker update does not
+normally invalidate push subscriptions** — a subscription belongs to the
+*registration*, not to the worker script version, and `skipWaiting()` /
+`clients.claim()` change which script is active, not the registration. So the
+redeploy is a suspect, not a demonstrated cause.
+
+Other candidates, none excluded:
+
+- FCM rotating its registration on its own schedule, which it does.
+- A changed `applicationServerKey` between builds. Excluded here — the VAPID
+  keys were stable — but it is the classic cause and worth checking first next
+  time.
+- Anything that unregistered the worker: clearing site data, a scope change, a
+  different worker claiming the scope.
+
+**If a redeploy does turn out to invalidate subscriptions in this setup, it is a
+recurring problem on every deploy, not a one-off.** The repair above makes it
+survivable either way, which is why it was built before the cause was known. To
+settle it, note the endpoint tail before a deploy and check it after: the
+diagnostic's status panel shows it, and the app-load reconcile logs any change.
+
+### Stale subscriptions — considered, not built
+
+A subscription that no longer works but keeps returning 201 will sit in the
+table forever. Pruning "no successful app-load reconciliation in N days" would
+need a `last_seen_at` column stamped by the reconciler — `last_used_at` means
+"last sent to" and would be stamped by exactly the sends that are failing
+silently, so it cannot serve this purpose.
+
+Not built: it is a new column and a new migration, and the repair above
+addresses the cause rather than the symptom. Worth revisiting if dead rows
+accumulate in practice.
+
 ## Deep linking
 
 **This is a prerequisite, not a nice-to-have.** `viewPaths.js` currently maps
