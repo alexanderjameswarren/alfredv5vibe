@@ -1,5 +1,11 @@
 import { supabase } from "../supabaseClient";
-import { readPendingRotation, clearPendingRotation } from "./pushRotation";
+import {
+  readPendingRotation,
+  clearPendingRotation,
+  readKnownEndpoints,
+  rememberEndpoint,
+  forgetEndpoint,
+} from "./pushRotation";
 
 /**
  * Keeping `push_subscriptions` honest about what this browser actually holds.
@@ -35,18 +41,39 @@ const TABLE = "push_subscriptions";
 export function planSubscriptionReconcile(
   currentEndpoint,
   storedEndpoints,
-  pendingRotation
+  pendingRotation,
+  knownEndpoints
 ) {
   const stored = Array.isArray(storedEndpoints) ? storedEndpoints : [];
+  const known = Array.isArray(knownEndpoints) ? knownEndpoints : [];
   const deleteEndpoints = [];
 
-  // The worker told us exactly which row this device replaced. Only that one —
-  // every other row belongs to a DIFFERENT DEVICE and must be left alone.
-  // Deleting "everything that is not the current endpoint" would silently
-  // unsubscribe the user's other phone.
+  // ── What may be deleted, and why it is safe ──────────────────────────────
+  //
+  // Only rows this browser can PROVE it created. Every other row belongs to a
+  // DIFFERENT DEVICE, and "delete everything that is not the current endpoint"
+  // would silently unsubscribe the user's other phone.
+  //
+  // Two independent proofs of ownership, because neither covers every case:
+  //
+  //   1. The worker's rotation record — precise, but only exists if the worker
+  //      ran and IndexedDB was available.
+  //   2. The local endpoint ledger — every endpoint THIS browser put in the
+  //      table. Durable, and the only thing that covers a rotation which
+  //      happened before any of this shipped.
+  //
+  // Neither can name another device's endpoint, which is the safety property.
+  const candidates = new Set();
+
   const rotatedFrom = pendingRotation && pendingRotation.oldEndpoint;
-  if (rotatedFrom && rotatedFrom !== currentEndpoint && stored.includes(rotatedFrom)) {
-    deleteEndpoints.push(rotatedFrom);
+  if (rotatedFrom) candidates.add(rotatedFrom);
+  for (const endpoint of known) candidates.add(endpoint);
+
+  for (const endpoint of candidates) {
+    // Never the live one, and only rows that are actually there.
+    if (!endpoint || endpoint === currentEndpoint) continue;
+    if (!stored.includes(endpoint)) continue;
+    deleteEndpoints.push(endpoint);
   }
 
   if (!currentEndpoint) {
@@ -62,19 +89,23 @@ export function planSubscriptionReconcile(
     };
   }
 
-  const known = stored.includes(currentEndpoint);
-  if (known && deleteEndpoints.length === 0) {
-    return { insert: false, deleteEndpoints, reason: "already in sync" };
+  const alreadyStored = stored.includes(currentEndpoint);
+  if (alreadyStored && deleteEndpoints.length === 0) {
+    return {
+      insert: false,
+      deleteEndpoints,
+      reason: "already in sync — this device's endpoint is stored and no stale rows of its own remain",
+    };
   }
 
   return {
-    insert: !known,
+    insert: !alreadyStored,
     deleteEndpoints,
-    reason: known
-      ? "endpoint already stored; clearing the rotated-away row"
-      : rotatedFrom
-      ? "rotated: storing the new endpoint and removing the old"
-      : "local subscription was missing from the table; storing it",
+    reason: alreadyStored
+      ? `this device's endpoint is stored; removing ${deleteEndpoints.length} stale row(s) it left behind`
+      : deleteEndpoints.length
+      ? `rotated: storing this device's new endpoint and removing ${deleteEndpoints.length} stale row(s)`
+      : "this device's endpoint was missing from the table; storing it",
   };
 }
 
@@ -89,7 +120,13 @@ export function planSubscriptionReconcile(
  *          failed reconcile must not break app load.
  */
 export async function reconcilePushSubscription() {
-  const outcome = { ran: false, inserted: false, deleted: 0, reason: "" };
+  const outcome = {
+    ran: false,
+    inserted: false,
+    deleted: 0,
+    rowsInTable: null,
+    reason: "",
+  };
 
   try {
     if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
@@ -123,10 +160,12 @@ export async function reconcilePushSubscription() {
     const plan = planSubscriptionReconcile(
       sub ? sub.endpoint : null,
       stored,
-      pending
+      pending,
+      readKnownEndpoints()
     );
     outcome.ran = true;
     outcome.reason = plan.reason;
+    outcome.rowsInTable = stored.length;
 
     if (plan.insert && sub) {
       const json = sub.toJSON();
@@ -154,12 +193,24 @@ export async function reconcilePushSubscription() {
       outcome.inserted = true;
     }
 
+    // Remember the live endpoint whether or not it was just inserted. Without
+    // this, a browser that is already in sync never records what it holds — so
+    // when that endpoint later rotates there is no proof of ownership and the
+    // dead row cannot be reaped. Recording it now is what makes the NEXT
+    // rotation self-healing.
+    if (sub) rememberEndpoint(sub.endpoint);
+
     for (const endpoint of plan.deleteEndpoints) {
       const { error: delError } = await supabase
         .from(TABLE)
         .delete()
         .eq("endpoint", endpoint);
-      if (!delError) outcome.deleted += 1;
+      if (delError) {
+        outcome.reason += ` (failed to remove one stale row: ${delError.message})`;
+        continue;
+      }
+      outcome.deleted += 1;
+      forgetEndpoint(endpoint);
     }
 
     // Only cleared once the swap has actually landed, so an interrupted

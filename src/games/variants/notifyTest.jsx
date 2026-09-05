@@ -1,6 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { supabase } from "../../supabaseClient";
 import { reconcilePushSubscription } from "../../utils/pushSubscriptions";
+import {
+  writePendingRotation,
+  rememberEndpoint,
+  forgetEndpoint,
+} from "../../utils/pushRotation";
 
 // Push Notification Test — not a game, a diagnostic.
 //
@@ -122,6 +127,11 @@ export default function NotifyTest() {
   // the table row is matched on; the object itself is fetched when needed.
   const [endpoint, setEndpoint] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [tableRows, setTableRows] = useState(null);
+  const [staleRows, setStaleRows] = useState(null);
+  // The actual rows, so each can be inspected and removed from the phone.
+  const [subRows, setSubRows] = useState([]);
+  const [liveEndpoint, setLiveEndpoint] = useState(null);
 
   // The registration is held in a ref, not state: it is the handle every
   // notification call needs, and re-rendering on it would say nothing that
@@ -463,6 +473,92 @@ export default function NotifyTest() {
     }
   };
 
+  // Read the table and say, on screen, exactly what is in it.
+  //
+  // This is the only way to see a stale row from a phone. Without it, "reconcile
+  // says already in sync" and "there is a dead row still being sent to" look
+  // identical — which is how the first version of this passed while leaving a
+  // dead row behind.
+  const reportTableState = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from(PUSH_TABLE)
+        .select("endpoint, user_agent, created_at, last_used_at")
+        .order("created_at", { ascending: true });
+      if (error) throw new Error(error.message);
+
+      const rows = data || [];
+      setTableRows(rows.length);
+      const reg = regRef.current;
+      const sub = reg ? await reg.pushManager.getSubscription() : null;
+      const live = sub ? sub.endpoint : null;
+      const others = rows.filter((r) => r.endpoint !== live);
+      setSubRows(rows);
+      setLiveEndpoint(live);
+
+      append(`Table now holds ${rows.length} subscription row(s) for this account.`);
+      for (const row of rows) {
+        const isLive = row.endpoint === live;
+        append(
+          `  ${endpointTail(row.endpoint)} — ${isLive ? "THIS DEVICE (live)" : "not this device's current endpoint"}`,
+          isLive ? "good" : "bad"
+        );
+      }
+      if (others.length > 0) {
+        append(
+          `${others.length} row(s) are not this browser's live endpoint. If any belongs ` +
+            `to another device that is correct; if it is this device's old one, reconcile removes it.`
+        );
+      }
+      setStaleRows(others.length);
+    } catch (err) {
+      append(`Could not read the table: ${messageOf(err)}`, "bad");
+    }
+  }, [append]);
+
+  // Remove one row the user has looked at and judged dead.
+  //
+  // The reconciler will never do this on its own: it deletes only rows it can
+  // PROVE this browser created, because a wrong guess silently unsubscribes
+  // another device. A row that predates the endpoint ledger cannot be proved
+  // either way — so the decision is handed to a person who can see the list,
+  // which is also the only way to do it from a phone.
+  const removeRow = async (row) => {
+    const tail = endpointTail(row.endpoint);
+    if (row.endpoint === liveEndpoint) {
+      append(`Refusing to remove ${tail} — it is this device's LIVE endpoint.`, "bad");
+      return;
+    }
+    // eslint-disable-next-line no-restricted-globals
+    const ok = window.confirm(
+      `Remove the subscription ending ${tail}?
+
+` +
+        `If this belongs to another device, that device stops receiving ` +
+        `notifications until it is re-subscribed.`
+    );
+    if (!ok) {
+      append(`Cancelled — ${tail} left in place.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const { error } = await supabase
+        .from(PUSH_TABLE)
+        .delete()
+        .eq("endpoint", row.endpoint)
+        .select("endpoint");
+      if (error) throw new Error(error.message);
+      forgetEndpoint(row.endpoint);
+      append(`Removed ${tail} from the table.`, "good");
+      await reportTableState();
+    } catch (err) {
+      append(`Could not remove ${tail}: ${messageOf(err)}`, "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // --- Rotation drill (Phase 5c) -------------------------------------------
   //
   // Chrome rotates a subscription on its own schedule, which is no use for
@@ -482,8 +578,14 @@ export default function NotifyTest() {
       if (!before) throw new Error("Nothing to rotate — subscribe first.");
 
       const staleEndpoint = before.endpoint;
-      append(`Rotation drill: current endpoint ${endpointTail(staleEndpoint)}`);
-      append("Unsubscribing in the browser WITHOUT touching the table…");
+      append(`Rotation drill. Old endpoint ${endpointTail(staleEndpoint)}`);
+
+      // The ledger is what a real rotation would already have: proof that THIS
+      // browser put the old endpoint in the table. Recorded before unsubscribing
+      // so the drill cannot pass while the delete path is untested.
+      rememberEndpoint(staleEndpoint);
+
+      append("Unsubscribing in the browser, leaving the table untouched…");
       await before.unsubscribe();
 
       const after = await reg.pushManager.subscribe({
@@ -491,10 +593,27 @@ export default function NotifyTest() {
         applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
       });
       setEndpoint(after.endpoint);
-      append(`New endpoint: ${endpointTail(after.endpoint)}`, "good");
+      append(`New endpoint ${endpointTail(after.endpoint)}`, "good");
+
+      // Also write the IndexedDB record the service worker would have written,
+      // so the drill exercises BOTH proofs of ownership rather than only the
+      // ledger.
+      const wrote = await writePendingRotation({
+        oldEndpoint: staleEndpoint,
+        newEndpoint: after.endpoint,
+        at: new Date().toISOString(),
+      });
       append(
-        `Table is now STALE: it still holds ${endpointTail(staleEndpoint)}. ` +
-          `Sending would return 201 and deliver nothing. Now press "Reconcile now".`,
+        wrote
+          ? "Wrote the same rotation record the service worker writes."
+          : "Could not write the rotation record; the ledger still covers it.",
+        wrote ? "info" : "bad"
+      );
+
+      append(
+        `Table is now STALE. It still holds ${endpointTail(staleEndpoint)}, ` +
+          `which is dead but will answer 201. Press "Reconcile now" — expect ` +
+          `1 stored and 1 removed.`,
         "bad"
       );
     } catch (err) {
@@ -509,12 +628,18 @@ export default function NotifyTest() {
   const reconcileNow = async () => {
     setBusy(true);
     try {
-      append("Reconciling browser subscription against the table…");
+      append("Reconciling this browser's subscription against the table…");
       const outcome = await reconcilePushSubscription();
       append(
-        `Reconcile: ${outcome.reason} (inserted: ${outcome.inserted}, removed: ${outcome.deleted})`,
+        `Reconcile result: ${outcome.reason}.`,
         outcome.inserted || outcome.deleted > 0 ? "good" : "info"
       );
+      append(
+        `Stored this device's endpoint: ${outcome.inserted ? "yes" : "no"}. ` +
+          `Stale rows removed: ${outcome.deleted}.`,
+        outcome.deleted > 0 ? "good" : "info"
+      );
+      await reportTableState();
     } catch (err) {
       append(`Reconcile failed: ${messageOf(err)}`, "bad");
     } finally {
@@ -576,6 +701,16 @@ export default function NotifyTest() {
             label="Endpoint tail"
             value={endpointTail(endpoint)}
             tone={endpoint ? "good" : "neutral"}
+          />
+          <StatusRow
+            label="Rows in table"
+            value={tableRows === null ? "not checked" : tableRows}
+            tone="neutral"
+          />
+          <StatusRow
+            label="Rows not this device"
+            value={staleRows === null ? "not checked" : staleRows}
+            tone={staleRows > 0 ? "bad" : staleRows === 0 ? "good" : "neutral"}
           />
         </dl>
       </div>
@@ -656,6 +791,50 @@ export default function NotifyTest() {
           that works with Alfred closed.
         </p>
 
+        <button
+          type="button"
+          onClick={() => reportTableState()}
+          disabled={busy}
+          className="w-full mt-2 px-4 py-2 min-h-[44px] rounded bg-card border border-border text-foreground disabled:opacity-50"
+        >
+          Show table rows
+        </button>
+
+        {subRows.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {subRows.map((row) => {
+              const isLive = row.endpoint === liveEndpoint;
+              return (
+                <div
+                  key={row.endpoint}
+                  className="flex items-center justify-between gap-2 p-2 bg-card border border-border rounded"
+                >
+                  <div className="min-w-0">
+                    <span
+                      className={`block text-xs font-mono break-all ${
+                        isLive ? "text-success" : "text-destructive"
+                      }`}
+                    >
+                      {endpointTail(row.endpoint)}
+                    </span>
+                    <span className="block text-xs text-muted-foreground">
+                      {isLive ? "this device (live)" : "not this device's live endpoint"}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeRow(row)}
+                    disabled={busy || isLive}
+                    className="px-3 py-2 min-h-[44px] rounded border border-border text-sm text-destructive disabled:opacity-30 shrink-0"
+                  >
+                    Remove
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <div className="flex gap-2 mt-3 pt-3 border-t border-border">
           <button
             type="button"
@@ -675,8 +854,10 @@ export default function NotifyTest() {
           </button>
         </div>
         <p className="mt-2 text-sm text-muted-foreground">
-          Rotation leaves the table pointing at a dead endpoint that still
-          answers 201. Simulate one, then reconcile, then send.
+          A rotation leaves the table pointing at a dead endpoint that still
+          answers 201. The drill reproduces that exactly — including the
+          ownership record a real rotation leaves — so reconcile is tested on
+          both storing the new row and removing the old one.
         </p>
       </div>
 

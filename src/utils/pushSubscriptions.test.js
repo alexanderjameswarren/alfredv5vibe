@@ -10,7 +10,12 @@ const OTHER_DEVICE = "https://fcm.googleapis.com/fcm/send/someOtherPhone12345";
 describe("planSubscriptionReconcile", () => {
   it("does nothing when the browser and the table already agree", () => {
     const plan = planSubscriptionReconcile(NEW, [NEW], null);
-    expect(plan).toEqual({ insert: false, deleteEndpoints: [], reason: "already in sync" });
+    expect(plan.insert).toBe(false);
+    expect(plan.deleteEndpoints).toEqual([]);
+    // Wording matters: this is read on a phone with no console, and a bare
+    // "already in sync" was mistaken for "there are no stale rows anywhere".
+    expect(plan.reason).toMatch(/already in sync/);
+    expect(plan.reason).toMatch(/no stale rows of its own/);
   });
 
   it("stores a subscription the table has never seen", () => {
@@ -84,6 +89,77 @@ describe("planSubscriptionReconcile", () => {
   it("tolerates junk", () => {
     expect(planSubscriptionReconcile(null, null, null).insert).toBe(false);
     expect(planSubscriptionReconcile(NEW, undefined, undefined).insert).toBe(true);
+  });
+});
+
+describe("reaping a stale row with NO worker record — the field failure", () => {
+  // Reported from a phone: two rows for the same device, reconcile said
+  // "already in sync", and the dead row stayed in the table being sent to.
+  // The worker record did not exist because the rotation predated that code.
+  // The ledger is the durable proof of ownership that covers it.
+
+  it("previously said already in sync and removed nothing", () => {
+    // The old behaviour, kept as documentation of the bug.
+    const plan = planSubscriptionReconcile(NEW, [OLD, NEW], null, []);
+    expect(plan.deleteEndpoints).toEqual([]);
+    expect(plan.reason).toMatch(/already in sync/);
+  });
+
+  it("now removes the stale row when the ledger proves this browser made it", () => {
+    const plan = planSubscriptionReconcile(NEW, [OLD, NEW], null, [OLD, NEW]);
+    expect(plan.insert).toBe(false);
+    expect(plan.deleteEndpoints).toEqual([OLD]);
+  });
+
+  it("removes it even when the current endpoint still needs storing", () => {
+    const plan = planSubscriptionReconcile(NEW, [OLD], null, [OLD]);
+    expect(plan.insert).toBe(true);
+    expect(plan.deleteEndpoints).toEqual([OLD]);
+  });
+
+  it("STILL never touches another device's row", () => {
+    // The ledger can only ever contain endpoints this browser created, which
+    // is the whole reason it is safe where user_agent matching is not.
+    const plan = planSubscriptionReconcile(NEW, [OLD, OTHER_DEVICE, NEW], null, [OLD, NEW]);
+    expect(plan.deleteEndpoints).toEqual([OLD]);
+    expect(plan.deleteEndpoints).not.toContain(OTHER_DEVICE);
+  });
+
+  it("never deletes the live endpoint even if the ledger lists it", () => {
+    const plan = planSubscriptionReconcile(NEW, [NEW], null, [OLD, NEW]);
+    expect(plan.deleteEndpoints).toEqual([]);
+  });
+
+  it("does not delete a ledger endpoint that is not in the table", () => {
+    const plan = planSubscriptionReconcile(NEW, [NEW], null, [OLD, NEW]);
+    expect(plan.deleteEndpoints).toEqual([]);
+  });
+
+  it("reaps several stale rows left by repeated rotations", () => {
+    const OLDER = "https://fcm.googleapis.com/fcm/send/olderStillAAAAAAAAAA";
+    const plan = planSubscriptionReconcile(NEW, [OLDER, OLD, NEW, OTHER_DEVICE], null, [
+      OLDER,
+      OLD,
+      NEW,
+    ]);
+    expect(plan.deleteEndpoints.sort()).toEqual([OLD, OLDER].sort());
+    expect(plan.deleteEndpoints).not.toContain(OTHER_DEVICE);
+  });
+
+  it("combines both proofs without double-deleting", () => {
+    const plan = planSubscriptionReconcile(
+      NEW,
+      [OLD, NEW],
+      { oldEndpoint: OLD, newEndpoint: NEW },
+      [OLD, NEW]
+    );
+    expect(plan.deleteEndpoints).toEqual([OLD]);
+  });
+
+  it("says how many stale rows it is removing", () => {
+    // The phone log is the only diagnostic; the reason has to be specific.
+    const plan = planSubscriptionReconcile(NEW, [OLD, NEW], null, [OLD]);
+    expect(plan.reason).toMatch(/removing 1 stale row/);
   });
 });
 

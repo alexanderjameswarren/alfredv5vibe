@@ -84,3 +84,90 @@ export async function clearPendingRotation() {
     /* nothing recoverable; a stale record is re-applied harmlessly next load */
   }
 }
+
+/**
+ * Write a rotation record from the APP side.
+ *
+ * Used by the rotation drill in the diagnostic, so that forcing a rotation
+ * leaves exactly the state a real one does. Without it the drill exercised the
+ * insert path only and reported a pass while the delete path had never run.
+ */
+export async function writePendingRotation(record) {
+  try {
+    const db = await openDb();
+    if (!db) return false;
+    return await new Promise((resolve) => {
+      const tx = db.transaction(ROTATION_STORE, "readwrite");
+      tx.objectStore(ROTATION_STORE).put(record, ROTATION_KEY);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+      tx.onabort = () => resolve(false);
+    });
+  } catch {
+    return false;
+  }
+}
+
+/* ── The endpoint ledger ────────────────────────────────────────────────────
+ *
+ * Every endpoint THIS browser has ever stored in push_subscriptions.
+ *
+ * It exists to answer one question safely: "is this table row mine, and dead?"
+ *
+ * The reconciler must never delete a row just because it is not the current
+ * endpoint — other rows belong to the user's other devices, and deleting them
+ * would silently unsubscribe another phone. The worker's rotation record proves
+ * ownership when it exists, but it does not exist for a rotation that happened
+ * before this code shipped, or if IndexedDB was unavailable when it fired.
+ *
+ * The ledger is the durable version of that proof. An endpoint in here was put
+ * in the table BY THIS BROWSER, so if it is no longer the endpoint this browser
+ * holds, it is this browser's dead row and is safe to remove.
+ *
+ * localStorage is per-origin and per-browser-profile, so two Chrome installs on
+ * the same phone keep separate ledgers — which is exactly why this is safe
+ * where matching on user_agent is not.
+ *
+ * If it is lost (cleared storage, private mode) nothing breaks: the reconciler
+ * falls back to inserting the current endpoint, which is today's behaviour.
+ */
+
+const LEDGER_KEY = "alfred.push.endpoints";
+// Bounded so a browser that rotates often cannot grow this without limit.
+const LEDGER_MAX = 20;
+
+export function readKnownEndpoints() {
+  try {
+    const raw = window.localStorage.getItem(LEDGER_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((e) => typeof e === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Record that this browser put `endpoint` in the table. Newest last. */
+export function rememberEndpoint(endpoint) {
+  if (!endpoint) return;
+  try {
+    const list = readKnownEndpoints().filter((e) => e !== endpoint);
+    list.push(endpoint);
+    window.localStorage.setItem(
+      LEDGER_KEY,
+      JSON.stringify(list.slice(-LEDGER_MAX))
+    );
+  } catch {
+    /* storage unavailable; the reconciler degrades to insert-only */
+  }
+}
+
+/** Drop an endpoint once its row has actually been deleted. */
+export function forgetEndpoint(endpoint) {
+  try {
+    const list = readKnownEndpoints().filter((e) => e !== endpoint);
+    window.localStorage.setItem(LEDGER_KEY, JSON.stringify(list));
+  } catch {
+    /* nothing recoverable */
+  }
+}

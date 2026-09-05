@@ -1,6 +1,6 @@
 # Progress: Chained Notifications
 
-## Status: Phase 5c — subscription rotation repair (Phase 6 not started)
+## Status: Phase 5c.1 — stale-row reaping (Phase 6 not started)
 
 Reference: `docs/technical-spec-notification-chains.md`
 
@@ -754,3 +754,89 @@ check it after.
 - 595 tests across 27 suites; `CI=true` build clean.
 - 17 new tests: the reconcile planner including the other-device case, and the
   worker/app twin-site guard.
+
+---
+
+## Phase 5c.1 — the reconciler was not reaping stale rows
+
+Reported from the phone: two rows for the same device, and "Reconcile now" said
+*already in sync, inserted false, removed 0* while the dead row stayed in the
+table being sent to.
+
+Correct diagnosis. The reconciler only asked "is the CURRENT endpoint stored?".
+If yes it stopped, whatever else was in the table. The delete path fired only on
+a service-worker rotation record — which does not exist for a rotation that
+happened before that code shipped.
+
+### The drill gave a false pass
+
+"Simulate rotation" bypassed the worker, so it never wrote the ownership record
+and never exercised the delete path — while reporting success. It now writes the
+**same IndexedDB record the worker writes** and records the old endpoint in the
+ledger before unsubscribing, so it reproduces a real rotation rather than half
+of one.
+
+### The reaping rule, and why not the alternatives
+
+The constraint stands: **never delete a row this browser cannot prove it
+created.** Other rows are other devices, and a wrong guess unsubscribes one
+silently.
+
+| Option | Verdict |
+|---|---|
+| Reap on 410 | Insufficient. The whole failure is a dead endpoint answering **201**, so it never 410s. |
+| `last_seen_at` + prune after N days | Rejected. A device that has not opened Alfred for N days is legitimate; pruning it unsubscribes a working phone for being idle. Also needs a migration. |
+| `user_agent` + keep most recent | Rejected, as Alex said. Two Chrome installs on the same phone model share a user agent, so one would delete the other's row. |
+| **Local endpoint ledger** | **Chosen.** |
+
+The ledger records every endpoint **this browser** has stored, in localStorage.
+An endpoint in it was put in the table by this browser, so if it is no longer
+what this browser holds, it is this browser's dead row and safe to remove.
+localStorage is per-origin and per-profile, so two Chrome installs keep separate
+ledgers — the exact collision that sinks user-agent matching cannot occur. No
+migration, no new column, no time-based guessing.
+
+Losing it (cleared storage, private mode) degrades to today's behaviour: insert
+only, nothing deleted.
+
+The live endpoint is now recorded on **every** reconcile, not only on insert —
+otherwise a browser already in sync never records what it holds, and the next
+rotation has no proof of ownership. That is what makes the next rotation
+self-healing.
+
+### For rows that predate all of this
+
+They can never be in the ledger, so the code will not touch them. Two ways out:
+
+- **From the phone** — "Show table rows" lists every row with its endpoint tail,
+  marks which one this device holds, and puts a **Remove** button on the others.
+  The live row cannot be removed. A human-confirmed delete, which is exactly the
+  judgement the code must not make on its own.
+- `docs/sql/phase5c-remove-stale-subscription.sql` — look, confirm by id,
+  delete.
+
+### Phone-first diagnostics
+
+The on-screen log is the only diagnostic available on the test device, so:
+
+- Status panel gained **Rows in table** and **Rows not this device**.
+- "Show table rows" lists every row and says which is live.
+- Reconcile now reports what it did in full sentences, and its "already in sync"
+  reason says *and no stale rows of its own remain* — the bare version was read
+  as "there are no stale rows anywhere", which is what made this bug look like
+  correct behaviour.
+
+### On the reported typos
+
+Searched the source for "rconiling borward" and "reconle": they do not appear.
+Every emitted string is spelled correctly (`"Reconciling browser subscription
+against the table…"`). Most likely a rendering or transcription artefact. The
+wording was rewritten to be more specific anyway, since it is the only
+diagnostic on the device.
+
+### Status
+
+- 604 tests across 27 suites; `CI=true` build clean.
+- 9 new tests for the field failure, including `previously said already in sync
+  and removed nothing` as documentation of the bug, and `STILL never touches
+  another device's row` guarding the safety property under the new rule.
