@@ -1,6 +1,9 @@
 import {
   TERMINAL_STATES,
+  RESTORABLE_STATES,
   NO_SUBSCRIPTION,
+  planRevertToChain,
+  planRestore,
   ownsNotificationRow,
   isTickableElement,
   precedingTickableIndex,
@@ -388,6 +391,145 @@ describe("no_subscription behaves exactly like sent", () => {
   it("is not re-timed on resume", () => {
     const stale = [{ id: "r1", state: NO_SUBSCRIPTION, due_at: "2020-01-01T00:00:00.000Z" }];
     expect(planResume(stale, T0)).toEqual([]);
+  });
+});
+
+describe("a manual time is an override, not a mode change", () => {
+  // Steps 1-4, all steps, offsets on 2/3/4.
+  const els = [
+    step("one", 10),
+    step("two", 10),
+    step("three", 20),
+    step("four", 30),
+  ];
+  const done = (list, i) =>
+    list.map((el, n) => (n === i ? { ...el, isCompleted: true } : el));
+
+  const rows = (overrides = {}) =>
+    [
+      { id: "r1", seq: 1, offset_minutes: 10, state: "done" },
+      { id: "r2", seq: 2, offset_minutes: 10, state: "scheduled" },
+      { id: "r3", seq: 3, offset_minutes: 20, state: "waiting" },
+      { id: "r4", seq: 4, offset_minutes: 30, state: "waiting" },
+    ].map((r) => ({ ...r, ...(overrides[r.id] || {}) }));
+
+  it("THE RULE: a manual time wins over the chain", () => {
+    // Step 4 manually scheduled for 2pm; step 3 completed at 1:30. The manual
+    // time must survive — a deliberate override outranks an unrelated
+    // completion.
+    const TWO_PM = "2026-09-06T14:00:00.000Z";
+    const ONE_THIRTY = "2026-09-06T13:30:00.000Z";
+    const withManual = rows({ r4: { state: "scheduled", due_at: TWO_PM } });
+
+    const plan = planCompletion(els, withManual, 2, ONE_THIRTY);
+
+    // r4 is untouched: not rescheduled to 1:30 + 30min = 2:00 by coincidence,
+    // but genuinely absent from the plan.
+    expect(plan.schedule.map((p) => p.id)).not.toContain("r4");
+    expect(withManual.find((r) => r.id === "r4").due_at).toBe(TWO_PM);
+  });
+
+  it("reverting a manual time hands the row back to the chain", () => {
+    // Step 3 not yet completed, so step 4 goes dormant and waits for it.
+    const row = { id: "r4", seq: 4, offset_minutes: 30, state: "scheduled", due_at: T0 };
+    expect(planRevertToChain(els, row, T0)).toEqual({
+      id: "r4",
+      state: "waiting",
+      due_at: null,
+      sent_at: null,
+    });
+  });
+
+  it("and completing the predecessor then arms it normally", () => {
+    // The link was never severed: the whole point of the revert.
+    const reverted = rows({ r4: { state: "waiting", due_at: null } });
+    const plan = planCompletion(els, reverted, 2, T0);
+    expect(plan.schedule).toContainEqual({
+      id: "r4",
+      state: "scheduled",
+      due_at: "2026-09-04T10:30:00.000Z",
+    });
+  });
+
+  it("reverting AFTER the predecessor finished re-arms immediately", () => {
+    // Otherwise the row would wait for a completion that has already happened
+    // and will never happen again — severed by a different route.
+    const elsDone = done(els, 2);
+    const row = { id: "r4", seq: 4, offset_minutes: 30, state: "scheduled", due_at: T0 };
+    expect(planRevertToChain(elsDone, row, T0)).toEqual({
+      id: "r4",
+      state: "scheduled",
+      due_at: "2026-09-04T10:30:00.000Z",
+      sent_at: null,
+    });
+  });
+
+  it("reverting the head of the chain schedules it now", () => {
+    const row = { id: "r1", seq: 1, offset_minutes: 10, state: "cancelled" };
+    expect(planRevertToChain(els, row, T0)).toEqual({
+      id: "r1",
+      state: "scheduled",
+      due_at: T0,
+      sent_at: null,
+    });
+  });
+
+  it("clears sent_at on revert, so a resent step is not shown as notified", () => {
+    const row = { id: "r4", seq: 4, offset_minutes: 30, state: "sent", sent_at: T0 };
+    expect(planRevertToChain(els, row, T0).sent_at).toBeNull();
+  });
+});
+
+describe("cancelled is restorable, not permanent", () => {
+  const els = [step("one", 10), step("two", 20), step("three", 30)];
+
+  it("is still terminal to the CHAIN", () => {
+    // Nothing automatic resurrects it; only a user action does.
+    expect(TERMINAL_STATES.has("cancelled")).toBe(true);
+    expect(RESTORABLE_STATES.has("cancelled")).toBe(true);
+  });
+
+  it("restores every cancelled row and nothing else", () => {
+    const rows = [
+      { id: "a", seq: 1, offset_minutes: 10, state: "cancelled" },
+      { id: "b", seq: 2, offset_minutes: 20, state: "cancelled" },
+      { id: "c", seq: 3, offset_minutes: 30, state: "done" },
+    ];
+    const plan = planRestore(els, rows, T0);
+    expect(plan.map((p) => p.id)).toEqual(["a", "b"]);
+  });
+
+  it("recomputes the due time from NOW, not the original", () => {
+    // Reinstating a due_at from an hour ago would fire the instant it was
+    // restored, for a moment that has passed.
+    const elsDone = [{ ...els[0], isCompleted: true }, els[1], els[2]];
+    const rows = [
+      { id: "b", seq: 2, offset_minutes: 20, state: "cancelled", due_at: "2020-01-01T00:00:00.000Z" },
+    ];
+    const plan = planRestore(elsDone, rows, T0);
+    expect(plan[0].due_at).toBe("2026-09-04T10:20:00.000Z");
+  });
+
+  it("restores a row whose predecessor is not done to waiting", () => {
+    const rows = [{ id: "b", seq: 2, offset_minutes: 20, state: "cancelled" }];
+    expect(planRestore(els, rows, T0)[0]).toMatchObject({
+      state: "waiting",
+      due_at: null,
+    });
+  });
+
+  it("round-trips: cancel then restore leaves the chain workable", () => {
+    const rows = [
+      { id: "a", seq: 1, offset_minutes: 10, state: "scheduled" },
+      { id: "b", seq: 2, offset_minutes: 20, state: "waiting" },
+    ];
+    const cancelled = planCancellation(rows).map((p) => {
+      const r = rows.find((x) => x.id === p.id);
+      return { ...r, ...p };
+    });
+    expect(cancelled.every((r) => r.state === "cancelled")).toBe(true);
+    const restored = planRestore(els, cancelled, T0);
+    expect(restored.map((p) => p.state)).toEqual(["scheduled", "waiting"]);
   });
 });
 

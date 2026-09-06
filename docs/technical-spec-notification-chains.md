@@ -223,10 +223,41 @@ conformance returning CONFORMANT.
 | `sent` | Notification delivered. Awaiting completion. |
 | `done` | Marked complete. Stamps the next step's `due_at` and moves it to `scheduled`. |
 | `skipped` | Explicitly passed over. Advances the chain like `done`. |
-| `cancelled` | Chain was cancelled or the execution closed. Terminal. |
+| `cancelled` | Cancelled by the user, or the execution closed. Terminal to the chain, **restorable by hand**. |
+| `no_subscription` | Came due with no subscription for the user. Out of the send queue, not terminal. |
 
 Transitions: `waiting → scheduled → sent → done`. Any non-terminal state can go
 to `cancelled`. `scheduled` or `sent` can go to `skipped`.
+
+### `cancelled` is terminal to the chain, not permanent
+
+Nothing automatic moves a row out of `cancelled` — no completion, resume or
+dispatch. But **a user can put it back**: "Schedule remaining" restores every
+cancelled row, and a per-step control restores one.
+
+Restoring **recomputes the due time from now**. Reinstating the original
+`due_at` would fire the instant it was restored, for a moment that has passed.
+A restored row lands in `waiting` if the element before it is not yet completed,
+or `scheduled` at `now + offset_minutes` if it already is.
+
+### 🛑 A manual time is an override, not a mode change
+
+Setting a step's notify time by hand puts the row in `scheduled`, and **that
+time wins over the chain**: completing the preceding element leaves it alone. A
+deliberate override is not something an unrelated completion should quietly
+overwrite. Scheduled for 2pm and the step before it finishes at 1:30? It still
+fires at 2pm.
+
+**The override must never sever the row from the chain.** Reverting hands it
+back, and the chain decides where it lands — `waiting` if its predecessor has
+not completed, armed at `now + offset` if it already has. Without that second
+case, reverting after the predecessor had finished would leave the row waiting
+for a completion that has already happened and will never happen again, which is
+the same severing by a different route.
+
+An earlier version promoted a `waiting` row to `scheduled` on edit with no way
+back, which severed it permanently. The revert control is what makes the
+override temporary.
 
 **A chain advances only on `done` or `skipped`.** If a step is never completed,
 nothing further is scheduled — the chain stalls with one outstanding
@@ -547,12 +578,34 @@ Capabilities:
 
 ## Control surface
 
-On the active execution, the user can:
+**Notification state is shown ON each element, not in a section of its own.** A
+separate "Timed steps" list said everything twice — the same steps in the same
+order, once to tick and once to read about. What a step's notification is doing
+belongs next to the step, where the user is already looking.
 
-- See the full queue, including `waiting` steps that have no due time yet.
-- Cancel the remainder of the chain.
-- Edit an individual step's `due_at`.
-- Edit an individual step's text.
+Per element, when it owns a row:
+
+| Element state | Shown |
+|---|---|
+| completed, notification sent | `notified 3:15pm` |
+| completed, never sent | `notification cancelled — step completed` |
+| `scheduled` | `notify at 2:15pm`, with **cancel notification** and **edit** |
+| `sent`, awaiting completion | `notified 3:15pm — awaiting completion` |
+| `waiting` | `notify 30 min after the step above is checked`, with **edit** |
+| `cancelled` | `notification cancelled`, with **restore** |
+| `no_subscription` | `not sent — no device was subscribed` |
+
+A completed element is described by **`sent_at`, not by state** — a row can be
+`done` or `cancelled` and what the user needs to know is whether anything
+actually reached them.
+
+**"Cancel remaining" / "Schedule remaining"** sits inline immediately before the
+first `waiting` element. There rather than at the top because *remaining* means
+"from here on", and that boundary is where it reads true. Deliberately **not**
+before a `sent` row awaiting completion: that notification has already gone out,
+so the remainder starts after it.
+
+Editing a step offers its text and **Notify at**.
 
 Edits apply to the `notification_steps` row for this run only. They never write
 back to the item's elements. If the same edit is being made every day, the

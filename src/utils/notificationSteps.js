@@ -28,8 +28,25 @@ import { readOffsetMinutes } from "./elementOffsets";
  * row, with seq 3.
  */
 
-/** States a row can no longer move out of. */
+/**
+ * States the CHAIN will not move a row out of on its own.
+ *
+ * `cancelled` is here, but it is **not permanent**: "Schedule remaining" and
+ * the per-step restore put a cancelled row back under chain control. Nothing
+ * automatic resurrects one — only a deliberate user action — which is the
+ * distinction this set encodes. See RESTORABLE_STATES.
+ */
 export const TERMINAL_STATES = new Set(["done", "skipped", "cancelled"]);
+
+/**
+ * States a user can explicitly bring back into the chain.
+ *
+ * Cancelling is a decision, not a death: the queue is a control surface, and a
+ * control that cannot be undone is a trap. Restoring recomputes the due time
+ * from NOW rather than reinstating the original `due_at`, which would fire
+ * immediately for a moment that has already passed.
+ */
+export const RESTORABLE_STATES = new Set(["cancelled"]);
 
 /**
  * Set by the dispatcher when a step comes due and its user has no
@@ -175,9 +192,21 @@ export function planCompletion(elements, rows, completedIndex, nowIso) {
   // 2. Rows whose clock this completion starts.
   for (const row of all) {
     if (row.seq === completedIndex + 1) continue; // its own row, handled above
-    // Only `waiting` advances. A row already scheduled, sent or terminal must
-    // not be moved: un-ticking and re-ticking an element would otherwise push
-    // a live due time further out every time.
+    // Only `waiting` advances, and that single line carries two rules.
+    //
+    //   1. Idempotency — un-ticking and re-ticking must not push a live due
+    //      time further out each time.
+    //
+    //   2. 🛑 A MANUAL TIME OUTRANKS THE CHAIN. A row the user scheduled by
+    //      hand is already `scheduled`, so completing the element before it
+    //      leaves that time alone. Scheduled for 2pm and the previous step
+    //      finished at 1:30? It still fires at 2pm. A deliberate override is
+    //      not something an unrelated completion should quietly overwrite.
+    //
+    // The override is temporary, not a mode change: reverting the row hands it
+    // back to the chain, and if its predecessor has already completed the
+    // revert re-arms it immediately. See planRevertToChain — that is what stops
+    // a manual time from severing the link permanently.
     if (row.state !== "waiting") continue;
     if (precedingTickableIndex(list, row.seq - 1) !== completedIndex) continue;
 
@@ -191,11 +220,57 @@ export function planCompletion(elements, rows, completedIndex, nowIso) {
   return { complete, schedule };
 }
 
-/** Rows to cancel when an execution closes: everything not already terminal. */
+/** Rows to cancel: everything the chain still has live. */
 export function planCancellation(rows) {
   return (Array.isArray(rows) ? rows : [])
     .filter((r) => !TERMINAL_STATES.has(r.state))
     .map((r) => ({ id: r.id, state: "cancelled" }));
+}
+
+/**
+ * Hand one row back to the chain.
+ *
+ * Used by the per-step revert and by "Schedule remaining". The chain — not the
+ * caller — decides where the row lands, which is what makes the link
+ * unseverable:
+ *
+ *   - **Predecessor not yet completed** → `waiting`, no due time. The normal
+ *     completion path arms it when the time comes.
+ *   - **Predecessor already completed** → armed straight away at
+ *     `now + offset`. Without this, reverting a row after its predecessor had
+ *     finished would leave it waiting for a completion that has already
+ *     happened and will never happen again — the exact severing this replaces.
+ *   - **Nothing precedes it** → scheduled now; it is the head of the chain.
+ *
+ * The due time is always recomputed from NOW. Reinstating the original would
+ * fire instantly for a moment that has passed.
+ */
+export function planRevertToChain(elements, row, nowIso) {
+  const list = Array.isArray(elements) ? elements : [];
+  const predecessor = precedingTickableIndex(list, row.seq - 1);
+
+  if (predecessor === -1) {
+    return { id: row.id, state: "scheduled", due_at: nowIso, sent_at: null };
+  }
+
+  const el = list[predecessor];
+  if (!el || !el.isCompleted) {
+    return { id: row.id, state: "waiting", due_at: null, sent_at: null };
+  }
+
+  return {
+    id: row.id,
+    state: "scheduled",
+    due_at: addMinutes(nowIso, row.offset_minutes),
+    sent_at: null,
+  };
+}
+
+/** Every restorable row handed back to the chain. */
+export function planRestore(elements, rows, nowIso) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((r) => RESTORABLE_STATES.has(r.state))
+    .map((r) => planRevertToChain(elements, r, nowIso));
 }
 
 /**

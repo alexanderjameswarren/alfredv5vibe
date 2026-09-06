@@ -12,7 +12,12 @@ import {
 import { useExecutionRoute } from "./useExecutionRoute";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
 import NotificationSettings from "./NotificationSettings";
-import NotificationChainPanel from "./NotificationChainPanel";
+import {
+  useNotificationChain,
+  ChainUnreachableNotice,
+  ElementNotification,
+  ChainRemainingToggle,
+} from "./NotificationChainInline";
 import AppLink from "./AppLink";
 import UndoMessage, { useUndo } from "./UndoMessage";
 import SortControl, { useSortPreference } from "./SortControl";
@@ -5049,6 +5054,7 @@ export default function Alfred() {
             contexts={contexts}
             collections={collections}
             collectionMembers={collectionMembers}
+            onOpenSettings={() => setView("settings")}
             onToggleElement={toggleExecutionElement}
             onUpdateElement={updateExecutionElement}
             onToggleCollectionItem={toggleCollectionItem}
@@ -8942,9 +8948,14 @@ function ExecutionDetailView({
   onCancel,
   onBack,
   getIntentDisplay,
+  onOpenSettings,
 }) {
   const [localNotes, setLocalNotes] = useState(execution.notes || "");
   const [, setTick] = useState(0);
+  // Notification state lives ON the elements now, so the chain is loaded here
+  // and threaded into the element rows rather than rendered as its own list.
+  const chain = useNotificationChain(execution.id, execution.elements);
+  const [editingStep, setEditingStep] = useState(null);
 
   // Poll collection every 5 seconds for collection-based executions
   useEffect(() => {
@@ -9086,6 +9097,7 @@ function ExecutionDetailView({
       {!execution.collectionId && execution.elements && execution.elements.length > 0 && (
         <div className="mb-6">
           <div className="border-t border-border pt-4 space-y-2">
+            <ChainUnreachableNotice chain={chain} onOpenSettings={onOpenSettings} />
             {(() => {
               let stepCounter = 0;
               return execution.elements.map((el, index) => {
@@ -9142,6 +9154,7 @@ function ExecutionDetailView({
                 const stepNum = stepCounter;
                 return (
                   <div key={index} style={{ marginLeft: indentPx }}>
+                    <ChainRemainingToggle chain={chain} index={index} />
                     <div
                       className="flex items-start gap-3 py-2 px-3 rounded hover:bg-secondary/50"
                     >
@@ -9183,6 +9196,13 @@ function ExecutionDetailView({
                               .join(" · ")}
                           </p>
                         )}
+                        <ElementNotification
+                          chain={chain}
+                          element={el}
+                          index={index}
+                          editing={editingStep}
+                          setEditing={setEditingStep}
+                        />
                       </div>
                       {!el.isCompleted && !el.inProgress && (
                         <button
@@ -9213,13 +9233,6 @@ function ExecutionDetailView({
           </div>
         </div>
       )}
-
-      {/* Timed steps. Renders nothing when this execution has no chain, which
-          is every ordinary execution. */}
-      <NotificationChainPanel
-        executionId={execution.id}
-        executionStatus={execution.status}
-      />
 
       <div className="mb-6">
         <div className="border-t border-border pt-4">

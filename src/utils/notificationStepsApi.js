@@ -4,6 +4,8 @@ import {
   planCompletion,
   planCancellation,
   planResume,
+  planRevertToChain,
+  planRestore,
 } from "./notificationSteps";
 
 /**
@@ -198,8 +200,29 @@ export async function updateStepText(stepId, text) {
  * that has already passed is allowed: the dispatcher picks it up on the next
  * tick, which is what "send it now" means here.
  */
-export async function updateStepDueAt(stepId, dueAtIso, currentState) {
-  const patch = { id: stepId, due_at: dueAtIso };
-  if (currentState === "waiting") patch.state = "scheduled";
+export async function updateStepDueAt(stepId, dueAtIso) {
+  await applyPatch({ id: stepId, due_at: dueAtIso, state: "scheduled", sent_at: null });
+}
+
+/**
+ * Hand one row back to the chain — the undo for a manual time or a cancel.
+ *
+ * The chain decides where it lands; see planRevertToChain. This is what makes a
+ * manual override temporary rather than a severed link.
+ */
+export async function revertStepToChain(executionId, elements, stepId, now = new Date()) {
+  const rows = await getNotificationSteps(executionId);
+  const row = rows.find((r) => r.id === stepId);
+  if (!row) return null;
+  const patch = planRevertToChain(elements, row, now.toISOString());
   await applyPatch(patch);
+  return patch;
+}
+
+/** Restore every cancelled row, recomputing its due time from now. */
+export async function restoreCancelledSteps(executionId, elements, now = new Date()) {
+  const rows = await getNotificationSteps(executionId);
+  const patches = planRestore(elements, rows, now.toISOString());
+  await applyPatches(patches);
+  return patches;
 }

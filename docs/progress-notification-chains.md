@@ -1,6 +1,6 @@
 # Progress: Chained Notifications
 
-## Status: Phase 6 complete — control surface, Settings, warnings (Phase 7 not started)
+## Status: Phase 6b complete — inline notifications, restorable cancel (Phase 7 not started)
 
 Reference: `docs/technical-spec-notification-chains.md`
 
@@ -982,3 +982,72 @@ status codes at all, which is why it is built on the browser's own
 ### Status
 
 - 607 tests across 27 suites; `CI=true` build clean.
+
+---
+
+## Phase 6b — notifications moved onto the elements
+
+Phase 6 verified; this is the revision pass plus one behaviour change.
+
+### UI
+
+- **The separate "Timed steps" section is gone.** It said everything twice — the
+  same steps in the same order, once to tick and once to read about. Each
+  element now carries its own notification line.
+- **"Cancel remaining" is inline**, immediately before the first `waiting`
+  element. Not before a `sent` row awaiting completion: that notification has
+  already gone out, so the remainder starts after it.
+- **It toggles to "Schedule remaining"** when anything is cancelled.
+- **Per-element cancel/restore** for one notification at a time.
+- **"Send at" → "Notify at".**
+- **The Settings link is now a real link.** It was
+  `<AppLink to={...}>` — `AppLink` takes `view` and `onNavigate`, so the old
+  version rendered an underlined phrase that looked tappable and navigated
+  nowhere. Exactly the reported symptom.
+- **Completed elements report what became of their notification**, keyed on
+  `sent_at` rather than state: `notified 3:15pm`, or `notification cancelled —
+  step completed`.
+
+### Behaviour: a manual time is an override, not a mode change
+
+The old `updateStepDueAt` promoted a `waiting` row to `scheduled` with no way
+back, which severed it from the chain permanently.
+
+Now:
+
+- **The manual time wins.** Completing the preceding element leaves a manually
+  scheduled row alone — scheduled for 2pm, predecessor finished at 1:30, still
+  fires at 2pm. Pinned by `THE RULE: a manual time wins over the chain`.
+- **Reverting hands the row back to the chain**, which decides where it lands:
+  `waiting` if the predecessor has not completed, armed at `now + offset` if it
+  already has.
+
+That second case matters more than it looks. Without it, reverting *after* the
+predecessor had finished would leave the row waiting for a completion that has
+already happened and will never happen again — the same severing by a different
+route. Pinned by `reverting AFTER the predecessor finished re-arms immediately`.
+
+### `cancelled` is restorable
+
+Terminal to the **chain** — nothing automatic moves a row out of it — but not
+permanent: a user can restore it. Restoring **recomputes the due time from now**;
+reinstating the original `due_at` would fire the instant it was restored, for a
+moment that has passed.
+
+`docs/sql/phase6-cancelled-is-restorable.sql` updates the column comment. **No
+schema change** — the CHECK constraint already permits every value used; only
+the authoritative description was wrong.
+
+### Status
+
+- 618 tests across 27 suites; `CI=true` build clean.
+- 12 new tests covering the override rule, revert in all three predecessor
+  states, `sent_at` clearing, and the cancel/restore round trip.
+
+### Still open, carried forward
+
+- ⚠️ **`platform.audit_log` records service-role writes as `actor = 'ui'`.**
+  Platform-layer work, not this feature.
+- ✅ `no_subscription` — implemented, constraint widened, not yet observed
+  firing in the wild.
+- ⏸️ `push-rotate` — deferred, revisit on the next observed rotation.
