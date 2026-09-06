@@ -1,6 +1,6 @@
 # Progress: Chained Notifications
 
-## Status: Phase 5c.2 — honest drill + rotation outage window (Phase 6 not started)
+## Status: Phase 6 complete — control surface, Settings, warnings (Phase 7 not started)
 
 Reference: `docs/technical-spec-notification-chains.md`
 
@@ -476,13 +476,60 @@ repeat a minute later.
 
 ## Phase 6 — Control surface
 
-- [ ] Show the full step queue on the active execution, including `waiting` rows
-- [ ] Cancel the remaining chain
-- [ ] Edit a step's `due_at`
-- [ ] Edit a step's text
+- [x] Show the full step queue on the active execution, including `waiting` rows
+- [x] Cancel the remaining chain
+- [x] Edit a step's `due_at`
+- [x] Edit a step's text
+- [x] **Subscription control in Settings** (added beyond spec)
+- [x] **Warning when notifications cannot arrive** (added beyond spec)
+- [x] **Element editor label says what the delay is measured FROM** (added)
 
 **Verify:** each edit changes only the `notification_steps` row and leaves the
 item's elements untouched.
+
+### Files
+
+| File | What |
+|---|---|
+| `src/NotificationChainPanel.jsx` | The queue, cancel, and per-run edits |
+| `src/NotificationSettings.jsx` | Subscribe / unsubscribe / repair in Settings |
+| `src/utils/pushSubscriptions.js` | Shared subscribe/unsubscribe/state helpers |
+| `src/utils/notificationStepsApi.js` | `updateStepText`, `updateStepDueAt` |
+
+### Decisions
+
+- **The panel is self-fetching.** `ExecutionDetailView` gains one line rather
+  than a set of props threaded from Alfred, and it renders **nothing** when the
+  execution has no chain — which is every ordinary execution.
+- **Editing a `waiting` step's due time moves it to `scheduled`.** Giving it a
+  time is what makes it eligible; leaving it `waiting` would accept the edit and
+  silently never send. A time in the past is allowed and fires on the next tick,
+  which is what "send it now" means here.
+- **Subscribe/unsubscribe was EXTRACTED, not copied.** Settings and the Games
+  diagnostic call the same `subscribeThisDevice` / `unsubscribeThisDevice`. A
+  second copy of "convert the key, subscribe, upsert the row" is precisely the
+  duplication that has cost this project twice. The diagnostic's UI is unchanged.
+- **Settings leads with "Notifications on this device" in plain language**, not
+  with the endpoint. Permission granted and a subscription existing are each
+  necessary and neither is sufficient — the endpoint has to be in the table too,
+  which is what `reachable` actually tests.
+- **The warning appears only when there IS a chain and the device cannot receive
+  it.** A user who never uses timed steps never sees it, and their subscription
+  state is never even queried.
+- **Label change is guarded by a twin-site test**, like the offset itself: both
+  call sites must carry the new wording.
+
+### Still open, carried forward
+
+- ⚠️ **`platform.audit_log` records the dispatcher's service-role writes with
+  `actor = 'ui'`.** The column cannot distinguish a service-role write from a
+  browser write, which is exactly what was needed to diagnose the Phase 5b
+  stall. Platform-layer work, not this feature.
+- ✅ `no_subscription` state — implemented in the dispatcher; SQL constraint
+  widened. Verify it fires the first time a step comes due for an account with
+  no subscription (Alex's partner is the natural test).
+- ⏸️ `push-rotate` edge function — **deferred, not rejected**. Revisit the next
+  time a rotation is observed in normal use.
 
 ---
 
@@ -914,3 +961,24 @@ frequent enough to warrant it.
 - 606 tests across 27 suites; `CI=true` build clean.
 - 2 new worker-source guards: the rotation warning exists, and it fires only
   when no window is open.
+
+---
+
+## Phase 6 notes — the drill's limits, recorded
+
+Alex's outage test did **not** reproduce the original bug, and the spec now says
+so. "Simulate rotation" calls `unsubscribe()`, which explicitly invalidates the
+endpoint at the push service, so it returns a proper **410**, `push-send` deletes
+the row, and the situation self-heals on the first send. That is the
+**well-behaved** rotation.
+
+The real failure was the opposite: **201 with the message silently dropped**,
+three times, never a 410. That variant is **unreproduced** — there is no way to
+ask FCM to accept-and-discard on demand — so a passing drill must not be read as
+proof it is handled. The reconciler covers it by not depending on push-service
+status codes at all, which is why it is built on the browser's own
+`getSubscription()` rather than on 410s.
+
+### Status
+
+- 607 tests across 27 suites; `CI=true` build clean.

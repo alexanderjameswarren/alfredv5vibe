@@ -453,9 +453,14 @@ call with no user token:
 - This closes the window entirely: the table is correct within seconds of the
   rotation, whether or not Alfred is ever opened.
 
-Not built because it is a new public endpoint that writes subscriptions, and it
-needs its own security review, deploy and SQL. Worth doing if rotations turn out
-to be anything other than rare.
+**Status: DEFERRED, not rejected.** It is a new public endpoint that writes
+subscriptions, so it needs its own security review, deploy and SQL — and the
+shipped mitigation makes the outage visible rather than silent, which lowers the
+urgency.
+
+**Revisit the moment another rotation is observed in normal use.** One rotation
+is an incident; two is a pattern, and at that point an unbounded outage window
+that depends on the user noticing a notification is not good enough.
 
 ### Why did it rotate?
 

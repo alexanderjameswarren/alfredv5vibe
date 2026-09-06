@@ -173,3 +173,33 @@ export async function resumeNotificationSteps(executionId, now = new Date()) {
   await applyPatches(patches);
   return patches;
 }
+
+/* ── Per-run edits (Phase 6) ────────────────────────────────────────────────
+ *
+ * 🛑 These write to notification_steps ONLY. They never touch the item's
+ * elements.
+ *
+ * The rows are copies taken at execution start, and that is the whole point: if
+ * the same edit is being made on every run, the template is wrong and the ITEM
+ * should be changed instead. An edit that wrote back would silently rewrite a
+ * recipe because someone was running late once.
+ */
+
+/** Change one step's text, for this run only. */
+export async function updateStepText(stepId, text) {
+  await applyPatch({ id: stepId, text });
+}
+
+/**
+ * Change one step's due time, for this run only.
+ *
+ * A step that had no due time — still `waiting` — becomes `scheduled`, because
+ * giving it a time is what makes it eligible for the dispatcher. Setting a time
+ * that has already passed is allowed: the dispatcher picks it up on the next
+ * tick, which is what "send it now" means here.
+ */
+export async function updateStepDueAt(stepId, dueAtIso, currentState) {
+  const patch = { id: stepId, due_at: dueAtIso };
+  if (currentState === "waiting") patch.state = "scheduled";
+  await applyPatch(patch);
+}

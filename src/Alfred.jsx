@@ -11,6 +11,8 @@ import {
 } from "./viewPaths";
 import { useExecutionRoute } from "./useExecutionRoute";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
+import NotificationSettings from "./NotificationSettings";
+import NotificationChainPanel from "./NotificationChainPanel";
 import AppLink from "./AppLink";
 import UndoMessage, { useUndo } from "./UndoMessage";
 import SortControl, { useSortPreference } from "./SortControl";
@@ -5808,8 +5810,9 @@ export default function Alfred() {
         {view === "settings" && (
           <div>
             <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Settings</h2>
-            <div className="p-4 sm:p-6 bg-card border border-border rounded-lg">
-              <p className="text-muted-foreground">Settings coming soon...</p>
+            <NotificationSettings />
+            <div className="mt-4 p-4 sm:p-6 bg-card border border-border rounded-lg">
+              <p className="text-muted-foreground">More settings coming soon...</p>
             </div>
             {process.env.REACT_APP_BUILD_TIMESTAMP && (
               <div className="mt-6 text-xs text-muted-foreground/60">
@@ -7132,7 +7135,7 @@ function InboxCard({
                             title="Minutes to wait after the previous step is completed."
                           >
                             <span className="text-sm text-muted-foreground whitespace-nowrap">
-                              after
+                              notify
                             </span>
                             <input
                               type="number"
@@ -7151,7 +7154,9 @@ function InboxCard({
                               placeholder="—"
                               className="w-16 px-2 py-2 border border-border rounded text-sm"
                             />
-                            <span className="text-sm text-muted-foreground">min</span>
+                            <span className="text-sm text-muted-foreground">
+                              min after the step above is checked.
+                            </span>
                             {/* Alongside the input, never in place of it. The value stays
                                 authorable at position one so a step created at the top can be
                                 given a gap and carry it when dragged down — which is the whole
@@ -7159,9 +7164,9 @@ function InboxCard({
                             {isFirstStep(itemElements, index) && (
                               <span
                                 className="text-xs text-muted-foreground italic whitespace-nowrap"
-                                title="Not used while this step is first — the first step is scheduled when the execution starts. It applies if you move this step below another one."
+                                title="Nothing precedes this step, so there is no completion to measure from. The value is kept and becomes live if you move this step below another one."
                               >
-                                at start
+                                — at starting step, no notification will be sent
                               </span>
                             )}
                           </label>
@@ -9209,6 +9214,13 @@ function ExecutionDetailView({
         </div>
       )}
 
+      {/* Timed steps. Renders nothing when this execution has no chain, which
+          is every ordinary execution. */}
+      <NotificationChainPanel
+        executionId={execution.id}
+        executionStatus={execution.status}
+      />
+
       <div className="mb-6">
         <div className="border-t border-border pt-4">
           <label className="block text-sm font-medium text-foreground mb-2">
@@ -9732,7 +9744,7 @@ function ItemCard({
                           title="Minutes to wait after the previous step is completed."
                         >
                           <span className="text-sm text-muted-foreground whitespace-nowrap">
-                            after
+                            notify
                           </span>
                           <input
                             type="number"
@@ -9751,7 +9763,9 @@ function ItemCard({
                             placeholder="—"
                             className="w-16 px-2 py-2 border border-border rounded text-sm"
                           />
-                          <span className="text-sm text-muted-foreground">min</span>
+                          <span className="text-sm text-muted-foreground">
+                              min after the step above is checked.
+                            </span>
                           {/* Alongside the input, never in place of it. The value stays
                               authorable at position one so a step created at the top can be
                               given a gap and carry it when dragged down — which is the whole
@@ -9759,9 +9773,9 @@ function ItemCard({
                           {isFirstStep(elements, index) && (
                             <span
                               className="text-xs text-muted-foreground italic whitespace-nowrap"
-                              title="Not used while this step is first — the first step is scheduled when the execution starts. It applies if you move this step below another one."
+                              title="Nothing precedes this step, so there is no completion to measure from. The value is kept and becomes live if you move this step below another one."
                             >
-                              at start
+                              — at starting step, no notification will be sent
                             </span>
                           )}
                         </label>

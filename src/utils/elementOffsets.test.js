@@ -234,6 +234,15 @@ describe("the twin-site rule", () => {
     expect(offsetSites).toBe(collectableSites);
   });
 
+  it("labels the offset with what it is measured FROM, at both call sites", () => {
+    // The old label was "after [N] min", which never said what the delay is
+    // measured from — the non-obvious part of the whole feature.
+    const notify = (source.match(/min after the step above is checked/g) || []).length;
+    const atStart = (source.match(/at starting step, no notification will be sent/g) || []).length;
+    expect(notify).toBe(2);
+    expect(atStart).toBe(2);
+  });
+
   it("drops the offset wherever it drops collectable on a type change", () => {
     // Both updateElement copies must delete it, or a step demoted to a header
     // keeps an invisible scheduling instruction.

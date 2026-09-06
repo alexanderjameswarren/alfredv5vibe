@@ -225,3 +225,166 @@ export async function reconcilePushSubscription() {
     return outcome;
   }
 }
+
+/* ── Subscribing this device ────────────────────────────────────────────────
+ *
+ * Extracted so Settings and the Games diagnostic share ONE implementation.
+ * They are two surfaces onto the same operation, and a second copy of "convert
+ * the key, subscribe, upsert the row" is exactly the kind of duplication that
+ * has already cost this project twice.
+ */
+
+/**
+ * `applicationServerKey` will not take the base64url string the VAPID key is
+ * stored and transported as — it wants the raw bytes. Passing the string gets
+ * an InvalidCharacterError or an InvalidAccessError depending on the browser,
+ * neither of which mentions encoding.
+ *
+ * Two differences from plain base64: `-` and `_` stand in for `+` and `/`, and
+ * the `=` padding is stripped, so it goes back on before atob sees it.
+ */
+export function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  const output = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i);
+  return output;
+}
+
+/** What this browser holds, and whether the table agrees. */
+export async function getDeviceSubscriptionState() {
+  const state = {
+    supported: false,
+    permission: "unavailable",
+    endpoint: null,
+    rows: [],
+    reachable: false,
+  };
+  try {
+    state.supported =
+      typeof navigator !== "undefined" &&
+      "serviceWorker" in navigator &&
+      typeof window !== "undefined" &&
+      "PushManager" in window &&
+      "Notification" in window;
+    if (typeof window !== "undefined" && "Notification" in window) {
+      state.permission = Notification.permission;
+    }
+    if (!state.supported) return state;
+
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg && reg.pushManager) {
+      const sub = await reg.pushManager.getSubscription();
+      state.endpoint = sub ? sub.endpoint : null;
+    }
+
+    const { data } = await supabase.from(TABLE).select("endpoint, user_agent, created_at");
+    state.rows = data || [];
+    // The single fact that decides whether a notification can arrive: is the
+    // endpoint this browser actually holds present in the table?
+    state.reachable =
+      Boolean(state.endpoint) && state.rows.some((r) => r.endpoint === state.endpoint);
+  } catch {
+    /* leave the defaults; the caller renders "unknown" rather than crashing */
+  }
+  return state;
+}
+
+/**
+ * Subscribe this device and store the row.
+ *
+ * Registers the worker if it is not already there — unlike the reconciler,
+ * which must never create one. This is an explicit user action, so creating
+ * what it needs is the point.
+ *
+ * @returns {Promise<{ok: boolean, endpoint?: string, error?: string}>}
+ */
+export async function subscribeThisDevice(vapidPublicKey, swUrl) {
+  try {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+      return { ok: false, error: "This browser has no service worker support." };
+    }
+    if (!("PushManager" in window)) {
+      return { ok: false, error: "This browser cannot do Web Push." };
+    }
+    if (!vapidPublicKey) {
+      return {
+        ok: false,
+        error:
+          "No REACT_APP_VAPID_PUBLIC_KEY in this build — set it in Vercel and redeploy.",
+      };
+    }
+
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      return { ok: false, error: `Notification permission is "${permission}".` };
+    }
+
+    await navigator.serviceWorker.register(swUrl);
+    const reg = await navigator.serviceWorker.ready;
+
+    const existing = await reg.pushManager.getSubscription();
+    const sub =
+      existing ||
+      (await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+      }));
+
+    const json = sub.toJSON();
+    const keys = json.keys || {};
+    if (!keys.p256dh || !keys.auth) {
+      return { ok: false, error: "The subscription came back without its keys." };
+    }
+
+    const { error } = await supabase.from(TABLE).upsert(
+      {
+        endpoint: json.endpoint,
+        p256dh: keys.p256dh,
+        auth_key: keys.auth,
+        user_agent: navigator.userAgent,
+      },
+      { onConflict: "endpoint" }
+    );
+    if (error) return { ok: false, error: `Could not store the subscription: ${error.message}` };
+
+    // Ownership proof for the next rotation. Without it, a future rotation
+    // cannot be reaped and leaves a dead row answering 201.
+    rememberEndpoint(json.endpoint);
+    return { ok: true, endpoint: json.endpoint };
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+}
+
+/**
+ * Unsubscribe this device and remove its row.
+ *
+ * Both halves are attempted even if one fails: a subscription cleaned up at
+ * only one end is worse than either failure alone.
+ */
+export async function unsubscribeThisDevice() {
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && reg.pushManager ? await reg.pushManager.getSubscription() : null;
+    if (!sub) return { ok: false, error: "Nothing to unsubscribe on this device." };
+
+    const endpoint = sub.endpoint;
+    let browserError = null;
+    try {
+      await sub.unsubscribe();
+    } catch (e) {
+      browserError = e && e.message ? e.message : String(e);
+    }
+
+    const { error } = await supabase.from(TABLE).delete().eq("endpoint", endpoint);
+    forgetEndpoint(endpoint);
+
+    if (error) return { ok: false, error: `Row not removed: ${error.message}` };
+    if (browserError) return { ok: false, error: `Row removed, but: ${browserError}` };
+    return { ok: true, endpoint };
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+}
