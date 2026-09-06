@@ -49,6 +49,132 @@ export const TERMINAL_STATES = new Set(["done", "skipped", "cancelled"]);
 export const RESTORABLE_STATES = new Set(["cancelled"]);
 
 /**
+ * States a user can still call off.
+ *
+ * `sent` is NOT here. Once a notification has gone out it cannot be recalled,
+ * so offering to cancel it would be a lie — and it is what decides where the
+ * bulk-cancel button sits: above everything it affects, below everything it
+ * does not.
+ */
+export const CANCELLABLE_STATES = new Set(["waiting", "scheduled"]);
+
+/**
+ * What one element's notification line should say, and which controls it gets.
+ *
+ * Pure and TOTAL: every state returns text, and an unrecognised one returns the
+ * state itself rather than nothing. The first version listed five states as
+ * bare JSX conditions with no fallback, so a row in any other state — `done`
+ * and `skipped` both qualify — rendered a clock icon and nothing else: no text,
+ * no controls, a gutted row. A render path that silently produces nothing for
+ * an unhandled case is the bug; enumerating harder is not the fix, having a
+ * fallback is.
+ *
+ * @param {object} step    The notification_steps row.
+ * @param {object} element The snapshotted element it belongs to.
+ */
+export function describeStepStatus(step, element, formatTime = (t) => t) {
+  const completed = Boolean(element && element.isCompleted);
+  const state = step && step.state;
+
+  // A COMPLETED element is described by whether anything actually reached the
+  // user — sent_at — not by the row's state. `done` and `cancelled` both end up
+  // here and the useful distinction between them is delivery, not bookkeeping.
+  if (completed) {
+    return {
+      text: step && step.sent_at
+        ? `notified ${formatTime(step.sent_at)}`
+        : "notification cancelled — step completed",
+      canCancel: false,
+      canRestore: false,
+      canEdit: false,
+    };
+  }
+
+  const canEdit = !TERMINAL_STATES.has(state);
+  const base = { canCancel: false, canRestore: false, canEdit };
+
+  switch (state) {
+    case "scheduled":
+      return {
+        ...base,
+        text: step.due_at
+          ? `notify at ${formatTime(step.due_at)}`
+          : "scheduled, no time set",
+        canCancel: true,
+      };
+    case "sent":
+      return {
+        ...base,
+        text: `notified ${formatTime(step.sent_at)} — awaiting completion`,
+        // Already delivered; there is nothing left to call off.
+        canCancel: false,
+      };
+    case "waiting":
+      return {
+        ...base,
+        text: `notify ${step.offset_minutes} min after the step above is checked`,
+        canCancel: true,
+      };
+    case "cancelled":
+      return { ...base, text: "notification cancelled", canRestore: true };
+    case "no_subscription":
+      return { ...base, text: "not sent — no device was subscribed" };
+    // The states that produced an empty row. An un-ticked element whose row is
+    // already `done` reaches here, which is how the gutted row was seen.
+    case "done":
+      return { ...base, text: "notification finished" };
+    case "skipped":
+      return { ...base, text: "notification skipped" };
+    default:
+      // Never render nothing. An unknown state is a fact worth showing.
+      return { ...base, text: state ? `notification ${state}` : "notification" };
+  }
+}
+
+/** Rows a user's bulk cancel should affect: pending, not already delivered. */
+export function planCancelPending(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((r) => CANCELLABLE_STATES.has(r.state))
+    .map((r) => ({ id: r.id, state: "cancelled" }));
+}
+
+/**
+ * Whether to show the bulk toggle, in which mode, and above which element.
+ *
+ * Placement rule, and the reason it is worth stating: **the button must sit
+ * above everything it will affect and below everything it will not.** Anything
+ * else misrepresents its scope. Sitting above the first *waiting* row while
+ * also cancelling the scheduled row above it read as though it only touched the
+ * rows below.
+ *
+ * So the anchor is the first CANCELLABLE row. A `sent` row is not cancellable,
+ * so the button naturally moves below it as the chain progresses.
+ *
+ * It is hidden until the chain is actually live — at least one row scheduled or
+ * sent. Before that nothing is armed and there is nothing to call off.
+ */
+export function planChainToggle(rows) {
+  const all = Array.isArray(rows) ? rows : [];
+  const cancellable = all.filter((r) => CANCELLABLE_STATES.has(r.state));
+  const restorable = all.filter((r) => RESTORABLE_STATES.has(r.state));
+  const seqOf = (list) => Math.min(...list.map((r) => r.seq));
+
+  if (restorable.length > 0) {
+    // Restoring is offered wherever cancelled rows exist, live chain or not —
+    // it is the undo for the button itself, and hiding it would strand them.
+    const anchors = [...restorable, ...cancellable];
+    return { show: true, mode: "restore", anchorSeq: seqOf(anchors) };
+  }
+
+  const live = all.some((r) => r.state === "scheduled" || r.state === "sent");
+  if (!live || cancellable.length === 0) {
+    return { show: false, mode: null, anchorSeq: -1 };
+  }
+
+  return { show: true, mode: "cancel", anchorSeq: seqOf(cancellable) };
+}
+
+/**
  * Set by the dispatcher when a step comes due and its user has no
  * `push_subscriptions` row at all.
  *

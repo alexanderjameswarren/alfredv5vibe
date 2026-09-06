@@ -4,6 +4,9 @@ import {
   NO_SUBSCRIPTION,
   planRevertToChain,
   planRestore,
+  describeStepStatus,
+  planCancelPending,
+  planChainToggle,
   ownsNotificationRow,
   isTickableElement,
   precedingTickableIndex,
@@ -530,6 +533,190 @@ describe("cancelled is restorable, not permanent", () => {
     expect(cancelled.every((r) => r.state === "cancelled")).toBe(true);
     const restored = planRestore(els, cancelled, T0);
     expect(restored.map((p) => p.state)).toEqual(["scheduled", "waiting"]);
+  });
+});
+
+describe("BUG: an element's notification line lost its content", () => {
+  // Reported from a phone: a step read "notify 2 min after the step above is
+  // checked" with an edit link, then moments later showed a bare clock icon and
+  // nothing else — no text, no links. The row was gutted.
+  //
+  // Cause: the renderer listed five states as bare JSX conditions with no
+  // fallback. Any other state produced no text, and TERMINAL states also
+  // produced no controls. `done` and `skipped` both qualify, and an un-ticked
+  // element whose row is already `done` lands exactly there.
+  const el = (isCompleted) => ({ name: "s", displayType: "step", isCompleted });
+
+  it.each([
+    ["done"],
+    ["skipped"],
+    ["scheduled"],
+    ["sent"],
+    ["waiting"],
+    ["cancelled"],
+    ["no_subscription"],
+  ])("always produces text for state %s", (state) => {
+    const d = describeStepStatus(
+      { state, seq: 1, offset_minutes: 2, due_at: T0, sent_at: T0 },
+      el(false)
+    );
+    expect(typeof d.text).toBe("string");
+    expect(d.text.length).toBeGreaterThan(0);
+  });
+
+  it("produces text for a state nobody has thought of yet", () => {
+    const d = describeStepStatus({ state: "quantum", seq: 1 }, el(false));
+    expect(d.text).toBe("notification quantum");
+  });
+
+  it("describes a done row on an un-ticked element — the reported case", () => {
+    const d = describeStepStatus({ state: "done", seq: 1 }, el(false));
+    expect(d.text).toBe("notification finished");
+  });
+
+  it("does not render an empty scheduled row when the time is missing", () => {
+    const d = describeStepStatus({ state: "scheduled", seq: 1, due_at: null }, el(false));
+    expect(d.text).toBe("scheduled, no time set");
+  });
+});
+
+describe("BUG: cancel notification did nothing visible", () => {
+  // Reported: clicking "cancel notification" on a scheduled step left it
+  // reading "notify at ..." with the same links — but the time moved from
+  // 6:10am to 6:20am, so something had run.
+  //
+  // Cause: the control was wired to revertStepToChain, which hands the row BACK
+  // to the chain rather than cancelling it. With the preceding element already
+  // completed, revert re-arms at now + offset — which is precisely a row that
+  // still says "notify at ..." with a changed time.
+  const els = [step("one", 10), step("two", 10)];
+  const elsDone = [{ ...els[0], isCompleted: true }, els[1]];
+
+  it("reverting a scheduled row re-arms it — NOT what cancel should do", () => {
+    const row = { id: "r2", seq: 2, offset_minutes: 10, state: "scheduled", due_at: T0 };
+    const reverted = planRevertToChain(elsDone, row, "2026-09-04T10:10:00.000Z");
+    expect(reverted.state).toBe("scheduled");
+    expect(reverted.due_at).toBe("2026-09-04T10:20:00.000Z"); // the time moved
+  });
+
+  it("cancelling a scheduled row actually cancels it", () => {
+    const rows = [{ id: "r2", seq: 2, offset_minutes: 10, state: "scheduled" }];
+    expect(planCancelPending(rows)).toEqual([{ id: "r2", state: "cancelled" }]);
+  });
+
+  it("a cancelled row offers restore and not cancel", () => {
+    const d = describeStepStatus({ state: "cancelled", seq: 1 }, { isCompleted: false });
+    expect(d.canRestore).toBe(true);
+    expect(d.canCancel).toBe(false);
+  });
+
+  it("a scheduled row offers cancel and not restore", () => {
+    const d = describeStepStatus(
+      { state: "scheduled", seq: 1, due_at: T0 },
+      { isCompleted: false }
+    );
+    expect(d.canCancel).toBe(true);
+    expect(d.canRestore).toBe(false);
+  });
+
+  it("a SENT row cannot be cancelled — it has already gone out", () => {
+    const d = describeStepStatus(
+      { state: "sent", seq: 1, sent_at: T0 },
+      { isCompleted: false }
+    );
+    expect(d.canCancel).toBe(false);
+  });
+
+  it("bulk cancel leaves a sent row alone", () => {
+    const rows = [
+      { id: "a", seq: 1, state: "sent" },
+      { id: "b", seq: 2, state: "scheduled" },
+      { id: "c", seq: 3, state: "waiting" },
+    ];
+    expect(planCancelPending(rows).map((p) => p.id)).toEqual(["b", "c"]);
+  });
+});
+
+describe("where the bulk toggle sits, and whether it appears at all", () => {
+  // The rule, so it survives: the button must sit ABOVE everything it will
+  // affect and BELOW everything it will not.
+
+  it("is hidden before anything is armed", () => {
+    // No steps checked, nothing scheduled — nothing to call off.
+    const rows = [
+      { id: "a", seq: 1, state: "waiting" },
+      { id: "b", seq: 2, state: "waiting" },
+    ];
+    expect(planChainToggle(rows).show).toBe(false);
+  });
+
+  it("appears once a row is scheduled", () => {
+    const rows = [
+      { id: "a", seq: 1, state: "scheduled" },
+      { id: "b", seq: 2, state: "waiting" },
+    ];
+    expect(planChainToggle(rows)).toMatchObject({ show: true, mode: "cancel" });
+  });
+
+  it("sits above the first SCHEDULED row, not the first waiting one", () => {
+    // The reported misplacement: anchored between steps 2 and 3 while
+    // cancelling all three.
+    const rows = [
+      { id: "a", seq: 2, state: "scheduled" },
+      { id: "b", seq: 3, state: "waiting" },
+      { id: "c", seq: 4, state: "waiting" },
+    ];
+    expect(planChainToggle(rows).anchorSeq).toBe(2);
+  });
+
+  it("moves BELOW a sent row, which is no longer cancellable", () => {
+    const rows = [
+      { id: "a", seq: 1, state: "sent" },
+      { id: "b", seq: 2, state: "scheduled" },
+      { id: "c", seq: 3, state: "waiting" },
+    ];
+    expect(planChainToggle(rows).anchorSeq).toBe(2);
+  });
+
+  it("stays below every done row too", () => {
+    const rows = [
+      { id: "a", seq: 1, state: "done" },
+      { id: "b", seq: 2, state: "sent" },
+      { id: "c", seq: 3, state: "waiting" },
+    ];
+    expect(planChainToggle(rows).anchorSeq).toBe(3);
+  });
+
+  it("switches to restore mode when anything is cancelled", () => {
+    const rows = [
+      { id: "a", seq: 1, state: "sent" },
+      { id: "b", seq: 2, state: "cancelled" },
+      { id: "c", seq: 3, state: "cancelled" },
+    ];
+    expect(planChainToggle(rows)).toMatchObject({
+      show: true,
+      mode: "restore",
+      anchorSeq: 2,
+    });
+  });
+
+  it("offers restore even when the chain is not live", () => {
+    // Otherwise cancelling everything would hide the only way back.
+    const rows = [{ id: "a", seq: 1, state: "cancelled" }];
+    expect(planChainToggle(rows)).toMatchObject({ show: true, mode: "restore" });
+  });
+
+  it("is hidden when everything is finished", () => {
+    const rows = [
+      { id: "a", seq: 1, state: "done" },
+      { id: "b", seq: 2, state: "done" },
+    ];
+    expect(planChainToggle(rows).show).toBe(false);
+  });
+
+  it("is hidden for an execution with no chain", () => {
+    expect(planChainToggle([]).show).toBe(false);
+    expect(planChainToggle(null).show).toBe(false);
   });
 });
 

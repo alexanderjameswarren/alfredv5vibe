@@ -6,6 +6,7 @@ import {
   planResume,
   planRevertToChain,
   planRestore,
+  planCancelPending,
 } from "./notificationSteps";
 
 /**
@@ -223,6 +224,27 @@ export async function revertStepToChain(executionId, elements, stepId, now = new
 export async function restoreCancelledSteps(executionId, elements, now = new Date()) {
   const rows = await getNotificationSteps(executionId);
   const patches = planRestore(elements, rows, now.toISOString());
+  await applyPatches(patches);
+  return patches;
+}
+
+/**
+ * Cancel one step's notification.
+ *
+ * Distinct from revertStepToChain, which hands the row BACK to the chain. The
+ * per-element control was wired to revert by mistake: with the preceding
+ * element already completed, revert re-arms at now + offset, so the row still
+ * read "notify at ..." with a time that had quietly moved — a control that
+ * appeared to do nothing while doing something else.
+ */
+export async function cancelStep(stepId) {
+  await applyPatch({ id: stepId, state: "cancelled" });
+}
+
+/** Cancel every pending notification. Leaves already-sent rows alone. */
+export async function cancelPendingSteps(executionId) {
+  const rows = await getNotificationSteps(executionId);
+  const patches = planCancelPending(rows);
   await applyPatches(patches);
   return patches;
 }

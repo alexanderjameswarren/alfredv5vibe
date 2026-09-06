@@ -3,12 +3,17 @@ import { Bell, BellOff, Clock } from "lucide-react";
 import AppLink from "./AppLink";
 import {
   getNotificationSteps,
-  cancelNotificationSteps,
+  cancelPendingSteps,
+  cancelStep,
   restoreCancelledSteps,
   revertStepToChain,
   updateStepText,
   updateStepDueAt,
 } from "./utils/notificationStepsApi";
+import {
+  describeStepStatus,
+  planChainToggle,
+} from "./utils/notificationSteps";
 import { getDeviceSubscriptionState } from "./utils/pushSubscriptions";
 
 /**
@@ -60,6 +65,14 @@ function toLocalInputValue(iso) {
 
 /** Load the chain for an execution, with the actions that mutate it. */
 export function useNotificationChain(executionId, elements) {
+  // Ticking an element writes to notification_steps from OUTSIDE this hook, so
+  // without watching completion the rows here go stale: the panel keeps showing
+  // a step as `waiting` after the chain armed it, or a row as `done` against an
+  // element that has since been un-ticked. That mismatch is what produced a
+  // gutted notification line in the field.
+  const completionSignature = (Array.isArray(elements) ? elements : [])
+    .map((el) => (el && el.isCompleted ? "1" : "0"))
+    .join("");
   const [steps, setSteps] = useState(null);
   const [reachable, setReachable] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -77,7 +90,7 @@ export function useNotificationChain(executionId, elements) {
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, completionSignature]);
 
   // Only asked once there is a chain to warn about, so a user who never uses
   // timed steps never has their subscription state queried.
@@ -113,7 +126,11 @@ export function useNotificationChain(executionId, elements) {
     busy,
     error,
     reload: load,
-    cancelRemaining: () => act(() => cancelNotificationSteps(executionId)),
+    cancelAll: () => act(() => cancelPendingSteps(executionId)),
+    // Distinct from revert: cancel STOPS the notification. Wiring this to
+    // revert made the control appear to do nothing while quietly re-arming the
+    // row at a new time.
+    cancelOne: (stepId) => act(() => cancelStep(stepId)),
     scheduleRemaining: () => act(() => restoreCancelledSteps(executionId, elements)),
     revert: (stepId) => act(() => revertStepToChain(executionId, elements, stepId)),
     saveEdit: (stepId, text, dueAtLocal, original) =>
@@ -165,7 +182,6 @@ export function ElementNotification({ chain, element, index, editing, setEditing
   if (!step) return null;
 
   const isEditing = editing === step.id;
-  const completed = Boolean(element.isCompleted);
 
   if (isEditing) {
     return (
@@ -215,50 +231,38 @@ export function ElementNotification({ chain, element, index, editing, setEditing
     );
   }
 
-  // A completed element reports what became of its notification. `sent_at` is
-  // the discriminator, not the state: a row can be `done` or `cancelled` and
-  // what the user needs to know is whether anything actually reached them.
-  if (completed) {
-    const sent = shortTime(step.sent_at);
-    return (
-      <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1">
-        <Bell className="w-3 h-3 shrink-0" />
-        {sent ? `notified ${sent}` : "notification cancelled — step completed"}
-      </p>
-    );
-  }
-
-  const due = shortTime(step.due_at);
+  // Every case answered by one TOTAL function. The previous version listed
+  // five states as bare JSX conditions with no fallback, so `done` and
+  // `skipped` rendered a clock icon and nothing else — no text, no controls.
+  const status = describeStepStatus(step, element, shortTime);
 
   return (
     <div className="mt-1 flex items-center flex-wrap gap-x-3 gap-y-1">
       <span
         className={`text-xs flex items-center gap-1 ${
-          step.state === "cancelled" ? "text-muted-foreground" : "text-primary"
+          status.canCancel || status.canEdit ? "text-primary" : "text-muted-foreground"
         }`}
       >
-        <Clock className="w-3 h-3 shrink-0" />
-        {step.state === "scheduled" && due && `notify at ${due}`}
-        {step.state === "sent" &&
-          `notified ${shortTime(step.sent_at) || ""} — awaiting completion`}
-        {step.state === "waiting" &&
-          `notify ${step.offset_minutes} min after the step above is checked`}
-        {step.state === "cancelled" && "notification cancelled"}
-        {step.state === "no_subscription" && "not sent — no device was subscribed"}
+        {element.isCompleted ? (
+          <Bell className="w-3 h-3 shrink-0" />
+        ) : (
+          <Clock className="w-3 h-3 shrink-0" />
+        )}
+        {status.text}
       </span>
 
       <span className="flex items-center gap-2">
-        {(step.state === "scheduled" || step.state === "sent") && (
+        {status.canCancel && (
           <button
             type="button"
-            onClick={() => chain.revert(step.id)}
+            onClick={() => chain.cancelOne(step.id)}
             disabled={chain.busy}
             className="text-xs underline text-muted-foreground disabled:opacity-50"
           >
             cancel notification
           </button>
         )}
-        {step.state === "cancelled" && (
+        {status.canRestore && (
           <button
             type="button"
             onClick={() => chain.revert(step.id)}
@@ -268,7 +272,7 @@ export function ElementNotification({ chain, element, index, editing, setEditing
             restore
           </button>
         )}
-        {!TERMINAL.has(step.state) && (
+        {status.canEdit && (
           <button
             type="button"
             onClick={() => setEditing(step.id)}
@@ -284,37 +288,27 @@ export function ElementNotification({ chain, element, index, editing, setEditing
 }
 
 /**
- * "Cancel remaining" / "Schedule remaining", rendered inline immediately before
- * the first element that is still waiting.
+ * "Cancel all notifications" / "Schedule remaining", rendered inline.
  *
- * Placed there rather than at the top because "remaining" means "from here on",
- * and the boundary between what has happened and what has not is exactly where
- * that reads true. Deliberately NOT before a `sent` row awaiting completion —
- * that notification has already gone out; the remainder starts after it.
+ * 🛑 PLACEMENT RULE, so it survives the next edit: **the button sits above
+ * everything it will affect and below everything it will not.** Anything else
+ * misrepresents its scope.
+ *
+ * That means the anchor is the first CANCELLABLE row, not the first waiting
+ * one. Sitting above the first waiting row while also cancelling the scheduled
+ * row above it read as though it only touched the rows below. A `sent` row
+ * cannot be cancelled — the notification has already gone — so the button
+ * naturally moves below it as the chain progresses.
+ *
+ * "Cancel all notifications", not "Cancel remaining": it also cancels the
+ * currently scheduled step, so "remaining" understated it. The label says what
+ * the button does.
  */
-export function chainAnchorIndex(steps) {
-  if (!steps || steps.length === 0) return -1;
-  const waiting = steps.filter((s) => s.state === "waiting");
-  if (waiting.length > 0) {
-    return Math.min(...waiting.map((s) => s.seq - 1));
-  }
-  // Everything remaining is cancelled: anchor on the first of those so the
-  // toggle back to "Schedule remaining" is still reachable.
-  const cancelled = steps.filter((s) => s.state === "cancelled");
-  if (cancelled.length > 0) {
-    return Math.min(...cancelled.map((s) => s.seq - 1));
-  }
-  return -1;
-}
-
 export function ChainRemainingToggle({ chain, index }) {
-  const steps = chain.steps || [];
-  if (chainAnchorIndex(steps) !== index) return null;
+  const toggle = planChainToggle(chain.steps || []);
+  if (!toggle.show || toggle.anchorSeq - 1 !== index) return null;
 
-  const hasCancelled = steps.some((s) => s.state === "cancelled");
-  const live = steps.filter((s) => !TERMINAL.has(s.state));
-
-  if (hasCancelled) {
+  if (toggle.mode === "restore") {
     return (
       <div className="my-2 flex justify-center">
         <button
@@ -329,7 +323,9 @@ export function ChainRemainingToggle({ chain, index }) {
     );
   }
 
-  if (live.length === 0) return null;
+  const pending = (chain.steps || []).filter(
+    (s) => s.state === "waiting" || s.state === "scheduled"
+  ).length;
 
   return (
     <div className="my-2 flex justify-center">
@@ -338,16 +334,19 @@ export function ChainRemainingToggle({ chain, index }) {
         onClick={() => {
           // eslint-disable-next-line no-restricted-globals
           const ok = window.confirm(
-            `Cancel the remaining ${live.length} notification(s)?\n\n` +
-              `The steps stay on the list and can still be ticked. You can ` +
-              `bring the notifications back with "Schedule remaining".`
+            `Cancel all ${pending} pending notification(s)?
+
+` +
+              `Anything already sent is unaffected. The steps stay on the list ` +
+              `and can still be ticked, and "Schedule remaining" brings the ` +
+              `notifications back.`
           );
-          if (ok) chain.cancelRemaining();
+          if (ok) chain.cancelAll();
         }}
         disabled={chain.busy}
         className="px-3 py-2 min-h-[44px] rounded border border-border text-sm text-destructive disabled:opacity-50"
       >
-        Cancel remaining
+        Cancel all notifications
       </button>
     </div>
   );

@@ -1,6 +1,6 @@
 # Progress: Chained Notifications
 
-## Status: Phase 6b complete — inline notifications, restorable cancel (Phase 7 not started)
+## Status: Phase 6c complete — two bugs fixed, cancel placement corrected (Phase 7 not started)
 
 Reference: `docs/technical-spec-notification-chains.md`
 
@@ -1050,4 +1050,79 @@ the authoritative description was wrong.
   Platform-layer work, not this feature.
 - ✅ `no_subscription` — implemented, constraint widened, not yet observed
   firing in the wild.
+- ⏸️ `push-rotate` — deferred, revisit on the next observed rotation.
+
+---
+
+## Phase 6c — two bugs, one root cause
+
+Asked whether they were one bug: **two distinct defects, sharing one root
+cause.** The inline renderer's state model was incomplete in two different ways.
+
+### Bug (item 5): a notification line rendered a bare clock icon
+
+The renderer listed five states as bare JSX conditions with **no fallback**:
+
+```jsx
+{step.state === "scheduled" && due && `notify at ${due}`}
+{step.state === "sent" && …}
+{step.state === "waiting" && …}
+{step.state === "cancelled" && …}
+{step.state === "no_subscription" && …}
+```
+
+`done` and `skipped` match none of them, so they produced no text — and both are
+in `TERMINAL_STATES`, so they produced no controls either. **Clock icon, nothing
+else.** Exactly the screenshot.
+
+A `done` row reaches that path whenever its element is NOT completed, which
+happens two ways: the element was un-ticked, or — far more likely — the loaded
+rows were **stale**. Ticking an element writes to `notification_steps` from
+outside the hook, and the hook only reloaded on mount. So the panel could hold a
+row in one state while the element beside it had moved on.
+
+**Fixed twice over**, because either alone would leave the other latent:
+
+- `describeStepStatus` is **total**: every state returns text, and an unknown
+  state returns `notification <state>` rather than nothing. Enumerating harder
+  is not the fix; having a fallback is.
+- The hook now reloads when element completion changes, so the rows and the
+  elements cannot drift apart.
+
+### Bug (item 4): "cancel notification" appeared to do nothing
+
+It was wired to `revertStepToChain` — which hands the row **back to the chain**
+rather than cancelling it. With the preceding element already completed, revert
+re-arms at `now + offset`, so the row still read "notify at …" with the same
+links **and a time that had quietly moved**. That is precisely the reported
+6:10am → 6:20am.
+
+A control that appears inert while doing something else is worse than one that
+errors. Cancel now calls `cancelStep`, which sets `cancelled`. Restore keeps
+`revert`, which is the correct operation for it.
+
+### Placement and wording
+
+1. **Hidden until the chain is live** — at least one row `scheduled` or `sent`.
+   Before that nothing is armed and there is nothing to call off.
+2. **"Cancel remaining" → "Cancel all notifications".** It also cancels the
+   currently scheduled step, so "remaining" understated it.
+3. **Anchored above the first CANCELLABLE row**, not the first waiting one.
+
+The rule, recorded so it survives the next edit: **the button sits above
+everything it will affect and below everything it will not.** A `sent` row is no
+longer cancellable, so `sent` was removed from the bulk cancel and the button
+moves below such rows as the chain progresses.
+
+### Status
+
+- 643 tests across 27 suites; `CI=true` build clean.
+- 25 new tests: exhaustive state coverage for the description function
+  including an invented state, the revert-vs-cancel distinction with the moving
+  time reproduced, and every placement case.
+
+### Still open, carried forward
+
+- ⚠️ `platform.audit_log` records service-role writes as `actor = 'ui'`.
+- ✅ `no_subscription` — implemented, not yet observed firing.
 - ⏸️ `push-rotate` — deferred, revisit on the next observed rotation.
