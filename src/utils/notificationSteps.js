@@ -121,10 +121,15 @@ export function describeStepStatus(step, element, formatTime = (t) => t) {
       return { ...base, text: "not sent — no device was subscribed" };
     // The states that produced an empty row. An un-ticked element whose row is
     // already `done` reaches here, which is how the gutted row was seen.
+    // A `done` or `skipped` row against an element that is NOT completed is a
+    // mismatch — normally impossible once un-ticking hands the row back to the
+    // chain, but reachable if that write failed. It gets a restore control
+    // rather than being a dead end: every other stopped row in this feature has
+    // a route back, and this one had none.
     case "done":
-      return { ...base, text: "notification finished" };
+      return { ...base, text: "notification finished", canRestore: true };
     case "skipped":
-      return { ...base, text: "notification skipped" };
+      return { ...base, text: "notification skipped", canRestore: true };
     default:
       // Never render nothing. An unknown state is a fact worth showing.
       return { ...base, text: state ? `notification ${state}` : "notification" };
@@ -390,6 +395,58 @@ export function planRevertToChain(elements, row, nowIso) {
     due_at: addMinutes(nowIso, row.offset_minutes),
     sent_at: null,
   };
+}
+
+/**
+ * What UN-ticking an element changes.
+ *
+ * Un-ticking had no defined behaviour at all, and that absence was the bug: a
+ * row armed by a completion stayed armed after the completion was taken back,
+ * so a notification would fire for a step nobody had finished.
+ *
+ * The rule is symmetry with completion — un-ticking means "this step is not
+ * done after all", and the chain should follow:
+ *
+ *   1. **The element's own row goes back to the chain.** It was marked `done`
+ *      by the tick; it is not done now. `planRevertToChain` decides where it
+ *      lands, so if its own predecessor is still complete it re-arms and will
+ *      remind again, which is what "not done after all" should mean.
+ *   2. **Any row this completion armed goes back to `waiting`.** That is the
+ *      one that actually prevents a notification firing for an un-ticked step.
+ *
+ * Two deliberate exceptions:
+ *
+ *   - **A `cancelled` row is left alone.** The user cancelled it explicitly; an
+ *     un-tick is not a request to undo that. It keeps its own restore control.
+ *   - **A `sent` successor is left alone.** It has already reached the user and
+ *     cannot be unsent. Reverting it to `waiting` would re-fire it on the next
+ *     tick, giving a duplicate alert for a step that already alerted.
+ *
+ * ⚠️ Known limitation: a successor that was MANUALLY scheduled is
+ * indistinguishable from one the chain armed — both are simply `scheduled` —
+ * so un-ticking the element before it will reset a manual override. Detecting
+ * the difference needs a column the table does not have.
+ */
+export function planUntick(elements, rows, untickedIndex, nowIso) {
+  const list = Array.isArray(elements) ? elements : [];
+  const all = Array.isArray(rows) ? rows : [];
+  const patches = [];
+
+  const own = all.find((r) => r.seq === untickedIndex + 1);
+  if (own && own.state !== "cancelled") {
+    patches.push(planRevertToChain(list, own, nowIso));
+  }
+
+  for (const row of all) {
+    if (row.seq === untickedIndex + 1) continue;
+    // Only rows still pending. `sent` has happened, `cancelled` was a decision,
+    // `done`/`skipped` belong to their own elements.
+    if (row.state !== "scheduled") continue;
+    if (precedingTickableIndex(list, row.seq - 1) !== untickedIndex) continue;
+    patches.push({ id: row.id, state: "waiting", due_at: null, sent_at: null });
+  }
+
+  return patches;
 }
 
 /** Every restorable row handed back to the chain. */

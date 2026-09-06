@@ -1,6 +1,6 @@
 # Progress: Chained Notifications
 
-## Status: Phase 6c complete — two bugs fixed, cancel placement corrected (Phase 7 not started)
+## Status: Phase 6d complete — un-tick defined, reload race fixed (Phase 7 not started)
 
 Reference: `docs/technical-spec-notification-chains.md`
 
@@ -1120,6 +1120,103 @@ moves below such rows as the chain progresses.
 - 25 new tests: exhaustive state coverage for the description function
   including an invented state, the revert-vs-cancel distinction with the moving
   time reproduced, and every placement case.
+
+### Still open, carried forward
+
+- ⚠️ `platform.audit_log` records service-role writes as `actor = 'ui'`.
+- ✅ `no_subscription` — implemented, not yet observed firing.
+- ⏸️ `push-rotate` — deferred, revisit on the next observed rotation.
+
+---
+
+## Phase 6d — un-ticking had no defined behaviour
+
+### Failure 1 was (a): a read/write race. The DB was right.
+
+`toggleExecutionElement` updates elements **optimistically**, then awaits the
+storage write, then awaits the chain advance:
+
+```js
+setActiveExecution(updated);      // re-render happens here
+await storage.set(...);           // ~100ms
+await advanceNotificationChain(); // the row is written HERE
+```
+
+The panel's completion-change effect fired on that first re-render and read the
+rows back **before** the advance had written them. So the tick armed step 2
+correctly in the database, and the panel showed the pre-write state. The stale
+read only corrected itself on the next unrelated reload — which is why the
+un-tick appeared to arm step 2. It did not; it just triggered a refresh that
+finally saw the tick's own write.
+
+**Fixed by awaiting the toggle before reloading**, rather than reacting to the
+optimistic state change. The completion-change effect is kept as a backstop for
+changes arriving from elsewhere.
+
+### Why no existing test caught it
+
+Every chain test is either on the pure planners or on the API layer against a
+mocked PostgREST. **Nothing exercises the ordering between Alfred's toggle
+handler and the panel's reload effect** — the race lives entirely in that seam,
+and neither layer can see it. Noted rather than papered over: the planners were
+right the whole time, which is exactly why they stayed green.
+
+### Un-tick behaviour, now defined
+
+It previously did nothing but log. That absence was the real bug: a row armed by
+a completion stayed armed after the completion was taken back, so **a
+notification would fire for a step nobody had finished**.
+
+Symmetry with completion, as proposed:
+
+1. **The element's own row goes back to the chain** via `planRevertToChain` — it
+   was `done`; it is not done now.
+2. **Any row that completion armed goes back to `waiting`** — the half that
+   actually stops a notification firing for an un-ticked step.
+
+Two deliberate exceptions, both worth stating:
+
+- **A `sent` successor is left alone.** It has already reached the user and
+  cannot be unsent; reverting it would re-fire on the next tick and duplicate an
+  alert they have already had.
+- **A `cancelled` row is left alone.** That was an explicit decision, and an
+  un-tick is not a request to undo it. It keeps its own restore control.
+
+⚠️ **Known limitation:** a successor that was MANUALLY scheduled is
+indistinguishable from one the chain armed — both are simply `scheduled` — so
+un-ticking the element before it resets a manual override. Telling them apart
+needs a column the table does not have.
+
+### The dead end is closed
+
+`done` and `skipped` rows on an **incomplete** element now offer a restore
+control. With un-tick handing rows back to the chain that state should not arise
+at all, but it is reachable if that write fails — and every other stopped row in
+this feature has a route back, so this one does too.
+
+### Status
+
+- 657 tests across 27 suites; `CI=true` build clean.
+- 14 new tests: the full un-tick matrix — armed successor, own row, both halves
+  at once, sent, cancelled, unrelated rows, header/bullet skipping, the
+  tick-then-un-tick round trip — plus dead-end coverage for every stopped state.
+
+### Other element transitions, audited
+
+| Transition | Covered before? | Now |
+|---|---|---|
+| tick → arm successor | ✅ | ✅ |
+| tick → close own row | ✅ | ✅ |
+| re-tick (idempotency) | ✅ | ✅ |
+| **un-tick** | ❌ **nothing at all** | ✅ 11 tests |
+| manual override wins | ✅ | ✅ |
+| revert to chain | ✅ | ✅ |
+| cancel / restore | ✅ | ✅ |
+| pause / resume | ✅ | ✅ |
+| close | ✅ | ✅ |
+
+Un-tick was the only element transition with no coverage whatsoever, which is
+precisely where the bug was.
 
 ### Still open, carried forward
 

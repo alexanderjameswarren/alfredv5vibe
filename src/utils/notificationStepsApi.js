@@ -7,6 +7,7 @@ import {
   planRevertToChain,
   planRestore,
   planCancelPending,
+  planUntick,
 } from "./notificationSteps";
 
 /**
@@ -247,4 +248,24 @@ export async function cancelPendingSteps(executionId) {
   const patches = planCancelPending(rows);
   await applyPatches(patches);
   return patches;
+}
+
+/**
+ * Retreat the chain for an UN-ticked element.
+ *
+ * The mirror of completeNotificationStep. Without it, un-ticking left every row
+ * the completion had armed still armed, so a notification fired for a step
+ * nobody had finished.
+ */
+export async function untickNotificationStep(
+  executionId,
+  elements,
+  untickedIndex,
+  now = new Date()
+) {
+  const rows = await getNotificationSteps(executionId);
+  if (rows.length === 0) return { patches: [], rowsSeen: 0 };
+  const patches = planUntick(elements, rows, untickedIndex, now.toISOString());
+  await applyPatches(patches);
+  return { patches, rowsSeen: rows.length };
 }

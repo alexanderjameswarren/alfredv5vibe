@@ -7,6 +7,7 @@ import {
   describeStepStatus,
   planCancelPending,
   planChainToggle,
+  planUntick,
   ownsNotificationRow,
   isTickableElement,
   precedingTickableIndex,
@@ -717,6 +718,130 @@ describe("where the bulk toggle sits, and whether it appears at all", () => {
   it("is hidden for an execution with no chain", () => {
     expect(planChainToggle([]).show).toBe(false);
     expect(planChainToggle(null).show).toBe(false);
+  });
+});
+
+describe("UN-TICKING an element retreats the chain", () => {
+  // Un-ticking had NO defined behaviour, and no test. That absence is the bug:
+  // a row armed by a completion stayed armed after the completion was taken
+  // back, so a notification would fire for a step nobody had finished.
+  //
+  // Reported as: tick step 1, un-tick step 1, and step 2 reads "notify at
+  // 7:17am" with nothing completed.
+  const els = [step("Chop"), step("two", 2), step("three", 3), step("four", 4)];
+  const withDone = (list, ...indexes) =>
+    list.map((el, i) => (indexes.includes(i) ? { ...el, isCompleted: true } : el));
+
+  it("THE FAILURE: an armed successor goes back to waiting", () => {
+    // Step 1 owns no row; ticking it armed step 2. Un-ticking must disarm it.
+    const rows = [
+      { id: "r2", seq: 2, offset_minutes: 2, state: "scheduled", due_at: T0 },
+      { id: "r3", seq: 3, offset_minutes: 3, state: "waiting" },
+    ];
+    const patches = planUntick(els, rows, 0, T0);
+    expect(patches).toEqual([
+      { id: "r2", state: "waiting", due_at: null, sent_at: null },
+    ]);
+  });
+
+  it("hands the un-ticked element's OWN row back to the chain", () => {
+    // Step 3 was ticked (row done); un-ticking means it is not done after all.
+    const elsDone = withDone(els, 1); // step 2 still complete
+    const rows = [
+      { id: "r3", seq: 3, offset_minutes: 3, state: "done", completed_at: T0 },
+    ];
+    const patches = planUntick(elsDone, rows, 2, T0);
+    expect(patches[0]).toEqual({
+      id: "r3",
+      state: "scheduled",
+      due_at: "2026-09-04T10:03:00.000Z",
+      sent_at: null,
+    });
+  });
+
+  it("closes both halves in one un-tick", () => {
+    const elsDone = withDone(els, 1);
+    const rows = [
+      { id: "r3", seq: 3, offset_minutes: 3, state: "done" },
+      { id: "r4", seq: 4, offset_minutes: 4, state: "scheduled", due_at: T0 },
+    ];
+    const patches = planUntick(elsDone, rows, 2, T0);
+    expect(patches.map((p) => p.id)).toEqual(["r3", "r4"]);
+    expect(patches[1].state).toBe("waiting");
+  });
+
+  it("leaves a SENT successor alone — it cannot be unsent", () => {
+    // Reverting it would re-fire on the next tick, duplicating an alert the
+    // user has already had.
+    const rows = [{ id: "r2", seq: 2, offset_minutes: 2, state: "sent", sent_at: T0 }];
+    expect(planUntick(els, rows, 0, T0)).toEqual([]);
+  });
+
+  it("leaves a CANCELLED row alone — that was a deliberate decision", () => {
+    const rows = [
+      { id: "r2", seq: 2, offset_minutes: 2, state: "cancelled" },
+      { id: "r3", seq: 3, offset_minutes: 3, state: "waiting" },
+    ];
+    expect(planUntick(els, rows, 0, T0)).toEqual([]);
+  });
+
+  it("leaves the un-ticked element's own cancelled row alone", () => {
+    const rows = [{ id: "r3", seq: 3, offset_minutes: 3, state: "cancelled" }];
+    expect(planUntick(els, rows, 2, T0)).toEqual([]);
+  });
+
+  it("does not touch a row belonging to an unrelated element", () => {
+    const rows = [{ id: "r4", seq: 4, offset_minutes: 4, state: "scheduled", due_at: T0 }];
+    // Un-ticking step 1 — step 4's clock comes from step 3, not step 1.
+    expect(planUntick(els, rows, 0, T0)).toEqual([]);
+  });
+
+  it("skips over headers and bullets when finding what it armed", () => {
+    const mixed = [step("a"), header("H"), bullet("b"), step("c", 5)];
+    const rows = [{ id: "r4", seq: 4, offset_minutes: 5, state: "scheduled", due_at: T0 }];
+    expect(planUntick(mixed, rows, 0, T0)[0].state).toBe("waiting");
+  });
+
+  it("tick then un-tick returns the chain to where it started", () => {
+    // The symmetry that makes the whole thing predictable.
+    const rows = [
+      { id: "r2", seq: 2, offset_minutes: 2, state: "waiting", due_at: null },
+    ];
+    const armed = planCompletion(els, rows, 0, T0);
+    expect(armed.schedule[0]).toMatchObject({ id: "r2", state: "scheduled" });
+
+    const afterTick = [{ ...rows[0], state: "scheduled", due_at: armed.schedule[0].due_at }];
+    const disarmed = planUntick(els, afterTick, 0, T0);
+    expect(disarmed[0]).toEqual({
+      id: "r2",
+      state: "waiting",
+      due_at: null,
+      sent_at: null,
+    });
+  });
+
+  it("tolerates junk", () => {
+    expect(planUntick(null, null, 0, T0)).toEqual([]);
+    expect(planUntick(els, [], 0, T0)).toEqual([]);
+  });
+});
+
+describe("no stopped row is a dead end", () => {
+  // Every other cancelled or overridden row can be restored. A `done` row on an
+  // un-ticked element had no edit and no restore — the one path with no way out.
+  it.each([["done"], ["skipped"], ["cancelled"]])(
+    "offers a way back from %s on an incomplete element",
+    (state) => {
+      const d = describeStepStatus({ state, seq: 1 }, { isCompleted: false });
+      expect(d.canRestore).toBe(true);
+    }
+  );
+
+  it("offers no controls on a COMPLETED element, which is correct", () => {
+    // Nothing to schedule: the step is finished.
+    const d = describeStepStatus({ state: "done", seq: 1, sent_at: T0 }, { isCompleted: true });
+    expect(d.canRestore).toBe(false);
+    expect(d.canEdit).toBe(false);
   });
 });
 

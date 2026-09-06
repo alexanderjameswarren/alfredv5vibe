@@ -27,6 +27,7 @@ import { offsetPatch, isFirstStep } from "./utils/elementOffsets";
 import {
   createNotificationSteps,
   completeNotificationStep,
+  untickNotificationStep,
   cancelNotificationSteps,
   resumeNotificationSteps,
 } from "./utils/notificationStepsApi";
@@ -3111,6 +3112,22 @@ export default function Alfred() {
     }
   }
 
+  async function retreatNotificationChain(execution, elementIndex) {
+    try {
+      const { patches, rowsSeen } = await untickNotificationStep(
+        execution.id,
+        execution.elements,
+        elementIndex
+      );
+      console.log(
+        `[Chain] Element ${elementIndex} un-ticked: saw ${rowsSeen} row(s), ` +
+          `returned ${patches.length} to the chain.`
+      );
+    } catch (e) {
+      console.error("[Chain] Failed to retreat notification chain:", e, e.failures ?? "");
+    }
+  }
+
   async function endNotificationChain(executionId) {
     try {
       const cancelled = await cancelNotificationSteps(executionId);
@@ -3286,13 +3303,10 @@ export default function Alfred() {
     if (!el.isCompleted) {
       await advanceNotificationChain(updated, elementIndex);
     } else {
-      // Un-ticking. The chain deliberately does not retreat — but say so,
-      // because "I ticked it and nothing happened" and "I un-ticked it and
-      // nothing happened" produce the same empty audit log, and the second is
-      // correct behaviour that has already been mistaken for the first.
-      console.log(
-        `[Chain] Element ${elementIndex} un-ticked — chain not advanced (by design).`
-      );
+      // Un-ticking RETREATS the chain. It used to do nothing, which left every
+      // row the completion had armed still armed — so a notification would fire
+      // for a step nobody had finished.
+      await retreatNotificationChain(updated, elementIndex);
     }
   }
 
@@ -8957,6 +8971,23 @@ function ExecutionDetailView({
   const chain = useNotificationChain(execution.id, execution.elements);
   const [editingStep, setEditingStep] = useState(null);
 
+  // 🛑 Reload the chain AFTER the toggle has finished writing, not when the
+  // element state changes.
+  //
+  // toggleExecutionElement updates elements optimistically and only THEN awaits
+  // the storage write and the chain advance. The hook's completion-change
+  // effect therefore fired first and read the rows back BEFORE the advance had
+  // written them — so a ticked step left the next one still showing "notify N
+  // min after…", and the stale read only corrected itself on the next unrelated
+  // reload. Awaiting the toggle removes the race entirely.
+  const handleToggleElement = useCallback(
+    async (elementIndex) => {
+      await onToggleElement(elementIndex);
+      await chain.reload();
+    },
+    [onToggleElement, chain]
+  );
+
   // Poll collection every 5 seconds for collection-based executions
   useEffect(() => {
     if (!execution.collectionId || !onRefreshCollection) return;
@@ -9162,7 +9193,7 @@ function ExecutionDetailView({
                         {stepNum}.
                       </span>
                       <span
-                        onClick={() => onToggleElement(index)}
+                        onClick={() => handleToggleElement(index)}
                         className={`mt-1 w-5 h-5 flex-shrink-0 rounded border-2 flex items-center justify-center cursor-pointer ${
                           el.isCompleted
                             ? "bg-primary border-primary"
