@@ -13,6 +13,12 @@ from dataclasses import dataclass
 
 VALID_AUTH_MODES = {"strict", "permissive"}
 
+# The path the MCP endpoint is mounted at (``streamable_http_path`` in
+# ``server.build_app``). RFC 8707 / MCP require the advertised ``resource``
+# to be the MCP server URL *including its path*, so this is appended to
+# ``public_origin`` in ``Config.resource`` rather than hardcoded per host.
+MCP_PATH = "/mcp"
+
 
 @dataclass(frozen=True)
 class Config:
@@ -29,7 +35,13 @@ class Config:
         # sent as the `resource` parameter in auth flows, and compared against
         # the `aud`/`resource` claim in strict mode. Derived from public_origin
         # so desktop and Surface both work without hardcoding either hostname.
-        return self.public_origin
+        #
+        # MUST include the MCP endpoint's path: clients (Claude included)
+        # send this canonical URL as the RFC 8707 `resource` parameter when
+        # requesting a token, and a bare-origin value binds the issued token
+        # to the wrong audience — login appears to succeed and every
+        # subsequent tool call fails.
+        return f"{self.public_origin}{MCP_PATH}"
 
 
 def _required(k: str) -> str:

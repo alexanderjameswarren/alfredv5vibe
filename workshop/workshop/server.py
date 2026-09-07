@@ -17,11 +17,12 @@ Auth wiring (Step 5, permissive pass):
     ``RequireAuthMiddleware``, which returns 401 with the correct
     ``WWW-Authenticate: Bearer resource_metadata="..."`` header when a
     request has no valid bearer.
-  * The SDK auto-serves ``/.well-known/oauth-protected-resource`` (the
-    "root" variant, computed from ``resource_server_url`` with no path).
-  * We manually add ``/.well-known/oauth-protected-resource/mcp`` as a
-    ``custom_starlette_route`` because clients probe both variants
-    (spec §3.3) and the SDK only wires the one that matches the
+  * The SDK auto-serves ``/.well-known/oauth-protected-resource/mcp``
+    (the path-suffixed variant, computed by inserting the well-known
+    prefix ahead of ``resource_server_url``'s ``/mcp`` path).
+  * We manually add ``/.well-known/oauth-protected-resource`` (the "root"
+    variant) as a ``custom_starlette_route`` because clients probe both
+    variants (spec §3.3) and the SDK only wires the one that matches the
     resource_server_url path.
   * ``/health`` remains unauthenticated permanently (spec §3.5), because
     ``custom_starlette_routes`` are outside the ``/mcp`` middleware wrapper.
@@ -125,12 +126,14 @@ def _build_mcp_server(config: Config, job_store: JobStore) -> Server:
 
 
 def _build_metadata_document(config: Config) -> dict:
-    # Static JSON, per RFC 9728 §3.2. `resource` MUST match the connector's
-    # server origin exactly, so it derives from config.public_origin — never
-    # hardcoded. `scopes_supported` is empty in pass 1; we're not enforcing
-    # scopes yet and don't advertise anything we don't consume.
+    # Static JSON, per RFC 9728 §3.2. `resource` MUST match the MCP server
+    # URL exactly — including the `/mcp` path, which is what clients send as
+    # the RFC 8707 `resource` parameter — so it derives from config.resource
+    # (public_origin + MCP_PATH) and is never hardcoded per host.
+    # `scopes_supported` is empty in pass 1; we're not enforcing scopes yet
+    # and don't advertise anything we don't consume.
     return {
-        "resource": config.public_origin,
+        "resource": config.resource,
         "authorization_servers": [config.supabase_issuer],
         "bearer_methods_supported": ["header"],
         "scopes_supported": [],
@@ -142,9 +145,10 @@ def build_app(config: Config):
 
     Routes at the top level, in order:
       * ``/health`` (unauthenticated, custom_starlette_route)
-      * ``/.well-known/oauth-protected-resource/mcp``
-        (unauthenticated, custom_starlette_route — root variant is served
-        automatically by the SDK when resource_server_url is set)
+      * ``/.well-known/oauth-protected-resource``
+        (unauthenticated, custom_starlette_route — the path-suffixed
+        ``/mcp`` variant is served automatically by the SDK from
+        resource_server_url)
       * ``/mcp`` (wrapped in RequireAuthMiddleware by the SDK)
     """
 
@@ -162,14 +166,14 @@ def build_app(config: Config):
             }
         )
 
-    async def metadata_mcp_variant(_request: Request) -> Response:
+    async def metadata_root_variant(_request: Request) -> Response:
         # RFC 9728 lets clients construct the metadata URL two ways: from
         # the origin (root variant), and from the protected-resource URL
         # by inserting the well-known prefix between host and path
         # (path-suffixed variant). Serving both here — the SDK covers the
-        # root variant automatically once resource_server_url is set on
-        # AuthSettings; we cover the path-suffixed one so /mcp probes land
-        # somewhere real. Same JSON body either way.
+        # path-suffixed variant automatically now that resource_server_url
+        # carries the /mcp path; we cover the root one so origin-derived
+        # probes land somewhere real. Same JSON body either way.
         return JSONResponse(metadata_doc)
 
     verifier = SupabaseTokenVerifier(config)
@@ -180,9 +184,12 @@ def build_app(config: Config):
         issuer_url=config.supabase_issuer,
         # `resource_server_url` — the SDK builds the metadata URL from
         # this by inserting /.well-known/oauth-protected-resource before
-        # any path. Passing the bare origin (no /mcp) makes the SDK serve
-        # the root variant; we add the /mcp-suffixed variant ourselves.
-        resource_server_url=config.public_origin,
+        # any path, and stamps it into both the served document's
+        # `resource` field and the 401 WWW-Authenticate header. It MUST
+        # carry the /mcp path (config.resource), or the token Claude
+        # requests is bound to the wrong audience. That makes the SDK
+        # serve the /mcp-suffixed variant; we add the root one ourselves.
+        resource_server_url=config.resource,
         required_scopes=[],
     )
 
@@ -197,8 +204,8 @@ def build_app(config: Config):
     custom_routes = [
         Route("/health", health, methods=["GET"]),
         Route(
-            "/.well-known/oauth-protected-resource/mcp",
-            metadata_mcp_variant,
+            "/.well-known/oauth-protected-resource",
+            metadata_root_variant,
             methods=["GET"],
         ),
     ]
