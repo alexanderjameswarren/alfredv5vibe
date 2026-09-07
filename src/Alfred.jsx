@@ -12,6 +12,7 @@ import {
 import { useExecutionRoute } from "./useExecutionRoute";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
 import NotificationSettings from "./NotificationSettings";
+import RepeatBlockDialog from "./RepeatBlockDialog";
 import {
   useNotificationChain,
   ChainUnreachableNotice,
@@ -9399,6 +9400,10 @@ function ItemCard({
     item.isCaptureTarget || false,
   );
   const [draggedIndex, setDraggedIndex] = useState(null);
+  // Which row anchors the repeat block, or null. Anchoring on the tapped row is
+  // what lets a block be chosen without a drag-select gesture — see
+  // RepeatBlockDialog for the reasoning.
+  const [repeatFromIndex, setRepeatFromIndex] = useState(null);
   const [linkingElementIndex, setLinkingElementIndex] = useState(null);
   const [linkSearch, setLinkSearch] = useState("");
   const elementDescRefs = useRef([]);
@@ -9824,6 +9829,16 @@ function ItemCard({
                           )}
                         </label>
                       )}
+                      {(element.displayType || "step") === "step" && (
+                        <button
+                          type="button"
+                          onClick={() => setRepeatFromIndex(index)}
+                          className="px-2 py-2 min-h-[44px] text-sm text-primary underline whitespace-nowrap"
+                          title="Repeat this step, and optionally the ones below it, several times."
+                        >
+                          repeat…
+                        </button>
+                      )}
                       {(element.displayType || "step") === "bullet" && (
                         <label
                           className="flex items-center gap-2 min-h-[44px] cursor-pointer"
@@ -9926,6 +9941,21 @@ function ItemCard({
               >
                 + Add Element
               </button>
+
+              {/* The picker writes ordinary elements straight into local state.
+                  Nothing is persisted until the item is saved, so it goes
+                  through the same dirty check and Save as hand typing. */}
+              {repeatFromIndex !== null && (
+                <RepeatBlockDialog
+                  elements={elements}
+                  startIndex={repeatFromIndex}
+                  onDone={(next) => {
+                    setElements(next);
+                    setRepeatFromIndex(null);
+                  }}
+                  onCancel={() => setRepeatFromIndex(null)}
+                />
+              )}
             </div>
           </div>
 

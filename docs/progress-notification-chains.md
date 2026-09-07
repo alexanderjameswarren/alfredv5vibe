@@ -1,6 +1,6 @@
 # Progress: Chained Notifications
 
-## Status: Phase 6d complete — un-tick defined, reload race fixed (Phase 7 not started)
+## Status: Phase 7 complete — authoring picker (Phase 8 not started)
 
 Reference: `docs/technical-spec-notification-chains.md`
 
@@ -535,14 +535,106 @@ item's elements untouched.
 
 ## Phase 7 — Authoring picker
 
-- [ ] Parallel component; reuse only the date helpers and the modal chrome from
-      `CustomRecurrenceDialog`
-- [ ] Repeat a contiguous block, N times
-- [ ] Per-step offset in minutes
-- [ ] Auto-numbering checkbox producing "Take dose 7 of 20"
+- [x] Parallel component; modal chrome copied from `CustomRecurrenceDialog`
+- [x] Repeat a contiguous block, N times
+- [x] Per-step offset with a unit selector storing minutes underneath
+- [x] Auto-numbering checkbox producing "Take dose 7 of 20", off by default
 
 **Verify:** generate the 20-dose antibiotic chain in one action, and the
 13-step daily plan as a 4-step block repeated three times plus a closing step.
+
+### Files
+
+| File | What |
+|---|---|
+| `src/utils/blockRepeat.js` | Pure: units, numbering, block description, repetition |
+| `src/utils/blockRepeat.test.js` | 32 tests, both driving use cases end to end |
+| `src/RepeatBlockDialog.jsx` | The modal, chrome copied from CustomRecurrenceDialog |
+| `src/Alfred.jsx` | A `repeat…` control on step rows of the item editor |
+
+### The date helpers were not reused, and could not be
+
+The spec says to reuse the pure date helpers in `src/utils/recurrence.js`.
+**There is nothing here to reuse them for.** Repeating a block is array surgery
+plus minute arithmetic and involves no dates at all; `addDays` and `addMonths`
+are also module-private there. Exporting helpers in order to not use them would
+have been worse than saying so. The **modal chrome** is copied, which is the
+part that makes it look native.
+
+### Decision 1 — invocation and block selection on a phone
+
+**A `repeat…` control on each step row of the item editor**, which anchors the
+block on that row. The dialog then asks for a LENGTH ("repeat N steps") and a
+count ("for a total of N passes").
+
+Dragging to select a range is a desktop idiom with no good phone equivalent:
+shift-click has no touch analogue, and long-press-then-drag across a scrolling
+list is miserable on a small screen. Anchoring on the tapped row turns a
+two-dimensional gesture into two numbers, which behaves identically on both
+platforms. **The dialog previews the block by name**, which is what a drag
+selection would have shown visually — that preview is what makes "this row plus
+N more" unambiguous.
+
+**Item editor only, not the inbox triage card.** Triage is a capture-and-file
+surface; generating twenty rows mid-triage is not what it is for. Guarded by a
+test asserting exactly one call site.
+
+### Decision 2 — repeating a block that already contains numbering
+
+**Warn, do not refuse; and renumber from the base name when auto-numbering is
+on.**
+
+- **Refusing** would be paternalistic — there are reasons to duplicate a
+  numbered row, and the picker is not in a position to know.
+- **Silent duplication** produces twenty rows reading "Take dose 7 of 20", which
+  is precisely the unreadable result auto-numbering exists to prevent. So the
+  dialog names the offending row and says what will happen.
+- **Renumbering strips the existing suffix first**, or repeating a numbered
+  block would compound into "Take dose 7 of 20 2 of 3".
+
+### Numbering is per PASS, not per row
+
+A block of one gives "Take dose 1 of 20" … "20 of 20". A block of four gives
+"Pull 1 of 3", "Legs 1 of 3", … "Pull 2 of 3". One rule, and it is the useful
+answer for both shapes — "Pull 5 of 12" would not be.
+
+Only **step** elements are numbered: numbering exists because identical names
+are unreadable in the editor and useless in a notification, and only steps
+produce notifications.
+
+### Constraints held
+
+- `offsetMinutes` is written only onto step elements — a bullet with an offset
+  would own a row nothing can ever tick. Tested.
+- **No normaliser changed**, because generation adds no new key. A generated
+  element is an ordinary element; a marker would have been a new storage shape
+  and all six normalisers would have stripped it on the next save. The
+  twin-site rule is satisfied by there being nothing to duplicate. Tested.
+- Every generated step gets a real offset, **including the first**, whose value
+  is ignored at position one but becomes live if it is dragged down (Phase 2).
+- Nothing in `notification_steps`, the dispatcher or expansion changed.
+- `times` is the TOTAL, not the number of extra copies: "20 times" is twenty
+  doses, and the source block is occurrence one. Running it twice does not
+  silently double.
+
+### Deliberately not done
+
+The **inline** element editor keeps its plain minutes input. The unit selector
+is in the picker, where blocks are authored. Changing the inline input means
+touching both editor call sites and the label wording settled in Phase 6b — a
+separate call, not a silent side effect of this phase.
+
+### Status
+
+- 697 tests across 28 suites; `CI=true` build clean.
+
+### Still open, carried forward
+
+- ⚠️ `platform.audit_log` records service-role writes as `actor = 'ui'`.
+- ✅ `no_subscription` — implemented, not yet observed firing.
+- ⏸️ `push-rotate` — deferred.
+- 📊 Delivery latency on an idle phone — Alex is gathering real data with Chrome
+  set to Unrestricted before deciding whether anything more is needed.
 
 ---
 
@@ -1223,3 +1315,81 @@ precisely where the bug was.
 - ⚠️ `platform.audit_log` records service-role writes as `actor = 'ui'`.
 - ✅ `no_subscription` — implemented, not yet observed firing.
 - ⏸️ `push-rotate` — deferred, revisit on the next observed rotation.
+
+---
+
+## Phase 6e — it was Doze, not rotation
+
+Alex found the root cause: `seq 4` sent at 17:25:02, no arrival; at ~17:35 the
+phone was picked up and the notification landed **immediately**. Diagnostics at
+the time were all green — one row, matching endpoint tails, reconcile "already
+in sync", `Device reachable: YES`, a 201 from the send. **The endpoint was never
+dead and FCM's 201 was truthful.** Android Doze had held the message while the
+device was idle.
+
+### The fix: `urgency: "high"`
+
+Confirmed against `npm:web-push@3.6.7` rather than assumed, by building real
+request headers with `generateRequestDetails`:
+
+| Probe | Result |
+|---|---|
+| no options at all | `TTL=2419200` (**28 days**), `Urgency=normal` |
+| `{ urgency: "high" }` | `Urgency=high` |
+| `{ Urgency: "high" }` | **throws** — *"'Urgency' is an invalid option"* |
+| `{ urgency: "HIGH" }` | **throws** — *"Unsupported urgency specified"* |
+| valid values | `very-low \| low \| normal \| high` |
+
+**The default urgency is `normal`, which is deferrable** — so every notification
+this system has ever sent was in the class Doze is allowed to hold. That is the
+bug, and it had nothing to do with subscriptions.
+
+### TTL — the default was 28 days
+
+Both functions already overrode it, but **differently**: `notify-dispatch` sent
+`TTL: 3600`, `push-send` sent `TTL: 60`. So the button used to test delivery was
+not testing the path that delivers, and from a phone that difference was
+invisible.
+
+Both now share `supabase/functions/_shared/push-options.ts`:
+`{ urgency: "high", TTL: 900 }`.
+
+**15 minutes** — long enough to survive a tunnel, short enough that a stale
+reminder is dropped rather than delivered hours later, per Alex's "late is worse
+than never".
+
+> ⚠️ **The trade, stated because it is not obvious.** A step is marked `sent` as
+> soon as one endpoint returns 201, and is never re-sent. If the TTL expires
+> while the device is unreachable the notification is lost **permanently** — the
+> row stays `sent` and the chain waits for a manual tick. A short TTL trades
+> "late" for "never" on purpose. Raise `TTL` in the shared file if that turns
+> out to be the wrong trade; it is one line and both functions follow.
+
+### Spec revised, rotation work kept
+
+The Phase 5c attribution is corrected: the original "silent 201" is now read as
+Doze, and the manual resubscribe that appeared to fix it most likely **coincided
+with the phone waking**. The rotation machinery is kept and still correct — it
+did repair a real duplicate row — but it is no longer described as the
+explanation for what was observed.
+
+### Correction: two spec blocks I previously reported as recorded were not
+
+The drill caveat and one earlier revision were written by scripts that threw on
+a later assertion **before** writing the file, so nothing landed while the
+summary said it had. Both are now in the spec and verified by grep. Worth noting
+because it means a "recorded in the spec" claim from those rounds was wrong.
+
+### Status
+
+- 663 tests across 27 suites; `CI=true` build clean. Both edge functions
+  type-check under Deno 2.1.4.
+- 6 new guards: high urgency is set, TTL is not the 28-day default, and both
+  functions use the shared options with no local TTL of their own.
+
+### Still open, carried forward
+
+- ⚠️ `platform.audit_log` records service-role writes as `actor = 'ui'`.
+- ✅ `no_subscription` — implemented, not yet observed firing.
+- ⏸️ `push-rotate` — deferred; the case for it is now weaker, since the outage
+  it guards against has not actually been observed.

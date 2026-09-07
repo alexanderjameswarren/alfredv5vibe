@@ -243,6 +243,22 @@ describe("the twin-site rule", () => {
     expect(atStart).toBe(2);
   });
 
+  it("puts the repeat picker on the item editor only", () => {
+    // Deliberately NOT on the inbox triage card: that is a capture-and-file
+    // surface, and generating twenty rows mid-triage is not what it is for.
+    // The picker adds no new element key, so no normaliser changes and the
+    // twin-site rule is satisfied by there being nothing to duplicate.
+    const repeatControls = (source.match(/setRepeatFromIndex\(index\)/g) || []).length;
+    expect(repeatControls).toBe(1);
+  });
+
+  it("adds no new element key, so the normalisers need no change", () => {
+    // Generated elements are ordinary elements. If the picker invented a
+    // marker key, all six normalisers would strip it on the next save.
+    expect(source).not.toMatch(/generated:\s*true/);
+    expect(source).not.toMatch(/isGenerated/);
+  });
+
   it("drops the offset wherever it drops collectable on a type change", () => {
     // Both updateElement copies must delete it, or a step demoted to a header
     // keeps an invisible scheduling instruction.

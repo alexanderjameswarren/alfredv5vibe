@@ -5,6 +5,7 @@ import webpush from "web-push";
 import { createECDH, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { PUSH_SEND_OPTIONS } from "../_shared/push-options.ts";
 // The deep link is built with the SAME function the app routes on. Imported
 // rather than reimplemented: a hand-copied path here would silently stop
 // matching the day viewPaths.js changes, and the failure would be a
@@ -284,7 +285,7 @@ Deno.serve(async (req) => {
           const res = await webpush.sendNotification(
             { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_key } },
             payload,
-            { TTL: 3600 },
+            PUSH_SEND_OPTIONS,
           );
           return { endpoint_tail: tail, status: res?.statusCode ?? 201, ok: true, removed: false };
         } catch (err) {

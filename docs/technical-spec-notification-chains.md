@@ -396,21 +396,82 @@ cannot express the per-step scheduling; that lives entirely in
 
 ## Delivery is not guaranteed, and `sent` does not mean delivered
 
-> 🛑 **`sent` means "the push service accepted this request". It does not mean
-> the phone showed anything.** Web Push has **no delivery receipt**. There is no
-> mechanism, anywhere in the protocol, by which Alfred can learn that a
-> notification was displayed. Do not add one; do not make `sent` imply one.
+> 🛑 **`sent` means "the push service accepted this request FOR DELIVERY". It
+> does not mean the phone showed anything, and it does not mean promptly.** Web
+> Push has **no delivery receipt**. There is no mechanism, anywhere in the
+> protocol, by which Alfred can learn that a notification was displayed. Do not
+> add one; do not make `sent` imply one.
 
-Observed in the field, and the reason this section exists: an FCM endpoint
-returned **201 for three consecutive sends and delivered nothing**. The
-subscription had died mid-session while the stored row went on looking healthy.
-Every send reported success, every step was stamped `sent_at` and left the
-queue, and the user got nothing — with no error at any layer.
+### 🛑 Late delivery: Android Doze is the expected cause
 
-The consequence is structural: **the 404/410 pruning cannot be relied on.** A
-dead FCM registration can answer 201 indefinitely rather than the 410 that would
-delete the row. So `push_subscriptions` does not correct itself, and something
-outside the send path has to keep it honest.
+**A 201 followed by nothing is far more likely to be a deferred message than a
+dead endpoint.** This was learned the expensive way — see the revision note
+below.
+
+Observed with full diagnostics: `seq 4` was sent at 17:25:02 and did not arrive.
+At roughly 17:35 the phone was picked up and Chrome opened — and the
+notification arrived **immediately**, ten minutes late. At the time: one
+subscription row, endpoint tails matching between browser and table, reconcile
+reporting already in sync, `Device reachable: YES`, and a 201 from the send.
+**The endpoint was never dead, the browser never rotated, and FCM's 201 was
+truthful.** Android Doze had held the message while the device was idle and
+released the queue on wake.
+
+The lever is the `Urgency` header, which FCM uses to decide whether a message
+may break through Doze:
+
+| Urgency | On an idle device |
+|---|---|
+| `very-low`, `low`, `normal` | May be **deferred** until the device wakes |
+| `high` | Delivered promptly |
+
+**web-push defaults to `normal`**, so every notification this system had ever
+sent was in the deferrable class. For a timed reminder, arriving on time is the
+whole point; there is no weaker urgency that makes sense. Both functions now
+send `urgency: "high"` from `supabase/functions/_shared/push-options.ts`.
+
+Verified against `npm:web-push@3.6.7` rather than assumed: the option key is
+lowercase `urgency` (`Urgency` throws *"'Urgency' is an invalid option"*), the
+values are lowercase from `very-low | low | normal | high` (`HIGH` throws
+*"Unsupported urgency specified"*), and it becomes the `Urgency` request header.
+
+**TTL.** The default with no options at all is **2419200 seconds — 28 days**,
+which for a reminder is absurd: a phone switched off since Tuesday would be told
+to take Tuesday's dose. Both functions send **900 seconds (15 minutes)** — long
+enough to survive a tunnel, short enough that a stale reminder is dropped rather
+than delivered hours later.
+
+> ⚠️ **The trade TTL makes.** A step is marked `sent` as soon as one endpoint
+> returns 201, and it is **never re-sent**. So if the TTL expires while the
+> device is unreachable, that notification is lost **permanently** — the row
+> stays `sent` and the chain waits for a manual tick. A short TTL trades "late"
+> for "never", deliberately.
+
+**Both functions share one options object.** They previously differed —
+`notify-dispatch` sent `TTL: 3600`, `push-send` sent `TTL: 60` — so the button
+used to test delivery was not testing the path that delivers. A diagnostic that
+exercises different behaviour from the thing it diagnoses is worse than none,
+and from a phone the difference was invisible.
+
+### The dead-endpoint failure mode
+
+> ⚠️ **REVISED — the incident below was probably Doze, not a dead
+> subscription.** An FCM endpoint appeared to return 201 for three consecutive
+> sends while delivering nothing, and Phase 5c's rotation repair was built on
+> reading that as a dead endpoint. The later episode above shows the same
+> signature resolving the instant the phone was picked up. The manual
+> resubscribe that seemed to fix the first episode most likely just **coincided
+> with the phone waking**.
+>
+> The rotation work is kept — a subscription genuinely can rotate, the
+> reconciler is correct, and it did repair a real duplicate row — but it is **no
+> longer the explanation for what was observed**. Read what follows as "the
+> failure rotation would cause", not as a diagnosis of that incident.
+
+The consequence is still structural: **the 404/410 pruning cannot be relied on.**
+A dead FCM registration can answer 201 indefinitely rather than the 410 that
+would delete the row. So `push_subscriptions` does not correct itself, and
+something outside the send path has to keep it honest.
 
 ### Subscription rotation and repair
 
@@ -443,6 +504,19 @@ Two layers, because neither is sufficient alone:
 
 The reconciler never registers a worker and never creates a subscription — a
 user who has not enabled push is untouched.
+
+> ⚠️ **The rotation drill does not reproduce a silent 201, and a passing drill
+> is not proof that case is handled.** "Simulate rotation" calls
+> `unsubscribe()`, which explicitly invalidates the endpoint at the push
+> service. It then correctly returns **410**, the 404/410 handling deletes the
+> row, and the situation self-heals on the first send — the **well-behaved**
+> rotation.
+>
+> The 201-and-nothing signature is now attributed to Doze (see *Late delivery*),
+> and there is no way to ask FCM to accept-and-discard on demand, so that
+> variant stays unreproduced. The reconciler covers a genuine rotation by not
+> depending on push-service status codes at all — it is built on the browser's
+> own `getSubscription()` rather than on 410s.
 
 ### 🛑 The rotation outage window
 

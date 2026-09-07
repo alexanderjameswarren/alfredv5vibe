@@ -163,6 +163,50 @@ describe("reaping a stale row with NO worker record — the field failure", () =
   });
 });
 
+describe("both edge functions send with the SAME urgency and TTL", () => {
+  // The dispatcher sent TTL 3600 and the diagnostic TTL 60, so the button used
+  // to test delivery was not testing the path that delivers. A diagnostic that
+  // exercises different behaviour from the thing it diagnoses is worse than
+  // none — and the difference was invisible from the phone.
+  const read = (rel) =>
+    fs.readFileSync(path.join(__dirname, "..", "..", "supabase", "functions", rel), "utf8");
+
+  const shared = read("_shared/push-options.ts");
+  const dispatch = read("notify-dispatch/index.ts");
+  const send = read("push-send/index.ts");
+
+  it("sends at HIGH urgency, which is what breaks through Doze", () => {
+    // web-push defaults Urgency to `normal`, and normal is deferrable: a step
+    // sent at 17:25 arrived at 17:35 when the phone was picked up.
+    expect(shared).toMatch(/urgency:\s*"high"/);
+  });
+
+  it("does not leave TTL at the 28-day default", () => {
+    // Verified against npm:web-push@3.6.7: no options at all gives TTL 2419200.
+    expect(shared).toMatch(/TTL:\s*\d+/);
+    const ttl = Number(shared.match(/TTL:\s*(\d+)/)[1]);
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThan(2419200);
+  });
+
+  it.each([
+    ["notify-dispatch", () => dispatch],
+    ["push-send", () => send],
+  ])("%s uses the shared options", (_name, get) => {
+    const src = get();
+    expect(src).toContain('from "../_shared/push-options.ts"');
+    expect(src).toContain("PUSH_SEND_OPTIONS,");
+  });
+
+  it.each([
+    ["notify-dispatch", () => dispatch],
+    ["push-send", () => send],
+  ])("%s sets no TTL of its own", (_name, get) => {
+    // A local TTL would silently override the shared one and reopen the split.
+    expect(get()).not.toMatch(/\{\s*TTL:\s*\d+\s*\}/);
+  });
+});
+
 describe("the service worker and the app agree on the IDB handoff", () => {
   // A worker cannot import from src/, so the database, store and key names are
   // duplicated in public/notify-sw.js. If they drift, the worker writes a

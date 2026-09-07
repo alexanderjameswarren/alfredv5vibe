@@ -7,6 +7,7 @@ import { createECDH } from "node:crypto";
 // runtime happening to expose it.
 import { Buffer } from "node:buffer";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { PUSH_SEND_OPTIONS } from "../_shared/push-options.ts";
 
 // push-send — deliver a Web Push notification to every device the caller has
 // subscribed.
@@ -176,7 +177,7 @@ Deno.serve(async (req) => {
             keys: { p256dh: row.p256dh, auth: row.auth_key },
           },
           payload,
-          { TTL: 60 },
+          PUSH_SEND_OPTIONS,
         );
 
         // Success: record that this device was reachable just now.
