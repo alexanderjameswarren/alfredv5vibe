@@ -1,5 +1,7 @@
 import {
   OFFSET_UNITS,
+  coerceCount,
+  isPartialCount,
   toMinutes,
   splitMinutes,
   hasNumbering,
@@ -331,5 +333,50 @@ describe("guards", () => {
     expect(
       repeatBlock({ elements: [], startIndex: 0, blockLength: 1, times: 3 })
     ).toEqual([]);
+  });
+});
+
+describe("typing a number without the field fighting back", () => {
+  // The reported failure: going from 1 to 20 was impossible. The field ran
+  // `parseInt(value, 10) || 1` on every keystroke, so deleting the "1" put a
+  // "1" straight back and there was no way to clear it.
+
+  it("treats an empty field as the default rather than as zero", () => {
+    expect(coerceCount("", { fallback: 3 })).toBe(3);
+  });
+
+  it("reads a typed number", () => {
+    expect(coerceCount("20", { fallback: 3 })).toBe(20);
+  });
+
+  it("clamps to the allowed range", () => {
+    expect(coerceCount("999", { fallback: 3, min: 1, max: 99 })).toBe(99);
+    expect(coerceCount("0", { fallback: 3, min: 1, max: 99 })).toBe(1);
+  });
+
+  it("falls back for junk rather than producing NaN", () => {
+    expect(coerceCount("abc", { fallback: 3 })).toBe(3);
+    expect(coerceCount(null, { fallback: 3 })).toBe(3);
+  });
+
+  it("accepts an empty field mid-typing, which is the whole point", () => {
+    // If this were false the field could not be cleared, and 1 -> 20 would
+    // need select-all to be possible at all.
+    expect(isPartialCount("")).toBe(true);
+    expect(isPartialCount("2")).toBe(true);
+    expect(isPartialCount("20")).toBe(true);
+  });
+
+  it("rejects input that is not digits", () => {
+    expect(isPartialCount("2a")).toBe(false);
+    expect(isPartialCount("-1")).toBe(false);
+    expect(isPartialCount("1.5")).toBe(false);
+  });
+
+  it("supports the reported keystroke sequence: 1 -> '' -> 2 -> 20", () => {
+    // Each step is a legal intermediate state, and only the last is committed.
+    const typed = ["1", "", "2", "20"];
+    expect(typed.every(isPartialCount)).toBe(true);
+    expect(coerceCount(typed[typed.length - 1], { fallback: 3, min: 1, max: 99 })).toBe(20);
   });
 });

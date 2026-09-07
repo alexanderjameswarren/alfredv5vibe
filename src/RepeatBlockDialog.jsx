@@ -1,11 +1,49 @@
 import React, { useState } from "react";
 import {
   OFFSET_UNITS,
+  coerceCount,
+  isPartialCount,
   toMinutes,
   splitMinutes,
   describeBlock,
   repeatBlock,
 } from "./utils/blockRepeat";
+
+const DEFAULT_BLOCK_LENGTH = 1;
+const DEFAULT_TIMES = 3;
+
+/**
+ * A number field that can actually be typed into.
+ *
+ * ⚠️ The bug this replaces: coercing on every keystroke with
+ * `parseInt(value, 10) || 1`. Deleting the "1" put a "1" straight back, so the
+ * field could never be cleared and going from 1 to 20 was impossible.
+ *
+ * Three things make it behave:
+ *   - the RAW string stays in state while typing, so "" is a legal state;
+ *   - focus selects the whole value, so typing over it replaces rather than
+ *     appends — no more "120" when you meant 20;
+ *   - blur is the only place a value is committed, filling in the default if
+ *     the field was left empty and clamping anything out of range.
+ */
+function CountInput({ value, onChange, onCommit, min, max, className, ...rest }) {
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      pattern="[0-9]*"
+      value={value}
+      onFocus={(e) => e.target.select()}
+      onChange={(e) => {
+        // Reject anything that is not digits, but ALLOW the empty string.
+        if (isPartialCount(e.target.value)) onChange(e.target.value);
+      }}
+      onBlur={() => onCommit(String(coerceCount(value, { fallback: min, min, max })))}
+      className={className}
+      {...rest}
+    />
+  );
+}
 
 /**
  * Repeat a block of steps — the authoring picker. Phase 7.
@@ -33,27 +71,39 @@ import {
  */
 export default function RepeatBlockDialog({ elements, startIndex, onDone, onCancel }) {
   const maxLength = Math.max(1, elements.length - startIndex);
-  const [blockLength, setBlockLength] = useState(1);
-  const [times, setTimes] = useState(3);
+  // Raw strings, not numbers: "" has to be a legal state while typing.
+  const [blockLength, setBlockLength] = useState(String(DEFAULT_BLOCK_LENGTH));
+  const [times, setTimes] = useState(String(DEFAULT_TIMES));
   const [autoNumber, setAutoNumber] = useState(false);
 
   // Prefilled from the anchor row's existing gap, so the common case of
   // "repeat this, same spacing" needs no typing.
   const seed = splitMinutes(elements[startIndex] && elements[startIndex].offsetMinutes);
-  const [offsetValue, setOffsetValue] = useState(seed.value === "" ? "" : seed.value);
+  const [offsetValue, setOffsetValue] = useState(
+    seed.value === "" ? "" : String(seed.value)
+  );
   const [offsetUnit, setOffsetUnit] = useState(seed.unitId);
 
-  const block = describeBlock(elements, startIndex, blockLength);
+  // Interpreted for the preview and for generation; the fields keep their raw
+  // text so a half-typed value never snaps back under the cursor.
+  const blockLengthNum = coerceCount(blockLength, {
+    fallback: DEFAULT_BLOCK_LENGTH,
+    min: 1,
+    max: maxLength,
+  });
+  const timesNum = coerceCount(times, { fallback: DEFAULT_TIMES, min: 1, max: 99 });
+
+  const block = describeBlock(elements, startIndex, blockLengthNum);
   const offsetMinutes = toMinutes(offsetValue, offsetUnit);
-  const totalRows = block.rows.length * times;
+  const totalRows = block.rows.length * timesNum;
 
   function handleDone() {
     onDone(
       repeatBlock({
         elements,
         startIndex,
-        blockLength,
-        times,
+        blockLength: blockLengthNum,
+        times: timesNum,
         offsetMinutes: offsetValue === "" ? undefined : offsetMinutes,
         autoNumber,
       })
@@ -74,48 +124,45 @@ export default function RepeatBlockDialog({ elements, startIndex, onDone, onCanc
         {/* Block: this row, plus N more */}
         <div className="flex items-center gap-2 mb-3">
           <span className="text-sm">Repeat</span>
-          <input
-            type="number"
+          <CountInput
+            value={blockLength}
+            onChange={setBlockLength}
+            onCommit={setBlockLength}
             min={1}
             max={maxLength}
-            inputMode="numeric"
-            value={blockLength}
-            onChange={(e) =>
-              setBlockLength(
-                Math.max(1, Math.min(maxLength, parseInt(e.target.value, 10) || 1))
-              )
-            }
             className="w-16 px-2 py-2 border border-border rounded text-center text-base"
           />
-          <span className="text-sm">{blockLength === 1 ? "step" : "steps"}</span>
+          <span className="text-sm">{blockLengthNum === 1 ? "step" : "steps"}</span>
         </div>
 
         {/* Times: the TOTAL, not the number of extra copies */}
         <div className="flex items-center gap-2 mb-3">
           <span className="text-sm">for a total of</span>
-          <input
-            type="number"
+          <CountInput
+            value={times}
+            onChange={setTimes}
+            onCommit={setTimes}
             min={1}
             max={99}
-            inputMode="numeric"
-            value={times}
-            onChange={(e) =>
-              setTimes(Math.max(1, Math.min(99, parseInt(e.target.value, 10) || 1)))
-            }
             className="w-16 px-2 py-2 border border-border rounded text-center text-base"
           />
-          <span className="text-sm">{times === 1 ? "pass" : "passes"}</span>
+          <span className="text-sm">{timesNum === 1 ? "pass" : "passes"}</span>
         </div>
 
         {/* Gap, with a unit so nobody computes that an hour is 60 */}
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <span className="text-sm">notify every</span>
+          {/* Not a CountInput: an empty gap MEANS "keep each step's existing
+              gap", so blur must not fill in a default here. */}
           <input
-            type="number"
-            min={0}
+            type="text"
             inputMode="numeric"
+            pattern="[0-9]*"
             value={offsetValue}
-            onChange={(e) => setOffsetValue(e.target.value)}
+            onFocus={(e) => e.target.select()}
+            onChange={(e) => {
+              if (isPartialCount(e.target.value)) setOffsetValue(e.target.value);
+            }}
             placeholder="—"
             className="w-16 px-2 py-2 border border-border rounded text-center text-base"
           />
@@ -153,7 +200,7 @@ export default function RepeatBlockDialog({ elements, startIndex, onDone, onCanc
           <span className="text-sm">
             Number them
             <span className="block text-xs text-muted-foreground">
-              "Take dose" becomes "Take dose 1 of {times}". Without this, every
+              "Take dose" becomes "Take dose 1 of {timesNum}". Without this, every
               copy has the same name.
             </span>
           </span>
@@ -163,8 +210,8 @@ export default function RepeatBlockDialog({ elements, startIndex, onDone, onCanc
         <div className="mb-4 p-3 bg-card border border-border rounded">
           <p className="text-xs text-muted-foreground mb-1">
             Repeating {block.rows.length} row{block.rows.length === 1 ? "" : "s"} ×{" "}
-            {times} = <strong className="text-foreground">{totalRows} rows</strong>
-            {block.stepCount > 0 && ` (${block.stepCount * times} with notifications)`}
+            {timesNum} = <strong className="text-foreground">{totalRows} rows</strong>
+            {block.stepCount > 0 && ` (${block.stepCount * timesNum} with notifications)`}
           </p>
           <ul className="text-xs space-y-0.5">
             {block.rows.map((row, i) => (
@@ -187,7 +234,7 @@ export default function RepeatBlockDialog({ elements, startIndex, onDone, onCanc
         {block.numberedNames.length > 0 && (
           <p className="text-xs text-destructive mb-4">
             {autoNumber
-              ? `These rows are already numbered (e.g. "${block.numberedNames[0]}"). They will be renumbered 1 of ${times}.`
+              ? `These rows are already numbered (e.g. "${block.numberedNames[0]}"). They will be renumbered 1 of ${timesNum}.`
               : `These rows are already numbered (e.g. "${block.numberedNames[0]}"). Every copy will repeat that same number — tick "Number them" to renumber instead.`}
           </p>
         )}

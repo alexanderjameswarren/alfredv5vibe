@@ -624,9 +624,31 @@ is in the picker, where blocks are authored. Changing the inline input means
 touching both editor call sites and the label wording settled in Phase 6b — a
 separate call, not a silent side effect of this phase.
 
+### Fix: the number fields fought back
+
+Reported: going from 1 to 20 repeats was impossible.
+
+The fields coerced on every keystroke — `parseInt(value, 10) || 1` — so deleting
+the "1" put a "1" straight back and the field could never be cleared. With no
+select-on-focus either, typing "20" over it appended to give "120".
+
+A shared `CountInput` fixes all three:
+
+- the **raw string** stays in state while typing, so `""` is a legal state;
+- **focus selects the whole value**, so typing replaces rather than appends;
+- **blur is the only commit point** — it fills in the default if the field was
+  left empty and clamps anything out of range.
+
+The gap field is deliberately NOT a `CountInput`: an empty gap *means* "keep
+each step's existing gap", so blur must not fill in a default there. It still
+selects on focus and rejects non-digits.
+
+`coerceCount` and `isPartialCount` are extracted and tested, including the
+reported keystroke sequence `1 → "" → 2 → 20`.
+
 ### Status
 
-- 697 tests across 28 suites; `CI=true` build clean.
+- 704 tests across 28 suites; `CI=true` build clean.
 
 ### Still open, carried forward
 

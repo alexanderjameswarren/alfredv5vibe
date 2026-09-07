@@ -56,6 +56,30 @@ export function splitMinutes(minutes) {
   return { value: n, unitId: "minutes" };
 }
 
+/**
+ * Read a number out of a partially-typed field.
+ *
+ * ⚠️ The bug this exists to prevent: coercing on every keystroke.
+ * `parseInt(value, 10) || 1` turns an empty field straight back into `1`, so
+ * the field can never be cleared — and going from 1 to 20 becomes impossible
+ * without select-all, because every attempt to delete the `1` immediately
+ * restores it. The raw string has to stay in state while it is being typed and
+ * only be interpreted for display and on blur.
+ *
+ * `fallback` is what an empty or unparseable field MEANS, not what it shows.
+ * The field is only rewritten to it when focus leaves.
+ */
+export function coerceCount(raw, { fallback, min = 1, max = Number.MAX_SAFE_INTEGER }) {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+/** True for a value a numeric field should accept mid-typing, including "". */
+export function isPartialCount(raw) {
+  return /^\d*$/.test(String(raw));
+}
+
 // " 7 of 20" at the end of a name. Tolerates extra spaces; anchored so
 // "Take 2 of 3 tablets" in the middle of a sentence is left alone.
 const NUMBERING = /\s+\d+\s+of\s+\d+\s*$/i;
