@@ -1,7 +1,6 @@
 import Vanish from "./variants/vanish";
 import Cascade from "./variants/cascade";
 import Drop from "./variants/drop";
-import NotifyTest from "./variants/notifyTest";
 
 // The variant registry. The Games tab renders this list and nothing else knows
 // what variants exist — adding one means adding one entry here and one file
@@ -11,7 +10,14 @@ import NotifyTest from "./variants/notifyTest";
 // for it. It is how two variants get compared after a run.
 //
 // `status` is either "current" or "archived". Variants are frozen once they are
-// superseded, so this list only grows: keep it in the order they were built and
+// superseded, so this list only grows — with one exception, taken deliberately:
+// the "Push Notification Test" entry was DELETED rather than archived when the
+// diagnostic moved to Settings. Archiving is for a variant that has been
+// superseded and is still playable; that was neither. Leaving it registered
+// would have meant two copies of a diagnostic with no way to tell which one you
+// were looking at, which is worse than none.
+//
+// Keep it in the order they were built and
 // let the tab do the sorting. Anything not explicitly archived counts as
 // current, which means forgetting the field puts a new variant at the top where
 // it will be noticed, rather than burying it.
@@ -36,17 +42,6 @@ export const VARIANTS = [
     description: "Horizontal chains only, survivors fall into the gaps.",
     status: "current",
     component: Drop,
-  },
-  {
-    // Not a game. A diagnostic that happens to need exactly what this harness
-    // provides — one screen, opened and closed, with no state anywhere else —
-    // so it is registered here rather than given a tab of its own. The
-    // description says so plainly, because the list gives no other signal.
-    id: "notify-test",
-    name: "Push Notification Test",
-    description: "Diagnostic: do notifications reach the phone and the watch?",
-    status: "current",
-    component: NotifyTest,
   },
 ];
 

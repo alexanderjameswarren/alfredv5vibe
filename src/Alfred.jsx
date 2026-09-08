@@ -13,6 +13,7 @@ import { useExecutionRoute } from "./useExecutionRoute";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
 import { takePendingNavigation } from "./utils/pushRotation";
 import NotificationSettings from "./NotificationSettings";
+import NotificationDiagnostics from "./NotificationDiagnostics";
 import RepeatBlockDialog from "./RepeatBlockDialog";
 import {
   useNotificationChain,
@@ -5866,6 +5867,7 @@ export default function Alfred() {
           <div>
             <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Settings</h2>
             <NotificationSettings />
+            <NotificationDiagnostics />
             <div className="mt-4 p-4 sm:p-6 bg-card border border-border rounded-lg">
               <p className="text-muted-foreground">More settings coming soon...</p>
             </div>

@@ -1542,3 +1542,65 @@ belong to this feature and none of which have been filed:**
   manual override. Telling them apart needs a column the table does not have.
 - The rotation drill exercises the *well-behaved* rotation only; the silent-201
   variant cannot be reproduced on demand.
+
+---
+
+## Post-project — the diagnostic moved to Settings
+
+The Push Notification Test left the Games tab for a collapsed **Diagnostics**
+section beneath "Notifications on this device" in Settings. It was built in
+Games because that tab is a variant harness and it was the fastest place to put
+a throwaway probe; it stopped being throwaway some phases ago.
+
+- `src/games/variants/notifyTest.jsx` → `src/NotificationDiagnostics.jsx`
+  (`git mv`, so the history follows), imports rebased from `../../` to `./`.
+- Registry entry and import **deleted**, not archived.
+- Everything it does survives: status panel (Device reachable, Worker version,
+  Build expects), Request permission, Notify now, Notify in 10 seconds, Send
+  push now, Subscribe, Unsubscribe, Simulate rotation, Reconcile now, Show table
+  rows with per-row Remove, Update worker, and the on-screen log.
+
+**Collapsed, and not mounted until expanded.** The panel registers a service
+worker and reads subscription state on mount, and neither should happen to
+someone who only ever wanted the on/off switch. Gating the mount behind the
+disclosure reproduces exactly what opening the Games variant used to do.
+
+### Deleting rather than archiving is a deliberate break with the registry
+
+`variants.js` states that the list only grows and superseded variants are frozen
+as `archived`. That convention is for a variant that has been superseded and is
+still playable. This was neither — it moved. Leaving it registered would have
+meant two copies of a diagnostic with no way to tell which one you were looking
+at. The reason is recorded in `variants.js` itself so the exception does not
+read as someone ignoring the rule.
+
+Nothing in the registry depends on ordinal position: `CURRENT_VARIANTS` and
+`ARCHIVED_VARIANTS` are filters, `findVariant` is by id, and `gameStorage` keys
+saves on the variant id. Checked before removing.
+
+### ⚠️ Two findings, reported and NOT fixed
+
+A pure relocation was asked for, so both are left exactly as they were.
+
+**1. The Phase 6 sharing claim was wrong.** Phase 6 extracted
+`subscribeThisDevice` / `unsubscribeThisDevice` into
+`src/utils/pushSubscriptions.js` and the progress file recorded that "Settings
+and the Games diagnostic call the same" helpers. **Only Settings was ever
+rewired.** The diagnostic still calls `reg.pushManager.subscribe` and
+`sub.unsubscribe` inline. There have been two copies since Phase 6; the move did
+not create them and has not removed them.
+
+**2. Reachability is computed twice.** `getDeviceSubscriptionState` computes
+`Boolean(endpoint) && rows.some(r => r.endpoint === endpoint)`; the diagnostic's
+`reportTableState` computes the identical expression from its own separate
+fetch. The logic matches today, so they agree — but they are two computations
+that could drift, which is exactly what was asked to be watched for.
+
+Both are worth closing, together, as a follow-up that can be verified on its
+own. Neither was touched here so that anything that breaks after this deploy is
+attributable to the move.
+
+### Status
+
+- 726 tests across 29 suites; `CI=true` build clean. No test changes were
+  needed — nothing referenced the variant.

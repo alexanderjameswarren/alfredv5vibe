@@ -1,23 +1,35 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { supabase } from "../../supabaseClient";
+import { ChevronDown } from "lucide-react";
+import { supabase } from "./supabaseClient";
 import {
   reconcilePushSubscription,
   getServiceWorkerVersion,
   updateServiceWorker,
-} from "../../utils/pushSubscriptions";
-import { EXPECTED_SW_VERSION } from "../../utils/swVersion";
+} from "./utils/pushSubscriptions";
+import { EXPECTED_SW_VERSION } from "./utils/swVersion";
 import {
   writePendingRotation,
   rememberEndpoint,
   forgetEndpoint,
-} from "../../utils/pushRotation";
+} from "./utils/pushRotation";
 
-// Push Notification Test — not a game, a diagnostic.
+// Push notification diagnostics, in Settings.
 //
 // It answers one question: does a notification raised by this app reach the
-// phone, and does it mirror to the watch? It lives in the Games tab because
-// that tab is the variant harness — one file, one registry entry, no edits
-// anywhere else — and this needs exactly that and nothing more.
+// phone, and does it mirror to the watch?
+//
+// It began life in the Games tab because that tab is a variant harness — one
+// file, one registry entry, no edits anywhere else — which made it the fastest
+// place to put a throwaway probe. It is not throwaway: it is the only thing
+// that can tell you whether this device can receive notifications at all, so
+// it belongs beside the notification controls rather than next to a
+// note-reading fidget game.
+//
+// Collapsed by default. Alfred is shared, and the person who just wants
+// notifications on should see the plain control, not the probe. The panel is
+// only MOUNTED when expanded, so opening Settings does not register a service
+// worker or query subscription state for someone who never opens it — the same
+// side effects that used to be gated behind opening the Games variant.
 //
 // Everything is in memory. Nothing is saved, nothing is sent, and the only
 // lasting effect is the service worker registration, which is what is being
@@ -122,7 +134,7 @@ function StatusRow({ label, value, tone }) {
   );
 }
 
-export default function NotifyTest() {
+export function NotificationDiagnosticsPanel() {
   const [permission, setPermission] = useState(currentPermission);
   const [registered, setRegistered] = useState(false);
   const [countdown, setCountdown] = useState(null);
@@ -1011,6 +1023,51 @@ export default function NotifyTest() {
           <div ref={logEndRef} />
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The collapsed wrapper Settings renders.
+ *
+ * Follows the disclosure pattern GamesPage uses for earlier versions — chevron,
+ * aria-expanded, 44px target — so it reads as native rather than as something
+ * bolted on during a move.
+ */
+export default function NotificationDiagnostics() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="mt-4 bg-card border border-border rounded-lg">
+      <button
+        type="button"
+        onClick={() => setOpen((shown) => !shown)}
+        aria-expanded={open}
+        className="w-full text-left px-4 py-3 min-h-[44px] flex items-center justify-between gap-3"
+      >
+        <span>
+          <span className="block text-sm font-medium text-foreground">
+            Diagnostics
+          </span>
+          <span className="block text-xs text-muted-foreground">
+            Test delivery, inspect subscriptions, check the service worker
+          </span>
+        </span>
+        <ChevronDown
+          className={`w-4 h-4 shrink-0 text-muted-foreground transition-transform ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+
+      {/* Mounted only when open: the panel registers a service worker and reads
+          subscription state on mount, and neither should happen to someone who
+          never expands it. */}
+      {open && (
+        <div className="px-4 pb-4 border-t border-border pt-4">
+          <NotificationDiagnosticsPanel />
+        </div>
+      )}
     </div>
   );
 }
