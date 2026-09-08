@@ -1,6 +1,6 @@
 # Progress: Chained Notifications
 
-## Status: Phase 7 complete — authoring picker (Phase 8 not started)
+## Status: ✅ COMPLETE — all phases delivered and verified
 
 Reference: `docs/technical-spec-notification-chains.md`
 
@@ -662,12 +662,69 @@ reported keystroke sequence `1 → "" → 2 → 20`.
 
 ## Phase 8 — Skill amendment
 
-*Last, once the field name is settled.*
-
-- [ ] Update `alfred-enrich` to emit `offsetMinutes` on steps when a capture
+- [x] Update `alfred-enrich` to emit `offsetMinutes` on steps when a capture
       implies a timed sequence
-- [ ] Include guidance on when NOT to — ordinary checklist steps and recipes
+- [x] Include guidance on when NOT to — ordinary checklist steps and recipes
       must not acquire offsets
+
+The "skill" is the system prompt inside `supabase/functions/ai-enrich/index.ts`,
+plus the `suggested_item_elements` tool-schema description. Both amended.
+
+### The restraint half got the most words, deliberately
+
+Rule 18 opens with **DEFAULT TO OMITTING IT**, and says why in the terms that
+matter: *"A notification the user did not ask for is worse than a missing one …
+Omitting a wait costs one manual edit. Inventing one costs a phone buzzing at
+midnight."*
+
+It then gives an explicit allow-list and an explicit deny-list, because a model
+told only "be conservative" will still find reasons:
+
+| Capture text | Result |
+|---|---|
+| "marinate 30 minutes" | `offsetMinutes: 30` |
+| "rest 10 min" | `offsetMinutes: 10` |
+| "every 6 hours" | `360` on each dose step |
+| "leave overnight" | **omit** — not a number |
+| "prove until doubled" | **omit** — a condition, not a duration |
+| steps merely being sequential | **omit** |
+| a total time ("Ready in 45 minutes") | **omit** |
+| "chop the onions" — takes time, states none | **omit** |
+| the model's own sense of how long it ought to take | **omit** |
+
+Closing tiebreaker: *"If you are weighing whether a wait is explicit enough, it
+is not. Omit it."*
+
+### Rule 19: the wait goes on the step AFTER it
+
+"Bake for 25 minutes" then "Remove and cool" puts the 25 on **"Remove and
+cool"** — that is the step the user wants to be told about. A stated duration
+with no following step schedules nothing and is omitted. This follows directly
+from the Phase 4 semantics: an offset is measured from the completion of the
+preceding element.
+
+### The worked example is a MIXED item
+
+Chop and saute take real time and get nothing, because the capture states no
+wait. Marinate states 30 and gets it. Brown follows immediately and gets
+nothing. The example ends by saying so explicitly — *"An item may freely mix
+scheduled and unscheduled steps; that is expected, not a sign something was
+missed"* — because a model shown one offset tends to want to give the others
+some too.
+
+### Key casing, and a new guard
+
+The prompt emits camelCase `offsetMinutes`, matching the app's React-side shape
+and what the inbox triage normaliser reads via `offsetPatch`. It states that
+Postgres stores `offset_minutes` and that the model must **never emit the
+snake_case form** — a plausible mistake, since the model can see the column name
+through the schema tools.
+
+That seam is now guarded by test: the enrich prompt is read as source and
+asserted to instruct camelCase, forbid snake_case, restrict offsets to steps,
+default to omitting, and carry the worked example. Without it, a prompt edit
+could drop every captured offset between capture and item with nothing failing
+anywhere.
 
 ---
 
@@ -1415,3 +1472,73 @@ because it means a "recorded in the spec" claim from those rounds was wrong.
 - ✅ `no_subscription` — implemented, not yet observed firing.
 - ⏸️ `push-rotate` — deferred; the case for it is now weaker, since the outage
   it guards against has not actually been observed.
+
+---
+
+# ✅ Project complete
+
+All eight phases delivered and verified on a Pixel 7 with a Pixel Watch.
+
+| Phase | What |
+|---|---|
+| 0 | Service worker + Web Push proof of concept |
+| 1 | Execution deep link (`/schedule/execution/:id`) |
+| 2 | `offsetMinutes` on step elements |
+| 3 | `notification_steps` table, CONFORMANT |
+| 4 | Expansion, completion, close, pause/resume |
+| 5 | Dispatcher + pg_cron, with a gate proving cron fires first |
+| 6 | Control surface, Settings, inline per-element status |
+| 7 | Authoring picker — repeat a block, units, auto-numbering |
+| 8 | `alfred-enrich` emits offsets, conservatively |
+
+**710 tests across 28 suites. `CI=true` build clean.**
+
+## What remains open
+
+**Known and accepted:**
+
+1. ⚠️ **`platform.audit_log` records service-role writes as `actor = 'ui'`.**
+   The column cannot distinguish a dispatcher write from a browser one, which is
+   exactly what was needed to diagnose the Phase 5b stall. The dispatcher sets
+   no `x-actor` header and falls through to the default. Platform-layer work,
+   not this feature.
+
+2. ⏸️ **`push-rotate` edge function — deferred, not rejected.** It would close
+   the rotation outage window entirely, letting the service worker repair the
+   table with no user session. The case for it is now *weaker* than when it was
+   designed: the outage it guards against has never actually been observed, and
+   the incident that motivated it turned out to be Doze. Revisit if a genuine
+   rotation is seen in normal use.
+
+3. ✅ **`no_subscription` has never fired in the wild.** Implemented, constraint
+   widened, unit-tested — but no step has yet come due for an account with no
+   subscription. Alex's partner's first chain is the natural test.
+
+4. 📊 **Delivery latency on an idle phone.** `urgency: "high"` is shipped and
+   the mechanism is understood; Alex is gathering real data with Chrome set to
+   Unrestricted before deciding whether anything more is needed. Note the TTL
+   trade: a step is marked `sent` on the first 201 and never re-sent, so a
+   notification lost to an expired 15-minute TTL is lost permanently.
+
+**Three Intentions bugs found during the Phase 1 investigation, none of which
+belong to this feature and none of which have been filed:**
+
+5. 🐛 **`CustomRecurrenceDialog` silently clears an intention's end date on
+   reopen.** `initialConfig` carries the config but not the end date, and the
+   dialog hardcodes `endMode` to `"never"` — so an intention with an end date
+   reopens showing Never, and pressing Done clears it. **Live data loss**, and
+   the most serious of the three.
+
+6. 🐛 **`onOpenInterval` is a dead prop** on `RecurrenceQuickSelect` — in the
+   signature, unused in the body.
+
+7. 🤔 **`triggerRecurrence` counts intervals from today**, not from the archived
+   event's due date. Defensible, but currently accidental rather than decided.
+
+**Known limitations, recorded in the spec rather than fixed:**
+
+- A manually-scheduled successor is indistinguishable from a chain-armed one
+  (both are just `scheduled`), so un-ticking the element before it resets a
+  manual override. Telling them apart needs a column the table does not have.
+- The rotation drill exercises the *well-behaved* rotation only; the silent-201
+  variant cannot be reproduced on demand.

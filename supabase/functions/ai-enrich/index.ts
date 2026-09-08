@@ -121,7 +121,7 @@ const SHARED_TOOLS: Anthropic.Tool[] = [
         suggested_item_description: { type: "string", description: "Description for the item" },
         suggested_item_elements: {
           type: "array",
-          description: "Structured elements. Each element: {type: 'header'|'bullet'|'step', text: '...', collectable?: true}. Recipes: an 'Ingredients' header, one collectable bullet per ingredient (exactly one purchasable product each), then a 'Steps' header with step elements.",
+          description: "Structured elements. Each element: {type: 'header'|'bullet'|'step', text: '...', collectable?: true, offsetMinutes?: number}. Recipes: an 'Ingredients' header, one collectable bullet per ingredient (exactly one purchasable product each), then a 'Steps' header with step elements. offsetMinutes is ONLY for steps and ONLY when the capture states a wait — see rules 17-19.",
         },
         suggested_item_id: { type: "string", description: "ID of an EXISTING item to link to" },
         suggest_intent: { type: "boolean", description: "Should this become an Intention/task?" },
@@ -279,6 +279,67 @@ RULES:
     ("Ingredients — Dressing"); bullets under all of them are collectable.
 15. Search collections to find capture targets (like grocery lists, shopping lists). Collections with is_capture_target=true are frequently used for quick capture. If the capture seems like it belongs in a collection, set suggested_collection_id.
 16. When searching items, pay attention to items with is_capture_target=true — these are items the user frequently references (common recipes, recurring checklists). Prefer linking to these via suggested_item_id over creating new items.
+
+--- TIMED STEPS: offsetMinutes ---
+
+17. "offsetMinutes" is a whole number of MINUTES to wait BEFORE a step, measured
+    from the moment the PREVIOUS step is ticked off. It turns that step into a
+    push notification that arrives on the user's phone and watch at that time.
+    Emit it in camelCase as "offsetMinutes", exactly as shown. (On disk Postgres
+    stores it as "offset_minutes" — the app converts. Never emit the snake_case
+    form.)
+
+18. 🛑 DEFAULT TO OMITTING IT. Most captured steps are ordinary checklist items.
+    A notification the user did not ask for is worse than a missing one: if
+    every recipe becomes a chain of alerts, the feature turns into noise and the
+    user stops trusting the whole enrichment. Omitting a wait costs one manual
+    edit. Inventing one costs a phone buzzing at midnight.
+
+    Emit offsetMinutes ONLY when the captured text EXPLICITLY STATES a wait or
+    an interval. Quote-worthy examples:
+      "marinate 30 minutes"        -> offsetMinutes: 30
+      "rest 10 min"                -> offsetMinutes: 10
+      "every 6 hours"              -> offsetMinutes: 360 on each dose step
+      "leave overnight"            -> omit; "overnight" is not a number
+      "prove until doubled"        -> omit; a condition, not a duration
+      "bake for 25 minutes"        -> see rule 19
+
+    NEVER infer one from:
+      - steps merely being sequential or numbered;
+      - a total time ("Ready in 45 minutes", "Prep 10 / Cook 20");
+      - a step that obviously takes time but states no wait ("chop the onions",
+        "walk to the shops", "wash up");
+      - your own sense of how long something ought to take.
+
+    If you are weighing whether a wait is explicit enough, it is not. Omit it.
+
+19. The wait belongs on the step that comes AFTER it, not the step that causes
+    it. "Bake for 25 minutes" then "Remove and cool" means the 25 goes on
+    "Remove and cool" — that is the step the user wants to be told about. If a
+    stated duration has no following step, there is nothing to schedule and it
+    should be omitted.
+
+    Only "step" elements may carry offsetMinutes. Never a header, never a
+    bullet. A bullet with an offset cannot be ticked off in the app and would
+    stall the sequence permanently.
+
+    WORKED EXAMPLE — a mixed item, which is the normal case:
+
+      Capture: "Beef stew: chop onions, saute until soft, marinate the beef
+      30 minutes, then brown it"
+
+      Steps:
+        {type: "step", text: "Chop onions"}                         no offset
+        {type: "step", text: "Saute until soft"}                    no offset
+        {type: "step", text: "Marinate the beef", offsetMinutes: 30}
+        {type: "step", text: "Brown the beef"}                      no offset
+
+    Note what does NOT get an offset. "Chop" and "saute" take real time but the
+    capture states no wait, so they get none. "Marinate" states 30 minutes, so
+    the step gets 30 — and the user will be notified 30 minutes after they tick
+    "Saute until soft". "Brown the beef" follows immediately, so it gets none.
+    An item may freely mix scheduled and unscheduled steps; that is expected,
+    not a sign something was missed.
 
 IMPORTANT: The user will review and approve your suggestions before anything is created. Suggest generously — it's easier for them to remove a suggestion than to add a missing one.`;
 

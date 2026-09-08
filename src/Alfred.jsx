@@ -7129,9 +7129,9 @@ function InboxCard({
                         rows="2"
                       />
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <select
-                          value={element.displayType || "step"}
+                        value={element.displayType || "step"}
                           onChange={(e) =>
                             updateElement(index, "displayType", e.target.value)
                           }
@@ -7152,12 +7152,22 @@ function InboxCard({
                         />
                         {(element.displayType || "step") === "step" && (
                           <label
-                            className="flex items-center gap-1"
+                            className="w-full text-sm text-muted-foreground"
                             title="Minutes to wait after the previous step is completed."
                           >
-                            <span className="text-sm text-muted-foreground whitespace-nowrap">
-                              notify
-                            </span>
+                            {/* Inline flow, deliberately NOT a nested flex row.
+                          
+                                At 390px the flex version could not wrap: the sentence was
+                                squeezed into a four-word column while the nowrap note and the
+                                repeat link were pushed past the right edge, out of reach, and the
+                                page scrolled sideways.
+                          
+                                inline-block on the input keeps it ON the line with the words, so
+                                "notify [5] min after the step above is checked" still reads as one
+                                sentence — the 6b decision — while the text wraps around it at any
+                                width. w-full gives the sentence its own line beneath the type and
+                                quantity controls, which is where vertical space is cheap. */}
+                            notify{" "}
                             <input
                               type="number"
                               min={0}
@@ -7173,18 +7183,13 @@ function InboxCard({
                                 );
                               }}
                               placeholder="—"
-                              className="w-16 px-2 py-2 border border-border rounded text-sm"
-                            />
-                            <span className="text-sm text-muted-foreground">
-                              min after the step above is checked.
-                            </span>
-                            {/* Alongside the input, never in place of it. The value stays
-                                authorable at position one so a step created at the top can be
-                                given a gap and carry it when dragged down — which is the whole
-                                reason the offset lives on the element rather than on the item. */}
+                              className="inline-block w-16 align-middle px-2 py-1.5 border border-border rounded text-sm"
+                            />{" "}
+                            min after the step above is checked.
+                            {/* Its own line: a note about the sentence, not part of it. */}
                             {isFirstStep(itemElements, index) && (
                               <span
-                                className="text-xs text-muted-foreground italic whitespace-nowrap"
+                                className="block mt-0.5 text-xs text-muted-foreground italic"
                                 title="Nothing precedes this step, so there is no completion to measure from. The value is kept and becomes live if you move this step below another one."
                               >
                                 — at starting step, no notification will be sent
@@ -9766,9 +9771,9 @@ function ItemCard({
                       rows="2"
                     />
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <select
-                        value={element.displayType || "step"}
+                      value={element.displayType || "step"}
                         onChange={(e) =>
                           updateElement(index, "displayType", e.target.value)
                         }
@@ -9789,12 +9794,22 @@ function ItemCard({
                       />
                       {(element.displayType || "step") === "step" && (
                         <label
-                          className="flex items-center gap-1"
+                          className="w-full text-sm text-muted-foreground"
                           title="Minutes to wait after the previous step is completed."
                         >
-                          <span className="text-sm text-muted-foreground whitespace-nowrap">
-                            notify
-                          </span>
+                          {/* Inline flow, deliberately NOT a nested flex row.
+                        
+                              At 390px the flex version could not wrap: the sentence was
+                              squeezed into a four-word column while the nowrap note and the
+                              repeat link were pushed past the right edge, out of reach, and the
+                              page scrolled sideways.
+                        
+                              inline-block on the input keeps it ON the line with the words, so
+                              "notify [5] min after the step above is checked" still reads as one
+                              sentence — the 6b decision — while the text wraps around it at any
+                              width. w-full gives the sentence its own line beneath the type and
+                              quantity controls, which is where vertical space is cheap. */}
+                          notify{" "}
                           <input
                             type="number"
                             min={0}
@@ -9810,18 +9825,13 @@ function ItemCard({
                               );
                             }}
                             placeholder="—"
-                            className="w-16 px-2 py-2 border border-border rounded text-sm"
-                          />
-                          <span className="text-sm text-muted-foreground">
-                              min after the step above is checked.
-                            </span>
-                          {/* Alongside the input, never in place of it. The value stays
-                              authorable at position one so a step created at the top can be
-                              given a gap and carry it when dragged down — which is the whole
-                              reason the offset lives on the element rather than on the item. */}
+                            className="inline-block w-16 align-middle px-2 py-1.5 border border-border rounded text-sm"
+                          />{" "}
+                          min after the step above is checked.
+                          {/* Its own line: a note about the sentence, not part of it. */}
                           {isFirstStep(elements, index) && (
                             <span
-                              className="text-xs text-muted-foreground italic whitespace-nowrap"
+                              className="block mt-0.5 text-xs text-muted-foreground italic"
                               title="Nothing precedes this step, so there is no completion to measure from. The value is kept and becomes live if you move this step below another one."
                             >
                               — at starting step, no notification will be sent
@@ -9864,7 +9874,7 @@ function ItemCard({
                     {/* Item reference link */}
                     {(element.itemId || element.item_id) ? (
                       <div className="flex items-center gap-2 px-2 py-1 bg-warning-light border border-accent rounded text-sm">
-                        <span className="text-primary">
+                        <span className="text-primary min-w-0 break-words">
                           → {allItems.find((i) => i.id === (element.itemId || element.item_id))?.name || (element.itemId || element.item_id)}
                         </span>
                         <button

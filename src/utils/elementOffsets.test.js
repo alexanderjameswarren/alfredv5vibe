@@ -209,6 +209,89 @@ describe("an offset authored at position one survives being dragged down", () =>
   });
 });
 
+describe("the enrich prompt and the triage normaliser agree", () => {
+  // The AI emits {type, text, offsetMinutes} and the inbox triage normaliser
+  // reads it with offsetPatch. If the prompt were changed to emit the disk
+  // spelling, or a different key, offsets would be dropped between capture and
+  // item with nothing failing anywhere — the same silent seam that has bitten
+  // this project before.
+  const enrich = fs.readFileSync(
+    path.join(__dirname, "..", "..", "supabase", "functions", "ai-enrich", "index.ts"),
+    "utf8"
+  );
+
+  it("tells the model to emit camelCase offsetMinutes", () => {
+    expect(enrich).toContain("offsetMinutes");
+  });
+
+  it("forbids the snake_case form the model might otherwise copy from the DB", () => {
+    expect(enrich).toMatch(/Never emit the snake_case\s+form/);
+  });
+
+  it("reads exactly the key the prompt emits", () => {
+    // The contract, asserted rather than assumed.
+    expect(offsetPatch({ offsetMinutes: 30 })).toEqual({ offsetMinutes: 30 });
+  });
+
+  it("restricts offsets to step elements, like the editor does", () => {
+    // A bullet with an offset would own a notification row nothing can tick.
+    expect(enrich).toMatch(/Only "step" elements may carry\s+offsetMinutes/);
+  });
+
+  it("tells the model to default to omitting it", () => {
+    // The harder half: most captured steps are ordinary checklist items, and an
+    // unwanted notification costs more than a missing one.
+    expect(enrich).toMatch(/DEFAULT TO OMITTING IT/);
+  });
+
+  it("carries the mixed-item worked example", () => {
+    expect(enrich).toMatch(/WORKED EXAMPLE/);
+    expect(enrich).toMatch(/Marinate the beef/);
+  });
+});
+
+describe("the notification row survives a 390px viewport", () => {
+  // Reported from a Pixel 7 in portrait: the row laid out as one non-wrapping
+  // line, the sentence was crushed into a four-word column, and the note and
+  // the repeat link were pushed past the right edge where they could not be
+  // reached. The page scrolled sideways.
+  const source = fs.readFileSync(path.join(__dirname, "..", "Alfred.jsx"), "utf8");
+
+  const countOf = (needle) => source.split(needle).length - 1;
+
+  it("lets the row holding the type, quantity and gap WRAP", () => {
+    // The container was `flex items-center gap-2` with no wrap, so its children
+    // had nowhere to go but off-screen.
+    expect(countOf('className="flex flex-wrap items-center gap-2"')).toBe(2);
+  });
+
+  it("gives the gap sentence its own full-width line", () => {
+    // w-full in a wrapping flex container cannot share a line with anything,
+    // so the sentence never competes for width with the select and quantity.
+    expect(countOf('className="w-full text-sm text-muted-foreground"')).toBe(2);
+  });
+
+  it("keeps the input INLINE with the words, not stacked above them", () => {
+    // The 6b wording decision: "notify [5] min after the step above is
+    // checked" has to read as one sentence.
+    expect(countOf("inline-block w-16 align-middle")).toBe(2);
+  });
+
+  it("has no nowrap left in the gap sentence or its note", () => {
+    // Two nowrap spans were what actually pushed content off the edge.
+    const labels = source.split('className="w-full text-sm text-muted-foreground"').slice(1);
+    expect(labels).toHaveLength(2);
+    for (const rest of labels) {
+      const label = rest.slice(0, rest.indexOf("</label>"));
+      expect(label).not.toContain("whitespace-nowrap");
+    }
+  });
+
+  it("puts the at-start note on its own line", () => {
+    expect(countOf('className="block mt-0.5 text-xs text-muted-foreground italic"')).toBe(2);
+  });
+});
+
 describe("the twin-site rule", () => {
   // `collectable` was silently stripped on open-and-save cycles because one of
   // its normalisers was updated and its shadow copy in a dirty-check effect was
@@ -237,7 +320,9 @@ describe("the twin-site rule", () => {
   it("labels the offset with what it is measured FROM, at both call sites", () => {
     // The old label was "after [N] min", which never said what the delay is
     // measured from — the non-obvious part of the whole feature.
-    const notify = (source.match(/min after the step above is checked/g) || []).length;
+    // The trailing period pins the RENDERED text. Without it this also counted
+    // the phrase where it is quoted in a comment, and reported 4 sites.
+    const notify = (source.match(/min after the step above is checked\./g) || []).length;
     const atStart = (source.match(/at starting step, no notification will be sent/g) || []).length;
     expect(notify).toBe(2);
     expect(atStart).toBe(2);
