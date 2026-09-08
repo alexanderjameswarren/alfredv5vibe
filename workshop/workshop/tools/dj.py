@@ -716,3 +716,194 @@ async def get_dj_playlists(args: dict, ctx: Ctx) -> dict:
     if data["returned"] < data["track_count"]:
         meta["truncated"] = (data["returned"], data["track_count"])
     return {"data": data, "meta": meta}
+
+# ---------------------------------------------------------------------------
+# Albums — the Jazz thread's seed and its coverage input
+# ---------------------------------------------------------------------------
+#
+# Two reads, and they answer different questions:
+#
+#   get_dj_library_albums  what Alex has BOOKMARKED. His curation, explicit
+#                          rather than inferred from listening.
+#   get_dj_album           what an album CONTAINS, with video ids.
+#
+# 🛑 THE SECOND ONE IS NOT OPTIONAL AND dj_tracks.album CANNOT REPLACE IT.
+# "Have I heard this album" has to be answerable from plays, and dj_tracks.album
+# is unreliable and mostly null (§14.9), frozen at write (§4.1.2), and describes
+# where a PLAY came from rather than what an album HOLDS. An album's track list
+# is a fact about the album; that column is a fact about a play.
+
+
+def _project_album_summary(a: dict) -> dict:
+    """One library album, flattened.
+
+    ⚠️ `browseId` IS THE ALBUM ID AND `playlistId` IS NOT. get_album takes the
+    browseId (MPREb_...); the playlistId (OLAK5uy_...) is the same album served
+    as a playlist and is what you would queue. Both are returned because they are
+    used for different things, and picking the wrong one fails in a way that
+    still returns music.
+    """
+    artists = [x.get("name") for x in (a.get("artists") or []) if x.get("name")]
+    return {
+        "album_id": a.get("browseId"),
+        "playlist_id": a.get("playlistId"),
+        "title": a.get("title"),
+        # The JOINED display string, matching how dj_tracks.artist reads. A
+        # collaboration arrives as one string here too (§14.1).
+        "artist": ", ".join(artists) if artists else None,
+        "artists": artists,
+        "year": a.get("year"),
+        "type": a.get("type"),
+    }
+
+
+@define_tool(
+    name="get_dj_library_albums",
+    tier=1,
+    description=(
+        "Read the albums Alex has BOOKMARKED in YouTube Music. Read-only. "
+        "This is his curation stated explicitly, rather than inferred from what "
+        "he happened to play — which is why it is the seed for dj_albums (spec "
+        "§14.2: the table has existed since Block C with no writer and no data). "
+        "⚠️ `album_id` IS THE browseId AND IS WHAT get_dj_album TAKES. "
+        "`playlist_id` is the same album served as a playlist — that is what you "
+        "would queue, and passing it where an album id belongs fails in a way "
+        "that still returns music, which is the worst kind of wrong. "
+        "⚠️ `artist` is the JOINED display string, the same shape as "
+        "dj_tracks.artist: a collaboration arrives as one string, not several "
+        "(§14.1). Tier 1."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "description": (
+                    "Max albums (default 50, cap 50). The full library is read "
+                    "upstream regardless, so `total` is the real count rather "
+                    "than a guess from the page requested."
+                ),
+            },
+        },
+    },
+)
+async def get_dj_library_albums(args: dict, ctx: Ctx) -> dict:
+    limit = clamp_limit(args.get("limit"), default=50, cap=50)
+    # limit=None fetches everything, so `total` is real. Same argument as
+    # get_dj_playlists mode=library: a bookmarked-album library is small, and
+    # knowing the true total is what lets a caller see it was cut.
+    rows = await _call(ctx.config.host_id, "get_library_albums", limit=None) or []
+    total = len(rows)
+    kept = [_project_album_summary(a) for a in rows[:limit]]
+
+    data = {
+        "albums": kept,
+        "returned": len(kept),
+        "total": total,
+        "limit_applied": limit,
+        "reading": (
+            "These are BOOKMARKS, not listening. An album here may never have "
+            "been played, and one played to death may not be here — the two are "
+            "different facts and this tool only knows the first. "
+            "⚠️ Pass `album_id` (the browseId) to get_dj_album for the track "
+            "list; `playlist_id` is the queueable form and is not "
+            "interchangeable with it."
+        ),
+    }
+    meta: dict[str, Any] = {}
+    if len(kept) < total:
+        meta["truncated"] = (len(kept), total)
+    return {"data": data, "meta": meta}
+
+
+@define_tool(
+    name="get_dj_album",
+    tier=1,
+    description=(
+        "Read ONE album's track list, with video ids. Read-only. This is what "
+        "makes 'have I heard this album' answerable: the ids join to dj_tracks "
+        "and through it to dj_plays. "
+        "🛑 dj_tracks.album CANNOT ANSWER THAT AND MUST NOT BE USED TO TRY — it "
+        "is unreliable and mostly null (§14.9), frozen at write, and it records "
+        "where a PLAY came from rather than what an album CONTAINS. "
+        "⚠️ TAKES THE browseId (MPREb_...), from get_dj_library_albums' "
+        "`album_id` or from search. Passing the playlistId (OLAK5uy_...) is the "
+        "failure worth naming: it may still return something, and something is "
+        "indistinguishable from the right thing until much later. "
+        "⚠️ A track with no `video_id` is returned WITH THAT FIELD NULL rather "
+        "than dropped — YouTube omits it for tracks unavailable in the region, "
+        "and silently shortening a track list makes an album look shorter than "
+        "it is, which makes coverage look better than it is. Tier 1."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "album_id": {
+                "type": "string",
+                "description": (
+                    "The album's browseId (MPREb_...), from "
+                    "get_dj_library_albums' `album_id`. NOT the playlistId."
+                ),
+            },
+        },
+        "required": ["album_id"],
+    },
+)
+async def get_dj_album(args: dict, ctx: Ctx) -> dict:
+    album_id = args.get("album_id")
+    if not album_id or not isinstance(album_id, str):
+        raise OperationalError(
+            "bad_argument: `album_id` is required and must be a string. "
+            "Re-call with a corrected value."
+        )
+
+    detail = await _call(ctx.config.host_id, "get_album", browseId=album_id) or {}
+    raw_tracks = detail.get("tracks") or []
+    if not detail.get("title") and not raw_tracks:
+        raise OperationalError(
+            f"not_found: no album resolved for id {album_id!r}. Check it is a "
+            f"browseId (MPREb_...) and not a playlistId (OLAK5uy_...) — the two "
+            f"are different ids for the same album and only one works here."
+        )
+
+    tracks, missing_video_id = [], 0
+    for i, t in enumerate(raw_tracks, start=1):
+        artists = [x.get("name") for x in (t.get("artists") or []) if x.get("name")]
+        vid = t.get("videoId")
+        if not vid:
+            missing_video_id += 1
+        tracks.append({
+            "position": i,
+            "video_id": vid,
+            "title": t.get("title"),
+            "artist": ", ".join(artists) if artists else None,
+            "duration_seconds": t.get("duration_seconds"),
+        })
+
+    album_artists = [x.get("name") for x in (detail.get("artists") or []) if x.get("name")]
+
+    data = {
+        "album_id": album_id,
+        "title": detail.get("title"),
+        "artist": ", ".join(album_artists) if album_artists else None,
+        "year": detail.get("year"),
+        "playlist_id": detail.get("audioPlaylistId"),
+        "track_count": len(tracks),
+        "tracks": tracks,
+        # ⚠️ COUNTED AND REPORTED, NOT DROPPED. See the description.
+        "tracks_without_video_id": missing_video_id,
+        "reading": (
+            "`tracks` is the album's running order, 1-indexed. `video_id` joins "
+            "to dj_tracks and through it to dj_plays — that join is how album "
+            "coverage is computed. "
+            "⚠️ `tracks_without_video_id` COUNTS TRACKS THAT CAN NEVER BE "
+            "MATCHED TO A PLAY. They are kept in the list because dropping them "
+            "would shorten the album and make coverage look better than it is; "
+            "a coverage figure over an album with any of these is a fraction of "
+            "a denominator that is partly unmeasurable, and should say so. "
+            "⚠️ `playlist_id` (audioPlaylistId) is the QUEUEABLE form of this "
+            "album — the id to hand to replace_dj_playlist if the whole album is "
+            "going into Today's Jazz. It is not the album id."
+        ),
+    }
+    return {"data": data, "meta": {}}

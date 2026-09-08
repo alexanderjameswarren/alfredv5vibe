@@ -61,7 +61,9 @@ WORKSHOP_DIR = Path(__file__).resolve().parents[1]
 EXPECTED_TOOLS = {
     "create_dj_playlist",
     "edit_dj_playlist",
+    "get_dj_album",
     "get_dj_history",
+    "get_dj_library_albums",
     "get_dj_playlists",
     "get_dj_setlists",
     "diff_dj_setlists",
@@ -137,10 +139,11 @@ class ToolsImportTests(unittest.TestCase):
 
         Redundant with the set comparison by design: the count is the number
         quoted when reconnecting a connector, so it is worth failing on its own
-        terms. 12 since replace_dj_playlist joined the surface (the Jazz
-        thread's write path: overwriting a working playlist was five calls).
+        terms. 14 since the Jazz thread landed: replace_dj_playlist (its write
+        path — overwriting a working playlist was five calls), plus
+        get_dj_library_albums and get_dj_album (its seed and its coverage input).
         """
-        self.assertEqual(len(EXPECTED_TOOLS), 12)
+        self.assertEqual(len(EXPECTED_TOOLS), 14)
 
 
 class ImportCheckIsNotVacuousTests(unittest.TestCase):

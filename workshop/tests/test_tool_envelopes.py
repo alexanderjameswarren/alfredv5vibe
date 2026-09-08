@@ -158,6 +158,18 @@ _YT_RESPONSES: dict[str, Any] = {
     "search": [],
     "create_playlist": "PL_created",
     "edit_playlist": {"status": "STATUS_SUCCEEDED"},
+    "get_library_albums": [
+        {"browseId": "MPREb_test", "playlistId": "OLAK5uy_test", "title": "Mingus Ah Um",
+         "artists": [{"name": "Charles Mingus"}], "year": "1959", "type": "Album"},
+    ],
+    "get_album": {
+        "title": "Mingus Ah Um", "year": "1959", "audioPlaylistId": "OLAK5uy_test",
+        "artists": [{"name": "Charles Mingus"}],
+        "tracks": [
+            {"videoId": "v_pork", "title": "Goodbye Pork Pie Hat",
+             "artists": [{"name": "Charles Mingus"}], "duration_seconds": 320},
+        ],
+    },
     "add_playlist_items": {"status": "STATUS_SUCCEEDED"},
     "remove_playlist_items": {"status": "STATUS_SUCCEEDED"},
     "delete_playlist": {"status": "STATUS_SUCCEEDED"},
@@ -198,6 +210,8 @@ _CALLS: dict[str, dict] = {
         "entries": [{"video_id": "v1", "set_video_id": "s1"}],
         "confirmed": True,
     },
+    "get_dj_library_albums": {},
+    "get_dj_album": {"album_id": "MPREb_test"},
     "replace_dj_playlist": {
         "playlist_id": "PL_test",
         "video_ids": ["v2"],

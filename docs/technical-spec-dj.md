@@ -3704,3 +3704,70 @@ diff passes the targeting straight through.
 dd-MM-yyyy; this project already spent a day on a d/m swap in the Takeout timezone work, and both
 acceptance dates are in October — a swap would produce a 13th month for one and a plausible wrong
 answer for the other.
+
+### 14.41 🛑 SEASONAL SUBSTITUTION IS NOT DISENGAGEMENT, AND `went_quiet` CANNOT TELL THEM APART
+
+**Christmas jazz is a genre Alex actively listens to**, especially in November and December.
+When he does, **Today's Jazz goes silent** — and `went_quiet` fires on exactly that shape: warm
+before the recent window, silent within it.
+
+⚠️ **THE FLAG WILL BE CORRECT AND THE READING WILL BE WRONG.** Nothing in the data distinguishes
+*"stopped caring about jazz"* from *"listening to a different jazz playlist this month"*. Every
+November the weekly review will report a healthy seasonal switch as a playlist he has abandoned.
+
+**The rule: `went_quiet` on Today's Jazz in November or December is expected. Do not report it as
+disengagement.** Check whether a seasonal playlist warmed in the same window before writing a
+sentence about a cold one.
+
+🛑 **AND THE INVERSE IS ALREADY RECORDED, WHICH IS WHY THIS IS EASY TO GET BACKWARDS.** §11.7 and
+migration 015 built `went_quiet` as a CHANGE detector precisely so *Christmas jazz* would not be
+reported as cold every September — a flat-cold seasonal playlist never fires. This is the same
+seasonality arriving from the other direction: the seasonal playlist warming up makes a
+*different* playlist go cold, and that one does fire.
+
+⚠️ **NOT FIXED IN CODE, AND THE REASON IS WORTH STATING.** A substitution detector — playlist A
+went quiet while related playlist B warmed in the same window — is computable and is exactly the
+kind of clever inference that is wrong the first time two playlists move for unrelated reasons.
+The honest fix is a reader who knows, so it is written down rather than inferred.
+
+#### A correction to how this was first framed
+
+The 2026-09-08 design pass called Christmas jazz a source of *pollution* in the jazz tags. **That
+was wrong and the framing mattered.** Christmas jazz is a genre Alex cares about; excluding it
+would have been the wrong fix to the wrong problem.
+
+**The real defect is narrower:** B.J. Thomas is tagged `jazz` because he appears on one track in
+that playlist. He is a **real artist wrongly labelled**, which is worse than a junk string —
+`Anything_F_744` looks like junk, and *"go deeper on artists you love"* recommending B.J. Thomas
+looks correct.
+
+So §14.35's cleanup pass stands, and it is a **prerequisite for stage 2 only**. Stage 1 (cover
+the canon) touches no artist tags and is not blocked by it.
+
+### 14.42 `replace_dj_playlist` — live-tested 2026-09-08, with one branch unexercised
+
+Built as a separate tier-3 tool rather than a mode on `edit_dj_playlist`, because **`tier` is
+declared per TOOL**: hanging `replace` off the tier-2 tool would have promoted `add`, `move` and
+`rename` with it, putting a confirmation gate on every cram seed and every playlist build. A
+private gate inside a tier-2 tool is what the platform contract forbids.
+
+🛑 **IT ADDS FIRST AND REMOVES SECOND, AND THAT IS THE DESIGN.** Clear-then-fill has a failure
+mode worse than either end state: if the add fails after the remove succeeded, **the playlist is
+empty — which is precisely when YouTube autoplay takes over**, the thing this playlist exists to
+prevent. The naive order fails directly into the problem it was built to solve. Adding first
+leaves a partial failure playable and visibly wrong instead of silently empty.
+
+**Live-tested, two rounds.** Round 2 was a true replace: all three round-1 tracks gone, only the
+new set present, no residue. The preview led with the playlist title both times, and nothing
+executed without `confirmed: true`.
+
+⚠️ **`unremovable_entries` IS UNEXERCISED, NOT PASSING.** That branch needs a playlist entry with
+no `setVideoId`, which a clean playlist cannot produce — so the code path that reports leftover
+rows has never run against YouTube. It is unit-tested against a fake. **Recorded as untested
+rather than counted as working**, because the difference is exactly what §11.16 is about.
+
+⚠️ **A MUTATION TEST NEARLY REPORTED A FALSE PASS.** The first two attempts to invert the
+add/remove order were no-ops — one changed nothing, the other relocated the statement into a
+different function and failed with a `NameError` rather than the assertion. Only the third
+actually inverted it, and then two tests failed with the right message. **A mutation that does
+not mutate is a green run that proves nothing**, and the first two runs proved nothing.

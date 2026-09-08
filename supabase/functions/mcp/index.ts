@@ -35,6 +35,7 @@ import {
   recordDjFeedbackTool,
 } from "../_shared/tools/dj-concerts.ts";
 import { getDjArtistsTool, upsertDjArtistTool, recordDjArtistTagTool, getDjArtistTagsTool } from "../_shared/tools/dj-artists.ts";
+import { recordDjAlbumTool, getDjAlbumsTool } from "../_shared/tools/dj-albums.ts";
 import {
   getItems,
   searchItems,
@@ -1213,6 +1214,55 @@ export function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(recordDjFeedbackTool, args, token),
+  );
+
+  server.registerTool(
+    "get_dj_albums",
+    {
+      title: "Get DJ Albums",
+      description:
+        "Albums with 'how much of this have I heard' computed. The Jazz thread's memory: what has been suggested, accepted, heard, or declined. " +
+        "🛑 COVERAGE IS A FRACTION, NEVER A BOOLEAN. Report `tracks_heard / tracks_playable`. Albums are 8-12 tracks and three may have been heard; '3 of 9' needs no caveat and 'unheard: false' needs a paragraph (spec 12.12). " +
+        "⚠️ WHEN `tracks_total` EXCEEDS `tracks_playable`, SAY SO. The difference is region-blocked tracks that YouTube gives no videoId for — real tracks that can never match a play. Reporting '7 of 7' on an album whose total is 9 tells him it is finished when two were never checkable. `albums_partly_unmeasurable` counts these. " +
+        "⚠️ COUNTS CANONICAL GROUPS, so a play of ANY upload counts: this measures the MUSIC, not the RECORD. It does NOT answer 'have I sat through this album as an album' and would answer that confidently and wrongly. " +
+        "⚠️ `status` is QUEUE POSITION, not feeling (that is dj_feedback): proposed | queued | listening | known | dismissed. 'dismissed' means asked and answered NO and must never be proposed again. `suggested_on` is how a later session knows an album was already put forward — the canon lives in these rows, not in the model. Tier 1, read-only.",
+      inputSchema: {
+        status: z.enum(["proposed", "queued", "listening", "known", "dismissed"]).optional().describe("Filter by queue position. Omit for all."),
+        tag: z.string().optional().describe("Filter to albums carrying this tag, e.g. 'canon' or 'latin-jazz'."),
+        limit: z.coerce.number().optional().describe("Max albums (default 20, cap 50)."),
+      },
+    },
+    async (args) => runToolForMcp(getDjAlbumsTool, args, token),
+  );
+
+  server.registerTool(
+    "record_dj_album",
+    {
+      title: "Record DJ Album",
+      description:
+        "Record an album and its track list — the Jazz thread's write. Upserts on `yt_album_id` where there is one. " +
+        "🛑 THIS WRITE IS THE MEMORY AND IS NOT OPTIONAL. The canon is knowledge the MODEL holds, not something the listening history contains, so a later session can suggest the same album again unless this row exists. A session that suggests without recording has silently broken the thing. " +
+        "⚠️ `status` is where the album sits in the QUEUE, never how Alex feels about it (that is record_dj_feedback): proposed | queued | listening | known | dismissed. RECORD A 'dismissed' WHEN HE SAYS NO — without it a declined album is indistinguishable from one never mentioned and comes back every week (spec 11.7). An album can legitimately be tags=['canon'] AND dismissed. " +
+        "⚠️ PASS THE FULL TRACK LIST FROM get_dj_album, INCLUDING TRACKS WITH NO video_id. Those are region-blocked: real tracks that lengthen the record and can never match a play. They are stored, counted in `tracks_total` and excluded from `tracks_playable`, which is what keeps the coverage fraction honest — dropping them would make a short album look finished. " +
+        "⚠️ Track ids resolve through the SAME shared resolver record_dj_plays uses, creating dj_tracks rows and canonical groupings, so a play of any upload counts toward hearing the album. Tier 2 — it updates existing rows.",
+      inputSchema: {
+        title: z.string().describe("Album title."),
+        artist: z.string().optional().describe("Album artist as a DISPLAY STRING (joined, e.g. 'Miles Davis, John Coltrane'). NOT a foreign key — dj_artists holds mbid-keyed concert acts and jazz musicians do not belong in it (spec 14.1, 14.23)."),
+        yt_album_id: z.string().optional().describe("YouTube browseId (MPREb_...), from get_dj_album/get_dj_library_albums. Omit for an album recorded from knowledge before it is resolved — several such rows may coexist."),
+        release_year: z.coerce.number().optional().describe("Release year."),
+        status: z.enum(["proposed", "queued", "listening", "known", "dismissed"]).optional().describe("Defaults to 'proposed'. `suggested_on` is stamped server-side when proposed, so a suggestion cannot be back-dated."),
+        tags: z.array(z.string()).optional().describe("What KIND of album: 'canon', 'latin-jazz', 'hard-bop'. Category, not decision — the decision is `status`."),
+        notes: z.string().optional().describe("Why it was suggested. Free text."),
+        tracks: z.array(z.object({
+          video_id: z.string().nullable().optional(),
+          title: z.string().optional(),
+          artist: z.string().nullable().optional(),
+          duration_seconds: z.coerce.number().nullable().optional(),
+          position: z.coerce.number().optional(),
+        })).optional().describe("The full track list from get_dj_album, in order. INCLUDE tracks whose video_id is null."),
+      },
+    },
+    async (args) => runToolForMcp(recordDjAlbumTool, args, token),
   );
 
   server.registerTool(

@@ -191,7 +191,8 @@ test("the DJ tool surface is registered", () => {
                       "get_dj_managed_playlists", "create_platform_schedule",
                       "get_dj_artists", "upsert_dj_artist",
                       "get_dj_concerts", "update_dj_concert",
-                      "record_dj_feedback", "record_dj_artist_tag", "get_dj_artist_tags"]) {
+                      "record_dj_feedback", "record_dj_artist_tag", "get_dj_artist_tags",
+                      "record_dj_album", "get_dj_albums"]) {
     assert.ok(registered.some((r) => r.name === name), `${name} not registered`);
   }
 });
@@ -230,7 +231,7 @@ test("dry_run_dj_playlist is deliberately NOT an MCP tool either", () => {
     "dry_run_dj_playlist is now registered as an MCP tool - was that deliberate?");
 });
 
-test("the tool count is 41 after the tag system", () => {
+test("the tool count is 43 after the Jazz thread", () => {
   // The number quoted at every reconnect. 36 through step 0 and step 1, which
   // added an endpoint and a non-registered tool on purpose. Step 2 adds three:
   // get_dj_concerts, update_dj_concert, record_dj_feedback - batched into ONE
@@ -242,8 +243,12 @@ test("the tool count is 41 after the tag system", () => {
   // definition, §14.19), record_dj_artist_tag and get_dj_artist_tags ADDED.
   // ⚠️ A NET COUNT HIDES A REMOVAL, which is why the three are named here: a
   // future reader seeing 40 -> 41 would otherwise assume one tool arrived.
-  assert.equal(registered.length, 41,
-    `expected 41 registered tools, found ${registered.length}: ` +
+  //
+  // 2026-09-08, +2 for the Jazz thread: get_dj_albums (coverage as a fraction)
+  // and record_dj_album (the memory — the canon is knowledge the model holds,
+  // so a suggestion that is not written is a suggestion a later session repeats).
+  assert.equal(registered.length, 43,
+    `expected 43 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
