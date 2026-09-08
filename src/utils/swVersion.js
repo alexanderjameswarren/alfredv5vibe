@@ -17,4 +17,4 @@
  * this. Silence means a worker older than version reporting itself, which is
  * the same answer with less precision.
  */
-export const EXPECTED_SW_VERSION = "2026-09-08a";
+export const EXPECTED_SW_VERSION = "2026-09-08b";

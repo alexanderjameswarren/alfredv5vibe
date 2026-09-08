@@ -29,8 +29,8 @@ const bodyHash = crypto
 // this whole mechanism exists to detect. Updating the hash without bumping the
 // version defeats it.
 const LOCKED_BODY_HASH =
-  "54ea59314d42ac9dc53e899131d645a7f9780fb1a0a66fee8256ff710785067a";
-const LOCKED_VERSION = "2026-09-08a";
+  "ac648613759e3ac8262f47bf591c93a3a81f131dd075f58fccd4dc71f0742766";
+const LOCKED_VERSION = "2026-09-08b";
 
 describe("the worker version is honest about what is deployed", () => {
   it("declares a version", () => {
@@ -85,5 +85,38 @@ describe("the deep link path the worker owns", () => {
 
   it("still has no fetch handler", () => {
     expect(source).not.toContain("addEventListener('fetch'");
+  });
+});
+
+describe("the closed-app landing fallback", () => {
+  // clients.openWindow() cannot be relied on to control the landing route in an
+  // installed PWA on Android: the OS launches the app at the manifest's
+  // start_url and the requested URL is advisory. With Alfred already open the
+  // worker navigates an existing window instead, which is why only the closed
+  // path failed.
+  it("records where it wanted to go before launching", () => {
+    expect(source).toContain("recordPendingNavigation");
+    expect(source).toContain("pendingNavigation");
+  });
+
+  it("awaits the record so it is durable before the app can boot", () => {
+    expect(source).toMatch(/await recordPendingNavigation\(path\)/);
+  });
+
+  it("records ONLY on the closed path, never when a window is navigated", () => {
+    // A record left behind on the open path could only be consumed by some
+    // later, unrelated launch.
+    const clickHandler = source.slice(source.indexOf("addEventListener('notificationclick'"));
+    const navigateAt = clickHandler.indexOf("target.navigate(absolute)");
+    const recordAt = clickHandler.indexOf("recordPendingNavigation(path)");
+    expect(navigateAt).toBeGreaterThan(-1);
+    expect(recordAt).toBeGreaterThan(navigateAt);
+  });
+
+  it("passes an ABSOLUTE url to openWindow", () => {
+    // Some Chrome versions handle a bare path badly here. The origin comes from
+    // self.location, so there is still no setting to get wrong.
+    expect(source).toMatch(/new URL\(path, self\.location\.origin\)/);
+    expect(source).toMatch(/openWindow\(absolute\)/);
   });
 });

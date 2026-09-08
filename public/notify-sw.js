@@ -28,7 +28,7 @@
  * changing the worker without bumping the version fails the suite rather than
  * silently reporting "up to date".
  */
-const SW_VERSION = '2026-09-08a';
+const SW_VERSION = '2026-09-08b';
 
 // Take over as soon as installed rather than waiting for every tab to close,
 // so the first visit can raise a notification instead of the second.
@@ -116,6 +116,7 @@ self.addEventListener('push', (event) => {
 const ROTATION_DB = 'alfred-push';
 const ROTATION_STORE = 'rotation';
 const ROTATION_KEY = 'pending';
+const NAV_KEY = 'pendingNavigation';
 
 function openRotationDb() {
   return new Promise((resolve, reject) => {
@@ -136,6 +137,19 @@ async function recordRotation(record) {
   await new Promise((resolve) => {
     const tx = db.transaction(ROTATION_STORE, 'readwrite');
     tx.objectStore(ROTATION_STORE).put(record, ROTATION_KEY);
+    tx.oncomplete = resolve;
+    tx.onerror = resolve;
+    tx.onabort = resolve;
+  });
+}
+
+/* Where the worker wanted the tap to land, for the app to pick up on boot.
+ * See the notificationclick handler for why this is needed at all. */
+async function recordPendingNavigation(url) {
+  const db = await openRotationDb();
+  await new Promise((resolve) => {
+    const tx = db.transaction(ROTATION_STORE, 'readwrite');
+    tx.objectStore(ROTATION_STORE).put({ url, at: new Date().toISOString() }, NAV_KEY);
     tx.oncomplete = resolve;
     tx.onerror = resolve;
     tx.onabort = resolve;
@@ -232,39 +246,66 @@ self.addEventListener('pushsubscriptionchange', (event) => {
   );
 });
 
-// Tapping the notification — on the phone or mirrored on the watch — opens the
-// app at the URL the push asked for, focusing an existing window rather than
-// piling up tabs.
-//
-// The URL is a PATH, not an absolute address. openWindow and navigate resolve
-// it against this worker's own origin, so there is no base-URL setting to get
-// wrong and no way to send someone to the wrong host.
+/* Tapping the notification, on the phone or mirrored on the watch.
+ *
+ * 🛑 THE TWO PATHS BEHAVE DIFFERENTLY, AND ONLY ONE OF THEM IS REALLY OURS.
+ *
+ *   Alfred OPEN   -> an existing window is focused and navigated. Reliable.
+ *   Alfred CLOSED -> clients.openWindow() launches the installed PWA, and on
+ *                    Android it lands on the manifest's start_url rather than
+ *                    the URL passed here. The URL is simply lost.
+ *
+ * That is a platform behaviour, not something this handler can fix: an
+ * installed PWA is launched by the OS, and the requested URL is advisory. So
+ * the URL is RECORDED before openWindow is called, and the app applies it on
+ * boot — see takePendingNavigation in src/utils/pushRotation.js.
+ *
+ * The record is written and AWAITED before launching, so it is durable before
+ * the app can possibly start reading it.
+ *
+ * The URL is also made absolute against this worker's own origin. Some Chrome
+ * versions handle a bare path badly here. Deriving the origin from
+ * self.location keeps the Phase 5 property that mattered — no base-URL setting
+ * to get wrong, no way to send anyone to another host.
+ */
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || '/';
+  const path = (event.notification.data && event.notification.data.url) || '/';
+  const absolute = new URL(path, self.location.origin).href;
 
   event.waitUntil(
-    self.clients
-      .matchAll({ type: 'window', includeUncontrolled: true })
-      .then((windows) => {
-        for (const client of windows) {
-          if ('focus' in client) {
-            // Focus first, then move it. An already-open Alfred sitting on the
-            // home screen must still end up on the execution — focusing alone
-            // would look like the link had been ignored.
-            const focused = client.focus();
-            if ('navigate' in client) {
-              return Promise.resolve(focused)
-                .then((c) => (c && c.navigate ? c.navigate(url) : client.navigate(url)))
-                // navigate() rejects on some browsers for cross-origin or
-                // uncontrolled clients. Falling back to a new window is better
-                // than swallowing the tap.
-                .catch(() => (self.clients.openWindow ? self.clients.openWindow(url) : undefined));
-            }
-            return focused;
+    (async () => {
+      const windows = await self.clients.matchAll({
+        type: 'window',
+        includeUncontrolled: true,
+      });
+
+      // Alfred is open: navigate the window we already have. No stash — the
+      // app is not going to boot, so a record left behind could only be
+      // consumed by some later, unrelated launch.
+      for (const client of windows) {
+        if ('focus' in client) {
+          try {
+            const focused = await client.focus();
+            const target = focused && focused.navigate ? focused : client;
+            if (target.navigate) await target.navigate(absolute);
+            return;
+          } catch (err) {
+            // navigate() rejects for an uncontrolled or cross-origin client.
+            // Fall through to opening a window instead of swallowing the tap.
+            break;
           }
         }
-        return self.clients.openWindow ? self.clients.openWindow(url) : undefined;
-      })
+      }
+
+      // Alfred is closed. Record first, then launch: if the OS ignores the URL
+      // and lands on start_url, the app corrects itself on boot.
+      try {
+        await recordPendingNavigation(path);
+      } catch (err) {
+        /* no IndexedDB; openWindow may still land correctly on its own */
+      }
+      if (self.clients.openWindow) await self.clients.openWindow(absolute);
+    })()
   );
 });

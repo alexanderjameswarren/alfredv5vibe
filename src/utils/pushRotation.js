@@ -24,6 +24,13 @@
 export const ROTATION_DB = "alfred-push";
 export const ROTATION_STORE = "rotation";
 export const ROTATION_KEY = "pending";
+/**
+ * Where the worker leaves a URL for the app to open on boot.
+ *
+ * ⚠️ TWIN SITE: also declared in `public/notify-sw.js`. Same store, different
+ * key, same rename-both rule — guarded by test.
+ */
+export const NAV_KEY = "pendingNavigation";
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -169,5 +176,69 @@ export function forgetEndpoint(endpoint) {
     window.localStorage.setItem(LEDGER_KEY, JSON.stringify(list));
   } catch {
     /* nothing recoverable */
+  }
+}
+
+/* ── The deep-link landing fallback ─────────────────────────────────────────
+ *
+ * Tapping a chain notification with Alfred CLOSED launched the installed PWA on
+ * the home page instead of the execution. Everything upstream was correct — the
+ * payload carried the URL, `notification.data` carried it into the click
+ * handler, and the same URL pasted into a browser opened the right screen. The
+ * loss happens inside `clients.openWindow()`: on Android, launching an
+ * installed PWA that is not already running lands on the manifest's `start_url`
+ * rather than the requested URL. With Alfred already open the worker navigates
+ * an existing window instead, which is why that path always worked.
+ *
+ * So the worker records where it wanted to go, and the app reads it on boot.
+ *
+ * Two rules keep it from firing when it should not:
+ *
+ *   - **Freshness.** A tap-to-boot takes seconds. A record older than the
+ *     window below is ignored, so opening Alfred from its icon an hour later
+ *     never jumps somewhere unexpected.
+ *   - **Consume once.** It is deleted as it is read, before anything navigates,
+ *     so a single tap can only ever move the app once.
+ */
+
+const NAV_MAX_AGE_MS = 60_000;
+
+/**
+ * Take the URL the worker wanted to open, if it is recent.
+ *
+ * Always clears the record, even when it is too old to use — a stale one has no
+ * further purpose and leaving it risks it being consumed by a later launch.
+ *
+ * @returns {Promise<string|null>} The path to navigate to, or null.
+ */
+export async function takePendingNavigation(now = Date.now()) {
+  try {
+    const db = await openDb();
+    if (!db) return null;
+
+    const record = await new Promise((resolve) => {
+      const tx = db.transaction(ROTATION_STORE, "readonly");
+      const req = tx.objectStore(ROTATION_STORE).get(NAV_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+    if (!record) return null;
+
+    await new Promise((resolve) => {
+      const tx = db.transaction(ROTATION_STORE, "readwrite");
+      tx.objectStore(ROTATION_STORE).delete(NAV_KEY);
+      tx.oncomplete = resolve;
+      tx.onerror = resolve;
+      tx.onabort = resolve;
+    });
+
+    const at = Date.parse(record.at);
+    if (!record.url || !Number.isFinite(at)) return null;
+    if (now - at > NAV_MAX_AGE_MS) return null;   // an unrelated launch
+    return record.url;
+  } catch {
+    // No IndexedDB, or blocked storage. The app simply lands where the browser
+    // put it, which is today's behaviour.
+    return null;
   }
 }

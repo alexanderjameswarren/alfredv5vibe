@@ -11,6 +11,7 @@ import {
 } from "./viewPaths";
 import { useExecutionRoute } from "./useExecutionRoute";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
+import { takePendingNavigation } from "./utils/pushRotation";
 import NotificationSettings from "./NotificationSettings";
 import RepeatBlockDialog from "./RepeatBlockDialog";
 import {
@@ -1313,6 +1314,39 @@ export default function Alfred() {
   const [recycleLoading, setRecycleLoading] = useState(false);
   const [recycleHasMore, setRecycleHasMore] = useState(false);
   const [recycleSelected, setRecycleSelected] = useState(new Set());
+
+  // --- Notification landing (deep link, closed app) -------------------------
+  //
+  // Tapping a chain notification with Alfred CLOSED launched the installed PWA
+  // on the home page. Everything upstream was correct — the payload carried the
+  // URL, notification.data carried it into the click handler, and the same URL
+  // pasted into a browser opened the right screen. It is lost inside
+  // clients.openWindow(): on Android an installed PWA is launched by the OS at
+  // the manifest's start_url, and the requested URL is advisory.
+  //
+  // So the worker records where it meant to go and this applies it on boot.
+  // Runs BEFORE auth resolves on purpose: the Phase 1 guard already suppresses
+  // its redirect while a session is being restored, so navigating early costs
+  // nothing and gets the address right before anything can look at it.
+  //
+  // Deliberately not gated on `user` and deliberately not in the dependency
+  // list of anything: it must run exactly once per launch.
+  useEffect(() => {
+    let cancelled = false;
+    takePendingNavigation().then((path) => {
+      if (cancelled || !path) return;
+      // If openWindow DID land correctly — it does on some versions — the app
+      // is already here and navigating again would push a pointless history
+      // entry.
+      if (normalizePath(path) === normalizePath(window.location.pathname)) return;
+      console.log(`[Push] Notification asked for ${path}; applying it on launch.`);
+      navigate(path, { replace: true });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // --- Push subscription self-healing (Phase 5c) ----------------------------
   //
