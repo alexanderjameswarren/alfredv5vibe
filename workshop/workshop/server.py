@@ -166,6 +166,30 @@ def build_app(config: Config):
             }
         )
 
+    async def credential(request: Request) -> Response:
+        """Is the YouTube credential ALIVE — cached by default, probed on request.
+
+        🛑 A SEPARATE ENDPOINT, NOT A FLAG ON /health. /health must stay instant:
+        a health check that hangs because YouTube is slow is worse than no probe
+        at all, and every monitor that touches it would inherit the hang.
+
+        ⚠️ THE DEFAULT PATH MAKES NO NETWORK CALL. It reports what the Surface
+        already recorded — last success, last failure, and the AGE of each — so
+        the checker can say "last confirmed working 6 hours ago" without waiting
+        on YouTube. `?deep=1` opts in to the real round trip.
+
+        Unauthenticated like /health, and it returns no part of the credential:
+        timestamps, a failure classification, and a scrubbed message.
+        """
+        from . import credential_probe
+
+        deep = request.query_params.get("deep") in ("1", "true", "yes")
+        if not deep:
+            return JSONResponse({"host": config.host_id, "probed": False,
+                                 **credential_probe.summarise()})
+        result = await credential_probe.run_probe(config.host_id)
+        return JSONResponse({"host": config.host_id, "probed": True, **result})
+
     async def metadata_root_variant(_request: Request) -> Response:
         # RFC 9728 lets clients construct the metadata URL two ways: from
         # the origin (root variant), and from the protected-resource URL
@@ -203,6 +227,7 @@ def build_app(config: Config):
     mcp_server = _build_mcp_server(config, job_store)
     custom_routes = [
         Route("/health", health, methods=["GET"]),
+        Route("/credential", credential, methods=["GET"]),
         Route(
             "/.well-known/oauth-protected-resource",
             metadata_root_variant,

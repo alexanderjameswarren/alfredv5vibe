@@ -225,15 +225,43 @@ def _client(host_id: str):
 
 
 async def _call(host_id: str, method: str, **kwargs) -> Any:
-    """Run one blocking ytmusicapi method off the event loop, classified."""
+    """Run one blocking ytmusicapi method off the event loop, classified.
+
+    ⚠️ EVERY OUTCOME IS RECORDED FOR THE CREDENTIAL PROBE, and that is what makes
+    `last_success` mean "the last time YouTube accepted this credential" rather
+    than "the last time somebody ran the checker". The daily sync calls YouTube
+    every day, so the AGE of that timestamp then reports a second fault for
+    free: nothing calling YouTube at all.
+
+    🛑 THE BOOKKEEPING MUST NEVER BREAK THE CALL. Both recorders swallow
+    everything — a read-only data directory is not a reason for a DJ tool to
+    fail, and an observer that can take down the thing it observes is worse than
+    no observer.
+    """
+    from .. import credential_probe
+
     yt = _client(host_id)
     fn = functools.partial(getattr(yt, method), **kwargs)
     try:
-        return await to_thread.run_sync(fn)
+        result = await to_thread.run_sync(fn)
     except OperationalError:
+        # Already classified upstream (auth_missing, dependency_missing). Not a
+        # statement about whether YouTube accepts the cookie, so nothing is
+        # recorded — inventing a failure here would send Alex to the reauth
+        # procedure for a missing dependency.
         raise
     except Exception as e:
-        raise _upstream_error(e, host_id) from e
+        err = _upstream_error(e, host_id)
+        detail = str(err)
+        credential_probe.record_failure(
+            "auth_expired" if detail.startswith("auth_expired:") else "upstream_error",
+            detail,
+            source=f"call:{method}",
+        )
+        raise err from e
+
+    credential_probe.record_success(source=f"call:{method}")
+    return result
 
 
 # ---------------------------------------------------------------------------
