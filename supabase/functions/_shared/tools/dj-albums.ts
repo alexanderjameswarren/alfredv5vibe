@@ -33,7 +33,23 @@ export const recordDjAlbumTool = defineTool({
     const title = (args.title as string | undefined)?.trim();
     if (!title) throw new Error("record_dj_album: `title` is required.");
 
-    const status = ((args.status as string | undefined) ?? "proposed").trim();
+    // -----------------------------------------------------------------------
+    // 🛑 `proposed` IS NO LONGER THE DEFAULT, AND THAT IS THE POINT.
+    // -----------------------------------------------------------------------
+    // The first real album recorded — Bewitched, 13 of 13 heard — landed as
+    // 'proposed'. An album Alex finished in August is not an unanswered
+    // suggestion, and seeding his other 21 bookmarks would have produced 21 rows
+    // claiming the thread had asked about records it has never mentioned. It
+    // would then have suggested him albums he already knows.
+    //
+    // ⚠️ THE SHARPER POINT: A BOOKMARK WAS NEVER PROPOSED. `proposed` means the
+    // thread put something forward and is waiting for an answer. A bookmark is
+    // Alex's own curation, accepted before anything asked. So PROPOSING IS AN
+    // ACT AND MUST BE ASKED FOR — omitting `status` derives it from coverage
+    // instead, which is a fact about listening rather than a claim about a
+    // conversation that did not happen.
+    const statusGiven = args.status !== undefined;
+    const status = ((args.status as string | undefined) ?? "queued").trim();
     if (!VALID_STATUS.includes(status)) {
       throw new Error(
         `record_dj_album: \`status\` must be one of ${VALID_STATUS.join(", ")} ` +
@@ -153,15 +169,73 @@ export const recordDjAlbumTool = defineTool({
       }
     }
 
+    // -----------------------------------------------------------------------
+    // Derive the status from coverage, when the caller did not state one
+    // -----------------------------------------------------------------------
+    // ⚠️ THIS CANNOT HAPPEN BEFORE THE WRITE. Coverage is zero until the track
+    // list exists, so a derivation attempted earlier would mark every album
+    // unheard — including one finished months ago.
+    //
+    // Only two outcomes are derived, and neither is a judgement:
+    //   every playable track heard  -> 'known'    (a fact about listening)
+    //   anything else               -> 'queued'   (he bookmarked it; that IS
+    //                                              the acceptance)
+    // 🛑 'proposed' IS NEVER DERIVED. It asserts that a conversation happened.
+    let finalStatus = status;
+    let statusDerived = false;
+    let coverage: Record<string, unknown> | null = null;
+
+    if (!statusGiven) {
+      const { data: cov, error: covErr } = await ctx.db.rpc("dj_album_coverage", {
+        p_status: null, p_tag: null, p_limit: 1, p_album_id: albumId,
+      });
+      if (covErr) {
+        throw new Error(
+          `record_dj_album: coverage lookup failed: ${covErr.message}. If this ` +
+            `says the function does not exist or takes different arguments, ` +
+            `migration 025 has not been applied yet.`,
+        );
+      }
+      coverage = ((cov ?? []) as Array<Record<string, unknown>>)[0] ?? null;
+      const playable = Number(coverage?.tracks_playable ?? 0);
+      const heard = Number(coverage?.tracks_heard ?? 0);
+      if (playable > 0 && heard >= playable) {
+        finalStatus = "known";
+      }
+      if (finalStatus !== status) {
+        const { error } = await ctx.db
+          .from("dj_albums").update({ status: finalStatus }).eq("id", albumId);
+        if (error) {
+          throw new Error(`record_dj_album: status update failed: ${error.message}`);
+        }
+      }
+      statusDerived = true;
+    }
+
     return {
       album_id: albumId,
       created,
       title,
-      status,
+      status: finalStatus,
+      status_derived: statusDerived,
+      coverage: coverage
+        ? {
+          tracks_total: coverage.tracks_total,
+          tracks_playable: coverage.tracks_playable,
+          tracks_heard: coverage.tracks_heard,
+          last_heard_on: coverage.last_heard_on,
+        }
+        : null,
       tracks_recorded: rawTracks.length,
       tracks_resolved: resolvedCount,
       tracks_without_video_id: unresolvable,
       reading:
+        "🛑 `proposed` IS NEVER DERIVED AND MUST BE ASKED FOR. It asserts that " +
+        "the thread put this album forward and is waiting for an answer. A " +
+        "BOOKMARK WAS NEVER PROPOSED — it is Alex's own curation, accepted " +
+        "before anything asked. Omit `status` when recording something he chose " +
+        "(it derives 'known' from full coverage, else 'queued'); pass " +
+        "'proposed' ONLY when the thread is actually suggesting it. " +
         "🛑 THIS ROW IS THE MEMORY. The canon is knowledge the model holds, not " +
         "something the listening history contains — a later session can suggest " +
         "this album again unless this write happened. " +

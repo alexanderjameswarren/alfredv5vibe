@@ -120,13 +120,17 @@ const MINGUS = {
 
 // --- the memory ------------------------------------------------------------
 
-test("recording an album creates the row and stamps suggested_on server-side", async () => {
-  const db = makeDb();
+test("recording an album creates the row", async () => {
+  const db = makeDb({ rpc: () => [{ tracks_total: 2, tracks_playable: 2, tracks_heard: 0 }] });
   const r = await rec(db, MINGUS);
   assert.equal(r.created, true);
-  assert.equal(r.status, "proposed", "default");
-  const row = db._tables.dj_albums[0];
-  assert.equal(row.suggested_on, new Date().toISOString().slice(0, 10));
+});
+
+test("an explicit 'proposed' stamps suggested_on server-side", async () => {
+  const db = makeDb();
+  await rec(db, { ...MINGUS, status: "proposed" });
+  assert.equal(db._tables.dj_albums[0].suggested_on,
+    new Date().toISOString().slice(0, 10));
 });
 
 test("a suggestion date cannot be back-dated by the caller", async () => {
@@ -134,13 +138,68 @@ test("a suggestion date cannot be back-dated by the caller", async () => {
   // ACTUALLY asked. A caller supplying it could back-date one and re-propose
   // an album it had just put forward.
   const db = makeDb();
-  await rec(db, { ...MINGUS, suggested_on: "2020-01-01" });
+  await rec(db, { ...MINGUS, status: "proposed", suggested_on: "2020-01-01" });
   assert.equal(db._tables.dj_albums[0].suggested_on,
     new Date().toISOString().slice(0, 10));
 });
 
+// --- status derivation: 'proposed' is an act, not a default ----------------
+
+test("🛑 OMITTING status DERIVES 'known' FROM FULL COVERAGE", async () => {
+  // Bewitched came back 13 of 13 heard and landed as 'proposed'. An album
+  // finished in August is not an unanswered suggestion.
+  const db = makeDb({
+    rpc: () => [{ tracks_total: 13, tracks_playable: 13, tracks_heard: 13,
+                  last_heard_on: "2026-08-28" }],
+  });
+  const r = await rec(db, MINGUS);
+  assert.equal(r.status, "known");
+  assert.equal(r.status_derived, true);
+  assert.equal(db._tables.dj_albums[0].status, "known", "persisted, not just reported");
+});
+
+test("partial coverage derives 'queued' — a bookmark IS the acceptance", async () => {
+  const db = makeDb({
+    rpc: () => [{ tracks_total: 13, tracks_playable: 13, tracks_heard: 5 }],
+  });
+  const r = await rec(db, MINGUS);
+  assert.equal(r.status, "queued");
+});
+
+test("🛑 'proposed' IS NEVER DERIVED — it asserts a conversation happened", async () => {
+  // A BOOKMARK WAS NEVER PROPOSED. Seeding 21 bookmarks as 'proposed' would
+  // claim the thread had asked about records it has never mentioned, and it
+  // would then suggest him albums he already knows.
+  for (const cov of [
+    { tracks_total: 9, tracks_playable: 9, tracks_heard: 0 },
+    { tracks_total: 9, tracks_playable: 9, tracks_heard: 9 },
+    { tracks_total: 0, tracks_playable: 0, tracks_heard: 0 },
+  ]) {
+    const db = makeDb({ rpc: () => [cov] });
+    const r = await rec(db, MINGUS);
+    assert.notEqual(r.status, "proposed", JSON.stringify(cov));
+  }
+});
+
+test("an EXPLICIT status is honoured and nothing is derived", async () => {
+  let rpcCalled = false;
+  const db = makeDb({ rpc: () => { rpcCalled = true; return []; } });
+  const r = await rec(db, { ...MINGUS, status: "proposed" });
+  assert.equal(r.status, "proposed");
+  assert.equal(r.status_derived, false);
+  assert.equal(rpcCalled, false, "no coverage lookup when the caller stated one");
+});
+
+test("coverage of zero playable tracks does not derive 'known'", async () => {
+  // NEGATIVE CONTROL: 0 >= 0 is true, and an album with nothing measurable
+  // would otherwise be marked finished on the strength of no evidence.
+  const db = makeDb({ rpc: () => [{ tracks_total: 3, tracks_playable: 0, tracks_heard: 0 }] });
+  const r = await rec(db, MINGUS);
+  assert.equal(r.status, "queued");
+});
+
 test("re-recording the same yt_album_id UPDATES rather than duplicating", async () => {
-  const db = makeDb();
+  const db = makeDb({ rpc: () => [{ tracks_playable: 2, tracks_heard: 0 }] });
   await rec(db, MINGUS);
   const r = await rec(db, { ...MINGUS, status: "queued" });
   assert.equal(r.created, false);
@@ -170,11 +229,12 @@ test("an invented status is refused, and the message explains dismissed", async 
 // --- the coverage-honesty rule ---------------------------------------------
 
 test("🛑 A TRACK WITH NO video_id IS STORED, NOT DROPPED", async () => {
+  // (status omitted -> coverage lookup stubbed below)
   // THE ONE THAT CORRUPTS COVERAGE SILENTLY. YouTube omits videoId for
   // region-blocked tracks. Dropping them SHORTENS the album, so "3 of 9"
   // becomes "3 of 7" and it looks better covered than it is — a wrong answer
   // that reads as a right one, with no error anywhere.
-  const db = makeDb();
+  const db = makeDb({ rpc: () => [{ tracks_total: 3, tracks_playable: 2, tracks_heard: 0 }] });
   const r = await rec(db, {
     ...MINGUS,
     tracks: [...MINGUS.tracks, { video_id: null, title: "Blocked", position: 3 }],
@@ -188,7 +248,7 @@ test("🛑 A TRACK WITH NO video_id IS STORED, NOT DROPPED", async () => {
 
 test("only tracks WITH a video_id reach the resolver", async () => {
   resolverCalls.length = 0;
-  const db = makeDb();
+  const db = makeDb({ rpc: () => [{ tracks_playable: 2, tracks_heard: 0 }] });
   await rec(db, {
     ...MINGUS,
     tracks: [...MINGUS.tracks, { video_id: null, title: "Blocked", position: 3 }],
@@ -201,14 +261,14 @@ test("it uses the SHARED resolver rather than a local one", async () => {
   // ⚠️ A second implementation would agree with record_dj_playlist until one of
   // them changed — §14.6, a rule living in two runtimes and drifting.
   resolverCalls.length = 0;
-  await rec(makeDb(), MINGUS);
+  await rec(makeDb({ rpc: () => [{ tracks_playable: 2, tracks_heard: 0 }] }), MINGUS);
   assert.equal(resolverCalls.length, 1, "resolveTrackIds must be called");
 });
 
 test("re-recording REPLACES the track list rather than appending", async () => {
   // An album's running order is a fact about the album, not an accumulation. A
   // corrected re-read must not leave the old rows behind.
-  const db = makeDb();
+  const db = makeDb({ rpc: () => [{ tracks_playable: 1, tracks_heard: 0 }] });
   await rec(db, MINGUS);
   await rec(db, { ...MINGUS, tracks: [{ video_id: "v9", title: "Only", position: 1 }] });
   assert.equal(db._tables.dj_album_tracks.length, 1);

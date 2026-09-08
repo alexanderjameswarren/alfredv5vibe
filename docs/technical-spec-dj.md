@@ -3771,3 +3771,81 @@ add/remove order were no-ops — one changed nothing, the other relocated the st
 different function and failed with a `NameError` rather than the assertion. Only the third
 actually inverted it, and then two tests failed with the right message. **A mutation that does
 not mutate is a green run that proves nothing**, and the first two runs proved nothing.
+
+### 14.43 BUILT 2026-09-08: the Jazz thread
+
+§1 capability 4, and §14.2's "dj_albums has no writer and no data" finally getting one.
+
+**The design turns on one sentence: a suggestion is a WRITE, not a sentence.** *"Try Mingus Ah
+Um"* is homework — it means copying text off a phone and hunting for the album. *"It's in Today's
+Jazz"* is a suggestion. Everything else follows from making that write cheap enough to happen in
+the same breath.
+
+| piece | what it is |
+|---|---|
+| `replace_dj_playlist` | the write path (§14.42) — overwriting a working playlist was five calls |
+| migration 023 | `dj_albums` made usable, `dj_album_tracks`, Today's Jazz as `kind='utility'` |
+| migration 024/025 | `dj_album_coverage` — a fraction, and by album id |
+| `get_dj_library_albums` / `get_dj_album` | the seed and the coverage input |
+| `record_dj_album` / `get_dj_albums` | the memory and the read |
+| `dj-jazz` skill | three options, one line each, priority order |
+
+#### 🛑 THE CANON IS KNOWLEDGE THE MODEL HOLDS, AND THAT IS THE WHOLE ARCHITECTURAL PROBLEM
+
+Nothing in this system knows *Mingus Ah Um* is essential. That knowledge is the model's, which
+makes suggestions **unauditable and variable between sessions**. Two consequences, both encoded:
+
+- **`dj_albums` IS the memory; the model is not.** A later session suggests the same album with
+  no idea it was suggested last week unless the row exists. **A session that suggests without
+  writing has silently broken the thing**, and nothing reports it.
+- **A suggestion must never be presented as though the data produced it.** The listening is data;
+  the recommendation is the model's. Conflating them is §14.13 — a claim about what the data
+  means, and false.
+
+#### `proposed` is an act, and stopped being the default
+
+The first real album recorded — *Bewitched*, **13 of 13 heard** — landed as `proposed`. An album
+finished in August is not an unanswered suggestion.
+
+🛑 **AND THE SHARPER VERSION: A BOOKMARK WAS NEVER PROPOSED.** `proposed` asserts that the thread
+put something forward and is waiting. A bookmark is Alex's own curation, accepted before anything
+asked. Seeding his other 21 bookmarks as `proposed` would have created 21 rows claiming the
+thread had asked about records it never mentioned — **and it would then have suggested him albums
+he already knows.**
+
+So `record_dj_album` **derives** status when the caller omits one: every playable track heard →
+`known`, otherwise → `queued`. ⚠️ **`proposed` is never derived**, because it asserts a
+conversation happened.
+
+⚠️ **THE DERIVATION CANNOT HAPPEN BEFORE THE WRITE** — coverage is zero until the track list
+exists, so a derivation attempted earlier would mark every album unheard, including one finished
+months ago. Migration 025 adds `p_album_id` so the tool can ask about the album it has just
+written rather than scanning them all — a parameter rather than a second function, because two
+coverage definitions is §14.6 one table over.
+
+#### Coverage is a fraction, over two denominators
+
+`tracks_heard / tracks_playable`, never a boolean: albums are 8–12 tracks and three may have been
+heard, and a boolean needs a threshold and then a paragraph (§12.12).
+
+⚠️ **TWO DENOMINATORS, BECAUSE ONE IS PARTLY UNMEASURABLE.** YouTube gives no `videoId` for
+region-blocked tracks — real tracks that lengthen the record and can never match a play.
+`tracks_total` is what the record IS; `tracks_playable` is what CAN be measured. **Counting them
+caps coverage below 100 per cent forever; dropping them makes a short album look finished.** They
+are stored with a null id and reported apart.
+
+⚠️ **CANONICAL GROUPS, SO IT MEASURES THE MUSIC AND NOT THE RECORD.** A play of any upload counts
+(§4.1). Decided deliberately, and it means the function does **not** answer *"have I sat through
+this album as an album"* — it would answer that confidently and wrongly. The two questions are
+one word apart in English.
+
+**Proven against real plays 2026-09-08:** *Bewitched* returned 13 heard of 13 playable of 13
+total, first heard 19 June, last 28 August. The join is the thing everything else rests on, and
+it was tested before anything was built on top of it.
+
+#### The skill boundary
+
+`dj-jazz` writes **albums and Today's Jazz, and nothing else**. It does not tag artists — if Alex
+listens to something it queued, the artist appears in the weekly review as untagged and is
+proposed there. **The loop closes without a second writer**, which is what keeps §14.19 from
+happening again.
