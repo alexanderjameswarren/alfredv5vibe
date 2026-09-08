@@ -388,3 +388,69 @@ export async function unsubscribeThisDevice() {
     return { ok: false, error: e && e.message ? e.message : String(e) };
   }
 }
+
+/* ── Which worker is actually running? ──────────────────────────────────────
+ *
+ * A service worker updates on its own schedule, and a stale one can behave
+ * perfectly in every visible way while missing a change made weeks ago. Deep
+ * links failed exactly like that: the dispatcher payload carried the URL, the
+ * route worked when pasted, and tapping a notification still opened the home
+ * page — because the running worker predated the change that puts the URL into
+ * `notification.data`.
+ *
+ * Nothing on a phone can answer "which worker is running" without asking the
+ * worker itself. The server's copy of the file says nothing about what is
+ * installed.
+ */
+
+/**
+ * Ask the ACTIVE worker for its version over a MessageChannel.
+ *
+ * @returns {Promise<string|null>} The version, or null when the worker does
+ *   not answer — which means it predates version reporting, and is itself the
+ *   answer to "is this the worker I deployed?".
+ */
+export async function getServiceWorkerVersion(timeoutMs = 2000) {
+  try {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return null;
+    const reg = await navigator.serviceWorker.getRegistration();
+    const worker = (reg && reg.active) || navigator.serviceWorker.controller;
+    if (!worker) return null;
+
+    return await new Promise((resolve) => {
+      const channel = new MessageChannel();
+      // An old worker has no message handler, so nothing ever comes back. The
+      // timeout is what turns that silence into a reportable answer.
+      const timer = setTimeout(() => resolve(null), timeoutMs);
+      channel.port1.onmessage = (event) => {
+        clearTimeout(timer);
+        resolve(event.data && event.data.version ? event.data.version : null);
+      };
+      worker.postMessage({ type: "sw-version" }, [channel.port2]);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Force a check for a new worker.
+ *
+ * `update()` re-fetches the script and installs it if the bytes differ. The
+ * worker calls skipWaiting() and clients.claim(), so a new one takes over
+ * immediately rather than waiting for every tab to close — which is the usual
+ * reason a phone sits on an old worker for days.
+ */
+export async function updateServiceWorker() {
+  try {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+      return { ok: false, error: "No service worker support." };
+    }
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) return { ok: false, error: "No service worker is registered." };
+    await reg.update();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+}

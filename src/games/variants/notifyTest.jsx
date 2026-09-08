@@ -1,6 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { supabase } from "../../supabaseClient";
-import { reconcilePushSubscription } from "../../utils/pushSubscriptions";
+import {
+  reconcilePushSubscription,
+  getServiceWorkerVersion,
+  updateServiceWorker,
+} from "../../utils/pushSubscriptions";
+import { EXPECTED_SW_VERSION } from "../../utils/swVersion";
 import {
   writePendingRotation,
   rememberEndpoint,
@@ -135,6 +140,9 @@ export default function NotifyTest() {
   // Is this browser's live endpoint actually in the table? The one fact that
   // decides whether a notification can arrive at all.
   const [reachable, setReachable] = useState(null);
+  // Which worker is ACTUALLY running on this device. Null means it did not
+  // answer, i.e. it predates version reporting — which is the same answer.
+  const [swVersion, setSwVersion] = useState(undefined);
 
   // The registration is held in a ref, not state: it is the handle every
   // notification call needs, and re-rendering on it would say nothing that
@@ -197,6 +205,27 @@ export default function NotifyTest() {
         regRef.current = active || reg;
         setRegistered(true);
         append(`Service worker active. Scope: ${(active || reg).scope}`, "good");
+
+        // The question that has cost two debugging sessions: is this the worker
+        // that was deployed, or one the phone has been holding on to?
+        const version = await getServiceWorkerVersion();
+        if (!liveRef.current) return;
+        setSwVersion(version);
+        if (version === EXPECTED_SW_VERSION) {
+          append(`Worker version ${version} — matches this build.`, "good");
+        } else if (version) {
+          append(
+            `⚠ Worker version ${version}, but this build expects ${EXPECTED_SW_VERSION}. ` +
+              `The phone is running an OLD worker. Tap "Update worker".`,
+            "bad"
+          );
+        } else {
+          append(
+            `⚠ The worker did not report a version, so it predates version ` +
+              `reporting — it is older than ${EXPECTED_SW_VERSION}. Tap "Update worker".`,
+            "bad"
+          );
+        }
 
         // Report an existing subscription rather than assuming there is none:
         // a subscription outlives the page, so arriving here already
@@ -476,6 +505,38 @@ export default function NotifyTest() {
     }
   };
 
+  // Force the browser to re-fetch the worker script.
+  //
+  // A worker only updates when the browser decides to check, which is why a
+  // phone can sit on a weeks-old worker while everything looks fine. This
+  // worker calls skipWaiting() and clients.claim(), so a newly installed one
+  // takes over at once rather than waiting for every tab to close.
+  const updateWorker = async () => {
+    setBusy(true);
+    try {
+      append("Checking for a newer service worker…");
+      const result = await updateServiceWorker();
+      if (!result.ok) throw new Error(result.error);
+      // Give the new worker a moment to install and claim before asking again.
+      await new Promise((r) => setTimeout(r, 1500));
+      const version = await getServiceWorkerVersion();
+      setSwVersion(version);
+      if (version === EXPECTED_SW_VERSION) {
+        append(`Now running worker ${version} — matches this build.`, "good");
+      } else {
+        append(
+          `Still on ${version || "an unreported version"}, expected ${EXPECTED_SW_VERSION}. ` +
+            `Close every Alfred tab and reopen, then check again.`,
+          "bad"
+        );
+      }
+    } catch (err) {
+      append(`Worker update failed: ${messageOf(err)}`, "bad");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Read the table and say, on screen, exactly what is in it.
   //
   // This is the only way to see a stale row from a phone. Without it, "reconcile
@@ -740,6 +801,26 @@ export default function NotifyTest() {
             tone={staleRows > 0 ? "bad" : staleRows === 0 ? "good" : "neutral"}
           />
           <StatusRow
+            label="Worker version"
+            value={
+              swVersion === undefined
+                ? "checking…"
+                : swVersion || "no reply (old worker)"
+            }
+            tone={
+              swVersion === undefined
+                ? "neutral"
+                : swVersion === EXPECTED_SW_VERSION
+                ? "good"
+                : "bad"
+            }
+          />
+          <StatusRow
+            label="Build expects"
+            value={EXPECTED_SW_VERSION}
+            tone="neutral"
+          />
+          <StatusRow
             label="Device reachable"
             value={reachable === null ? "not checked" : reachable ? "YES" : "NO"}
             tone={reachable === null ? "neutral" : reachable ? "good" : "bad"}
@@ -822,6 +903,15 @@ export default function NotifyTest() {
           Sends to every subscribed device on this account — this is the one
           that works with Alfred closed.
         </p>
+
+        <button
+          type="button"
+          onClick={updateWorker}
+          disabled={busy}
+          className="w-full mt-2 px-4 py-2 min-h-[44px] rounded bg-card border border-border text-foreground disabled:opacity-50"
+        >
+          Update worker
+        </button>
 
         <button
           type="button"

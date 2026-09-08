@@ -13,10 +13,37 @@
  * Do not add one.
  */
 
+/* 🛑 BUMP THIS WHENEVER YOU CHANGE ANYTHING BELOW.
+ *
+ * "Is my phone running the worker I deployed?" has been unanswerable twice, and
+ * both times cost a debugging session chasing the wrong thing. A worker updates
+ * on its own schedule and there is no way to read its version from a phone
+ * without asking it — so it reports this string on request, and the diagnostic
+ * compares it against EXPECTED_SW_VERSION in src/utils/swVersion.js.
+ *
+ * A worker that predates this constant simply never replies, which is itself
+ * the answer.
+ *
+ * The two values are kept in step by a test that also hashes this file, so
+ * changing the worker without bumping the version fails the suite rather than
+ * silently reporting "up to date".
+ */
+const SW_VERSION = '2026-09-08a';
+
 // Take over as soon as installed rather than waiting for every tab to close,
 // so the first visit can raise a notification instead of the second.
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+
+// Answer "which worker is actually running?". The page asks over a
+// MessageChannel and gets this back from the ACTIVE worker — not from the copy
+// sitting on the server, which is the question that matters.
+self.addEventListener('message', (event) => {
+  if (!event.data || event.data.type !== 'sw-version') return;
+  const reply = { type: 'sw-version', version: SW_VERSION };
+  if (event.ports && event.ports[0]) event.ports[0].postMessage(reply);
+  else if (event.source) event.source.postMessage(reply);
+});
 
 // The defaults. A push that carries no payload, or a payload that will not
 // parse, still has to produce a notification — see the handler below.
