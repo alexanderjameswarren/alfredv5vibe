@@ -69,6 +69,7 @@ EXPECTED_TOOLS = {
     "get_workshop_status",
     "list_jobs",
     "remove_from_dj_playlist",
+    "replace_dj_playlist",
     "search_dj_music",
 }
 
@@ -136,9 +137,10 @@ class ToolsImportTests(unittest.TestCase):
 
         Redundant with the set comparison by design: the count is the number
         quoted when reconnecting a connector, so it is worth failing on its own
-        terms. 11 since diff_dj_setlists joined the surface.
+        terms. 12 since replace_dj_playlist joined the surface (the Jazz
+        thread's write path: overwriting a working playlist was five calls).
         """
-        self.assertEqual(len(EXPECTED_TOOLS), 11)
+        self.assertEqual(len(EXPECTED_TOOLS), 12)
 
 
 class ImportCheckIsNotVacuousTests(unittest.TestCase):

@@ -198,6 +198,11 @@ _CALLS: dict[str, dict] = {
         "entries": [{"video_id": "v1", "set_video_id": "s1"}],
         "confirmed": True,
     },
+    "replace_dj_playlist": {
+        "playlist_id": "PL_test",
+        "video_ids": ["v2"],
+        "confirmed": True,
+    },
 }
 
 

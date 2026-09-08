@@ -728,3 +728,232 @@ def _status_of(result: Any) -> str:
     if isinstance(result, dict):
         return str(result.get("status") or result)
     return str(result)
+
+# ---------------------------------------------------------------------------
+# replace_dj_playlist — the whole contents, in one call
+# ---------------------------------------------------------------------------
+#
+# 🛑 WHY THIS IS A TOOL AND NOT A MODE ON edit_dj_playlist.
+#
+# `tier` is declared per TOOL, not per mode. Hanging `replace` off
+# edit_dj_playlist would promote `add`, `move` and `rename` to tier 3 with it —
+# putting a confirmation gate on every cram seed and every playlist build, which
+# are the two things that must stay cheap. And a private gate inside a tier-2
+# tool is exactly what the platform contract forbids: the built-in one, or none.
+#
+# ⚠️ WHY IT EXISTS AT ALL: overwriting a fixed working playlist was five calls —
+# a contents read for the handles, a tier-3 removal, an add, a second contents
+# read, and a record. The Jazz thread's whole premise is that a suggestion is a
+# WRITE rather than a sentence, and five calls per suggestion is the friction
+# problem moved rather than solved.
+#
+# ---------------------------------------------------------------------------
+# 🛑 IT ADDS FIRST AND REMOVES SECOND, AND THAT ORDER IS THE DESIGN.
+# ---------------------------------------------------------------------------
+# The obvious order — clear it out, then fill it — has a failure mode that is
+# worse than either end state: if the add fails after the remove succeeded, the
+# playlist is EMPTY. For this playlist specifically that is the bad outcome,
+# because an empty Today's Jazz is precisely when YouTube's autoplay takes over
+# and the evening ends up somewhere random. That is the thing it exists to stop.
+#
+# Adding first means a partial failure leaves the OLD contents plus some or all
+# of the new — untidy, still playable, and obviously wrong to a human rather
+# than silently empty. Recovery is another replace.
+#
+# ⚠️ THE OLD ENTRIES ARE CAPTURED BEFORE THE ADD, so the removal targets exactly
+# what was there when we looked, never "whatever is in it now". A new track that
+# happens to duplicate an old one leaves both rows briefly; the old row is the
+# one removed, because it is the one whose set_video_id we hold.
+_REPLACE_MIN = 1
+
+
+async def _preview_replace(args: dict, ctx: Ctx) -> dict:
+    """Resolve what a replace WOULD act on, for the confirmation proposal.
+
+    Same argument as _preview_removal: the gate stops accidental execution, and
+    this is what stops an accidental WRONG TARGET. A mistyped playlist id
+    otherwise produces a proposal that reads exactly as reassuring as the
+    correct one.
+    """
+    playlist_id = args.get("playlist_id")
+    video_ids = args.get("video_ids") or []
+    detail = await _call(
+        ctx.config.host_id, "get_playlist", playlistId=playlist_id, limit=ITEMS_CAP
+    ) or {}
+    tracks = detail.get("tracks") or []
+    title = detail.get("title")
+    if not title and not tracks:
+        raise OperationalError(
+            f"not_found: no playlist resolved for id {playlist_id!r} on host "
+            f"{ctx.config.host_id!r}. Nothing was changed. Check the id — an "
+            f"unresolvable id is usually a typo rather than a missing playlist."
+        )
+    return {
+        "playlist_id": detail.get("id") or playlist_id,
+        # ⚠️ THE TITLE IS THE POINT OF THE PREVIEW. "Today's Jazz" and a concert
+        # playlist are one keystroke apart in an id and worlds apart in
+        # consequence, and the title is the only field a human can check.
+        "title": title,
+        "tracks_now": len(tracks),
+        "tracks_after": len(video_ids),
+        "will_remove": [
+            {"video_id": t.get("videoId"), "title": t.get("title")}
+            for t in tracks[:10]
+        ],
+        "will_remove_truncated": max(0, len(tracks) - 10),
+        "reading": (
+            f"This REPLACES the contents of {title!r}: {len(tracks)} entr(ies) "
+            f"out, {len(video_ids)} in. Adds happen first, so a partial failure "
+            f"leaves the playlist playable rather than empty."
+        ),
+    }
+
+
+@define_tool(
+    name="replace_dj_playlist",
+    tier=3,
+    preview=_preview_replace,
+    description=(
+        "DESTRUCTIVE. Replace a playlist's ENTIRE contents with `video_ids`, in "
+        "the order given. Built for a fixed working playlist that is overwritten "
+        "each time rather than appended to — 'Today's Jazz' is the case it "
+        "exists for. "
+        "⚠️ ADDS RUN FIRST, REMOVALS SECOND, DELIBERATELY. Clearing then filling "
+        "leaves the playlist EMPTY if the add fails, and an empty playlist is "
+        "exactly when YouTube autoplay takes over — the thing this playlist "
+        "exists to prevent. Adding first means a partial failure leaves the old "
+        "contents plus some new ones: untidy, still playable, and visibly wrong. "
+        "⚠️ The entries removed are the ones captured BEFORE the add, so a new "
+        "track that duplicates an old one keeps the new row and drops the old. "
+        "🛑 NOTHING IS LOST BY OVERWRITING — dj_plays records what was actually "
+        "heard regardless, which is why this playlist is disposable and a "
+        "concert playlist is not. Do not point this at a concert playlist. "
+        "Tier 3: the first call returns a proposal naming the playlist TITLE and "
+        "what would go; re-call with `confirmed: true` to execute."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "playlist_id": {
+                "type": "string",
+                "description": "Target playlist. Its contents are REPLACED.",
+            },
+            "video_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    f"The new contents, in order. Cap {ITEMS_CAP}. Must be "
+                    f"non-empty: emptying this playlist is what lets autoplay "
+                    f"take over, so a clear-out is not something this tool will "
+                    f"do by accident. Use remove_from_dj_playlist for that."
+                ),
+            },
+            "confirmed": {
+                "type": "boolean",
+                "description": "Tier-3 gate. Omit to see a proposal; set true to execute.",
+            },
+        },
+        "required": ["playlist_id", "video_ids"],
+    },
+)
+async def replace_dj_playlist(args: dict, ctx: Ctx) -> dict:
+    playlist_id = args.get("playlist_id")
+    video_ids = args.get("video_ids") or []
+
+    if not playlist_id or not isinstance(playlist_id, str):
+        raise OperationalError(
+            "bad_argument: `playlist_id` is required and must be a string. "
+            "Re-call with a corrected value."
+        )
+    if not isinstance(video_ids, list) or len(video_ids) < _REPLACE_MIN:
+        raise OperationalError(
+            "bad_argument: `video_ids` must be a non-empty list. Nothing was "
+            "changed. An EMPTY working playlist is what lets YouTube autoplay "
+            "take over, which is the failure this playlist exists to prevent — "
+            "so emptying one is deliberate work for remove_from_dj_playlist, "
+            "never a side effect of a replace."
+        )
+    if len(video_ids) > ITEMS_CAP:
+        raise OperationalError(
+            f"bad_argument: {len(video_ids)} video_ids exceeds the cap of "
+            f"{ITEMS_CAP}. Nothing was changed. Split the selection."
+        )
+
+    host_id = ctx.config.host_id
+
+    # ---- 1. Capture what is there NOW, with handles -----------------------
+    detail = await _call(
+        host_id, "get_playlist", playlistId=playlist_id, limit=ITEMS_CAP
+    ) or {}
+    before = detail.get("tracks") or []
+    title = detail.get("title")
+    if not title and not before:
+        raise OperationalError(
+            f"not_found: no playlist resolved for id {playlist_id!r} on host "
+            f"{host_id!r}. Nothing was changed."
+        )
+
+    # ⚠️ An entry with no setVideoId cannot be removed. Collected rather than
+    # ignored, and reported below — a replace that silently left rows behind
+    # would look like it worked and drift a little further every night.
+    old_entries, unremovable = [], []
+    for t in before:
+        svid = t.get("setVideoId")
+        vid = t.get("videoId")
+        if svid and vid:
+            old_entries.append({"videoId": vid, "setVideoId": svid})
+        else:
+            unremovable.append({"video_id": vid, "title": t.get("title")})
+
+    # ---- 2. ADD FIRST. See the header for why this order. ------------------
+    add_result = await _call(
+        host_id,
+        "add_playlist_items",
+        playlistId=playlist_id,
+        videoIds=video_ids,
+        # The new list may legitimately contain a track already present; the old
+        # row is removed by handle in step 3, so the duplicate is transient.
+        duplicates=True,
+    )
+
+    # ---- 3. Remove exactly what was captured in step 1 ---------------------
+    removed = 0
+    remove_status = "nothing_to_remove"
+    if old_entries:
+        for i in range(0, len(old_entries), ITEMS_CAP):
+            chunk = old_entries[i:i + ITEMS_CAP]
+            rm = await _call(
+                host_id,
+                "remove_playlist_items",
+                playlistId=playlist_id,
+                videos=chunk,
+            )
+            remove_status = _status_of(rm)
+            removed += len(chunk)
+
+    return {
+        "data": {
+            "playlist_id": playlist_id,
+            "title": title,
+            "tracks_added": len(video_ids),
+            "tracks_removed": removed,
+            "add_upstream": _status_of(add_result),
+            "remove_upstream": remove_status,
+            # ⚠️ REPORTED, NOT SWALLOWED. Rows with no handle survive a replace.
+            "unremovable_entries": unremovable,
+            "next_step": (
+                "Re-read with get_dj_playlists mode=contents to capture the new "
+                "set_video_ids, then record_dj_playlist so Supabase matches "
+                "YouTube."
+            ),
+            "reading": (
+                "Adds ran BEFORE removals on purpose: a partial failure leaves "
+                "the playlist playable rather than empty, and an empty working "
+                "playlist is when autoplay takes over. "
+                "⚠️ If `unremovable_entries` is non-empty, those rows had no "
+                "setVideoId and are STILL IN THE PLAYLIST — they are not a "
+                "rounding error, they are leftovers that will accumulate."
+            ),
+        },
+        "meta": {},
+    }
