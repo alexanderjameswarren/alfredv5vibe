@@ -128,6 +128,17 @@ would resolve cleanly, and **nothing further down could tell.**
    ⚠️ `title_match: "loose"` on a joined song is **normal, not a warning** — mention it only if
    the pairing in `loose_title_matches` looks wrong.
 
+9. 🛑 **`other_artists_only` IS NOT SETTLED — REPORT IT AS UNRESOLVED, NOT AS A DEAD END.** It
+   means *no returned row carries this act's byline*, which is **not** the same as *"they never
+   recorded it"*. **It cannot tell a genuine cover from a mis-bylined original**, and a
+   compilation stamping one artist across every track is an ordinary metadata error — Foo
+   Fighters really do have an A320 on the Godzilla soundtrack.
+   Say *"only other artists have this title — worth a listen before writing it off"*, name what
+   `other_artists_found` holds, and quote `by_performing_artist_in_results`: many rows under the
+   act's byline supports *"they don't have it"*; **zero makes the mis-byline more likely**.
+   ⚠️ **Only listening settles it**, and `near_titles_by_artist` being empty is **not** clearance
+   — it compares titles, and this failure mode has the title right.
+
 ⚠️ **`variant_only` IS A SEPARATE YES.** Adding a live cut means learning the song from a live
 recording. Name it and get its own answer; do not fold it into "add them all".
 

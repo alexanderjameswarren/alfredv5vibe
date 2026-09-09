@@ -1664,3 +1664,111 @@ never have caught this.
 ### Status
 
 - 755 tests across 31 suites; `CI=true` build clean.
+
+---
+
+# ✅ Project complete
+
+All eight phases delivered, plus the Settings relocation, the deep-link work and
+the VAPID fingerprint tooling. Verified on a Pixel 7 with a Pixel Watch,
+**against a genuine WebAPK install** — which matters, because every earlier pass
+had been against a home-screen shortcut, and a shortcut takes a different launch
+path. The closed-app deep link had therefore never actually been tested until
+the final run.
+
+| Phase | What |
+|---|---|
+| 0 | Service worker + Web Push proof of concept |
+| 1 | Execution deep link (`/schedule/execution/:id`) |
+| 2 | `offsetMinutes` on step elements |
+| 3 | `notification_steps` table, CONFORMANT |
+| 4 | Expansion, completion, close, pause/resume, un-tick |
+| 5 | Dispatcher + pg_cron, gated on proving cron fires first |
+| 6 | Control surface, Settings, inline per-element status |
+| 7 | Authoring picker — repeat a block, units, auto-numbering |
+| 8 | `alfred-enrich` emits offsets, conservatively |
+
+Plus, after the phases: the diagnostic moved from Games into a collapsed
+Settings section, `urgency: "high"` for Doze, service-worker version reporting,
+the VAPID client/server fingerprint comparison, and the PWA manifest repair.
+
+**Final verification on the fresh install:** VAPID keys MATCH, push delivers,
+notifications carry the Alfred silhouette rather than Chrome's glyph, and a
+chain notification tapped with the app fully closed opens directly on the right
+execution.
+
+**765 tests across 31 suites. `CI=true` build clean.**
+
+## The last bug, for the record
+
+Several hours were spent on Chrome refusing to install Alfred. **The cause was
+uninstalling the PWA during an unrelated theme-colour fix — nothing in the
+notification system, and nothing in the manifest, which was not wrong at the
+time it broke.**
+
+Only a **full phone restart** fixed it. Site settings "Clear & reset" and
+clearing Chrome's cache both failed first. Recorded in the spec under *The PWA
+install, and what uninstalling it costs*, along with `chrome://webapks` as the
+definitive check and the `vercel.json` rewrite hazard.
+
+Three manifest changes were made chasing a false premise before the cause was
+found. The icon, maskable and notification-badge work stands on its own merits —
+the declared icon sizes really were wrong, and the notification `badge` really
+was a full-colour opaque PNG where Android needs an alpha silhouette — but none
+of it was the cause, and it should not be remembered as the fix.
+
+## What remains open
+
+**Known and accepted:**
+
+1. ⚠️ **`platform.audit_log` records service-role writes as `actor = 'ui'`.** The
+   column cannot distinguish a dispatcher write from a browser one, which is
+   exactly what was needed to diagnose the Phase 5b stall. Platform-layer work.
+2. ⏸️ **`push-rotate` edge function — deferred, not rejected.** It would close
+   the rotation outage window entirely. The case is weaker than when designed:
+   the outage it guards against has never been observed, and the incident that
+   motivated it turned out to be Doze. Revisit on a genuine observed rotation.
+3. ✅ **`no_subscription` has never fired in the wild.** Implemented, constraint
+   widened, unit-tested — but no step has yet come due for an account with no
+   subscription. Alex's partner's first chain is the natural test.
+4. 📊 **Delivery latency on an idle phone.** `urgency: "high"` is shipped and the
+   mechanism understood; Alex is gathering real data with Chrome set to
+   Unrestricted. Carry the TTL trade: a step is marked `sent` on the first 201
+   and never re-sent, so a notification lost to an expired 15-minute TTL is lost
+   permanently.
+
+**Two defects found during the Settings relocation, reported and deliberately
+not fixed** (a pure relocation was wanted so that any breakage was attributable):
+
+5. 🐛 **The Phase 6 sharing claim was wrong.** `subscribeThisDevice` /
+   `unsubscribeThisDevice` were extracted and the progress file recorded that
+   Settings and the diagnostic both call them. **Only Settings was rewired.**
+   The diagnostic still calls `reg.pushManager.subscribe` and `sub.unsubscribe`
+   inline. Two copies since Phase 6.
+6. 🐛 **Reachability is computed twice** — `getDeviceSubscriptionState` and the
+   diagnostic's `reportTableState` compute the identical expression from
+   separate fetches. They agree today; they can drift.
+
+Both are worth closing together as one follow-up that can be verified on its own.
+
+**Three Intentions bugs found during the Phase 1 investigation, none belonging
+to this feature and none yet filed:**
+
+7. 🐛 **`CustomRecurrenceDialog` silently clears an intention's end date on
+   reopen.** `initialConfig` carries the config but not the end date, and the
+   dialog hardcodes `endMode` to `"never"` — so an intention with an end date
+   reopens showing Never, and pressing Done clears it. **Live data loss**, and
+   the most serious of the three.
+8. 🐛 **`onOpenInterval` is a dead prop** on `RecurrenceQuickSelect`.
+9. 🤔 **`triggerRecurrence` counts intervals from today**, not from the archived
+   event's due date. Defensible, but accidental rather than decided.
+
+**Known limitations, recorded in the spec rather than fixed:**
+
+- A manually-scheduled successor is indistinguishable from a chain-armed one
+  (both are simply `scheduled`), so un-ticking the element before it resets a
+  manual override. Telling them apart needs a column the table does not have.
+- The rotation drill exercises the well-behaved rotation only; the silent-201
+  variant cannot be reproduced on demand.
+- A `sent` successor is deliberately left alone on un-tick: it cannot be unsent,
+  and reverting it would duplicate an alert the user has already had.

@@ -605,6 +605,83 @@ Not built: it is a new column and a new migration, and the repair above
 addresses the cause rather than the symptom. Worth revisiting if dead rows
 accumulate in practice.
 
+## 🛑 The PWA install, and what uninstalling it costs
+
+**Alfred must be installed as a real PWA (a WebAPK) for the notification system
+to behave as designed.** A home-screen *shortcut* looks similar and takes a
+different launch path, so the closed-app deep link in particular cannot be
+trusted until it has been tested against an actual WebAPK.
+
+This cost several hours once. The notes below are the shortest path back.
+
+### Uninstalling the PWA breaks push, in two separate ways
+
+1. **The push subscription goes with it.** Uninstalling drops the subscription,
+   so the stored `push_subscriptions` row becomes a dead endpoint and the device
+   must resubscribe. Settings → Notifications on this device → Turn on.
+2. **Chrome may then refuse to mint a new WebAPK for the origin.** The install
+   banner still appears and install appears to succeed, but no app is created:
+   no entry under Android Settings → Apps, a badged home-screen icon, and
+   **"Remove" rather than "Uninstall"**. Chrome has silently fallen back to a
+   legacy shortcut.
+
+### What actually fixes the minting failure
+
+In the order that worked:
+
+| Attempt | Result |
+|---|---|
+| Site settings → **Clear & reset** for the origin | ❌ did not fix it |
+| Android Settings → Apps → Chrome → Storage → **Clear cache** | ❌ did not fix it |
+| **Full phone restart** | ✅ fixed it |
+
+**Try the restart first.** Both of the obvious, cheaper steps failed, and each
+one costs a re-login and a resubscribe to discover that.
+
+### `chrome://webapks` is the definitive check
+
+Type it into Chrome on the phone. It lists every WebAPK with its scope, manifest
+URL and update status.
+
+- **Alfred absent** → no WebAPK exists, whatever the home screen suggests.
+- **Another PWA present while Alfred is not** → the problem is this origin.
+- **Nothing at all listed** → the problem is the device, and no manifest change
+  will help.
+
+That last distinction answers "is it this origin or this device" in one step, and
+it is the question to ask *before* touching the manifest.
+
+### ⚠️ A missing asset returns HTTP 200, not 404
+
+`vercel.json` is a catch-all SPA rewrite:
+
+```json
+{ "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }
+```
+
+Vercel checks the filesystem first, so real files are served correctly. But
+**any path that does not exist returns `index.html` with HTTP 200 and
+`content-type: text/html`.** Nothing 404s, ever.
+
+For icons that is genuinely dangerous: a mistyped path in `manifest.json` would
+feed the WebAPK minting server HTML labelled as a PNG, and there would be no
+error at any layer — not in the browser, not in the build, not in the network
+tab if you only check status codes. "The icons resolve" is only evidence if you
+**saw an image**.
+
+This is why `src/manifest.test.js` asserting that every icon file exists on disk
+is load-bearing rather than belt-and-braces: it is the only layer that can catch
+a bad icon path at all.
+
+### For the record: the manifest was not the cause
+
+The break was the PWA uninstall during a theme-colour fix. Nothing in the
+manifest was wrong at the time it broke — the WebAPK that had been working was
+minted from a manifest whose icon `sizes` were wrong, which Chrome tolerated
+because it validates the **decoded** size against its minimum, not the declared
+one. Three manifest changes were made chasing that false premise. The icon and
+badge work stands on its own merits, but none of it was the cause.
+
 ## Deep linking
 
 **This is a prerequisite, not a nice-to-have.** `viewPaths.js` currently maps

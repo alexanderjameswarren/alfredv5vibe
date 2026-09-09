@@ -1501,5 +1501,86 @@ class NearTitleTests(unittest.TestCase):
         self.assertEqual(out["near_titles_by_artist"], [])
 
 
+class UnsettleableCoverVerdictTests(unittest.TestCase):
+    """🛑 A CHECK CANNOT RULE OUT A FAILURE MODE IT DOES NOT COMPARE ON.
+
+    A320 was reported `other_artists_only` against the Hollywood Symphony
+    Orchestra, and confirmed BY EAR on 2026-09-09 to be genuinely orchestral. The
+    verdict was right - and right by luck of the data, not by having checked.
+
+    Foo Fighters really do have an A320, on the 1998 Godzilla soundtrack, and a
+    compilation stamping one orchestra's byline across every track is an ordinary
+    metadata error. So the failure mode is real; it just did not occur.
+
+    `near_titles_by_artist` RETURNED EMPTY AND READ AS CONFIRMATION. It compares
+    TITLES. A320's title matched exactly and the BYLINE was the question, so the
+    diagnostic structurally could not see it - and its silence looked identical
+    to a clean bill of health.
+    """
+
+    FF = FF
+
+    def test_the_verdict_does_NOT_claim_the_song_does_not_exist(self):
+        # The old text ended "if it does not exist, the song does not" - a claim
+        # about the world derived from an absence of correctly-bylined results.
+        results = [r("A320", ["Hollywood Symphony Orchestra"], "Godzilla", 200)]
+        why = _resolve_one(results, "A320", self.FF)["why"]
+        self.assertNotIn("the song does not", why)
+        self.assertIn("NO RETURNED ROW IS BYLINED", why)
+
+    def test_it_NAMES_what_it_cannot_distinguish(self):
+        # ⚠️ A verdict that says what it cannot rule out is better than one that
+        # looks settled. This is the whole of the fix.
+        results = [r("A320", ["Hollywood Symphony Orchestra"], "Godzilla", 200)]
+        why = _resolve_one(results, "A320", self.FF)["why"]
+        self.assertIn("MIS-BYLINED ORIGINAL", why)
+        self.assertIn("LISTEN", why)
+
+    def test_the_12_4_rule_is_still_the_grounds_for_rejection(self):
+        # The overclaim was removed; the RULE was not. The performing artist's
+        # version is still what goes in the playlist.
+        results = [r("London Calling", ["The Clash"], "London Calling", 201)]
+        self.assertIn("spec 12.4", _resolve_one(results, "London Calling", self.FF)["why"])
+
+    def test_the_candidate_ROWS_travel_so_a_listen_is_possible(self):
+        # ⚠️ Option "a near_titles_by_title field" was already built and is
+        # called `other_artists_found`. The same-title-different-artist rows have
+        # shipped since the first build; what was missing was the verdict
+        # admitting they might be the answer.
+        results = [r("A320", ["Hollywood Symphony Orchestra"], "Godzilla", 200, vid="orch")]
+        out = _resolve_one(results, "A320", self.FF)
+        self.assertEqual([c["video_id"] for c in out["other_artists_found"]], ["orch"])
+
+    def test_it_reports_HOW_MANY_rows_carried_the_acts_byline(self):
+        """A COUNT, NOT A CAUSE (11.20). Many rows under the act's byline and
+        none of them the title asked for supports "they do not have it"; none at
+        all makes the mis-byline hypothesis more live. The reader weighs it."""
+        results = [
+            r("A320", ["Hollywood Symphony Orchestra"], "Godzilla", 200),
+            r("Everlong", [self.FF], "The Colour And The Shape", 251),
+            r("Monkey Wrench", [self.FF], "The Colour And The Shape", 232),
+        ]
+        out = _resolve_one(results, "A320", self.FF)
+        self.assertEqual(out["by_performing_artist_in_results"], 2)
+
+    def test_the_count_is_ZERO_when_the_act_appears_nowhere(self):
+        # The negative control. If this always reported the result-set size the
+        # number would carry no information.
+        results = [r("A320", ["Hollywood Symphony Orchestra"], "Godzilla", 200)]
+        out = _resolve_one(results, "A320", self.FF)
+        self.assertEqual(out["by_performing_artist_in_results"], 0)
+
+    def test_near_titles_is_EMPTY_here_and_that_is_the_point(self):
+        """🛑 THE STRUCTURAL BLINDNESS, PINNED. The title matched exactly,
+        so the near-title net has nothing to say - and its silence must never be
+        read as clearance. This test exists so that if the field is ever
+        repurposed, somebody has to come and read this docstring."""
+        results = [r("A320", ["Hollywood Symphony Orchestra"], "Godzilla", 200)]
+        out = _resolve_one(results, "A320", self.FF)
+        self.assertEqual(out["near_titles_by_artist"], [],
+                         "empty because the title was exact - NOT because the "
+                         "byline was checked and found correct")
+
+
 if __name__ == "__main__":
     unittest.main()

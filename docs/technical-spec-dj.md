@@ -4340,3 +4340,62 @@ Both now have discriminating cases. Twelve mutations, all caught.
 
 **Confirmed working on real data, unchanged:** Make It Wit Chu has a 4:51 album cut and a 3:51
 single, and §12.11 escalated rather than picking. The ambiguity path fires correctly.
+
+---
+
+### 14.55 🛑 THE THIRD FAILURE MODE: a correct title on a row whose byline is wrong at source
+
+**Named 2026-09-09, after both diffs came back clean.** QOTSA: core 5 of 5, zero uncloseable, all
+three title failures folded. Foo Fighters: core 7 of 7, 32 of 32 gettable. **The medley parts hold
+up** — three returned nothing under that title, One Headlight came back as The Wallflowers,
+Invincible as No Use For A Name. Covers played inside a medley, on a tour called *Take Cover*.
+Genuine, and reached correctly.
+
+**A320 is the one worth recording, and it is recorded as a NEAR MISS rather than a bug.**
+`ujrcnA_S-zc` was confirmed **by ear** to be genuinely the Hollywood Symphony Orchestra cut, so
+`other_artists_only` was correct. ⚠️ **But it was correct by luck of the data, not by having
+checked.** Foo Fighters really do have an A320, on the 1998 Godzilla soundtrack, and **a
+soundtrack compilation carrying one orchestra's byline across every track is an ordinary metadata
+error.** The shape exists; it simply did not occur.
+
+🛑 **`near_titles_by_artist` RETURNED EMPTY AND READ AS CONFIRMATION.** It compares **titles**.
+A320's title matched exactly and the **byline** was the question, so the diagnostic structurally
+could not see that failure mode — **and its silence looked identical to a clean bill of health.**
+
+⚠️ **A CHECK CANNOT RULE OUT A FAILURE MODE IT DOES NOT COMPARE ON**, and this project keeps
+finding that shape. Three distinct ones now, and they are genuinely different:
+
+| # | failure | where it bites |
+|---|---|---|
+| §14.53 | title normalisation | two vocabularies spell one title differently |
+| §14.7 | artist vocabulary split | two vocabularies name one act differently |
+| **§14.55** | **byline wrong at source** | **the title is right; the metadata lies** |
+
+The first two are disagreements between two correct sources. **The third is one source being
+wrong**, which is why no amount of folding reaches it.
+
+**WHAT WAS BUILT — the honest line, not something clever.** Of the two options considered, the
+first turned out to **already exist**: `other_artists_found` has shipped the
+same-title-different-artist rows since the first build. **The data was never missing. What was
+missing was the verdict admitting they might be the answer.**
+
+* The `why` string no longer ends *"if it does not exist, the song does not"* — a claim about the
+  world derived from an absence of correctly-bylined results. It now states what was **observed**
+  (no returned row carries this byline), names what it **cannot distinguish** (a genuine cover
+  from a mis-bylined original), and says **only listening settles it**. §12.4 remains the grounds
+  for rejection; only the overclaim after it is gone.
+* `by_performing_artist_in_results` ships as **a count, not a cause** (§11.20): many rows under
+  the act's byline and none of them the title asked for supports *"they do not have it"*; **zero
+  makes the mis-byline hypothesis more live.** The reader weighs it; the tool concludes nothing.
+* `near_titles_by_artist`'s **scope is stated in its own docstring and in `reading`** — an empty
+  list means *"no near titles"*, **never** *"no problem"*. A test pins the A320 shape precisely so
+  that anyone repurposing the field has to read why it is empty there.
+
+**NOT BUILT, and named so the decision is available rather than forgotten:** a MusicBrainz
+*recording* search on `(artist mbid, title)` would settle it outright — we already hold the mbid,
+and it answers exactly *"does this act have a recording by this name"*. It is a new upstream
+dependency for a case that has not yet occurred, and §14.4 already records the MusicBrainz gap for
+artist-identity collisions. **The same call would close both.** Worth doing when a real mis-byline
+appears, and not before.
+
+**A verdict that says what it cannot rule out is better than one that looks settled.**

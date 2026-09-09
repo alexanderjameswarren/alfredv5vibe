@@ -15,6 +15,33 @@ import path from "path";
  *
  * Reading the declared sizes is not enough to catch that. These tests decode
  * the PNG headers.
+ *
+ * ── 🛑 Why "every icon file exists" is load-bearing, not belt-and-braces ────
+ *
+ * `vercel.json` is a catch-all SPA rewrite:
+ *
+ *     { "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }
+ *
+ * Vercel checks the filesystem first, so real files are served correctly. But
+ * **any path that does not exist returns index.html with HTTP 200 and
+ * content-type: text/html.** Nothing 404s, ever.
+ *
+ * So a mistyped icon path in manifest.json would hand the WebAPK minting server
+ * HTML labelled as a PNG, and nothing would report an error — not the browser,
+ * not the build, not a status-code check. "The icons resolve" is only evidence
+ * if someone SAW an image.
+ *
+ * These tests are the only layer that can catch a bad icon path at all. Do not
+ * weaken them into checking the manifest's own strings.
+ *
+ * ── What was NOT the cause ─────────────────────────────────────────────────
+ *
+ * A separate multi-hour hunt blamed these icons for Chrome refusing to install
+ * Alfred. It was not them: the WebAPK that had been working was minted from the
+ * broken manifest, because Chrome validates an icon's DECODED size against its
+ * minimum rather than its declared `sizes`. The real cause was uninstalling the
+ * PWA, after which Chrome would not mint a new WebAPK until the phone was
+ * restarted. See the spec's "The PWA install, and what uninstalling it costs".
  */
 
 const publicDir = path.join(__dirname, "..", "public");

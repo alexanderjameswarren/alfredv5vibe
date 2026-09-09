@@ -1153,6 +1153,13 @@ _NEAR_TITLE_RATIO = 0.75
 def _near_titles(results, title: str, performing: str) -> list[dict]:
     """Tracks BY THE PERFORMING ARTIST whose titles are close but not equal.
 
+    🛑 ITS SCOPE IS TITLES, AND ITS SILENCE IS NOT A CLEAN BILL OF HEALTH.
+    It answers "does this act have a DIFFERENTLY TITLED version". It cannot see a
+    row whose title is exactly right and whose BYLINE is wrong — A320 matched on
+    title, so this returned empty and read as confirmation while never having
+    examined the question. ⚠️ A CHECK CANNOT RULE OUT A FAILURE MODE IT DOES NOT
+    COMPARE ON, and an empty list here means "no near titles", never "no problem".
+
     🛑 THIS IS THE ANTIDOTE TO A CONFIDENT WRONG VERDICT. On 2026-09-09 the diff
     decided "A Song for the Deaf" was missing, searched for that exact string,
     found nothing under it, and reported it UNCLOSEABLE — two independent-looking
@@ -1337,14 +1344,45 @@ def _resolve_one(
             for r in titled[:5]
         ]
         names = sorted({a for r in titled for a in (r.get("artists") or [])})
+        # A COUNT, NOT A CAUSE (§11.20). If the search returned many rows under
+        # this act's byline and none of them is the title asked for, "they do not
+        # have it" is better supported than if the act appears nowhere at all.
+        # The reader weighs it; the tool does not conclude from it.
+        by_artist_count = sum(
+            1 for r in results
+            if _artist_matches(r.get("artists") or [], performing)
+        )
         why = (
             f"{len(titled)} result(s) titled {title!r}, none by {performing}. "
             f"Found instead: {', '.join(names[:4])}. "
         )
         if cover_of_known:
+            # 🛑 "IF IT DOES NOT EXIST, THE SONG DOES NOT" WAS AN OVERCLAIM, AND
+            # IT IS THE ONE THIS VERDICT KEEPS INVITING. What was actually
+            # observed is that NO RETURNED ROW CARRIES THIS ARTIST'S BYLINE. That
+            # is two different worlds and the search cannot separate them:
+            #
+            #   * a genuine cover — the act really never recorded it;
+            #   * a MIS-BYLINED ORIGINAL — the act's own recording is right there
+            #     under somebody else's name.
+            #
+            # ⚠️ THE SECOND IS ORDINARY, NOT EXOTIC. A soundtrack compilation
+            # carrying one orchestra's byline across every track is a routine
+            # metadata error. Foo Fighters really do have "A320", on the 1998
+            # Godzilla soundtrack. On 2026-09-09 the returned A320 was checked BY
+            # EAR and was genuinely the orchestral cut — so the verdict was right,
+            # and it was right by luck of the data rather than by having checked.
             why += (
-                f"Their version is what goes in the playlist (spec 12.4); if it "
-                f"does not exist, the song does not."
+                f"The PERFORMING artist's version is what goes in the playlist "
+                f"(spec 12.4). "
+                f"⚠️ WHAT WAS OBSERVED IS THAT NO RETURNED ROW IS BYLINED "
+                f"{performing}, WHICH IS NOT THE SAME AS 'they never recorded "
+                f"it'. This cannot distinguish a genuine cover from a MIS-BYLINED "
+                f"ORIGINAL — a compilation stamping one artist across every track "
+                f"is an ordinary metadata error. `other_artists_found` carries the "
+                f"rows; the only way to settle it is to LISTEN to one. "
+                f"{by_artist_count} of {len(results)} returned row(s) were bylined "
+                f"{performing} under other titles."
             )
         else:
             # 🛑 THE VERDICT IS RIGHT AND THE OLD REASON WAS NOT. Reading "none by
@@ -1369,6 +1407,7 @@ def _resolve_one(
             "video_id": None,
             "artist_match": None,
             "title_match": None,
+            "by_performing_artist_in_results": by_artist_count,
             # 🛑 THE CASE THIS WAS BUILT FOR. "Hangin' Tree" matched Olivier
             # Libaux and Vitamin String Quartet on the exact title, so the
             # verdict read "only other artists have it" WITH NAMED EVIDENCE —
@@ -2244,6 +2283,20 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 "apostrophe-marked elided -g are folded; both raw titles ship in "
                 "`loose_title_matches` so a wrong join can be seen. It is not an "
                 "error and does not need reporting unless one looks wrong. "
+                "🛑 `other_artists_only` MEANS 'NO RETURNED ROW CARRIES THIS "
+                "ARTIST'S BYLINE' - IT DOES NOT MEAN 'THEY NEVER RECORDED IT'. It "
+                "CANNOT distinguish a genuine cover from a MIS-BYLINED ORIGINAL, "
+                "and a compilation stamping one artist across every track is an "
+                "ordinary metadata error. Report it as 'only other artists have "
+                "this title - worth a listen before writing it off', never as "
+                "settled. `other_artists_found` carries the rows and "
+                "`by_performing_artist_in_results` says how many rows DID carry "
+                "the act's byline under other titles - many makes 'they do not "
+                "have it' better supported, none makes the byline hypothesis more "
+                "live. ⚠️ ONLY LISTENING SETTLES IT. "
+                "⚠️ `near_titles_by_artist` IS SCOPED TO TITLES AND ITS SILENCE IS "
+                "NOT CLEARANCE - it cannot see a row whose title is right and "
+                "whose byline is wrong, which is exactly the case above. "
                 "🛑 `near_titles_by_artist` ON A not_found IS THE VERDICT'S OWN "
                 "CONTRADICTION. It lists the PERFORMING artist's tracks with "
                 "close-but-unequal titles. IF IT IS NON-EMPTY, DO NOT REPORT THE "
