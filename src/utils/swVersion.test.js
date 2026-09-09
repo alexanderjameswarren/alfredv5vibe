@@ -29,8 +29,8 @@ const bodyHash = crypto
 // this whole mechanism exists to detect. Updating the hash without bumping the
 // version defeats it.
 const LOCKED_BODY_HASH =
-  "ac648613759e3ac8262f47bf591c93a3a81f131dd075f58fccd4dc71f0742766";
-const LOCKED_VERSION = "2026-09-08b";
+  "d74694bf44b38e2df41e8f53d57be49f837ff037f4fe91d277118e15140e503a";
+const LOCKED_VERSION = "2026-09-09a";
 
 describe("the worker version is honest about what is deployed", () => {
   it("declares a version", () => {

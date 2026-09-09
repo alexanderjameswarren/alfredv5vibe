@@ -18,6 +18,12 @@
       "type": "image/png",
       "sizes": "512x512",
       "purpose": "any"
+    },
+    {
+      "src": "android-chrome-maskable-640x640.png",
+      "type": "image/png",
+      "sizes": "640x640",
+      "purpose": "maskable"
     }
   ],
   "start_url": "/",

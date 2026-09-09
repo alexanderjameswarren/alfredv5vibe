@@ -28,7 +28,7 @@
  * changing the worker without bumping the version fails the suite rather than
  * silently reporting "up to date".
  */
-const SW_VERSION = '2026-09-08b';
+const SW_VERSION = '2026-09-09a';
 
 // Take over as soon as installed rather than waiting for every tab to close,
 // so the first visit can raise a notification instead of the second.
@@ -52,6 +52,15 @@ const FALLBACK = {
   body: 'Time for: squats',
   tag: 'alfred-push',
   icon: '/android-chrome-192x192.png',
+  // ⚠️ The SMALL icon, and a different kind of image entirely.
+  //
+  // Android renders the notification's small icon from the ALPHA CHANNEL only:
+  // it wants a white-on-transparent silhouette and paints it in the system
+  // accent colour. `badge` was set to the full-colour, fully OPAQUE 192 icon,
+  // whose alpha channel is a solid square — so Android had nothing to make a
+  // silhouette from and fell back to the browser's own glyph. That is why
+  // notifications showed Chrome's icon rather than Alfred's.
+  badge: '/notification-badge-128.png',
   url: '/',
 };
 
@@ -82,7 +91,7 @@ self.addEventListener('push', (event) => {
     body: payload.body || FALLBACK.body,
     tag: payload.tag || FALLBACK.tag,
     icon: payload.icon || FALLBACK.icon,
-    badge: payload.icon || FALLBACK.icon,
+    badge: payload.badge || FALLBACK.badge,
     // Ignored on Android, which keeps notifications until dismissed anyway.
     requireInteraction: payload.requireInteraction !== false,
     // Where tapping this should land. `data` is the only part of a notification
@@ -234,7 +243,7 @@ self.addEventListener('pushsubscriptionchange', (event) => {
             body: 'Notifications were reset by the browser. Open Alfred to restore them.',
             tag: 'alfred-subscription-rotated',
             icon: FALLBACK.icon,
-            badge: FALLBACK.icon,
+            badge: FALLBACK.badge,
             requireInteraction: true,
             data: { url: '/' },
           });
