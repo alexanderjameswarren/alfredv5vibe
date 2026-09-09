@@ -10739,9 +10739,17 @@ function IntentionCard({
   // Was a per-card query on mount asking
   // `intent_id = … AND closed_at IS NULL` — one round trip per row on the
   // Intentions list. `executions` already carries allLiveExecutions, which is
-  // that exact set, so the answer was in hand the whole time. Every site that
-  // passes `onArchive` also passes `executions` (checked; intention detail's
-  // edit mode had to be given it).
+  // that exact set, so the answer was in hand the whole time.
+  //
+  // The invariant this guard rests on is "every site that passes `onArchive`
+  // also passes `executions`", because it FAILS OPEN — a missing prop defaults
+  // to [] and reads as "no executions", leaving Archive enabled mid-execution.
+  // Holds at 4 of 4, rechecked at Step 12.1. (8a had to give intention detail's
+  // edit mode the prop. 12.1 added no new sites; it turned three existing ones
+  // into Archive renderers, and all three already passed both props.) The other
+  // three sites pass neither and are add-forms, so nothing renders there.
+  //
+  // Recheck this whenever a site gains `onArchive` or a row strip.
   const hasActiveExecutions = executions.some(
     (ex) => ex.intentId === intent.id,
   );
@@ -11128,29 +11136,86 @@ function IntentionCard({
             a row you are scanning past would be a worse trade. It does pick up
             the rest of Step 6 for free — it no longer navigates, and it now
             reports the date through the message. */}
-        {showScheduling && relatedEvents.length === 0 && (
-          <div className="flex gap-2 shrink-0">
-            {onSchedule && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSchedule(intent.id, "today");
-                }}
-                className="px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-              >
-                Do Today
-              </button>
+        {/* Row action strip — Step 12.1. Matches the one EventCard took in 8a:
+            gap-3 because 8px is Material's documented FLOOR for adjacent targets
+            rather than a comfortable value and the neighbour here is destructive,
+            and self-end sm:self-auto because below the sm breakpoint the parent is
+            `flex-col`, where justify-between governs the vertical axis and does
+            nothing horizontally — without it the "right-aligned" strip lands on the
+            left on exactly the device this app is built for.
+
+            The strip renders when it has something in it. Do Today / Start Now keep
+            their own condition; Archive has a different one, which is the whole
+            point of the restructure below. */}
+        {((showScheduling && relatedEvents.length === 0) ||
+          (onArchive && intent.id)) && (
+          <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
+            {showScheduling && relatedEvents.length === 0 && (
+              <>
+                {onSchedule && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSchedule(intent.id, "today");
+                    }}
+                    className="px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+                  >
+                    Do Today
+                  </button>
+                )}
+                {onStartNow && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStartNow(intent.id);
+                    }}
+                    className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+                  >
+                    <Play className="w-4 h-4" />
+                    Start Now
+                  </button>
+                )}
+              </>
             )}
-            {onStartNow && (
+            {/* Archive lived only inside the edit form, which governing rule 4
+                forbids: archiving changes the record's state, not its content, so
+                it belongs on the row. Step 8 gave EventCard this and left its
+                sibling behind — that omission is what 12.1 closes.
+
+                Deliberately NOT gated on `relatedEvents.length === 0`, unlike Do
+                Today and Start Now. An intention with events is still archivable:
+                `archiveIntention` cascades to them and builds the compound Undo
+                from Step 2. That is why this sits outside their fragment.
+
+                Gated on `intent.id` so it cannot render in add mode — Step 1's
+                defect 0.1 was precisely a phantom record created by an Archive on
+                an unsaved card. All four add/edit-form sites pass isEditing={true}
+                and so never reach display mode at all; this is the second lock.
+
+                stopPropagation because the whole card is the navigate target as of
+                Step 3, so without it this would archive AND open the detail page.
+
+                No Edit button: per 8b, clicking the row already opens detail, and a
+                row action never duplicates the row click. */}
+            {onArchive && intent.id && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  onStartNow(intent.id);
+                  onArchive(intent.id);
                 }}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+                disabled={hasActiveExecutions}
+                title={
+                  hasActiveExecutions
+                    ? "Cannot archive: active execution in progress"
+                    : "Archive this intention and all related events"
+                }
+                className={`flex items-center justify-center p-2 min-h-[44px] min-w-[44px] rounded-lg transition-colors shrink-0 ${
+                  hasActiveExecutions
+                    ? "text-muted-foreground/40 cursor-not-allowed"
+                    : "text-muted-foreground hover:text-destructive hover:bg-secondary"
+                }`}
               >
-                <Play className="w-4 h-4" />
-                Start Now
+                <Archive className="w-4 h-4" />
               </button>
             )}
           </div>

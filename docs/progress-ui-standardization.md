@@ -12,7 +12,9 @@ permanently by decision (spec Undo section, exception 1).
 **Routing tripwire:** `setView(` is now **37**, down from 39 at slice-1 close. Both
 removals were deliberate — see Step 5 and Step 6 findings.
 
-Spec: `docs/technical-spec-ui-standardization.md` (Revision 2)
+Spec: `docs/technical-spec-ui-standardization.md` (Revision 2), plus
+`docs/technical-spec-ui-standardization-step12.md` for Step 12. Both live in
+`docs/` alongside this file — the phase is active, not history.
 
 Step 1 of the original plan — the codebase survey — is complete. Its findings are
 folded into Revision 2 of the spec. Steps below start from that baseline.
@@ -168,17 +170,22 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
 - [ ] All three collection row sites render identically apart from the pin and badge
 - [x] Intention detail: Do Today works without entering edit mode and does not
       navigate away
-- [ ] Recipe edit form: Save reachable without scrolling _(Step 7b — this is
+- [x] Recipe edit form: Save reachable without scrolling _(confirmed by Alex
+      2026-09-09. Step 7b — this is
       the original complaint from the screenshot that opened the phase, NOT a
       Revision 1 leftover to strike. See Step 7b findings.)_
-- [ ] Every list row: Archive/Delete reachable in one click _(Contexts rows
-      still pending — no `contexts.archived` column until Step 11)_
-- [ ] Sort choice survives a page reload, independently per page
+- [x] Every list row: Archive/Delete reachable in one click _(confirmed by Alex
+      2026-09-09; Contexts rows landed with Step 11's `contexts.archived`.
+      Note IntentionCard rows are the remaining gap — see Step 12.1)_
+- [x] Sort choice survives a page reload, independently per page _(confirmed by
+      Alex 2026-09-09)_
 - [ ] Schedule's order is identical across two separate sessions _(proved in
       unit tests over all 120 permutations of a 5-row list; still worth the
       real two-session check)_
-- [ ] Discarded inbox capture is gone from the database, not flagged
-- [ ] Undo restores a deleted inbox capture with its original id
+- [x] Discarded inbox capture is gone from the database, not flagged _(confirmed
+      by Alex 2026-09-09)_
+- [x] Undo restores a deleted inbox capture with its original id _(confirmed by
+      Alex 2026-09-09)_
 
 ---
 

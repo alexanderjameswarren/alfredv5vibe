@@ -490,6 +490,28 @@ async def _verify_entries(
         if isinstance(t, dict)
     }
     bad = [p for p in pairs if p not in live]
+
+    # ⚠️ A PARTIAL READ CANNOT TELL A STALE HANDLE FROM AN UNSEEN ONE, AND MUST
+    # NOT GUESS. The contents read is capped at ITEMS_CAP. On a playlist longer
+    # than that, `live` is a PARTIAL VIEW, so a perfectly good handle for entry
+    # 201 is absent from it and would otherwise be reported as
+    # `stale_or_foreign_handle` — a diagnostic naming the wrong cause, which
+    # §11.20 rates worse than no diagnostic at all. The reader would re-read the
+    # playlist, get the same handle back, and try again forever.
+    #
+    # It still FAILS CLOSED: nothing is removed either way. Only the reason
+    # changes, and the reason is the whole value of the error.
+    count = detail.get("trackCount")
+    if bad and isinstance(count, int) and count > len(tracks):
+        raise OperationalError(
+            f"playlist_too_large_to_verify: {playlist_id!r} holds {count} "
+            f"entries but only {len(tracks)} could be read (cap {ITEMS_CAP}), so "
+            f"{len(bad)} handle(s) could not be confirmed present. THEY MAY BE "
+            f"PERFECTLY VALID and simply beyond the read window — this is NOT "
+            f"evidence of a stale handle. NOTHING WAS CHANGED. Remove entries "
+            f"from a playlist this long in smaller playlists, or raise the cap."
+        )
+
     if bad:
         examples = ", ".join(f"{{{v}, {sv}}}" for v, sv in bad[:3])
         raise OperationalError(

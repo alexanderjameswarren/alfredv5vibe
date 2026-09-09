@@ -4115,3 +4115,138 @@ Mayonaise behind `variant_only`. Both were rewritten into the **past tense and d
 neither reads as this run's data. `Mayonaise, at 5 of 10 ... is that case` became `WAS that
 case on 2026-09-02`. **Three tests pin this**: no coverage pair may be asserted, the text must
 point at this response, and the surviving historical figures must stay marked as past.
+
+---
+
+### 14.50 HANDLE REUSE CONFIRMED AGAIN, AND THE GUARD THAT PREVENTS IT WAS UNTESTED
+
+**Observed 2026-09-09** on a minutes-old QOTSA playlist: **all five `set_video_id` handles
+were byte-identical to five in the Foo Fighters playlist** — No One Knows/Everlong, Go With
+The Flow/The Pretender, and so on. Five for five.
+
+That matches the 2026-08-28 measurement already recorded in `_verify_entries` (of twelve
+handles on a fresh playlist, eleven existed elsewhere and three denoted a different song
+there). **Handle reuse is not a hazard the system might meet; it is the normal case.**
+
+**THE ANSWER TO THE QUESTION ASKED: yes, `remove_from_dj_playlist` verifies, at exactly the
+same strength as `edit_dj_playlist mode=move`.** Both call the same `_verify_entries`, with
+the same `(video_id, set_video_id)` pair check, immediately before the mutation. The remove
+path's call carries a comment already reasoning about the preview/confirm gap.
+
+⚠️ **THE PAIR IS WHAT DEFEATS THE COLLISION, AND ONLY THE PAIR.** A handle-only check would
+find `HANDLE_A` present in the QOTSA playlist and **remove No One Knows** when asked to
+remove Everlong — a real, wrong entry, reported as success. The pair fails, because
+*(Everlong's video_id, HANDLE_A)* is not in that playlist even though the handle is.
+
+🛑 **THE REAL FINDING: THE GUARD HAD NO TESTS AT ALL.** The envelope suite drives
+`remove_from_dj_playlist` once, with a fixture whose single pair matches — the happy path.
+**Every rejection branch was unexercised.** The guard looked correct because nothing had ever
+asked it to work: §14.42's shape, on the destructive tool rather than the safe one, and the
+same per-tool-not-per-path coverage illusion as §14.44. `tests/test_dj_handles.py` now covers
+it, with the QOTSA collision as the negative control (§11.16 — the control must reproduce the
+ACTUAL defect) and seven mutations confirming each test bites.
+
+**DOES THE TIER-3 PREVIEW MITIGATE IT? NO — AND IT ONLY LOOKS AS IF IT MIGHT.** Checked, not
+assumed:
+
+* `_build_tier_3_proposal` **catches** a preview failure and reports it *inside* the proposal.
+  Nothing then stops a `confirmed: true` re-call. **The gate is a re-call, not a lock**, so
+  the preview is advisory text a human reads.
+* Preview and confirm are **separate invocations**, so anything the preview verified can
+  change before the removal runs.
+
+The preview's value is real but different: it stops the **wrong target** (a mistyped playlist
+id reads exactly as reassuring as a correct one). It is not, and cannot be, the thing that
+refuses a bad handle. The execute-path verifier is.
+
+**AND ONE ACTUAL DEFECT, FIXED.** `_verify_entries` reads contents capped at `ITEMS_CAP`
+(200). On a longer playlist `live` is a **partial view**, so a perfectly valid handle for
+entry 201 was absent from it and got reported as `stale_or_foreign_handle` — ⚠️ **a
+diagnostic naming the wrong cause, which §11.20 rates worse than none.** The reader would
+re-read the playlist, get the same handle back, and try again forever. It now raises
+`playlist_too_large_to_verify`, says the handles **may be perfectly valid**, and still
+**fails closed** — only the reason changes, and the reason is the whole value of the error.
+
+---
+
+### 14.51 🛑 THE UNION IS NOT THE SET — a denominator no single night can reach
+
+**Found 2026-09-09**, from the QOTSA concert playlist. The review was going to report
+**5 of 28** and read as badly incomplete, and would have proposed 23 songs Alex would
+never hear that night.
+
+**It was first read as a support-slot problem. It is not.** `coverage.total` is the
+INCLUSIVE union over the window (§12.2) — every song played at *any* show. That is the
+right answer to *"what might I hear"* and the **wrong denominator for "is this playlist
+finished"**, because he attends **one** show. ⚠️ **The same is true of headline shows**;
+the union of ten Taylor Swift nights exceeds any one of them too. The support slot only
+made it loud.
+
+Measured on the live 10-show window:
+
+```
+typical set                12 songs
+union across the window    28      <- what coverage.total reported
+songs at <=2 of 10 shows   12
+```
+
+**And the playlist was not incomplete at all:**
+
+```
+10/10  HAVE  My God Is the Sun        10/10   --   A Song for the Dead
+10/10  HAVE  Little Sister             7/10   --   Make It Wit Chu
+10/10  HAVE  Go With the Flow          6/10  HAVE  The Lost Art of Keeping a Secret
+10/10  HAVE  No One Knows              6/10   --   Paper Machete
+```
+
+**Four of the five songs played at every show were already there.** The honest report is
+*"4 of 5 certainties — add A Song for the Dead"* — a one-item proposal somebody can act
+on. §12.12 exactly: a number that needs a caveat should be a different number.
+
+**`set_shape` now folds out of the window already fetched** — no new field, no data
+entry, no manual classification: `core` (every show), `likely` (≥60%), `rotating`, plus
+`typical_set` as a **median** so one 4-song radio session cannot drag it to a length no
+show had. Every `missing` entry carries `certainty` and `plays_in_window`, so the
+proposal leads with the certainty rather than burying it under the lottery.
+
+⚠️ **WHY THE FLOOR IS FIVE SHOWS, AND WHY BELOW IT NOTHING IS PRINTED.** "Played at every
+show" is evidence only when there are enough shows to make it hard. With the observed
+shape — 12 songs a night from a pool of 28 — a randomly chosen song appears in all n
+shows with probability (12/28)ⁿ, so the songs falsely certified `core` by chance:
+
+| shows | expected false certainties |
+|---|---|
+| 3 | **2.2** — the core would be mostly noise |
+| 4 | 0.95 |
+| **5** | **0.41** — under half a song |
+| 10 | 0.005 |
+
+Below five, **the split is withheld entirely rather than printed with a warning** — a
+caveat beside a number is the thing §12.12 rejects, and `core: []` with an asterisk reads
+as "this band has no fixed set". `usable: false` ships `why_not` instead, and every
+song's `certainty` is **null rather than `rotating`**: a default of "rotating" would be a
+verdict reached by having no evidence, and every song would silently carry it. The show
+count and typical set length still ship — they need no frequency argument.
+
+---
+
+### 14.52 `full_set_min_songs` HAS A CASE IT DOES NOT COVER
+
+`_FULL_SET_MIN_SONGS = 8` was tuned in §12.3's work against **Weezer's 1–6 song
+television and radio spots**, where it separated promo appearances from concerts cleanly.
+
+⚠️ **A STADIUM SUPPORT SLOT SAILS PAST IT.** QOTSA's support slots run **11–14 songs** and
+are all classed as full sets; their own headline shows are the two Catacombs Tour theatre
+dates at **18**. So the constant cannot distinguish a support slot from a headline show —
+the distinction it would need to make for this act is 12-vs-18, not 5-vs-24.
+
+**Not retuned, and deliberately.** The threshold still does the job it was built for, and
+raising it would reclassify genuine short headline sets as promo. The gap is recorded
+rather than papered over: §14.51's `set_shape` answers the question that mattered here
+(*what will I hear on one night*) **without needing to know which kind of show it is**,
+which is why it was the smaller fix. If a slot distinction is ever wanted for its own
+sake, it belongs as a field on `dj_concerts` selecting which window to fold — cheap once
+`set_shape` exists, and not a substitute for it.
+
+**Also corrected here:** the Coldplay/WILLOW opener decision lives in the Phase 6b notes,
+not in this spec. There was no §14.51 before this one.

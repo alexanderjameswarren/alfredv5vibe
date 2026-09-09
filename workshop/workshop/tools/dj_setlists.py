@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import json
 import re
+from math import ceil
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -777,6 +778,18 @@ DIFF_REQUIRED_SHOW_KEYS = frozenset({
     "event_date", "venue", "song_count", "songs", "tape_entries",
 })
 
+def _median(xs: list[int]) -> int | None:
+    """Median, or None for an empty window. The TYPICAL set, not the mean —
+    one 4-song radio session should not drag the figure a whole song down."""
+    if not xs:
+        return None
+    ordered = sorted(xs)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) // 2
+
+
 _MEDLEY_SEP = " / "
 
 # Two recordings within this many seconds of each other are the same master
@@ -842,6 +855,61 @@ _FULL_SET_MIN_SONGS = 8
 # `coverage.gettable` subtracts. The fourth is a question, and subtracting it
 # would hide the only not-found worth reading.
 _UNCLOSEABLE_CAUSES = ("medley_part", "other_artists_only", "no_such_title")
+
+# ---------------------------------------------------------------------------
+# ADDED 2026-09-09: THE UNION IS NOT THE SET. A DENOMINATOR NOBODY CAN REACH.
+# ---------------------------------------------------------------------------
+# `coverage.total` is the INCLUSIVE union over the window (§12.2) — every song
+# played at ANY show. That is the right answer to "what might I hear" and the
+# WRONG denominator for "is this playlist finished", because he attends ONE
+# show.
+#
+# Measured on Queens of the Stone Age, 2026-09-09, 10-show window:
+#
+#     typical set                12 songs
+#     union across the window    28      <- what coverage.total reported
+#     songs at <=2 of 10 shows   12
+#
+# So the playlist read 5/28 and looked badly incomplete. It was not:
+#
+#     10/10  HAVE  My God Is the Sun          10/10   --   A Song for the Dead
+#     10/10  HAVE  Little Sister               7/10   --   Make It Wit Chu
+#     10/10  HAVE  Go With the Flow            6/10  HAVE  The Lost Art of...
+#     10/10  HAVE  No One Knows                6/10   --   Paper Machete
+#
+# FOUR OF THE FIVE SONGS PLAYED AT EVERY SHOW WERE ALREADY THERE. The honest
+# report is "4 of 5 certainties — add A Song for the Dead", which is a proposal
+# somebody can act on. "5 of 28, expect a gap" is not, and §12.12 says a number
+# that needs a caveat should be a different number.
+#
+# ⚠️ THIS IS NOT A SUPPORT-SLOT DEFECT, which is how it was first read. It is
+# true of headline shows too — the union of ten Taylor Swift nights exceeds any
+# one of them. The support slot only made it loud.
+_SET_SHAPE_CORE = "core"          # played at EVERY show in the window
+_SET_SHAPE_LIKELY = "likely"      # played at most of them
+_SET_SHAPE_ROTATING = "rotating"  # comes and goes
+
+# A song counts as `likely` at this share of the window.
+_LIKELY_SHARE = 0.6
+
+# ---------------------------------------------------------------------------
+# 🛑 WHY 5, AND WHAT HAPPENS BELOW IT — a number that means nothing must SAY SO
+# ---------------------------------------------------------------------------
+# "Played at every show" is only evidence when there are enough shows for it to
+# be hard. With the observed QOTSA shape — 12 songs a night drawn from a pool of
+# 28 — a song that is chosen AT RANDOM appears in all n shows with probability
+# (12/28)^n, so the number of songs falsely certified `core` by chance is:
+#
+#     n = 3   ->  28 x 0.079  =  2.2 songs      <- the core would be mostly noise
+#     n = 4   ->  28 x 0.034  =  0.95
+#     n = 5   ->  28 x 0.015  =  0.41           <- under half a song
+#     n = 10  ->  28 x 0.0002 =  0.005
+#
+# Five is where the expected number of false certainties drops below one. Below
+# it the shape is NOT REPORTED AT ALL rather than reported with a warning — a
+# caveat next to a printed number is the thing §12.12 rejects, and `core: []`
+# with an asterisk would be read as "this band has no fixed set".
+_MIN_SHOWS_FOR_SET_SHAPE = 5
 
 # Variant markers. A live or acoustic cut is not the studio recording, and the
 # setlist entry is never asking for one.
@@ -1301,6 +1369,11 @@ def _resolve_one(
         "are the same master and resolve silently, and only a genuinely different "
         "recording is escalated - with album and duration attached so it can be "
         "settled without opening anything. "
+        "IT REPORTS SET SHAPE, BECAUSE THE UNION IS NOT THE SET. `coverage."
+        "total` unions every song across the window and no single night contains "
+        "it; `set_shape.core` is what gets played EVERY night and is the "
+        "denominator one show can be judged against. Below "
+        "`set_shape.usable` the split is withheld rather than guessed. "
         "THE JOIN RULE, DECIDED 2026-09-09 AND STATED RATHER THAN EMERGENT: "
         "setlist songs are matched to the body BY TITLE, case- and "
         "punctuation-insensitively. The body's `artist` ANNOTATES the match and "
@@ -1511,6 +1584,10 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
 
     # --- Fold the window into one entry per distinct song ------------------
     songs: dict[str, dict[str, Any]] = {}
+    # Distinct songs at EACH show, in the same units as the union: after the
+    # medley split and after tape rows are dropped. Comparing a raw song_count
+    # against a normalised union would be two different countings of one set.
+    distinct_per_show: list[int] = []
     for show in shows:
         seen_here: set[str] = set()
         for sg in show["songs"]:
@@ -1535,6 +1612,9 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 # which is the pairing that breaks when the case changes.
                 e = songs.setdefault(key, {
                     "title": part,
+                    # The normalised key, carried so the shape fold can test
+                    # body membership without re-normalising and drifting.
+                    "title_key": key,
                     "cover_of": None if is_medley else sg.get("cover_of"),
                     "cover_of_known": not is_medley,
                     "medley": is_medley,
@@ -1573,11 +1653,35 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                         "full_set": show["song_count"] >= _FULL_SET_MIN_SONGS,
                     })
                     seen_here.add(key)
+        distinct_per_show.append(len(seen_here))
 
     # `full_set_shows` alongside the raw count, because they answer different
     # questions and only one of them is comparable across acts.
     for e in songs.values():
         e["full_set_shows"] = sum(1 for s in e["shows"] if s["full_set"])
+
+    # -----------------------------------------------------------------------
+    # SET SHAPE — how much of the union any ONE night actually contains
+    # -----------------------------------------------------------------------
+    n_shows = len(shows)
+    typical_set = _median(distinct_per_show)
+    shape_usable = n_shows >= _MIN_SHOWS_FOR_SET_SHAPE
+    likely_floor = max(2, ceil(n_shows * _LIKELY_SHARE)) if shape_usable else None
+
+    for e in songs.values():
+        plays = len(e["shows"])
+        e["plays_in_window"] = plays
+        # ⚠️ None, NOT "rotating", when the window is too thin. A default of
+        # "rotating" would be a verdict reached by having no evidence, and every
+        # song would silently carry it.
+        if not shape_usable:
+            e["certainty"] = None
+        elif plays == n_shows:
+            e["certainty"] = _SET_SHAPE_CORE
+        elif plays >= likely_floor:
+            e["certainty"] = _SET_SHAPE_LIKELY
+        else:
+            e["certainty"] = _SET_SHAPE_ROTATING
 
     in_body = [(k, e) for k, e in songs.items() if k in body_titles]
     missing = [e for k, e in songs.items() if k not in body_titles]
@@ -1758,6 +1862,55 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
     uncloseable = sum(cause_counts.get(c, 0) for c in _UNCLOSEABLE_CAUSES)
     gettable = len(songs) - uncloseable
 
+    # -----------------------------------------------------------------------
+    # THE SET SHAPE BLOCK — the denominator a single night can actually reach
+    # -----------------------------------------------------------------------
+    core_entries = [e for e in songs.values() if e["certainty"] == _SET_SHAPE_CORE]
+    likely_entries = [e for e in songs.values() if e["certainty"] == _SET_SHAPE_LIKELY]
+
+    def _brief(entries):
+        return [
+            {"title": e["title"], "plays_in_window": e["plays_in_window"],
+             "in_body": e["title_key"] in body_titles}
+            for e in sorted(entries, key=lambda x: (-x["plays_in_window"],
+                                                    x["title"].lower()))
+        ]
+
+    if shape_usable:
+        core_in_body = sum(1 for e in core_entries if e["title_key"] in body_titles)
+        set_shape = {
+            "usable": True,
+            "shows_in_window": n_shows,
+            "typical_set": typical_set,
+            "union_total": len(songs),
+            # 🛑 THE NUMBER TO QUOTE. `core_in_body / core_total` is what one
+            # night can be judged against; `in_body / union_total` is a score out
+            # of a total no single show contains.
+            "core_in_body": core_in_body,
+            "core_total": len(core_entries),
+            "core": _brief(core_entries),
+            "likely": _brief(likely_entries),
+            "likely_floor_plays": likely_floor,
+            "rotating_count": len(songs) - len(core_entries) - len(likely_entries),
+        }
+    else:
+        # ⚠️ NOT REPORTED, rather than reported with a caveat. See the note above
+        # _MIN_SHOWS_FOR_SET_SHAPE: at three shows roughly two songs land in the
+        # "core" by chance alone, and a wrong certainty is worse than none.
+        set_shape = {
+            "usable": False,
+            "shows_in_window": n_shows,
+            "typical_set": typical_set,
+            "union_total": len(songs),
+            "why_not": (
+                f"{n_shows} show(s) in the window; {_MIN_SHOWS_FOR_SET_SHAPE} are "
+                f"needed before 'played at every show' is evidence rather than "
+                f"coincidence. At three shows roughly two songs qualify by chance. "
+                f"NO core/likely/rotating split is reported and every song's "
+                f"`certainty` is null - raise `limit` to get one."
+            ),
+        }
+
     return {
         "data": {
             "artist": performing,
@@ -1782,6 +1935,7 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
             "empty_entries_skipped": sl["empty_entries_skipped"],
             "body_size": len(body),
             "distinct_setlist_songs": len(songs),
+            "set_shape": set_shape,
             "coverage": {
                 "in_body": len(in_body),
                 "total": len(songs),
@@ -1832,6 +1986,27 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 "radio spots, so 'We Might as Well Be Strangers, 4 shows' was "
                 "three TV appearances and one concert.) `missing` is now sorted "
                 "by full sets first for the same reason. "
+                "🛑 QUOTE `set_shape.core_in_body / core_total`, NOT "
+                "`coverage.in_body / total`, WHENEVER THE QUESTION IS WHETHER "
+                "THE PLAYLIST IS READY FOR ONE NIGHT. `coverage.total` is the "
+                "UNION over the whole window - every song played at ANY show - "
+                "and NO SINGLE NIGHT CONTAINS IT. A QOTSA playlist read 5/28 and "
+                "looked badly incomplete while holding FOUR OF THE FIVE songs "
+                "played at every show in the window; the honest report was '4 of "
+                "5 certainties, add A Song for the Dead'. ⚠️ THIS IS NOT A "
+                "SUPPORT-SLOT PROBLEM - the union of ten headline nights exceeds "
+                "any one of them too. "
+                "`core` = played at EVERY show, so near-certain to be heard. "
+                "`likely` = played at most of them. `rotating` is the rest, and "
+                "adding it is a lottery rather than a gap. Each `missing` entry "
+                "carries `certainty` and `plays_in_window` so a proposal can lead "
+                "with the certainties. "
+                "🛑 IF `set_shape.usable` IS FALSE THERE IS NO SPLIT AND YOU MUST "
+                "NOT INVENT ONE - `why_not` says how many shows are needed and "
+                "why. Below that floor 'played at every show' is coincidence, so "
+                "`certainty` is null on every song. Raise `limit` or say the "
+                "window is too thin; do NOT fall back to the union and call it "
+                "coverage. "
                 "🛑 `coverage` CARRIES TWO DENOMINATORS AND NEITHER "
                 "REPLACES THE OTHER. `total` is every distinct song in the window "
                 "- what he will actually hear, and the right denominator for 'do I "

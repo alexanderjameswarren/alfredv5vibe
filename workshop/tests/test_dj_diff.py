@@ -1048,5 +1048,202 @@ class ReadingBlobTests(unittest.TestCase):
         self.assertNotIn("Mayonaise, at 5 of 10", txt)
 
 
+class SetShapeTests(unittest.TestCase):
+    """🛑 THE UNION IS NOT THE SET, AND IT WAS THE DENOMINATOR.
+
+    `coverage.total` is the INCLUSIVE union over the window (12.2) - right for
+    "what might I hear", wrong for "is this playlist finished", because he
+    attends ONE show. The QOTSA playlist read 5/28 and looked badly incomplete.
+    It held FOUR OF THE FIVE songs played at every single show in the window.
+
+    "4 of 5 certainties - add A Song for the Dead" is a proposal somebody can
+    act on. "5 of 28, expect a gap" is not, and 12.12 says a number needing a
+    caveat should be a different number.
+
+    NOT A SUPPORT-SLOT DEFECT, which is how it was first read - the union of ten
+    headline nights exceeds any one of them too. The support slot made it loud.
+    """
+
+    MBID = "7dc8f5bd-9d0b-4087-9f73-dc164950bbd8"
+    QOTSA = "Queens of the Stone Age"
+
+    # The measured shape, 2026-09-09. Five songs every night, one at 7 of 10,
+    # two at 6, and a long tail that comes and goes.
+    CORE = ["No One Knows", "Go With the Flow", "Little Sister",
+            "My God Is the Sun", "A Song for the Dead"]
+
+    def _shows(self, n=10):
+        """n shows: CORE at every one, Make It Wit Chu at 70%, two at 60%,
+        and a per-show unique so the union outruns any single night."""
+        out = []
+        for i in range(n):
+            songs = list(self.CORE)
+            if i < round(n * 0.7):
+                songs.append("Make It Wit Chu")
+            if i < round(n * 0.6):
+                songs += ["The Lost Art of Keeping a Secret", "Paper Machete"]
+            songs.append(f"Deep Cut {i}")
+            out.append(songs)
+        return out
+
+    def _run(self, body, shows=None, limit=10):
+        shows = shows or self._shows()
+        pages = [{"setlist": [
+            {"id": f"s{i}", "eventDate": f"{(i % 28) + 1:02d}-08-2026",
+             "artist": {"name": self.QOTSA},
+             "venue": {"name": f"Stadium {i}",
+                       "city": {"name": "C", "country": {"code": "US"}}},
+             "sets": {"set": [{"song": [{"name": t} for t in titles]}]}}
+            for i, titles in enumerate(shows)], "total": len(shows)}]
+
+        def fake_fetch(mbid, page, key):
+            return pages[0] if page == 1 else {"setlist": [], "total": len(shows)}
+
+        with mock.patch.object(dj_setlists, "_fetch_page", fake_fetch), \
+             mock.patch.object(dj_setlists, "_read_api_key", lambda: "k"):
+            out = asyncio.run(dj_setlists.diff_dj_setlists(
+                {"mbid": self.MBID, "body": body, "limit": limit,
+                 "resolve": False}, _Ctx()))
+        return out["data"]
+
+    def _body(self, *titles):
+        return [{"title": t, "artist": self.QOTSA, "video_id": f"v{i}"}
+                for i, t in enumerate(titles)]
+
+    # -- the real case ----------------------------------------------------
+
+    def test_THE_REAL_CASE_4_of_5_not_5_of_28(self):
+        data = self._run(self._body(
+            "No One Knows", "Go With The Flow", "The Lost Art Of Keeping A Secret",
+            "Little Sister", "My God Is the Sun"))
+        sh = data["set_shape"]
+        # The union is still reported - it answers a different question.
+        self.assertEqual(data["coverage"]["in_body"], 5)
+        # The property, not a figure borrowed from the live window: the union is
+        # several times the certainties, which is what makes it read as a hole.
+        self.assertGreater(data["coverage"]["total"], 3 * sh["core_total"])
+        # And the number worth quoting:
+        self.assertEqual((sh["core_in_body"], sh["core_total"]), (4, 5))
+
+    def test_the_ONE_REAL_GAP_sorts_to_the_top_of_the_proposal(self):
+        # ⚠️ The whole point. 23 songs he will not hear must not bury the one
+        # he certainly will.
+        data = self._run(self._body(
+            "No One Knows", "Go With The Flow", "The Lost Art Of Keeping A Secret",
+            "Little Sister", "My God Is the Sun"))
+        top = data["missing"][0]
+        self.assertEqual(top["title"], "A Song for the Dead")
+        self.assertEqual(top["certainty"], "core")
+        self.assertEqual(top["plays_in_window"], 10)
+
+    def test_the_typical_set_is_far_below_the_union(self):
+        data = self._run([])
+        sh = data["set_shape"]
+        self.assertLess(sh["typical_set"], sh["union_total"],
+                        "if these were equal there would be no defect to fix")
+
+    # -- the classification ------------------------------------------------
+
+    def test_core_is_EVERY_show_not_merely_most(self):
+        data = self._run([])
+        sh = data["set_shape"]
+        self.assertEqual({c["title"] for c in sh["core"]}, set(self.CORE))
+        for c in sh["core"]:
+            self.assertEqual(c["plays_in_window"], sh["shows_in_window"])
+
+    def test_a_song_missing_from_ONE_SHOW_is_not_core(self):
+        """The discriminating case. Without a song at exactly n-1 plays, a
+        `>= n - 1` core rule passes every other test in this class - which is
+        what the mutation sweep caught."""
+        shows = self._shows()
+        shows[0] = [t for t in shows[0] if t != "Little Sister"]
+        sh = self._run([], shows=shows)["set_shape"]
+        names = {c["title"] for c in sh["core"]}
+        self.assertNotIn("Little Sister", names,
+                         "9 of 10 is not a certainty - he could go on the night "
+                         "they drop it")
+        self.assertEqual(names, set(self.CORE) - {"Little Sister"})
+        # It is not discarded either - it lands in `likely`.
+        self.assertIn("Little Sister", {c["title"] for c in sh["likely"]})
+
+    def test_likely_and_rotating_are_SEPARATE_answers(self):
+        # ⚠️ A two-way split would put a 7-of-10 song in the same bucket as a
+        # 1-of-10 deep cut, which is the collapse this whole block exists to undo.
+        data = self._run([])
+        sh = data["set_shape"]
+        self.assertEqual({c["title"] for c in sh["likely"]},
+                         {"Make It Wit Chu", "The Lost Art of Keeping a Secret",
+                          "Paper Machete"})
+        self.assertGreater(sh["rotating_count"], 0)
+        self.assertEqual(
+            len(sh["core"]) + len(sh["likely"]) + sh["rotating_count"],
+            sh["union_total"], "every song must land in exactly one bucket")
+
+    def test_in_body_is_marked_on_each_named_song(self):
+        data = self._run(self._body("No One Knows"))
+        core = {c["title"]: c["in_body"] for c in data["set_shape"]["core"]}
+        self.assertTrue(core["No One Knows"])
+        self.assertFalse(core["A Song for the Dead"])
+
+    # -- the too-thin guard -------------------------------------------------
+
+    def test_a_THIN_WINDOW_REPORTS_NOTHING_rather_than_something_wrong(self):
+        """🛑 A NUMBER THAT MEANS NOTHING MUST SAY SO RATHER THAN PRINT.
+
+        With the observed shape - 12 songs a night from a pool of 28 - a randomly
+        chosen song appears in all n shows with probability (12/28)^n, so at
+        n=3 roughly TWO songs are certified `core` by chance alone.
+        """
+        data = self._run([], limit=3)
+        sh = data["set_shape"]
+        self.assertFalse(sh["usable"])
+        self.assertNotIn("core", sh)
+        self.assertNotIn("core_in_body", sh)
+        self.assertIn("coincidence", sh["why_not"])
+        self.assertIn("raise `limit`", sh["why_not"])
+
+    def test_certainty_is_NULL_below_the_floor_not_rotating(self):
+        # ⚠️ A default of "rotating" would be a verdict reached by having no
+        # evidence, and EVERY song would silently carry it.
+        data = self._run([], limit=3)
+        self.assertTrue(all(e["certainty"] is None for e in data["missing"]))
+
+    def test_the_floor_is_FIVE_shows_exactly(self):
+        # The boundary, both sides. Four refuses; five reports.
+        self.assertFalse(self._run([], shows=self._shows(4))["set_shape"]["usable"])
+        self.assertTrue(self._run([], shows=self._shows(5))["set_shape"]["usable"])
+
+    def test_the_thin_window_still_reports_what_it_CAN_stand_behind(self):
+        # Refusing the shape is not refusing everything: the show count and the
+        # typical set length need no frequency argument and still ship.
+        sh = self._run([], limit=3)["set_shape"]
+        self.assertEqual(sh["shows_in_window"], 3)
+        self.assertIsNotNone(sh["typical_set"])
+        self.assertIsNotNone(sh["union_total"])
+
+    # -- the median ---------------------------------------------------------
+
+    def test_typical_set_is_a_MEDIAN_so_one_radio_session_cannot_drag_it(self):
+        # ⚠️ QOTSA's window carries a 4-song KEXP session beside eleven
+        # 11-14 song stadium slots. A mean would report a set length no show has.
+        shows = self._shows(9) + [["No One Knows", "Go With the Flow"]]
+        sh = self._run([], shows=shows)["set_shape"]
+        self.assertGreaterEqual(sh["typical_set"], 7,
+                                "a single short session must not move the typical "
+                                "set toward a length nobody played")
+
+    def test_median_of_an_empty_window_is_None_not_zero(self):
+        # Zero would read as "they played nothing", which is a claim.
+        self.assertIsNone(dj_setlists._median([]))
+        self.assertEqual(dj_setlists._median([11, 12, 13]), 12)
+        self.assertEqual(dj_setlists._median([11, 13]), 12)
+        # ⚠️ SKEWED, because symmetric inputs cannot tell a median from a mean -
+        # [11,12,13] gives 12 either way, and that is how the first version of
+        # this test passed against a mean.
+        self.assertEqual(dj_setlists._median([4, 11, 12, 13, 14]), 12,
+                         "the KEXP session shape: mean would say 10, and no "
+                         "show in that window was 10 songs long")
+
+
 if __name__ == "__main__":
     unittest.main()

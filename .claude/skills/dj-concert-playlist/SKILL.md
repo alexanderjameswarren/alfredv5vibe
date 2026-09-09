@@ -92,6 +92,18 @@ would resolve cleanly, and **nothing further down could tell.**
 2. **The show being used** — date and venue, and for a targeted lookup say the date matched.
 3. **The resolved songs**, with the ones that did not resolve and why. Use `not_found_cause`:
    `variant_only` is a decision he can make; the others cannot be closed.
+3b. 🛑 **LEAD WITH `set_shape`, NOT WITH `coverage`.** `coverage.total` unions every song
+   across the window and **no single night contains it** — quoting it makes a finished
+   playlist look broken. A QOTSA playlist read **5 of 28** while holding four of the five
+   songs played at *every* show; the useful sentence was *"4 of 5 certainties — add
+   A Song for the Dead"*.
+   - Say **`core_in_body` of `core_total`**, then name the missing core songs. That is the
+     proposal he can act on.
+   - Mention `likely` briefly (*"3 more show up at most shows"*). **Do not enumerate
+     `rotating`** — it is a lottery, not a gap, and it is usually most of the list.
+   - ⚠️ **If `set_shape.usable` is false, there is no split and you must not invent one.**
+     Say the window is too thin and quote `why_not`. Do **not** fall back to the union and
+     present it as coverage — that is the number this rule exists to stop.
 4. **Whether an existing playlist will be renamed** (below).
 5. **`stage_sections`, if any — one line, not a list of gaps.** These are act intros and video
    interludes that setlist.fm records as set rows (`tape`). They are already excluded from
