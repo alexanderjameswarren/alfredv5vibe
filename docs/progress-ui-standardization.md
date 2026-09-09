@@ -3,8 +3,9 @@
 ## Status: Steps 1–11 done. Step 12 now **eight** sub-items — 12.8 was added
 2026-09-09 out of what 12.3 turned up. **12.1 verified** (all nine checks).
 **12.3 verified for items**, and extended afterwards to the edit paths — see the
-correction in "Step 12.3 fix". **12.4 and 12.5 done, awaiting verification.**
-12.2, 12.6, 12.7 and 12.8 not started.
+correction in "Step 12.3 fix". **12.5 verified** — note that a `theme_color` change needs a PWA reinstall to take
+effect. **12.4 done and retargeted, awaiting verification.** 12.2, 12.6, 12.7 and 12.8
+not started.
 
 Inbox purged by Alex 2026-08-25: **151 archived rows deleted, 10 live remain.** That
 closes the gap Step 10 recorded — the count is now zero and the column is no longer
@@ -182,16 +183,19 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
         **No migration.** The cause was client-side: `storage.set` inserted without
         `.select()`, so the database-assigned columns were never read back and state
         kept the incomplete object the caller had built.
-  - [x] **12.4 — Remove the saving indicator on collections.** _(done 2026-09-09 —
-        see "Step 12.4 findings" below)_ It was `LoadingOverlay`, a full-screen scrim
-        with a spinner, raised by four of the five fields on collection detail. Now
-        every field saves quietly, like the Name field always did. Nothing replaces
-        it — the controls are checkboxes and selects, so holding the new value is its
-        own confirmation. **The real find was the opposite of the request:** the
-        already-silent path swallowed failures, so the Name field was the one
-        genuinely silent write in the app. Failures are now reported.
-  - [x] **12.5 — The teal top.** _(done 2026-09-09 — see "Step 12.5 findings"
-        below)_ Not a component: `public/manifest.json`'s `theme_color` was
+  - [x] **12.4 — Remove the saving overlay from the shopping path.** _(done
+        2026-09-09, **retargeted** — see "Step 12.4 findings" below)_ The first pass
+        silenced collection detail's four settings toggles; those were never the
+        complaint and **have been reverted**. The real target was the full-screen
+        overlay when **removing an item from a collection** — mid-aisle, one-handed,
+        once per item — plus Put back on the removal panel. Both are now quiet.
+        **The overlay was load-bearing:** `pollPausedRef` includes `isLoading`, so
+        removing `withLoading` would have silently dropped the guard that stops the
+        five-second membership poll landing mid-write. Both now hold the poll off
+        themselves via `memberWriteInFlight`, as `saveMemberQuantity` already did.
+        Kept from the first pass: the error handling, a real bug on any screen.
+  - [x] **12.5 — The teal top.** _(done and **verified** 2026-09-09 — see "Step 12.5
+        findings" below)_ Not a component: `public/manifest.json`'s `theme_color` was
         `#a2d8c8`, a leftover from the pre-redesign palette that appears nowhere in
         `index.css`. It painted the browser/OS chrome above the page. Retired to
         `#ffffff`, matching the header's `bg-white`. **`index.html` disagreed with the
@@ -288,19 +292,25 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
 - [ ] Editing an ITEM, INTENTION, EVENT or COLLECTION updates its "Last modified"
       without a reload _(12.3 correction — this was claimed before it was true; only
       contexts worked. Check a non-context record specifically)_
-- [ ] Collection detail: ticking Pinned, Shared or Capture-target no longer dims the
-      whole app _(12.4)_
-- [ ] Collection detail: changing the Context select is likewise quiet _(12.4)_
-- [ ] The Name field still saves on blur, as it always did _(12.4 — the one field
-      that was already correct; make sure removing the flag did not change it)_
-- [ ] A FAILED collection save now says so and the control snaps back _(12.4 — the
-      actual bug. Go offline, toggle a checkbox, expect a message and a revert)_
-- [ ] Installed PWA: the chrome above the header is white, not teal _(12.5 — this is
-      the only place the teal was ever visible)_
-- [ ] Browser tab: the chrome above the header is white, not black _(12.5 — the meta
-      tag half, which disagreed with the manifest)_
-- [ ] The splash screen behind the icon on launch is the app's cream, not a cool
-      white _(12.5 — `background_color`)_
+- [ ] Collection detail: removing an item does NOT dim the screen _(12.4 — the
+      actual complaint. Tick several off in a row, one-handed)_
+- [ ] Removal panel: Put back does not dim the screen either _(12.4)_
+- [ ] **A removed item stays removed for at least ten seconds** _(12.4 — the poll
+      guard. Remove one, then wait through two five-second ticks without touching
+      anything. If it reappears, `memberWriteInFlight` is not holding)_
+- [ ] Execution checklist: ticking an item off still does not dim the screen _(12.4 —
+      it never did; this confirms nothing regressed)_
+- [ ] Quantity edits, in both the execution view and collection detail, stay quiet
+      _(12.4 — already correct before this step)_
+- [ ] Collection detail settings — Context, Shared, Pinned, Capture-target — DO still
+      show the overlay _(12.4 — deliberately reverted; their absence would mean the
+      revert did not land)_
+- [ ] A FAILED collection save says so and re-reads _(12.4 — the error-handling fix,
+      kept from the first pass. Go offline, toggle a setting)_
+- [ ] Completing an execution with items ticked still shows "Completing..." _(12.4 —
+      deliberately left blocking; once per shop, not once per item)_
+- [x] Installed PWA: chrome above the header is white, not teal _(12.5 — verified by
+      Alex 2026-09-09, after a reinstall with site data cleared)_
 
 ---
 
@@ -2436,50 +2446,114 @@ follow" is not "does follow", and the sites were checked rather than assumed.
 
 ---
 
-## Step 12.4 findings — the saving indicator, and what it was hiding (2026-09-09)
+## Step 12.4 findings — the saving overlay, aimed correctly the second time (2026-09-09)
 
-**What it actually was:** `LoadingOverlay` — `fixed inset-0`, a 50%-black scrim over
-the whole app, a spinning border and the word "Saving...". Not a small inline badge.
+**The first attempt hit the wrong target and is recorded here rather than quietly
+replaced.** The addendum said "Collection detail auto-saves on blur with no Save
+button… the saving indicator is reported as unwanted", so the four settings toggles on
+collection detail were made quiet. Those were never the complaint.
 
-**What raised it:** four of the five fields on collection detail — the Context select
-and the Shared, Pinned and Capture-target checkboxes — each called `updateCollection`
-without the `silent` flag. Ticking "Pinned" dimmed the entire application for one
-round trip.
+**The actual complaint:** the full-screen overlay when **removing an item from a
+collection** — mid-aisle at the supermarket, one-handed, once per item ticked off.
+That is the use the collection exists for, and it is the one place a scrim over the
+whole app is genuinely costly.
 
-The fifth field, Name, passed `silent = true` and had always saved without it. So the
-screen was already inconsistent with itself, and the unwanted behaviour was the
-majority rather than the rule.
+The lesson is not that the addendum was wrong; it is that "the saving indicator on
+collections" named a component and not a moment, and the moment is what mattered.
 
-### What it communicated, checked before removing it as the spec asked
+### What changed, second pass
 
-That a write was in flight — and nothing else. It carried no success state and no
-failure state; it appeared and vanished. Since every control here is a checkbox or a
-select bound to state, **the control holding its new value is already the
-confirmation.** That is the difference from an archive, where the row disappears and
-Step 2's Undo message is the only remaining evidence anything happened.
+| Path | Before | After |
+|---|---|---|
+| Remove member (collection detail) | `withLoading('Removing...')` | **quiet** |
+| Put back (removal panel) | `withLoading('Putting back...')` | **quiet** |
+| Four settings toggles | `withLoading('Saving...')` | **`withLoading('Saving...')` — put back** |
 
-So nothing replaces it. `silent` is gone rather than defaulted, because after this
-there is no caller that wants the other behaviour.
+### Decision — the settings toggles get their overlay back
 
-### The finding — the request was to remove a signal; the bug was a missing one
+Reverted rather than left changed. Context, Shared, Pinned and Capture-target are
+configuration: changed rarely, at a desk, one at a time. The overlay there was not the
+complaint, and leaving an unrequested behaviour change in the codebase because it was
+already typed is how a phase about consistency accumulates inconsistency. The `silent`
+flag stays, with its one caller.
 
-The already-silent path swallowed failures in a `console.error` inside a `catch`.
-`storage.set` **returns `false` rather than throwing**, so that `catch` never ran for
-the failure that actually happens. A failed save left the checkbox ticked, the name
-edited, and the database unchanged, with nothing on screen and nothing in the console.
-**The Name field was the one genuinely silent write in the app** — and it was the
-field held up as the model the others should follow.
+**What did NOT get reverted is the error handling**, which was a real bug independent
+of any screen: `storage.set` returns `false` rather than throwing, so the silent
+branch's `catch` never fired for the failure that actually happens. A failed save left
+the control showing a value the database did not have, with nothing on screen and
+nothing in the console. Both branches now report and re-read.
 
-Both branches now report: a failed save says so and calls `refreshData()`, so the
-controls snap back to what the database actually holds rather than sitting on a lie.
+### Finding — the overlay was load-bearing, and removing it would have taken a poll guard with it
+
+This is the part that would have broken quietly.
+
+Collection detail runs a **five-second poll** that reloads membership. Its pause
+condition is:
+
+```js
+pollPausedRef.current = collDragIdx !== null || editingQuantityItemId !== null || isLoading;
+```
+
+`isLoading` is set by `withLoading`. So the remove path was holding the poll off **as a
+side effect of raising the overlay** — and deleting the `withLoading` wrapper would
+have silently removed that protection, letting a tick land mid-write and put the
+removed row back until the next one.
+
+There was already a comment naming `saveMemberQuantity` and `saveMemberOrder` as "the
+two writes NOT wrapped in withLoading" that hold the poll off themselves via
+`memberWriteInFlight`. `removeItemFromCollection` and `putBackRemoval` now do the same,
+and the comment names all four. The guard is a property of the write, not of whether a
+spinner is on screen — which is what it should have been all along.
+
+Neither path lost error reporting: both already call `reportMembershipError` and return
+`false` internally, so `withLoading` was contributing the spinner and the poll pause,
+nothing else.
+
+### The audit — everything else on the shopping path, as asked
+
+Checked whether anything else dims the screen mid-shop. **Most of it was already
+correct**, which is why the one that was not stood out.
+
+| Action | Where | Blocking? | Verdict |
+|---|---|---|---|
+| Tick an item off the checklist | Execution view | **No** — `toggleCollectionItem` is optimistic, no `withLoading` | Already right |
+| Edit a quantity | Execution view and collection detail | **No** — `saveMemberQuantity`, own poll guard and error report | Already right |
+| Reorder by drag | Collection detail | **No** — `saveMemberOrder`, same shape | Already right |
+| Remove an item | Collection detail | **Was yes** | **Fixed** |
+| Put an item back | Removal panel | **Was yes** | **Fixed** |
+| Refresh the open collection | Both, on a poll | No — `quiet: true` | Already right |
+| **Completion sweep** | End of execution | **Yes — `withLoading('Completing...')`** | **Left deliberately** |
+| Bulk add items | Add-items screen | **Yes — `withLoading('Saving...')`** | **Left deliberately** |
+
+**The execution checklist's item toggle was already silent**, contrary to what the
+report assumed — worth stating plainly rather than "fixing" something that was not
+broken. It writes the execution row optimistically and never raises the overlay. If a
+dim was seen while ticking, it came from the remove button on collection detail, not
+from the checklist.
+
+**The completion sweep stays blocking, deliberately.** It is once per shop, not once
+per item, and it fans out across several writes — archive the intent or trigger
+recurrence, then clear every completed item from the collection. A half-finished sweep
+is worth blocking a moment to avoid, and there is no aisle-hand cost to a spinner at
+the till.
+
+**Bulk add stays blocking** for the same reason: once per trip, and it ends by
+navigating away, so the overlay covers a screen that is about to be replaced anyway.
 
 ### Surprise
 
-**Making the loud thing quiet meant making the quiet thing loud.** The captured
-complaint was "remove the saving indicator", and taken literally that would have
-extended a broken silence across the whole screen rather than fixing it. The overlay
-was disproportionate, but it was also the only thing on four of five fields that
-failed visibly.
+**Every per-item write on the shopping path was already silent except the one being
+complained about, and that one was silent-by-accident's opposite: blocking-by-accident.**
+`removeItemFromCollection` reports its own errors and reloads its own state — it needed
+nothing from `withLoading` except, as it turned out, the poll pause nobody had noticed
+it was borrowing. The wrapper looked like the boring kind of code you delete without
+thinking. Deleting it without thinking would have introduced a five-second window in
+which removed items came back.
+
+### Checks run
+
+- Full suite — **29 suites, 726 tests, pass**
+- `CI=true npm run build` — **compiled successfully**, main bundle **+28 B** gzipped
 
 ---
 
@@ -2528,13 +2602,37 @@ why alfred has a teal top" is answerable only from an installed PWA; from a brow
 tab the honest answer is "it doesn't, it has a black one". Neither answer would have
 found the other without looking at both files.
 
-### Checks run (12.4 and 12.5)
+### VERIFIED 2026-09-09 — and the thing that nearly hid it
+
+Alex confirmed: chrome above the header is now white.
+
+**The OS had cached the old `theme_color` at install time.** The new manifest was not
+picked up until the PWA was **reinstalled after clearing site data**. A plain reload,
+a hard reload, and a redeploy all left the teal in place.
+
+**Record this for the next person to touch `theme_color`, because nothing in the app
+can force it and the failure looks exactly like a change that did not work:**
+
+- The manifest is read once, when the app is installed. An installed PWA keeps the
+  values it was installed with.
+- There is no client-side way to invalidate that. No service-worker trick, no cache
+  header, no version bump in the manifest reaches it.
+- The only reliable check is: uninstall, clear site data, reinstall.
+- So a `theme_color` change is unverifiable in the browser and un-forceable from code.
+  Ship it, then reinstall to confirm — and do not conclude it failed because the old
+  colour is still there.
+
+This is also why the meta-tag half was worth fixing at the same time: `index.html` is
+re-read on every load, so that half takes effect immediately, and having the two agree
+means a future reader comparing them cannot be misled by one being stale.
+
+### Checks run
 
 - Full suite — **29 suites, 726 tests, pass**
-- `CI=true npm run build` — **compiled successfully**, main bundle **+35 B** gzipped
+- `CI=true npm run build` — **compiled successfully**
 
-Manifest and meta changes do not surface in tests — they are browser-chrome metadata
-and need the device check in the verification list.
+Manifest and meta changes do not surface in tests at all — they are browser-chrome
+metadata, and per the note above they do not even surface in a browser.
 
 ---
 

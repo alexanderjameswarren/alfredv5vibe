@@ -8,6 +8,10 @@ import {
 } from "./utils/pushSubscriptions";
 import { EXPECTED_SW_VERSION } from "./utils/swVersion";
 import {
+  vapidFingerprint,
+  describeVapidKeyBytes,
+} from "./utils/vapidFingerprint";
+import {
   writePendingRotation,
   rememberEndpoint,
   forgetEndpoint,
@@ -155,6 +159,9 @@ export function NotificationDiagnosticsPanel() {
   // Which worker is ACTUALLY running on this device. Null means it did not
   // answer, i.e. it predates version reporting — which is the same answer.
   const [swVersion, setSwVersion] = useState(undefined);
+  // The key the SERVER last signed with, as reported by push-send. Null until a
+  // send has happened — it cannot be known any other way from a phone.
+  const [serverKey, setServerKey] = useState(null);
 
   // The registration is held in a ref, not state: it is the handle every
   // notification call needs, and re-rendering on it would say nothing that
@@ -195,10 +202,20 @@ export function NotificationDiagnosticsPanel() {
     // otherwise invisible on a phone. The first 8 characters are enough to tell
     // one keypair from another without putting the whole key on screen.
     if (VAPID_PUBLIC_KEY) {
-      append(
-        `VAPID public key present: ${VAPID_PUBLIC_KEY.length} chars, starts "${VAPID_PUBLIC_KEY.slice(0, 8)}"`,
-        "good"
-      );
+      // Prefix AND suffix. A prefix alone cannot distinguish two keys that were
+      // generated in the same session, and the length alone distinguishes
+      // nothing at all — every valid key is 87 characters.
+      append(`VAPID key (client, subscribes with): ${vapidFingerprint(VAPID_PUBLIC_KEY)}`, "good");
+
+      // "87 chars" is reassuring and proves nothing. Decode it and check it is
+      // actually an uncompressed P-256 point, which is what
+      // pushManager.subscribe requires.
+      try {
+        const check = describeVapidKeyBytes(urlBase64ToUint8Array(VAPID_PUBLIC_KEY));
+        append(`Key decodes to: ${check.detail}`, check.ok ? "good" : "bad");
+      } catch (err) {
+        append(`Key will not decode at all: ${messageOf(err)}`, "bad");
+      }
     } else {
       append(
         "REACT_APP_VAPID_PUBLIC_KEY is missing or empty in this build — push cannot be subscribed. Set it in Vercel and redeploy.",
@@ -499,6 +516,36 @@ export function NotificationDiagnosticsPanel() {
         }
         append(`push-send failed: ${messageOf(error)}${detail ? ` — ${detail}` : ""}`, "bad");
         return;
+      }
+
+      // 🛑 THE COMPARISON, done automatically so it cannot be forgotten.
+      //
+      // A 410 on a subscription created seconds ago is what a VAPID mismatch
+      // looks like — the browser subscribed against Vercel's key, the server
+      // signed with Supabase's, and FCM rejects the send as expired. The
+      // dispatcher's own assertion cannot see this: it compares the two
+      // SUPABASE values with each other and has no view of Vercel's.
+      const reported = data && data.vapid_public_key;
+      if (reported) {
+        setServerKey(reported);
+        const clientKey = vapidFingerprint(VAPID_PUBLIC_KEY);
+        if (reported === clientKey) {
+          append(`VAPID keys MATCH — client and server are the same key: ${clientKey}`, "good");
+        } else {
+          append(
+            `🛑 VAPID KEY MISMATCH. Client subscribes with ${clientKey}; server signed with ` +
+              `${reported}. Every send will 410 as "expired" even on a brand new ` +
+              `subscription. Set REACT_APP_VAPID_PUBLIC_KEY (Vercel) and VAPID_PUBLIC_KEY / ` +
+              `VAPID_PRIVATE_KEY (Supabase) to one keypair, redeploy both, then resubscribe.`,
+            "bad"
+          );
+        }
+      } else {
+        append(
+          "The server did not report which VAPID key it signed with — it is running " +
+            "a build from before key reporting. Redeploy push-send.",
+          "bad"
+        );
       }
 
       // The whole envelope, not a summary: per-endpoint status codes are the
@@ -811,6 +858,22 @@ export function NotificationDiagnosticsPanel() {
             label="Rows not this device"
             value={staleRows === null ? "not checked" : staleRows}
             tone={staleRows > 0 ? "bad" : staleRows === 0 ? "good" : "neutral"}
+          />
+          <StatusRow
+            label="VAPID key (client)"
+            value={VAPID_PUBLIC_KEY ? vapidFingerprint(VAPID_PUBLIC_KEY) : "MISSING"}
+            tone={VAPID_PUBLIC_KEY ? "neutral" : "bad"}
+          />
+          <StatusRow
+            label="VAPID key (server)"
+            value={serverKey || "send once to find out"}
+            tone={
+              !serverKey
+                ? "neutral"
+                : serverKey === vapidFingerprint(VAPID_PUBLIC_KEY)
+                ? "good"
+                : "bad"
+            }
           />
           <StatusRow
             label="Worker version"

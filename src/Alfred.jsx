@@ -3628,21 +3628,32 @@ export default function Alfred() {
     });
   }
 
+  // Holds the poll off for its own duration, as of Step 12.4. It used to inherit
+  // that from the `withLoading('Removing...')` its caller wrapped it in —
+  // `pollPausedRef` includes `isLoading` — so taking the overlay away would have
+  // silently taken the poll guard with it. This is the same mechanism
+  // saveMemberQuantity and saveMemberOrder already use, and it is the right one:
+  // the guard is a property of the write, not of whether a spinner is on screen.
   async function removeItemFromCollection(collectionId, itemId) {
-    const result = await removeMember(collectionId, itemId, {
-      reason: REMOVAL_MANUAL,
-      userId: user.id,
-    });
-    // Reload either way: on failure the membership row may or may not have gone,
-    // and the list must show what is actually there rather than what we assumed.
-    await loadCollectionMembers([collectionId]);
-    await loadCollectionRemovals(collectionId);
-    await loadCollectionHistory(collectionId);
-    if (result.error) {
-      reportMembershipError("remove that item", result.error);
-      return false;
+    memberWriteInFlight.current += 1;
+    try {
+      const result = await removeMember(collectionId, itemId, {
+        reason: REMOVAL_MANUAL,
+        userId: user.id,
+      });
+      // Reload either way: on failure the membership row may or may not have gone,
+      // and the list must show what is actually there rather than what we assumed.
+      await loadCollectionMembers([collectionId]);
+      await loadCollectionRemovals(collectionId);
+      await loadCollectionHistory(collectionId);
+      if (result.error) {
+        reportMembershipError("remove that item", result.error);
+        return false;
+      }
+      return true;
+    } finally {
+      memberWriteInFlight.current -= 1;
     }
-    return true;
   }
 
   /**
@@ -3704,9 +3715,13 @@ export default function Alfred() {
    * out of the panel because the item is a member again, not because the history
    * was rewritten.
    */
+  // Same poll guard as removeItemFromCollection, and for the same reason —
+  // Step 12.4 took its overlay away. `reAddingRemovalId` disables the button but
+  // does nothing to the poll; these are two different jobs.
   async function putBackRemoval(removal) {
     if (reAddingRemovalId) return false;
     setReAddingRemovalId(removal.id);
+    memberWriteInFlight.current += 1;
     try {
       const result = await reAddRemoval(removal, { userId: user.id });
       if (result.error) {
@@ -3719,14 +3734,18 @@ export default function Alfred() {
       await loadCollectionRemovals(removal.collectionId);
       return true;
     } finally {
+      memberWriteInFlight.current -= 1;
       setReAddingRemovalId(null);
     }
   }
 
-  // saveMemberQuantity and saveMemberOrder are the two writes that are NOT
-  // wrapped in withLoading, so nothing else stops a poll tick landing in the
-  // middle of one and reverting the change until the next tick. They hold the
-  // poll off for their own duration.
+  // saveMemberQuantity and saveMemberOrder are not wrapped in withLoading, so
+  // nothing else stops a poll tick landing in the middle of one and reverting the
+  // change until the next tick. They hold the poll off for their own duration.
+  //
+  // As of Step 12.4 removeItemFromCollection and putBackRemoval are in this set
+  // too — every write on the shopping path now holds the poll off explicitly
+  // rather than as a side effect of raising a full-screen overlay.
   async function saveMemberQuantity(collectionId, itemId, quantity) {
     memberWriteInFlight.current += 1;
     try {
@@ -4021,35 +4040,34 @@ export default function Alfred() {
   // Collection metadata only — name, context, shared, pinned. Membership goes
   // through the collection_items helpers above.
   //
-  // Saves QUIETLY — no "Saving..." overlay. Step 12.4.
+  // The `silent` flag STAYS. Step 12.4 briefly removed it and made every field
+  // here quiet; that was the wrong target. These four settings — Context,
+  // Shared, Pinned, Capture-target — are configuration, changed rarely and at a
+  // desk, not the per-item taps done one-handed in a supermarket aisle. The
+  // overlay was never the complaint here, so it goes back rather than leaving an
+  // unrequested change behind. The shopping-path writes are the ones that lost
+  // it: see removeItemFromCollection and putBackRemoval.
   //
-  // `LoadingOverlay` is a full-screen scrim with a spinner. Four of the five
-  // fields on this screen used to raise it on every change, so ticking
-  // "Pinned" dimmed the entire app for the length of one round trip. It was
-  // also inconsistent with the Name field beside it, which had always saved
-  // silently via the old `silent` flag — a flag that now has no other value,
-  // so it is gone rather than defaulted.
-  //
-  // Nothing replaces it, deliberately. Every control here is a checkbox or a
-  // select bound to state: the control holding its new value IS the
-  // confirmation, unlike an archive, where the row vanishes and Step 2's Undo
-  // message is the only thing left to tell you what happened.
-  //
-  // Quiet is not the same as unreported, and that distinction is the actual
-  // work of this step. The old silent branch swallowed failures in a
-  // `console.error`, which made the Name field the one genuinely silent write
-  // in the app — `storage.set` returns false rather than throwing, so a failed
-  // save left the control showing a value the database did not have. It now
-  // says so and re-reads the truth.
-  async function updateCollection(collId, updates) {
+  // What 12.4 DID leave behind is the error handling, and that was a real bug
+  // independent of any screen. `storage.set` returns false rather than throwing,
+  // so the silent branch's `catch` never fired for the failure that actually
+  // happens: a failed save left the control showing a value the database did not
+  // have, with nothing on screen and nothing in the console. Both branches now
+  // report it and re-read the truth.
+  async function updateCollection(collId, updates, silent = false) {
     const coll = collections.find((c) => c.id === collId);
     if (!coll) return;
-    try {
+
+    const reportFailure = async () => {
+      window.alert("That change could not be saved. Reloading this collection.");
+      await refreshData();
+    };
+
+    const doSave = async () => {
       const savedColl = await storage.set(`item_collections:${coll.id}`, { ...coll, ...updates });
 
       if (savedColl === false) {
-        window.alert("That change could not be saved. Reloading this collection.");
-        await refreshData();
+        await reportFailure();
         return;
       }
 
@@ -4066,10 +4084,17 @@ export default function Alfred() {
       setCollections((prev) =>
         prev.map((c) => (c.id === collId ? { ...c, ...savedColl, ...updates } : c)),
       );
-    } catch (e) {
-      console.error("Collection save error:", e);
-      window.alert("That change could not be saved. Reloading this collection.");
-      await refreshData();
+    };
+
+    if (silent) {
+      try {
+        await doSave();
+      } catch (e) {
+        console.error("Collection save error:", e);
+        await reportFailure();
+      }
+    } else {
+      return withLoading("Saving...", doSave);
     }
   }
 
@@ -5507,7 +5532,7 @@ export default function Alfred() {
                       const updated = { ...coll, name: e.target.value };
                       setCollections(collections.map((c) => (c.id === coll.id ? updated : c)));
                     }}
-                    onBlur={() => updateCollection(coll.id, { name: coll.name })}
+                    onBlur={() => updateCollection(coll.id, { name: coll.name }, true)}
                     className="w-full px-3 py-2 border border-border rounded text-base"
                   />
                 </div>
@@ -5663,10 +5688,14 @@ export default function Alfred() {
                               className="w-20 sm:w-24 px-2 py-2 border border-border rounded text-base disabled:opacity-50 disabled:cursor-not-allowed"
                             />
                             <button
+                              // No overlay — Step 12.4. This is THE shopping
+                              // action: one-handed, in an aisle, once per item.
+                              // A full-screen scrim per tick was the complaint.
+                              // The row disappearing is the confirmation, and
+                              // removeItemFromCollection reports its own failures
+                              // through reportMembershipError.
                               onClick={() =>
-                                withLoading('Removing...', () =>
-                                  removeItemFromCollection(coll.id, member.itemId),
-                                )
+                                removeItemFromCollection(coll.id, member.itemId)
                               }
                               className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-destructive"
                             >
@@ -5726,9 +5755,12 @@ export default function Alfred() {
                                 </p>
                               </div>
                               <button
-                                onClick={() =>
-                                  withLoading('Putting back...', () => putBackRemoval(removal))
-                                }
+                                // No overlay — Step 12.4, same aisle, same hand.
+                                // The button disables via reAddingRemovalId while
+                                // the write runs, which is feedback enough for a
+                                // single row, and putBackRemoval reports its own
+                                // failures.
+                                onClick={() => putBackRemoval(removal)}
                                 disabled={reAddingRemovalId !== null}
                                 className="flex items-center gap-2 px-3 py-2 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm shrink-0 disabled:opacity-50"
                               >

@@ -6,6 +6,10 @@ import { createECDH, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { PUSH_SEND_OPTIONS } from "../_shared/push-options.ts";
+// The SAME formatter the client uses, so a matching pair can never be made to
+// look mismatched by two different renderings. See the module for why this
+// comparison is permanent rather than a debugging aid.
+import { vapidFingerprint } from "../../../src/utils/vapidFingerprint.js";
 // The deep link is built with the SAME function the app routes on. Imported
 // rather than reimplemented: a hand-copied path here would silently stop
 // matching the day viewPaths.js changes, and the failure would be a
@@ -102,6 +106,8 @@ function loadVapid() {
   }
 
   webpush.setVapidDetails(subject!, publicKey!, privateKey!);
+  // Returned so the response can report WHICH key this run signed with.
+  return publicKey!;
 }
 
 interface StepRow {
@@ -142,8 +148,12 @@ Deno.serve(async (req) => {
   const startedAt = new Date();
   const nowIso = startedAt.toISOString();
 
+  let signingKeyFingerprint = "(unknown)";
   try {
-    loadVapid();
+    // Reported on every response so a failed dispatch is self-diagnosing: the
+    // client shows the key it SUBSCRIBED with, this shows the key the server
+    // SIGNED with, and a mismatch is visible without a dashboard or a desktop.
+    signingKeyFingerprint = vapidFingerprint(loadVapid());
   } catch (err) {
     console.error("[dispatch] VAPID configuration error:", err);
     return json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -168,7 +178,14 @@ Deno.serve(async (req) => {
     return json({ error: `Could not read due steps: ${stepsError.message}` }, 500);
   }
   if (!dueSteps || dueSteps.length === 0) {
-    return json({ checked_at: nowIso, due: 0, sent: 0, failed: 0, results: [] });
+    return json({
+      checked_at: nowIso,
+      due: 0,
+      sent: 0,
+      failed: 0,
+      vapid_public_key: signingKeyFingerprint,
+      results: [],
+    });
   }
 
   // ── 3. Drop steps whose execution is not active. ─────────────────────────
@@ -344,6 +361,9 @@ Deno.serve(async (req) => {
   const sent = results.filter((r) => r.sent).length;
   const summary = {
     checked_at: nowIso,
+    // The key this run SIGNED with. Compare against the client's subscribe
+    // key — a 410 on a seconds-old subscription is what a mismatch looks like.
+    vapid_public_key: signingKeyFingerprint,
     duration_ms: Date.now() - startedAt.getTime(),
     due: dueSteps.length,
     skipped_inactive: skippedInactive,

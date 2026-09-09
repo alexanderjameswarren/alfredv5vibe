@@ -8,6 +8,10 @@ import { createECDH } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { PUSH_SEND_OPTIONS } from "../_shared/push-options.ts";
+// The SAME formatter the client uses, so a matching pair can never be made to
+// look mismatched by two different renderings. See the module for why this
+// comparison is permanent rather than a debugging aid.
+import { vapidFingerprint } from "../../../src/utils/vapidFingerprint.js";
 
 // push-send — deliver a Web Push notification to every device the caller has
 // subscribed.
@@ -128,8 +132,13 @@ Deno.serve(async (req) => {
     // No body, or not JSON. The defaults are the whole point of the defaults.
   }
 
+  let signingKeyFingerprint = "(unknown)";
   try {
-    loadVapid();
+    const vapid = loadVapid();
+    // Reported on every response so a failed send is self-diagnosing: the
+    // client shows the key it SUBSCRIBED with, this shows the key the server
+    // SIGNED with, and a mismatch is visible on one phone screen.
+    signingKeyFingerprint = vapidFingerprint(vapid.publicKey);
   } catch (err) {
     // Configuration, not a transient failure — say exactly what is wrong,
     // because this is read on a phone.
@@ -158,6 +167,7 @@ Deno.serve(async (req) => {
       sent: 0,
       failed: 0,
       removed: 0,
+      vapid_public_key: signingKeyFingerprint,
       results: [],
       note: "No push subscriptions for this user — subscribe on the device first.",
     });
@@ -234,6 +244,11 @@ Deno.serve(async (req) => {
     sent,
     failed: results.length - sent,
     removed: results.filter((r) => r.removed).length,
+    // The key this send was SIGNED with. Compare against the client's
+    // subscribe key: a 410 on a seconds-old subscription is what a VAPID
+    // mismatch looks like, and this is the only way to tell that apart from a
+    // genuinely dead endpoint.
+    vapid_public_key: signingKeyFingerprint,
     title,
     body,
     results,
