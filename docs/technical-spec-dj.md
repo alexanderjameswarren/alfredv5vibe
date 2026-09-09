@@ -4250,3 +4250,93 @@ sake, it belongs as a field on `dj_concerts` selecting which window to fold — 
 
 **Also corrected here:** the Coldplay/WILLOW opener decision lives in the Phase 6b notes,
 not in this spec. There was no §14.51 before this one.
+
+---
+
+### 14.53 🛑 THE LEADING ARTICLE — a rule the project had already decided, applied to one field of two
+
+**Found 2026-09-09.** setlist.fm writes `A Song for the Dead`; YouTube Music titles the same
+recording `Song For The Dead`. §14.51's brand-new `set_shape` reported **4 of 5 certainties**
+and proposed adding a song already in the playlist. The core is **5 of 5**.
+
+⚠️ **THE RULE EXISTED AND WAS APPLIED TO ARTISTS ONLY.** `_artist_match_kind` already folds
+the leading article, with a note recording that setlist.fm and YouTube Music disagree about it
+and that an exact compare dropped three Smashing Pumpkins songs on 2026-09-02. **The identical
+disagreement applies to titles and nobody carried the rule across** — §14.6 inside a single
+file.
+
+**AND IT COMPOUNDED, WHICH IS WORSE THAN THE MISS.** Having decided the song was missing, the
+resolver searched for that exact string, found nothing under it, and reported it
+**uncloseable**. Two independent-looking confirmations of a false premise.
+
+🛑 **THEY WERE NOT INDEPENDENT. BOTH CALL `_norm_title`.** A second check that shares the first
+check's comparison cannot corroborate it — it is one computation run twice. That is the general
+lesson, and it is why the second failure made the first look verified.
+
+---
+
+### 14.54 THE FOLD RULE, STATED — and the two other uncloseables, re-tested
+
+Both flagged verdicts were **wrong**, and each for a different reason:
+
+| reported | truth |
+|---|---|
+| `A Song for the Deaf` — uncloseable | QOTSA's own **`Song For The Deaf`** exists, several cuts. Leading article again. |
+| `Hangin' Tree` — *"only other artists' covers"* | QOTSA's own recording is titled **`Hanging Tree`**. The exact-titled results were Olivier Libaux (a covers album) and Vitamin String Quartet (a tribute). |
+
+⚠️ **THE SECOND IS THE DANGEROUS SHAPE.** The verdict was *literally true of the string* and
+entirely wrong about the song, **and it named two real cover artists as evidence.** A confident
+wrong answer with corroboration attached.
+
+**THE RULE — not a list of cases that make today's bug pass (§14.7).** A difference is folded
+when **both** hold:
+
+* **(a)** it is a **fixed, closed transformation with exactly one expansion**, and
+* **(b)** it **cannot distinguish two real recordings by the same artist**.
+
+| folded | why it qualifies |
+|---|---|
+| leading article | `{the, a, an}` is closed; catalogues add and drop it by house style. Already folded for artists. |
+| elided `-in'` | `Hangin'` → `Hanging`. **The apostrophe is the marker**, and the fold runs **before** it is stripped — which is what keeps `again` and `ain't` out of it. |
+
+| NOT folded | why it fails the rule |
+|---|---|
+| `Pt.` → `Part` | Not closed — `Pt.` is Part *or* Point. Fails (a). |
+| `Vol.` → `Volume` | Head of an open abbreviation vocabulary. Fails (a). |
+| `Mr.` → `Mister` | Head of an open honorific vocabulary. Fails (a). |
+| `2` ↔ `II` | `I` is also a pronoun; roman numerals are ambiguous against real words. Fails (a) and risks (b). |
+
+⚠️ **THE HONEST WRINKLE:** `&` → `and` is already inside `_norm_title` and *is* a substitution.
+It qualifies under (a) — an ampersand is a **typographic glyph for one word, with exactly one
+expansion**, unlike `Pt.` which has two. The line is *"one unambiguous expansion"*, not *"never
+substitute"*.
+
+**IT IS A SECOND KEY, NOT A CHANGE TO `_norm_title`.** `_norm_title` is a port of
+`dj-normalise.ts`, which builds `match_key`, **written once and frozen** (§4.1.2). Loosening it
+would diverge from every `match_key` already stored — a backfill migration, not an edit. So
+`_loose_key` lives beside it, exactly as `_artist_match_kind` already does.
+
+⚠️ **THE RESIDUAL RISK IS ACCEPTED BY REPORTING IT.** The article fold cannot tell `The Man`
+from `A Man`. So a loose match is **never silent**: `title_match: "loose"`, both raw titles in
+`loose_title_matches`, and a body row can be **claimed only once** — two setlist entries folding
+to one key made `coverage.in_body` exceed `body_size` in the first build.
+
+**THE FALLBACK TRIGGER IS "NO USABLE MATCH", NOT "NO TITLE MATCH".** The first version fell back
+only when the exact key found *nothing*, which misses the `Hangin' Tree` case exactly: two
+covers matched the title, so `titled` was non-empty and the fallback never ran. A title match by
+the wrong artist is not a match (§12.7). ⚠️ It swaps **only if the loose pass does better** —
+when neither tier has the act's own version (`One Headlight`, genuinely only The Wallflowers'),
+the exact results are kept so the cover ruling names what it found.
+
+**AND EVERY NOT-FOUND NOW CARRIES WHAT WOULD CONTRADICT IT.** `near_titles_by_artist` lists the
+performing artist's own tracks with close-but-unequal titles. If it is non-empty, the cause is
+almost certainly a spelling rather than a missing recording. **A verdict that carries its own
+contradiction cannot look verified when it is wrong.**
+
+**Two of my own tests could not tell the fix from the bug**, and the mutation sweep caught both:
+`_brief` was pinned while `core_in_body` still re-tested the exact key, and the
+"swaps only when better" branch needed a fixture where the two tiers return *different* covers.
+Both now have discriminating cases. Twelve mutations, all caught.
+
+**Confirmed working on real data, unchanged:** Make It Wit Chu has a 4:51 album cut and a 3:51
+single, and §12.11 escalated rather than picking. The ambiguity path fires correctly.

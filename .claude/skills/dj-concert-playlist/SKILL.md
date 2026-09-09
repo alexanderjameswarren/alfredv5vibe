@@ -121,6 +121,13 @@ would resolve cleanly, and **nothing further down could tell.**
    in a Foo Fighters playlist. ⚠️ **But this is the only place a genuinely wrong track shows up**,
    so name the ones that appear rather than summarising them away.
 
+8. 🛑 **NEVER call a song unobtainable while `near_titles_by_artist` is non-empty.** That field
+   lists the act's *own* tracks with close titles, and a non-empty list means the verdict is
+   almost certainly a spelling difference rather than a missing recording. Say *"setlist.fm
+   calls it X, YouTube has Y — same song"* and treat it as held.
+   ⚠️ `title_match: "loose"` on a joined song is **normal, not a warning** — mention it only if
+   the pairing in `loose_title_matches` looks wrong.
+
 ⚠️ **`variant_only` IS A SEPARATE YES.** Adding a live cut means learning the song from a live
 recording. Name it and get its own answer; do not fold it into "add them all".
 

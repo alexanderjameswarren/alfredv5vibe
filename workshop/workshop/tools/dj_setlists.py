@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import json
 import re
+from difflib import SequenceMatcher
 from math import ceil
 import unicodedata
 from pathlib import Path
@@ -1074,8 +1075,112 @@ def _norm_title(title: str) -> str:
 # applied quietly is the §14.4 failure arriving through the front door.
 _LEADING_ARTICLE_RE = re.compile(r"^(?:the|a|an)\s+")
 
+# ---------------------------------------------------------------------------
+# 🛑 THE SECOND KEY — added 2026-09-09, and WHY IT IS NOT A CHANGE TO _norm_title
+# ---------------------------------------------------------------------------
+# `_norm_title` is a PORT of dj-normalise.ts, which builds `match_key`, which is
+# WRITTEN ONCE AND FROZEN (§4.1.2). Loosening it would diverge from every
+# match_key already in the table and from the TypeScript it is pinned to — a
+# backfill migration, not an edit. So the fold that this diff needs lives BESIDE
+# it as a strictly weaker key, exactly as `_artist_match_kind` already does for
+# artist names.
+#
+# ⚠️ THE PROJECT HAD ALREADY DECIDED THIS RULE AND APPLIED IT TO ONE FIELD OF
+# TWO. The note above _artist_match_kind says setlist.fm and YouTube Music
+# disagree about the leading article, and that an exact compare dropped three
+# Smashing Pumpkins songs over it. The identical disagreement applies to TITLES
+# and nobody carried the rule across. This is §14.6 in a single file.
+#
+# WHAT IT COST, 2026-09-09: setlist.fm writes "A Song for the Dead"; YouTube
+# Music titles the same recording "Song For The Dead". The diff reported a song
+# already in the playlist as missing.
+#
+# ---------------------------------------------------------------------------
+# 🛑 THE RULE, STATED — NOT A LIST OF CASES THAT MAKE TODAY'S BUG PASS (§14.7)
+# ---------------------------------------------------------------------------
+# A difference is folded when BOTH hold:
+#
+#   (a) it is a FIXED, CLOSED transformation with exactly one expansion, and
+#   (b) it cannot distinguish two real recordings by the same artist.
+#
+# FOLDED, and why each qualifies:
+#   leading article   {the, a, an} is a closed set, and cataloguing systems add
+#                     and drop it by house style. Already folded for artists.
+#   elided -in'       "Hangin'" -> "Hanging". THE APOSTROPHE IS THE MARKER and
+#                     the fold is applied BEFORE it is stripped — which is what
+#                     keeps "again" and "ain't" out of it. There is no pair of
+#                     songs by one artist separated only by that g.
+#
+# NOT FOLDED, and why each fails the rule rather than merely being unlisted:
+#   Pt. -> Part       NOT closed: "Pt." expands to Part or Point. Fails (a).
+#   Vol. -> Volume    Head of an open abbreviation vocabulary. Fails (a).
+#   Mr. -> Mister     Head of an open honorific vocabulary. Fails (a).
+#   2 <-> II          "I" is also a pronoun, and roman numerals are ambiguous
+#                     against real words. Fails (a) and risks (b).
+#
+# ⚠️ THE HONEST WRINKLE: "&" -> "and" is already inside `_norm_title` and is a
+# substitution. It qualifies under (a) — an ampersand is a TYPOGRAPHIC GLYPH FOR
+# ONE WORD, with exactly one expansion, unlike "Pt." which has two. The line is
+# "one unambiguous expansion", not "never substitute".
+#
+# ⚠️ AND THE RESIDUAL RISK IS ACCEPTED BY REPORTING IT, NOT BY DENYING IT. The
+# article fold cannot tell "The Man" from "A Man". That is why a loose match is
+# NEVER SILENT: it is labelled `title_match: "loose"` and both raw titles travel
+# with it, so a wrong join is auditable instead of invisible.
+_ELIDED_G_RE = re.compile(r"(\w{2,})in['\u2019]", re.IGNORECASE)
+
+
+def _loose_key(title: str) -> str:
+    """A strictly weaker `_norm_title`. Never used to WRITE anything.
+
+    ⚠️ THE ELISION FOLD RUNS FIRST, ON THE RAW TITLE, because the apostrophe is
+    the evidence that a letter was dropped and `_norm_title` strips it. Folding
+    a bare word-final "in" afterwards would turn "again" into "againg" and
+    "Wanderin" into a different word — the marker has to be read before it is
+    thrown away.
+    """
+    t = _ELIDED_G_RE.sub(r"\1ing", title or "")
+    return _LEADING_ARTICLE_RE.sub("", _norm_title(t))
+
+
+# How close a title has to be to the one asked for before it is worth showing as
+# "the artist does have this". 0.75 admits "hangin tree"/"hanging tree" (0.96)
+# and "song for the deaf"/"a song for the deaf" (0.90) while excluding unrelated
+# tracks from the same album.
+_NEAR_TITLE_RATIO = 0.75
+
+
+def _near_titles(results, title: str, performing: str) -> list[dict]:
+    """Tracks BY THE PERFORMING ARTIST whose titles are close but not equal.
+
+    🛑 THIS IS THE ANTIDOTE TO A CONFIDENT WRONG VERDICT. On 2026-09-09 the diff
+    decided "A Song for the Deaf" was missing, searched for that exact string,
+    found nothing under it, and reported it UNCLOSEABLE — two independent-looking
+    confirmations of a false premise. "Hangin' Tree" was worse: the search DID
+    find that exact title, by Olivier Libaux and Vitamin String Quartet, so the
+    verdict came back `other_artists_only` and NAMED TWO REAL COVER ARTISTS as
+    evidence. Queens of the Stone Age's own recording was sitting in the same
+    result list under "Hanging Tree".
+    """
+    want = _norm_title(title)
+    out: list[dict] = []
+    for r in results:
+        rt = r.get("title") or ""
+        k = _norm_title(rt)
+        if not k or k == want or not _artist_matches(r.get("artists") or [], performing):
+            continue
+        wt, kt = set(want.split()), set(k.split())
+        close = (SequenceMatcher(None, want, k).ratio() >= _NEAR_TITLE_RATIO
+                 or wt <= kt or kt <= wt)
+        if close:
+            out.append({"title": rt, "video_id": r.get("video_id"),
+                        "album": r.get("album"),
+                        "duration_seconds": r.get("duration_seconds")})
+    return out[:3]
+
 EXACT = "exact"
 ARTICLE_INSENSITIVE = "article_insensitive"
+LOOSE = "loose"
 
 
 def _artist_match_kind(result_artists, performing: str):
@@ -1150,6 +1255,31 @@ def _resolve_one(
     want = _norm_title(title)
     titled = [r for r in results if _norm_title(r.get("title") or "") == want]
 
+    # -----------------------------------------------------------------------
+    # TIER 2 — AND THE TRIGGER IS "NO USABLE MATCH", NOT "NO TITLE MATCH"
+    # -----------------------------------------------------------------------
+    # 🛑 THE FIRST VERSION OF THIS FELL BACK ONLY WHEN THE EXACT KEY FOUND
+    # NOTHING AT ALL, AND THAT MISSES THE WORST CASE. "Hangin' Tree" matched two
+    # results exactly — Olivier Libaux's covers album and a Vitamin String
+    # Quartet tribute — so `titled` was non-empty, the fallback never ran, and
+    # the verdict came back `other_artists_only` NAMING TWO REAL COVER ARTISTS
+    # while Queens of the Stone Age's own "Hanging Tree" sat in the same list.
+    #
+    # A title match by the WRONG ARTIST is not a match (§12.7). So the question
+    # that gates the fallback is the one the resolver actually needs answered:
+    # is there anything here BY THE PERFORMING ARTIST?
+    #
+    # ⚠️ IT SWAPS ONLY IF THE LOOSE PASS DOES BETTER. When neither tier has the
+    # act's own version — One Headlight, which really is only The Wallflowers' —
+    # the exact results are kept so the cover ruling still names what it found.
+    title_match = EXACT
+    if not any(_artist_matches(r.get("artists") or [], performing) for r in titled):
+        want_loose = _loose_key(title)
+        loose = [r for r in results
+                 if _loose_key(r.get("title") or "") == want_loose]
+        if any(_artist_matches(r.get("artists") or [], performing) for r in loose):
+            titled, title_match = loose, LOOSE
+
     if not titled:
         return {
             "resolution": "not_found",
@@ -1160,6 +1290,11 @@ def _resolve_one(
             "not_found_cause": "medley_part" if not cover_of_known else "no_such_title",
             "video_id": None,
             "artist_match": None,
+            "title_match": None,
+            # ⚠️ THE VERDICT CARRIES WHAT WOULD CONTRADICT IT. If this is
+            # non-empty the cause is almost certainly a title spelling rather
+            # than a missing recording.
+            "near_titles_by_artist": _near_titles(results, title, performing),
             "why": (
                 f"Nothing titled {title!r} came back. Search returned "
                 f"{len(results)} result(s), all with other titles — YouTube "
@@ -1233,6 +1368,12 @@ def _resolve_one(
             ),
             "video_id": None,
             "artist_match": None,
+            "title_match": None,
+            # 🛑 THE CASE THIS WAS BUILT FOR. "Hangin' Tree" matched Olivier
+            # Libaux and Vitamin String Quartet on the exact title, so the
+            # verdict read "only other artists have it" WITH NAMED EVIDENCE —
+            # while QOTSA's own "Hanging Tree" sat in the same result list.
+            "near_titles_by_artist": _near_titles(results, title, performing),
             "why": why,
             "other_artists_found": others,
         }
@@ -1277,6 +1418,7 @@ def _resolve_one(
             "not_found_cause": "variant_only",
             "video_id": None,
             "artist_match": match_kind,
+            "title_match": title_match,
             "why": (
                 f"{performing} has results for this title but every one is a live, "
                 f"acoustic or otherwise variant cut, so nothing resolves "
@@ -1302,6 +1444,7 @@ def _resolve_one(
         r = studio[0]
         return {"resolution": "resolved", "video_id": r.get("video_id"),
                 "artist_match": match_kind,
+            "title_match": title_match,
                 "album": r.get("album"), "duration_seconds": r.get("duration_seconds"),
                 "why": "One studio recording by the performing artist." + fold_note}
 
@@ -1314,6 +1457,7 @@ def _resolve_one(
             "resolution": "resolved",
             "video_id": pick.get("video_id"),
             "artist_match": match_kind,
+            "title_match": title_match,
             "album": pick.get("album"),
             "duration_seconds": pick.get("duration_seconds"),
             "why": (
@@ -1335,6 +1479,7 @@ def _resolve_one(
         "resolution": "ambiguous_same_artist",
         "video_id": None,
         "artist_match": match_kind,
+        "title_match": title_match,
         "why": (
             f"{len(studio)} studio recordings by {performing}, differing by more "
             f"than {_SAME_MASTER_SECONDS}s — genuinely different recordings, so "
@@ -1554,6 +1699,15 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
         body_by_title.setdefault(k, []).append(t)
     body_titles = set(body_by_title)
 
+    # ⚠️ THE LOOSE INDEX IS A FALLBACK, NEVER A REPLACEMENT. Exact keys win; a
+    # loose key is consulted only for setlist songs the exact pass missed, and
+    # first-wins so one body row cannot be claimed twice. See `_loose_key`.
+    body_loose: dict[str, str] = {}
+    for k in body_by_title:
+        lk = _loose_key(body_by_title[k][0].get("title") or "")
+        if lk and lk not in body_loose:
+            body_loose[lk] = k
+
     # ⚠️ ADDED 2026-09-02: carry the body's video_id through to `in_body`, so
     # nothing downstream has to join these entries on TITLE.
     #
@@ -1683,8 +1837,49 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
         else:
             e["certainty"] = _SET_SHAPE_ROTATING
 
-    in_body = [(k, e) for k, e in songs.items() if k in body_titles]
-    missing = [e for k, e in songs.items() if k not in body_titles]
+    # -----------------------------------------------------------------------
+    # THE JOIN — exact first, then the weaker key, and the tier is RECORDED
+    # -----------------------------------------------------------------------
+    # 🛑 A LOOSE MATCH IS NEVER SILENT. The article fold cannot tell "The Man"
+    # from "A Man", and that residual risk is accepted by REPORTING it rather
+    # than by pretending it is absent — both raw titles travel with the match so
+    # a wrong join can be seen. Same contract as `artist_match`.
+    in_body: list[tuple[str, dict[str, Any]]] = []
+    missing: list[dict[str, Any]] = []
+    loose_title_matches: list[dict[str, Any]] = []
+    claimed_loose: set[str] = set()
+    for k, e in songs.items():
+        if k in body_titles:
+            e["title_match"] = EXACT
+            e["in_body"] = True
+            in_body.append((k, e))
+            continue
+        bk = body_loose.get(_loose_key(e["title"]))
+        # ⚠️ A BODY ROW IS CLAIMED ONCE. Two setlist entries can fold to the
+        # same loose key ("A Song for the Dead" and "The Song for the Dead"),
+        # and letting both match one row made `coverage.in_body` exceed
+        # `body_size` — a playlist reported as holding more than it has.
+        if bk is not None and bk not in claimed_loose and bk not in {
+                kk for kk, _ in in_body}:
+            claimed_loose.add(bk)
+        elif bk is not None:
+            bk = None
+        if bk is not None:
+            e["title_match"] = LOOSE
+            e["in_body"] = True
+            e["body_title"] = (body_by_title[bk][0].get("title") or "")
+            loose_title_matches.append({
+                "setlist_title": e["title"],
+                "body_title": e["body_title"],
+                "video_id": body_video_by_title.get(bk),
+            })
+            # Keyed on the BODY row's key from here on, so duplicates, artist
+            # disagreement and video_id all resolve against the row that matched.
+            in_body.append((bk, e))
+            continue
+        e["title_match"] = None
+        e["in_body"] = False
+        missing.append(e)
 
     # -----------------------------------------------------------------------
     # THE BODY SIDE OF THE DIFF — orphans, duplicates, and the artist question
@@ -1869,15 +2064,19 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
     likely_entries = [e for e in songs.values() if e["certainty"] == _SET_SHAPE_LIKELY]
 
     def _brief(entries):
+        # ⚠️ READS THE JOIN'S OWN VERDICT (`e["in_body"]`), never re-tests
+        # membership. Re-testing with `title_key in body_titles` is the EXACT
+        # key, so a loose match reported "not held" while the join had already
+        # matched it — one question answered two ways, §14.6 inside one function.
         return [
             {"title": e["title"], "plays_in_window": e["plays_in_window"],
-             "in_body": e["title_key"] in body_titles}
+             "in_body": e["in_body"]}
             for e in sorted(entries, key=lambda x: (-x["plays_in_window"],
                                                     x["title"].lower()))
         ]
 
     if shape_usable:
-        core_in_body = sum(1 for e in core_entries if e["title_key"] in body_titles)
+        core_in_body = sum(1 for e in core_entries if e["in_body"])
         set_shape = {
             "usable": True,
             "shows_in_window": n_shows,
@@ -1954,7 +2153,10 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                  # null = the body row carried no byline, which is UNKNOWN and
                  # not disagreement. See the decision note above the join.
                  "body_artist_agrees": e.get("body_artist_agrees"),
-                 "body_artist": e.get("body_artist")}
+                 "body_artist": e.get("body_artist"),
+                 # "exact" or "loose" — see loose_title_matches.
+                 "title_match": e.get("title_match"),
+                 "body_title": e.get("body_title")}
                 for k, e in sorted(
                     in_body, key=lambda kv: (-kv[1]["full_set_shows"],
                                              -len(kv[1]["shows"])))
@@ -1962,6 +2164,10 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
             # THE BODY SIDE OF THE DIFF. Added 2026-09-09 — before this, 35 rows
             # in and 32 out, with the other three findable only by subtraction.
             "body_reconciliation": body_reconciliation,
+            # ⚠️ EVERY WEAKER-KEY JOIN, NAMED. An empty list is the claim that
+            # every match was exact; a non-empty one is where to look first if a
+            # song was joined that should not have been.
+            "loose_title_matches": loose_title_matches,
             "orphans": orphans,
             "body_duplicates": body_duplicates,
             "artist_disagreements": artist_disagreements,
@@ -2032,6 +2238,18 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 "never escalate without a recommendation and a way to resolve it). "
                 "(Mayonaise WAS that case on 2026-09-02 - a past observation, not "
                 "a current count; check this run's own numbers.) "
+                "⚠️ `title_match: \"loose\"` MEANS THE TITLES DIFFER AND WERE "
+                "FOLDED - setlist.fm's \"A Song for the Dead\" against YouTube "
+                "Music's \"Song For The Dead\". Only the leading article and an "
+                "apostrophe-marked elided -g are folded; both raw titles ship in "
+                "`loose_title_matches` so a wrong join can be seen. It is not an "
+                "error and does not need reporting unless one looks wrong. "
+                "🛑 `near_titles_by_artist` ON A not_found IS THE VERDICT'S OWN "
+                "CONTRADICTION. It lists the PERFORMING artist's tracks with "
+                "close-but-unequal titles. IF IT IS NON-EMPTY, DO NOT REPORT THE "
+                "SONG AS UNOBTAINABLE - the cause is almost certainly a spelling, "
+                "and a 'Hangin' Tree' once came back as covers-only while the "
+                "act's own 'Hanging Tree' sat in the same result list. "
                 "🛑 THE BODY SIDE IS REPORTED TOO, AND `body_reconciliation` "
                 "MUST SUM: matched_titles + duplicate_rows + orphan_rows + "
                 "untitled_rows = body_size. Nobody should ever subtract to find "

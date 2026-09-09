@@ -1245,5 +1245,261 @@ class SetShapeTests(unittest.TestCase):
                          "show in that window was 10 songs long")
 
 
+class LooseTitleKeyTests(unittest.TestCase):
+    """🛑 THE RULE, NOT A LIST OF CASES THAT MAKE TODAY'S BUG PASS (14.7).
+
+    setlist.fm writes "A Song for the Dead"; YouTube Music titles the same
+    recording "Song For The Dead". The diff reported a song already in the
+    playlist as missing, then searched for the exact string, found nothing, and
+    called it UNCLOSEABLE - two independent-looking confirmations of a false
+    premise.
+
+    A difference is folded when BOTH hold:
+      (a) it is a FIXED, CLOSED transformation with exactly one expansion, and
+      (b) it cannot distinguish two real recordings by the same artist.
+
+    Every case below is the rule being applied, and the NOT-folded half matters
+    as much as the folded half - it is what makes this a rule rather than a
+    patch list.
+    """
+
+    def assertFolds(self, a, b, why):
+        self.assertEqual(dj_setlists._loose_key(a), dj_setlists._loose_key(b), why)
+
+    def assertDistinct(self, a, b, why):
+        self.assertNotEqual(dj_setlists._loose_key(a), dj_setlists._loose_key(b), why)
+
+    # -- folded: passes (a) and (b) ----------------------------------------
+
+    def test_LEADING_ARTICLE_the_live_bug(self):
+        self.assertFolds("Song For The Dead", "A Song for the Dead",
+                         "the exact case that reported a held song as missing")
+
+    def test_the_article_folds_in_EITHER_direction(self):
+        self.assertFolds("The Way You Used to Do", "Way You Used To Do",
+                         "neither vocabulary is the authority on the article")
+
+    def test_ELIDED_G_marked_by_its_apostrophe(self):
+        # Queens of the Stone Age's own recording is titled "Hanging Tree";
+        # setlist.fm writes "Hangin' Tree".
+        self.assertFolds("Hangin' Tree", "Hanging Tree", "elision")
+        self.assertFolds("Nothin' Else Matters", "Nothing Else Matters", "elision")
+
+    def test_the_curly_apostrophe_folds_too(self):
+        # Two editorial systems, two apostrophe characters.
+        self.assertFolds("Hangin\u2019 Tree", "Hanging Tree", "U+2019")
+
+    # -- NOT folded: fails (a) or (b) ---------------------------------------
+
+    def test_Pt_is_NOT_folded_because_it_has_TWO_expansions(self):
+        # "Pt." is Part or Point. Fails (a) - not a single expansion.
+        self.assertDistinct("Pt. 1", "Part 1", "ambiguous abbreviation")
+
+    def test_roman_numerals_are_NOT_folded(self):
+        # "I" is also a pronoun. Fails (a), and risks (b).
+        self.assertDistinct("Song 2", "Song II", "ambiguous against real words")
+
+    def test_honorifics_are_NOT_folded(self):
+        # The head of an open vocabulary - Mr, Mrs, Dr, St. Fails (a).
+        self.assertDistinct("Mr. Brightside", "Mister Brightside", "open vocabulary")
+
+    def test_a_PLURAL_is_content_not_orthography(self):
+        self.assertDistinct("A Song for the Dead", "Songs for the Dead",
+                            "different songs, and the fold must not merge them")
+
+    # -- the elision fold must not overreach --------------------------------
+
+    def test_a_bare_word_ending_in_IN_is_untouched(self):
+        """⚠️ WHY THE FOLD RUNS BEFORE THE APOSTROPHE IS STRIPPED.
+
+        The apostrophe is the EVIDENCE that a letter was dropped. Folding a
+        word-final "in" after _norm_title removed it would turn "again" into
+        "againg" - a different word, silently.
+        """
+        self.assertEqual(dj_setlists._loose_key("Again"), "again")
+        self.assertDistinct("Again", "Againg", "no apostrophe, no elision")
+
+    def test_ain_t_is_not_mistaken_for_an_elision(self):
+        # "Ain't" has only one word char before "in'", so the fold does not
+        # reach it - while "Talkin'" in the same title does.
+        self.assertEqual(dj_setlists._loose_key("Ain't Talkin'"), "aint talking")
+
+    # -- it is a SECOND key, not a replacement -------------------------------
+
+    def test_norm_title_is_UNCHANGED_because_match_key_is_frozen(self):
+        """🛑 _norm_title is a PORT of dj-normalise.ts, which builds
+        match_key, WRITTEN ONCE AND FROZEN (4.1.2). Loosening it would diverge
+        from every match_key already in the table. The fold lives BESIDE it."""
+        self.assertEqual(_norm_title("A Song for the Dead"), "a song for the dead")
+        self.assertEqual(_norm_title("Hangin' Tree"), "hangin tree")
+
+    def test_the_loose_key_is_STRICTLY_WEAKER(self):
+        # Anything the exact key merges, the loose key must also merge. A fold
+        # that disagreed with _norm_title on some pair would not be a fallback,
+        # it would be a different question.
+        for a, b in [("No Son of Mine", "No Son Of Mine"),
+                     ("Salt & Pepper", "Salt and Pepper"),
+                     ("Sick, Sick, Sick", "Sick Sick Sick"),
+                     ("Alg\u00e9s", "Alges")]:
+            if _norm_title(a) == _norm_title(b):
+                self.assertFolds(a, b, f"loose must not un-merge {a!r}/{b!r}")
+
+
+class LooseJoinTests(unittest.TestCase):
+    """The fallback in the body join, and the label that keeps it honest."""
+
+    MBID = "7dc8f5bd-9d0b-4087-9f73-dc164950bbd8"
+    QOTSA = "Queens of the Stone Age"
+
+    def _run(self, body, setlist_songs=("A Song for the Dead", "No One Knows")):
+        # SIX shows, not one: set_shape withholds the core/likely/rotating
+        # split below five (§14.51), so a one-show fixture cannot exercise it.
+        page = {"setlist": [{
+            "id": f"s{i}", "eventDate": f"0{i + 1}-12-2024",
+            "artist": {"name": self.QOTSA},
+            "venue": {"name": "H", "city": {"name": "C", "country": {"code": "US"}}},
+            "sets": {"set": [{"song": [{"name": n} for n in setlist_songs]}]},
+        } for i in range(6)], "total": 6}
+        with mock.patch.object(dj_setlists, "_fetch_page",
+                               lambda m, p, k: page if p == 1 else {"setlist": []}), \
+             mock.patch.object(dj_setlists, "_read_api_key", lambda: "k"):
+            return asyncio.run(dj_setlists.diff_dj_setlists(
+                {"mbid": self.MBID, "body": body, "limit": 10,
+                 "resolve": False}, _Ctx()))["data"]
+
+    def _body(self, *titles):
+        return [{"title": t, "artist": self.QOTSA, "video_id": f"v{i}"}
+                for i, t in enumerate(titles)]
+
+    def test_the_held_song_JOINS(self):
+        data = self._run(self._body("Song For The Dead", "No One Knows"))
+        self.assertEqual(data["coverage"]["in_body"], 2)
+        self.assertEqual(data["missing"], [])
+
+    def test_a_loose_match_is_NEVER_SILENT(self):
+        # ⚠️ THE RESIDUAL RISK IS ACCEPTED BY REPORTING IT. The article fold
+        # cannot tell "The Man" from "A Man"; both raw titles travel with the
+        # match so a wrong join is auditable rather than invisible.
+        data = self._run(self._body("Song For The Dead", "No One Knows"))
+        self.assertEqual(len(data["loose_title_matches"]), 1)
+        m = data["loose_title_matches"][0]
+        self.assertEqual(m["setlist_title"], "A Song for the Dead")
+        self.assertEqual(m["body_title"], "Song For The Dead")
+        self.assertEqual(m["video_id"], "v0")
+
+    def test_an_EXACT_match_reports_no_loose_join(self):
+        # 11.7 - a flag that fires on the normal case gets ignored. An empty
+        # list is the claim that every match was exact.
+        data = self._run(self._body("A Song for the Dead", "No One Knows"))
+        self.assertEqual(data["loose_title_matches"], [])
+        self.assertTrue(all(r["title_match"] == "exact" for r in data["in_body"]))
+
+    def test_set_shape_READS_THE_JOIN_rather_than_re_testing(self):
+        """🛑 ONE QUESTION, ONE ANSWER. The first build had `_brief`
+        re-test `title_key in body_titles` - the EXACT key - so a loose match
+        showed as "not held" in set_shape while the join had already matched it.
+        14.6 inside a single function."""
+        data = self._run(self._body("Song For The Dead", "No One Knows"))
+        sh = data["set_shape"]
+        held = {c["title"]: c["in_body"] for c in sh["core"]}
+        self.assertTrue(held["A Song for the Dead"],
+                        "set_shape must not disagree with the join it is folded from")
+
+    def test_core_in_body_COUNTS_the_loose_match_too(self):
+        # ⚠️ `_brief` and `core_in_body` are two readers of the same fact, and
+        # the mutation sweep found only one of them was pinned. Fixing `_brief`
+        # while `core_in_body` still re-tested the exact key would report
+        # "4 of 5" beside a list showing all five held.
+        data = self._run(self._body("Song For The Dead", "No One Knows"))
+        sh = data["set_shape"]
+        self.assertEqual(sh["core_in_body"], sh["core_total"],
+                         "the count must agree with the list beside it")
+
+    def test_the_loose_pass_does_not_invent_matches(self):
+        # A genuinely absent song stays missing.
+        data = self._run(self._body("No One Knows"))
+        self.assertEqual([e["title"] for e in data["missing"]],
+                         ["A Song for the Dead"])
+        self.assertEqual(data["loose_title_matches"], [])
+
+    def test_one_body_row_cannot_be_claimed_TWICE(self):
+        # Both setlist entries fold to the same loose key; only one body row
+        # exists. Claiming it twice would make coverage exceed the body.
+        data = self._run(self._body("Song For The Dead"),
+                         setlist_songs=("A Song for the Dead", "The Song for the Dead"))
+        self.assertLessEqual(data["coverage"]["in_body"],
+                             data["body_reconciliation"]["body_size"])
+
+
+class NearTitleTests(unittest.TestCase):
+    """🛑 A VERDICT MUST CARRY WHAT WOULD CONTRADICT IT.
+
+    "Hangin' Tree" was reported `other_artists_only` and NAMED Olivier Libaux
+    and Vitamin String Quartet as evidence - both real covers under that exact
+    title. Queens of the Stone Age's own "Hanging Tree" was in the same result
+    list. The verdict was literally true of the string and entirely wrong about
+    the song, and the named evidence made it look verified.
+    """
+
+    QOTSA = "Queens of the Stone Age"
+
+    def test_the_artists_own_near_title_travels_with_a_NOT_FOUND(self):
+        results = [
+            r("Hangin' Tree", ["Olivier Libaux"], "Uncovered QOTSA", 190),
+            r("Hangin' Tree", ["Vitamin String Quartet"], "Strings", 189),
+            r("Hanging Tree", [self.QOTSA], "Songs For The Deaf", 187, vid="own"),
+        ]
+        out = _resolve_one(results, "Hangin' Tree", self.QOTSA)
+        # The loose key now RESOLVES this one outright.
+        self.assertEqual(out["resolution"], "resolved")
+        self.assertEqual(out["video_id"], "own")
+        self.assertEqual(out["title_match"], "loose")
+
+    def test_a_TRUE_other_artists_only_still_says_so(self):
+        # ⚠️ THE NEGATIVE CONTROL. If the loose key swallowed every case,
+        # the cover ruling would be dead code that looks like caution.
+        results = [r("One Headlight", ["The Wallflowers"], "Bringing Down", 313)]
+        out = _resolve_one(results, "One Headlight", FF)
+        self.assertEqual(out["not_found_cause"], "other_artists_only")
+        self.assertEqual(out["near_titles_by_artist"], [])
+
+    def test_a_not_found_carries_near_titles_when_the_artist_HAS_something_close(self):
+        # Nothing folds these two, but they are close enough that "no such
+        # title" is the wrong story.
+        results = [r("Songs for the Deaf", [self.QOTSA], "SFTD", 400, vid="near")]
+        out = _resolve_one(results, "Song for the Deaf II", self.QOTSA)
+        self.assertEqual(out["resolution"], "not_found")
+        self.assertEqual([n["title"] for n in out["near_titles_by_artist"]],
+                         ["Songs for the Deaf"])
+
+    def test_the_fallback_swaps_ONLY_when_the_loose_pass_does_BETTER(self):
+        """⚠️ When NEITHER tier has the act's own version, the exact results are
+        kept so the cover ruling names what it actually found under the title
+        asked for. Swapping in the looser set would credit the verdict with
+        evidence it did not have."""
+        results = [
+            r("A Hanging Tree", ["Cover Band A"], "Tributes", 190, vid="a"),
+            r("Hanging Tree", ["Cover Band B"], "More Tributes", 191, vid="b"),
+        ]
+        out = _resolve_one(results, "A Hanging Tree", self.QOTSA)
+        self.assertEqual(out["not_found_cause"], "other_artists_only")
+        self.assertEqual([c["video_id"] for c in out["other_artists_found"]], ["a"],
+                         "only the EXACT-title cover is evidence about the title "
+                         "that was asked for")
+
+    def test_near_titles_are_the_PERFORMING_artists_only(self):
+        # A cover with a near title is not evidence the act has the song.
+        results = [r("Hanging Tree", ["Some Tribute Band"], "Covers", 187)]
+        out = _resolve_one(results, "Hangin Tree II", self.QOTSA)
+        self.assertEqual(out["near_titles_by_artist"], [])
+
+    def test_an_unrelated_track_from_the_same_album_is_NOT_near(self):
+        # 11.7 - if every album-mate qualified, the field would be noise on
+        # every not_found and get ignored.
+        results = [r("Mosquito Song", [self.QOTSA], "Songs For The Deaf", 339)]
+        out = _resolve_one(results, "Hangin Tree", self.QOTSA)
+        self.assertEqual(out["near_titles_by_artist"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

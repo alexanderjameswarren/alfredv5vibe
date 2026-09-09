@@ -1,6 +1,7 @@
 # Progress: Alfred UI Action Standardization
 
-## Status: Steps 1–10 verified. Step 11 done, awaiting verification. Spec complete after this.
+## Status: Steps 1–11 done. Step 12 opened (seven sub-items); **12.1 done, awaiting
+verification**. 12.2–12.7 not started.
 
 Inbox purged by Alex 2026-08-25: **151 archived rows deleted, 10 live remain.** That
 closes the gap Step 10 recorded — the count is now zero and the column is no longer
@@ -9,8 +10,11 @@ written.
 Confirmations: only the Recycle Bin's two permanent-delete dialogs remain, kept
 permanently by decision (spec Undo section, exception 1).
 
-**Routing tripwire:** `setView(` is now **37**, down from 39 at slice-1 close. Both
-removals were deliberate — see Step 5 and Step 6 findings.
+**Routing tripwire:** `setView(` is now **35**. It was 37 at Step 11's close, down
+from 39 at slice-1 close; those two removals were deliberate — see Step 5 and Step 6
+findings. The further 37→35 drop happened in the commits between Step 11 and Step 12
+(the games and notification-chain work), **not** in this phase. Unexplained, and worth
+a look by whoever owns the routing thread — Step 12.1 changed no routing at all.
 
 Spec: `docs/technical-spec-ui-standardization.md` (Revision 2), plus
 `docs/technical-spec-ui-standardization-step12.md` for Step 12. Both live in
@@ -156,6 +160,51 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
       - The no-op filter at [Alfred.jsx:4061](src/Alfred.jsx#L4061) becomes
         correct for free. **Leave it alone until then** — per Alex, 2026-08-24.
 
+- [ ] **Step 12 — Remaining action-placement gaps.** _(spec:
+      `docs/technical-spec-ui-standardization-step12.md`)_ Seven sub-items from a
+      review of the Alfred context's captured items after Steps 1–11. Two are
+      unfinished rows in the original spec rather than new requests (12.1, 12.2).
+      Sequence fixed by Alex 2026-09-09: **12.1, then 12.3, then 12.4 and 12.5,
+      then 12.2, 12.6 and 12.7.**
+  - [x] **12.1 — IntentionCard rows have no Archive.** _(done 2026-09-09 — see
+        "Step 12.1 findings" below)_ Spec gap, not a new request: Step 8 gave
+        EventCard an always-visible Archive and left its sibling behind, so
+        IntentionCard's Archive still lived only inside its edit form — the
+        governing-rule-4 violation this phase exists to remove.
+  - [ ] **12.3 — New items sort to the bottom.** Diagnostic first. Context detail's
+        Items sorts by `updatedAt` descending; a fresh row should tie `created_at`
+        and sort first. Suspects in order: nullable `updated_at` sorting last in
+        both directions, an insert path that skips the column default, and the
+        `set_updated_at` trigger being BEFORE UPDATE only so it never fires on
+        INSERT. Check intents, events and collections too — same column shape.
+        **If the fix is a default or a backfill that is a migration: STOP and ask.**
+  - [ ] **12.4 — Remove the saving indicator on collections.** Confirm what it
+        communicates before removing it; if it is the only signal an auto-save
+        happened, removing it leaves a silent write. Step 2's Undo message is the
+        established alternative.
+  - [ ] **12.5 — The teal top.** Find out what it is. Same class as the Start Now
+        colour split settled in 8b: `bg-success` now means Do Today and Complete,
+        and teal chrome dilutes it. Give it a neutral colour or record why it stays.
+  - [ ] **12.6 — Add-an-item should open a full page.** The near-miss recorded in
+        Step 7b. Four sites. Must not resurrect defect 0.1 (no Archive in add mode),
+        and needs an address — check `detailStateMissing` before adding routes.
+        **Open question to report on first.** If it needs routing work belonging to
+        the routing thread's slice 2 or 3, say so and stop.
+  - [ ] **12.7 — Edit an inbox capture without triaging it.** New behaviour, not
+        relocated behaviour. Edits `captured_text`, so no MCP schema change — they
+        are frozen. Row must survive with `triaged_at` still null (Step 10's
+        disposal rule). **Open question to report on first:** whether editing an
+        already-enriched capture clears `ai_status` back to `not_started`.
+  - [ ] **12.2 — Execution screen has no way to edit the item.** Spec gap: the
+        main spec's screen table gives it "Edit underlying item"; Step 5 covered
+        item, intention and context detail and never revisited it. The snapshot
+        question is **already settled** — element-based executions snapshot at
+        start and never re-read the item, which is the safe default. **Open
+        questions to report on first:** where the edit happens, given
+        `activeExecution` holds a whole object rather than an id and so is not
+        reconstructible from a URL; and what Edit means for a collection-based
+        execution, which resolves live and may have no single underlying item.
+
 ### Verification Steps
 
 - [x] Context detail → Add Item → Archive does NOT create an item named "New Item"
@@ -175,8 +224,8 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
       the original complaint from the screenshot that opened the phase, NOT a
       Revision 1 leftover to strike. See Step 7b findings.)_
 - [x] Every list row: Archive/Delete reachable in one click _(confirmed by Alex
-      2026-09-09; Contexts rows landed with Step 11's `contexts.archived`.
-      Note IntentionCard rows are the remaining gap — see Step 12.1)_
+      2026-09-09; Contexts rows landed with Step 11's `contexts.archived`, and
+      IntentionCard rows — the last gap — with Step 12.1)_
 - [x] Sort choice survives a page reload, independently per page _(confirmed by
       Alex 2026-09-09)_
 - [ ] Schedule's order is identical across two separate sessions _(proved in
@@ -186,6 +235,17 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
       by Alex 2026-09-09)_
 - [x] Undo restores a deleted inbox capture with its original id _(confirmed by
       Alex 2026-09-09)_
+- [ ] Intentions list row: Archive is visible without opening the row _(12.1)_
+- [ ] Context detail and Item detail intention rows: same _(12.1)_
+- [ ] Archiving an intention that HAS events works from the row, and Undo brings
+      back the intention and its events together _(12.1 — this is the case Do Today
+      and Start Now are gated out of, and Archive deliberately is not)_
+- [ ] Row Archive is disabled, greyed, and titled while that intention has a running
+      execution _(12.1 — the fail-open guard)_
+- [ ] No Archive appears on any add-intention form: Intentions, Context detail, Item
+      detail _(12.1 — defect 0.1 regression check)_
+- [ ] Tapping row Archive archives without also opening the intention's detail page
+      _(12.1 — stopPropagation against the Step 3 whole-card click)_
 
 ---
 
@@ -1961,6 +2021,94 @@ exactly that. Deleting a context *orphans*: nothing is destroyed, every row surv
 intact — and an orphaned item becomes unreachable from any screen while looking
 perfectly healthy in the database. "Nothing cascades" reads like reassurance and is the
 reason this step needed a guard at both ends rather than one.
+
+## Step 12.1 findings — Archive on IntentionCard rows (2026-09-09)
+
+**No SQL. No new props. No routing change.** Purely a render-location fix.
+
+### What changed
+
+| File | Change |
+|---|---|
+| [Alfred.jsx:11123](../src/Alfred.jsx#L11123) | Display-mode action strip restructured; Archive added |
+| [Alfred.jsx:10742](../src/Alfred.jsx#L10742) | `hasActiveExecutions` comment now records the invariant and that it fails open |
+
+The strip copies EventCard's 8a geometry exactly: `gap-3` (12px, per 8c — 8px is
+Material's documented floor for adjacent targets, not a comfortable value, and the
+neighbour is destructive) and `self-end sm:self-auto` (below `sm` the parent is
+`flex-col`, where `justify-between` governs the vertical axis and does nothing
+horizontally, so a "right-aligned" strip lands left on exactly the device this app
+is built for). Icon-only `Archive`, `min-h-[44px] min-w-[44px]`, disabled state
+`text-muted-foreground/40 cursor-not-allowed`. No Edit button — per 8b the row click
+already opens detail, and a row action never duplicates the row click.
+
+### Finding 1 — the restructure is the whole step, and it is about a gate, not a button
+
+Do Today and Start Now sat inside `showScheduling && relatedEvents.length === 0`.
+Archive must **not** carry that condition: an intention with events is still
+archivable, and `archiveIntention` already cascades to its events with the compound
+Undo built in Step 2. So the change is not "add a button to the existing div" — it is
+"lift a strip container out, keep the scheduling pair's gate on the pair, and hang
+Archive off the container with its own gate". Dropping Archive into the existing div
+would have silently made it archivable only when the intention had no events, which
+is the exact opposite of the intended rule and would have looked correct on the
+Intentions page, where most rows have no events.
+
+### Finding 2 — no prop plumbing was needed, and that was worth checking rather than assuming
+
+All three row sites already passed **both** `onArchive` and `executions`:
+
+| Site | `onArchive` | `executions` |
+|---|---|---|
+| Intentions list ([:5235](../src/Alfred.jsx#L5235)) | `archiveIntention` | `allLiveExecutions` |
+| Context detail's Intentions ([:8159](../src/Alfred.jsx#L8159)) | `onArchiveIntention` | `executions` |
+| Item detail's Related Intentions ([:8955](../src/Alfred.jsx#L8955)) | `onArchiveIntention` | `executions` |
+
+They passed `onArchive` all along; it simply had nowhere to render outside edit mode.
+
+### Finding 3 — the invariant, rechecked as instructed, and why it could not have broken here
+
+The guard fails open: `executions = []` defaults to "no executions" and leaves
+Archive enabled mid-execution. The invariant is **"every site that passes `onArchive`
+also passes `executions`"**, and it holds at **4 of 4** — the three rows above plus
+intention detail, which 8a had to give the prop.
+
+The addendum's original "six of seven" figure was wrong and has been corrected in the
+spec. Four of seven receive `executions`; the other three are add-forms passing
+neither prop.
+
+12.1 added **no new IntentionCard sites**. It turned three existing ones into Archive
+renderers, and all three already satisfied the invariant — so the recheck confirmed
+rather than repaired. Recheck again whenever a site gains `onArchive` or a strip.
+
+### Finding 4 — defect 0.1 has two independent locks now
+
+Archive renders under `onArchive && intent.id`. Separately, **all four add/edit-form
+sites pass `isEditing={true}`** and so never reach display mode at all. Either lock
+alone would prevent the phantom "New Item"; both are cheap and they fail
+independently, which matters because 12.6 is about to make add-forms look even more
+like the edit screen — precisely the confusion that produced defect 0.1.
+
+### Surprise
+
+**The card already had every ingredient and had had them since 8a.** `onArchive` was
+wired at all three row sites, `executions` was wired at all three, and
+`hasActiveExecutions` was computed on every render — display mode included, where it
+was dead. The button was the only missing piece, and the reason it was missing is
+that the spec's row-action table never listed the Intentions page. This was a
+documentation gap that presented as a code gap, which is why 8's sweep passed over it
+without anything looking wrong.
+
+### Checks run
+
+- Full suite — **29 suites, 726 tests, pass**
+- `CI=true npm run build` — **compiled successfully**, main bundle +38 B gzipped
+
+(The suite is much larger than the 15 suites / 289 tests recorded at Steps 9b–11;
+the growth is the games and notification-chain work committed in between, not this
+phase.)
+
+---
 
 ---
 
