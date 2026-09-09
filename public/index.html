@@ -5,7 +5,11 @@
      <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
    <link rel="apple-touch-icon" href="%PUBLIC_URL%/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#000000" />
+    <!-- Matches manifest.json's theme_color and the app header's bg-white, so the
+         browser or OS chrome above the page is continuous with the page. These two
+         disagreed until Step 12.4/12.5: this said black, the manifest said #a2d8c8,
+         so the top of the app was black in a tab and teal once installed. -->
+    <meta name="theme-color" content="#ffffff" />
   <meta name="description" content="Alfred - Household task management" />
     <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
     <!--

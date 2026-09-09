@@ -1,7 +1,10 @@
 # Progress: Alfred UI Action Standardization
 
-## Status: Steps 1–11 done. Step 12 opened (seven sub-items); **12.1 done, awaiting
-verification**. 12.2–12.7 not started.
+## Status: Steps 1–11 done. Step 12 now **eight** sub-items — 12.8 was added
+2026-09-09 out of what 12.3 turned up. **12.1 verified** (all nine checks).
+**12.3 verified for items**, and extended afterwards to the edit paths — see the
+correction in "Step 12.3 fix". **12.4 and 12.5 done, awaiting verification.**
+12.2, 12.6, 12.7 and 12.8 not started.
 
 Inbox purged by Alex 2026-08-25: **151 archived rows deleted, 10 live remain.** That
 closes the gap Step 10 recorded — the count is now zero and the column is no longer
@@ -171,20 +174,29 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
         EventCard an always-visible Archive and left its sibling behind, so
         IntentionCard's Archive still lived only inside its edit form — the
         governing-rule-4 violation this phase exists to remove.
-  - [ ] **12.3 — New items sort to the bottom.** Diagnostic first. Context detail's
-        Items sorts by `updatedAt` descending; a fresh row should tie `created_at`
-        and sort first. Suspects in order: nullable `updated_at` sorting last in
-        both directions, an insert path that skips the column default, and the
-        `set_updated_at` trigger being BEFORE UPDATE only so it never fires on
-        INSERT. Check intents, events and collections too — same column shape.
-        **If the fix is a default or a backfill that is a migration: STOP and ask.**
-  - [ ] **12.4 — Remove the saving indicator on collections.** Confirm what it
-        communicates before removing it; if it is the only signal an auto-save
-        happened, removing it leaves a silent write. Step 2's Undo message is the
-        established alternative.
-  - [ ] **12.5 — The teal top.** Find out what it is. Same class as the Start Now
-        colour split settled in 8b: `bg-success` now means Do Today and Complete,
-        and teal chrome dilutes it. Give it a neutral colour or record why it stays.
+  - [x] **12.3 — New items sort to the bottom.** _(diagnosed and fixed 2026-09-09 —
+        see "Step 12.3 findings" and "Step 12.3 fix" below)_ **All three suspects in
+        the addendum were wrong.** `updated_at` is `timestamptz DEFAULT now()` on all
+        six Alfred tables and no row anywhere is null (counts run by Alex: 375 items,
+        133 intents, 126 events, 9 contexts, 4 collections, 4 inbox — zero nulls).
+        **No migration.** The cause was client-side: `storage.set` inserted without
+        `.select()`, so the database-assigned columns were never read back and state
+        kept the incomplete object the caller had built.
+  - [x] **12.4 — Remove the saving indicator on collections.** _(done 2026-09-09 —
+        see "Step 12.4 findings" below)_ It was `LoadingOverlay`, a full-screen scrim
+        with a spinner, raised by four of the five fields on collection detail. Now
+        every field saves quietly, like the Name field always did. Nothing replaces
+        it — the controls are checkboxes and selects, so holding the new value is its
+        own confirmation. **The real find was the opposite of the request:** the
+        already-silent path swallowed failures, so the Name field was the one
+        genuinely silent write in the app. Failures are now reported.
+  - [x] **12.5 — The teal top.** _(done 2026-09-09 — see "Step 12.5 findings"
+        below)_ Not a component: `public/manifest.json`'s `theme_color` was
+        `#a2d8c8`, a leftover from the pre-redesign palette that appears nowhere in
+        `index.css`. It painted the browser/OS chrome above the page. Retired to
+        `#ffffff`, matching the header's `bg-white`. **`index.html` disagreed with the
+        manifest** — it said `#000000` — so the top was black in a tab and teal once
+        installed. Both now say the same thing.
   - [ ] **12.6 — Add-an-item should open a full page.** The near-miss recorded in
         Step 7b. Four sites. Must not resurrect defect 0.1 (no Archive in add mode),
         and needs an address — check `detailStateMissing` before adding routes.
@@ -204,6 +216,15 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
         `activeExecution` holds a whole object rather than an id and so is not
         reconstructible from a URL; and what Edit means for a collection-based
         execution, which resolves live and may have no single underlying item.
+  - [ ] **12.8 — Intentions page parity.** _(added 2026-09-09, builds last)_ The
+        Intentions page has no sort control (Name, Created, Last modified; no
+        scheduled date, since `intentionsWithoutActiveEvent` excludes scheduled
+        intentions) and `IntentionCard` renders no "last updated" line although
+        `ItemCard` does. **Inventory finding: Memories was missed the same way**, and
+        neither page has any ordering at all — both are bare `.filter()` calls over a
+        `select("*")` with no `ORDER BY`, so their order is arbitrary and Step 9b's
+        "stable across a reload" was never true for them. Seven list pages, five of
+        which got a control. See the addendum's 12.8.
 
 ### Verification Steps
 
@@ -246,6 +267,40 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
       detail _(12.1 — defect 0.1 regression check)_
 - [ ] Tapping row Archive archives without also opening the intention's detail page
       _(12.1 — stopPropagation against the Step 3 whole-card click)_
+- [x] Intentions list row: Archive visible, guarded, absent from add forms, no stray
+      navigation _(12.1 — all nine checks confirmed by Alex 2026-09-09)_
+- [ ] A brand-new item appears at the TOP of Context detail's Items, not the bottom,
+      with no reload _(12.3)_
+- [ ] The new row shows a "last updated" line immediately, like every other row
+      _(12.3 — the same missing value surfacing twice; Alex's corroboration)_
+- [ ] New context, collection, intention, event and inbox capture all land in the
+      right place under "Last modified" _(12.3 — one cause, six record types)_
+- [ ] Collections especially: it has no realtime channel, so the insert path is the
+      only thing that can fix it _(12.3)_
+- [ ] EDITING a record updates its "Last modified" immediately, without a reload
+      _(12.3 — the `.select("id")` half of the fix)_
+- [ ] Two rows sharing a timestamp order by name rather than arbitrarily _(12.3 —
+      the title tiebreaker Context detail's inline comparator never had)_
+- [ ] A second device still shows one row, not two, when the first creates a record
+      _(12.3 — the realtime dedupe was deliberately left in place)_
+- [x] A new item lands at the TOP of Context detail's Items with a "last updated"
+      line, no reload _(12.3 — confirmed by Alex 2026-09-09)_
+- [ ] Editing an ITEM, INTENTION, EVENT or COLLECTION updates its "Last modified"
+      without a reload _(12.3 correction — this was claimed before it was true; only
+      contexts worked. Check a non-context record specifically)_
+- [ ] Collection detail: ticking Pinned, Shared or Capture-target no longer dims the
+      whole app _(12.4)_
+- [ ] Collection detail: changing the Context select is likewise quiet _(12.4)_
+- [ ] The Name field still saves on blur, as it always did _(12.4 — the one field
+      that was already correct; make sure removing the flag did not change it)_
+- [ ] A FAILED collection save now says so and the control snaps back _(12.4 — the
+      actual bug. Go offline, toggle a checkbox, expect a message and a revert)_
+- [ ] Installed PWA: the chrome above the header is white, not teal _(12.5 — this is
+      the only place the teal was ever visible)_
+- [ ] Browser tab: the chrome above the header is white, not black _(12.5 — the meta
+      tag half, which disagreed with the manifest)_
+- [ ] The splash screen behind the icon on launch is the app's cream, not a cool
+      white _(12.5 — `background_color`)_
 
 ---
 
@@ -2110,7 +2165,380 @@ phase.)
 
 ---
 
+## Step 12.3 findings — diagnosis only, no fix written (2026-09-09)
+
+**Verdict: none of the three candidates in the addendum. The database is correct and
+always has been; the bug is entirely in client state.** No migration is needed.
+
+### The three candidates, each ruled out by evidence
+
+| Candidate | Verdict | Evidence |
+|---|---|---|
+| `updated_at` nullable, comparator sorts nulls last | **Half right, wrong half** | The comparator does sort missing last (`compareValues`: `if (!a) return 1`) — that part is real and is *how* the symptom renders. But the column is not null on insert. |
+| Insert path skips the column default | **Wrong** | `storage.set` omits the key, which is exactly what makes the `DEFAULT` fire. Omitting a column is how you *get* a default, not how you skip one. |
+| `set_updated_at` is BEFORE UPDATE, never fires on INSERT | **True but irrelevant** | It genuinely does not fire on INSERT. It does not need to — the column default covers inserts, and the trigger covers updates. |
+
+`updated_at` is `timestamp with time zone`, `DEFAULT now()`, nullable on **all six**
+Alfred tables — `items`, `intents`, `events`, `contexts`, `item_collections`, `inbox`.
+Confirmed by schema query, not assumed.
+
+### The actual cause — a fourth thing, in three steps
+
+1. Every create path builds its object with `createdAt: new Date().toISOString()` and
+   **no `updatedAt`**. There are 18 `createdAt:` assignments in Alfred.jsx and
+   **zero** `updatedAt:` assignments.
+2. `storage.set` inserts it. The database assigns `updated_at = now()` correctly. But
+   the insert is `.insert(dbValue)` with **no `.select()`**, so the assigned value is
+   never returned.
+3. The caller then does `setItems([...items, newItem])` — appending the *local*
+   object, the one with no `updatedAt`. State now holds a row that disagrees with the
+   database about a column the sort depends on.
+
+The comparator then does exactly what it was designed to do: missing sorts last in
+both directions. The new row goes to the bottom.
+
+**This is a display-layer lie about a correct database row, not a data defect.** The
+distinction decides the fix: a backfill would repair nothing, because the stored data
+was never wrong.
+
+### Finding — realtime should have healed this, and is the reason it does not
+
+All four realtime INSERT handlers (`handleItemChange`, `handleIntentChange`,
+`handleEventChange`, `handleContextChange`) are byte-identical in shape:
+
+```js
+setItems(prev => {
+  if (prev.find(item => item.id === record.id)) return prev;   // <-- here
+  return [...prev, record];
+});
+```
+
+The INSERT payload **does** carry the database's `updated_at`. It arrives moments
+after the optimistic add, finds the id already present, and returns `prev` — throwing
+the authoritative row away in favour of the incomplete local one.
+
+The dedupe guard is correct and necessary: without it the optimistic add and the
+realtime echo would render the row twice. But it treats "already present" as "nothing
+to learn", and for a row created locally that is precisely backwards — the local copy
+is the one that is missing fields.
+
+So the stale object survives **for the whole session**. It is not a momentary flicker
+that realtime repairs a second later.
+
+### Scope — wider than Context detail, and it is the same bug everywhere
+
+Six surfaces, one cause:
+
+| Surface | Sorts by | Affected |
+|---|---|---|
+| Context detail → Items | hardcoded `(b.updatedAt \|\| '').localeCompare(a.updatedAt \|\| '')` ([:4973](../src/Alfred.jsx#L4973)) | **Yes** — where Alex saw it |
+| Home | `EVENT_SORT_OPTIONS` → "Last modified" | Yes, when that order is chosen |
+| Schedule | `EVENT_SORT_OPTIONS` → "Last modified" | Yes, when chosen |
+| Inbox | `INBOX_SORT_OPTIONS` → "Last modified" | Yes, when chosen |
+| Contexts | `NAMED_RECORD_SORT_OPTIONS` → "Last modified" | Yes, when chosen |
+| Collections | `NAMED_RECORD_SORT_OPTIONS` → "Last modified" | Yes, when chosen — **and no realtime channel at all**, so not even a reconnect helps |
+
+All five sort-controlled pages offer "Last modified"; Context detail's Items sub-list
+has no control and is hardcoded to it, which is why it is the one that shows the
+symptom without anyone opting in. Note it uses its **own** inline comparator, not the
+shared one — two independent comparators, same behaviour on a missing value, so
+fixing one would not have fixed the other.
+
+The Intentions page has no sort control and is unaffected.
+
+### The two populations, which are genuinely different
+
+- **New rows (this session).** Database correct, client wrong. Client-side fix.
+  Reload repairs it, which is the diagnostic test.
+- **Legacy rows predating the column.** **Unresolved — needs a query, not a guess.**
+  `ALTER TABLE ... ADD COLUMN ... DEFAULT` backfills existing rows on PostgreSQL 11+,
+  so these are *probably* fine, but the Alfred tables' `updated_at` was added outside
+  this repo's migration history (only `001_sam_tables.sql` is present), so the form of
+  that ALTER is not on record here. The Recycle Bin queries pass
+  `nullsFirst: false` on every `updated_at` order, which suggests someone once
+  expected nulls — defensive, not evidence. The MCP tools do not expose the column and
+  their schemas are frozen, so this cannot be answered from the client.
+
+**If that query returns non-zero anywhere, the fix is a backfill — a migration, and a
+stop-and-ask.** It is a separate fix from the client-state one and neither substitutes
+for the other.
+
+### Surprise
+
+**The safety convention and the optimistic-update convention are individually correct
+and collide.** "Missing values sort last in both directions" was reasoned carefully in
+Step 9a and is right — an unplayed song belongs at the bottom whichever way the arrow
+points. Optimistic local append is right too; it is what makes creation feel instant.
+Together they mean the newest row is indistinguishable from the most-stale one, and
+the app confidently sorts it to the position that means the opposite of the truth. No
+line of code is wrong on its own.
+
 ---
+## Step 12.3 fix — read the row back instead of rebuilding it (2026-09-09)
+
+**No SQL. No migration.** Alex's null counts came back zero on all six tables (375
+items, 133 intents, 126 events, 9 contexts, 4 collections, 4 inbox rows), so the
+legacy population the diagnosis flagged does not exist. Only the client needed work.
+
+### The one-line change that does the work
+
+`storage.set`'s insert was `.insert(dbValue)` with no `.select()`, so the row the
+database produced was never returned. It is now
+`.insert(dbValue).select().maybeSingle()`, and **`storage.set` returns the saved row
+in camelCase** rather than `true`.
+
+The update branch changed too: `.select("id")` became `.select()`. Same defect, other
+half — the `set_updated_at` trigger stamps an `updated_at` the caller does not have,
+so an *edited* record kept its old "Last modified" until a reload. Asking only for the
+id threw that away exactly as the insert did.
+
+`false` remains the only falsy return, so `if (!ok)` callers and `wrote`'s
+`result === false` check are untouched. If the database returns no row, the value that
+was written is returned instead, so the result is always safe to put into state.
+
+**`updatedAt` is NOT stamped client-side, deliberately** — that is the twin-site trap.
+The trigger is the single source of truth and the client reads it rather than racing
+it. The rule is recorded in the docblock on `storage.set` so the next person does not
+re-derive it.
+
+### Fifteen call sites now use the returned row
+
+Every create path takes `saved || local`: inbox capture, triage's item / intent /
+event, `moveToPlanner`, item clone, the three recurrence-and-start event creations,
+context save, `handleAddItemToContext`, `handleAddIntentionToContext`, collection
+create, start-now intent, and the inline add-item-to-collection.
+
+Context save was the interesting one: it is create **and** edit through one call, and
+both branches now take the saved row, so an edited context also stops showing a stale
+"Last modified".
+
+### Decision 1 — the realtime dedupe stays, and this is why
+
+The guard that discards the authoritative payload:
+
+```js
+if (prev.find(item => item.id === record.id)) return prev;
+```
+
+**Left exactly as it is.** With the insert returning the real row, the local object is
+already correct by the time the echo arrives, so the dedupe has nothing left to teach.
+Removing it would mean overwriting state on every echo, which would clobber a local
+edit made in the window between insert and echo — trading a fixed bug for a rarer,
+worse one.
+
+It also could never have been the fix on its own: **collections have no realtime
+channel at all**, so a dedupe change would have left the Collections page broken. The
+insert path is the only place that fixes all six record types, which is the argument
+for fixing it there and nowhere else.
+
+Recorded rather than silently left: the guard is *correct given* that inserts now
+return their row. If `storage.set` ever stops doing that, this becomes a bug again.
+
+### Decision 2 — the two comparators are now one
+
+Unified rather than paired. Context detail's hand-rolled
+`(b.updatedAt || '').localeCompare(a.updatedAt || '')` now calls `sortRows` with
+`NAMED_RECORD_ACCESSORS`, the same path every list page uses. Same order, one
+implementation.
+
+It also inherits the title tiebreaker, so items sharing a timestamp stop depending on
+array order — convention 1 in `sortOrders.js`, which the inline version never had.
+
+Context detail's sub-lists still get no sort *control*; that decision is unchanged.
+What is gone is the second copy of the comparator, not the difference in UI.
+
+### Finding — `updated_at` was not the only thing being dropped
+
+The insert discarded **every** database-assigned column, not just this one. What each
+create path was silently losing:
+
+| Table | Columns the client never sent, and so never learned |
+|---|---|
+| `items` | `updated_at`, `tags` (`'[]'`), `archived` (`false`) |
+| `intents` | `updated_at`, `tags` (`'[]'`) |
+| `events` | `updated_at` |
+| `contexts` | `updated_at`, `tags` (`'[]'`), `archived` (`false`) |
+| `item_collections` | `updated_at`, `pinned` (`false`), `items` (`'[]'`) |
+| `inbox` | `updated_at` only — its create object sets all 22 other fields explicitly |
+
+All of them are fixed by the same line, because the cause was one line.
+
+Most were harmless by luck rather than design: `undefined` and `false` are both falsy,
+so an unpinned new collection and an unarchived new item rendered correctly while
+carrying the wrong value. `tags` was the closest to a real second bug —
+`intent.tags && intent.tags.includes(...)` is guarded everywhere it is read, which is
+the only reason a missing array never threw.
+
+### Surprise
+
+**The codebase had already found this bug and worked around it one field at a time.**
+`newColl` carries this comment, written well before Step 12:
+
+> `archived: false` — *"Explicit rather than leaning on the column default, so the
+> object in local state has the same shape as one read back from the database."*
+
+That is a precise description of exactly this defect, and the fix chosen was to
+hand-copy one default into one create path. It worked, for that field, in that
+function. Six create paths and five tables later, `updated_at` was the field nobody
+had hand-copied yet — and the first one whose absence was visible, because it was the
+only one where `undefined` did not happen to look the same as the real default.
+
+### Checks run
+
+- Full suite — **29 suites, 726 tests, pass**
+- `CI=true npm run build` — **compiled successfully**, main bundle **−1 B** gzipped
+
+---
+### Correction — the edit half was claimed too early (2026-09-09)
+
+The verification instructions issued with the first cut of this fix said an edited
+record would show a new "Last modified" immediately. **That was true only for
+contexts.** `storage.set` had been changed to *return* the updated row, but only
+`saveContext` was changed to *use* it — `updateItem`, `updateIntent`, `updateEvent`
+and `updateCollection` all still put their locally-rebuilt object into state, so an
+edit anywhere else left the timestamp stale until a reload.
+
+Found while confirming 12.3 had reached intents. Now fixed at all four: each takes
+`saved || updated`.
+
+`updateCollection` needed a different shape from the other three. Its functional
+updater exists to avoid replacing the row with a render-time snapshot, so the saved
+row goes in the MIDDLE of the spread — `{ ...c, ...savedColl, ...updates }` — where it
+supplies the database-assigned columns while the user's patch stays the winner for the
+fields they just edited. Replacing outright would have reintroduced the clobber that
+updater was written to prevent.
+
+Archive and Undo paths were deliberately left alone. They write an object and put that
+same object into state, so their `updatedAt` is stale too — but an archived row leaves
+the visible list, and the Recycle Bin reads `updated_at` from its own query rather than
+from this state. Recorded so the asymmetry is a decision rather than an oversight.
+
+### Confirmation — the fix reached intents, verified by inspection not inference
+
+Asked for explicitly, because the Intentions page offers nothing to observe it on: it
+has no sort control and `IntentionCard` renders no "last updated" line. That gap is
+now 12.8.
+
+All three intent CREATE paths take the saved row:
+
+| Path | Line | Uses |
+|---|---|---|
+| Triage → create intention | [:2666](../src/Alfred.jsx#L2666) | `savedIntent \|\| newIntent` |
+| `handleAddIntentionToContext` | [:3987](../src/Alfred.jsx#L3987) | `savedIntent \|\| newIntent` |
+| Start Now on an item | [:4216](../src/Alfred.jsx#L4216) | `savedIntent \|\| newIntent` |
+
+The remaining four intent writes are updates, archives and Undo restores, not creates.
+`updateIntent` now takes the saved row per the correction above.
+
+Intents were never a separate code path — `storage.set` is shared and table-agnostic,
+so the insert fix could not have reached items without reaching intents. But "should
+follow" is not "does follow", and the sites were checked rather than assumed.
+
+---
+
+## Step 12.4 findings — the saving indicator, and what it was hiding (2026-09-09)
+
+**What it actually was:** `LoadingOverlay` — `fixed inset-0`, a 50%-black scrim over
+the whole app, a spinning border and the word "Saving...". Not a small inline badge.
+
+**What raised it:** four of the five fields on collection detail — the Context select
+and the Shared, Pinned and Capture-target checkboxes — each called `updateCollection`
+without the `silent` flag. Ticking "Pinned" dimmed the entire application for one
+round trip.
+
+The fifth field, Name, passed `silent = true` and had always saved without it. So the
+screen was already inconsistent with itself, and the unwanted behaviour was the
+majority rather than the rule.
+
+### What it communicated, checked before removing it as the spec asked
+
+That a write was in flight — and nothing else. It carried no success state and no
+failure state; it appeared and vanished. Since every control here is a checkbox or a
+select bound to state, **the control holding its new value is already the
+confirmation.** That is the difference from an archive, where the row disappears and
+Step 2's Undo message is the only remaining evidence anything happened.
+
+So nothing replaces it. `silent` is gone rather than defaulted, because after this
+there is no caller that wants the other behaviour.
+
+### The finding — the request was to remove a signal; the bug was a missing one
+
+The already-silent path swallowed failures in a `console.error` inside a `catch`.
+`storage.set` **returns `false` rather than throwing**, so that `catch` never ran for
+the failure that actually happens. A failed save left the checkbox ticked, the name
+edited, and the database unchanged, with nothing on screen and nothing in the console.
+**The Name field was the one genuinely silent write in the app** — and it was the
+field held up as the model the others should follow.
+
+Both branches now report: a failed save says so and calls `refreshData()`, so the
+controls snap back to what the database actually holds rather than sitting on a lie.
+
+### Surprise
+
+**Making the loud thing quiet meant making the quiet thing loud.** The captured
+complaint was "remove the saving indicator", and taken literally that would have
+extended a broken silence across the whole screen rather than fixing it. The overlay
+was disproportionate, but it was also the only thing on four of five fields that
+failed visibly.
+
+---
+
+## Step 12.5 findings — the teal top (2026-09-09)
+
+**It is not a component.** A case-insensitive search for "teal" over the entire source
+tree returns one hit, in an unrelated comment in `games/variants/drop.jsx`. Nothing
+renders it.
+
+It is `public/manifest.json`: `"theme_color": "#a2d8c8"`, with
+`"background_color": "#F8FFFE"` beside it.
+
+`theme_color` is what the browser or OS paints in the chrome **above** the page — the
+address bar on Android Chrome, the status bar in an installed PWA. Hence "top", and
+hence why it could not be found in the app's own markup.
+
+### Not deliberate — a leftover, and provably so
+
+`#a2d8c8` is a mint-teal. The palette in `index.css` is warm browns and creams:
+`--background: #FAFAF8`, `--primary: #7A4E37`, `--secondary: #E4D2C3`. Neither
+`#a2d8c8` nor `#F8FFFE` (a cool near-white splash colour) appears anywhere in it.
+Both predate the colour redesign and were never revisited.
+
+The spec's reasoning holds: `bg-success` is `#7A9B9B`, a muted sage that now means Do
+Today and Complete specifically. A teal-family colour in the app chrome dilutes a
+meaning the palette works to keep narrow — and this one is not even the same teal.
+
+### The second half, which is why the answer was confusing
+
+`public/index.html` carried `<meta name="theme-color" content="#000000" />`.
+
+The meta tag governs a normal browser tab; the manifest governs the installed app. So
+**the top of Alfred was black in a tab and teal once installed**, and which one you saw
+depended on how you opened it. Two sources of truth, disagreeing, neither matching the
+palette.
+
+Now both say `#ffffff`, matching the header's `bg-white` so the chrome is continuous
+with the page rather than a band of colour above it. `background_color` — the splash
+behind the icon before the app renders — becomes `#FAFAF8`, the app's `--background`.
+
+### Surprise
+
+**Two files disagreed about the same colour for long enough that the app had two
+different tops, and the bug report could only ever describe one of them.** "Find out
+why alfred has a teal top" is answerable only from an installed PWA; from a browser
+tab the honest answer is "it doesn't, it has a black one". Neither answer would have
+found the other without looking at both files.
+
+### Checks run (12.4 and 12.5)
+
+- Full suite — **29 suites, 726 tests, pass**
+- `CI=true npm run build` — **compiled successfully**, main bundle **+35 B** gzipped
+
+Manifest and meta changes do not surface in tests — they are browser-chrome metadata
+and need the device check in the verification list.
+
+---
+
+
 
 ### Notes
 

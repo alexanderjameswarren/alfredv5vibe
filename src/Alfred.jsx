@@ -142,6 +142,25 @@ const storage = {
     }
   },
 
+  /**
+   * Write a record and return THE ROW AS IT NOW STANDS.
+   *
+   * Returns the saved record in camelCase on success, or `false` on failure.
+   * It never returns `true` any more: a caller that appends the object it built
+   * instead of the row that came back will silently miss every column the
+   * database assigns, which is the Step 12.3 bug — a new item had no
+   * `updatedAt`, so "Last modified" sorted it last and its timestamp line did
+   * not render.
+   *
+   * `false` remains the only falsy result, so `if (!ok)` callers and the
+   * `result === false` check in `wrote` are unaffected. If the database returns
+   * no row (it should not), the value that was written is returned instead, so
+   * the result is always safe to put straight into state.
+   *
+   * DO NOT stamp `updatedAt` client-side to avoid needing this. The
+   * `set_updated_at` trigger is the single source of truth; a second writer
+   * would have to agree with it and nothing would enforce that.
+   */
   async set(key, value, shared = false) {
     try {
       const [prefix, id] = key.split(":");
@@ -156,28 +175,43 @@ const storage = {
 
       if (id) {
         // Try update first (works for both owned and shared records)
+        //
+        // `.select()` and not `.select("id")` as of Step 12.3. The database
+        // assigns columns we do not send — `updated_at` via the
+        // `set_updated_at` BEFORE UPDATE trigger, and on insert the `now()`,
+        // `'[]'::jsonb` and `false` column defaults. Asking only for the id
+        // threw all of that away, so state kept whatever the caller happened to
+        // build and disagreed with the row it had just written.
         const { data: updated, error: updateError } = await supabase
           .from(table)
           .update(dbValue)
           .eq("id", id)
-          .select("id");
+          .select();
 
         if (updateError) throw updateError;
 
         // If update matched no rows, this is a new record — insert
         if (!updated || updated.length === 0) {
-          const { error: insertError } = await supabase
+          const { data: inserted, error: insertError } = await supabase
             .from(table)
-            .insert(dbValue);
+            .insert(dbValue)
+            .select()
+            .maybeSingle();
           if (insertError) throw insertError;
+          return inserted ? this.toCamelCase(inserted) : value;
         }
+
+        return this.toCamelCase(updated[0]);
       } else {
         // No id in key — straight insert
-        const { error } = await supabase.from(table).insert(dbValue);
+        const { data: inserted, error } = await supabase
+          .from(table)
+          .insert(dbValue)
+          .select()
+          .maybeSingle();
         if (error) throw error;
+        return inserted ? this.toCamelCase(inserted) : value;
       }
-
-      return true;
     } catch (e) {
       console.error("Storage set error:", e, "Key:", key, "Value:", value);
       return false;
@@ -2487,8 +2521,11 @@ export default function Alfred() {
         suggestedCollectionId: null,
       };
 
-      await storage.set(`inbox:${inboxItem.id}`, inboxItem);
-      setInboxItems([...inboxItems, inboxItem]); // Add to end (oldest first)
+      const savedCapture = await storage.set(`inbox:${inboxItem.id}`, inboxItem);
+      // The saved row, not the one we built — see storage.set. Ours has no
+      // `updatedAt`, which sorts a brand-new capture last under "Last modified"
+      // and renders it with no timestamp line at all.
+      setInboxItems([...inboxItems, savedCapture || inboxItem]); // Add to end (oldest first)
       setCaptureText("");
       if (captureRef.current) {
         captureRef.current.style.height = "auto";
@@ -2558,9 +2595,14 @@ export default function Alfred() {
       // delete on a failed triage would destroy the capture AND leave nothing
       // downstream to show for it.
       let allWritesSucceeded = true;
+      // Returns the result unchanged rather than a boolean, so a caller can
+      // both record the failure and use the saved row — `storage.set` returns
+      // the row it wrote as of Step 12.3. `false` is still the only falsy
+      // result, which is what the check above and the `saved || local`
+      // fallbacks below both rely on.
       const wrote = (result) => {
         if (result === false) allWritesSucceeded = false;
-        return result !== false;
+        return result;
       };
 
       // Create item if Item section was open
@@ -2579,8 +2621,8 @@ export default function Alfred() {
 
         const context = contexts.find((c) => c.id === newItem.contextId);
         const isShared = context?.shared || false;
-        wrote(await storage.set(`item:${newItem.id}`, newItem, isShared));
-        setItems((prev) => [...prev, newItem]);
+        const savedItem = wrote(await storage.set(`item:${newItem.id}`, newItem, isShared));
+        setItems((prev) => [...prev, savedItem || newItem]);
         createdItemId = newItem.id;
 
         // Update linked items to reference the newly created item
@@ -2621,8 +2663,8 @@ export default function Alfred() {
           endDate: triageData.intentionData.endDate || null,
           tags: triageData.intentionData.tags || [],
         };
-        wrote(await storage.set(`intent:${newIntent.id}`, newIntent));
-        setIntents((prev) => [...prev, newIntent]);
+        const savedIntent = wrote(await storage.set(`intent:${newIntent.id}`, newIntent));
+        setIntents((prev) => [...prev, savedIntent || newIntent]);
 
         // Create event if scheduled
         if (triageData.intentionData.createEvent && triageData.intentionData.eventDate) {
@@ -2637,8 +2679,8 @@ export default function Alfred() {
             createdAt: new Date().toISOString(),
             text: triageData.intentionData.text,
           };
-          wrote(await storage.set(`event:${newEvent.id}`, newEvent));
-          setEvents((prev) => [...prev, newEvent]);
+          const savedEvent = wrote(await storage.set(`event:${newEvent.id}`, newEvent));
+          setEvents((prev) => [...prev, savedEvent || newEvent]);
         }
       }
 
@@ -2717,8 +2759,8 @@ export default function Alfred() {
         createdAt: new Date().toISOString(),
       };
 
-      await storage.set(`event:${event.id}`, event);
-      setEvents([...events, event]);
+      const savedEvent = await storage.set(`event:${event.id}`, event);
+      setEvents([...events, savedEvent || event]);
 
       // No navigation. This used to end by switching the view to the schedule
       // whenever the date was today, which is what made "Do Today" throw you
@@ -2786,8 +2828,8 @@ export default function Alfred() {
           updates.collectionId !== undefined ? updates.collectionId : intent.collectionId || null,
       };
 
-      await storage.set(`intent:${intent.id}`, updated);
-      setIntents(intents.map((i) => (i.id === intentId ? updated : i)));
+      const savedIntent = await storage.set(`intent:${intent.id}`, updated);
+      setIntents(intents.map((i) => (i.id === intentId ? savedIntent || updated : i)));
 
       // If scheduledDate provided, create an event
       if (scheduledDate) {
@@ -2875,8 +2917,8 @@ export default function Alfred() {
       const context = contexts.find((c) => c.id === updated.contextId);
       const isShared = context?.shared || false;
 
-      await storage.set(`item:${item.id}`, updated, isShared);
-      setItems(items.map((i) => (i.id === itemId ? updated : i)));
+      const savedItem = await storage.set(`item:${item.id}`, updated, isShared);
+      setItems(items.map((i) => (i.id === itemId ? savedItem || updated : i)));
 
       // `item` is the pre-archive snapshot, so restoring is a straight rewrite
       // rather than a flag flip — it also puts back anything the archiving edit
@@ -2933,8 +2975,8 @@ export default function Alfred() {
           createdAt: new Date().toISOString(),
         };
 
-        await storage.set(`item:${cloneId}`, cloned);
-        newItems.push(cloned);
+        const savedClone = await storage.set(`item:${cloneId}`, cloned);
+        newItems.push(savedClone || cloned);
         return cloneId;
       }
 
@@ -2949,8 +2991,8 @@ export default function Alfred() {
     if (!event) return;
     return withLoading('Saving...', async () => {
       const updated = { ...event, ...updates };
-      await storage.set(`event:${event.id}`, updated);
-      setEvents(events.map((e) => (e.id === eventId ? updated : e)));
+      const savedEvent = await storage.set(`event:${event.id}`, updated);
+      setEvents(events.map((e) => (e.id === eventId ? savedEvent || updated : e)));
 
       // If archiving a recurring event, trigger recurrence to create next event
       let successor = null;
@@ -3091,8 +3133,8 @@ export default function Alfred() {
         archived: false,
         createdAt: new Date().toISOString(),
       };
-      await storage.set(`event:${newEvent.id}`, newEvent);
-      setEvents((prev) => [...prev, newEvent]);
+      const savedEvent = await storage.set(`event:${newEvent.id}`, newEvent);
+      setEvents((prev) => [...prev, savedEvent || newEvent]);
       return newEvent;
     }
     return null;
@@ -3790,14 +3832,18 @@ export default function Alfred() {
             createdAt: new Date().toISOString(),
           };
 
-      await storage.set(`context:${context.id}`, context, shared);
+      const savedContext = (await storage.set(`context:${context.id}`, context, shared)) || context;
 
+      // Both branches take the saved row. On the edit branch that matters as
+      // much as on the create branch: the `set_updated_at` trigger stamps a new
+      // `updated_at` that the object we sent does not have, so without this an
+      // edited context kept its old "Last modified" until a reload.
       if (existing) {
         setContexts((prev) =>
-          prev.map((c) => (c.id === context.id ? context : c)),
+          prev.map((c) => (c.id === context.id ? savedContext : c)),
         );
       } else {
-        setContexts((prev) => [...prev, context]);
+        setContexts((prev) => [...prev, savedContext]);
       }
     });
   }
@@ -3911,8 +3957,8 @@ export default function Alfred() {
       const context = contexts.find((c) => c.id === contextId);
       const isShared = context?.shared || false;
 
-      await storage.set(`item:${newItem.id}`, newItem, isShared);
-      setItems([...items, newItem]);
+      const savedItem = await storage.set(`item:${newItem.id}`, newItem, isShared);
+      setItems([...items, savedItem || newItem]);
     });
   }
 
@@ -3938,8 +3984,8 @@ export default function Alfred() {
         collectionId: collectionId,
       };
 
-      await storage.set(`intent:${newIntent.id}`, newIntent);
-      setIntents([...intents, newIntent]);
+      const savedIntent = await storage.set(`intent:${newIntent.id}`, newIntent);
+      setIntents([...intents, savedIntent || newIntent]);
       return newIntent.id; // Return the ID so it can be scheduled
     });
   }
@@ -3964,30 +4010,66 @@ export default function Alfred() {
         // column keeps its own '[]' default and is never written again.
         createdAt: new Date().toISOString(),
       };
-      await storage.set(`item_collections:${newColl.id}`, newColl);
-      setCollections((prev) => [...prev, newColl]);
+      const savedColl = await storage.set(`item_collections:${newColl.id}`, newColl);
+      // Collections have NO realtime channel, so this is the only chance to
+      // learn the database's `updated_at` short of a manual refresh.
+      setCollections((prev) => [...prev, savedColl || newColl]);
       return newColl.id;
     });
   }
 
   // Collection metadata only — name, context, shared, pinned. Membership goes
   // through the collection_items helpers above.
-  async function updateCollection(collId, updates, silent = false) {
+  //
+  // Saves QUIETLY — no "Saving..." overlay. Step 12.4.
+  //
+  // `LoadingOverlay` is a full-screen scrim with a spinner. Four of the five
+  // fields on this screen used to raise it on every change, so ticking
+  // "Pinned" dimmed the entire app for the length of one round trip. It was
+  // also inconsistent with the Name field beside it, which had always saved
+  // silently via the old `silent` flag — a flag that now has no other value,
+  // so it is gone rather than defaulted.
+  //
+  // Nothing replaces it, deliberately. Every control here is a checkbox or a
+  // select bound to state: the control holding its new value IS the
+  // confirmation, unlike an archive, where the row vanishes and Step 2's Undo
+  // message is the only thing left to tell you what happened.
+  //
+  // Quiet is not the same as unreported, and that distinction is the actual
+  // work of this step. The old silent branch swallowed failures in a
+  // `console.error`, which made the Name field the one genuinely silent write
+  // in the app — `storage.set` returns false rather than throwing, so a failed
+  // save left the control showing a value the database did not have. It now
+  // says so and re-reads the truth.
+  async function updateCollection(collId, updates) {
     const coll = collections.find((c) => c.id === collId);
     if (!coll) return;
-    const doSave = async () => {
-      await storage.set(`item_collections:${coll.id}`, { ...coll, ...updates });
+    try {
+      const savedColl = await storage.set(`item_collections:${coll.id}`, { ...coll, ...updates });
+
+      if (savedColl === false) {
+        window.alert("That change could not be saved. Reloading this collection.");
+        await refreshData();
+        return;
+      }
+
       // Functional updater: apply the patch to the freshest state rather than
       // replacing the row with a snapshot captured at render time, which is an
       // independent cause of lost concurrent edits.
+      //
+      // `savedColl` sits in the MIDDLE of the spread as of Step 12.3, not at the
+      // end: it carries the columns the database assigns — `updated_at` above
+      // all — while `updates` stays the winner for the fields the user just
+      // edited. Replacing the row with `savedColl` outright would take the
+      // server's copy of every field and reintroduce exactly the clobber this
+      // functional updater exists to prevent.
       setCollections((prev) =>
-        prev.map((c) => (c.id === collId ? { ...c, ...updates } : c)),
+        prev.map((c) => (c.id === collId ? { ...c, ...savedColl, ...updates } : c)),
       );
-    };
-    if (silent) {
-      try { await doSave(); } catch (e) { console.error('Collection save error:', e); }
-    } else {
-      return withLoading('Saving...', doSave);
+    } catch (e) {
+      console.error("Collection save error:", e);
+      window.alert("That change could not be saved. Reloading this collection.");
+      await refreshData();
     }
   }
 
@@ -4165,8 +4247,8 @@ export default function Alfred() {
         contextId: item.contextId || null,
         recurrenceConfig: { type: "once" },
       };
-      await storage.set(`intent:${newIntent.id}`, newIntent);
-      setIntents((prev) => [...prev, newIntent]);
+      const savedIntent = await storage.set(`intent:${newIntent.id}`, newIntent);
+      setIntents((prev) => [...prev, savedIntent || newIntent]);
 
       // Create event for today
       const newEvent = {
@@ -4179,8 +4261,8 @@ export default function Alfred() {
         archived: false,
         createdAt: new Date().toISOString(),
       };
-      await storage.set(`event:${newEvent.id}`, newEvent);
-      setEvents((prev) => [...prev, newEvent]);
+      const savedEvent = await storage.set(`event:${newEvent.id}`, newEvent);
+      setEvents((prev) => [...prev, savedEvent || newEvent]);
 
       // Build execution inline (can't call activate — state hasn't updated yet)
       let itemElements = [];
@@ -4247,8 +4329,8 @@ export default function Alfred() {
         archived: false,
         createdAt: new Date().toISOString(),
       };
-      await storage.set(`event:${newEvent.id}`, newEvent);
-      setEvents((prev) => [...prev, newEvent]);
+      const savedEvent = await storage.set(`event:${newEvent.id}`, newEvent);
+      setEvents((prev) => [...prev, savedEvent || newEvent]);
 
       // Collection-based execution
       if (intent.collectionId) {
@@ -4941,11 +5023,15 @@ export default function Alfred() {
                 {/* Was a hardcoded `.sort(a.name.localeCompare(b.name))`. That
                     order is now this page's DEFAULT rather than its only option.
 
-                    Context DETAIL's sub-lists are deliberately untouched — its
-                    Items still sort by updatedAt descending, and its Intentions
-                    and Collections keep their arrival order. The spec covers
-                    list pages; detail pages hold five such sub-lists between
-                    them, and giving each a control is a different decision. */}
+                    Context DETAIL's sub-lists still get no CONTROL — its Items
+                    sort by updatedAt descending, and its Intentions and
+                    Collections keep their arrival order. The spec covers list
+                    pages; detail pages hold five such sub-lists between them,
+                    and giving each a control is a different decision.
+
+                    Step 12.3 note: Items' fixed order now runs through
+                    `sortRows` rather than its own inline comparator. No control,
+                    but no second implementation of the comparator either. */}
                 {sortRows(
                   activeContexts, contextsSort.sortKey, NAMED_RECORD_ACCESSORS, contextsSort.sortDir,
                 ).map((context) => (
@@ -4970,7 +5056,19 @@ export default function Alfred() {
           <ContextDetailView
             contextId={selectedContextId}
             context={contexts.find((c) => c.id === selectedContextId)}
-            items={items.filter((i) => i.contextId === selectedContextId && !i.archived).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))}
+            // Was a hand-rolled `(b.updatedAt || '').localeCompare(a.updatedAt || '')`.
+            // Same order, but through the shared comparator as of Step 12.3.
+            // There were two independent implementations of "sort by last
+            // modified, missing last", and they agreed — which is exactly why
+            // fixing one would not have fixed the other. One is now the only
+            // one. It also picks up the title tiebreaker, so items sharing a
+            // timestamp stop depending on array order.
+            items={sortRows(
+              items.filter((i) => i.contextId === selectedContextId && !i.archived),
+              "updated",
+              NAMED_RECORD_ACCESSORS,
+              "desc",
+            )}
             intents={intents.filter((i) => i.contextId === selectedContextId && !(i.isIntention && i.archived))}
             contexts={contexts}
             onBack={() => {
@@ -5409,7 +5507,7 @@ export default function Alfred() {
                       const updated = { ...coll, name: e.target.value };
                       setCollections(collections.map((c) => (c.id === coll.id ? updated : c)));
                     }}
-                    onBlur={() => updateCollection(coll.id, { name: coll.name }, true)}
+                    onBlur={() => updateCollection(coll.id, { name: coll.name })}
                     className="w-full px-3 py-2 border border-border rounded text-base"
                   />
                 </div>
@@ -5840,10 +5938,10 @@ export default function Alfred() {
                 // Save to database
                 const context = contexts.find((c) => c.id === newItem.contextId);
                 const isShared = context?.shared || false;
-                await storage.set(`item:${newItem.id}`, newItem, isShared);
+                const savedItem = await storage.set(`item:${newItem.id}`, newItem, isShared);
 
                 // Add to local items state
-                setItems((prev) => [...prev, newItem]);
+                setItems((prev) => [...prev, savedItem || newItem]);
 
                 // Add to collection
                 const added = await addItemsToCollection(coll.id, [

@@ -3,9 +3,11 @@
 Companion to `technical-spec-ui-standardization.md` (Revision 2). Everything here
 came out of a review of the Alfred context's captured items after Steps 1–11.
 
-Seven items. Two are unfinished rows in the original spec rather than new requests —
-those are marked. The governing rules and the deferred list in the main spec still
-apply unchanged.
+Eight items. Two are unfinished rows in the original spec rather than new requests —
+those are marked. 12.8 was added later, on 2026-09-09, out of what 12.3 turned up.
+The governing rules and the deferred list in the main spec still apply unchanged.
+
+Build order, fixed by Alex: **12.1, 12.3, 12.4, 12.5, 12.2, 12.6, 12.7, then 12.8.**
 
 ---
 
@@ -181,6 +183,60 @@ Three constraints:
   clears `ai_status` back to `not_started`, leaves the stale suggestions, or prompts
   for re-enrichment. Clearing is the honest option; say what you chose.
 
+## 12.8 — Intentions page parity
+
+**Build after the existing seven.** Added 2026-09-09, after 12.3 showed the page had
+nothing to observe a timestamp fix on.
+
+The Intentions page was omitted from Step 9b's sort work the same way it was omitted
+from Step 8's row-action table. Two gaps:
+
+- **No sort control.** Options: Name, Created, Last modified. **No scheduled date** —
+  the list is `intentionsWithoutActiveEvent`, so a scheduled intention drops out of it
+  entirely and the field would be null on every row present. Default: **Last modified
+  descending.**
+- **`IntentionCard` renders no "last updated" line.** `ItemCard` does, at
+  [Alfred.jsx:10151-10157](../src/Alfred.jsx#L10151-L10157) — a
+  `text-xs text-muted-foreground mt-1 block` span below the description, combining an
+  element count and `last updated: <Mon D, YYYY>` with a `·` separator. Add the
+  timestamp half to IntentionCard's display mode, matching that format and placement.
+
+### Inventory finding — it is not just Intentions
+
+**Memories was missed the same way, and worse.** Checked as instructed, and the
+suspicion behind the instruction was right: the spec's page inventory was never
+complete.
+
+| Page | Sort control | Underlying order |
+|---|---|---|
+| Home | yes (9b) | `EVENT_SORT_OPTIONS` |
+| Schedule | yes (9b) | `EVENT_SORT_OPTIONS` |
+| Inbox | yes (9b) | `INBOX_SORT_OPTIONS` |
+| Contexts | yes (9b) | `NAMED_RECORD_SORT_OPTIONS` |
+| Collections | yes (9b) | `NAMED_RECORD_SORT_OPTIONS` |
+| **Intentions** | **none** | **none** — `intentionsWithoutActiveEvent` is a bare `.filter()` |
+| **Memories** | **none** | **none** — `memoriesWithoutContext` is a bare `.filter()` |
+
+Neither omitted page has a *hardcoded* order either, which is the part worth pausing
+on. Context detail's Items at least sorted by `updatedAt` deliberately. These two
+render in whatever order `loadData`'s `select("*")` returned, which carries no
+`ORDER BY` — so the order is arbitrary and may change between sessions for reasons
+nothing in the app controls. Step 9b's stated goal was that order be stable across
+reloads; on these two pages it was never stable to begin with.
+
+`memoriesWithoutContext` is `items.filter((i) => !i.contextId && !i.archived)` and
+`intentionsWithoutActiveEvent` is a filter over `intents`. Both take
+`NAMED_RECORD_ACCESSORS` unchanged — items and intents both have `createdAt` and
+`updatedAt`, and `title` maps to `name` for items and would need `text` for intents,
+so intents need a small accessor bag of their own.
+
+**So 12.8 covers both pages**, not just Intentions. Two omissions of the same page
+across two separate steps was the signal; a third page with the identical gap
+confirms the inventory rather than the page was the problem.
+
+Whether Memories also needs the "last updated" line is already answered: it renders
+`ItemCard`, which has one.
+
 ---
 
 ## Success criteria
@@ -194,6 +250,9 @@ Three constraints:
 - Nothing in the app chrome is teal without a recorded reason.
 - Add-an-item opens a dedicated page, with Archive still absent in add mode.
 - An inbox capture's text can be edited and saved without triaging it.
+- The Intentions and Memories pages each have a sort control, and their order is
+  stable across a reload.
+- IntentionCard shows a "last updated" line in display mode, matching ItemCard's.
 
 ## Out of scope
 
