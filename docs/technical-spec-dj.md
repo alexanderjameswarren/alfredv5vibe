@@ -3957,3 +3957,161 @@ a retryable failure can never claim to be terminal — `OperationalError` raises
 `ValueError` on that phrasing at construction. A test asserts `OperationalError` would
 **still reject** `_defect_text`'s output, so reusing the clause for a genuine defect stays
 a deliberate exception rather than becoming licence to phrase any error this way.
+
+---
+
+### 14.46 🛑 A STAGE SECTION IS NOT A SONG — and setlist.fm already says which is which
+
+**Found by Alex on 2026-09-09**, from the first live run of the fixed targeted diff: Taylor
+Swift, 2024-12-08, BC Place. `Red - Intro`, `Speak Now - Intro` and `Female Rage: The
+Musical` came back `not_found`.
+
+**Why that was wrong in kind, not just in count.** Those are act breaks — video interludes
+and PA intros. setlist.fm records them as rows in the set **because the set is what the
+audience experienced**, which is correct for setlist.fm and wrong for a playlist. They were
+classified `no_such_title`, a cause that means *"YouTube Music has nothing under that
+title"* — true, and it reads as *a recording is missing*. **Nothing is missing.** It was
+never a track. Same error as the medley-part case of §12.7: the verdict was right and the
+reason was invented.
+
+They also inflated the denominator, so **the playlist could never reach its own total.**
+
+**The source marks them and the parser was throwing the mark away.** `song.tape` is a
+boolean in the setlist.fm schema. `_songs_of` never read it — it relied on the *side effect*
+that such rows are often unnamed, and skipped those. Checked against the real setlist
+(id `3baa40bc`, fetched 2026-09-09): **`tape` was true for exactly four of 49 rows — one
+unnamed, and precisely those three.** Zero false positives.
+
+```
+raw rows from setlist.fm : 49
+BEFORE (songs)           : 48   ← one unnamed tape row was already dropped
+AFTER  (songs)           : 45
+stage sections demoted   : 3    ← Red - Intro, Speak Now - Intro, Female Rage: The Musical
+```
+
+⚠️ **THIS IS THE MEDLEY CASE, NOT THE §14.7 CASE, AND THE DIFFERENCE IS THE WHOLE ARGUMENT.**
+Medley parts split on `' / '` — a **structural fact the source states**. *"Prefer the longer
+form"* was a **pattern over titles**, and it fixed Eddie Higgins and broke Red Garland. A
+`- Intro` pattern here would have been the second kind, and worse on both counts:
+
+* it catches **two of the three**, and **cannot** catch `Female Rage: The Musical`, which
+  carries no lexical signal at all;
+* a song genuinely called `Intro` exists somewhere, and a pattern cannot tell it from an act
+  break. **`tape` can, because the source asserts it per row.** Pinned by a test where an
+  untaped track called `Intro` survives beside a taped `Red - Intro` that does not.
+
+⚠️ **NO PATTERN ARM WAS ADDED AS A BACKSTOP** for contributors who omit the flag. §11.1 — a
+check needs a failing case, and there is not one. An unflagged stage section would surface as
+`no_such_title` exactly as these did, and *that* would be the evidence justifying it.
+
+⚠️ **DEMOTED, NEVER DISCARDED.** An artist can play a recording of a real track over the PA,
+and that row is marked tape too. So `tape_entries` ships the **names**, not only a count, and
+the diff aggregates them across the window as `stage_sections` — **a skip nobody can inspect
+is a skip nobody can dispute.**
+
+**`tape_entries` went into BOTH show-assembly paths in the same change**, and
+`DIFF_REQUIRED_SHOW_KEYS` now pins the per-show contract beside `DIFF_REQUIRED_KEYS`. §14.44
+was a payload key on one path and not the other; this is the same hazard one level down, and
+it was the first place to apply the lesson rather than re-learn it.
+
+**RECORDED, NOT ACTED ON: `info` describes a different recording.** setlist.fm's per-song
+note is now carried (32 of 49 rows had one) and **nothing reads it**. It is informational
+because one value — `All Too Well`, `"10 Minute Version; spoken intro"` — names a
+**different master from the one the resolver will pick**. That is a real gap in resolution
+accuracy. It is left open deliberately: acting on it is a resolution rule, and `_songs_of` is
+a parser. Fixing it in the parser would put a §12.11 decision in the wrong layer.
+
+---
+
+### 14.47 THE DIFF ONLY REPORTED ONE DIRECTION — the body side, 2026-09-09
+
+**From the second live run.** 35 body rows in, 32 in `in_body`, and **nothing said what
+happened to the other three.** They had to be found by subtraction: `Enough Space` and
+`Shame Shame` matched no setlist song, and a second `Marigold` row silently collapsed into
+the first.
+
+⚠️ **FOR A TOOL WHOSE JOB IS DIFFING, ONE DIRECTION IS HALF A DIFF.** The setlist side was
+fully accounted for — every song was `in_body` or `missing`, with a `not_found_cause`. The
+body side had **no accounting at all**. The cause was the index: a *set* of titles plus a
+first-wins video_id map, both of which discard rows by construction.
+
+**`body_reconciliation` now closes the arithmetic in the payload:**
+
+```
+matched_titles + duplicate_rows + orphan_rows + untitled_rows = body_size
+```
+
+Asserted by a test across three bodies. **Nobody should ever subtract to find out what
+happened to a row**, and if these four ever fail to sum, a row has gone missing again.
+
+**`orphans`** — body rows matching nothing in the window. ⚠️ **NOT AN ERROR, and the wording
+must not imply one.** A band drops songs; a playlist keeping one they have stopped playing
+is a normal state, and for a recent-shows window it is the *common* state. §11.7 — a flag
+firing on the normal case gets ignored, and it would take the real signals with it.
+
+**`body_duplicates`** — a matched title the body holds more than once. §12.10's duplicate-title
+problem, in the diff rather than in cram. ⚠️ **REPORTED, NOT JUDGED**: a second cut can be
+deliberate. It says the body holds two rows under one title; it does not say remove one.
+
+---
+
+### 14.48 🛑 DECIDED: TITLE JOINS. ARTIST ANNOTATES. ARTIST NEVER REJECTS.
+
+**This was emergent rather than chosen**, which is the whole reason it is written down. A
+body row bylined `Nirvana` joined a Foo Fighters setlist entry for `Marigold` and nothing
+said so. The outcome was right — Grohl wrote it, the row is deliberate — but **a rule that
+happens to be right is not a rule.** A body row by a completely different act would have
+matched a same-named setlist song with no complaint.
+
+⚠️ **THERE IS NO ARTIST-FREE ALTERNATIVE KEY HERE.** Elsewhere this tool insists on joining
+by `video_id` and never by title. That is possible because both sides are YouTube rows. **The
+setlist.fm side has no video_id — it is a name on a stage.** Title is the only key that
+exists for this join, which removes the apparent contradiction with the `in_body` note.
+
+**§12.2 argues for rejecting and does not win.** A false accept (a different act's song
+counted as present) is worse than a false reject (one extra listen) by §12.2's own asymmetry.
+Three reasons it still loses:
+
+1. **`dj_tracks.artist` is a scraped byline (§14.9)** — the weakest field in the body.
+   Rejecting on the weakest available evidence converts a data-quality problem into a wrong
+   answer.
+2. **Rejecting overrules a deliberate human choice silently.** The Marigold row would land in
+   `missing` with no hint that a track already in the playlist had been called missing — a
+   wrong answer with no visible cause, which is worse than either error §12.2 weighs.
+3. **The actual defect was the silence, not the join.** With the disagreement reported,
+   §12.2's false-accept risk stops being invisible — which is the property that made it
+   dangerous.
+
+⚠️ **IT IS A GOOD FLAG BECAUSE IT IS RARE:** one row in 32 on the live run. A per-row
+annotation firing on every row would be §11.7 noise.
+
+⚠️ **`any` WAS THE WRONG QUANTIFIER, AND THE LIVE DATA CAUGHT IT.** The body holds *two*
+Marigolds: the studio cut, a Nirvana B-side bylined `Nirvana`, and the 2006 Pantages live
+cut, a Foo Fighters release. Under `any(row agrees)` the Foo Fighters row **suppressed the
+flag on the Nirvana row** — the check went quiet on the one case it was built for. A title
+agrees only when **every** named row agrees, disagreements are listed **per row**, and each
+carries **the disagreeing row's own `video_id`** rather than the title's joined one.
+
+⚠️ `body_artist_agrees: null` means the row carried **no byline** — UNKNOWN, not
+disagreement. Saying "artist differs" about an absent field invents a conflict.
+
+---
+
+### 14.49 A CONSTANT THAT DESCRIBES CHANGING DATA IS A STALE FACT WITH REACH
+
+The `reading` blob — which ships inside **every** `diff_dj_setlists` response — asserted
+*"Foo Fighters read 27/40 total and 27/32 gettable on 2026-09-02"*. By 2026-09-09 the same
+playlist read 32/40 and 32/32, because five tracks had been added. **The wrong pair went out
+with every call for a week.**
+
+Same trap as the weekly prompt's Appendix A, and fixed the same way: **the operational half
+must be self-checking rather than asserted.** The worked pair is gone and the text now points
+at *this response's own* `coverage` block, which cannot go stale because it is computed.
+
+⚠️ **NOT EVERY NUMBER HAD TO GO, AND THE AUDIT MATTERED MORE THAN THE ONE FIX.** Two other
+figures survive because they are **the observations that caused the rules** rather than
+descriptions of current data — the Weezer promo-spot counts behind `full_set_min_songs`, and
+Mayonaise behind `variant_only`. Both were rewritten into the **past tense and dated**, so
+neither reads as this run's data. `Mayonaise, at 5 of 10 ... is that case` became `WAS that
+case on 2026-09-02`. **Three tests pin this**: no coverage pair may be asserted, the text must
+point at this response, and the surviving historical figures must stay marked as past.

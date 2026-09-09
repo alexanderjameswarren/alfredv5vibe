@@ -249,14 +249,54 @@ def _search_page(mbid: str, year: int | None, venue: str | None,
         ) from None
 
 
+# ---------------------------------------------------------------------------
+# ADDED 2026-09-09: A TAPE ENTRY IS NOT A SONG THE ARTIST PLAYED
+# ---------------------------------------------------------------------------
+# setlist.fm records stage sections — act intros, video interludes, PA outros —
+# as ROWS IN THE SET, because the set is what the audience experienced. They are
+# not performances and they are not tracks. The Taylor Swift show of 2024-12-08
+# carried three named ones: "Red - Intro", "Speak Now - Intro" and "Female Rage:
+# The Musical". All three searched YouTube, found nothing, and were reported as
+# `no_such_title` — a cause that means "the recording is missing" when in fact
+# NOTHING IS MISSING. They inflated `distinct_setlist_songs` from 45 to 48, so
+# the playlist could never reach its own denominator.
+#
+# 🛑 THE SOURCE MARKS THEM AND WE WERE THROWING THE MARK AWAY. `song.tape` is a
+# boolean in the setlist.fm schema and this parser never read it — it only used
+# the SIDE EFFECT that such entries are often unnamed. On the real show, `tape`
+# was true for exactly four rows: one unnamed, and precisely those three. Zero
+# false positives across 49 entries.
+#
+# ⚠️ THIS IS THE MEDLEY CASE, NOT THE §14.7 CASE, AND THE DIFFERENCE IS THE WHOLE
+# ARGUMENT. Medley parts are split on ' / ' — a STRUCTURAL fact the source
+# states. "Prefer the longer form" was a PATTERN over titles, and it fixed Eddie
+# Higgins and broke Red Garland. A title pattern here would have been the second
+# kind: `- Intro` catches two of the three and CANNOT catch "Female Rage: The
+# Musical", which has no lexical signal at all. A pattern was therefore both
+# riskier and worse. `tape` is the source's own assertion, and it is complete.
+#
+# ⚠️ NO PATTERN ARM WAS ADDED AS A BACKSTOP for contributors who omit the flag.
+# §11.1 — a check needs a failing case, and there is not one. If an unflagged
+# stage section ever appears it will surface as `no_such_title` exactly as these
+# did, which is the evidence that would justify building it.
+#
+# ⚠️ THE ENTRIES ARE NOT DISCARDED, ONLY DEMOTED. An artist could play a
+# recording of a REAL track over the PA, and that row is marked tape too. So the
+# names ship (`_tape_of`) rather than only a count: a skip nobody can inspect is
+# a skip nobody can dispute.
 def _songs_of(setlist: dict[str, Any]) -> list[dict[str, Any]]:
-    """Flatten the sets -> set -> song nesting into one ordered list."""
+    """Flatten the sets -> set -> song nesting into one ordered list.
+
+    Tape entries are EXCLUDED — see `_tape_of`, which keeps them.
+    """
     out: list[dict[str, Any]] = []
     for chunk in (setlist.get("sets") or {}).get("set") or []:
         for song in chunk.get("song") or []:
             name = (song.get("name") or "").strip()
             if not name:
-                # A tape/intro entry with no name. Not a song anyone can learn.
+                # An entry with no name. Not a song anyone can learn.
+                continue
+            if song.get("tape"):
                 continue
             cover = (song.get("cover") or {}).get("name")
             out.append({
@@ -265,7 +305,33 @@ def _songs_of(setlist: dict[str, Any]) -> list[dict[str, Any]]:
                 # PERFORMING artist's version, so this never gates inclusion.
                 "cover_of": cover,
                 "encore": bool(chunk.get("encore")),
+                # setlist.fm's per-performance note: "shortened", "spoken intro",
+                # "10 Minute Version". ⚠️ INFORMATIONAL AND UNUSED — it is real
+                # data about the performance that was being thrown away, and one
+                # value of it ("All Too Well - 10 Minute Version") describes a
+                # DIFFERENT RECORDING from the one the resolver will pick. That
+                # is a known gap, recorded rather than acted on: acting on it is
+                # a resolution rule, and this is a parser.
+                "info": (song.get("info") or "").strip() or None,
             })
+    return out
+
+
+def _tape_of(setlist: dict[str, Any]) -> list[dict[str, Any]]:
+    """The NAMED stage sections `_songs_of` dropped, so the skip is inspectable.
+
+    Unnamed tape rows are omitted here too — there is nothing to show and
+    nothing anyone could act on.
+    """
+    out: list[dict[str, Any]] = []
+    for chunk in (setlist.get("sets") or {}).get("set") or []:
+        for song in chunk.get("song") or []:
+            name = (song.get("name") or "").strip()
+            if name and song.get("tape"):
+                out.append({
+                    "name": name,
+                    "info": (song.get("info") or "").strip() or None,
+                })
     return out
 
 
@@ -313,6 +379,7 @@ async def _targeted_lookup(mbid: str, year: int | None, venue: str | None,
                 "artist": (entry.get("artist") or {}).get("name"),
                 "song_count": len(songs),
                 "songs": songs,
+                "tape_entries": _tape_of(entry),
                 "url": entry.get("url"),
             })
         # A page short of the API's page size is the last one. Unlike the
@@ -440,7 +507,9 @@ async def _targeted_lookup(mbid: str, year: int | None, venue: str | None,
         "Turtles'), never to decide a cover does not count. `song_count` per show "
         "is returned because a 1-song TV appearance and a 24-song stadium set are "
         "not comparable evidence, and any 'appeared in N of 10' figure that hides "
-        "that is misleading. Tier 1."
+        "that is misleading. STAGE SECTIONS (setlist.fm `tape` rows - act intros, "
+        "video interludes) are NOT counted as songs and are returned separately "
+        "as `tape_entries`. Tier 1."
     ),
     input_schema={
         "type": "object",
@@ -588,6 +657,7 @@ async def get_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 "artist": (entry.get("artist") or {}).get("name"),
                 "song_count": len(songs),
                 "songs": songs,
+                "tape_entries": _tape_of(entry),
                 "url": entry.get("url"),
             })
             if len(kept) >= limit:
@@ -622,7 +692,13 @@ async def get_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
             "number of setlists here — and show `song_count` per show, because a "
             "1-song appearance and a 24-song set are not comparable evidence. "
             "`cover_of` is informational: resolve covers against the PERFORMING "
-            "artist's version, never to exclude them."
+            "artist's version, never to exclude them. `tape_entries` are STAGE "
+            "SECTIONS - act intros and video interludes that setlist.fm records "
+            "as set rows because the audience experienced them. They are NOT "
+            "songs, they are excluded from `songs` and `song_count`, and they "
+            "ship by name so the skip can be checked. `info` is setlist.fm's "
+            "per-performance note ('shortened', '10 Minute Version') and is "
+            "INFORMATIONAL - resolution does not read it."
         ),
     }
 
@@ -691,6 +767,14 @@ async def get_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
 # Asserted by test_dj_diff.py against BOTH paths.
 DIFF_REQUIRED_KEYS = frozenset({
     "mbid", "setlists", "returned", "empty_entries_skipped",
+})
+
+# The keys diff_dj_setlists reads off EACH SHOW in `setlists`. Same argument one
+# level down, and the level `tape_entries` was added at on 2026-09-09 — a key
+# added to the untargeted show dict and not the targeted one would reproduce the
+# crash of 2026-09-08 exactly, just later.
+DIFF_REQUIRED_SHOW_KEYS = frozenset({
+    "event_date", "venue", "song_count", "songs", "tape_entries",
 })
 
 _MEDLEY_SEP = " / "
@@ -1217,6 +1301,19 @@ def _resolve_one(
         "are the same master and resolve silently, and only a genuinely different "
         "recording is escalated - with album and duration attached so it can be "
         "settled without opening anything. "
+        "THE JOIN RULE, DECIDED 2026-09-09 AND STATED RATHER THAN EMERGENT: "
+        "setlist songs are matched to the body BY TITLE, case- and "
+        "punctuation-insensitively. The body's `artist` ANNOTATES the match and "
+        "NEVER REJECTS it - dj_tracks.artist is a scraped byline (14.9), so "
+        "rejecting on it would turn a data-quality problem into a wrong answer, "
+        "and it would silently overrule deliberate inclusions (a Marigold bylined "
+        "'Nirvana' belongs in a Foo Fighters playlist). Disagreements ship in "
+        "`artist_disagreements` so the risk is visible instead of silent. Title "
+        "is also the ONLY key available for this join: the setlist.fm side has no "
+        "video_id, it is a name on a stage. "
+        "THE BODY SIDE IS RECONCILED: `orphans` (body rows matching nothing - "
+        "normal, not an error) and `body_duplicates` (one title held twice) are "
+        "reported, and `body_reconciliation` sums to `body_size`. "
         "IT CANNOT SEE ARTIST-IDENTITY COLLISIONS (spec 14.4): it detects that a "
         "SEARCH returned several artists, not that two real-world acts share a "
         "name. That needs the MusicBrainz search API, and the gap is stated in "
@@ -1362,8 +1459,27 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
             "Resolving nothing is the safe answer here (spec 12.7)."
         )
 
-    body_titles = {_norm_title(t.get("title") or "") for t in body}
-    body_titles.discard("")
+    # -----------------------------------------------------------------------
+    # 🛑 THE BODY IS INDEXED BY TITLE, KEEPING EVERY ROW — added 2026-09-09
+    # -----------------------------------------------------------------------
+    # The old index was a SET of titles plus a first-wins video_id map, and both
+    # of those threw rows away. Three things went missing with them, all found in
+    # one live Foo Fighters run: 35 body rows went in, 32 came back in `in_body`,
+    # and NOTHING said what happened to the other three. They had to be found by
+    # subtraction, which is not a report.
+    #
+    # ⚠️ FOR A TOOL WHOSE JOB IS DIFFING, ONE DIRECTION IS HALF A DIFF. The
+    # setlist side was fully accounted for — every song was in_body or missing,
+    # with a cause. The body side had no accounting at all.
+    body_by_title: dict[str, list[dict[str, Any]]] = {}
+    untitled_rows = 0
+    for t in body:
+        k = _norm_title(t.get("title") or "")
+        if not k:
+            untitled_rows += 1
+            continue
+        body_by_title.setdefault(k, []).append(t)
+    body_titles = set(body_by_title)
 
     # ⚠️ ADDED 2026-09-02: carry the body's video_id through to `in_body`, so
     # nothing downstream has to join these entries on TITLE.
@@ -1376,10 +1492,22 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
     # the spec mandates is the one that would have failed silently on titles.
     # video_id is stable across both. Join on that, never on the title.
     body_video_by_title: dict[str, str] = {}
-    for t in body:
-        k = _norm_title(t.get("title") or "")
-        if k and t.get("video_id") and k not in body_video_by_title:
-            body_video_by_title[k] = t["video_id"]
+    for k, rows in body_by_title.items():
+        for t in rows:
+            if t.get("video_id"):
+                body_video_by_title[k] = t["video_id"]
+                break
+
+    # Distinct across the window, first-seen order — the same show repeats its
+    # act intros every night, and three names read better than ninety.
+    stage_sections: list[dict[str, Any]] = []
+    _seen_tape: set[str] = set()
+    for show in shows:
+        for t in show.get("tape_entries") or []:
+            k = _norm_title(t.get("name") or "")
+            if k and k not in _seen_tape:
+                _seen_tape.add(k)
+                stage_sections.append(t)
 
     # --- Fold the window into one entry per distinct song ------------------
     songs: dict[str, dict[str, Any]] = {}
@@ -1453,6 +1581,117 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
 
     in_body = [(k, e) for k, e in songs.items() if k in body_titles]
     missing = [e for k, e in songs.items() if k not in body_titles]
+
+    # -----------------------------------------------------------------------
+    # THE BODY SIDE OF THE DIFF — orphans, duplicates, and the artist question
+    # -----------------------------------------------------------------------
+    matched_keys = {k for k, _ in in_body}
+
+    # ORPHANS: body rows matching nothing in the window. ⚠️ NOT AN ERROR AND THE
+    # WORDING MUST NOT IMPLY ONE (§11.7 — a flag that fires on the normal case
+    # gets ignored). A band drops songs; a playlist keeping one they have stopped
+    # playing is a fine state, and for a window of recent shows it is the COMMON
+    # state. Reported so it is visible rather than derived by subtraction.
+    orphans = [
+        {"title": (t.get("title") or ""), "video_id": t.get("video_id"),
+         "artist": t.get("artist")}
+        for k, rows in body_by_title.items() if k not in matched_keys
+        for t in rows
+    ]
+    orphans.sort(key=lambda o: o["title"].lower())
+
+    # DUPLICATES: a matched title the body holds MORE THAN ONCE. The live Foo
+    # Fighters run held two Marigolds — the studio cut and the 2006 Pantages live
+    # one. The setlist has a single entry, it joined the studio version, and the
+    # live row simply VANISHED from the output. §12.10's duplicate-title problem,
+    # in the diff rather than in cram.
+    #
+    # ⚠️ REPORTED, NOT JUDGED. A second cut of a song can be deliberate. This
+    # says the body holds two rows under one title; it does not say remove one.
+    body_duplicates = []
+    duplicate_rows = 0
+    for k, e in in_body:
+        rows = body_by_title.get(k) or []
+        if len(rows) > 1:
+            duplicate_rows += len(rows) - 1
+            body_duplicates.append({
+                "title": e["title"],
+                "body_rows": [{"title": t.get("title"), "artist": t.get("artist"),
+                               "video_id": t.get("video_id")} for t in rows],
+                "joined_video_id": body_video_by_title.get(k),
+            })
+
+    # -----------------------------------------------------------------------
+    # 🛑 DECIDED 2026-09-09: TITLE JOINS. ARTIST ANNOTATES. ARTIST NEVER REJECTS.
+    # -----------------------------------------------------------------------
+    # This was EMERGENT rather than chosen, which is why it is written down here
+    # and in the tool's own description. A body row attributed to "Nirvana"
+    # joined a Foo Fighters setlist entry for Marigold and nothing said so. The
+    # OUTCOME was right — Grohl wrote it and the row is there deliberately — but
+    # a rule that happens to be right is not a rule.
+    #
+    # ⚠️ THERE IS NO ARTIST-FREE ALTERNATIVE KEY HERE. Elsewhere this tool insists
+    # on joining by video_id and never by title; that is possible because both
+    # sides are YouTube rows. The setlist.fm side has NO video_id — it is a name
+    # on a stage. Title is the only key that exists for this particular join, and
+    # saying so removes the apparent contradiction with the `in_body` note.
+    #
+    # WHY ARTIST DOES NOT REJECT, given §12.2 says a false ACCEPT is the worse
+    # error (a song he does not know when the lights go down, against one extra
+    # listen):
+    #
+    #   1. `dj_tracks.artist` IS A SCRAPED BYLINE (§14.9) — the weakest field in
+    #      the body. Rejecting on the weakest available evidence converts a data
+    #      quality problem into a wrong answer.
+    #   2. REJECTING OVERRULES A DELIBERATE HUMAN CHOICE SILENTLY. The Marigold
+    #      row would land in `missing` with no hint that a track already in the
+    #      playlist had been called missing — a wrong answer with no visible
+    #      cause, which is worse than either error §12.2 weighs.
+    #   3. THE ACTUAL DEFECT WAS THE SILENCE, NOT THE JOIN. With the disagreement
+    #      reported, §12.2's false-accept risk stops being invisible, which is
+    #      the property that made it dangerous.
+    #
+    # ⚠️ IT IS A GOOD FLAG BECAUSE IT IS RARE: one row in 32 on the live run.
+    # A per-row annotation that fired on every row would be §11.7 noise.
+    # ⚠️ PER ROW, NOT PER TITLE — and `any` would have been the wrong quantifier.
+    # The body holds TWO Marigolds. The studio cut is a Nirvana B-side (Grohl
+    # wrote and sang it) and is bylined "Nirvana"; the 2006 Pantages live cut is
+    # a Foo Fighters release. Under `any(agrees)` the Foo Fighters row would
+    # SUPPRESS the flag on the Nirvana row — silencing the exact disagreement
+    # this block exists to show. A title agrees only when EVERY named row does.
+    artist_disagreements: list[dict[str, Any]] = []
+    for k, e in in_body:
+        rows = body_by_title.get(k) or []
+        named = [t for t in rows if (t.get("artist") or "").strip()]
+        if not named:
+            # No byline at all is UNKNOWN, not disagreement. Saying "artist
+            # differs" about an absent field invents a conflict.
+            e["body_artist_agrees"] = None
+            e["body_artist"] = None
+            continue
+        disagreeing = [t for t in named
+                       if not _artist_matches([t.get("artist")], performing)]
+        e["body_artist_agrees"] = not disagreeing
+        e["body_artist"] = named[0].get("artist")
+        for t in disagreeing:
+            artist_disagreements.append({
+                "title": e["title"],
+                "body_artist": t.get("artist"),
+                "performing": performing,
+                # The DISAGREEING row's own id, not the title's joined id — the
+                # caller needs to find the row being talked about.
+                "video_id": t.get("video_id"),
+            })
+
+    # ⚠️ THE ARITHMETIC CLOSES IN THE PAYLOAD, so nobody subtracts to find out
+    # what happened to a row. Asserted by test: these four sum to `body_size`.
+    body_reconciliation = {
+        "body_size": len(body),
+        "matched_titles": len(in_body),
+        "duplicate_rows": duplicate_rows,
+        "orphan_rows": len(orphans),
+        "untitled_rows": untitled_rows,
+    }
     # Sort on FULL SETS first. A song at four promo spots outranking one played
     # at every stadium show is the ordering the raw count produced, and it put
     # the weakest evidence at the top of the list a human reads first.
@@ -1530,6 +1769,12 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 for s in shows
             ],
             "shows_read": sl["returned"],
+            # ⚠️ NOT A COUNT ALONE. `stage_sections` names what was demoted so
+            # the reader can see the skip was right; `distinct_setlist_songs`
+            # below no longer includes them, and without the names that drop
+            # would be invisible arithmetic.
+            "stage_sections": stage_sections,
+            "stage_sections_skipped": len(stage_sections),
             "full_sets_read": sum(
                 1 for s in shows if s["song_count"] >= _FULL_SET_MIN_SONGS),
             # In the payload, never in prose, and named so it can be argued with.
@@ -1551,11 +1796,21 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 # video_id travels so callers join on it rather than on title.
                 {"title": e["title"], "shows": len(e["shows"]),
                  "full_set_shows": e["full_set_shows"],
-                 "video_id": body_video_by_title.get(k)}
+                 "video_id": body_video_by_title.get(k),
+                 # null = the body row carried no byline, which is UNKNOWN and
+                 # not disagreement. See the decision note above the join.
+                 "body_artist_agrees": e.get("body_artist_agrees"),
+                 "body_artist": e.get("body_artist")}
                 for k, e in sorted(
                     in_body, key=lambda kv: (-kv[1]["full_set_shows"],
                                              -len(kv[1]["shows"])))
             ],
+            # THE BODY SIDE OF THE DIFF. Added 2026-09-09 — before this, 35 rows
+            # in and 32 out, with the other three findable only by subtraction.
+            "body_reconciliation": body_reconciliation,
+            "orphans": orphans,
+            "body_duplicates": body_duplicates,
+            "artist_disagreements": artist_disagreements,
             "missing": missing,
             "resolution_counts": counts,
             "not_found_causes": cause_counts,
@@ -1571,19 +1826,26 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 "NUMBER HAS TO STAND ALONE. A show counts as a full set at "
                 "`full_set_min_songs` songs or more. §12.3 decided promo "
                 "appearances COUNT and they still do - this labels them, it "
-                "excludes nothing. Six of ten Weezer shows in the 2026-09-02 "
-                "window were 1-6 song television and radio spots, so 'We Might as "
-                "Well Be Strangers, 4 shows' was three TV appearances and one "
-                "concert. `missing` is now sorted by full sets first for the same "
-                "reason. "
+                "excludes nothing. (THE OBSERVATION THAT CAUSED THE RULE, kept "
+                "as history and not as a current figure: on 2026-09-02, six of "
+                "ten Weezer shows in the window were 1-6 song television and "
+                "radio spots, so 'We Might as Well Be Strangers, 4 shows' was "
+                "three TV appearances and one concert.) `missing` is now sorted "
+                "by full sets first for the same reason. "
                 "🛑 `coverage` CARRIES TWO DENOMINATORS AND NEITHER "
                 "REPLACES THE OTHER. `total` is every distinct song in the window "
                 "- what he will actually hear, and the right denominator for 'do I "
                 "know this set'. `gettable` subtracts the gaps NO decision can "
                 "close (medley parts, songs only other artists have recorded, "
                 "titles YouTube Music does not have) - the right denominator for "
-                "'is this playlist finished'. Foo Fighters read 27/40 total and "
-                "27/32 gettable on 2026-09-02. Report `total` beside any "
+                "'is this playlist finished'. 🛑 QUOTE THE `coverage` BLOCK IN "
+                "THIS RESPONSE AND NOTHING ELSE - THIS TEXT DELIBERATELY CARRIES "
+                "NO EXAMPLE NUMBERS. A worked pair was frozen here on 2026-09-02 "
+                "and was WRONG BY 2026-09-09 because five tracks had been added "
+                "to the playlist since, and it shipped inside every response the "
+                "tool returned. A constant that describes changing data is a "
+                "stale fact with a long reach. "
+                "Report `total` beside any "
                 "cram_complete (§12.10); report `gettable` when the question "
                 "is whether to add anything. "
                 "⚠️ `not_found_cause` CLASSIFIES EVERY not_found, so "
@@ -1593,7 +1855,31 @@ async def diff_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
                 "artist has the song and only a studio cut is missing, so it "
                 "ships `variant_candidates` and `recommended_video_id` (§12.11: "
                 "never escalate without a recommendation and a way to resolve it). "
-                "Mayonaise, at 5 of 10 Smashing Pumpkins shows, is that case. "
+                "(Mayonaise WAS that case on 2026-09-02 - a past observation, not "
+                "a current count; check this run's own numbers.) "
+                "🛑 THE BODY SIDE IS REPORTED TOO, AND `body_reconciliation` "
+                "MUST SUM: matched_titles + duplicate_rows + orphan_rows + "
+                "untitled_rows = body_size. Nobody should ever subtract to find "
+                "out what happened to a row. "
+                "`orphans` are body rows matching NOTHING in the window - ⚠️ NOT "
+                "AN ERROR, and do not report them as one: a band drops songs, and "
+                "keeping one they have stopped playing is a normal state. State "
+                "the count; name them only if asked. "
+                "`body_duplicates` are titles the body holds MORE THAN ONCE - the "
+                "join takes one row and the others would otherwise vanish. "
+                "REPORTED, NOT JUDGED: a second cut can be deliberate. "
+                "🛑 `artist_disagreements` - THE JOIN RULE IS: TITLE JOINS, "
+                "ARTIST ANNOTATES, ARTIST NEVER REJECTS. A body row whose byline "
+                "is a different act still counts as present, because "
+                "dj_tracks.artist is a SCRAPED BYLINE (§14.9) and rejecting on "
+                "the weakest field turns bad data into a wrong answer - a "
+                "Marigold row bylined 'Nirvana' is in a Foo Fighters playlist "
+                "deliberately. ⚠️ THE DISAGREEMENT IS REPORTED SO THE §12.2 "
+                "FALSE-ACCEPT RISK IS NOT SILENT: if one of these really is a "
+                "different act's song, the setlist song is NOT in the playlist "
+                "and this list is the only place that shows it. "
+                "`body_artist_agrees: null` means the row carried no byline - "
+                "UNKNOWN, not disagreement. "
                 "⚠️ `in_body` CARRIES `video_id`. JOIN ON IT, NEVER ON "
                 "TITLE - get_dj_managed_playlists mode=cram reports the raw "
                 "dj_tracks title ('Jellybelly (Remastered 2012)') and this tool "

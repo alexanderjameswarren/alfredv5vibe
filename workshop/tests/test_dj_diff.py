@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import unittest
 import unittest.mock as mock
 from pathlib import Path
@@ -682,6 +683,369 @@ class TargetedDiffEndToEndTests(unittest.TestCase):
             self._diff({"mbid": self.MBID, "body": [], "on_date": "2024-12-08",
                         "resolve": False}, page=page)
         self.assertIn("2024-12-08", str(cm.exception))
+
+
+class TapeEntryTests(unittest.TestCase):
+    """🛑 A STAGE SECTION IS NOT A SONG, AND THE SOURCE ALREADY SAYS SO.
+
+    setlist.fm records act intros, video interludes and PA outros as rows in the
+    set, because the set is what the audience experienced. The Taylor Swift show
+    of 2024-12-08 carried three named ones. All three searched YouTube, found
+    nothing, and were reported `no_such_title` — a cause meaning "the recording
+    is missing" when NOTHING WAS MISSING. They inflated the song count 45 -> 48,
+    so the playlist could never reach its own denominator.
+
+    ⚠️ EVERY ROW BELOW IS REAL, taken from setlist.fm id 3baa40bc on 2026-09-09.
+    `tape` was true for exactly four of the 49 rows: one unnamed and these three.
+    ZERO false positives — which is why this is the medley case (a structural
+    fact the source states) and not the §14.7 case (a pattern over titles).
+    """
+
+    # Verbatim from the API. Trimmed to the fields the parser reads.
+    REAL_SET = {"sets": {"set": [{"song": [
+        {"name": "", "tape": True,
+         "info": "w/ elements of MA&tHP, The Alchemy, Fearless, EG, SN, gr, ..."},
+        {"name": "Cruel Summer", "info": "extended outro"},
+        {"name": "Fearless", "info": "shortened"},
+        {"name": "Red - Intro", "tape": True,
+         "info": 'contains elements of "State of Grace", "Holy Ground" and "Red"'},
+        {"name": "I Knew You Were Trouble", "info": "shortened"},
+        {"name": "Speak Now - Intro", "tape": True,
+         "info": 'contains elements of "Castles Crumbling"'},
+        {"name": "Female Rage: The Musical", "tape": True,
+         "info": 'contains elements of "MBOBHFT", "WAOLOM?", "loml", ...'},
+        {"name": "All Too Well", "info": "10 Minute Version; spoken intro"},
+    ]}]}}
+
+    def test_the_three_stage_sections_are_NOT_SONGS(self):
+        names = [s["name"] for s in dj_setlists._songs_of(self.REAL_SET)]
+        for section in ("Red - Intro", "Speak Now - Intro",
+                        "Female Rage: The Musical"):
+            self.assertNotIn(section, names)
+        self.assertEqual(len(names), 4)
+
+    def test_the_REAL_SONGS_SURVIVE(self):
+        # ⚠️ THE NEGATIVE CONTROL. A filter that dropped everything would pass
+        # the test above and destroy the tool.
+        names = [s["name"] for s in dj_setlists._songs_of(self.REAL_SET)]
+        self.assertEqual(names, ["Cruel Summer", "Fearless",
+                                 "I Knew You Were Trouble", "All Too Well"])
+
+    def test_a_song_TITLED_like_a_stage_section_is_kept_when_not_taped(self):
+        """🛑 THE §14.7 GUARD, AND THE REASON NO TITLE PATTERN WAS ADDED.
+
+        "Prefer the longer form" fixed Eddie Higgins and broke Red Garland. A
+        `- Intro` pattern here would do the same thing: a song genuinely called
+        "Intro" exists somewhere, and the pattern cannot tell it from an act
+        break. `tape` can, because the source asserts it per row.
+        """
+        st = {"sets": {"set": [{"song": [
+            {"name": "Intro"},                       # a real track so titled
+            {"name": "Red - Intro", "tape": True},   # an act break
+        ]}]}}
+        self.assertEqual([s["name"] for s in dj_setlists._songs_of(st)], ["Intro"])
+
+    def test_a_TAPED_REAL_TRACK_is_still_reported_not_erased(self):
+        # ⚠️ An artist can play a recording of a real song over the PA, and that
+        # row is marked tape too. Demoted, never discarded - a skip nobody can
+        # inspect is a skip nobody can dispute.
+        st = {"sets": {"set": [{"song": [
+            {"name": "Fortnight", "tape": True, "info": "outro"},
+        ]}]}}
+        self.assertEqual(dj_setlists._songs_of(st), [])
+        self.assertEqual(dj_setlists._tape_of(st),
+                         [{"name": "Fortnight", "info": "outro"}])
+
+    def test_tape_entries_ship_with_their_names(self):
+        tape = dj_setlists._tape_of(self.REAL_SET)
+        self.assertEqual([t["name"] for t in tape],
+                         ["Red - Intro", "Speak Now - Intro",
+                          "Female Rage: The Musical"])
+
+    def test_an_UNNAMED_tape_row_appears_in_NEITHER(self):
+        # There is nothing to show and nothing anyone could act on.
+        self.assertEqual(len(dj_setlists._songs_of(self.REAL_SET)), 4)
+        self.assertEqual(len(dj_setlists._tape_of(self.REAL_SET)), 3)
+
+    def test_the_performance_note_is_carried_but_UNUSED(self):
+        # ⚠️ A RECORDED GAP. "All Too Well - 10 Minute Version" names a DIFFERENT
+        # RECORDING from the one the resolver will pick. Carried as data; acting
+        # on it is a resolution rule and _songs_of is a parser.
+        songs = {s["name"]: s for s in dj_setlists._songs_of(self.REAL_SET)}
+        self.assertEqual(songs["All Too Well"]["info"],
+                         "10 Minute Version; spoken intro")
+        self.assertEqual(songs["Cruel Summer"]["info"], "extended outro")
+        # A song with no note carries None rather than an empty string, so
+        # "absent" and "recorded as blank" stay distinguishable.
+        self.assertIsNone(dj_setlists._songs_of(
+            {"sets": {"set": [{"song": [{"name": "X"}]}]}})[0]["info"])
+
+
+class ShowKeyContractTests(unittest.TestCase):
+    """§14.44 one level down: a show key added to one path and not the other.
+
+    `tape_entries` is read off every show by the diff. It went into the
+    untargeted assembly and the targeted one in the same change BECAUSE the
+    2026-09-08 crash was exactly this, one level up.
+    """
+
+    def test_the_targeted_path_builds_shows_with_every_key_the_diff_reads(self):
+        page = {"setlist": [{
+            "id": "sl1", "eventDate": "08-12-2024",
+            "artist": {"name": "Someone"},
+            "venue": {"name": "H", "city": {"name": "C", "country": {"code": "GB"}}},
+            "sets": {"set": [{"song": [{"name": "A"}, {"name": "B - Intro", "tape": True}]}]},
+        }], "total": 1}
+
+        def fake_search(mbid, year, venue, p, key):
+            return page if p == 1 else {"setlist": [], "total": 1}
+
+        with mock.patch.object(dj_setlists, "_search_page", fake_search):
+            out = asyncio.run(dj_setlists._targeted_lookup(
+                "20244d07-534f-4eff-b4d4-930878889970", 2024, None,
+                "2024-12-08", 10, "key"))
+        show = out["data"]["setlists"][0]
+        missing = dj_setlists.DIFF_REQUIRED_SHOW_KEYS - set(show)
+        self.assertEqual(missing, set(),
+                         f"targeted shows are missing {sorted(missing)}")
+        self.assertEqual(show["song_count"], 1, "the tape row is not a song")
+        self.assertEqual([t["name"] for t in show["tape_entries"]], ["B - Intro"])
+
+
+class BodySideOfTheDiffTests(unittest.TestCase):
+    """🛑 35 ROWS IN, 32 OUT, AND NOTHING SAID WHERE THE OTHER THREE WENT.
+
+    The setlist side was fully accounted for - every song was in_body or missing,
+    with a cause. The body side had no accounting at all, so the gap was found by
+    SUBTRACTING. For a tool whose job is diffing, one direction is half a diff.
+
+    The three were real: Enough Space and Shame Shame matched no setlist song in
+    the window, and a second Marigold row (the 2006 Pantages live cut) joined the
+    same title as the studio one and vanished.
+    """
+
+    MBID = "20244d07-534f-4eff-b4d4-930878889970"
+
+    def _run(self, body, setlist_songs=("Marigold", "Everlong")):
+        page = {"setlist": [{
+            "id": "sl1", "eventDate": "08-12-2024",
+            "artist": {"name": FF},
+            "venue": {"name": "H", "city": {"name": "C", "country": {"code": "GB"}}},
+            "sets": {"set": [{"song": [{"name": n} for n in setlist_songs]}]},
+        }], "total": 1}
+
+        def fake_search(mbid, year, venue, p, key):
+            return page if p == 1 else {"setlist": [], "total": 1}
+
+        with mock.patch.object(dj_setlists, "_search_page", fake_search), \
+             mock.patch.object(dj_setlists, "_read_api_key", lambda: "k"):
+            out = asyncio.run(dj_setlists.diff_dj_setlists(
+                {"mbid": self.MBID, "body": body, "on_date": "2024-12-08",
+                 "resolve": False}, _Ctx()))
+        return out["data"]
+
+    # The live rows, with the two Marigolds and the two orphans.
+    BODY = [
+        {"title": "Marigold", "artist": FF, "video_id": "studio"},
+        {"title": "Marigold", "artist": "Nirvana", "video_id": "live2006"},
+        {"title": "Everlong", "artist": FF, "video_id": "ev"},
+        {"title": "Enough Space", "artist": FF, "video_id": "es"},
+        {"title": "Shame Shame", "artist": FF, "video_id": "ss"},
+    ]
+
+    def test_ORPHANS_ARE_NAMED_not_left_to_subtraction(self):
+        data = self._run(self.BODY)
+        self.assertEqual([o["title"] for o in data["orphans"]],
+                         ["Enough Space", "Shame Shame"])
+
+    def test_the_DUPLICATE_MARIGOLD_is_reported_instead_of_vanishing(self):
+        data = self._run(self.BODY)
+        self.assertEqual(len(data["body_duplicates"]), 1)
+        dup = data["body_duplicates"][0]
+        self.assertEqual(dup["title"], "Marigold")
+        self.assertEqual([r["video_id"] for r in dup["body_rows"]],
+                         ["studio", "live2006"])
+
+    def test_THE_ARITHMETIC_CLOSES(self):
+        """🛑 THE LOAD-BEARING ASSERTION. If these four ever fail to sum,
+        a row has gone missing again and this is the test that says so."""
+        for body in (self.BODY, [], self.BODY + [{"title": "", "artist": FF}]):
+            data = self._run(body)
+            r = data["body_reconciliation"]
+            self.assertEqual(
+                r["matched_titles"] + r["duplicate_rows"] + r["orphan_rows"]
+                + r["untitled_rows"],
+                r["body_size"],
+                f"body_reconciliation does not sum: {r}")
+
+    def test_a_row_with_no_title_is_counted_rather_than_dropped(self):
+        data = self._run(self.BODY + [{"title": "", "artist": FF}])
+        self.assertEqual(data["body_reconciliation"]["untitled_rows"], 1)
+
+    def test_an_orphaned_title_held_twice_counts_BOTH_rows(self):
+        # The bucket boundary. Duplicates are counted only on MATCHED titles; two
+        # rows of an unmatched song are two orphans, not one plus a duplicate.
+        data = self._run([{"title": "Shame Shame", "video_id": "a"},
+                          {"title": "Shame Shame", "video_id": "b"}])
+        self.assertEqual(data["body_reconciliation"]["orphan_rows"], 2)
+        self.assertEqual(data["body_reconciliation"]["duplicate_rows"], 0)
+        self.assertEqual(data["body_duplicates"], [])
+
+
+class JoinRuleTests(unittest.TestCase):
+    """🛑 TITLE JOINS. ARTIST ANNOTATES. ARTIST NEVER REJECTS.
+
+    Emergent until 2026-09-09: a body row bylined "Nirvana" joined a Foo Fighters
+    setlist entry for Marigold and nothing said so. The outcome was right - Grohl
+    wrote it, the row is deliberate - but a rule that happens to be right is not
+    a rule.
+
+    12.2 says a false ACCEPT is the worse error, which argues for rejecting. It
+    does not win here because dj_tracks.artist is a SCRAPED BYLINE (14.9), and
+    because rejecting would put a deliberately-placed track into `missing` with
+    no visible cause. THE DEFECT WAS THE SILENCE, NOT THE JOIN.
+    """
+
+    MBID = "20244d07-534f-4eff-b4d4-930878889970"
+
+    def _run(self, body):
+        return BodySideOfTheDiffTests._run(self, body, setlist_songs=("Marigold",))
+
+    def test_a_DIFFERENT_ARTIST_still_joins(self):
+        data = self._run([{"title": "Marigold", "artist": "Nirvana", "video_id": "x"}])
+        self.assertEqual(data["coverage"]["in_body"], 1,
+                         "rejecting would drop a deliberately-placed track into "
+                         "`missing` with no visible cause")
+
+    def test_but_it_is_REPORTED(self):
+        # THE POINT OF THE WHOLE CHANGE. Without this the 12.2 false-accept risk
+        # is invisible, which is what made it dangerous.
+        data = self._run([{"title": "Marigold", "artist": "Nirvana", "video_id": "x"}])
+        self.assertEqual(len(data["artist_disagreements"]), 1)
+        d = data["artist_disagreements"][0]
+        self.assertEqual(d["body_artist"], "Nirvana")
+        self.assertEqual(d["performing"], FF)
+        self.assertEqual(d["video_id"], "x")
+
+
+    def test_AN_AGREEING_SIBLING_ROW_DOES_NOT_SILENCE_A_DISAGREEING_ONE(self):
+        """🛑 THE REAL MARIGOLD SHAPE, and the quantifier bug it caught.
+
+        The body holds TWO Marigolds: the studio cut, which is a Nirvana B-side
+        (Grohl wrote and sang it) and is bylined "Nirvana", and the 2006 Pantages
+        live cut, which is a Foo Fighters release.
+
+        The first implementation asked `any(row agrees)`. The Foo Fighters row
+        made that true, so the Nirvana row was SILENTLY SUPPRESSED - the flag
+        went quiet on the one case it was built for. A title agrees only when
+        EVERY named row agrees.
+        """
+        # ORDER MATTERS IN THIS FIXTURE: the AGREEING row comes first, so the
+        # title's joined video_id is "live2006". If the disagreement reported the
+        # title's id instead of the row's, the two would be indistinguishable -
+        # which is exactly how the first version of this test passed against a
+        # broken implementation.
+        data = self._run([
+            {"title": "Marigold", "artist": FF, "video_id": "live2006"},
+            {"title": "Marigold", "artist": "Nirvana", "video_id": "studio"},
+        ])
+        self.assertEqual(data["in_body"][0]["video_id"], "live2006")
+        self.assertEqual(len(data["artist_disagreements"]), 1)
+        d = data["artist_disagreements"][0]
+        self.assertEqual(d["body_artist"], "Nirvana")
+        # The DISAGREEING row's own id - a caller told "Marigold disagrees" and
+        # handed the other row's id cannot find what is being talked about.
+        self.assertEqual(d["video_id"], "studio")
+        self.assertFalse(data["in_body"][0]["body_artist_agrees"])
+        # And it still JOINS - the rule is annotate, never reject.
+        self.assertEqual(data["coverage"]["in_body"], 1)
+
+    def test_every_disagreeing_row_is_listed_not_just_the_first(self):
+        data = self._run([
+            {"title": "Marigold", "artist": "Nirvana", "video_id": "a"},
+            {"title": "Marigold", "artist": "Scream", "video_id": "b"},
+        ])
+        self.assertEqual([d["body_artist"] for d in data["artist_disagreements"]],
+                         ["Nirvana", "Scream"])
+
+    def test_the_MATCHING_artist_raises_NO_flag(self):
+        # 11.7 - a flag that fires on the normal case gets ignored. One row in 32
+        # fired on the live run; every other row must stay quiet.
+        data = self._run([{"title": "Marigold", "artist": FF, "video_id": "x"}])
+        self.assertEqual(data["artist_disagreements"], [])
+        self.assertTrue(data["in_body"][0]["body_artist_agrees"])
+
+    def test_NO_BYLINE_is_UNKNOWN_and_not_disagreement(self):
+        # Saying "artist differs" about an absent field invents a conflict.
+        data = self._run([{"title": "Marigold", "video_id": "x"}])
+        self.assertIsNone(data["in_body"][0]["body_artist_agrees"])
+        self.assertEqual(data["artist_disagreements"], [])
+
+    def test_the_article_insensitive_case_is_not_a_disagreement(self):
+        # "The Smashing Pumpkins" on setlist.fm, "Smashing Pumpkins" on YouTube.
+        # Reusing _artist_matches means this join inherits that rule for free
+        # rather than growing a second, subtly different one (14.6).
+        page = {"setlist": [{"id": "s", "eventDate": "08-12-2024",
+                             "artist": {"name": SP_EXACT},
+                             "venue": {"name": "H", "city": {"name": "C",
+                                       "country": {"code": "GB"}}},
+                             "sets": {"set": [{"song": [{"name": "Today"}]}]}}],
+                "total": 1}
+        with mock.patch.object(dj_setlists, "_search_page", lambda *a, **k: page), \
+             mock.patch.object(dj_setlists, "_read_api_key", lambda: "k"):
+            out = asyncio.run(dj_setlists.diff_dj_setlists(
+                {"mbid": self.MBID,
+                 "body": [{"title": "Today", "artist": "Smashing Pumpkins",
+                           "video_id": "t"}],
+                 "on_date": "2024-12-08", "resolve": False}, _Ctx()))
+        self.assertEqual(out["data"]["artist_disagreements"], [])
+        self.assertTrue(out["data"]["in_body"][0]["body_artist_agrees"])
+
+
+class ReadingBlobTests(unittest.TestCase):
+    """A CONSTANT THAT DESCRIBES CHANGING DATA IS A STALE FACT WITH REACH.
+
+    `reading` ships inside EVERY response. It carried "Foo Fighters read 27/40
+    total and 27/32 gettable on 2026-09-02"; by 2026-09-09 the same playlist read
+    32/40 and 32/32, because five tracks had been added. The wrong pair went out
+    with every call.
+
+    Same trap as the weekly prompt's Appendix A, fixed the same way: the
+    operational half must be SELF-CHECKING rather than asserted.
+    """
+
+    def _reading(self):
+        page = {"setlist": [{
+            "id": "s", "eventDate": "08-12-2024", "artist": {"name": FF},
+            "venue": {"name": "H", "city": {"name": "C", "country": {"code": "GB"}}},
+            "sets": {"set": [{"song": [{"name": "Everlong"}]}]}}], "total": 1}
+        with mock.patch.object(dj_setlists, "_search_page", lambda *a, **k: page), \
+             mock.patch.object(dj_setlists, "_read_api_key", lambda: "k"):
+            out = asyncio.run(dj_setlists.diff_dj_setlists(
+                {"mbid": "20244d07-534f-4eff-b4d4-930878889970",
+                 "body": [], "on_date": "2024-12-08", "resolve": False}, _Ctx()))
+        return out["data"]["reading"]
+
+    def test_no_coverage_pair_is_asserted_in_the_text(self):
+        # The literal that shipped, and the shape of any replacement for it.
+        txt = self._reading()
+        for stale in ("27/40", "27/32", "32/40"):
+            self.assertNotIn(stale, txt)
+        self.assertIsNone(
+            re.search(r"read \d+/\d+ total", txt),
+            "a worked coverage pair is a number that goes stale in place")
+
+    def test_it_points_at_THIS_RESPONSE_instead(self):
+        self.assertIn("QUOTE THE `coverage` BLOCK IN THIS RESPONSE", self._reading())
+
+    def test_surviving_historical_figures_are_marked_as_PAST(self):
+        # Not every number had to go. The Weezer promo counts and Mayonaise are
+        # the OBSERVATIONS THAT CAUSED the rules and are worth keeping - but in
+        # the past tense, so neither reads as this run's data.
+        txt = self._reading()
+        self.assertIn("WAS that case on 2026-09-02", txt)
+        self.assertIn("THE OBSERVATION THAT CAUSED THE RULE", txt)
+        self.assertNotIn("Mayonaise, at 5 of 10", txt)
 
 
 if __name__ == "__main__":

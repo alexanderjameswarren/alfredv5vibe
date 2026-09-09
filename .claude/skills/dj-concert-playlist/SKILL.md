@@ -93,6 +93,21 @@ would resolve cleanly, and **nothing further down could tell.**
 3. **The resolved songs**, with the ones that did not resolve and why. Use `not_found_cause`:
    `variant_only` is a decision he can make; the others cannot be closed.
 4. **Whether an existing playlist will be renamed** (below).
+5. **`stage_sections`, if any — one line, not a list of gaps.** These are act intros and video
+   interludes that setlist.fm records as set rows (`tape`). They are already excluded from
+   `song_count` and from the coverage denominator. Say *"3 stage sections (act intros) were not
+   counted as songs"* and move on. ⚠️ **Do NOT present them as missing tracks** — that was the
+   pre-2026-09-09 behaviour and it made a complete playlist look like it had holes in it.
+
+6. **The body side, from `body_reconciliation`** — it sums to `body_size`, so quote it rather
+   than subtracting. ⚠️ **`orphans` ARE NOT AN ERROR**: a band drops songs, and keeping one they
+   have stopped playing is normal. Give the count; name them only if he asks. **`body_duplicates`**
+   are one title held twice — say so, do not recommend removing one.
+7. **`artist_disagreements`, if any — say it, do not act on it.** A body row bylined a different
+   act still counts as present (title joins, artist annotates, artist never rejects — §14.48).
+   Usually it is a scraped byline or a deliberate inclusion; a Marigold bylined "Nirvana" belongs
+   in a Foo Fighters playlist. ⚠️ **But this is the only place a genuinely wrong track shows up**,
+   so name the ones that appear rather than summarising them away.
 
 ⚠️ **`variant_only` IS A SEPARATE YES.** Adding a live cut means learning the song from a live
 recording. Name it and get its own answer; do not fold it into "add them all".
