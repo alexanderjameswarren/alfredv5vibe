@@ -20,6 +20,7 @@ import logging
 import unittest
 
 from workshop.config import Config
+from workshop.server import _defect_text
 from workshop.platform import (
     Ctx,
     GuardrailError,
@@ -488,6 +489,65 @@ class ClampLimitTests(unittest.TestCase):
 
     def test_non_integer_returns_default(self) -> None:
         self.assertEqual(clamp_limit("nope"), 20)
+
+
+class DefectTextTests(unittest.TestCase):
+    """🛑 THE THIRD ERROR KIND: a crash, told apart from a refusal and a wobble.
+
+    `GuardrailError` and `OperationalError` are both DELIBERATE — a tool decided
+    something and said so. An exception that escapes a tool decided nothing, and
+    the text it produces is the only thing a scheduled run will ever see.
+
+    ⚠️ THE CASE THAT PROMPTED THIS: a targeted diff died with the complete message
+    `Internal error: 'empty_entries_skipped'`. `str()` on a KeyError is just the
+    key, so that string named no tool, no exception type, and nothing about
+    whether a retry was worth trying.
+    """
+
+    def test_it_names_the_tool_and_the_exception_TYPE(self):
+        # ⚠️ Without the type, a KeyError's payload is an unattributed string in
+        # quotes. This is the exact shape that shipped.
+        txt = _defect_text("diff_dj_setlists", KeyError("empty_entries_skipped"))
+        self.assertIn("diff_dj_setlists", txt)
+        self.assertIn("KeyError", txt)
+        self.assertIn("empty_entries_skipped", txt)
+
+    def test_it_says_a_DEFECT_IS_NOT_TRANSIENT(self):
+        txt = _defect_text("t", ValueError("x"))
+        self.assertIn("not a transient failure", txt)
+        self.assertIn("the same call will fail the same way", txt)
+
+    def test_the_terminal_clause_is_GuardrailErrors_OWN_WORDS(self):
+        # §11.4 - two descriptions of one rule drift. A paraphrase here would
+        # become a second, slightly different definition of "terminal".
+        txt = _defect_text("t", ValueError("x"))
+        self.assertIn(GuardrailError.TERMINAL_CLAUSE, txt)
+
+    def test_it_does_NOT_GUESS_where_the_bug_is(self):
+        # §11.20 - a diagnostic that infers a cause is worse than one that does
+        # not. "A key was missing during response assembly" would have been true
+        # for the crash that prompted this and wrong for the next one.
+        txt = _defect_text("diff_dj_setlists", KeyError("empty_entries_skipped")).lower()
+        for guess in ("assembly", "response building", "probably", "likely",
+                      "this usually means", "caused by"):
+            self.assertNotIn(guess, txt)
+        self.assertIn("traceback is in the host log", txt)
+
+    def test_an_exception_with_NO_MESSAGE_still_produces_a_usable_line(self):
+        # ⚠️ The degenerate case: bare `raise RuntimeError`. A naive f-string
+        # yields "Workshop defect in tool 't' - ." Report the type alone instead.
+        txt = _defect_text("t", RuntimeError())
+        self.assertIn("RuntimeError", txt)
+        self.assertNotIn("— .", txt)
+        self.assertNotIn(": .", txt)
+
+    def test_OperationalError_would_REJECT_this_wording_and_that_is_correct(self):
+        # ⚠️ THE BOUNDARY, pinned. The terminal clause is reserved: putting it on
+        # a retryable failure suppresses a retry that should happen. This asserts
+        # the platform still refuses it, so the reuse above stays deliberate
+        # rather than becoming a licence to phrase any error this way.
+        with self.assertRaises(ValueError):
+            OperationalError(_defect_text("t", RuntimeError("boom")))
 
 
 if __name__ == "__main__":

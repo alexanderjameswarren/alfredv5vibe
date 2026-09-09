@@ -54,6 +54,44 @@ from .jobs import JobStore
 log = logging.getLogger("workshop.server")
 
 
+
+def _defect_text(tool_name: str, e: BaseException) -> str:
+    """🛑 A CRASH IS A THIRD KIND OF ERROR AND MUST READ LIKE ONE.
+
+    ``GuardrailError`` says "your call was refused, here is why". ``OperationalError``
+    says "upstream wobbled, try again". Anything else that escapes a tool is a
+    DEFECT IN WORKSHOP, and the old text — ``f"Internal error: {e}"`` — said none of
+    that. For the crash that prompted this, ``str(e)`` on a ``KeyError`` is bare:
+    the whole message was ``Internal error: 'empty_entries_skipped'``. It named no
+    tool, no exception type, and gave no way to tell a retry from a rebuild.
+
+    ⚠️ **THE COST IS SCHEDULED WORK, NOT INTERACTIVE WORK.** A human reads that and
+    asks. A cron run stamps a failure nobody can act on, and it recurs every week
+    because retrying a defect reproduces it exactly.
+
+    Three things go in, and nothing else:
+
+    * **the tool**, because the caller may have driven several;
+    * **the exception TYPE**, because it is what makes a bare ``KeyError`` payload
+      legible at all;
+    * **that it is terminal**, in ``GuardrailError``'s own words rather than a
+      paraphrase — §11.4, two descriptions of one rule drift.
+
+    ⚠️ **IT DOES NOT GUESS WHERE THE BUG IS.** "A key was missing during response
+    assembly" would have been right this once and wrong in general; §11.20 — a
+    diagnostic that infers a cause is worse than one that reports a fact. The
+    traceback is already in the host log, which is where a cause belongs.
+    """
+    detail = str(e).strip()
+    body = f"{type(e).__name__}: {detail}" if detail else type(e).__name__
+    return (
+        f"Workshop defect in tool {tool_name!r} — {body}. This is a bug in "
+        f"Workshop, not a transient failure: the same call will fail the same way. "
+        f"The traceback is in the host log. "
+        f"{plat.GuardrailError.TERMINAL_CLAUSE}"
+    )
+
+
 def _serialize_data(data: Any) -> str:
     # ``default=str`` covers datetimes, UUIDs, and dataclass-ish objects a
     # tool might legitimately return without forcing each handler to
@@ -103,7 +141,7 @@ def _build_mcp_server(config: Config, job_store: JobStore) -> Server:
         except Exception as e:
             mcp_log.exception("tool %r crashed", params.name)
             return CallToolResult(
-                content=[TextContent(type="text", text=f"Internal error: {e}")],
+                content=[TextContent(type="text", text=_defect_text(params.name, e))],
                 is_error=True,
             )
 

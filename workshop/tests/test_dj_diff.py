@@ -10,10 +10,14 @@ Run: ``python -m unittest discover tests`` from the ``workshop/`` dir.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import unittest
+import unittest.mock as mock
 from pathlib import Path
 
+from workshop.platform import GuardrailError
+from workshop.tools import dj_setlists
 from workshop.tools.dj_setlists import (
     _FULL_SET_MIN_SONGS,
     _days_apart,
@@ -24,6 +28,14 @@ from workshop.tools.dj_setlists import (
     _resolve_one,
     _VARIANT_RE,
 )
+
+class _Cfg:
+    host_id = "surface"
+
+
+class _Ctx:
+    config = _Cfg()
+
 
 FF = "Foo Fighters"
 # The act as setlist.fm bills it, from the mbid. YouTube Music drops the article.
@@ -507,6 +519,169 @@ class TargetedLookupTests(unittest.TestCase):
         self.assertEqual(_days_apart("2023-10-13", "2023-10-14"), 1)
         self.assertEqual(_days_apart("2023-10-13", "2023-10-13"), 0)
         self.assertEqual(_days_apart("2023-10-13", "2022-10-13"), 365)
+
+
+class ResponseContractTests(unittest.TestCase):
+    """🛑 BOTH PATHS MUST CARRY WHAT diff_dj_setlists READS.
+
+    get_dj_setlists builds its response two ways — the newest-first artist feed,
+    and _targeted_lookup for one specific show. diff_dj_setlists consumes
+    whichever it is handed, so a key present on one and absent on the other is a
+    crash waiting for the first caller who takes the other branch.
+
+    That is exactly what happened: `empty_entries_skipped` existed only on the
+    untargeted side, and a targeted diff died with
+    `Internal error: 'empty_entries_skipped'`.
+
+    ⚠️ NOTHING CAUGHT IT BECAUSE COVERAGE WAS PER-TOOL, NOT PER-PATH. The
+    envelope suite drives every registered tool once, with one fixture each, and
+    that fixture went down the untargeted branch. `on_date` appeared in NO test
+    at all — the targeted tests covered only the pure date helpers, never the
+    lookup or the assembly around it.
+    """
+
+    UNTARGETED = {
+        "mbid": "x", "setlists": [], "returned": 0, "empty_entries_skipped": 3,
+        "pages_read": 1, "total_upstream": 10, "limit_applied": 10,
+        "date_format": "...", "reading": "...",
+    }
+
+    def _targeted(self, **over):
+        """The targeted payload, built by the real code against fakes."""
+        page = {"setlist": [{
+            "id": "sl1", "eventDate": "08-12-2024",
+            "artist": {"name": "Someone"},
+            "venue": {"name": "A Hall", "city": {"name": "C", "country": {"code": "GB"}}},
+            "sets": {"set": [{"song": [{"name": "A Song"}]}]},
+        }], "total": 1}
+        page.update(over.pop("page", {}))
+
+        def fake_search(mbid, year, venue, p, key):
+            return page if p == 1 else {"setlist": [], "total": 1}
+
+        with mock.patch.object(dj_setlists, "_search_page", fake_search):
+            out = asyncio.run(dj_setlists._targeted_lookup(
+                "20244d07-534f-4eff-b4d4-930878889970", 2024, None,
+                "2024-12-08", 10, "key"))
+        return out["data"]
+
+    def test_the_targeted_path_carries_every_key_the_diff_READS(self):
+        data = self._targeted()
+        missing = dj_setlists.DIFF_REQUIRED_KEYS - set(data)
+        self.assertEqual(missing, set(),
+                         f"targeted payload is missing {sorted(missing)} - a "
+                         f"targeted diff will crash on the first caller")
+
+    def test_the_untargeted_path_carries_them_too(self):
+        missing = dj_setlists.DIFF_REQUIRED_KEYS - set(self.UNTARGETED)
+        self.assertEqual(missing, set())
+
+    def test_empty_entries_skipped_is_the_HONEST_ANALOGUE_not_a_zero(self):
+        # ⚠️ A hardcoded 0 would satisfy the key and lie about the data. In a
+        # targeted lookup the same fact exists: candidates in scope that have no
+        # songs and therefore cannot be diffed.
+        page = {"setlist": [
+            {"id": "a", "eventDate": "08-12-2024", "artist": {"name": "S"},
+             "venue": {"name": "H", "city": {"name": "C", "country": {"code": "GB"}}},
+             "sets": {"set": [{"song": [{"name": "One"}]}]}},
+            {"id": "b", "eventDate": "09-12-2024", "artist": {"name": "S"},
+             "venue": {"name": "H", "city": {"name": "C", "country": {"code": "GB"}}},
+             "sets": {"set": []}},
+            {"id": "c", "eventDate": "10-12-2024", "artist": {"name": "S"},
+             "venue": {"name": "H", "city": {"name": "C", "country": {"code": "GB"}}},
+             "sets": {"set": []}},
+        ], "total": 3}
+        data = self._targeted(page=page)
+        self.assertEqual(data["candidates_in_scope"], 3)
+        self.assertEqual(data["candidates_with_songs"], 1)
+        self.assertEqual(data["empty_entries_skipped"], 2,
+                         "two candidates had no songs; that is the same fact "
+                         "the untargeted count reports, reached another way")
+
+    def test_the_exact_date_still_matches_after_the_fix(self):
+        # The bug was in assembly, not in the lookup - so the thing the lookup
+        # exists for must still hold.
+        data = self._targeted()
+        self.assertEqual(data["lookup"]["date_match"], "exact")
+        self.assertEqual(data["lookup"]["matched_date"], "2024-12-08")
+
+
+class TargetedDiffEndToEndTests(unittest.TestCase):
+    """🛑 THE TEST THAT WOULD HAVE CAUGHT IT — the whole call, not the pieces.
+
+    The unit tests above pin `_targeted_lookup`'s payload against a frozen key
+    set, which is the cheap guard. This one is the expensive one: it drives
+    `diff_dj_setlists` with `on_date` all the way through the real
+    `get_dj_setlists` and the real assembly, stubbing only the network.
+
+    ⚠️ THIS IS THE SHAPE THAT WAS MISSING. `on_date` shipped with tests, but they
+    covered the pure date helpers only. Nothing ever ran the targeted branch INTO
+    the response assembly, so the two halves were each correct and the join was
+    never executed.
+
+    ⚠️ THE ACCEPTANCE TEST DID NOT REACH IT EITHER, and that is not luck: a
+    non-exact date match raises GuardrailError before assembly. Only an EXACT
+    match gets far enough to crash, so the failure needed a real matching show.
+    """
+
+    MBID = "20244d07-534f-4eff-b4d4-930878889970"
+
+    def _page(self, songs=("One", "Two", "Three")):
+        return {"setlist": [{
+            "id": "sl1", "eventDate": "08-12-2024",
+            "artist": {"name": "Someone"},
+            "venue": {"name": "A Hall",
+                      "city": {"name": "London", "country": {"code": "GB"}}},
+            "sets": {"set": [{"song": [{"name": n} for n in songs]}]},
+        }], "total": 1}
+
+    def _diff(self, args, page=None):
+        page = page or self._page()
+
+        def fake_search(mbid, year, venue, p, key):
+            return page if p == 1 else {"setlist": [], "total": 1}
+
+        with mock.patch.object(dj_setlists, "_search_page", fake_search),              mock.patch.object(dj_setlists, "_read_api_key", lambda: "k"):
+            return asyncio.run(dj_setlists.diff_dj_setlists(args, _Ctx()))
+
+    def test_a_targeted_diff_COMPLETES(self):
+        # Reproduces the reported crash: Internal error: 'empty_entries_skipped'.
+        out = self._diff({"mbid": self.MBID, "body": [], "on_date": "2024-12-08",
+                          "resolve": False})
+        data = out["data"]
+        self.assertEqual(data["shows_read"], 1)
+        self.assertEqual(data["empty_entries_skipped"], 0)
+        self.assertEqual(data["distinct_setlist_songs"], 3)
+
+    def test_an_EMPTY_BODY_is_supported_not_refused(self):
+        # ⚠️ Alex diffed against nothing deliberately - "what does a date return".
+        # `body: []` is a SUPPORTED case (the concert skill passes it for a new
+        # playlist); only an OMITTED body is refused. The crash was unrelated.
+        out = self._diff({"mbid": self.MBID, "body": [], "on_date": "2024-12-08",
+                          "resolve": False})
+        data = out["data"]
+        self.assertEqual(data["body_size"], 0)
+        self.assertEqual(data["coverage"]["in_body"], 0)
+        self.assertEqual(data["coverage"]["total"], 3,
+                         "an empty body means every setlist song is missing - "
+                         "that is the answer, not an error")
+
+    def test_an_OMITTED_body_is_still_refused(self):
+        # The negative control for the case above: the guard must still fire on
+        # the thing it was written for.
+        with self.assertRaises(GuardrailError) as cm:
+            self._diff({"mbid": self.MBID, "on_date": "2024-12-08"})
+        self.assertIn("must be an array", str(cm.exception))
+
+    def test_a_NON_EXACT_date_is_refused_cleanly_and_never_reaches_assembly(self):
+        # ⚠️ WHY THE ACCEPTANCE TEST PASSED. This path raises before the response
+        # is built, so it could not have hit the missing key however often it ran.
+        page = self._page()
+        page["setlist"][0]["eventDate"] = "10-12-2024"
+        with self.assertRaises(GuardrailError) as cm:
+            self._diff({"mbid": self.MBID, "body": [], "on_date": "2024-12-08",
+                        "resolve": False}, page=page)
+        self.assertIn("2024-12-08", str(cm.exception))
 
 
 if __name__ == "__main__":

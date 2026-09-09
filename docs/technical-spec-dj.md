@@ -2648,24 +2648,35 @@ at positions 5, 13 and 62, each copy with its own distinct `setVideoId`. This is
 property §5 relies on to make cram zones work. **Key playlist entries on `set_video_id` or
 `position`, never on `video_id`.**
 
-**Reconnecting the Alfred MCP connector — do NOT use automatic registration.**
+**Reconnecting an MCP connector — 🛑 SUPERSEDED 2026-09-08.**
 
-⚠️ **"No client ID — register one automatically" FAILS on reconnect.** Dynamic Client
-Registration mints a *fresh* registration every time, so each reconnect attempt creates a
-new client rather than reusing the working one. The MCP server itself is fully compliant —
-**the failure is on Claude's side of the DCR handshake**, so there is nothing to fix
-server-side and no amount of redeploying will help.
+🛑 **THE PROCEDURE THAT WAS HERE IS WRONG. FOLLOW
+[`runbook-mcp-connectors.md`](runbook-mcp-connectors.md) INSTEAD.**
 
-Use **"Use your own OAuth client"** with:
+Every connector — Alfred and both Workshop hosts — is now a **CONFIDENTIAL** OAuth client
+with a **real secret**, using **`client_secret_post`**, created by hand in the Supabase
+dashboard. One app per connector.
 
-| Field | Value |
-|---|---|
-| client_id | `2804f812-ea1a-4827-9443-3421fc4771f5` |
-| client secret | **blank** |
+⚠️ **THE OLD VALUES ARE KEPT BELOW SO THEY CAN BE RECOGNISED AS WRONG**, not followed.
+Deleting them would leave them alive wherever else they are written down, with nothing to
+contradict them — and anyone reading only this file would have followed them.
 
-It is a public client already registered with Claude's redirect URI. Recorded here because
-this is exactly the kind of procedure that is stale by the time it is next needed, and the
-symptom (auth failing on a server that is working correctly) points in the wrong direction.
+> ~~Use **"Use your own OAuth client"** with client_id
+> `2804f812-ea1a-4827-9443-3421fc4771f5` and a **blank** client secret. It is a public
+> client already registered with Claude's redirect URI.~~
+
+🛑 **A BLANK SECRET IS THE `400: Invalid client credentials` CASE, AND IT IS THE MOST LIKELY
+CAUSE OF THE TWO-WEEK 401.** A PKCE authorization-code exchange succeeds without client
+authentication; **the refresh grant requires it.** So the connection worked for exactly one
+access-token lifetime and then died — which reads as "it works then breaks", and sent two
+weeks of debugging at the Edge Function, which forwards the caller's token and mints nothing.
+The runbook records the full evidence chain and what to capture if it recurs.
+
+**What remains true from the old note:** automatic registration ("No client ID — register one
+automatically") does NOT work. Dynamic Client Registration no longer works with Supabase at
+all, so a hand-created OAuth app is the only path. The symptom still points in the wrong
+direction — auth failing on a server that is working correctly — which is why the runbook
+leads with the layer question rather than with the steps.
 
 **Paths:**
 - Workshop: `C:\Users\Alex\projects\alfred-v5\workshop`
@@ -3332,6 +3343,14 @@ is where every verification in every migration in this project lives. A migratio
 the part most likely to contain a long interpolated message and the part least likely to be
 executed before the migration is run for real. A typo in a diagnostic takes down the diagnostics.
 
+🛑 **RESOLVED 2026-09-08 — THE 401 THIS SAT NEXT TO HAD A CAUSE.** See
+[`runbook-mcp-connectors.md`](runbook-mcp-connectors.md): the OAuth clients were
+PUBLIC with blank secrets, so a PKCE code exchange succeeded while the refresh grant —
+which requires client authentication — returned 400. The connection therefore worked
+for exactly one access-token lifetime, every time. The Edge Function was never
+involved. Stated there as the most likely explanation rather than proven, with the one
+thing to capture if it recurs.
+
 **`scripts/check-raise-arity.py` now counts placeholders against arguments across every migration**
 (78 statements, all clean). Run it before applying anything.
 
@@ -3849,3 +3868,92 @@ it was tested before anything was built on top of it.
 listens to something it queued, the artist appears in the weekly review as untagged and is
 proposed there. **The loop closes without a second writer**, which is what keeps §14.19 from
 happening again.
+
+---
+
+### 14.44 🛑 COVERAGE WAS PER-TOOL, NOT PER-PATH — the `on_date` diff crash, 2026-09-08
+
+**The report:** `diff_dj_setlists` with `on_date` returned `Internal error:
+'empty_entries_skipped'`. That was the entire message.
+
+**The cause, checked rather than assumed.** `get_dj_setlists` builds its response two
+ways: the newest-first artist feed, and `_targeted_lookup` for one specific show.
+`diff_dj_setlists` reads four keys off whichever it is handed — `mbid`, `setlists`,
+`returned`, `empty_entries_skipped`. Comparing the two key sets, the untargeted payload
+had `empty_entries_skipped` and `limit_applied`; the targeted one had neither.
+**`empty_entries_skipped` was the only *read* key missing**, so it was the only one that
+crashed. `limit_applied` was absent too and nobody noticed, because nothing read it.
+
+⚠️ **WHY NOTHING CAUGHT IT — the interesting half, and the same shape as the envelope
+bug.** Three separate guards each had a reason to miss:
+
+1. **`on_date` appeared in ZERO tests.** The targeted work shipped with tests, but they
+   covered `_iso_to_setlistfm`, `_setlistfm_to_iso` and `_days_apart` — pure date
+   helpers. The lookup ran, the assembly around it never did.
+2. **The envelope suite drives every registered tool once, with one fixture each.** The
+   `diff_dj_setlists` fixture was `{mbid, body, limit, resolve}` — no `on_date`, so it
+   went down the untargeted branch. **A suite that guarantees every TOOL is called
+   guarantees nothing about every PATH through it**, and it reads like full coverage
+   either way.
+3. **The acceptance test could not have reached it.** A targeted diff raises
+   `GuardrailError` when `date_match != "exact"` — refusing the nearest night of a
+   residency is the whole point of §13.2. So a non-exact match dies *before* assembly,
+   and only a real exact match gets far enough to crash. The failing case needed a show
+   that actually matched.
+
+**The fix, in two parts.** `_targeted_lookup` now returns `empty_entries_skipped` and
+`limit_applied`. ⚠️ **`empty_entries_skipped` is the honest analogue, not a placating
+zero** — in a targeted lookup the same fact exists (candidates in scope with no songs
+recorded, which cannot be diffed), so it is `len(candidates) - len(with_songs)` and a
+test asserts it counts rather than returns 0. A hardcoded zero would have satisfied the
+key and lied about the data.
+
+The second part is `DIFF_REQUIRED_KEYS`, a frozenset naming what the diff reads, with
+one test per path asserting both payloads carry it. **A shared constant rather than two
+lists** — §14.6, a rule in two places drifts.
+
+**And the end-to-end test that would have caught it**: `diff_dj_setlists` driven with
+`on_date` through the real `get_dj_setlists` and the real assembly, stubbing only the
+network. ⚠️ Negative control confirmed: with the fix reverted it fails with exactly
+`KeyError: 'empty_entries_skipped'`, and the non-exact-date test still PASSES — which is
+the proof of point 3 rather than an assertion of it.
+
+**`body: []` was never the problem.** Alex was diffing against nothing deliberately, to
+see what a date returns. An empty body is a **supported** case — the concert skill passes
+it for a new playlist — and the guard refuses only an *omitted* body, because that would
+make every setlist song look missing. Both are now pinned, including the negative
+control that an omitted body is still refused.
+
+---
+
+### 14.45 A CRASH IS A THIRD KIND OF ERROR AND MUST READ LIKE ONE
+
+`GuardrailError` says *your call was refused, here is why*. `OperationalError` says
+*upstream wobbled, try again*. Both are decisions a tool made. **An exception that
+escapes a tool decided nothing**, and until now it surfaced as `f"Internal error: {e}"`.
+
+⚠️ **For the crash above, that was the whole message: `Internal error:
+'empty_entries_skipped'`.** `str()` on a `KeyError` is just the key, so the line named no
+tool, no exception type, and gave no way to tell a retry from a rebuild.
+
+**The cost is scheduled work, not interactive work.** A human reads that and asks. A cron
+run stamps a failure nobody can act on — and it recurs every week, because retrying a
+defect reproduces it exactly.
+
+`_defect_text` in `workshop/server.py` now puts three things in and nothing else:
+
+* **the tool name**, because a caller may have driven several;
+* **the exception TYPE**, which is what makes a bare `KeyError` payload legible at all;
+* **that it is terminal**, in `GuardrailError.TERMINAL_CLAUSE`'s own words rather than a
+  paraphrase — §11.4, two descriptions of one rule drift.
+
+⚠️ **IT DOES NOT GUESS WHERE THE BUG IS.** *"A key was missing during response assembly"*
+would have been right this once and wrong in general; §11.20 — a diagnostic that infers a
+cause is worse than one that reports a fact. The traceback is already in the host log,
+which is where a cause belongs.
+
+⚠️ **THE RESERVED-WORDING BOUNDARY IS PINNED, NOT ASSUMED.** The terminal clause exists so
+a retryable failure can never claim to be terminal — `OperationalError` raises
+`ValueError` on that phrasing at construction. A test asserts `OperationalError` would
+**still reject** `_defect_text`'s output, so reusing the clause for a genuine defect stays
+a deliberate exception rather than becoming licence to phrase any error this way.

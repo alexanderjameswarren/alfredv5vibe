@@ -375,6 +375,24 @@ async def _targeted_lookup(mbid: str, year: int | None, venue: str | None,
             "returned": len(shown),
             "candidates_in_scope": len(candidates),
             "candidates_with_songs": len(with_songs),
+            # 🛑 THESE TWO EXIST FOR CONTRACT PARITY WITH THE UNTARGETED PATH,
+            # AND THEIR ABSENCE WAS A CRASH.
+            #
+            # diff_dj_setlists reads `empty_entries_skipped` off whichever
+            # payload get_dj_setlists returns. The untargeted path had it; this
+            # one did not, so a targeted diff died with
+            # `Internal error: 'empty_entries_skipped'` — a KeyError in response
+            # assembly, surfacing as an opaque string that said nothing about
+            # what failed.
+            #
+            # ⚠️ THE VALUE IS THE HONEST ANALOGUE, NOT A ZERO PLACATING THE KEY.
+            # Untargeted, it counts entries passed over while paging because
+            # they had no songs. Here it counts candidates in scope that had no
+            # songs. Same fact — setlist.fm rows that exist and cannot be
+            # diffed — reached a different way. A hardcoded 0 would satisfy the
+            # caller and lie about the data.
+            "empty_entries_skipped": len(candidates) - len(with_songs),
+            "limit_applied": limit,
             "nearest": nearest,
             "pages_read": pages_read,
             "total_upstream": total_upstream,
@@ -656,6 +674,25 @@ async def get_dj_setlists(args: dict, ctx: Ctx) -> dict[str, Any]:
 
 # setlist.fm records a medley as ONE entry with " / " between the parts. Treating
 # it as one song invents a title nobody played; splitting it is the honest read.
+# ---------------------------------------------------------------------------
+# 🛑 THE KEYS diff_dj_setlists READS OFF get_dj_setlists' PAYLOAD.
+# ---------------------------------------------------------------------------
+# get_dj_setlists has TWO response-assembly paths — the newest-first artist feed
+# and _targeted_lookup — and diff_dj_setlists consumes whichever it is handed.
+# The targeted one shipped without `empty_entries_skipped`, so a targeted diff
+# died with `Internal error: 'empty_entries_skipped'`.
+#
+# ⚠️ NOTHING CAUGHT IT BECAUSE COVERAGE WAS PER-TOOL, NOT PER-PATH. The envelope
+# suite drives every registered tool exactly once, with one fixture each; the
+# targeted branch was never on the path it took. A tool with two ways of
+# building a response had one of them untested and nothing noticed — the same
+# shape as the envelope defect that suite exists for.
+#
+# Asserted by test_dj_diff.py against BOTH paths.
+DIFF_REQUIRED_KEYS = frozenset({
+    "mbid", "setlists", "returned", "empty_entries_skipped",
+})
+
 _MEDLEY_SEP = " / "
 
 # Two recordings within this many seconds of each other are the same master

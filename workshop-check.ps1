@@ -15,8 +15,8 @@
 # YouTube actually accepted it, and how long ago that was.
 #
 # Usage:
-#   .\workshop-check.ps1           status, then offer a live probe
-#   .\workshop-check.ps1 -Deep     probe immediately, no keypress
+#   .\workshop-check.ps1           status, then an explicit prompt
+#   .\workshop-check.ps1 -Deep     probe immediately, no keypress, no prompt
 #   .\workshop-check.ps1 -Reauth   just print the recovery procedure
 
 param(
@@ -107,73 +107,42 @@ function Show-ReauthProcedure {
     Write-Host ""
 }
 
-if ($Reauth) { Show-ReauthProcedure; Read-Host "  Press Enter to close"; exit }
+function Show-CredentialStatus {
+    # Prints the credential lines for one host. Returns $true if it looks bad.
+    #
+    # ⚠️ A FUNCTION CALLED IN-PROCESS, NOT A RE-INVOCATION OF THE SCRIPT.
+    # The interactive path used to run `& $PSCommandPath -Deep`. That WORKED —
+    # and then the parent fell off the end, so the console window closed before
+    # the output could be read. The probe ran; nobody saw it, which from the
+    # outside is indistinguishable from it never running. Staying in-process
+    # keeps the window under the control of the loop at the bottom, which
+    # always ends blocked on a prompt.
+    param(
+        [hashtable]$HostEntry,
+        [switch]$Probe
+    )
 
-Write-Host ""
-Write-Host "  Workshop Health Check" -ForegroundColor Cyan
-Write-Host "  $(Get-Date -Format 'ddd HH:mm:ss')" -ForegroundColor DarkGray
-Write-Host ""
-
-$downNames = @()
-$credLooksBad = $false
-
-foreach ($h in $hosts) {
-    Write-Host ("  {0,-16}" -f $h.Name) -NoNewline
-
-    try {
-        $r = Invoke-RestMethod -Uri "$($h.Base)/health" -TimeoutSec 8
-
-        $up = [TimeSpan]::FromSeconds($r.uptime_seconds)
-        if     ($up.TotalDays  -ge 1) { $uptime = "{0}d {1}h" -f [int]$up.TotalDays, $up.Hours }
-        elseif ($up.TotalHours -ge 1) { $uptime = "{0}h {1}m" -f [int]$up.TotalHours, $up.Minutes }
-        else                          { $uptime = "{0}m" -f [int]$up.TotalMinutes }
-
-        Write-Host "UP" -ForegroundColor Green -NoNewline
-        Write-Host ("   host={0}  sha={1}  tools={2}  up={3}" -f $r.host, $r.git_sha, $r.tool_count, $uptime) -ForegroundColor DarkGray
-    }
-    catch {
-        $downNames += $h.Name
-        $code = $null
-        if ($_.Exception.Response) { $code = $_.Exception.Response.StatusCode.value__ }
-
-        if ($code -eq 502) {
-            Write-Host "DOWN" -ForegroundColor Red -NoNewline
-            Write-Host "  502 - tunnel is up, server is not running" -ForegroundColor Yellow
-        }
-        elseif ($code) {
-            Write-Host "DOWN" -ForegroundColor Red -NoNewline
-            Write-Host ("  HTTP {0}" -f $code) -ForegroundColor Yellow
-        }
-        else {
-            Write-Host "DOWN" -ForegroundColor Red -NoNewline
-            Write-Host "  no response - tunnel down or host offline" -ForegroundColor Yellow
-        }
-        continue
-    }
-
-    # ---- YouTube credential ------------------------------------------------
-    # Cached by default: no network call to YouTube, so this stays instant.
-    # -Deep opts into the real round trip.
-    $url = "$($h.Base)/credential"
+    $url = "$($HostEntry.Base)/credential"
     $timeout = 8
-    if ($Deep) { $url = "$url`?deep=1"; $timeout = 30 }
+    if ($Probe) { $url = "$url`?deep=1"; $timeout = 30 }
 
     try { $c = Invoke-RestMethod -Uri $url -TimeoutSec $timeout }
     catch {
-        Write-Host "                  credential: " -NoNewline -ForegroundColor DarkGray
+        Write-Host "                  YouTube:    " -NoNewline -ForegroundColor DarkGray
         Write-Host "endpoint not available - Workshop predates the probe" -ForegroundColor Yellow
-        continue
+        return $false
     }
 
+    $looksBad = $false
     Write-Host "                  YouTube:    " -NoNewline -ForegroundColor DarkGray
 
     if ($c.never_recorded) {
         Write-Host "never confirmed" -ForegroundColor Yellow -NoNewline
         Write-Host "  - nothing has called YouTube since this was deployed" -ForegroundColor DarkGray
-        $credLooksBad = $true
+        $looksBad = $true
     }
     else {
-        $age = Format-Age $c.last_success_age_seconds
+        $age  = Format-Age $c.last_success_age_seconds
         $when = Format-Stamp $c.last_success
 
         if ($c.failing) {
@@ -186,9 +155,9 @@ foreach ($h in $hosts) {
             if ($c.last_failure_detail) {
                 Write-Host ("                              {0}" -f $c.last_failure_detail) -ForegroundColor DarkGray
             }
-            if ($c.last_failure_kind -eq "auth_expired") { $credLooksBad = $true }
+            if ($c.last_failure_kind -eq "auth_expired") { $looksBad = $true }
             else {
-                Write-Host "                              upstream_error - may be transient, try -Deep" -ForegroundColor DarkGray
+                Write-Host "                              upstream_error - may be transient, press 1 to retry" -ForegroundColor DarkGray
             }
         }
         elseif ($c.stale) {
@@ -206,13 +175,13 @@ foreach ($h in $hosts) {
         }
     }
 
-    if ($Deep -and $c.probed) {
+    if ($Probe -and $c.probed) {
         if ($c.probe_ok -eq $true) {
             Write-Host ("                              probe OK - {0}" -f $c.probe_detail) -ForegroundColor Green
         }
         elseif ($c.probe_ok -eq $false) {
             Write-Host ("                              probe FAILED - {0}" -f $c.probe_detail) -ForegroundColor Red
-            $credLooksBad = $true
+            $looksBad = $true
         }
         else {
             # Inconclusive: the call worked but returned nothing. Not recorded
@@ -220,27 +189,124 @@ foreach ($h in $hosts) {
             Write-Host ("                              probe INCONCLUSIVE - {0}" -f $c.probe_detail) -ForegroundColor Yellow
         }
     }
+
+    return $looksBad
 }
 
-Write-Host ""
+function Invoke-StatusPass {
+    param([switch]$Probe)
 
-# Only the hosts that are ACTUALLY down get a remedy. Printing both hints
-# whenever either is down told Alex to refresh a Surface that was up - a
-# diagnostic saying something untrue, which is the failure this file exists to
-# stop rather than commit.
-if ($downNames -contains "Dev (desktop)") {
-    Write-Host "  Dev is down:     run the Start Workshop Dev shortcut" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  Workshop Health Check" -ForegroundColor Cyan
+    if ($Probe) {
+        Write-Host "  $(Get-Date -Format 'ddd HH:mm:ss')  - probing YouTube, this takes a moment" -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host "  $(Get-Date -Format 'ddd HH:mm:ss')" -ForegroundColor DarkGray
+    }
+    Write-Host ""
+
+    $downNames = @()
+    $credLooksBad = $false
+
+    foreach ($h in $hosts) {
+        Write-Host ("  {0,-16}" -f $h.Name) -NoNewline
+
+        try {
+            $r = Invoke-RestMethod -Uri "$($h.Base)/health" -TimeoutSec 8
+
+            $up = [TimeSpan]::FromSeconds($r.uptime_seconds)
+            if     ($up.TotalDays  -ge 1) { $uptime = "{0}d {1}h" -f [int]$up.TotalDays, $up.Hours }
+            elseif ($up.TotalHours -ge 1) { $uptime = "{0}h {1}m" -f [int]$up.TotalHours, $up.Minutes }
+            else                          { $uptime = "{0}m" -f [int]$up.TotalMinutes }
+
+            Write-Host "UP" -ForegroundColor Green -NoNewline
+            Write-Host ("   host={0}  sha={1}  tools={2}  up={3}" -f $r.host, $r.git_sha, $r.tool_count, $uptime) -ForegroundColor DarkGray
+        }
+        catch {
+            $downNames += $h.Name
+            $code = $null
+            if ($_.Exception.Response) { $code = $_.Exception.Response.StatusCode.value__ }
+
+            if ($code -eq 502) {
+                Write-Host "DOWN" -ForegroundColor Red -NoNewline
+                Write-Host "  502 - tunnel is up, server is not running" -ForegroundColor Yellow
+            }
+            elseif ($code) {
+                Write-Host "DOWN" -ForegroundColor Red -NoNewline
+                Write-Host ("  HTTP {0}" -f $code) -ForegroundColor Yellow
+            }
+            else {
+                Write-Host "DOWN" -ForegroundColor Red -NoNewline
+                Write-Host "  no response - tunnel down or host offline" -ForegroundColor Yellow
+            }
+            continue
+        }
+
+        if (Show-CredentialStatus -HostEntry $h -Probe:$Probe) { $credLooksBad = $true }
+    }
+
+    Write-Host ""
+
+    # Only the hosts that are ACTUALLY down get a remedy. Printing both hints
+    # whenever either is down told Alex to refresh a Surface that was up - a
+    # diagnostic saying something untrue, which is the failure this file exists
+    # to stop rather than commit.
+    if ($downNames -contains "Dev (desktop)") {
+        Write-Host "  Dev is down:     run the Start Workshop Dev shortcut" -ForegroundColor DarkGray
+    }
+    if ($downNames -contains "Surface") {
+        Write-Host "  Surface is down: tap Refresh Workshop on the tablet" -ForegroundColor DarkGray
+    }
+    if ($downNames.Count -gt 0) { Write-Host "" }
+
+    if ($credLooksBad) { Show-ReauthProcedure }
 }
-if ($downNames -contains "Surface") {
-    Write-Host "  Surface is down: tap Refresh Workshop on the tablet" -ForegroundColor DarkGray
+
+# ---------------------------------------------------------------------------
+
+if ($Reauth) {
+    Show-ReauthProcedure
+    [void](Read-Host "  Press Enter to close")
+    exit
 }
-if ($downNames.Count -gt 0) { Write-Host "" }
 
-if ($credLooksBad) { Show-ReauthProcedure }
+Invoke-StatusPass -Probe:$Deep
 
+# -Deep is the non-interactive form: it has already probed, so it exits without
+# prompting. Everything below is the interactive path.
 if ($Deep) { exit }
 
-$answer = Read-Host "  Press 1 to check YouTube now, Enter to close"
-if ($answer -eq "1") {
-    & $PSCommandPath -Deep
+# ===========================================================================
+# 🛑 THE PROMPT NEVER FALLS THROUGH SILENTLY, AND NEVER ENDS UNBLOCKED.
+# ===========================================================================
+# The old prompt was "Press 1 to check now, Enter to close" — two behaviours on
+# one keypress, where THE FAILURE MODE WAS THAT THE USEFUL ONE SILENTLY DID NOT
+# HAPPEN. Two separate faults produced the same symptom:
+#
+#   * anything that was not exactly "1" closed the window without saying why;
+#   * and "1" DID run the probe, in a child invocation, after which the parent
+#     script ended and the window closed before the output could be read.
+#
+# Both look identical from the outside: the window shuts and you cannot tell
+# whether anything happened. So:
+#
+#   * unrecognised input SAYS WHAT IT RECEIVED and asks again
+#   * probing runs in-process and loops back to the prompt
+#   * only an empty line closes, and the prompt says so
+while ($true) {
+    $answer = Read-Host "  Press 1 to check YouTube now, or Enter to close"
+    if ($null -eq $answer) { break }          # Ctrl+C or a closed input stream
+    $answer = $answer.Trim()
+
+    if ($answer -eq "") { break }
+
+    if ($answer -eq "1") {
+        Invoke-StatusPass -Probe
+        continue
+    }
+
+    # Explicit about the non-match. A stray space, a stray letter, a paste —
+    # all used to close the window and read as the probe having failed.
+    Write-Host ("  Didn't recognise '{0}'. Press 1 to check YouTube, or Enter to close." -f $answer) -ForegroundColor Yellow
 }
