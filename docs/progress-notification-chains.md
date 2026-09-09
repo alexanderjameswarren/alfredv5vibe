@@ -1604,3 +1604,63 @@ attributable to the move.
 
 - 726 tests across 29 suites; `CI=true` build clean. No test changes were
   needed — nothing referenced the variant.
+
+---
+
+## Post-project — Alfred was never actually installable as a PWA
+
+Chrome offered only "Install and create shortcut" on the Pixel 7, which is its
+wording for a site that FAILS installability: a badged home-screen shortcut that
+opens in a Chrome tab, not a standalone app. That matters here because the
+deep-link work handles the installed-PWA cold-launch path specifically.
+
+### The cause
+
+`manifest.json` declared its 192 and 512 icons as `apple-touch-icon.png`, which
+is really **180x180**:
+
+```json
+{ "src": "apple-touch-icon.png", "sizes": "192x192" },   // file is 180x180
+{ "src": "apple-touch-icon.png", "sizes": "512x512" }    // same file
+```
+
+Chrome validates the **actual decoded dimensions** against the declared `sizes`
+and discards entries that disagree. Both were discarded, leaving only
+`favicon.ico` (16-64px, and `image/x-icon` is not usable for install). No 192,
+no 512, no install. **Nothing 404s and nothing errors** — the manifest is simply
+not believed, which is why this survived so long.
+
+The correct files existed all along and were unused:
+`android-chrome-192x192.png` and `android-chrome-512x512.png`, referenced only
+by `site.webmanifest` — which `index.html` never linked, so it was never
+fetched.
+
+### Also found
+
+- **`site.webmanifest` was dead**: unlinked, unreferenced in `src/`, `public/`
+  or `scripts/`, and carrying empty `name` and `short_name`, so it would have
+  failed installability on its own had it ever been linked. Deleted.
+- **`<link rel="apple-touch-icon" href="/logo192.png">` was a 404** on every
+  page load, and a duplicate — the real 180x180 icon is linked one line above.
+  Removed.
+- `start_url: "."` resolved correctly (the manifest sits at `/manifest.json`, so
+  `.` is `/`) but was made explicit. Because both resolve identically, Chrome's
+  computed app id is unchanged and no previously-installed copy is orphaned.
+
+`theme_color` was left alone — it already matches the meta tag, reconciled in
+Step 12.4/12.5.
+
+### Guarded by test
+
+`src/manifest.test.js` decodes each icon's PNG IHDR header and asserts the real
+pixels match the declared `sizes`, that every icon and every `index.html` icon
+href resolves, that a 192 and a 512 exist with a purpose including `any`, and
+that exactly one manifest exists and is linked exactly once.
+
+Verified against the pre-fix tree: it fails with
+`Expected: "192x192" / Received: "180x180"`. Reading declared sizes alone would
+never have caught this.
+
+### Status
+
+- 755 tests across 31 suites; `CI=true` build clean.
