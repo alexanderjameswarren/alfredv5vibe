@@ -25,10 +25,13 @@ import {
 } from "./NotificationChainInline";
 import AppLink from "./AppLink";
 import UndoMessage, { useUndo } from "./UndoMessage";
-import SortControl, { useSortPreference } from "./SortControl";
+import { useSortPreference } from "./SortControl";
+import ListToolbar, { NoMatches } from "./ListToolbar";
+import ItemPicker from "./ItemPicker";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
 import { offsetPatch, isFirstStep } from "./utils/elementOffsets";
+import { matchesQuery } from "./utils/search";
 import {
   createNotificationSteps,
   completeNotificationStep,
@@ -480,6 +483,18 @@ const NAMED_RECORD_ACCESSORS = {
   updated: (r) => r.updatedAt,
 };
 
+// What an item search matches: its name, its description, and the name and
+// description of every element. One definition, so Memories and Context detail
+// cannot disagree about what finds an item. Pass to `matchesQuery` spread.
+function itemSearchFields(item) {
+  const elements = Array.isArray(item.elements) ? item.elements : [];
+  return [
+    item.name,
+    item.description,
+    ...elements.flatMap((el) => [el?.name, el?.description]),
+  ];
+}
+
 // Intentions — Step 12.8.
 //
 // NO scheduled date, unlike the two event pages. This list is
@@ -708,12 +723,9 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState({});
 
-  const filtered = search.trim()
-    ? availableItems.filter((item) =>
-        item.name.toLowerCase().includes(search.toLowerCase()) ||
-        (item.tags && item.tags.some((t) => t.includes(search.toLowerCase())))
-      )
-    : availableItems;
+  const filtered = availableItems.filter((item) =>
+    matchesQuery(search, item.name, ...(Array.isArray(item.tags) ? item.tags : [])),
+  );
 
   function toggleItem(itemId) {
     setSelected((prev) => {
@@ -1007,15 +1019,6 @@ function ItemAddToCollection({ item, items, collections, contexts, onBack, onAdd
   }
 
   const pickerRowData = pickerRow ? rows.find((r) => r.key === pickerRow) : null;
-  const pickerCandidates = (items || [])
-    .filter((i) => !i.archived)
-    .filter((i) => targetContextId == null || i.contextId === targetContextId)
-    .filter((i) => {
-      const q = pickerSearch.trim().toLowerCase();
-      return !q || i.name.toLowerCase().includes(q);
-    })
-    .slice(0, 20);
-
   return (
     <div>
       <button
@@ -1242,35 +1245,22 @@ function ItemAddToCollection({ item, items, collections, contexts, onBack, onAdd
               </span>
             </button>
 
-            <input
-              type="text"
+            {/* No context name on rows: every candidate is already in the
+                target collection's context. */}
+            <ItemPicker
+              variant="popup"
+              items={items}
+              showContext={false}
+              exclude={(i) => targetContextId != null && i.contextId !== targetContextId}
+              query={pickerSearch}
+              onQueryChange={setPickerSearch}
+              onPick={(cand) => {
+                patch(pickerRowData.key, { targetId: cand.id, checked: true });
+                setPickerRow(null);
+              }}
               placeholder="Search items..."
-              value={pickerSearch}
-              onChange={(e) => setPickerSearch(e.target.value)}
-              className="w-full px-3 py-2 min-h-[44px] border border-border rounded-lg text-base mb-3"
               autoFocus
             />
-
-            <div className="space-y-2">
-              {pickerCandidates.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-2">
-                  No matching items
-                </p>
-              ) : (
-                pickerCandidates.map((cand) => (
-                  <button
-                    key={cand.id}
-                    onClick={() => {
-                      patch(pickerRowData.key, { targetId: cand.id, checked: true });
-                      setPickerRow(null);
-                    }}
-                    className="w-full text-left px-3 py-2 min-h-[44px] border border-border rounded-lg text-sm hover:border-primary"
-                  >
-                    {cand.name}
-                  </button>
-                ))
-              )}
-            </div>
           </div>
         </div>
       )}
@@ -1609,6 +1599,20 @@ export default function Alfred() {
   // for what has not been filed yet.
   const intentionsSort = useSortPreference("alfred.sort.intentions", INTENTION_SORT_OPTIONS, "updated");
   const memoriesSort = useSortPreference("alfred.sort.memories", NAMED_RECORD_SORT_OPTIONS, "updated");
+  // Context detail: ONE control for all three of its lists. Items and
+  // Intentions offer identical choices — only what "Name" reads differs — so a
+  // single row drives Items, Intentions and Collections alike. The default is
+  // the order Items always had here; Intentions and Collections had none.
+  const contextDetailSort = useSortPreference("alfred.sort.context-detail", NAMED_RECORD_SORT_OPTIONS, "updated");
+
+  // Per-page search text, keyed by page. In memory only, unlike the sort
+  // preference: it survives opening a record and pressing Back — the text is
+  // still visible in the box, so nothing is filtered invisibly — and a reload
+  // clears it.
+  const [listSearch, setListSearch] = useState({});
+  const searchFor = (page) => listSearch[page] || "";
+  const setSearchFor = (page) => (value) =>
+    setListSearch((prev) => ({ ...prev, [page]: value }));
 
   // --- Undo (Step 2, docs/technical-spec-ui-standardization.md) -------------
   //
@@ -4118,6 +4122,9 @@ export default function Alfred() {
   }
 
   function viewContextDetail(contextId) {
+    // A different context starts with an empty search. Coming back to the
+    // same one — Back from a record opened on it — does not come through here.
+    if (contextId !== selectedContextId) setSearchFor("context-detail")("");
     setPreviousView(view);
     setSelectedContextId(contextId);
     setView("context-detail");
@@ -4569,9 +4576,11 @@ export default function Alfred() {
   // accessor bags this one cannot be module-level. The name shown on an event
   // row is its own text when it has one, and the intention's otherwise —
   // exactly what the row renders, so sorting by Name matches what you can read.
+  // Search on Home's Today tab and Schedule matches the same value.
+  const eventTitle = (e) =>
+    e.text || getIntentDisplay(intents.find((i) => i.id === e.intentId) || {});
   const eventSortAccessors = {
-    title: (e) =>
-      e.text || getIntentDisplay(intents.find((i) => i.id === e.intentId) || {}),
+    title: eventTitle,
     time: (e) => e.time,
     created: (e) => e.createdAt,
     updated: (e) => e.updatedAt,
@@ -4784,6 +4793,43 @@ export default function Alfred() {
   });
 
   const memoriesWithoutContext = items.filter((i) => !i.contextId && !i.archived);
+
+  // What each list page shows: sorted, through its own filters (tags on
+  // Intentions and Memories), then searched. Search is applied last and the
+  // toolbar's presence is decided by the UNSEARCHED list, so typing can empty a
+  // list but never removes the box you are typing in.
+  const visibleTodayEvents = sortedTodayEvents.filter((e) =>
+    matchesQuery(searchFor("home"), eventTitle(e)),
+  );
+  const visibleScheduleEvents = sortedScheduleEvents.filter((e) =>
+    matchesQuery(searchFor("schedule"), eventTitle(e)),
+  );
+  const visibleInboxItems = sortRows(
+    inboxItems, inboxSort.sortKey, INBOX_ACCESSORS, inboxSort.sortDir,
+  ).filter((i) => matchesQuery(searchFor("inbox"), i.capturedText));
+  // Keywords are not on the card, so a keyword hit shows a row whose visible
+  // text does not contain the query. Accepted deliberately.
+  const visibleContexts = sortRows(
+    activeContexts, contextsSort.sortKey, NAMED_RECORD_ACCESSORS, contextsSort.sortDir,
+  ).filter((c) =>
+    matchesQuery(searchFor("contexts"), c.name, c.description, c.keywords),
+  );
+  const visibleIntentions = sortRows(
+    intentionsWithoutActiveEvent.filter(
+      (intent) => !filterTag || (intent.tags && intent.tags.includes(filterTag)),
+    ),
+    intentionsSort.sortKey,
+    INTENTION_ACCESSORS,
+    intentionsSort.sortDir,
+  ).filter((intent) => matchesQuery(searchFor("intentions"), getIntentDisplay(intent)));
+  const visibleMemories = sortRows(
+    memoriesWithoutContext.filter(
+      (item) => !filterTag || (item.tags && item.tags.includes(filterTag)),
+    ),
+    memoriesSort.sortKey,
+    NAMED_RECORD_ACCESSORS,
+    memoriesSort.sortDir,
+  ).filter((item) => matchesQuery(searchFor("memories"), ...itemSearchFields(item)));
 
   if (authLoading) {
     return (
@@ -5224,18 +5270,18 @@ export default function Alfred() {
                       Paused are execution lists ordered by started_at and this
                       does not govern them. */}
                   {todayEvents.length > 0 && (
-                    <SortControl
-                      id="home-sort"
-                      options={EVENT_SORT_OPTIONS}
-                      sortKey={homeSort.sortKey}
-                      sortDir={homeSort.sortDir}
-                      onChooseKey={homeSort.chooseKey}
-                      onToggleDir={homeSort.toggleDir}
+                    <ListToolbar
+                      query={searchFor("home")}
+                      onQueryChange={setSearchFor("home")}
+                      searchLabel="Search today's events"
+                      sortId="home-sort"
+                      sortOptions={EVENT_SORT_OPTIONS}
+                      sort={homeSort}
                       className="mb-3"
                     />
                   )}
-                  {sortedTodayEvents.length > 0 ? (
-                    sortedTodayEvents.map((event) => {
+                  {visibleTodayEvents.length > 0 ? (
+                    visibleTodayEvents.map((event) => {
                       const intent = intents.find((i) => i.id === event.intentId);
                       if (!intent) return null;
                       return (
@@ -5254,7 +5300,11 @@ export default function Alfred() {
                       );
                     })
                   ) : (
-                    <p className="text-muted-foreground text-sm">No events scheduled for today.</p>
+                    todayEvents.length > 0 ? (
+                      <NoMatches noun="events" query={searchFor("home")} />
+                    ) : (
+                      <p className="text-muted-foreground text-sm">No events scheduled for today.</p>
+                    )
                   )}
                 </div>
               )}
@@ -5311,13 +5361,13 @@ export default function Alfred() {
           <div>
             <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Inbox</h2>
             {inboxItems.length > 0 && (
-              <SortControl
-                id="inbox-sort"
-                options={INBOX_SORT_OPTIONS}
-                sortKey={inboxSort.sortKey}
-                sortDir={inboxSort.sortDir}
-                onChooseKey={inboxSort.chooseKey}
-                onToggleDir={inboxSort.toggleDir}
+              <ListToolbar
+                query={searchFor("inbox")}
+                onQueryChange={setSearchFor("inbox")}
+                searchLabel="Search inbox"
+                sortId="inbox-sort"
+                sortOptions={INBOX_SORT_OPTIONS}
+                sort={inboxSort}
                 className="mb-3"
               />
             )}
@@ -5326,11 +5376,11 @@ export default function Alfred() {
                 <p>Empty inbox.</p>
                 <p className="text-sm mt-2">This is success, not failure.</p>
               </div>
+            ) : visibleInboxItems.length === 0 ? (
+              <NoMatches noun="captures" query={searchFor("inbox")} />
             ) : (
               <div className="space-y-3">
-                {sortRows(
-                  inboxItems, inboxSort.sortKey, INBOX_ACCESSORS, inboxSort.sortDir,
-                ).map((inboxItem) => (
+                {visibleInboxItems.map((inboxItem) => (
                   <InboxCard
                     key={inboxItem.id}
                     inboxItem={inboxItem}
@@ -5387,41 +5437,36 @@ export default function Alfred() {
               </div>
             ) : (
               <div className="space-y-3">
-                <SortControl
-                  id="contexts-sort"
-                  options={NAMED_RECORD_SORT_OPTIONS}
-                  sortKey={contextsSort.sortKey}
-                  sortDir={contextsSort.sortDir}
-                  onChooseKey={contextsSort.chooseKey}
-                  onToggleDir={contextsSort.toggleDir}
+                <ListToolbar
+                  query={searchFor("contexts")}
+                  onQueryChange={setSearchFor("contexts")}
+                  searchLabel="Search contexts"
+                  sortId="contexts-sort"
+                  sortOptions={NAMED_RECORD_SORT_OPTIONS}
+                  sort={contextsSort}
                   className="mb-1"
                 />
                 {/* Was a hardcoded `.sort(a.name.localeCompare(b.name))`. That
                     order is now this page's DEFAULT rather than its only option.
 
-                    Context DETAIL's sub-lists still get no CONTROL — its Items
-                    sort by updatedAt descending, and its Intentions and
-                    Collections keep their arrival order. The spec covers list
-                    pages; detail pages hold five such sub-lists between them,
-                    and giving each a control is a different decision.
-
-                    Step 12.3 note: Items' fixed order now runs through
-                    `sortRows` rather than its own inline comparator. No control,
-                    but no second implementation of the comparator either. */}
-                {sortRows(
-                  activeContexts, contextsSort.sortKey, NAMED_RECORD_ACCESSORS, contextsSort.sortDir,
-                ).map((context) => (
-                  <ContextCard
-                    key={context.id}
-                    context={context}
-                    onClick={() => viewContextDetail(context.id)}
-                    onEdit={() => {
-                      setEditingContext(context);
-                      setShowContextForm(true);
-                    }}
-                    showSettings={true}
-                  />
-                ))}
+                    Context DETAIL has its own control as of the search work —
+                    one row for all three of its lists; see `contextDetailSort`. */}
+                {visibleContexts.length === 0 ? (
+                  <NoMatches noun="contexts" query={searchFor("contexts")} />
+                ) : (
+                  visibleContexts.map((context) => (
+                    <ContextCard
+                      key={context.id}
+                      context={context}
+                      onClick={() => viewContextDetail(context.id)}
+                      onEdit={() => {
+                        setEditingContext(context);
+                        setShowContextForm(true);
+                      }}
+                      showSettings={true}
+                    />
+                  ))
+                )}
               </div>
             )}
           </div>
@@ -5438,19 +5483,13 @@ export default function Alfred() {
             }
             contextId={selectedContextId}
             context={contexts.find((c) => c.id === selectedContextId)}
-            // Was a hand-rolled `(b.updatedAt || '').localeCompare(a.updatedAt || '')`.
-            // Same order, but through the shared comparator as of Step 12.3.
-            // There were two independent implementations of "sort by last
-            // modified, missing last", and they agreed — which is exactly why
-            // fixing one would not have fixed the other. One is now the only
-            // one. It also picks up the title tiebreaker, so items sharing a
-            // timestamp stop depending on array order.
-            items={sortRows(
-              items.filter((i) => i.contextId === selectedContextId && !i.archived),
-              "updated",
-              NAMED_RECORD_ACCESSORS,
-              "desc",
-            )}
+            // Unsorted on purpose: the page sorts all three of its lists with
+            // its own control, whose default (Last modified, newest first) is
+            // the fixed order Items used to get here.
+            items={items.filter((i) => i.contextId === selectedContextId && !i.archived)}
+            sort={contextDetailSort}
+            search={searchFor("context-detail")}
+            onSearchChange={setSearchFor("context-detail")}
             intents={intents.filter((i) => i.contextId === selectedContextId && !(i.isIntention && i.archived))}
             contexts={contexts}
             onBack={() => {
@@ -5683,13 +5722,13 @@ export default function Alfred() {
           <div>
             <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Schedule</h2>
             {allNonArchivedEvents.length > 0 && (
-              <SortControl
-                id="schedule-sort"
-                options={EVENT_SORT_OPTIONS}
-                sortKey={scheduleSort.sortKey}
-                sortDir={scheduleSort.sortDir}
-                onChooseKey={scheduleSort.chooseKey}
-                onToggleDir={scheduleSort.toggleDir}
+              <ListToolbar
+                query={searchFor("schedule")}
+                onQueryChange={setSearchFor("schedule")}
+                searchLabel="Search scheduled events"
+                sortId="schedule-sort"
+                sortOptions={EVENT_SORT_OPTIONS}
+                sort={scheduleSort}
                 className="mb-3"
               />
             )}
@@ -5698,9 +5737,11 @@ export default function Alfred() {
                 <p>No scheduled events.</p>
                 <p className="text-sm mt-2">This is a valid state.</p>
               </div>
+            ) : visibleScheduleEvents.length === 0 ? (
+              <NoMatches noun="events" query={searchFor("schedule")} />
             ) : (
               <div className="space-y-3">
-                {sortedScheduleEvents.map((event) => {
+                {visibleScheduleEvents.map((event) => {
                   const intent = intents.find((i) => i.id === event.intentId);
                   if (!intent) return null;
 
@@ -5744,13 +5785,13 @@ export default function Alfred() {
                 sort control AND no ordering — a bare `.filter()` over a query with
                 no ORDER BY, which is arbitrary rather than merely undocumented. */}
             {intentionsWithoutActiveEvent.length > 0 && (
-              <SortControl
-                id="intentions-sort"
-                options={INTENTION_SORT_OPTIONS}
-                sortKey={intentionsSort.sortKey}
-                sortDir={intentionsSort.sortDir}
-                onChooseKey={intentionsSort.chooseKey}
-                onToggleDir={intentionsSort.toggleDir}
+              <ListToolbar
+                query={searchFor("intentions")}
+                onQueryChange={setSearchFor("intentions")}
+                searchLabel="Search intentions"
+                sortId="intentions-sort"
+                sortOptions={INTENTION_SORT_OPTIONS}
+                sort={intentionsSort}
                 className="mb-3"
               />
             )}
@@ -5762,16 +5803,11 @@ export default function Alfred() {
                   All intentions are currently scheduled.
                 </p>
               </div>
+            ) : searchFor("intentions").trim() && visibleIntentions.length === 0 ? (
+              <NoMatches noun="intentions" query={searchFor("intentions")} />
             ) : (
               <div className="space-y-3">
-                {sortRows(
-                  intentionsWithoutActiveEvent.filter(
-                    (intent) => !filterTag || (intent.tags && intent.tags.includes(filterTag)),
-                  ),
-                  intentionsSort.sortKey,
-                  INTENTION_ACCESSORS,
-                  intentionsSort.sortDir,
-                ).map((intent) => (
+                {visibleIntentions.map((intent) => (
                   <IntentionCard
                     key={intent.id}
                     intent={intent}
@@ -5807,13 +5843,13 @@ export default function Alfred() {
             {/* Step 12.8. Missed by Step 9b in exactly the same way as Intentions,
                 and with the same consequence: no control and no order. */}
             {memoriesWithoutContext.length > 0 && (
-              <SortControl
-                id="memories-sort"
-                options={NAMED_RECORD_SORT_OPTIONS}
-                sortKey={memoriesSort.sortKey}
-                sortDir={memoriesSort.sortDir}
-                onChooseKey={memoriesSort.chooseKey}
-                onToggleDir={memoriesSort.toggleDir}
+              <ListToolbar
+                query={searchFor("memories")}
+                onQueryChange={setSearchFor("memories")}
+                searchLabel="Search memories"
+                sortId="memories-sort"
+                sortOptions={NAMED_RECORD_SORT_OPTIONS}
+                sort={memoriesSort}
                 className="mb-3"
               />
             )}
@@ -5822,16 +5858,11 @@ export default function Alfred() {
               <div className="text-center py-12 text-muted-foreground">
                 <p>No memories without context.</p>
               </div>
+            ) : searchFor("memories").trim() && visibleMemories.length === 0 ? (
+              <NoMatches noun="memories" query={searchFor("memories")} />
             ) : (
               <div className="space-y-3">
-                {sortRows(
-                  memoriesWithoutContext.filter(
-                    (item) => !filterTag || (item.tags && item.tags.includes(filterTag)),
-                  ),
-                  memoriesSort.sortKey,
-                  NAMED_RECORD_ACCESSORS,
-                  memoriesSort.sortDir,
-                ).map((item) => (
+                {visibleMemories.map((item) => (
                   <ItemCard
                     key={item.id}
                     item={item}
@@ -5900,33 +5931,42 @@ export default function Alfred() {
                 </div>
               );
 
+              // Searched AFTER the empty check above, so a search that matches
+              // nothing leaves the toolbar in place instead of replacing the
+              // whole page with "No collections yet".
+              const visible = sortRows(
+                filtered, collectionsSort.sortKey, NAMED_RECORD_ACCESSORS, collectionsSort.sortDir,
+              ).filter((coll) => matchesQuery(searchFor("collections"), coll.name));
+
               return (
               <div className="space-y-2">
-                <SortControl
-                  id="collections-sort"
-                  options={NAMED_RECORD_SORT_OPTIONS}
-                  sortKey={collectionsSort.sortKey}
-                  sortDir={collectionsSort.sortDir}
-                  onChooseKey={collectionsSort.chooseKey}
-                  onToggleDir={collectionsSort.toggleDir}
+                <ListToolbar
+                  query={searchFor("collections")}
+                  onQueryChange={setSearchFor("collections")}
+                  searchLabel="Search collections"
+                  sortId="collections-sort"
+                  sortOptions={NAMED_RECORD_SORT_OPTIONS}
+                  sort={collectionsSort}
                   className="mb-1"
                 />
-                {sortRows(
-                  filtered, collectionsSort.sortKey, NAMED_RECORD_ACCESSORS, collectionsSort.sortDir,
-                ).map((coll) => (
-                  <CollectionCard
-                    key={coll.id}
-                    collection={coll}
-                    contexts={contexts}
-                    memberCount={membersOf(coll.id).length}
-                    onOpen={() => {
-                      setPreviousView("collections");
-                      setSelectedCollectionId(coll.id);
-                      setView("collection-detail");
-                    }}
-                    onArchive={archiveCollection}
-                  />
-                ))}
+                {visible.length === 0 ? (
+                  <NoMatches noun="collections" query={searchFor("collections")} />
+                ) : (
+                  visible.map((coll) => (
+                    <CollectionCard
+                      key={coll.id}
+                      collection={coll}
+                      contexts={contexts}
+                      memberCount={membersOf(coll.id).length}
+                      onOpen={() => {
+                        setPreviousView("collections");
+                        setSelectedCollectionId(coll.id);
+                        setView("collection-detail");
+                      }}
+                      onArchive={archiveCollection}
+                    />
+                  ))
+                )}
               </div>
               );
             })()}
@@ -6860,7 +6900,6 @@ function InboxCard({
   const [intentItemSearch, setIntentItemSearch] = useState(
     (inboxItem.suggestedItemId && items?.find(i => i.id === inboxItem.suggestedItemId)?.name) || ''
   );
-  const [showIntentItemPicker, setShowIntentItemPicker] = useState(false);
 
   // Item form state (updated to pre-fill from suggestions)
   const [itemName, setItemName] = useState(
@@ -6902,31 +6941,12 @@ function InboxCard({
   const [collectionItemSearch, setCollectionItemSearch] = useState(
     (inboxItem.suggestedItemId && items?.find(i => i.id === inboxItem.suggestedItemId)?.name) || ''
   );
-  const [showCollectionItemPicker, setShowCollectionItemPicker] = useState(false);
   const [collectionQuantity, setCollectionQuantity] = useState('1');
 
-  // Autocomplete filtering.
-  //
-  // Items only, as of Step 12.7c. Context used to have one of these too; with
-  // nine contexts it was hiding the list rather than searching it. Items are a
-  // different problem — 375 of them — so this stays.
-  const filteredIntentItems =
-    items && intentItemSearch.trim()
-      ? items
-          .filter((item) =>
-            item.name.toLowerCase().includes(intentItemSearch.toLowerCase()),
-          )
-          .slice(0, 10)
-      : [];
-
-  const filteredCollectionItems =
-    items && collectionItemSearch.trim()
-      ? items
-          .filter((item) =>
-            item.name.toLowerCase().includes(collectionItemSearch.toLowerCase()),
-          )
-          .slice(0, 10)
-      : [];
+  // Item searches on this card go through ItemPicker, which does its own
+  // filtering. Items only, as of Step 12.7c: Context used to have a typeahead
+  // too, and with nine contexts it was hiding the list rather than searching
+  // it. Items are a different problem — 375 of them.
 
   // Re-sync local state when enrichment populates suggestions
   useEffect(() => {
@@ -7602,19 +7622,16 @@ function InboxCard({
                 )}
               </label>
               <div className={`relative ${itemOpen ? 'opacity-50 pointer-events-none' : ''}`}>
-                <input
-                  type="text"
-                  value={intentItemSearch}
-                  onChange={(e) => {
-                    setIntentItemSearch(e.target.value);
-                    setShowIntentItemPicker(true);
+                <ItemPicker
+                  variant="dropdown"
+                  items={items}
+                  contexts={contexts}
+                  query={intentItemSearch}
+                  onQueryChange={setIntentItemSearch}
+                  onPick={(item) => {
+                    setIntentItemId(item.id);
+                    setIntentItemSearch(item.name);
                   }}
-                  onFocus={() => setShowIntentItemPicker(true)}
-                  onBlur={() =>
-                    setTimeout(() => setShowIntentItemPicker(false), 200)
-                  }
-                  placeholder="Search for an item..."
-                  className="w-full px-3 py-2 border border-border rounded text-base"
                 />
                 {intentItemId && !intentItemSearch && items && (
                   <div className="mt-1 text-sm text-muted-foreground">
@@ -7630,35 +7647,7 @@ function InboxCard({
                       <X className="w-3 h-3" />
                     </button>
                   </div>
-                )}
-                {showIntentItemPicker &&
-                  intentItemSearch &&
-                  filteredIntentItems.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-card border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                      {filteredIntentItems.map((item) => (
-                        <button
-                          key={item.id}
-                          onClick={() => {
-                            setIntentItemId(item.id);
-                            setIntentItemSearch(item.name);
-                            setShowIntentItemPicker(false);
-                          }}
-                          className="w-full text-left px-3 py-2 hover:bg-background border-b border-border last:border-b-0"
-                        >
-                          <div className="font-medium">{item.name}</div>
-                          {item.contextId && contexts && (
-                            <div className="text-xs text-muted-foreground">
-                              {
-                                contexts.find((c) => c.id === item.contextId)
-                                  ?.name
-                              }
-                            </div>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-              </div>
+                )}              </div>
             </div>
 
             <div>
@@ -8015,19 +8004,16 @@ function InboxCard({
                 )}
               </label>
               <div className={`relative ${itemOpen ? 'opacity-50 pointer-events-none' : ''}`}>
-                <input
-                  type="text"
-                  value={collectionItemSearch}
-                  onChange={(e) => {
-                    setCollectionItemSearch(e.target.value);
-                    setShowCollectionItemPicker(true);
+                <ItemPicker
+                  variant="dropdown"
+                  items={items}
+                  contexts={contexts}
+                  query={collectionItemSearch}
+                  onQueryChange={setCollectionItemSearch}
+                  onPick={(item) => {
+                    setCollectionItemId(item.id);
+                    setCollectionItemSearch(item.name);
                   }}
-                  onFocus={() => setShowCollectionItemPicker(true)}
-                  onBlur={() =>
-                    setTimeout(() => setShowCollectionItemPicker(false), 200)
-                  }
-                  placeholder="Search for an item..."
-                  className="w-full px-3 py-2 border border-border rounded text-base"
                 />
                 {collectionItemId && !collectionItemSearch && items && (
                   <div className="mt-1 text-sm text-muted-foreground">
@@ -8043,35 +8029,7 @@ function InboxCard({
                       <X className="w-3 h-3" />
                     </button>
                   </div>
-                )}
-                {showCollectionItemPicker &&
-                  collectionItemSearch &&
-                  filteredCollectionItems.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-card border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                      {filteredCollectionItems.map((item) => (
-                        <button
-                          key={item.id}
-                          onClick={() => {
-                            setCollectionItemId(item.id);
-                            setCollectionItemSearch(item.name);
-                            setShowCollectionItemPicker(false);
-                          }}
-                          className="w-full text-left px-3 py-2 hover:bg-background border-b border-border last:border-b-0"
-                        >
-                          <div className="font-medium">{item.name}</div>
-                          {item.contextId && contexts && (
-                            <div className="text-xs text-muted-foreground">
-                              {
-                                contexts.find((c) => c.id === item.contextId)
-                                  ?.name
-                              }
-                            </div>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-              </div>
+                )}              </div>
             </div>
 
             {/* Quantity */}
@@ -8168,55 +8126,24 @@ function InboxCard({
               </button>
             </div>
 
-            <input
-              type="text"
+            {/* Descriptions still SHOW on these rows, as they always have, but
+                no longer match: pickers search names only. */}
+            <ItemPicker
+              variant="popup"
+              items={items}
+              contexts={contexts}
+              showDescription
+              exclude={(item) => itemItemLinks.some((link) => link.id === item.id)}
+              query={itemItemSearch}
+              onQueryChange={setItemItemSearch}
+              onPick={(item) => {
+                setItemItemLinks((prev) => [...prev, { id: item.id, name: item.name }]);
+                setShowItemItemPicker(false);
+                setItemItemSearch('');
+              }}
               placeholder="Search items..."
-              value={itemItemSearch}
-              onChange={(e) => setItemItemSearch(e.target.value)}
-              className="w-full px-3 py-2 border border-border rounded-lg text-base mb-3"
               autoFocus
             />
-
-            <div className="space-y-2">
-              {items
-                ?.filter((item) => !item.archived && !itemItemLinks.find((link) => link.id === item.id))
-                .filter((item) => {
-                  if (!itemItemSearch.trim()) return true;
-                  const query = itemItemSearch.toLowerCase();
-                  return (
-                    item.name.toLowerCase().includes(query) ||
-                    (item.description && item.description.toLowerCase().includes(query))
-                  );
-                })
-                .slice(0, 20)
-                .map((item) => {
-                  const contextName = item.contextId && contexts
-                    ? contexts.find((c) => c.id === item.contextId)?.name
-                    : null;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => {
-                        setItemItemLinks((prev) => [...prev, { id: item.id, name: item.name }]);
-                        setShowItemItemPicker(false);
-                        setItemItemSearch('');
-                      }}
-                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-accent transition-colors border border-border"
-                    >
-                      <div className="font-medium text-foreground">{item.name}</div>
-                      {contextName && (
-                        <div className="text-xs text-muted-foreground">{contextName}</div>
-                      )}
-                      {item.description && (
-                        <div className="text-sm text-muted-foreground mt-1 line-clamp-2">{item.description}</div>
-                      )}
-                    </button>
-                  );
-                })}
-              {items?.filter((item) => !item.archived && !itemItemLinks.find((link) => link.id === item.id)).length === 0 && (
-                <p className="text-muted-foreground text-sm py-4 text-center">No items available to link</p>
-              )}
-            </div>
           </div>
         </div>
       )}
@@ -8596,6 +8523,10 @@ function ContextDetailView({
   onViewCollection,
   onArchiveCollection,
   onDirtyChange,
+  // Owned by Alfred so they survive opening a record here and pressing Back.
+  sort,
+  search = "",
+  onSearchChange,
 }) {
   const [itemsExpanded, setItemsExpanded] = useState(true);
   const [intentionsExpanded, setIntentionsExpanded] = useState(true);
@@ -8604,8 +8535,26 @@ function ContextDetailView({
   // this page silently moved you to a different screen — and browser Back left
   // the form open on a page that had not asked for it.
   const [isEditingContext, setIsEditingContext] = useState(false);
+  const searching = search.trim() !== "";
 
   if (!context) return null;
+
+  // One sort and one search drive all three lists, each filtered on its own —
+  // nothing is merged or ranked. Filters what is already loaded: elements come
+  // in with `select("*")` on items, so element text is searchable without a
+  // fetch.
+  const sortBy = (rows, accessors) =>
+    sortRows(rows, sort.sortKey, accessors, sort.sortDir);
+  const visibleItems = sortBy(items, NAMED_RECORD_ACCESSORS)
+    .filter((item) => !filterTag || (item.tags && item.tags.includes(filterTag)))
+    .filter((item) => matchesQuery(search, ...itemSearchFields(item)));
+  const visibleIntents = sortBy(intents, INTENTION_ACCESSORS).filter((intent) =>
+    matchesQuery(search, getIntentDisplay(intent)),
+  );
+  const contextCollections = collections.filter((c) => c.contextId === contextId);
+  const visibleCollections = sortBy(contextCollections, NAMED_RECORD_ACCESSORS).filter(
+    (coll) => matchesQuery(search, coll.name),
+  );
 
   return (
     <div>
@@ -8690,6 +8639,18 @@ function ContextDetailView({
         )}
       </div>
 
+      {(items.length > 0 || intents.length > 0 || contextCollections.length > 0) && (
+        <ListToolbar
+          query={search}
+          onQueryChange={onSearchChange}
+          searchLabel="Search this context"
+          sortId="context-detail-sort"
+          sortOptions={NAMED_RECORD_SORT_OPTIONS}
+          sort={sort}
+          className="mb-3"
+        />
+      )}
+
       <div className="space-y-6">
         <div>
           <div className="flex items-center justify-between mb-3">
@@ -8698,7 +8659,7 @@ function ContextDetailView({
               className="flex items-center gap-2 text-base sm:text-lg font-medium text-foreground"
             >
               <ChevronDown className={`w-4 h-4 transition-transform ${itemsExpanded ? "" : "-rotate-90"}`} />
-              Items ({items.length})
+              Items ({searching ? `${visibleItems.length} of ${items.length}` : items.length})
             </button>
             <button
               onClick={() => onOpenAddItem()}
@@ -8714,11 +8675,11 @@ function ContextDetailView({
               <TagFilter entities={items} activeTag={filterTag} onFilter={onFilterTag} />
               {items.length === 0 ? (
                 <p className="text-muted-foreground text-sm">No items in this context</p>
+              ) : searching && visibleItems.length === 0 ? (
+                <NoMatches noun="items" query={search} />
               ) : (
                 <div className="space-y-2">
-                  {items
-                    .filter((item) => !filterTag || (item.tags && item.tags.includes(filterTag)))
-                    .map((item) => (
+                  {visibleItems.map((item) => (
                     <ItemCard
                       key={item.id}
                       item={item}
@@ -8745,7 +8706,7 @@ function ContextDetailView({
               className="flex items-center gap-2 text-base sm:text-lg font-medium text-foreground"
             >
               <ChevronDown className={`w-4 h-4 transition-transform ${intentionsExpanded ? "" : "-rotate-90"}`} />
-              Intentions ({intents.length})
+              Intentions ({searching ? `${visibleIntents.length} of ${intents.length}` : intents.length})
             </button>
             <button
               onClick={() => onOpenAddIntention()}
@@ -8762,9 +8723,11 @@ function ContextDetailView({
                 <p className="text-muted-foreground text-sm">
                   No intentions in this context
                 </p>
+              ) : searching && visibleIntents.length === 0 ? (
+                <NoMatches noun="intentions" query={search} />
               ) : (
                 <div className="space-y-2">
-                  {intents.map((intent) => (
+                  {visibleIntents.map((intent) => (
                     <IntentionCard
                       key={intent.id}
                       intent={intent}
@@ -8795,10 +8758,9 @@ function ContextDetailView({
         {/* Collections Section */}
         <div>
           <h3 className="text-base sm:text-lg font-medium mb-3">
-            Collections ({collections.filter((c) => c.contextId === contextId).length})
+            Collections ({searching ? `${visibleCollections.length} of ${contextCollections.length}` : contextCollections.length})
           </h3>
           {(() => {
-            const contextCollections = collections.filter((c) => c.contextId === contextId);
             if (contextCollections.length === 0) {
               return (
                 <p className="text-muted-foreground text-sm">
@@ -8806,9 +8768,12 @@ function ContextDetailView({
                 </p>
               );
             }
+            if (visibleCollections.length === 0) {
+              return <NoMatches noun="collections" query={search} />;
+            }
             return (
               <div className="space-y-2">
-                {contextCollections.map((coll) => (
+                {visibleCollections.map((coll) => (
                   <CollectionCard
                     key={coll.id}
                     collection={coll}
@@ -10591,35 +10556,21 @@ function ItemCard({
                       </div>
                     ) : linkingElementIndex === index ? (
                       <div className="space-y-1">
-                        <input
-                          type="text"
-                          value={linkSearch}
-                          onChange={(e) => setLinkSearch(e.target.value)}
+                        <ItemPicker
+                          variant="inline"
+                          items={allItems}
+                          contexts={contexts}
+                          exclude={(i) => i.id === item.id}
+                          query={linkSearch}
+                          onQueryChange={setLinkSearch}
+                          onPick={(i) => {
+                            updateElement(index, "itemId", i.id);
+                            setLinkingElementIndex(null);
+                            setLinkSearch("");
+                          }}
                           placeholder="Search for an item to link..."
-                          className="w-full px-2 py-1 border border-border rounded text-sm"
                           autoFocus
                         />
-                        <div className="max-h-32 overflow-y-auto border border-border rounded">
-                          {allItems
-                            .filter((i) => !i.archived && i.id !== item.id && i.name.toLowerCase().includes(linkSearch.toLowerCase()))
-                            .slice(0, 8)
-                            .map((i) => (
-                              <button
-                                key={i.id}
-                                onClick={() => {
-                                  updateElement(index, "itemId", i.id);
-                                  setLinkingElementIndex(null);
-                                  setLinkSearch("");
-                                }}
-                                className="w-full text-left px-2 py-1.5 text-sm hover:bg-background border-b border-border last:border-b-0"
-                              >
-                                {i.name}
-                              </button>
-                            ))}
-                          {allItems.filter((i) => !i.archived && i.id !== item.id && i.name.toLowerCase().includes(linkSearch.toLowerCase())).length === 0 && (
-                            <p className="text-xs text-muted-foreground px-2 py-1">No matching items</p>
-                          )}
-                        </div>
                         <button
                           onClick={() => { setLinkingElementIndex(null); setLinkSearch(""); }}
                           className="text-xs text-muted-foreground hover:text-foreground"
@@ -11397,7 +11348,6 @@ function IntentionCard({
   const [intentEndDate, setIntentEndDate] = useState(intent.endDate || null);
   const [targetStartDate, setTargetStartDate] = useState(intent.targetStartDate || null);
   const [itemSearch, setItemSearch] = useState("");
-  const [showItemPicker, setShowItemPicker] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState(intent.itemId || "");
   const [selectedCollectionId, setSelectedCollectionId] = useState(intent.collectionId || "");
   const [tags, setTags] = useState(intent.tags || []);
@@ -11436,18 +11386,6 @@ function IntentionCard({
   useEffect(() => {
     return () => { if (onDirtyChange) onDirtyChange(false); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Autocomplete search logic.
-  //
-  // Items only, as of Step 12.7c — see the note on the context dropdown below.
-  const filteredItems =
-    items && itemSearch.trim()
-      ? items
-          .filter((item) =>
-            item.name.toLowerCase().includes(itemSearch.toLowerCase()),
-          )
-          .slice(0, 10)
-      : [];
 
   function handleSave(scheduledDate) {
     if (!name.trim()) {
@@ -11539,17 +11477,18 @@ function IntentionCard({
               Linked Item (optional)
             </label>
             <div className="relative">
-              <input
-                type="text"
-                value={itemSearch}
-                onChange={(e) => {
-                  setItemSearch(e.target.value);
-                  setShowItemPicker(true);
+              {/* Items only, as of Step 12.7c — see the note on the context
+                  dropdown above. */}
+              <ItemPicker
+                variant="dropdown"
+                items={items}
+                contexts={contexts}
+                query={itemSearch}
+                onQueryChange={setItemSearch}
+                onPick={(item) => {
+                  setSelectedItemId(item.id);
+                  setItemSearch(item.name);
                 }}
-                onFocus={() => setShowItemPicker(true)}
-                onBlur={() => setTimeout(() => setShowItemPicker(false), 200)}
-                placeholder="Search for an item..."
-                className="w-full px-3 py-2 border border-border rounded text-base"
               />
               {selectedItemId && !itemSearch && items && (
                 <div className="mt-1 text-sm text-muted-foreground">
@@ -11564,30 +11503,7 @@ function IntentionCard({
                     <X className="w-3 h-3" />
                   </button>
                 </div>
-              )}
-              {showItemPicker && itemSearch && filteredItems.length > 0 && (
-                <div className="absolute z-10 w-full mt-1 bg-card border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                  {filteredItems.map((item) => (
-                    <button
-                      key={item.id}
-                      onClick={() => {
-                        setSelectedItemId(item.id);
-                        setItemSearch(item.name);
-                        setShowItemPicker(false);
-                      }}
-                      className="w-full text-left px-3 py-2 hover:bg-background border-b border-border last:border-b-0"
-                    >
-                      <div className="font-medium">{item.name}</div>
-                      {item.contextId && contexts && (
-                        <div className="text-xs text-muted-foreground">
-                          {contexts.find((c) => c.id === item.contextId)?.name}
-                        </div>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+              )}            </div>
           </div>
 
           {collections.length > 0 && (
