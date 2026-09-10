@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import SearchInput from "./SearchInput";
 import { matchesQuery } from "./utils/search";
 
@@ -32,6 +33,42 @@ import { matchesQuery } from "./utils/search";
 // come in as `exclude`.
 
 export const ITEM_PICKER_CAP = 20;
+
+/**
+ * The "Selected: X ×" line under a dropdown picker — what will actually be
+ * saved.
+ *
+ * Save writes the linked item's ID, never the text in the box, and only
+ * picking a result or tapping × changes that ID. So the line shows whenever the
+ * box does not already say exactly the linked item's name. It used to show
+ * only while the box was EMPTY: pick "Salt", edit the text to "pepp", and Salt
+ * was still saved with nothing on screen saying so.
+ *
+ * Typing deliberately does NOT clear the link: abandoning a search would
+ * silently drop an existing link, and on the Inbox's Collection section a
+ * missing item means nothing gets added at all.
+ */
+export function PickedItem({ selectedId, items, query, onClear }) {
+  if (!selectedId) return null;
+  const name = (items || []).find((i) => i.id === selectedId)?.name;
+  if (name && query.trim() === name) return null;
+  return (
+    <div className="mt-1 flex items-center gap-1 text-sm text-muted-foreground">
+      <span className="min-w-0 break-words">
+        Selected: {name || "(item not found)"}
+      </span>
+      <button
+        type="button"
+        onClick={onClear}
+        aria-label="Remove linked item"
+        title="Remove linked item"
+        className="p-1 shrink-0 text-destructive hover:text-destructive-hover"
+      >
+        <X className="w-3 h-3" />
+      </button>
+    </div>
+  );
+}
 
 // Delay before a blur hides the list, so a tap on a result lands before the
 // list unmounts under it.

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
-import ItemPicker, { ITEM_PICKER_CAP } from "./ItemPicker";
+import ItemPicker, { ITEM_PICKER_CAP, PickedItem } from "./ItemPicker";
 
 const CONTEXTS = [
   { id: "shop", name: "Shopping" },
@@ -128,5 +128,37 @@ describe("ItemPicker", () => {
     render(<Harness variant="inline" onPick={onPick} />);
     fireEvent.click(screen.getByText("Pepper"));
     expect(onPick).toHaveBeenCalledWith(ITEMS[2]);
+  });
+});
+
+describe("PickedItem", () => {
+  const renderPicked = (props) =>
+    render(<PickedItem items={ITEMS} onClear={() => {}} {...props} />);
+
+  test("nothing linked, nothing shown", () => {
+    renderPicked({ selectedId: "", query: "salt" });
+    expect(screen.queryByText(/Selected:/)).toBeNull();
+  });
+
+  test("hidden while the box already shows the linked name", () => {
+    renderPicked({ selectedId: "1", query: "Salt" });
+    expect(screen.queryByText(/Selected:/)).toBeNull();
+  });
+
+  test("shown while the box is empty", () => {
+    renderPicked({ selectedId: "1", query: "" });
+    expect(screen.getByText("Selected: Salt")).toBeTruthy();
+  });
+
+  test("shown when the box text no longer matches the link", () => {
+    renderPicked({ selectedId: "1", query: "pepp" });
+    expect(screen.getByText("Selected: Salt")).toBeTruthy();
+  });
+
+  test("× clears the link", () => {
+    const onClear = jest.fn();
+    renderPicked({ selectedId: "1", query: "pepp", onClear });
+    fireEvent.click(screen.getByLabelText("Remove linked item"));
+    expect(onClear).toHaveBeenCalled();
   });
 });

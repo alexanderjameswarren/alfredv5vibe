@@ -27,7 +27,7 @@ import AppLink from "./AppLink";
 import UndoMessage, { useUndo } from "./UndoMessage";
 import { useSortPreference } from "./SortControl";
 import ListToolbar, { NoMatches } from "./ListToolbar";
-import ItemPicker from "./ItemPicker";
+import ItemPicker, { PickedItem } from "./ItemPicker";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
 import { offsetPatch, isFirstStep } from "./utils/elementOffsets";
@@ -7052,8 +7052,15 @@ function InboxCard({
   // the state a text-only edit leaves the card in.
   const captureTextDirty =
     editingCapture && captureDraft.trim() !== inboxItem.capturedText;
+  // Collection open with nothing to add. The triage handler skips a collection
+  // step that has no item, and then files the capture anyway — so Save used to
+  // "succeed", remove the capture from the inbox, and add nothing anywhere.
+  // Blocked here, with the reason shown under the Item field. Create Item
+  // being open counts: the new item is what gets added.
+  const collectionNeedsItem = collectionOpen && !collectionItemId && !itemOpen;
   const canSave =
-    intentionOpen || itemOpen || collectionOpen || captureTextDirty;
+    (intentionOpen || itemOpen || collectionOpen || captureTextDirty) &&
+    !collectionNeedsItem;
 
   // Item element helpers
   function addElement() {
@@ -7296,6 +7303,7 @@ function InboxCard({
     if (intentionOpen && !intentText.trim()) return;
     if (itemOpen && !itemName.trim()) return;
     if (collectionOpen && !selectedCollectionId) return;
+    if (collectionNeedsItem) return;
 
     onSave(inboxItem.id, {
       createIntention: intentionOpen,
@@ -7633,21 +7641,15 @@ function InboxCard({
                     setIntentItemSearch(item.name);
                   }}
                 />
-                {intentItemId && !intentItemSearch && items && (
-                  <div className="mt-1 text-sm text-muted-foreground">
-                    Selected:{" "}
-                    {items.find((i) => i.id === intentItemId)?.name}
-                    <button
-                      onClick={() => {
-                        setIntentItemId("");
-                        setIntentItemSearch("");
-                      }}
-                      className="ml-2 text-destructive hover:text-destructive-hover"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                )}              </div>
+                <PickedItem
+                  selectedId={intentItemId}
+                  items={items}
+                  query={intentItemSearch}
+                  onClear={() => {
+                    setIntentItemId("");
+                    setIntentItemSearch("");
+                  }}
+                />              </div>
             </div>
 
             <div>
@@ -8015,20 +8017,19 @@ function InboxCard({
                     setCollectionItemSearch(item.name);
                   }}
                 />
-                {collectionItemId && !collectionItemSearch && items && (
-                  <div className="mt-1 text-sm text-muted-foreground">
-                    Selected:{" "}
-                    {items.find((i) => i.id === collectionItemId)?.name}
-                    <button
-                      onClick={() => {
-                        setCollectionItemId("");
-                        setCollectionItemSearch("");
-                      }}
-                      className="ml-2 text-destructive hover:text-destructive-hover"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
+                <PickedItem
+                  selectedId={collectionItemId}
+                  items={items}
+                  query={collectionItemSearch}
+                  onClear={() => {
+                    setCollectionItemId("");
+                    setCollectionItemSearch("");
+                  }}
+                />
+                {collectionNeedsItem && (
+                  <p className="mt-1 text-xs text-destructive">
+                    Pick an item to add, or open Create Item.
+                  </p>
                 )}              </div>
             </div>
 
@@ -11490,20 +11491,15 @@ function IntentionCard({
                   setItemSearch(item.name);
                 }}
               />
-              {selectedItemId && !itemSearch && items && (
-                <div className="mt-1 text-sm text-muted-foreground">
-                  Selected: {items.find((i) => i.id === selectedItemId)?.name}
-                  <button
-                    onClick={() => {
-                      setSelectedItemId("");
-                      setItemSearch("");
-                    }}
-                    className="ml-2 text-destructive hover:text-destructive-hover"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              )}            </div>
+              <PickedItem
+                selectedId={selectedItemId}
+                items={items}
+                query={itemSearch}
+                onClear={() => {
+                  setSelectedItemId("");
+                  setItemSearch("");
+                }}
+              />            </div>
           </div>
 
           {collections.length > 0 && (
