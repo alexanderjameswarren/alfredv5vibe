@@ -25,7 +25,7 @@ export default function SnippetPanel({
   const [startInput, setStartInput] = useState(String(snippet?.startMeasure || 1));
   const [endMeas, setEndMeas] = useState(snippet?.endMeasure || totalMeasures);
   const [endInput, setEndInput] = useState(String(snippet?.endMeasure || totalMeasures));
-  const [restMeasures, setRestMeasures] = useState(snippet?.restMeasures ?? 1);
+  const [restMeasures, setRestMeasures] = useState(snippet?.restMeasures ?? 0);
   const [handMode, setHandMode] = useState(snippet?.handMode || "both");
   const [saving, setSaving] = useState(false);
   const [savedSnippets, setSavedSnippets] = useState([]);
@@ -68,14 +68,14 @@ export default function SnippetPanel({
     setStartInput(String(s.start_measure));
     setEndMeas(s.end_measure);
     setEndInput(String(s.end_measure));
-    setRestMeasures(s.rest_measures ?? 1);
+    setRestMeasures(s.rest_measures ?? 0);
     const hm = s.settings?.handMode || "both";
     setHandMode(hm);
 
     onSnippetChange({
       startMeasure: s.start_measure,
       endMeasure: s.end_measure,
-      restMeasures: s.rest_measures ?? 1,
+      restMeasures: s.rest_measures ?? 0,
       handMode: hm,
       dbId: s.id,
       title: s.title,

@@ -2,8 +2,8 @@ import React from "react";
 
 // Shared −/value/+ stepper for a rest-measure count. Extracted from
 // SnippetPanel so the snippet control and the song-level repeat control
-// stay identical: min 0, no max, step 1, and a read-only value display
-// (the count is only changeable via the buttons, never typed).
+// stay identical: min 0, no max, step 1, default 0, and a read-only value
+// display (the count is only changeable via the buttons, never typed).
 export default function RestControl({ label = "Rest:", value, onChange }) {
   return (
     <div className="flex items-center gap-1 text-muted-foreground">

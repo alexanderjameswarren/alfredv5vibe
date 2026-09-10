@@ -90,7 +90,7 @@ export default function SamPlayer({ onBack }) {
   // a snippet's own loop (see `songRepeatActive`), because both would otherwise
   // compete over `loop`, `audioEndMs`, and the appended rest measures.
   const [songRepeat, setSongRepeat] = useState(false);
-  const [songRestMeasures, setSongRestMeasures] = useState(1); // same default as a snippet's rest
+  const [songRestMeasures, setSongRestMeasures] = useState(0); // same default as a snippet's rest
   // The single source of truth for "whole-song repeat is driving playback".
   // The toggle is hidden while a snippet is selected, but a stale `true` from
   // before the snippet was picked must not leak into `loop` / `audioEndMs`.
@@ -475,7 +475,7 @@ export default function SamPlayer({ onBack }) {
     setSnippet(null);
     // Repeat is session-only state, so a reload drops it back to the default.
     setSongRepeat(false);
-    setSongRestMeasures(1);
+    setSongRestMeasures(0);
     setAudioFilePath(loadedSong.audioFilePath || null);
     bpm.reset(loadedSong.defaultBpm || DEFAULTS.bpm);
     timingWindowMs.reset(loadedSong.defaultTimingWindowMs ?? DEFAULTS.timingWindowMs);
