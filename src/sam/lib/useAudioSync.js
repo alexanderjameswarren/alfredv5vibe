@@ -15,6 +15,7 @@ import { SCROLL_GEOMETRY, SCORE_SCALE } from "./samConstants";
 export default function useAudioSync({
   song,
   snippet,
+  songRepeat = false,
   activeMeasures,
   bpm,
   playbackSpeed,
@@ -27,7 +28,7 @@ export default function useAudioSync({
   const pendingAudioSeekRef = useRef(null);
 
   // Audio anchors derived from the FULL `song.measures` — consumed by
-  // `getSeekForMeasure` / `getSnippetAudioEndMs`. We need song-relative
+  // `getSeekForMeasure` / `getLoopAudioEndMs`. We need song-relative
   // anchors here so a snippet that doesn't start at measure 1 still gets
   // accurate seeks: the seek functions reason in terms of measure numbers
   // from the full song, not the snippet slice.
@@ -96,14 +97,26 @@ export default function useAudioSync({
     return beatPosToAudioMs(songBeatPosForMeasure(measNum), songAudioAnchors);
   }
 
-  // Audio file timestamp (ms) where the snippet's real measures end.
-  // Audio should be silent during rest measures that follow. Maps the
-  // snippet's end beatPos through `songAudioAnchors` so the end timestamp
-  // honors anchors that fall inside or beyond the snippet range.
-  function getSnippetAudioEndMs() {
-    if (!snippet || !song) return null;
+  // Audio file timestamp (ms) where the looped range's real measures end.
+  // Audio should be silent during rest measures that follow. Maps the end
+  // beatPos through `songAudioAnchors` so the end timestamp honors anchors
+  // that fall inside or beyond the range.
+  //
+  // Gated on a loop being ACTIVE, not on the absence of a snippet: with no
+  // loop there are no rest measures and no teleport, so ScrollEngine must
+  // get null — a defined end would pause audio at the last measure of
+  // ordinary straight-through playback. A snippet loops over its own range;
+  // whole-song repeat loops over every measure.
+  function getLoopAudioEndMs() {
+    if (!song?.measures?.length) return null;
+    const endMeasureIndex = snippet
+      ? snippet.endMeasure
+      : songRepeat
+        ? song.measures.length
+        : null;
+    if (endMeasureIndex == null) return null;
     let totalBeats = 0;
-    for (let i = 0; i < snippet.endMeasure; i++) {
+    for (let i = 0; i < endMeasureIndex; i++) {
       totalBeats += getMeasDurationQ(song.measures[i]);
     }
     return beatPosToAudioMs(totalBeats, songAudioAnchors);
@@ -200,7 +213,7 @@ export default function useAudioSync({
   return {
     audioAnchors,
     getSeekForMeasure,
-    getSnippetAudioEndMs,
+    getLoopAudioEndMs,
     scheduleAudioStartOnScroll,
     prepareAudioSeek,
     clearTimers,

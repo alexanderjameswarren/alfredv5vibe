@@ -85,6 +85,16 @@ export default function SamPlayer({ onBack }) {
   const measureWidth = useNumericInput(DEFAULTS.measureWidth);
   const [lastResult, setLastResult] = useState(null);
   const [snippet, setSnippet] = useState(null); // { startMeasure, endMeasure, restMeasures, dbId }
+  // Whole-song repeat. Session-only by design: never persisted, no column, no
+  // localStorage — it resets whenever a song is loaded. Mutually exclusive with
+  // a snippet's own loop (see `songRepeatActive`), because both would otherwise
+  // compete over `loop`, `audioEndMs`, and the appended rest measures.
+  const [songRepeat, setSongRepeat] = useState(false);
+  const [songRestMeasures, setSongRestMeasures] = useState(1); // same default as a snippet's rest
+  // The single source of truth for "whole-song repeat is driving playback".
+  // The toggle is hidden while a snippet is selected, but a stale `true` from
+  // before the snippet was picked must not leak into `loop` / `audioEndMs`.
+  const songRepeatActive = !snippet && songRepeat;
   const [metronome, setMetronome] = useState("off"); // "off" | "beat" | "halfbeat" | "quarterbeat"
   // Full score playback (spec D4). A separate dimension from `metronome`, not a
   // fifth value on it: the user may plausibly want the synth and a click at the
@@ -194,10 +204,18 @@ export default function SamPlayer({ onBack }) {
       ? song.measures
       : song.measures.slice(snippet.startMeasure - 1, snippet.endMeasure);
 
-    // Append empty rest measures (voice format — whole-note rests)
-    const restCount = snippet?.restMeasures || 0;
+    // Append empty rest measures (voice format — whole-note rests).
+    // A snippet's own rest count wins; whole-song repeat only contributes
+    // rests when no snippet is selected, so the two never stack.
+    const restCount = snippet
+      ? snippet.restMeasures || 0
+      : songRepeat
+        ? songRestMeasures
+        : 0;
     const restMeasures = [];
-    const endNum = snippet?.endMeasure || baseMeasures.length;
+    const endNum =
+      snippet?.endMeasure ??
+      (baseMeasures[baseMeasures.length - 1]?.number || baseMeasures.length);
     for (let i = 0; i < restCount; i++) {
       restMeasures.push({
         number: endNum + i + 1,
@@ -240,7 +258,7 @@ export default function SamPlayer({ onBack }) {
     }
 
     return allMeasures.map(normalizeMeasure);
-  }, [song, snippet, lyricPlacements]);
+  }, [song, snippet, songRepeat, songRestMeasures, lyricPlacements]);
 
   // Parent measures for the ghost overlay, sliced IDENTICALLY to the child.
   //
@@ -322,13 +340,14 @@ export default function SamPlayer({ onBack }) {
   const {
     audioAnchors,
     getSeekForMeasure,
-    getSnippetAudioEndMs,
+    getLoopAudioEndMs,
     scheduleAudioStartOnScroll,
     prepareAudioSeek,
     clearTimers,
   } = useAudioSync({
     song,
     snippet,
+    songRepeat: songRepeatActive,
     activeMeasures,
     bpm: bpm.value,
     playbackSpeed: playbackSpeed.value,
@@ -454,6 +473,9 @@ export default function SamPlayer({ onBack }) {
     setSong(loadedSong);
     setSongDbId(null);
     setSnippet(null);
+    // Repeat is session-only state, so a reload drops it back to the default.
+    setSongRepeat(false);
+    setSongRestMeasures(1);
     setAudioFilePath(loadedSong.audioFilePath || null);
     bpm.reset(loadedSong.defaultBpm || DEFAULTS.bpm);
     timingWindowMs.reset(loadedSong.defaultTimingWindowMs ?? DEFAULTS.timingWindowMs);
@@ -525,6 +547,10 @@ export default function SamPlayer({ onBack }) {
     const prev = prevSnippetRef.current;
     prevSnippetRef.current = snippet;
     if (prev === snippet) return;
+    // Selecting a snippet clears whole-song repeat rather than parking it:
+    // returning to the full song should not silently re-enable a loop the
+    // user last touched several snippets ago.
+    if (snippet) setSongRepeat(false);
     handleFullStop();
   }, [snippet]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -858,6 +884,10 @@ export default function SamPlayer({ onBack }) {
                   onLyricsChanged={setLyricPlacements}
                   skipTiedNotes={skipTiedNotes}
                   hasImportedFingerings={hasImported}
+                  songRepeat={songRepeat}
+                  onSongRepeatChange={setSongRepeat}
+                  songRestMeasures={songRestMeasures}
+                  onSongRestMeasuresChange={setSongRestMeasures}
                 />
 
                 <AudioControls audioElement={audioElement} playbackState={playbackState} />
@@ -1068,12 +1098,12 @@ export default function SamPlayer({ onBack }) {
                     ? Math.max(0, activeMeasures.findIndex(m => m.number >= pausedMeasure))
                     : 0
                 }
-                loop={!!snippet}
+                loop={!!snippet || songRepeatActive}
                 onEnded={handleStop}
                 timingWindowMs={timingWindowMs.value}
                 audioElement={audioElement}
                 audioAnchors={audioAnchors}
-                audioEndMs={snippet && audioElement ? getSnippetAudioEndMs() : null}
+                audioEndMs={audioElement ? getLoopAudioEndMs() : null}
                 handMode={snippet?.handMode || "both"}
                 onScrollStart={scheduleAudioStartOnScroll}
               />

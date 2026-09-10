@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { ChevronDown, ChevronRight, Save, Scissors, Archive, ArchiveRestore } from "lucide-react";
+import RestControl from "./RestControl";
 import { supabase } from "../../supabaseClient";
 
 // Snippet display label derived from the snippet's properties. Used at every
@@ -255,22 +256,7 @@ export default function SnippetPanel({
                 min={startMeas} max={maxMeas}
               />
             </label>
-            <div className="flex items-center gap-1 text-muted-foreground">
-              Rest:
-              <button
-                onClick={() => setRestMeasures(Math.max(0, restMeasures - 1))}
-                className="w-8 h-8 flex items-center justify-center border border-border rounded text-lg min-h-[44px] min-w-[44px]"
-              >
-                −
-              </button>
-              <span className="w-6 text-center font-medium text-dark">{restMeasures}</span>
-              <button
-                onClick={() => setRestMeasures(restMeasures + 1)}
-                className="w-8 h-8 flex items-center justify-center border border-border rounded text-lg min-h-[44px] min-w-[44px]"
-              >
-                +
-              </button>
-            </div>
+            <RestControl value={restMeasures} onChange={setRestMeasures} />
             <div className="flex items-center gap-1 text-muted-foreground">
               Hand:
               {["both", "lh", "rh"].map((mode) => (

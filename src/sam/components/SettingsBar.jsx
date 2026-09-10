@@ -24,6 +24,10 @@ export default function SettingsBar({
   onLyricsChanged,
   skipTiedNotes,
   hasImportedFingerings,
+  songRepeat,
+  onSongRepeatChange,
+  songRestMeasures,
+  onSongRestMeasuresChange,
 }) {
   const isPaused = playbackState === "paused";
 
@@ -94,6 +98,7 @@ export default function SettingsBar({
 
       <NumericSettings
         song={song}
+        snippet={snippet}
         songDbId={songDbId}
         playbackState={playbackState}
         bpm={bpm}
@@ -101,6 +106,10 @@ export default function SettingsBar({
         chordMs={chordMs}
         measureWidth={measureWidth}
         playbackSpeed={playbackSpeed}
+        songRepeat={songRepeat}
+        onSongRepeatChange={onSongRepeatChange}
+        songRestMeasures={songRestMeasures}
+        onSongRestMeasuresChange={onSongRestMeasuresChange}
         onSongUpdate={onSongUpdate}
       />
     </>

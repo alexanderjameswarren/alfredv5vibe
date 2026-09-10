@@ -9,6 +9,8 @@ import {
   samSongIdFromPath,
   executionPath,
   executionIdFromPath,
+  addPath,
+  addRouteFromPath,
   isSamStatsPath,
   isKnownPath,
 } from "./viewPaths";
@@ -18,8 +20,9 @@ import {
 // on — above all "never crash, fall back to home".
 
 describe("the map itself", () => {
-  it("covers all 20 view values", () => {
-    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(20);
+  it("covers all 22 view values", () => {
+    // 20 until Step 12.6 added the two add pages.
+    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(22);
   });
 
   it("is a bijection — no two views share a path", () => {
@@ -109,7 +112,8 @@ describe("parentPath (used by Step 9's cold-load redirect)", () => {
     const details = Object.values(VIEW_TO_PATH).filter(
       (p) => p.split("/").length > 2
     );
-    expect(details).toHaveLength(8);
+    // 8 until Step 12.6 added /memories/new and /intentions/new.
+    expect(details).toHaveLength(10);
     for (const path of details) {
       expect(pathToView(parentPath(path))).not.toBe(undefined);
       expect(VIEW_TO_PATH[pathToView(parentPath(path))]).toBe(parentPath(path));
@@ -119,6 +123,72 @@ describe("parentPath (used by Step 9's cold-load redirect)", () => {
   it("bottoms out at home", () => {
     expect(parentPath("/inbox")).toBe("/");
     expect(parentPath("/")).toBe("/");
+  });
+});
+
+describe("add sub-routes (Step 12.6)", () => {
+  it("resolves the bare form to its view, with no target", () => {
+    expect(pathToView("/memories/new")).toBe("item-add");
+    expect(pathToView("/intentions/new")).toBe("intention-add");
+    expect(addRouteFromPath("/memories/new")).toEqual({
+      view: "item-add",
+      target: null,
+    });
+  });
+
+  it("resolves a targeted form to the same view", () => {
+    expect(pathToView("/memories/new/context/abc")).toBe("item-add");
+    expect(pathToView("/intentions/new/item/xyz")).toBe("intention-add");
+    expect(addRouteFromPath("/intentions/new/context/abc")).toEqual({
+      view: "intention-add",
+      target: { kind: "context", id: "abc" },
+    });
+  });
+
+  it("round-trips a target through addPath", () => {
+    const target = { kind: "context", id: "ctx 1/2" };
+    const path = addPath("item-add", target);
+    expect(addRouteFromPath(path).target).toEqual(target);
+  });
+
+  it("keeps the view map a bijection — viewToPath is always the bare form", () => {
+    expect(viewToPath("item-add")).toBe("/memories/new");
+    expect(viewToPath("intention-add")).toBe("/intentions/new");
+  });
+
+  it("treats a malformed target as no address at all, not a partial one", () => {
+    // A half-read target would open an add form pointing somewhere unintended.
+    for (const bad of [
+      "/memories/new/context",
+      "/memories/new/context/a/b",
+      "/memories/new/nonsense/abc",
+      "/memories/new/context/",
+    ]) {
+      expect(addRouteFromPath(bad)).toBeNull();
+      expect(isKnownPath(bad)).toBe(false);
+    }
+  });
+
+  it("does not treat a look-alike prefix as an add path", () => {
+    expect(addRouteFromPath("/memories/detail")).toBeNull();
+    expect(addRouteFromPath("/memories/add-to-collection")).toBeNull();
+    expect(addRouteFromPath("/memories/newsletter")).toBeNull();
+  });
+
+  it("sends a targeted form's parent to the LIST, not to its own bare form", () => {
+    // Stripping one segment would land on /memories/new/context, which is not
+    // an address — one visible correction instead of two.
+    expect(parentPath("/memories/new/context/abc")).toBe("/memories");
+    expect(parentPath("/intentions/new/item/xyz")).toBe("/intentions");
+    expect(parentPath("/memories/new")).toBe("/memories");
+  });
+
+  it("falls back rather than throwing on rubbish input", () => {
+    expect(addPath("not-a-view")).toBe("/");
+    expect(addPath("item-add", { kind: "nope", id: "x" })).toBe("/memories/new");
+    expect(addPath("item-add", { kind: "context" })).toBe("/memories/new");
+    expect(addRouteFromPath("")).toBeNull();
+    expect(addRouteFromPath(undefined)).toBeNull();
   });
 });
 

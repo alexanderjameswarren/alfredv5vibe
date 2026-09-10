@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { AudioWaveform, Save } from "lucide-react";
+import { AudioWaveform, Save, Repeat } from "lucide-react";
+import RestControl from "./RestControl";
 import { supabase } from "../../supabaseClient";
 import { DEFAULTS } from "../lib/samConstants";
 
@@ -14,8 +15,16 @@ import { DEFAULTS } from "../lib/samConstants";
 // Each numeric input is a `useNumericInput` return value: the component
 // reads `.input` for the draft, calls `.setInput` on change, and
 // `.commit({ min, max, fallback })` on blur.
+//
+// The whole-song repeat toggle + its rest stepper live here, to the right of
+// Measure W. They are session-only state owned by SamPlayer — deliberately
+// absent from `isDirty` and from `handleSaveSettings`, so repeat is never
+// persisted and resets on song reload. The toggle is hidden while a snippet
+// is selected: snippet loop and song repeat are mutually exclusive, since
+// both drive `loop` / `audioEndMs` / the appended rest measures.
 export default function NumericSettings({
   song,
+  snippet,
   songDbId,
   playbackState,
   bpm,
@@ -23,6 +32,10 @@ export default function NumericSettings({
   chordMs,
   measureWidth,
   playbackSpeed,
+  songRepeat,
+  onSongRepeatChange,
+  songRestMeasures,
+  onSongRestMeasuresChange,
   onSongUpdate,
 }) {
   const [showBpmEdit, setShowBpmEdit] = useState(false);
@@ -125,6 +138,28 @@ export default function NumericSettings({
           min={150} max={600} step={50}
         />
       </label>
+      {!snippet && (
+        <>
+          <label
+            title="Repeat whole song"
+            className={`px-2 py-1 border rounded min-h-[44px] flex items-center cursor-pointer ${songRepeat ? "border-primary bg-primary-light text-primary" : "border-border text-muted"}`}
+          >
+            <input
+              type="checkbox"
+              checked={songRepeat}
+              onChange={(e) => onSongRepeatChange(e.target.checked)}
+              className="sr-only"
+            />
+            <Repeat className="w-4 h-4" />
+          </label>
+          {songRepeat && (
+            <RestControl
+              value={songRestMeasures}
+              onChange={onSongRestMeasuresChange}
+            />
+          )}
+        </>
+      )}
       {hasAudio && (
         <>
           <label className="text-sm text-foreground">

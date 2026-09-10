@@ -158,14 +158,48 @@ That draws the line in the right place, and "inside a scrolling list" did not:
   nothing else. They own the screen, so they pin — and item detail's is the long
   recipe form that opened this phase, with Save ~2,000px below the fold.
 - **The add-item and add-intention forms** also render one card, alone, at the top of
-  a page — so by the old wording they would pin. They must not: Context detail's
+  a page — so by the old wording they would pin. ~~They must not: Context detail's
   add-item form sits above that context's Items, Intentions and Collections, and a
-  pinned bar would hover over content it has nothing to do with. Same reason
-  `ContextForm` pins on the Contexts list but not on context detail.
+  pinned bar would hover over content it has nothing to do with.~~ **They now do —
+  see the correction below.** Same reason `ContextForm` pins on the Contexts list but
+  not on context detail.
 
-Sticky is therefore **opt-in, defaulting to inline**, at every card and form: seven of
-nine card render sites sit inside lists, so the common case must be the safe one and
-the exception must be written out loud at the call site.
+> #### Correction, 2026-09-09 (Step 12.6): `sticky` is not `fixed`
+>
+> **The struck sentence above describes `position: fixed`. The footer uses
+> `position: sticky`, and the difference reverses the conclusion.**
+>
+> A sticky element is constrained by its parent's box. It pins while the card is in
+> view and **releases at the card's bottom edge** — it cannot travel down the page
+> and hover over the Items list below, because the card is its containing block. The
+> actual class is:
+>
+> ```
+> sticky bottom-28 sm:bottom-32 -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 bg-card border-t border-border
+> ```
+>
+> A *fixed* bar would have done exactly what Step 7b feared. Nothing in Alfred uses
+> one for this.
+>
+> So the four add forms took `stickyFooter` in Step 12.6, and the rule below is
+> unchanged in spirit — "does this card own the rest of the screen?" was answering a
+> question about overlap that `sticky` never had. Where content follows a form, the
+> footer simply stops pinning when the form ends, which is the desired behaviour
+> rather than a hazard.
+>
+> **Kept in reserve, not built:** if a tall form still reads badly, hide the sibling
+> lists while an add form is open. That makes the card genuinely own the screen and
+> needs no routing. Not done, because the sticky footer should be sufficient on its
+> own.
+>
+> Recorded here rather than only in the progress file because the struck wording
+> misled us once — it is why the original complaint (Save unreachable on a long form)
+> survived Step 7b, which was the step written to fix it.
+
+Sticky is therefore **opt-in, defaulting to inline**, at every card and form: the
+common case is a card inside a list, so the common case must be the safe one and the
+exception must be written out loud at the call site. _(Was "seven of nine card render
+sites sit inside lists"; four of those seven opted in at Step 12.6.)_
 
 **In-place card edits inside a list** (`ItemCard`, `IntentionCard`, `EventCard`,
 `InboxCard`) keep their inline footer, but the footer is standardized:

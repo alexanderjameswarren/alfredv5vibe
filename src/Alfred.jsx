@@ -8,6 +8,8 @@ import {
   parentPath,
   DEFAULT_PATH,
   executionPath,
+  addPath,
+  addRouteFromPath,
 } from "./viewPaths";
 import { useExecutionRoute } from "./useExecutionRoute";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
@@ -474,6 +476,29 @@ const NAMED_RECORD_SORT_OPTIONS = [
 
 const NAMED_RECORD_ACCESSORS = {
   title: (r) => r.name,
+  created: (r) => r.createdAt,
+  updated: (r) => r.updatedAt,
+};
+
+// Intentions — Step 12.8.
+//
+// NO scheduled date, unlike the two event pages. This list is
+// `intentionsWithoutActiveEvent`: an intention that has an event drops out of it
+// entirely, so the field would be null on every row present and the order would
+// collapse to the title tiebreaker. An option that can only ever do nothing is
+// worse than an absent one.
+const INTENTION_SORT_OPTIONS = [
+  { value: "title", label: "Name", defaultDir: "asc" },
+  { value: "created", label: "Created", defaultDir: "desc" },
+  { value: "updated", label: "Last modified", defaultDir: "desc" },
+];
+
+// `title` maps to `text`, not `name` — an intention has no name. It must be
+// present whether or not the page offers Name as a choice: `comparatorFor` uses
+// `get.title` as the universal tiebreaker for EVERY order, so omitting it throws
+// inside the comparator rather than failing in any sort-shaped way.
+const INTENTION_ACCESSORS = {
+  title: (r) => r.text,
   created: (r) => r.createdAt,
   updated: (r) => r.updatedAt,
 };
@@ -1335,9 +1360,22 @@ export default function Alfred() {
   const [selectedIntentionId, setSelectedIntentionId] = useState(null);
   const [selectedItemId, setSelectedItemId] = useState(null);
   const [previousView, setPreviousView] = useState("home");
+
+  // Step 12.2: the execution -> item-edit round trip.
+  //
+  // A DEDICATED slot, not `previousView`. That one is shared by every detail
+  // view and any intervening navigation clobbers it — the same reason
+  // `viewIntentionDetail` grew `intentionReturnView`. This one is written on the
+  // way out and read once on the way back.
+  //
+  // Holds { executionId, itemId } — an ID, never the execution object. The URL
+  // carries the id and `useExecutionRoute` can refetch from it, so an id is
+  // sufficient, cannot go stale, and cannot resurrect an execution that has since
+  // been closed elsewhere. `itemId` is what makes the return fire on the right
+  // item when the user has tapped through several.
+  const [executionEditReturn, setExecutionEditReturn] = useState(null);
   const [intentionReturnView, setIntentionReturnView] = useState("home");
   const [itemHistoryStack, setItemHistoryStack] = useState([]);
-  const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [dataLoaded, setDataLoaded] = useState(false);
@@ -1487,9 +1525,49 @@ export default function Alfred() {
     // that lookup has actually completed and found nothing.
     !awaitingExecutionLoad;
 
+  // --- Add pages (Step 12.6) ------------------------------------------------
+  //
+  // `/memories/new/context/:id` and `/intentions/new/(context|item)/:id`, plus
+  // the bare forms. Resolved from the URL rather than held in state, which is
+  // what makes these cold-loadable and makes browser Back work on them.
+  //
+  // No fetch-by-id hook like `useExecutionRoute` is needed: contexts and items
+  // are ALREADY fully loaded into state by `loadData`, which selects every row
+  // of both. So the target is a plain lookup, and the only thing to be careful
+  // about is not judging it missing before that load has happened.
+  const addRoute = addRouteFromPath(currentPath);
+  const addTargetContext =
+    addRoute?.target?.kind === "context"
+      ? contexts.find((c) => c.id === addRoute.target.id) || null
+      : null;
+  const addTargetItem =
+    addRoute?.target?.kind === "item"
+      ? items.find((i) => i.id === addRoute.target.id) || null
+      : null;
+
+  // `dataLoaded` is the whole guard, and it is not optional. The redirect effect
+  // below runs on every render — hooks run before this component's `!dataLoaded`
+  // early return — so without it, every cold load would find an empty `contexts`
+  // array, decide the target was gone, and bounce to the list before the data
+  // arrived. Same failure `useExecutionRoute` documents at length; the fix here
+  // is cheaper only because the data is already on its way.
+  const addTargetMissing =
+    dataLoaded &&
+    Boolean(addRoute?.target) &&
+    !addTargetContext &&
+    !addTargetItem;
+
   useEffect(() => {
     if (!isKnownPath(currentPath)) {
       navigate(DEFAULT_PATH, { replace: true });
+      return;
+    }
+    // A target that no longer exists — a stale link, or a context deleted since
+    // the URL was shared. `parentPath` sends both add pages to their LIST, not
+    // to their own bare form: opening an add form with the target silently
+    // dropped would be worse than saying the address is no good.
+    if (addTargetMissing) {
+      navigate(parentPath(currentPath), { replace: true });
       return;
     }
     if (detailStateMissing) {
@@ -1499,7 +1577,7 @@ export default function Alfred() {
     }
     // `replace` in both cases: a path the app cannot render should not become
     // a history entry the Back button can return the user to.
-  }, [currentPath, detailStateMissing, navigate]);
+  }, [currentPath, detailStateMissing, addTargetMissing, navigate]);
 
   // --- List sort preferences (Step 9b) --------------------------------------
   //
@@ -1518,6 +1596,19 @@ export default function Alfred() {
   const inboxSort = useSortPreference("alfred.sort.inbox", INBOX_SORT_OPTIONS, "created");
   const contextsSort = useSortPreference("alfred.sort.contexts", NAMED_RECORD_SORT_OPTIONS, "title");
   const collectionsSort = useSortPreference("alfred.sort.collections", NAMED_RECORD_SORT_OPTIONS, "title");
+  // Step 12.8. Own keys, independent of the other five — changing the Intentions
+  // order must not reorder Memories.
+  //
+  // Both default to "Last modified, newest first". For Intentions that is Alex's
+  // call. For Memories it is a judgement: it is a list of ITEMS, and the only
+  // other list of items in the app — Context detail's Items — has always been
+  // ordered that way. 12.3 also established that a newly touched record is
+  // expected at the top, which is the same instinct. Name was the alternative,
+  // for consistency with Contexts and Collections, which share this option set;
+  // it lost because those two are things you look up and this is a holding pen
+  // for what has not been filed yet.
+  const intentionsSort = useSortPreference("alfred.sort.intentions", INTENTION_SORT_OPTIONS, "updated");
+  const memoriesSort = useSortPreference("alfred.sort.memories", NAMED_RECORD_SORT_OPTIONS, "updated");
 
   // --- Undo (Step 2, docs/technical-spec-ui-standardization.md) -------------
   //
@@ -2575,6 +2666,68 @@ export default function Alfred() {
     });
   }
 
+  /**
+   * Edit a capture's text without triaging it — Step 12.7.
+   *
+   * NOT triage. Step 10's disposal rule deletes a capture on successful triage;
+   * this one stays, with `triagedAt` still null. The row is spread rather than
+   * rebuilt so every other column, that one included, is carried through
+   * untouched.
+   *
+   * No MCP schema is involved: `update_inbox_item` writes the `ai_*` and
+   * `suggested_*` fields, and this writes `captured_text`, a different column.
+   * The tool schemas are frozen and stay frozen.
+   *
+   * ── The enrichment decision ──────────────────────────────────────────────
+   *
+   * Editing the text INVALIDATES any existing enrichment, so this clears
+   * `aiStatus` back to `not_started` **and nulls the suggested_* fields with
+   * it**. Clearing the status alone would not be enough, and that is the whole
+   * argument: `InboxCard` seeds its triage fields
+   * `suggestedIntentText || capturedText`, so a stale suggestion is not merely a
+   * stale column — it is what the triage form PROPOSES. Leaving it would mean a
+   * user who corrected a capture still gets offered the text they corrected.
+   *
+   * The cost is a good enrichment lost to a typo fix, and it is mitigated two
+   * ways: the clear only happens when the text ACTUALLY changed, and re-enriching
+   * is one tap on a button already in this card. `ai-enrich` takes an
+   * `inbox_id` and reads `captured_text` server-side, so a re-run after an edit
+   * describes the corrected text with no extra plumbing.
+   *
+   * If this decision is overturned, this function is the only place to change.
+   */
+  async function updateInboxCaptureText(inboxItemId, capturedText) {
+    const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
+    if (!inboxItem) return false;
+
+    const text = (capturedText || "").trim();
+    if (!text) {
+      window.alert("A capture needs some text.");
+      return false;
+    }
+
+    const textChanged = text !== inboxItem.capturedText;
+
+    return withLoading("Saving...", async () => {
+      const updated = {
+        ...inboxItem,
+        capturedText: text,
+        ...(textChanged ? CLEARED_ENRICHMENT : {}),
+      };
+
+      const saved = await storage.set(`inbox:${inboxItem.id}`, updated);
+      if (saved === false) {
+        window.alert("Could not save that edit. The capture is unchanged.");
+        return false;
+      }
+
+      setInboxItems((prev) =>
+        prev.map((i) => (i.id === inboxItemId ? saved || updated : i)),
+      );
+      return true;
+    });
+  }
+
   function handleInboxEnrich(inboxItemId, updatedItem) {
     setInboxItems((prev) =>
       prev.map((item) => (item.id === inboxItemId ? updatedItem : item))
@@ -3628,28 +3781,57 @@ export default function Alfred() {
     });
   }
 
-  // Holds the poll off for its own duration, as of Step 12.4. It used to inherit
-  // that from the `withLoading('Removing...')` its caller wrapped it in —
-  // `pollPausedRef` includes `isLoading` — so taking the overlay away would have
-  // silently taken the poll guard with it. This is the same mechanism
-  // saveMemberQuantity and saveMemberOrder already use, and it is the right one:
-  // the guard is a property of the write, not of whether a spinner is on screen.
+  // OPTIMISTIC as of Step 12.4b — the row leaves the list on the tap, not on the
+  // round trip. Same shape as toggleExecutionElement, which is why ticking items
+  // off in an execution always felt instant and this did not.
+  //
+  // Step 12.4 removed the overlay but the wait stayed, because the row was still
+  // gated on a write plus three reloads. Taking a spinner off a slow action makes
+  // it feel broken rather than fast; the two halves only work together.
+  //
+  // ORDER MATTERS, and it is the whole correctness argument:
+  //
+  //   1. `memberWriteInFlight` is raised FIRST, before the optimistic update, not
+  //      around the write. The five-second poll refetches membership; a tick
+  //      landing between "row dropped from state" and "row deleted in Postgres"
+  //      would read the pre-delete rows and put the row back under the user's
+  //      thumb. That window is precisely what going optimistic creates.
+  //   2. It is a COUNTER, not a flag, which is what makes three quick taps safe:
+  //      they raise it to 3 and it returns to 0 only when the last settles. A
+  //      boolean would let the second removal's completion clear the first's
+  //      guard while the first was still in flight.
+  //   3. The state update is FUNCTIONAL, so overlapping removals compose rather
+  //      than clobber. Each filter runs against what the previous one left, not
+  //      against a snapshot captured when this handler was created.
+  //
+  // On failure the row comes back by RELOADING rather than by re-inserting a
+  // snapshot. The server owns the order; a partial failure (row deleted, removal
+  // log not written) is real; and a reload is correct in every case where a
+  // spliced snapshot would be correct in most. One round trip on a rare path, in
+  // exchange for never showing a removal that did not happen.
   async function removeItemFromCollection(collectionId, itemId) {
     memberWriteInFlight.current += 1;
+    setMembersFor(collectionId, (prev) => prev.filter((m) => m.itemId !== itemId));
+
     try {
       const result = await removeMember(collectionId, itemId, {
         reason: REMOVAL_MANUAL,
         userId: user.id,
       });
-      // Reload either way: on failure the membership row may or may not have gone,
-      // and the list must show what is actually there rather than what we assumed.
-      await loadCollectionMembers([collectionId]);
-      await loadCollectionRemovals(collectionId);
-      await loadCollectionHistory(collectionId);
+
       if (result.error) {
         reportMembershipError("remove that item", result.error);
+        await loadCollectionMembers([collectionId]);
         return false;
       }
+
+      // Membership is deliberately NOT reloaded on success: state already holds
+      // the right answer, and a refetch would be a round trip whose only visible
+      // effect is confirming what the user can already see. These two feed the
+      // "Recently removed" panel and the history view, neither of which anyone is
+      // waiting on.
+      await loadCollectionRemovals(collectionId);
+      await loadCollectionHistory(collectionId);
       return true;
     } finally {
       memberWriteInFlight.current -= 1;
@@ -3715,22 +3897,57 @@ export default function Alfred() {
    * out of the panel because the item is a member again, not because the history
    * was rewritten.
    */
-  // Same poll guard as removeItemFromCollection, and for the same reason —
-  // Step 12.4 took its overlay away. `reAddingRemovalId` disables the button but
-  // does nothing to the poll; these are two different jobs.
+  // Optimistic too, for consistency as much as speed: this sits a few inches
+  // below the remove button on the same screen, in the same aisle. One instant
+  // and one laggy would read as a bug in whichever felt slower.
+  //
+  // The provisional row carries only what the member list renders — `id`,
+  // `itemId`, `quantity` — and is swapped for the real row the insert returns.
+  // Its `id` is namespaced so it can never collide with a database id if
+  // something goes wrong before the swap.
+  //
+  // Adding the member row is all that is needed to clear the entry from the
+  // "Recently removed" panel: `recentRemovals` filters out removals whose item is
+  // back in the collection, so the panel row disappears as a consequence rather
+  // than needing its own optimistic update. One write, both halves of the
+  // feedback.
   async function putBackRemoval(removal) {
     if (reAddingRemovalId) return false;
     setReAddingRemovalId(removal.id);
     memberWriteInFlight.current += 1;
+
+    const provisional = {
+      id: `pending:${removal.id}`,
+      itemId: removal.itemId,
+      quantity: removal.quantity,
+    };
+    setMembersFor(removal.collectionId, (prev) =>
+      prev.some((m) => m.itemId === removal.itemId) ? prev : [...prev, provisional],
+    );
+
     try {
       const result = await reAddRemoval(removal, { userId: user.id });
+
       if (result.error) {
         reportMembershipError("put that item back", result.error);
+        setMembersFor(removal.collectionId, (prev) =>
+          prev.filter((m) => m.id !== provisional.id),
+        );
         return false;
       }
+
       // alreadyPresent means a double tap, or the other person restored it first.
-      // That is the desired end state, so it is a quiet success, not a warning.
-      await loadCollectionMembers([removal.collectionId]);
+      // That is the desired end state, so it is a quiet success, not a warning —
+      // but it also means `result.data` is null, so the provisional row has no
+      // real row to become and a reload is the only way to learn the true one.
+      if (result.data) {
+        setMembersFor(removal.collectionId, (prev) =>
+          prev.map((m) => (m.id === provisional.id ? result.data : m)),
+        );
+      } else {
+        await loadCollectionMembers([removal.collectionId]);
+      }
+
       await loadCollectionRemovals(removal.collectionId);
       return true;
     } finally {
@@ -3930,9 +4147,124 @@ export default function Alfred() {
     } else {
       setPreviousView(fromView || view);
       setItemHistoryStack([]);
+      // A fresh visit from anywhere else drops any stale return address, so a
+      // later Back off this item cannot bounce into an execution the user was
+      // not in. `editItemFromExecution` writes the slot after calling this.
+      setExecutionEditReturn(null);
     }
     setSelectedItemId(itemId);
     setView("item-detail");
+  }
+
+  // Step 12.2. The link on the execution screen: open the underlying item
+  // already in edit mode, skipping the extra tap on "Edit Item".
+  //
+  // Order matters — `viewItemDetail` clears this slot when it starts a fresh
+  // visit, so the slot is written after it. Both land in one batch, so the
+  // render that mounts ItemDetailView already sees it.
+  function editItemFromExecution(itemId) {
+    const executionId = activeExecution?.id;
+    if (!executionId || !itemId) return;
+    viewItemDetail(itemId, "execution-detail");
+    setExecutionEditReturn({ executionId, itemId });
+  }
+
+  // --- Add pages: open, leave, save (Step 12.6) -----------------------------
+  //
+  // NO return-address slot. The routing thread asked for exactly this: "if a new
+  // screen needs a return address after slice 2 lands, it should use
+  // `navigate(-1)`". These are new screens, so they use it now rather than
+  // adding a fifth thing for slice 3 to unpick.
+  //
+  // `state.fromApp` is the one piece of bookkeeping, and it exists because
+  // `navigate(-1)` steps OUT of the app when there is nothing to go back to —
+  // the caveat the routing thread recorded for cold-loaded deep links and
+  // middle-clicked tabs. An add page reached from inside Alfred carries the flag
+  // and goes back; one reached by pasting a URL has no flag and goes to the
+  // parent list instead. Router state, not app state: it lives on the history
+  // entry, so it cannot go stale and there is nothing to clear.
+  function openAddPage(view, target = null) {
+    if (!confirmDiscardIfDirty()) return;
+    navigate(addPath(view, target), { state: { fromApp: true } });
+  }
+
+  // Leave without asking. Used after a save, where the card has already cleared
+  // the dirty flag — asking again would prompt about changes that were just
+  // committed.
+  //
+  // Two paths, and the second one is cold-load only.
+  //
+  // IN-APP: `navigate(-1)`, which returns to the actual previous history entry
+  // with its scroll position. Unchanged.
+  //
+  // COLD LOAD: there is no history to pop, so the destination is reconstructed —
+  // and **the address already says where the link conceptually came from**. A
+  // pasted `/intentions/new/context/:id` almost certainly arrived from someone
+  // pointing at that context, so Back goes to the CONTEXT, not to the Intentions
+  // list. Only the bare form, which names no target, falls back to the record
+  // type's list.
+  //
+  // Deliberately NOT via `viewContextDetail` / `viewItemDetail`: both write
+  // `previousView`, and from here they would write "intention-add" — so Back off
+  // the context would try to return to a form the user has just left. Setting the
+  // id and navigating directly avoids that, and avoids adding a `setPreviousView`
+  // writer the routing thread has asked us not to add. The consequence is that
+  // `previousView` keeps its cold-load default of "home", so Back off the target
+  // page goes Home. That is correct for a session that started on a pasted link:
+  // there is genuinely nowhere else it came from.
+  //
+  // `replace` throughout: the add page is being LEFT, not navigated from, so it
+  // should not sit in history as somewhere Back returns to — it would render an
+  // empty form, the draft having already been discarded or saved.
+  function leaveAddPage() {
+    if (location.state?.fromApp) {
+      navigate(-1);
+      return;
+    }
+
+    if (addTargetContext) {
+      setSelectedContextId(addTargetContext.id);
+      navigate(viewToPath("context-detail"), { replace: true });
+      return;
+    }
+
+    if (addTargetItem) {
+      setSelectedItemId(addTargetItem.id);
+      navigate(viewToPath("item-detail"), { replace: true });
+      return;
+    }
+
+    navigate(parentPath(currentPath), { replace: true });
+  }
+
+  function closeAddPage() {
+    if (!confirmDiscardIfDirty()) return;
+    leaveAddPage();
+  }
+
+  async function saveNewItemFromAddPage(_itemId, updates) {
+    await handleAddItemToContext(
+      updates.name,
+      updates.elements,
+      updates.contextId || null,
+      updates.description,
+      updates.isCaptureTarget,
+    );
+    leaveAddPage();
+  }
+
+  async function saveNewIntentionFromAddPage(_intentId, updates, scheduledDate) {
+    const newIntentId = await handleAddIntentionToContext(
+      updates.text,
+      updates.contextId || null,
+      updates.itemId || null,
+      updates.collectionId || null,
+      updates.recurrenceConfig || null,
+    );
+    if (scheduledDate && newIntentId) {
+      await moveToPlanner(newIntentId, scheduledDate);
+    }
+    leaveAddPage();
   }
 
   function handleBackFromItemDetail() {
@@ -3948,10 +4280,28 @@ export default function Alfred() {
       const prevItemId = stack.pop();
       setItemHistoryStack(stack);
       setSelectedItemId(prevItemId);
-    } else {
-      setSelectedItemId(null);
-      setView(previousView);
+      return;
     }
+
+    // Step 12.2 return trip. Checked against `selectedItemId` so that tapping
+    // through to other items and back only lands on the execution once the user
+    // is actually back on the item they left it for.
+    //
+    // `goToExecution`, NOT `setView("execution-detail")`. The view map is a
+    // bijection and `viewToPath("execution-detail")` is always the bare,
+    // ID-LESS "/schedule/execution" — so setView would render the right screen
+    // under an address that has silently lost the id, and a refresh from there
+    // redirects to /schedule. goToExecution puts the id back in the URL.
+    if (executionEditReturn && executionEditReturn.itemId === selectedItemId) {
+      const { executionId } = executionEditReturn;
+      setExecutionEditReturn(null);
+      setSelectedItemId(null);
+      goToExecution({ id: executionId });
+      return;
+    }
+
+    setSelectedItemId(null);
+    setView(previousView);
   }
 
   async function handleAddItemToContext(
@@ -4991,6 +5341,7 @@ export default function Alfred() {
                     onDelete={deleteInboxItem}
                     onEnrich={handleInboxEnrich}
                     onDirtyChange={setUnsavedChanges}
+                    onSaveCaptureText={updateInboxCaptureText}
                   />
                 ))}
               </div>
@@ -5079,6 +5430,12 @@ export default function Alfred() {
         {/* Context Detail View */}
         {view === "context-detail" && selectedContextId && (
           <ContextDetailView
+            onOpenAddItem={() =>
+              openAddPage("item-add", { kind: "context", id: selectedContextId })
+            }
+            onOpenAddIntention={() =>
+              openAddPage("intention-add", { kind: "context", id: selectedContextId })
+            }
             contextId={selectedContextId}
             context={contexts.find((c) => c.id === selectedContextId)}
             // Was a hand-rolled `(b.updatedAt || '').localeCompare(a.updatedAt || '')`.
@@ -5166,8 +5523,81 @@ export default function Alfred() {
         )}
 
         {/* Item Detail View */}
+        {/* Add pages — Step 12.6. Two pages, four entry points; which entry
+            point sent you is a target in the URL, not a separate screen. */}
+        {view === "item-add" && (
+          <AddPageChrome
+            title="New Item"
+            subtitle={addTargetContext ? `in ${addTargetContext.name}` : null}
+            onBack={closeAddPage}
+          >
+            <ItemCard
+              item={{
+                id: null,
+                name: "",
+                description: "",
+                contextId: addTargetContext?.id || null,
+                elements: [],
+                isCaptureTarget: false,
+              }}
+              contexts={contexts}
+              allItems={items}
+              isEditing={true}
+              onUpdate={saveNewItemFromAddPage}
+              onCancel={closeAddPage}
+              onDirtyChange={setUnsavedChanges}
+              stickyFooter
+            />
+          </AddPageChrome>
+        )}
+
+        {view === "intention-add" && (
+          <AddPageChrome
+            title="New Intention"
+            subtitle={
+              addTargetItem
+                ? `for ${addTargetItem.name}`
+                : addTargetContext
+                  ? `in ${addTargetContext.name}`
+                  : null
+            }
+            onBack={closeAddPage}
+          >
+            <IntentionCard
+              intent={{
+                id: null,
+                // Seeded from the item's name when adding against an item, which
+                // is what the inline form on item detail did. Kept: it is the
+                // common case and the text is usually right as-is.
+                text: addTargetItem?.name || "",
+                contextId: addTargetItem
+                  ? addTargetItem.contextId || null
+                  : addTargetContext?.id || null,
+                isIntention: true,
+                isItem: false,
+                archived: false,
+                itemId: addTargetItem?.id || null,
+              }}
+              contexts={contexts}
+              items={items}
+              collections={activeCollections}
+              onUpdate={saveNewIntentionFromAddPage}
+              onSchedule={moveToPlanner}
+              getIntentDisplay={getIntentDisplay}
+              showScheduling={true}
+              isEditing={true}
+              onCancel={closeAddPage}
+              onDirtyChange={setUnsavedChanges}
+              stickyFooter
+            />
+          </AddPageChrome>
+        )}
+
         {view === "item-detail" && selectedItemId && (
           <ItemDetailView
+            onOpenAddIntention={(itemId) =>
+              openAddPage("intention-add", { kind: "item", id: itemId })
+            }
             item={items.find((i) => i.id === selectedItemId)}
             intents={intents}
             events={events}
@@ -5193,6 +5623,10 @@ export default function Alfred() {
             onArchiveIntention={archiveIntention}
             onViewItem={viewItemDetail}
             onViewIntentionDetail={(id) => viewIntentionDetail(id, "item-detail")}
+            // Step 12.2: arrive already editing when the execution screen sent
+            // us. Keyed on the item id so tapping through to a DIFFERENT item
+            // from here does not also open that one in edit mode.
+            startInEditMode={executionEditReturn?.itemId === selectedItemId}
             onClone={async (itemId, newName) => {
               const cloned = await deepCloneItem(itemId, newName);
               if (cloned) {
@@ -5230,6 +5664,7 @@ export default function Alfred() {
             onOpenSettings={() => setView("settings")}
             onToggleElement={toggleExecutionElement}
             onUpdateElement={updateExecutionElement}
+            onEditItem={editItemFromExecution}
             onToggleCollectionItem={toggleCollectionItem}
             onUpdateCollectionItemQty={saveMemberQuantity}
             onRefreshCollection={refreshCollection}
@@ -5295,7 +5730,7 @@ export default function Alfred() {
             <div className="flex items-center justify-between mb-3 sm:mb-4">
               <h2 className="text-lg sm:text-xl font-medium">Intentions</h2>
               <button
-                onClick={() => setShowAddIntentionForm(true)}
+                onClick={() => openAddPage("intention-add")}
                 className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
               >
                 <Plus className="w-4 h-4" />
@@ -5303,47 +5738,24 @@ export default function Alfred() {
               </button>
             </div>
 
-            {showAddIntentionForm && (
-              <div className="mb-3">
-                <IntentionCard
-                  intent={{
-                    id: null,
-                    text: "",
-                    contextId: "",
-                    isIntention: true,
-                    isItem: false,
-                    archived: false,
-                    itemId: null,
-                  }}
-                  contexts={contexts}
-                  items={items}
-                  collections={activeCollections}
-                  onUpdate={async (_, updates, scheduledDate) => {
-                    const newIntentId = await handleAddIntentionToContext(
-                      updates.text,
-                      updates.contextId || null,
-                      updates.itemId || null,
-                      updates.collectionId || null,
-                      updates.recurrenceConfig || null,
-                    );
-                    if (scheduledDate && newIntentId) {
-                      moveToPlanner(newIntentId, scheduledDate);
-                    }
-                    setShowAddIntentionForm(false);
-                  }}
-                  onSchedule={moveToPlanner}
-                  getIntentDisplay={getIntentDisplay}
-                  showScheduling={true}
-                  isEditing={true}
-                  onCancel={() => setShowAddIntentionForm(false)}
-                  onDirtyChange={setUnsavedChanges}
-                />
-              </div>
-            )}
-
             <TagFilter entities={intentionsWithoutActiveEvent} activeTag={filterTag} onFilter={setFilterTag} />
 
-            {intentionsWithoutActiveEvent.length === 0 && !showAddIntentionForm ? (
+            {/* Step 12.8. This page was missed by Step 9b, so until now it had no
+                sort control AND no ordering — a bare `.filter()` over a query with
+                no ORDER BY, which is arbitrary rather than merely undocumented. */}
+            {intentionsWithoutActiveEvent.length > 0 && (
+              <SortControl
+                id="intentions-sort"
+                options={INTENTION_SORT_OPTIONS}
+                sortKey={intentionsSort.sortKey}
+                sortDir={intentionsSort.sortDir}
+                onChooseKey={intentionsSort.chooseKey}
+                onToggleDir={intentionsSort.toggleDir}
+                className="mb-3"
+              />
+            )}
+
+            {intentionsWithoutActiveEvent.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 <p>No available intentions.</p>
                 <p className="text-sm mt-2">
@@ -5352,9 +5764,14 @@ export default function Alfred() {
               </div>
             ) : (
               <div className="space-y-3">
-                {intentionsWithoutActiveEvent
-                  .filter((intent) => !filterTag || (intent.tags && intent.tags.includes(filterTag)))
-                  .map((intent) => (
+                {sortRows(
+                  intentionsWithoutActiveEvent.filter(
+                    (intent) => !filterTag || (intent.tags && intent.tags.includes(filterTag)),
+                  ),
+                  intentionsSort.sortKey,
+                  INTENTION_ACCESSORS,
+                  intentionsSort.sortDir,
+                ).map((intent) => (
                   <IntentionCard
                     key={intent.id}
                     intent={intent}
@@ -5386,15 +5803,35 @@ export default function Alfred() {
           <div>
             <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Memories</h2>
             <TagFilter entities={memoriesWithoutContext} activeTag={filterTag} onFilter={setFilterTag} />
+
+            {/* Step 12.8. Missed by Step 9b in exactly the same way as Intentions,
+                and with the same consequence: no control and no order. */}
+            {memoriesWithoutContext.length > 0 && (
+              <SortControl
+                id="memories-sort"
+                options={NAMED_RECORD_SORT_OPTIONS}
+                sortKey={memoriesSort.sortKey}
+                sortDir={memoriesSort.sortDir}
+                onChooseKey={memoriesSort.chooseKey}
+                onToggleDir={memoriesSort.toggleDir}
+                className="mb-3"
+              />
+            )}
+
             {memoriesWithoutContext.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 <p>No memories without context.</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {memoriesWithoutContext
-                  .filter((item) => !filterTag || (item.tags && item.tags.includes(filterTag)))
-                  .map((item) => (
+                {sortRows(
+                  memoriesWithoutContext.filter(
+                    (item) => !filterTag || (item.tags && item.tags.includes(filterTag)),
+                  ),
+                  memoriesSort.sortKey,
+                  NAMED_RECORD_ACCESSORS,
+                  memoriesSort.sortDir,
+                ).map((item) => (
                   <ItemCard
                     key={item.id}
                     item={item}
@@ -6321,6 +6758,35 @@ function friendlyDate(timestamp) {
   }) + ` at ${timeStr}`;
 }
 
+// Everything an enrichment produced, reset — Step 12.7.
+//
+// Applied when a capture's text is edited, because the suggestions describe text
+// that no longer exists. `aiStatus` alone would not do it: `InboxCard` seeds its
+// triage fields `suggestedIntentText || capturedText`, so a stale suggestion is
+// what the form PROPOSES, not just a column nobody reads.
+//
+// Written out in full rather than derived, so adding a `suggested_*` column and
+// forgetting it here shows up as a field this list does not mention. The columns
+// are the ones `ai-enrich` writes; see the inbox table comment.
+const CLEARED_ENRICHMENT = {
+  aiStatus: "not_started",
+  aiConfidence: null,
+  aiReasoning: null,
+  suggestedContextId: null,
+  suggestItem: false,
+  suggestedItemText: null,
+  suggestedItemDescription: null,
+  suggestedItemElements: null,
+  suggestedItemId: null,
+  suggestIntent: false,
+  suggestedIntentText: null,
+  suggestedIntentRecurrence: null,
+  suggestEvent: false,
+  suggestedEventDate: null,
+  suggestedTags: [],
+  suggestedCollectionId: null,
+};
+
 function AiStatusBadge({ status }) {
   const config = {
     not_started: { label: 'Not enriched', bg: 'bg-secondary/50', text: 'text-muted-foreground', dot: 'bg-muted' },
@@ -6358,10 +6824,15 @@ function InboxCard({
   onDelete,
   onEnrich,
   onDirtyChange,
+  onSaveCaptureText,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showAiInfo, setShowAiInfo] = useState(false);
   const [enriching, setEnriching] = useState(false);
+
+  // Step 12.7 — editing the capture itself, which is not triage.
+  const [editingCapture, setEditingCapture] = useState(false);
+  const [captureDraft, setCaptureDraft] = useState(inboxItem.capturedText);
 
   // Accordion section open/closed state — auto-open if suggestions exist
   const [intentionOpen, setIntentionOpen] = useState(!!inboxItem.suggestIntent);
@@ -6383,8 +6854,6 @@ function InboxCard({
   const [intentContextId, setIntentContextId] = useState(
     inboxItem.suggestedContextId || ''
   );
-  const [intentContextSearch, setIntentContextSearch] = useState("");
-  const [showIntentContextPicker, setShowIntentContextPicker] = useState(false);
   const [intentItemId, setIntentItemId] = useState(
     inboxItem.suggestedItemId || ''
   );
@@ -6436,17 +6905,11 @@ function InboxCard({
   const [showCollectionItemPicker, setShowCollectionItemPicker] = useState(false);
   const [collectionQuantity, setCollectionQuantity] = useState('1');
 
-  // Autocomplete filtering
-  const filteredIntentContexts =
-    contexts && intentContextSearch.trim()
-      ? contexts
-          .filter((c) =>
-            !c.archived &&
-            c.name.toLowerCase().includes(intentContextSearch.toLowerCase()),
-          )
-          .slice(0, 10)
-      : [];
-
+  // Autocomplete filtering.
+  //
+  // Items only, as of Step 12.7c. Context used to have one of these too; with
+  // nine contexts it was hiding the list rather than searching it. Items are a
+  // different problem — 375 of them — so this stays.
   const filteredIntentItems =
     items && intentItemSearch.trim()
       ? items
@@ -6543,19 +7006,34 @@ function InboxCard({
       collectionItemId !== (inboxItem.suggestedItemId || '') ||
       intentionOpen !== !!inboxItem.suggestIntent ||
       itemOpen !== !!inboxItem.suggestItem ||
-      collectionOpen !== !!inboxItem.suggestedCollectionId;
+      collectionOpen !== !!inboxItem.suggestedCollectionId ||
+      // Step 12.7. An open capture editor with unsaved text is exactly the kind
+      // of typing this guard exists for, and it was the one field on this card
+      // that could be lost by navigating away.
+      (editingCapture && captureDraft !== inboxItem.capturedText);
     onDirtyChange(isDirty, "this inbox item");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     expanded, intentText, intentContextId, intentItemId,
     intentTags, eventDate, itemName, itemDescription, itemContextId,
     itemElements, itemTags, itemItemLinks, selectedCollectionId,
-    collectionItemId, intentionOpen, itemOpen, collectionOpen
+    collectionItemId, intentionOpen, itemOpen, collectionOpen,
+    editingCapture, captureDraft
   ]);
 
   useEffect(() => {
     return () => { if (onDirtyChange) onDirtyChange(false); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Is there anything to commit? Step 12.7b.
+  //
+  // Two independent reasons, and the second one is why this exists: the Save
+  // used to be disabled whenever no triage section was open, which is exactly
+  // the state a text-only edit leaves the card in.
+  const captureTextDirty =
+    editingCapture && captureDraft.trim() !== inboxItem.capturedText;
+  const canSave =
+    intentionOpen || itemOpen || collectionOpen || captureTextDirty;
 
   // Item element helpers
   function addElement() {
@@ -6766,9 +7244,35 @@ function InboxCard({
     await handleEnrich();
   }
 
-  function handleSave() {
+  // The card's ONE Save — Step 12.7b.
+  //
+  // "Commit what I changed on this card", which is what Save means on every
+  // other card in Alfred. Two things can be pending and they are not
+  // alternatives:
+  //
+  //   * the capture text, which is an edit to the row and LEAVES IT in the inbox
+  //   * a triage, which files the capture and deletes the row (Step 10)
+  //
+  // The text is written first, so a triage in the same press files the corrected
+  // text rather than the text being corrected. If no triage section is open the
+  // save stops there and the row stays — which is the whole point of 12.7, and
+  // is why the button is no longer disabled on "nothing to triage" alone.
+  async function handleSave() {
+    const captureDirty =
+      editingCapture && captureDraft.trim() !== inboxItem.capturedText;
+
+    if (captureDirty) {
+      const ok = await onSaveCaptureText(inboxItem.id, captureDraft);
+      if (!ok) return;
+      setEditingCapture(false);
+    }
+
     if (onDirtyChange) onDirtyChange(false);
-    if (!intentionOpen && !itemOpen && !collectionOpen) return;
+    if (!intentionOpen && !itemOpen && !collectionOpen) {
+      // Text-only save. Close the editor and leave the row where it is.
+      setEditingCapture(false);
+      return;
+    }
     if (intentionOpen && !intentText.trim()) return;
     if (itemOpen && !itemName.trim()) return;
     if (collectionOpen && !selectedCollectionId) return;
@@ -6814,6 +7318,11 @@ function InboxCard({
     if (onDirtyChange) onDirtyChange(false);
     setExpanded(false);
 
+    // The capture editor is part of this card now, so the card's one Cancel
+    // discards it along with everything else — Step 12.7b.
+    setEditingCapture(false);
+    setCaptureDraft(inboxItem.capturedText);
+
     // Reset accordion states
     setIntentionOpen(!!inboxItem.suggestIntent);
     setItemOpen(!!inboxItem.suggestItem);
@@ -6825,7 +7334,6 @@ function InboxCard({
     setIntentEndDate(null);
     setIntentTargetStartDate(null);
     setIntentContextId(inboxItem.suggestedContextId || '');
-    setIntentContextSearch('');
     setIntentItemId(inboxItem.suggestedItemId || '');
     setIntentItemSearch(
       (inboxItem.suggestedItemId && items?.find(i => i.id === inboxItem.suggestedItemId)?.name) || ''
@@ -6914,10 +7422,70 @@ function InboxCard({
   // Expanded triage view
   return (
     <div className="p-3 sm:p-4 bg-card border-2 border-primary rounded-lg shadow-md">
-      {/* Captured text */}
-      <p className="text-lg text-foreground mb-2 whitespace-pre-wrap">
-        {inboxItem.capturedText}
-      </p>
+      {/* Captured text — editable in place as of Step 12.7.
+
+          A capture often lands half-written, and until now the only way to
+          change it was to triage it into something. This edits `captured_text`
+          and nothing else: no item, no intention, no event, and the row stays in
+          the inbox with `triaged_at` still null. */}
+      {editingCapture ? (
+        <div className="mb-2">
+          {/* NO buttons of its own — Step 12.7b. This card already has a Save
+              and a Cancel in its footer, and a second identically-labelled pair
+              250px above them is the exact inconsistency this phase removes.
+              Worse here than usually, because the two outcomes are not
+              symmetrical: the footer's Save FILES the capture and deletes the
+              row, this one fixes a typo.
+
+              So the capture text is now simply another dirty field of the card,
+              committed by the footer Save like every other field on it. */}
+          <textarea
+            value={captureDraft}
+            onChange={(e) => {
+              const next = e.target.value;
+              // Keep the triage fields in step while they are still showing the
+              // capture verbatim — which is how they are seeded. Once the user
+              // has edited one it is theirs, and this leaves it alone.
+              //
+              // Doing it here rather than after the save is what removes the
+              // race: there is no moment where the text has been written and
+              // the form below still proposes the sentence it replaced.
+              if (intentText === captureDraft) setIntentText(next);
+              if (itemName === captureDraft) setItemName(next);
+              setCaptureDraft(next);
+            }}
+            rows={4}
+            autoFocus
+            className="w-full px-3 py-2 border border-border rounded text-base resize-y min-h-[96px]"
+          />
+          {captureDraft !== inboxItem.capturedText &&
+            (inboxItem.aiStatus === "enriched" ||
+              inboxItem.aiStatus === "re_enriched") && (
+              <p className="text-xs text-muted-foreground mt-2">
+                Saving will clear the existing suggestions — they describe the text
+                you are replacing. Re-enrich afterwards to rebuild them.
+              </p>
+            )}
+        </div>
+      ) : (
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <p className="text-lg text-foreground whitespace-pre-wrap min-w-0">
+            {inboxItem.capturedText}
+          </p>
+          {onSaveCaptureText && (
+            <button
+              onClick={() => {
+                setCaptureDraft(inboxItem.capturedText);
+                setEditingCapture(true);
+              }}
+              title="Edit this capture"
+              className="shrink-0 flex items-center justify-center p-2 min-h-[44px] min-w-[44px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Metadata row */}
       <div className="flex items-center justify-between text-xs text-muted-foreground mb-3">
@@ -6996,56 +7564,34 @@ function InboxCard({
               <label className="block text-sm font-medium text-foreground mb-1">
                 Linked Context (optional)
               </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={intentContextSearch}
-                  onChange={(e) => {
-                    setIntentContextSearch(e.target.value);
-                    setShowIntentContextPicker(true);
-                  }}
-                  onFocus={() => setShowIntentContextPicker(true)}
-                  onBlur={() =>
-                    setTimeout(() => setShowIntentContextPicker(false), 200)
-                  }
-                  placeholder="Search for a context..."
-                  className="w-full px-3 py-2 border border-border rounded text-base"
-                />
-                {intentContextId && !intentContextSearch && contexts && (
-                  <div className="mt-1 text-sm text-muted-foreground">
-                    Selected:{" "}
-                    {contexts.find((c) => c.id === intentContextId)?.name}
-                    <button
-                      onClick={() => {
-                        setIntentContextId("");
-                        setIntentContextSearch("");
-                      }}
-                      className="ml-2 text-destructive hover:text-destructive-hover"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                )}
-                {showIntentContextPicker &&
-                  intentContextSearch &&
-                  filteredIntentContexts.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-card border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                      {filteredIntentContexts.map((ctx) => (
-                        <button
-                          key={ctx.id}
-                          onClick={() => {
-                            setIntentContextId(ctx.id);
-                            setIntentContextSearch(ctx.name);
-                            setShowIntentContextPicker(false);
-                          }}
-                          className="w-full text-left px-3 py-2 hover:bg-background border-b border-border last:border-b-0"
-                        >
-                          <div className="font-medium">{ctx.name}</div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-              </div>
+              {/* A dropdown, not a typeahead — Step 12.7c.
+
+                  There are nine contexts. A search field over nine options is
+                  friction for nothing, and worse than nothing: the typeahead
+                  showed its list only once you typed, so the thing you were
+                  choosing from was hidden until you already knew its name. A
+                  select shows all nine.
+
+                  Nothing is lost. The typeahead created no contexts on the fly
+                  and filtered on nothing but `name`; both it and this exclude
+                  archived contexts, and its `.slice(0, 10)` cap never bound at
+                  nine. The X-to-clear affordance becomes the "No context"
+                  option.
+
+                  Linked Item beside this one STAYS a typeahead, deliberately —
+                  see the note there. */}
+              <select
+                value={intentContextId}
+                onChange={(e) => setIntentContextId(e.target.value)}
+                className="w-full px-3 py-2 border border-border rounded text-base"
+              >
+                <option value="">No context</option>
+                {contexts?.filter((c) => !c.archived).map((ctx) => (
+                  <option key={ctx.id} value={ctx.id}>
+                    {ctx.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div>
@@ -7542,14 +8088,26 @@ function InboxCard({
         )}
       </div>
 
-      {/* Action buttons */}
-      <div className="flex items-center justify-between">
-        <div className="flex gap-2">
+      {/* Action buttons.
+
+          Order follows Step 7's standard and already did: primary, Cancel, gap,
+          destructive pushed right. `justify-between` is the gap, so Delete is as
+          far from Cancel as the row allows.
+
+          gap-3 not gap-2 as of Step 12.7b — Step 8c's 12px between adjacent
+          controls. 8px is Material's documented FLOOR, and this row is three
+          buttons wide on a touchscreen. */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-3">
           {/* Enrich / Re-enrich button */}
           {inboxItem.aiStatus !== 'in_progress' && !enriching && (
             <button
               onClick={inboxItem.aiStatus === 'not_started' ? handleEnrich : handleReEnrich}
-              className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 flex items-center gap-2"
+              // Secondary as of Step 12.7b. It was `bg-primary`, identical to
+              // Save sitting next to it — two primaries in one row, which is the
+              // same dilution Step 8b settled for Start Now. Save is this card's
+              // primary action; Enrich is a tool you may reach for first.
+              className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 flex items-center gap-2"
             >
               <Sparkles className="w-4 h-4" />
               {inboxItem.aiStatus === 'not_started'
@@ -7566,12 +8124,15 @@ function InboxCard({
             </button>
           )}
 
-          {/* Save button */}
+          {/* The card's one Save. Enabled when there is anything to commit —
+              a triage section open, OR an edited capture (Step 12.7b). It used
+              to be inert whenever no section was open, which is exactly the
+              state a text-only edit leaves the card in. */}
           <button
             onClick={handleSave}
-            disabled={!intentionOpen && !itemOpen && !collectionOpen}
+            disabled={!canSave}
             className={`px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${
-              intentionOpen || itemOpen || collectionOpen
+              canSave
                 ? "bg-primary hover:bg-primary-hover text-white"
                 : "bg-secondary text-muted-foreground cursor-not-allowed"
             }`}
@@ -7998,6 +8559,10 @@ function CollectionCard({
 }
 
 function ContextDetailView({
+  // Step 12.6: both add forms are pages now, so this view only has to say
+  // "open the add page for THIS context" — the target travels in the URL.
+  onOpenAddItem,
+  onOpenAddIntention,
   contextId,
   context,
   items,
@@ -8032,8 +8597,6 @@ function ContextDetailView({
   onArchiveCollection,
   onDirtyChange,
 }) {
-  const [showAddItemForm, setShowAddItemForm] = useState(false);
-  const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
   const [itemsExpanded, setItemsExpanded] = useState(true);
   const [intentionsExpanded, setIntentionsExpanded] = useState(true);
   // Editing happens here now. It used to set two pieces of Alfred state and
@@ -8043,58 +8606,6 @@ function ContextDetailView({
   const [isEditingContext, setIsEditingContext] = useState(false);
 
   if (!context) return null;
-
-  // Temporary new item for the add form
-  const newItem = {
-    id: null,
-    name: "",
-    description: "",
-    contextId: contextId,
-    elements: [],
-    isCaptureTarget: false,
-  };
-
-  // Temporary new intention for the add form
-  const newIntention = {
-    id: null,
-    text: "",
-    contextId: contextId,
-    isIntention: true,
-    isItem: false,
-    archived: false,
-  };
-
-  function handleSaveNewItem(itemId, updates) {
-    // Create the actual item - use contextId from updates if changed, otherwise use current contextId
-    const finalContextId =
-      updates.contextId !== undefined ? updates.contextId : contextId;
-    onAddItem(
-      updates.name,
-      updates.elements,
-      finalContextId,
-      updates.description,
-      updates.isCaptureTarget,
-    );
-    setShowAddItemForm(false);
-  }
-
-  async function handleSaveNewIntention(intentId, updates, scheduledDate) {
-    const finalContextId =
-      updates.contextId !== undefined ? updates.contextId : contextId;
-    const newIntentId = await onAddIntention(
-      updates.text,
-      finalContextId,
-      updates.itemId || null,
-      updates.collectionId || null,
-      updates.recurrenceConfig || null,
-    );
-
-    if (scheduledDate && onSchedule) {
-      onSchedule(newIntentId, scheduledDate);
-    }
-
-    setShowAddIntentionForm(false);
-  }
 
   return (
     <div>
@@ -8190,27 +8701,13 @@ function ContextDetailView({
               Items ({items.length})
             </button>
             <button
-              onClick={() => setShowAddItemForm(true)}
+              onClick={() => onOpenAddItem()}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
               <Plus className="w-4 h-4" />
               Add Item
             </button>
           </div>
-
-          {showAddItemForm && (
-            <div className="mb-3">
-              <ItemCard
-                item={newItem}
-                contexts={contexts}
-                onUpdate={handleSaveNewItem}
-                isEditing={true}
-                onCancel={() => setShowAddItemForm(false)}
-                allItems={allItems}
-                onDirtyChange={onDirtyChange}
-              />
-            </div>
-          )}
 
           {itemsExpanded && (
             <>
@@ -8251,31 +8748,13 @@ function ContextDetailView({
               Intentions ({intents.length})
             </button>
             <button
-              onClick={() => setShowAddIntentionForm(true)}
+              onClick={() => onOpenAddIntention()}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
               <Plus className="w-4 h-4" />
               Add Intention
             </button>
           </div>
-
-          {showAddIntentionForm && (
-            <div className="mb-3">
-              <IntentionCard
-                intent={newIntention}
-                contexts={contexts}
-                items={items}
-                collections={collections}
-                onUpdate={handleSaveNewIntention}
-                onSchedule={onSchedule}
-                getIntentDisplay={getIntentDisplay}
-                showScheduling={true}
-                isEditing={true}
-                onCancel={() => setShowAddIntentionForm(false)}
-                onDirtyChange={onDirtyChange}
-              />
-            </div>
-          )}
 
           {intentionsExpanded && (
             <>
@@ -8586,7 +9065,53 @@ function IntentionDetailView({
   );
 }
 
+/**
+ * Shared chrome for the two add pages — Step 12.6.
+ *
+ * The add forms used to render inline, wedged between a section header and the
+ * list below. These are real pages with real addresses, so browser Back works
+ * on them like any other navigation.
+ *
+ * ONE of these per form type, not one per entry point. Four near-identical
+ * pages is the copy-paste drift that produced the three collection rows in
+ * Step 4a; the entry point is data (a target in the URL), not code.
+ *
+ * The heading is load-bearing, not decoration. **Defect 0.1** was a phantom
+ * "New Item" created by an Archive rendering in add mode, and the reason the
+ * confusion was possible is that an add form and an edit form looked alike. A
+ * page makes them look MORE alike — same width, same chrome, same sticky
+ * footer — so the heading says "New Item" where the edit screen shows the
+ * record's own name. Archive is still structurally absent (the seed record has
+ * a null id and no `onArchive` prop); this is the visible half of the same
+ * guarantee.
+ */
+function AddPageChrome({ title, subtitle, onBack, children }) {
+  return (
+    <div>
+      <button
+        onClick={onBack}
+        className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Back
+      </button>
+
+      <div className="mb-3 sm:mb-4">
+        <h2 className="text-xl sm:text-2xl font-bold text-foreground">{title}</h2>
+        {subtitle && (
+          <p className="text-sm text-muted-foreground mt-1">{subtitle}</p>
+        )}
+      </div>
+
+      {children}
+    </div>
+  );
+}
+
 function ItemDetailView({
+  // Step 12.6. Takes the item id so the add page can seed the intention against
+  // it, exactly as the inline form did.
+  onOpenAddIntention,
   item,
   intents,
   events,
@@ -8613,9 +9138,14 @@ function ItemDetailView({
   onClone,
   collections = [],
   onDirtyChange,
+  startInEditMode = false,
 }) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [showAddIntentionForm, setShowAddIntentionForm] = useState(false);
+  // Seeded rather than set by an effect. This view is mounted conditionally on
+  // `view === "item-detail"`, so it unmounts on the way out and remounts on the
+  // way in — the initialiser runs exactly once per visit, which is precisely the
+  // moment the flag means anything. An effect would also have to decide what to
+  // do on every later render, and the answer would be "nothing".
+  const [isEditing, setIsEditing] = useState(Boolean(startInEditMode));
   const [showCloneDialog, setShowCloneDialog] = useState(false);
   const [cloneName, setCloneName] = useState("");
 
@@ -9026,9 +9556,9 @@ function ItemDetailView({
           <h3 className="text-lg font-medium">
             Related Intentions ({itemIntentions.length})
           </h3>
-          {onAddIntention && (
+          {onOpenAddIntention && (
             <button
-              onClick={() => setShowAddIntentionForm(true)}
+              onClick={() => onOpenAddIntention(item.id)}
               className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
             >
               <Plus className="w-4 h-4" />
@@ -9037,45 +9567,7 @@ function ItemDetailView({
           )}
         </div>
 
-        {showAddIntentionForm && (
-          <div className="mb-3">
-            <IntentionCard
-              intent={{
-                id: null,
-                text: item.name,
-                contextId: item.contextId || null,
-                isIntention: true,
-                isItem: false,
-                archived: false,
-                itemId: item.id,
-              }}
-              contexts={contexts}
-              items={items}
-              collections={collections}
-              onUpdate={async (_, updates, scheduledDate) => {
-                const newIntentId = await onAddIntention(
-                  updates.text,
-                  updates.contextId !== undefined ? updates.contextId : item.contextId,
-                  updates.itemId !== undefined ? updates.itemId : item.id,
-                  updates.collectionId || null,
-                  updates.recurrenceConfig || null,
-                );
-                if (scheduledDate && onSchedule && newIntentId) {
-                  onSchedule(newIntentId, scheduledDate);
-                }
-                setShowAddIntentionForm(false);
-              }}
-              onSchedule={onSchedule}
-              getIntentDisplay={getIntentDisplay}
-              showScheduling={true}
-              isEditing={true}
-              onCancel={() => setShowAddIntentionForm(false)}
-              onDirtyChange={onDirtyChange}
-            />
-          </div>
-        )}
-
-        {itemIntentions.length === 0 && !showAddIntentionForm ? (
+        {itemIntentions.length === 0 ? (
           <p className="text-muted-foreground text-sm">
             No intentions linked to this item
           </p>
@@ -9128,6 +9620,7 @@ function ExecutionDetailView({
   onUpdateCollectionItemQty,
   onRefreshCollection,
   onUpdateNotes,
+  onEditItem,
   onComplete,
   onPause,
   onMakeActive,
@@ -9197,6 +9690,17 @@ function ExecutionDetailView({
   const displayName = intent ? getIntentDisplay(intent) : "Execution";
   const dateDisplay = event?.time ? formatEventDate(event.time) : "";
 
+  // Exactly one underlying item, and it still exists. Anything else — none, many,
+  // a collection-based execution, or an item since deleted — yields null and the
+  // link does not render. See the comment on the link below.
+  const soleItemId =
+    !execution.collectionId && execution.itemIds?.length === 1
+      ? execution.itemIds[0]
+      : null;
+  const soleItem = soleItemId ? items.find((i) => i.id === soleItemId) : null;
+  const editableItemId = soleItem ? soleItemId : null;
+  const editableItemName = soleItem?.name || "";
+
   return (
     <div>
       <button
@@ -9211,7 +9715,42 @@ function ExecutionDetailView({
       </button>
 
       <div className="mb-4 sm:mb-6">
-        <h2 className="text-xl sm:text-2xl font-bold text-foreground">{displayName}</h2>
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="text-xl sm:text-2xl font-bold text-foreground">{displayName}</h2>
+          {/* Step 12.2 — a LINK, not an edit surface.
+
+              Shown only when the execution has EXACTLY ONE underlying item.
+              `itemIds` is an array and `flattenElements` pulls in nested
+              referenced items, so "the underlying item" is not guaranteed to
+              exist or to be singular: an intention with no item gives zero, and
+              the schema permits many. Rather than guess which one the user meant,
+              the link is absent unless the answer is unambiguous. In the whole of
+              Alex's execution history — 50 executions — none has more than one:
+              42 have exactly one and 8 have none, so this covers every real case
+              and declines only the hypothetical.
+
+              Collection-based executions get no link at all: they carry
+              `itemIds: []` by construction and resolve live from the collection,
+              so there is no underlying item to open. Tapping through to a row's
+              item is 12.9, deliberately separate.
+
+              Notes are flushed first, exactly as the Back button does — the
+              textarea also saves on blur, but a click that lands on the link
+              without blurring it would otherwise lose what was typed. */}
+          {editableItemId && onEditItem && (
+            <button
+              onClick={() => {
+                onUpdateNotes(localNotes);
+                onEditItem(editableItemId);
+              }}
+              title={`Edit "${editableItemName}"`}
+              className="flex items-center gap-1.5 shrink-0 min-h-[44px] px-2 text-sm text-muted-foreground hover:text-foreground underline underline-offset-4 decoration-border hover:decoration-foreground transition-colors"
+            >
+              <Pencil className="w-4 h-4" />
+              Edit item
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-2 mt-1">
           {contextName && (
             <span className="text-xs bg-success-light text-foreground px-2 py-0.5 rounded">
@@ -10863,8 +11402,6 @@ function IntentionCard({
   const [selectedCollectionId, setSelectedCollectionId] = useState(intent.collectionId || "");
   const [tags, setTags] = useState(intent.tags || []);
   const [selectedContextId, setSelectedContextId] = useState(intent.contextId || "");
-  const [contextSearch, setContextSearch] = useState("");
-  const [showContextPicker, setShowContextPicker] = useState(false);
 
   // Was a per-card query on mount asking
   // `intent_id = … AND closed_at IS NULL` — one round trip per row on the
@@ -10900,17 +11437,9 @@ function IntentionCard({
     return () => { if (onDirtyChange) onDirtyChange(false); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Autocomplete search logic
-  const filteredContexts =
-    contexts && contextSearch.trim()
-      ? contexts
-          .filter((c) =>
-            !c.archived &&
-            c.name.toLowerCase().includes(contextSearch.toLowerCase()),
-          )
-          .slice(0, 10)
-      : [];
-
+  // Autocomplete search logic.
+  //
+  // Items only, as of Step 12.7c — see the note on the context dropdown below.
   const filteredItems =
     items && itemSearch.trim()
       ? items
@@ -10952,7 +11481,6 @@ function IntentionCard({
       setSelectedCollectionId(intent.collectionId || "");
       setItemSearch("");
       setSelectedContextId(intent.contextId || "");
-      setContextSearch("");
       setIsEditing(false);
     }
   }
@@ -10988,51 +11516,22 @@ function IntentionCard({
             <label className="block text-sm font-medium text-foreground mb-1">
               Linked Context (optional)
             </label>
-            <div className="relative">
-              <input
-                type="text"
-                value={contextSearch}
-                onChange={(e) => {
-                  setContextSearch(e.target.value);
-                  setShowContextPicker(true);
-                }}
-                onFocus={() => setShowContextPicker(true)}
-                onBlur={() => setTimeout(() => setShowContextPicker(false), 200)}
-                placeholder="Search for a context..."
-                className="w-full px-3 py-2 border border-border rounded text-base"
-              />
-              {selectedContextId && !contextSearch && contexts && (
-                <div className="mt-1 text-sm text-muted-foreground">
-                  Selected: {contexts.find((c) => c.id === selectedContextId)?.name}
-                  <button
-                    onClick={() => {
-                      setSelectedContextId("");
-                      setContextSearch("");
-                    }}
-                    className="ml-2 text-destructive hover:text-destructive-hover"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              )}
-              {showContextPicker && contextSearch && filteredContexts.length > 0 && (
-                <div className="absolute z-10 w-full mt-1 bg-card border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                  {filteredContexts.map((ctx) => (
-                    <button
-                      key={ctx.id}
-                      onClick={() => {
-                        setSelectedContextId(ctx.id);
-                        setContextSearch(ctx.name);
-                        setShowContextPicker(false);
-                      }}
-                      className="w-full text-left px-3 py-2 hover:bg-background border-b border-border last:border-b-0"
-                    >
-                      <div className="font-medium">{ctx.name}</div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* A dropdown, not a typeahead — Step 12.7c. Same rule and same
+                reason as the inbox card's: nine contexts, so a search field
+                hides the list instead of showing it. Linked Item below stays a
+                typeahead — see the note there. */}
+            <select
+              value={selectedContextId}
+              onChange={(e) => setSelectedContextId(e.target.value)}
+              className="w-full px-3 py-2 border border-border rounded text-base"
+            >
+              <option value="">No context</option>
+              {contexts?.filter((c) => !c.archived).map((ctx) => (
+                <option key={ctx.id} value={ctx.id}>
+                  {ctx.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>
@@ -11258,6 +11757,17 @@ function IntentionCard({
               </span>
             )}
           </div>
+          {/* Step 12.8. ItemCard has carried one of these since Phase 6;
+              IntentionCard never got one, so an intention was the only record in
+              Alfred whose "Last modified" order you could sort by but not see.
+              Same format and same placement as ItemCard's: a text-xs muted span
+              below the metadata row. No element count here — an intention has no
+              elements — so it is the timestamp alone. */}
+          {intent.updatedAt && (
+            <span className="text-xs text-muted-foreground mt-1 block">
+              {`last updated: ${new Date(intent.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`}
+            </span>
+          )}
         </div>
         {/* Display mode — a list row, not one of Step 6's two surfaces. This
             stays a single-click commit rather than a popover: it is a quick

@@ -3,9 +3,11 @@
 ## Status: Steps 1–11 done. Step 12 now **eight** sub-items — 12.8 was added
 2026-09-09 out of what 12.3 turned up. **12.1 verified** (all nine checks).
 **12.3 verified for items**, and extended afterwards to the edit paths — see the
-correction in "Step 12.3 fix". **12.5 verified** — note that a `theme_color` change needs a PWA reinstall to take
-effect. **12.4 done and retargeted, awaiting verification.** 12.2, 12.6, 12.7 and 12.8
-not started.
+correction in "Step 12.3 fix". **12.2, 12.4, 12.4b, 12.5 and 12.6 verified** (12.6 including the scroll-position
+check). **12.7 verified.** **12.8 done, awaiting verification** — sort controls on
+Intentions and Memories, a "last updated" line on IntentionCard, and the page
+inventory counted properly for the first time: **7 list pages, 7 controls**. Step 12
+is nine sub-items. **12.9 is the only one left.**
 
 Inbox purged by Alex 2026-08-25: **151 archived rows deleted, 10 live remain.** That
 closes the gap Step 10 recorded — the count is now zero and the column is no longer
@@ -194,6 +196,17 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
         five-second membership poll landing mid-write. Both now hold the poll off
         themselves via `memberWriteInFlight`, as `saveMemberQuantity` already did.
         Kept from the first pass: the error handling, a real bug on any screen.
+        **Verified 2026-09-09** — no dim, and the removed row survived two poll ticks.
+  - [x] **12.4b — Optimistic removal.** _(done 2026-09-09 — see "Step 12.4b findings"
+        below)_ The overlay was gone but the wait was not: the row was still gated on
+        a write plus three reloads. Remove and Put back now update state first and
+        write after, matching `toggleExecutionElement`. The poll guard moved **before**
+        the optimistic update, because going optimistic is what opens the window where
+        local state and the database disagree — the blocking version never needed it as
+        much as this one does. `memberWriteInFlight` being a counter rather than a flag
+        is what makes rapid taps safe, and this is the first step where that mattered.
+        Adding items was checked: there is no single-item add on the shopping path, so
+        bulk add stays blocking unchanged.
   - [x] **12.5 — The teal top.** _(done and **verified** 2026-09-09 — see "Step 12.5
         findings" below)_ Not a component: `public/manifest.json`'s `theme_color` was
         `#a2d8c8`, a leftover from the pre-redesign palette that appears nowhere in
@@ -201,34 +214,111 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
         `#ffffff`, matching the header's `bg-white`. **`index.html` disagreed with the
         manifest** — it said `#000000` — so the top was black in a tab and teal once
         installed. Both now say the same thing.
-  - [ ] **12.6 — Add-an-item should open a full page.** The near-miss recorded in
-        Step 7b. Four sites. Must not resurrect defect 0.1 (no Archive in add mode),
-        and needs an address — check `detailStateMissing` before adding routes.
-        **Open question to report on first.** If it needs routing work belonging to
-        the routing thread's slice 2 or 3, say so and stop.
-  - [ ] **12.7 — Edit an inbox capture without triaging it.** New behaviour, not
-        relocated behaviour. Edits `captured_text`, so no MCP schema change — they
-        are frozen. Row must survive with `triaged_at` still null (Step 10's
-        disposal rule). **Open question to report on first:** whether editing an
-        already-enriched capture clears `ai_status` back to `not_started`.
-  - [ ] **12.2 — Execution screen has no way to edit the item.** Spec gap: the
-        main spec's screen table gives it "Edit underlying item"; Step 5 covered
-        item, intention and context detail and never revisited it. The snapshot
-        question is **already settled** — element-based executions snapshot at
-        start and never re-read the item, which is the safe default. **Open
-        questions to report on first:** where the edit happens, given
-        `activeExecution` holds a whole object rather than an id and so is not
-        reconstructible from a URL; and what Edit means for a collection-based
-        execution, which resolves live and may have no single underlying item.
-  - [ ] **12.8 — Intentions page parity.** _(added 2026-09-09, builds last)_ The
-        Intentions page has no sort control (Name, Created, Last modified; no
-        scheduled date, since `intentionsWithoutActiveEvent` excludes scheduled
-        intentions) and `IntentionCard` renders no "last updated" line although
-        `ItemCard` does. **Inventory finding: Memories was missed the same way**, and
-        neither page has any ordering at all — both are bare `.filter()` calls over a
-        `select("*")` with no `ORDER BY`, so their order is arbitrary and Step 9b's
-        "stable across a reload" was never true for them. Seven list pages, five of
-        which got a control. See the addendum's 12.8.
+  - [x] **12.6 — Save reachable on a long add form.** _(done 2026-09-09 as the small
+        fix — see "Step 12.6 findings" below)_ **The dedicated page is deferred to the
+        routing thread**, and what shipped is `stickyFooter` at the four add sites.
+        **Step 7b's objection was ours and it was wrong:** "a pinned bar would hover
+        over content it has nothing to do with" describes `position: fixed`, and the
+        footer uses `position: sticky`, which is constrained by its parent's box and
+        releases at the card's bottom edge. Corrected in the spec at the rule itself,
+        since the wrong version is why the original complaint survived Step 7b.
+        Deferral reasons: the page buys an address nothing links to (ids in URLs is
+        slice 2), costs four return-address writers the routing thread has explicitly
+        asked us not to add, and introduces a defect-0.1 confusion risk the current
+        layout does not have. **Held in reserve, not built:** hide the sibling lists
+        while an add form is open, if a tall form still reads badly.
+  - [x] **12.6b — Add Item and Add Intention are real pages.** _(done 2026-09-09 —
+        see "Step 12.6b findings" below)_ The deferral above was overturned: Alex
+        asked for real pages, and **the routing work turned out not to need slice 2
+        after all.** Two pages across four entry points, with the entry point as a
+        target in the URL — `/memories/new/context/:id`,
+        `/intentions/new/item/:id` — following the execution-route precedent so the
+        view map stays a bijection. It stayed cheap because `loadData` already holds
+        every context and item in state, so a target is a `.find()` rather than a
+        fetch; the execution route needed a loading hook only because closed
+        executions are *not* in state. **No return-address slot** — `navigate(-1)`
+        with a `state.fromApp` flag for the cold-load caveat, which is exactly what
+        the routing thread asked new screens to do. `dataLoaded` is the cold-load
+        guard and is load-bearing. The sticky footer from 12.6 stays and is now
+        unambiguously correct, since the pages own the screen.
+  - [x] **12.6c — Cold-load Back follows the target.** _(done 2026-09-09 — see "Step
+        12.6c findings" below)_ Verification check 7 passed as built and was wrong as
+        designed: a pasted targeted URL sent Back to the record type's list. It now
+        goes to **the target** — the context, or the item — because the address
+        already says where the link conceptually came from. Only the bare form falls
+        back to the list. Cold-load only; in-app `navigate(-1)` is unchanged, and a
+        target that no longer resolves still redirects to the list. **`fromApp` is
+        not redundant but its job has narrowed:** all four entry points now land in
+        the same place either way, so the flag no longer decides *where* — it decides
+        *how* (popping restores scroll and leaves `previousView` alone) and covers a
+        target-is-not-origin case that does not exist yet. Recorded for slice 3 with
+        the convergence table, so collapsing the two is an informed call.
+  - [x] **12.7 — Edit an inbox capture without triaging it.** _(done 2026-09-09 —
+        see "Step 12.7 findings" below)_ Editable in the expanded card; writes
+        `captured_text` only, row stays with `triaged_at` null, no MCP schema
+        touched. **The open question is answered: clear — and clear more than the
+        status.** `ai_status` goes back to `not_started` and the `suggested_*`
+        fields are nulled with it, because `InboxCard` seeds its triage fields
+        `suggestedIntentText || capturedText`, so a stale suggestion is what the
+        form PROPOSES rather than a column nobody reads. Only fires when the text
+        actually changed; re-enrich is one tap and reads the new text server-side.
+        The card's dirty guard now covers an open editor — the capture text was the
+        one field here that could be lost by navigating away.
+  - [x] **12.7b — One Save, one Cancel.** _(done 2026-09-09 — see "Step 12.7b
+        findings" below)_ 12.7 gave the editor its own Save and Cancel, 250px above
+        the card's existing pair and identically labelled — **and the outcomes are
+        not symmetrical**: the footer's Save files the capture and deletes the row.
+        The editor now has no buttons; the capture text is another dirty field, and
+        the one Save commits text first and then triages if a section is open. Save
+        is no longer disabled on "nothing to triage", which was exactly the state a
+        text-only edit left the card in. **Blur-commit was rejected** — collection
+        detail's blur-saves have no side effects and this one clears an enrichment;
+        a blur is not a decision. The reseed moved into the textarea's `onChange`,
+        which removes the 12.7 race rather than relocating it. Footer audited too:
+        order already matched Step 7, but Enrich was a second `bg-primary` next to
+        Save (now secondary, per 8b) and the row was `gap-2` (now `gap-3`, per 8c).
+  - [x] **12.7c — Context is a dropdown everywhere.** _(done 2026-09-09 — see "Step
+        12.7c findings" below)_ The same inbox card had Context as a search
+        typeahead on its Intention section and a dropdown on its Item section. Nine
+        contexts: a search field hides the list rather than showing it. Converted
+        both typeaheads — InboxCard's Intention section and `IntentionCard`, the
+        latter covering four render sites at once. **Nothing was lost, checked
+        first:** neither typeahead created contexts on the fly or filtered on
+        anything but `name`, both already excluded archived, and the `.slice(0, 10)`
+        cap never bound at nine. **Linked Item stays a typeahead** — 375 items
+        against 9 contexts, so the split is a size judgement, now written at both
+        fields. Bundle got 60 B smaller; the diff is mostly deletions.
+  - [x] **12.2 — Execution screen links to its underlying item.** _(done 2026-09-09
+        — see "Step 12.2 findings" below)_ Scoped down by Alex to **a link, not an
+        edit surface**: it opens the item already in edit mode, skipping the tap on
+        "Edit Item". **The addendum's premise was false and is corrected there:**
+        executions DO carry their id in the URL, deliberately, so a chained
+        notification can link back. The link shows only when there is **exactly one**
+        underlying item — verified against the data, where 42 of 50 executions have
+        one, 8 have none, and **none has more than one**. Back returns via a
+        dedicated `executionEditReturn` slot holding an ID, and via `goToExecution`
+        rather than `setView`, because `viewToPath("execution-detail")` is always the
+        id-less path. Collection-based executions get no link.
+  - [ ] **12.9 — Tappable collection rows.** _(added 2026-09-09, out of 12.2)_
+        Collection rows inside an execution are the only list rows in Alfred that are
+        not tappable — the checkbox and quantity react, the item name is plain text.
+        Separate from 12.2 on purpose: different target, different gesture, different
+        execution type. Mind the tap-target collision with the checkbox and quantity
+        field; Step 8c's 12px rule applies.
+  - [x] **12.8 — Intentions and Memories parity.** _(done 2026-09-09 — see "Step
+        12.8 findings" below)_ Both pages get the shared `SortControl` with their own
+        storage keys. **Intentions:** Name, Created, Last modified — no scheduled
+        date, since the list excludes intentions that have events, so the field would
+        be null on every row present. **Memories:** the same three, defaulting to
+        Last modified descending — my call, because it is a list of items like
+        Context detail's, and 12.3 established that a newly touched record is
+        expected at the top; Name was the alternative for consistency with Contexts
+        and Collections. Intentions needed **its own accessor bag**: `title` maps to
+        `text`, not `name`, and reusing the named-record bag would have made every
+        tiebreaker `undefined` — which fails silently back to array order rather than
+        throwing. `IntentionCard` gained the "last updated" line it was the only
+        record type to lack. **Inventory counted properly: 7 list pages, 7 controls**,
+        with every uncontrolled list uncontrolled on purpose and the reason recorded.
 
 ### Verification Steps
 
@@ -292,12 +382,184 @@ folded into Revision 2 of the spec. Steps below start from that baseline.
 - [ ] Editing an ITEM, INTENTION, EVENT or COLLECTION updates its "Last modified"
       without a reload _(12.3 correction — this was claimed before it was true; only
       contexts worked. Check a non-context record specifically)_
-- [ ] Collection detail: removing an item does NOT dim the screen _(12.4 — the
-      actual complaint. Tick several off in a row, one-handed)_
-- [ ] Removal panel: Put back does not dim the screen either _(12.4)_
-- [ ] **A removed item stays removed for at least ten seconds** _(12.4 — the poll
-      guard. Remove one, then wait through two five-second ticks without touching
-      anything. If it reappears, `memberWriteInFlight` is not holding)_
+- [x] Collection detail: removing an item does NOT dim the screen _(12.4 — verified
+      by Alex 2026-09-09)_
+- [x] Removal panel: Put back does not dim the screen either _(12.4 — verified)_
+- [x] **A removed item stays removed for at least ten seconds** _(12.4 — verified
+      through two poll ticks)_
+- [ ] The row disappears IMMEDIATELY on tapping ✕, with no perceptible wait _(12.4b —
+      the whole point; compare against ticking an item off in an execution, which is
+      the pattern being matched)_
+- [ ] **Remove three or four items in quick succession.** All disappear immediately,
+      all stay gone, and none reappears when the others' writes land _(12.4b — the
+      counter and the functional updates. This is the shopping case)_
+- [ ] After rapid removals, wait fifteen seconds. The list still shows exactly what
+      you left _(12.4b — the guard must have returned to zero cleanly, not been
+      cleared early by an earlier write finishing)_
+- [ ] Put back is likewise immediate, and the entry leaves "Recently removed" at the
+      same moment the item rejoins the list _(12.4b — one write drives both)_
+- [ ] Offline: tap ✕. The row goes, then comes BACK, with an error _(12.4b — the
+      rollback. A row that stays gone offline is the failure this guards against)_
+- [x] Offline: Put back. The row appears, then disappears again, with an error
+      _(12.4b — verified by Alex 2026-09-09, along with the whole optimistic path)_
+- [ ] Execution with one item: an "Edit item" link appears beside the title, and
+      opens that item ALREADY IN EDIT MODE — no second tap _(12.2)_
+- [ ] Back from there lands on the running execution, not Memories or Schedule
+      _(12.2 — the dedicated return slot)_
+- [ ] **After that Back, the URL still contains the execution id** _(12.2 — the
+      silent trap. `setView` would render the right screen under `/schedule/execution`
+      with no id; refresh from there and you get sent to Schedule. Refresh after
+      returning: you should stay on the execution)_
+- [ ] The partly-ticked checklist is exactly as you left it after the round trip
+      _(12.2 — durable, but worth seeing)_
+- [ ] Editing the item does NOT change the running checklist _(12.2 — the snapshot.
+      This is intended: the edit applies to the next execution)_
+- [ ] An execution with NO underlying item shows no link _(12.2 — e.g. "Water
+      Plants". 8 of the 50 executions in history are like this)_
+- [ ] A collection-based execution shows no link _(12.2 — decided; rows become
+      tappable in 12.9)_
+- [ ] From the edited item, tap through to a related item, then Back twice: the first
+      Back returns to the edited item, the second to the execution _(12.2 — the
+      itemId check against the existing itemHistoryStack)_
+- [ ] Open the same item from Memories and press Back: it returns to Memories, not to
+      an execution _(12.2 — the stale-slot guard)_
+- [x] 12.2 verified end to end, including the post-Back refresh keeping the execution
+      id in the URL _(Alex, 2026-09-09)_
+- [ ] **On a phone, open Context detail → Add Item and add a dozen-plus elements.**
+      Save stays pinned above the Capture bar the whole way down the form _(12.6 —
+      this is the case the complaint came from, and the only one that tests it. A
+      short form on desktop proves nothing)_
+- [ ] Keep scrolling past the end of that form: the footer RELEASES at the card's
+      bottom edge and does not hover over the Items list _(12.6 — the whole
+      sticky-vs-fixed distinction in one observation. A bar still floating over the
+      item rows would mean Step 7b was right and this change is wrong)_
+- [ ] Same check on Context detail → Add Intention, Intentions → Add Intention, and
+      Item detail → Create Intention _(12.6 — four sites, one prop)_
+- [ ] Open BOTH add forms on Context detail at once: each footer pins only within its
+      own card, and only one is ever visible _(12.6 — the two-open-cards objection is
+      also a `fixed` problem, not a `sticky` one)_
+- [ ] The two whole-page forms still behave as before — item detail and intention
+      detail edit modes _(12.6 — they had the prop since 7b; nothing should change)_
+- [ ] No Archive button on any add form _(12.6 — defect 0.1, unchanged by this fix
+      but re-checked because the forms now look more finished)_
+- [ ] All four Add buttons open a full page, not an inline form _(12.6b — Context
+      detail's Add Item and Add Intention, Intentions' Add Intention, Item detail's
+      Create Intention)_
+- [ ] Each page's heading reads **"New Item"** or **"New Intention"**, with a
+      subtitle naming the target _(12.6b — defect 0.1's visible half. The page now
+      looks like the edit screen, so the heading is what distinguishes them)_
+- [ ] **Browser Back works from each add page** and lands on the screen you came
+      from _(12.6b — the whole point of making them real pages)_
+- [ ] The page's own Back button does the same, and PROMPTS if you have typed
+      something _(12.6b — `confirmDiscardIfDirty`)_
+- [ ] Cancel discards without a second prompt _(12.6b — the card clears the dirty
+      flag first; existing behaviour, matched deliberately)_
+- [ ] Saving returns you to where you came from, with no discard prompt _(12.6b)_
+- [ ] **Copy an add-page URL, paste it into a fresh tab.** It opens the form with the
+      right context preselected _(12.6b — cold load, the reason these are addresses
+      at all)_
+- [x] From that pasted tab, Back stays inside Alfred rather than leaving it _(12.6b —
+      verified by Alex 2026-09-09; the destination was wrong, which 12.6c fixes)_
+- [ ] **Paste `/intentions/new/context/:id`, press Back: you land on THAT CONTEXT**,
+      not on the Intentions list _(12.6c — the fix)_
+- [ ] Same for `/memories/new/context/:id` → that context, and
+      `/intentions/new/item/:id` → that item _(12.6c)_
+- [ ] Paste a BARE `/intentions/new` or `/memories/new`, press Back: you land on the
+      Intentions or Memories list _(12.6c — the bare form names no target, so the
+      list is all there is)_
+- [ ] Back off that target page goes Home _(12.6c — `previousView` keeps its
+      cold-load default deliberately, rather than adding a `setPreviousView` writer.
+      Landing back on the add form would be the bug)_
+- [ ] Browser Back from the target page does NOT return to the add form _(12.6c —
+      `replace`. An empty form behind the Back button is the failure)_
+- [x] 12.6 verified end to end, including the scroll-position check _(Alex,
+      2026-09-09)_
+- [ ] Expand an inbox capture: a pencil sits beside the text, and tapping it opens a
+      textarea _(12.7)_
+- [ ] Edit the text and Save. **The row stays in the inbox** — it is not filed, and
+      no item, intention or event is created _(12.7 — Step 10's disposal rule applies
+      to triage, and this is not triage)_
+- [ ] The new text is there after a page reload _(12.7 — it actually wrote)_
+- [ ] **On an ENRICHED capture, edit the text and save: the badge returns to "Not
+      enriched" and the suggestions are gone** _(12.7 — the answer to the open
+      question)_
+- [ ] **Then open the triage form below: it proposes the NEW text, not the old
+      suggestion** _(12.7 — the half that fails silently. The columns can be cleared
+      correctly while the form still shows stale values, because those fields are
+      seeded once at mount)_
+- [ ] Re-enrich after editing: the new suggestions describe the corrected text
+      _(12.7 — `ai-enrich` reads `captured_text` server-side)_
+- [ ] Open the editor, change nothing, save: an enriched capture KEEPS its
+      enrichment _(12.7 — the clear is gated on the text actually changing)_
+- [ ] Type in the editor, then click a nav tab: you get the unsaved-changes warning
+      _(12.7 — this field was outside the guard until now)_
+- [ ] Cancel restores the original text and does NOT warn _(12.7 — an explicit
+      discard)_
+- [ ] Saving an empty capture is refused _(12.7)_
+- [ ] **Count the buttons in an expanded card: exactly one Save and one Cancel**
+      _(12.7b — the fix. Two of each was the defect)_
+- [ ] Edit the text with NO triage section open, press Save: the text saves and the
+      row stays in the inbox _(12.7b — Save used to be disabled in this exact state)_
+- [ ] Edit the text AND open a triage section, press Save once: the capture is filed
+      using the CORRECTED text, and the row is deleted _(12.7b — text is written
+      first, so one press does both in the right order)_
+- [ ] While typing in the editor, watch the intention/item fields below: they follow
+      the text as you type, until you edit one of them yourself — after which they
+      stop following _(12.7b — the reseed moved here, which is what removes the
+      window where the form could propose replaced text)_
+- [ ] Cancel with the editor open discards the text edit along with everything else
+      _(12.7b — one Cancel, whole card)_
+- [ ] Enrich is no longer the same blue as Save _(12.7b — one primary per row)_
+- [ ] The Enrich/Save/Cancel row has 12px gaps and wraps rather than crushing on a
+      narrow phone _(12.7b — Step 8c)_
+- [ ] Delete is still pushed to the right, away from Cancel _(12.7b — Step 7's order
+      was already correct; check it survived the spacing change)_
+- [ ] **Inbox card: Context is a dropdown on BOTH the Intention and Item sections**
+      _(12.7c — the two-patterns-one-card defect, and the quickest thing to see)_
+- [ ] Opening it shows all nine contexts without typing _(12.7c — the point)_
+- [ ] "No context" is selectable and clears a previous choice _(12.7c — this replaces
+      the typeahead's X button)_
+- [ ] An archived context does NOT appear in the list _(12.7c — parity with the old
+      filter, which excluded them too)_
+- [ ] Same dropdown on: intention edit, the add-intention page, Context detail's
+      intentions, Item detail's related intentions _(12.7c — one component, four
+      render sites)_
+- [ ] Item edit, the add-item page and Collection detail are unchanged _(12.7c —
+      they were already dropdowns)_
+- [ ] **Linked Item is STILL a typeahead** and still filters as you type _(12.7c —
+      375 items; converting it would be the wrong kind of consistency)_
+- [x] 12.7 verified end to end, including the context dropdowns _(Alex, 2026-09-09)_
+- [ ] Intentions and Memories each show a sort control above the list _(12.8)_
+- [ ] Intentions offers Name, Created, Last modified — and **no** scheduled date
+      _(12.8 — the list excludes intentions that have events, so that field would be
+      null on every row)_
+- [ ] Both default to Last modified, newest first, on a fresh browser _(12.8)_
+- [ ] **Choose a different order on Intentions, reload: it survives. Then check
+      Memories still has its own** _(12.8 — seven pages, seven independent keys)_
+- [ ] **Sort Intentions by Created, and check two intentions created in the same
+      minute order by NAME rather than jumping about between reloads** _(12.8 — the
+      title tiebreaker. Intentions have `text`, not `name`; a wrong accessor bag makes
+      every tiebreaker undefined and the order silently reverts to arbitrary, which
+      looks like nothing being wrong)_
+- [ ] Each intention row shows a "last updated" line, matching ItemCard's format
+      _(12.8 — an intention was the only record you could sort by Last modified but
+      not see it)_
+- [ ] Tag filtering still works on both pages, and the order holds within the
+      filtered set _(12.8 — the filter now runs before the sort)_
+- [ ] The Recycle Bin, Home's Active/Paused tabs and the detail-page sub-lists still
+      have no control _(12.8 — deliberate, each with a reason recorded; their absence
+      is not an eighth omission)_
+- [ ] Paste an add URL for a context you have since deleted: it redirects to the list
+      rather than opening a form pointed at nothing _(12.6b)_
+- [ ] Paste a malformed one — `/memories/new/context` or `/memories/new/nonsense/x` —
+      and it redirects to home _(12.6b — not an address, rather than a bad target)_
+- [ ] **Refresh an add page with a valid target.** It stays put and does NOT bounce to
+      the list _(12.6b — the `dataLoaded` guard. Without it a cold load judges the
+      target missing before the data arrives, and this is the check that catches it)_
+- [ ] Add Intention from Item detail still pre-fills the intention text with the
+      item's name _(12.6b — the inline form did this; it was kept)_
+- [ ] Saving actually creates the record in the right context _(12.6b — all four
+      entry points)_
 - [ ] Execution checklist: ticking an item off still does not dim the screen _(12.4 —
       it never did; this confirms nothing regressed)_
 - [ ] Quantity edits, in both the execution view and collection detail, stay quiet
@@ -2557,6 +2819,131 @@ which removed items came back.
 
 ---
 
+## Step 12.4b findings — optimistic removal (2026-09-09)
+
+12.4 took the overlay off the remove path. The wait stayed, because the row was still
+gated on a write plus three reloads. **Removing a spinner from a slow action makes it
+feel broken rather than fast** — the two halves only work together, and 12.4 shipped
+one of them.
+
+The pattern was already in the codebase: `toggleExecutionElement` updates state, then
+writes. That is why ticking items off inside an execution always felt instant while
+removing them from the collection did not. Matched rather than reinvented.
+
+### What changed
+
+| Path | Before | After |
+|---|---|---|
+| Remove member | write → 3 reloads → row disappears | **row disappears → write → 2 reloads** |
+| Put back | write → 2 reloads → row appears | **row appears → write → swap in real row** |
+
+**Membership is no longer reloaded on success.** State already holds the right answer;
+refetching it was a round trip whose only visible effect was confirming what the user
+could already see. `loadCollectionRemovals` and `loadCollectionHistory` still run, but
+they feed the "Recently removed" panel and the history view — nobody is waiting on
+either, and they now happen behind an already-updated list.
+
+### The four things, in order
+
+**1. Failure puts the row back — by reloading, not by splicing a snapshot.**
+
+The obvious implementation captures the removed row and re-inserts it at its old index.
+Rejected: the server owns member order, and a partial failure is real — `removeMember`
+reads the member rows, deletes them, and writes a removal-history record, so the row
+can be gone while the log write fails. A snapshot would restore a row the database no
+longer has. `loadCollectionMembers` is correct in every one of those cases where a
+splice is correct in most. The cost is one round trip on a path that is rare.
+
+`reportMembershipError` was already being called; what is new is that the list stops
+showing a removal that did not happen.
+
+**2. The poll race is sharper, and the guard moved to match.**
+
+`memberWriteInFlight` is now raised **before** the optimistic update rather than around
+the write. Going optimistic opens a window that did not previously exist: between "row
+dropped from state" and "row deleted in Postgres". A poll tick landing in it would
+refetch the pre-delete rows and put the row back under the user's thumb — the exact
+symptom 12.4 was verified against, reintroduced by the change meant to improve it.
+
+Raising the counter first closes the window at both ends.
+
+**3. Rapid removals — the counter was already the right shape, and that is why.**
+
+Three taps in an aisle raise `memberWriteInFlight` to 3; it returns to 0 only when the
+last settles. **A boolean would have been wrong here**: the second removal's completion
+would clear the first's guard while the first was still in flight, reopening the race
+for the remaining writes. The existing code chose `useRef(0)` with `+= 1` / `-= 1`
+rather than a flag, and this step is the first time that choice was load-bearing.
+
+State updates are **functional** — `setMembersFor(id, prev => prev.filter(...))` — so
+overlapping removals compose. Each filter runs against what the previous one left. A
+handler that captured `membersOf(collectionId)` at creation time and wrote back a
+filtered copy would have had the second tap resurrect the first tap's row.
+
+No `setMembersFor` updater has a side effect. That was deliberate: an updater that
+recorded the removed row as it ran would be double-invoked under React 18 StrictMode in
+development, and the second invocation — receiving the already-filtered array — would
+record `null`. The rollback would then silently do nothing, in dev only.
+
+**4. Put back got the same treatment, for consistency as much as speed.**
+
+It sits a few inches below the remove button on the same screen. One instant and one
+laggy would read as a bug in whichever felt slower.
+
+It inserts a provisional row carrying only what the member list renders — `id`,
+`itemId`, `quantity` — then swaps in the real row the insert returns. The provisional
+`id` is namespaced `pending:` so it cannot collide with a database id if something
+fails before the swap.
+
+**Adding the member row is all that is needed to clear the panel entry.**
+`recentRemovals` already filters out removals whose item is back in the collection, so
+the "Put back" row disappears as a consequence of the membership update rather than
+needing an optimistic update of its own. One write, both halves of the feedback.
+
+The `alreadyPresent` case — a double tap, or Elise restoring it first — returns
+`data: null`, so there is no real row for the provisional to become. That branch falls
+back to a reload. It stays a quiet success rather than a warning: the item is in the
+collection, which is what the tap asked for.
+
+### Adding items — checked, and it does not belong in this fix
+
+There is **no single-item add on the shopping path.** Adding always leaves collection
+detail for the `collection-add-items` screen and returns:
+
+| Add path | Screen | Verdict |
+|---|---|---|
+| "Add Items" button | navigates to add-items screen | Not a write |
+| Bulk add | add-items screen, `withLoading('Saving...')` | **Stays blocking** — once per trip, and it navigates away as it finishes, so the overlay covers a screen about to be replaced |
+| Create item then add | add-items screen | Same, same reasoning |
+| Triage → add to collection | inbox | Not the shopping path |
+
+So the earlier reasoning holds unchanged, and there is nothing here to make optimistic.
+Worth stating explicitly: the asymmetry between an instant remove and a blocking add is
+not an inconsistency, because they happen on different screens at different moments —
+removals are per-item mid-aisle, adds are once per trip at the start.
+
+### Surprise
+
+**The optimistic version needs the poll guard more than the blocking version did, which
+is the opposite of how it looks.** A blocking write cannot disagree with the server: the
+UI does not change until the write has returned, so a poll landing mid-write refetches
+rows that still match what is on screen. Going optimistic is what creates a period where
+local state and the database genuinely differ — so the version that removed the spinner
+"for speed" is the one that actually depends on the guard the spinner used to provide by
+accident. Both changes were needed, and doing either alone would have been worse than
+doing neither: 12.4 alone was slow-with-no-feedback, and this alone would have been
+fast-and-occasionally-wrong.
+
+### Checks run
+
+- Full suite — **31 suites, 765 tests, pass**
+- `CI=true npm run build` — **compiled successfully**, main bundle **+66 B** gzipped
+
+(The suite grew from 29/726 to 31/765 between this step and the last — new tests
+committed alongside other work, not from this phase.)
+
+---
+
 ## Step 12.5 findings — the teal top (2026-09-09)
 
 **It is not a component.** A case-insensitive search for "teal" over the entire source
@@ -2636,7 +3023,965 @@ metadata, and per the note above they do not even surface in a browser.
 
 ---
 
+## Step 12.2 findings — a link, not an edit surface (2026-09-09)
 
+Scoped down before building: **a link on the execution screen that opens the
+underlying item already in edit mode**, skipping the extra tap on "Edit Item". No
+in-place editing, no "applies next time" note. A link that visibly navigates to an
+edit page has no ambiguity about what it changed, which is what makes the snapshot
+question stop mattering rather than needing to be explained.
+
+### The addendum's premise was false, and it was the load-bearing one
+
+12.2 said `activeExecution` "lives as a whole object rather than an id, so it is not
+reconstructible from a URL". **Executions are the one detail view that IS
+reconstructible.** `executionPath(id)` produces `/schedule/execution/:id`;
+`useExecutionRoute` cold-loads it with `storage.get`; `detailStateMissing` exempts
+execution-detail for exactly that reason. `viewPaths.js` records why: the other detail
+views can redirect to a parent on a cold load, but "an execution cannot afford that: a
+chained notification links back to the execution it came from."
+
+Corrected in the addendum rather than only here, since that sentence would otherwise
+go on shaping decisions.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `Alfred.jsx` — state | `executionEditReturn`, a dedicated return slot |
+| `Alfred.jsx` — `editItemFromExecution` | opens the item, records where to return |
+| `Alfred.jsx` — `viewItemDetail` | clears a stale slot on any other fresh visit |
+| `Alfred.jsx` — `handleBackFromItemDetail` | returns via `goToExecution` |
+| `ItemDetailView` | new `startInEditMode` prop, seeds `isEditing` |
+| `ExecutionDetailView` | the link, and `soleItemId` deriving its target |
+
+### Multi-item executions — the data says the strict rule costs nothing
+
+`itemIds` is an array, the start loop iterates it, and `flattenElements` pulls in
+nested referenced items. So "the underlying item" is guaranteed neither to exist nor
+to be singular. **The link renders only when there is exactly one, and that item still
+exists.** No guessing which of several the user meant.
+
+Checked against real data rather than reasoned about. Across the **entire execution
+history — 50 executions**:
+
+| Underlying items | Count |
+|---|---|
+| Exactly one | **42** |
+| None (intent with no linked item) | **8** |
+| More than one | **0** |
+
+So the strict rule covers every case that has ever occurred and declines only the
+hypothetical. The eight zero-item executions — "Water Plants", "Go through Alfred
+scheduled items and inbox", and six test rows — correctly get no link, because there
+is nothing to open.
+
+### Where Back goes
+
+A **dedicated slot**, `executionEditReturn`, holding `{ executionId, itemId }`.
+
+- **Not `previousView`.** That is shared by every detail view and any intervening
+  navigation clobbers it — the reason `intentionReturnView` already exists. This one
+  is written on the way out and read once on the way back.
+- **An ID, never the execution object.** The URL carries the id and
+  `useExecutionRoute` can refetch from it, so an id is sufficient, cannot go stale,
+  and cannot resurrect an execution closed elsewhere in the meantime. Storing the
+  object here would have re-created in a state slot exactly the shape 12.2 was
+  complaining about.
+- **`goToExecution`, not `setView`.** `viewToPath("execution-detail")` is always the
+  bare, id-less `/schedule/execution` — the view map is deliberately a bijection. So
+  `setView` would render the right screen under an address that had silently lost the
+  id, and a refresh from there redirects to /schedule. This is the concrete trap the
+  earlier report flagged, and it is a silent one: the screen looks right.
+- **`itemId` is checked on the way back**, so tapping through to other items from the
+  edited one pops the existing `itemHistoryStack` first and only lands on the
+  execution once the user is actually back on the item they left for.
+- **Cleared on any other fresh visit to item detail**, so a later Back off that same
+  item cannot bounce into an execution the user was never in.
+
+Progress is durable either way — element and collection ticks both write the execution
+row on every toggle — so this is convenience, not correctness. Recorded because the
+distinction is what made it safe to choose the simpler option.
+
+### Two small things the link does that are not obvious
+
+**It flushes notes first.** The textarea already saves on blur, and Back already
+flushes, but a tap that lands on the link without blurring the textarea would
+otherwise lose what was typed. The link does exactly what Back does.
+
+**`startInEditMode` seeds `useState` rather than driving an effect.** `ItemDetailView`
+is mounted conditionally on `view === "item-detail"`, so it unmounts on the way out and
+remounts on the way in — the initialiser runs exactly once per visit, which is the only
+moment the flag means anything. An effect would additionally have to decide what to do
+on every later render, and the answer would be "nothing".
+
+### Collection-based executions get no link, and 12.9 was split out
+
+They carry `itemIds: []` by construction and resolve live from the collection. There is
+no underlying item to open, so there is nothing for this link to point at.
+
+While confirming that, one thing stood out and became **12.9**: collection rows inside
+an execution are the only list rows in Alfred that are not tappable. The checkbox
+reacts, the quantity input reacts, and the item name is plain text. Every other list in
+the app opens a detail view on a row tap. Deliberately not folded in here — different
+target, different gesture, different execution type.
+
+### Surprise
+
+**The feature got smaller every time the code was consulted, and the last cut removed
+the only genuinely hard part.** The addendum posed three open questions. The first was
+already answered by the snapshot. The second dissolved once the URL turned out to carry
+the id. The third — what Edit means for a collection-based execution — stopped applying
+the moment "edit surface" became "link", because a link with no target simply does not
+render. What remained was one conditional, one state slot, and one prop.
+
+### Checks run
+
+- Full suite — **31 suites, 765 tests, pass**
+- `CI=true npm run build` — **compiled successfully**, main bundle **+310 B** gzipped
+
+---
+
+## Step 12.6 findings — the sticky footer, and the page deferred (2026-09-09)
+
+The complaint: Add Item opens a form wedged between the section header and the item
+list. With a dozen elements added and 28 items below, Save ends up buried mid-page with
+content above and below it.
+
+**The fix is one prop at four call sites.** The dedicated page is deferred to the
+routing thread.
+
+### The correction — `sticky` is not `fixed`, and this one misled us
+
+Step 7b withheld the sticky footer from the add forms on this reasoning:
+
+> "a pinned bar would hover over content it has nothing to do with"
+
+**That is true of `position: fixed`. The footer uses `position: sticky`:**
+
+```
+sticky bottom-28 sm:bottom-32 -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 bg-card border-t border-border
+```
+
+A sticky element is constrained by its parent's box. It pins while the card is in view
+and **releases at the card's bottom edge** — it cannot travel down the page and hover
+over the Items list, because the card is its containing block. Checked for `overflow`
+on the scroll ancestors that would break sticky containment: the only hits are modals,
+textareas and dropdowns, none of them an ancestor of the add-form card. The page
+scrolls on the document.
+
+Recorded in the **spec**, not only here, at the rule it corrects. The struck wording is
+why the original complaint survived Step 7b — the step written to fix it.
+
+### What actually buries Save, which is worth being precise about
+
+The 28 items below do **not** push Save down. Save is inside the card. What buries it
+is the form growing tall as elements are added, with more page below so there is no
+visual end to the form. Sticky addresses exactly that and nothing else — the page stays
+as long as it was.
+
+### What changed
+
+`stickyFooter` at four sites: the Intentions page's add form, Context detail's Add Item
+and Add Intention, and Item detail's Create Intention. Both `ItemCard` and
+`IntentionCard` already had the prop from Step 7b; no component changed.
+
+Both add forms on Context detail can be open at once. Each footer is constrained to its
+own card, so they pin independently and only one is ever in view — the two-open-cards
+objection from Revision 1 is also a `fixed` problem, not a `sticky` one.
+
+### Build note — `{/* */}` is not valid between JSX attributes
+
+The first attempt used `{/* … */}` comments in the attribute position and **failed the
+build** with `Unexpected token, expected "..."`. JSX takes `//` line comments between
+attributes, which is what the rest of this file uses. Worth recording because **the
+test suite passed while the build failed**: no test imports `Alfred.jsx`, so a syntax
+error in it is invisible to 765 passing tests. `npm run build` is the only gate on this
+file.
+
+### The page, deferred — three reasons, none of them preference
+
+**1. It buys an address nothing links to.** Detail routes carry no record ids;
+executions are the sole exception, as 12.2 established. An add-item page needs the
+context id in its URL, and putting ids in URLs **is slice 2** of the routing thread by
+name.
+
+**2. It costs four return-address writers the routing thread has asked us not to add.**
+Its progress file is explicit:
+
+> "Until then, keep all three, and **add no new writers**. Every new `setPreviousView`
+> call is another site to unpick later. If a new screen needs a return address after
+> slice 2 lands, it should use `navigate(-1)`."
+
+Four add pages need four return addresses. That is slice 3's job made larger by us.
+
+**3. It introduces a defect-0.1 confusion risk the current layout does not have.** The
+structural protection is unaffected either way — Archive renders under
+`onArchive && intent.id`, and add forms pass neither with a null id. What a page changes
+is the *visual* cue: today an add form is unmistakably a card sitting in a list, and
+nothing like the edit screen. As a page it would look exactly like the edit screen,
+which is the confusion that produced the phantom "New Item". Keeping them apart would
+need a "New Item" heading and probably a different Save label — work the sticky footer
+does not incur at all.
+
+**Also worth saying:** four near-identical routes is the copy-paste drift that produced
+the three collection rows in Step 4a. If it is ever built it should be one
+parameterised route. The forms are already single components, so the duplication would
+land entirely in route plumbing — the part slice 2 is going to rewrite anyway.
+
+### Held in reserve, not built
+
+If a tall form still reads badly, **hide the sibling lists while an add form is open.**
+That makes the card genuinely own the screen — satisfying Step 7b's own test — with no
+routing at all. Not built, per Alex: the sticky footer should be sufficient, and he will
+say if it is not.
+
+### Surprise
+
+**The step written to fix this problem is the step that entrenched it.** Step 7b exists
+because Step 7 wrongly proposed striking "Recipe edit form: Save reachable without
+scrolling" as a stale requirement. 7b caught that, pinned the two whole-page forms —
+and then withheld the same fix from the add forms using a sentence about a CSS
+mechanism the codebase does not use. The requirement was reinstated and half-served in
+the same step, and the wording that half-served it read as settled reasoning for
+sixteen days.
+
+### Checks run
+
+- Full suite — **31 suites, 765 tests, pass**
+- `CI=true npm run build` — **compiled successfully** (after the JSX-comment fix above)
+
+Neither gate can see this change: it is CSS positioning with no test coverage on
+`Alfred.jsx`. **It needs the eyeball check in the verification list — a genuinely tall
+form on a phone, not a short one on desktop.**
+
+---
+
+## Step 12.6b findings — the add pages, built properly (2026-09-09)
+
+12.6 shipped the sticky footer as the small fix. This replaces it with the real thing:
+**two pages, four entry points, real addresses, browser Back working.** The sticky
+footer stays — the pages own the screen, so it is now unambiguously correct there.
+
+**No part of this needed the routing thread's work done wholesale.** The minimum was
+smaller than feared, for a reason worth recording — see "why this was cheap" below.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `viewPaths.js` | Two views, `item-add` and `intention-add`; `addPath`, `addRouteFromPath`; `pathToView` / `isKnownPath` / `parentPath` extended |
+| `viewPaths.test.js` | Counts updated with a note, plus 8 new tests for the add routes |
+| `Alfred.jsx` | `AddPageChrome`; route derivation and the missing-target guard; `openAddPage` / `leaveAddPage` / `closeAddPage`; two save handlers; two render blocks |
+| `Alfred.jsx` | Four inline forms deleted, along with three `showAdd*Form` state pairs and `ContextDetailView`'s two seeds and two save handlers |
+
+### The address grammar — two pages, not four
+
+```
+/memories/new                          bare: nothing preselected
+/memories/new/context/:contextId       Context detail's Add Item
+/intentions/new                        Intentions page's Add Intention
+/intentions/new/context/:contextId     Context detail's Add Intention
+/intentions/new/item/:itemId           Item detail's Create Intention
+```
+
+**The entry point is a target in the URL, not a separate screen.** One page per form
+type serves every caller; the difference between callers is data. Four near-identical
+routes is the copy-paste drift that produced the three collection rows in Step 4a.
+
+Two target kinds and no more without a reason: `context` and `item`. The bare form is a
+first-class address, which is what the Intentions page needs — its add form never had a
+context to preselect.
+
+This follows the **execution precedent** rather than inventing a second pattern: the
+view map stays a bijection (`viewToPath("item-add")` is always `/memories/new`) while
+`pathToView` resolves both the bare and targeted forms to the same view. That is
+exactly how `/schedule/execution/:id` was added without touching every navigation.
+
+### Why this was cheap, and it is not because we cut a corner
+
+The worry was that ids-in-URLs is slice 2 and this would drag it in. It did not, and
+the reason is specific: **`loadData` already selects every row of `contexts` and
+`items` into state.** So resolving a target is `contexts.find(...)` — no fetch, no
+`useExecutionRoute`-style loading hook, no per-view lookup machinery.
+
+The execution route needed all of that because executions are **not** all in state:
+only active and paused ones are, so a link to a closed execution has to fetch. Contexts
+and items have no such gap.
+
+**What that means for slice 2:** this is not a competing implementation of ids-in-URLs.
+It is two new addresses that happen to carry ids, built on the existing map. Converting
+`/contexts/detail` to `/contexts/:contextId` does not conflict with it and will not
+have to undo it.
+
+### Cold load
+
+- **Bare form** — renders. Legitimate address; the form's own context picker does the
+  rest.
+- **Target that resolves** — renders with it preselected.
+- **Target that no longer exists** — a deleted context, a stale shared link — redirects
+  to the **list** (`/memories`, `/intentions`), not to the bare add form. Opening an add
+  form with the target silently dropped would be worse than saying the address is no
+  good.
+- **Malformed target** — a bad kind, a missing id, an extra segment — is not an address
+  at all. `isKnownPath` returns false and it redirects to home like any other nonsense
+  path. Deliberately not "a target with a bad value": a half-read target would open an
+  add form pointing somewhere unintended.
+
+**`dataLoaded` is the whole cold-load guard, and it is not optional.** The redirect
+effect runs on every render — hooks run before Alfred's `!dataLoaded` early return — so
+without it every cold load would find an empty `contexts` array, decide the target was
+gone, and bounce to the list before the data arrived. This is the same failure
+`useExecutionRoute` documents at length; the fix is cheaper here only because the data
+is already on its way rather than needing to be fetched.
+
+### Back, Cancel, and the guard
+
+**No return-address slot.** The routing thread asked for exactly this:
+
+> "If a new screen needs a return address after slice 2 lands, it should use
+> `navigate(-1)`."
+
+These are new screens, so they use it now rather than adding a fifth thing for slice 3
+to unpick. `executionEditReturn` remains the only new slot this phase added, and it is
+already written up above for them.
+
+The one piece of bookkeeping is `state: { fromApp: true }`, set when opening from inside
+Alfred. It exists because `navigate(-1)` steps **out** of the app when there is nothing
+to go back to — the caveat the routing thread recorded for cold-loaded deep links and
+middle-clicked tabs. With the flag, Back returns to the entry screen; without it (a
+pasted URL), it goes to the parent list. **Router state, not app state:** it lives on
+the history entry, so it cannot go stale and there is nothing to clear.
+
+| Route in | Back / Cancel lands on |
+|---|---|
+| Context detail → Add Item | that context |
+| Context detail → Add Intention | that context |
+| Intentions → Add Intention | Intentions |
+| Item detail → Create Intention | that item |
+| Pasted URL | the parent list |
+
+**The guard:** `closeAddPage` calls `confirmDiscardIfDirty`, so the page's own Back
+button prompts on a half-typed record. The card's Cancel clears the dirty flag before
+calling back, so Cancel discards without a second prompt — existing behaviour, matched
+deliberately. After a save the card has already cleared the flag, and `leaveAddPage`
+skips the check rather than prompting about changes that were just committed.
+
+**Known limitation, and it is pre-existing rather than new: browser Back bypasses the
+guard.** `confirmDiscardIfDirty` only runs on in-app navigation, and `beforeunload`
+only covers leaving the site. Item detail, intention detail and every other in-place
+edit have had exactly this hole since the routing work landed; making these pages did
+not create it and fixing it belongs with the routing thread, where `navigate(-1)` and
+history blocking live in the same conversation.
+
+### Defect 0.1
+
+The structural guarantee is unchanged: the seed record has a null id and no `onArchive`
+prop, and Archive renders under `onArchive && intent.id`. Nothing about a page changes
+that.
+
+What a page **does** change is the visual cue, which was the other half of the original
+confusion. An add form now has the same width, chrome and sticky footer as the edit
+screen. So the page carries a heading the edit screen does not have:
+
+- **"New Item"** / **"New Intention"**, where the edit screen shows the record's own
+  name.
+- A subtitle naming the target — "in Recipes", "for Chicken Piccata" — so it is clear
+  what is being added and where before anything is typed.
+
+`AddPageChrome` exists to make that heading structural rather than something each page
+remembers to render.
+
+### For the routing thread — what they will want to change
+
+Written for them rather than left to be found:
+
+1. **`addRouteFromPath` will look like a smaller version of whatever slice 2 builds.**
+   When `/contexts/:contextId` exists there will be one general id-bearing-path parser;
+   these two routes should fold into it. The grammar (`base/kind/id`) was chosen to be
+   easy to absorb, not to be permanent.
+2. **`state.fromApp` should disappear** once there is a general answer to "did we get
+   here from inside the app". It is a local fix to the `navigate(-1)` caveat they
+   already documented, not a new idea.
+3. **`AddPageChrome` is presentational** and has no routing in it. It should survive
+   untouched.
+4. **These pages add no `setPreviousView` writers and no new return-address slot.** The
+   "add no new writers" rule is honoured.
+
+### Surprise
+
+**The expensive-looking half was free and the cheap-looking half needed the care.** The
+routing — new views, a path grammar, `pathToView`/`isKnownPath`/`parentPath` — was
+mechanical, because the execution route had already established the pattern and the
+module is pure data plus two lookups. The part that actually needed thought was
+`dataLoaded`: one boolean standing between this and a cold load that redirects away
+from a perfectly valid address before the data arrives. The routing module has tests;
+that boolean has none, because it lives in `Alfred.jsx`.
+
+### Checks run
+
+- Full suite — **31 suites, 773 tests, pass** (765 before; 8 new tests cover the add
+  routes, including malformed targets and the parent-path rule)
+- `CI=true npm run build` — **compiled successfully**, main bundle **+459 B** gzipped
+
+`Alfred.jsx` still has no test coverage, so the pages themselves are verified by hand.
+`viewPaths.js` does, and the new grammar is tested there.
+
+---
+
+## Step 12.6c findings — cold-load Back follows the target (2026-09-09)
+
+Verification check 7 passed as built and was wrong as designed. A pasted
+`/intentions/new/context/:id` sent Back to the **Intentions list**. It should send Back
+to **that context**.
+
+**The address already says where the link conceptually came from.** A pasted "add to
+this context" link almost certainly arrived from someone pointing at that context, not
+from a tour of the intentions list. The old fallback threw that information away and
+guessed from the record type instead.
+
+### The rule now
+
+| Address | Cold-load Back |
+|---|---|
+| `/memories/new/context/:contextId` | **that context** |
+| `/intentions/new/context/:contextId` | **that context** |
+| `/intentions/new/item/:itemId` | **that item** |
+| `/memories/new` | Memories |
+| `/intentions/new` | Intentions |
+
+Only the bare form, which names no target, falls back to the record type's list — there
+is nothing else it could use.
+
+**Cold load only.** In-app navigation still uses `navigate(-1)` with `state.fromApp`,
+unchanged, and a target that no longer resolves still redirects to the list rather than
+attempting to navigate to a deleted context.
+
+### Deliberately not via `viewContextDetail` / `viewItemDetail`
+
+Both write `previousView`, and called from here they would write `"intention-add"` — so
+Back off the context would try to return to a form the user had just left, and the flag
+would name a screen that is not on the way to anywhere. Setting the id and navigating
+directly avoids that, and avoids adding a `setPreviousView` writer the routing thread
+has asked us not to add.
+
+**The consequence, stated rather than hidden:** `previousView` keeps its cold-load
+default of `"home"`, so Back off the target page goes Home. That is right for a session
+that began on a pasted link — there is genuinely nowhere else it came from.
+
+`replace` throughout, because the add page is being *left* rather than navigated *from*.
+Leaving it in history would put an empty form behind the Back button, the draft having
+already been saved or discarded.
+
+### Is `fromApp` now redundant? No — but its job has narrowed, and that is worth saying
+
+**For all four entry points the two mechanisms now land in the same place.** Checked
+rather than assumed:
+
+| Entry point | in-app `navigate(-1)` | cold-load fallback | Same? |
+|---|---|---|---|
+| Context detail → Add Item | that context | that context | **yes** |
+| Context detail → Add Intention | that context | that context | **yes** |
+| Item detail → Create Intention | that item | that item | **yes** |
+| Intentions → Add Intention | Intentions | Intentions (bare) | **yes** |
+
+So the flag no longer decides *where* you land. Three things it still does:
+
+1. **It pops rather than reconstructs.** `navigate(-1)` returns to the actual previous
+   history entry, restoring scroll position. The fallback builds a fresh one at the top
+   of the page. On a context with 28 items that is a visible difference.
+2. **It leaves `previousView` alone.** In-app, Back off the target continues up the real
+   chain the user walked. The cold-load path lands with `previousView` at its default.
+   Both are correct for their situation, which is exactly why they are not
+   interchangeable.
+3. **It does not assume target == origin.** Today it always does, because all four
+   openers pass the target they are sitting on. A future entry point that does not — a
+   quick-add from Home, an add launched from inbox triage — would have the fallback
+   send the user somewhere they have never been, while `navigate(-1)` stays right.
+
+**Recommendation: keep both, and let slice 3 collapse them if it wants.** The
+convergence above is the useful fact: if the routing thread builds a general answer to
+"did we arrive from inside the app", the targeted case can drop the flag **with no
+behaviour change for today's entry points**. That is a much easier call to make with the
+table above in hand than by rediscovering it.
+
+### Surprise
+
+**Making the fallback smarter is what made the flag look redundant, and it is the same
+information arriving twice by different routes.** `fromApp` records the origin as
+history; the target records it as data in the URL. They agree today only because every
+opener passes the target it is standing on — an invariant nothing enforces and nothing
+writes down. It is written down now.
+
+### Checks run
+
+- Full suite — **31 suites, 773 tests, pass**
+- `CI=true npm run build` — **compiled successfully**, main bundle **+42 B** gzipped
+
+The routing tests in `viewPaths.test.js` cover the address grammar and `parentPath`,
+both unchanged by this. The fallback itself lives in `Alfred.jsx` and has no coverage,
+so it needs the paste-and-Back checks below.
+
+---
+
+## Step 12.7 findings — editing a capture without triaging it (2026-09-09)
+
+A capture often lands half-written, and until now the only way to change it was to
+triage it into something. The expanded inbox card now edits `captured_text` directly:
+no item, no intention, no event, and the row stays in the inbox.
+
+### The enrichment question — clear, and clear more than the status
+
+**Recommended and built: clear `ai_status` back to `not_started`, AND null the
+`suggested_*` fields with it.** The addendum offered three options; the reason for this
+one is specific and was not visible from the spec.
+
+**"Clear `ai_status`" alone does not work**, and that is the finding. `InboxCard` seeds
+its triage fields from the suggestions:
+
+```js
+const [intentText, setIntentText] = useState(
+  inboxItem.suggestedIntentText || inboxItem.capturedText
+);
+```
+
+So a stale suggestion is not a column nobody reads — **it is what the triage form
+proposes.** Leave it and a user who corrected a capture is still offered the text they
+corrected, with the status badge the only hint anything is wrong. That makes "leave the
+stale suggestions" the worst of the three rather than the laziest.
+
+**"Prompt for re-enrichment" conflicts with governing rule 3** — no confirmation
+dialogs — unless the prompt is a message rather than a dialog. But a message leaves the
+wrong prefill in place while the user decides, which is the actual harm. So it does not
+solve the problem it is aimed at.
+
+**The cost of clearing is a good enrichment lost to a typo fix**, and it is mitigated
+twice:
+
+- The clear only happens when the text **actually changed**. Opening the editor and
+  saving an unchanged capture touches nothing.
+- Re-enriching is one tap on a button already in this card, and `ai-enrich` takes an
+  `inbox_id` and reads `captured_text` **server-side** — so a re-run after an edit
+  describes the corrected text with no extra plumbing. That is what makes clearing
+  cheap rather than destructive.
+
+The editor says so before you commit: while a capture is enriched, the editor shows a
+line explaining that saving clears the suggestions and inviting a re-enrich after.
+
+**If this is overturned, `updateInboxCaptureText` is the only place to change** — the
+cleared shape is a single named constant, `CLEARED_ENRICHMENT`, written out in full
+rather than derived so a new `suggested_*` column that forgets it is visible as an
+omission.
+
+### The consequence nobody would have predicted from the spec
+
+Clearing the suggestions is necessary but not sufficient, because those `useState`
+initialisers run **once, at mount**. The card does not remount when the capture is
+saved, so `intentText` and `itemName` would keep the values seeded from the old text
+even after the columns behind them were nulled.
+
+So the save handler reseeds them explicitly from what was just written. Without that,
+the feature would appear to work — text updated, badge reset — while the triage form
+below still proposed the sentence the user had just replaced.
+
+### What changed
+
+| Location | Change |
+|---|---|
+| `Alfred.jsx` — `CLEARED_ENRICHMENT` | the reset shape, beside the badge that renders its status |
+| `Alfred.jsx` — `updateInboxCaptureText` | the write; spreads the row, so `triagedAt` survives |
+| `InboxCard` | `editingCapture` / `captureDraft` state, the editor, a pencil on the static text |
+| `InboxCard` | the dirty check now covers an open editor |
+| Inbox render site | `onSaveCaptureText` wired |
+
+### Step 10's disposal rule
+
+Editing is not triage. The row is **spread** rather than rebuilt — `{ ...inboxItem,
+capturedText, ...CLEARED_ENRICHMENT }` — so every column this step has no opinion
+about, `triagedAt` among them, is carried through untouched. Nothing here deletes, and
+`storage.set` UPDATEs by id, so there is no path from this function to a disposal.
+
+### MCP schemas
+
+Untouched, as required. `update_inbox_item` writes the `ai_*` and `suggested_*` fields;
+this writes `captured_text`, a different column, through the ordinary client write path.
+No tool definition was read or changed.
+
+### The unsaved-changes guard — it did participate, and this was the hole in it
+
+`InboxCard` has been in the guard since Step 7: it reports dirty for the triage fields
+and clears on unmount. **The capture text was the one field on this card that could be
+lost by navigating away**, because until now it was not a field at all.
+
+The dirty check now includes `editingCapture && captureDraft !== inboxItem.capturedText`,
+so an open editor with unsaved text warns on navigation exactly as a half-filled triage
+form does. Cancel restores the draft from the row and closes, which is a discard and
+correctly does not warn.
+
+The pre-existing limitation stands unchanged: **browser Back still bypasses the guard**,
+here as everywhere else in Alfred. Recorded in 12.6b; not made worse by this.
+
+### Surprise
+
+**The interesting part of this step was not the edit, it was what the edit invalidates —
+and the invalidation reaches further than the column it obviously touches.** Changing
+`captured_text` silently falsifies eleven other columns, and the mechanism by which that
+becomes visible to the user is not the AI badge but two `useState` initialisers a
+thousand lines away in a different component. A change to one text column had to be
+followed through a server-side enrichment contract, a set of suggestion columns, and a
+form-seeding rule before it was actually done.
+
+### Checks run
+
+- Full suite — **31 suites, 773 tests, pass**
+- `CI=true npm run build` — **compiled successfully**, main bundle **+505 B** gzipped
+
+`Alfred.jsx` has no test coverage, so the reseeding behaviour in particular needs the
+by-hand check below — it is the half that would fail silently.
+
+---
+
+
+
+## Step 12.7b findings — one Save, one Cancel (2026-09-09)
+
+12.7 gave the capture editor its own Save and Cancel. The card already had a pair in
+its footer, 250px below, identically labelled — and **the two outcomes are not
+symmetrical**: the footer's Save files the capture and deletes the row, the editor's
+saved a typo fix. Two identical labels, one recoverable and one disposing of the
+record. That is precisely the inconsistency this phase exists to remove, and it was
+introduced by the step that was meant to be tidying up.
+
+### The fix — the capture text is just another field of the card
+
+Of the three options, the middle one: **the footer's existing Save handles both.**
+
+The editor now has no buttons. `captureDraft` is a dirty field of the card like
+`intentText` or `itemName`, and the one Save commits whatever is pending:
+
+```
+Save = "commit what I changed on this card"
+  ├─ capture text edited?     → write it; the row STAYS in the inbox
+  └─ triage section open?     → file it; the row is deleted (Step 10)
+```
+
+Those are not alternatives — both can be pending, and the text is written **first**, so
+a triage in the same press files the corrected text rather than the text being
+corrected.
+
+**The Save is no longer disabled on "nothing to triage" alone.** It was inert whenever
+no section was open, which is exactly the state a text-only edit leaves the card in.
+`canSave` is now `intentionOpen || itemOpen || collectionOpen || captureTextDirty`.
+
+**Cancel** already reset every other field on the card; it now resets the editor too.
+
+### Why not blur-commit
+
+The first option — commit on blur, like collection detail's fields, no buttons at all —
+is tempting and was rejected for one reason: **collection detail's blur-saves have no
+side effects, and this one clears an enrichment.** A blur is not a decision. Losing an
+Opus enrichment because focus moved is a worse trade than one extra field on a form the
+user is already filling in.
+
+It also removes the ability to abandon an edit: with no buttons and blur committing,
+there is no way back. Recoverability would then have to come from an Undo message,
+which is more machinery than making the text a form field.
+
+### Both halves of 12.7 preserved — and the race is gone rather than handled
+
+**The enrichment clear still fires only on a real change.** `updateInboxCaptureText` is
+untouched: it compares the trimmed draft to the stored text and applies
+`CLEARED_ENRICHMENT` only if they differ.
+
+**The reseed moved, and moving it removed a race rather than relocating one.** 12.7
+reseeded `intentText` and `itemName` *after* the save returned. That left a window —
+small, but real — where the text was written and the form below still proposed the
+sentence it replaced. They are now kept in step **as the user types**:
+
+```js
+if (intentText === captureDraft) setIntentText(next);
+if (itemName === captureDraft) setItemName(next);
+```
+
+Comparing against the previous draft rather than the stored text is what makes this
+work while typing: a field that is still showing the capture verbatim follows along; one
+the user has edited is theirs and is left alone. There is no longer any moment at which
+the two can disagree.
+
+**The unsaved-changes guard still covers typed-but-unsaved capture text** — the dirty
+check keeps `editingCapture && captureDraft !== inboxItem.capturedText`, and the field
+is now inside the same commit path as everything else it sits beside.
+
+### The rest of the footer, audited as asked
+
+**Order was already right.** Enrich · Save · Cancel — gap — Delete matches Step 7's
+standard: primary, Cancel, then a gap, then the destructive action pushed right.
+`justify-between` is the gap, so Delete sits as far from Cancel as the row allows.
+
+Two things were not right:
+
+- **Two primaries.** Enrich carried `bg-primary`, identical to the Save beside it. Save
+  is this card's primary action; Enrich is a tool. Enrich is now secondary — the same
+  dilution Step 8b settled when Start Now and Do Today were both competing for the eye.
+- **8px spacing.** The row was `gap-2`. Step 8c's rule is 12px between adjacent
+  controls, 8px being Material's documented floor rather than a comfortable value — and
+  this is a three-button row on a touchscreen. Now `gap-3`, with `flex-wrap` so it
+  degrades on a narrow screen instead of crushing.
+
+Delete keeps its `min-h-[44px]`; it is a text button so width is not at issue.
+
+### Surprise
+
+**The tidying step introduced the defect the phase exists to remove, and it did so by
+following the local convention rather than the global one.** An editor with a Save and
+a Cancel is the right shape for an editor — every card in Alfred looks like that. It was
+wrong only because of what was already on screen 250px below it, which is not visible
+from the code that renders the editor. The rule "one primary action per surface" cannot
+be checked by looking at the thing you are building; it can only be checked by looking
+at the thing you are building it into.
+
+### Checks run
+
+- Full suite — **31 suites, 773 tests, pass**
+- `CI=true npm run build` — **compiled successfully**, main bundle **+2 B** gzipped over
+  12.7 (the buttons removed roughly paid for the logic added)
+- **Counted by hand:** exactly one `Save` and one `Cancel` label in `InboxCard`.
+
+---
+
+## Step 12.7c findings — Context is a dropdown everywhere (2026-09-09)
+
+The same inbox card offered Context as a **search typeahead** on its Intention section
+and a **dropdown** on its Item section. Two patterns, one card, one field.
+
+Nine contexts. A search field over nine options is friction for nothing — and worse
+than nothing, because the typeahead rendered its list only once you had typed, so the
+thing you were choosing from was hidden until you already knew its name.
+
+### What was lost by removing the typeahead — checked before, not after
+
+**Nothing.** Asked explicitly, and worth the check, but both typeaheads were pure
+filters over `contexts`:
+
+| Capability | Typeahead | Dropdown |
+|---|---|---|
+| Create a context on the fly | **no** | no |
+| Filter on anything but `name` | **no** | n/a |
+| Exclude archived contexts | yes | yes — same `!c.archived` |
+| Cap the list | `.slice(0, 10)` | none — and the cap never bound at nine |
+| Clear the selection | an X button | the "No context" option |
+| Show the options before you type | **no** | **yes** |
+
+The last row is the whole argument. The only real capability a typeahead has — typing
+to narrow a long list — is the one that does not apply at this size.
+
+### The inventory — five sites, two patterns, now one
+
+| Site | Was | Now |
+|---|---|---|
+| InboxCard → Intention section | typeahead | **dropdown** |
+| `IntentionCard` | typeahead | **dropdown** |
+| InboxCard → Item section | dropdown | unchanged |
+| `ItemCard` | dropdown | unchanged |
+| Collection detail | dropdown | unchanged |
+
+`IntentionCard` is one component with four render sites, so converting it covers the
+intention edit form, the add-intention page, Context detail's intentions and Item
+detail's related intentions in one change. `ItemCard` likewise already covered item edit
+and the add-item page — both were already dropdowns, which is why the inconsistency was
+visible on a single card rather than across screens.
+
+Verified after: zero context typeaheads remain, five context dropdowns.
+
+### Linked Item stays a typeahead — and yes, that is the reason
+
+Confirmed rather than assumed. **375 items against 9 contexts.** A dropdown of 375
+options is unusable on a phone, and typing to narrow is exactly the capability the
+context field had no use for. The split is a size judgement, not an accident, and it is
+now written at both fields so the next person does not "make them consistent" in the
+wrong direction.
+
+The same reasoning leaves the collection-item pickers alone.
+
+### Surprise
+
+**Removing the typeaheads made the bundle smaller and the diff mostly deletions.** The
+dropdown is nine lines; the typeahead it replaced was fifty, plus two pieces of state,
+a memoised filter, a blur timeout, and a manual clear button. The pattern that looked
+more capable was carrying five mechanisms to do less than `<select>` does natively —
+including a `setTimeout(..., 200)` on blur, which exists solely so a click on the
+dropdown lands before the dropdown disappears. That is a bug class a native select
+cannot have.
+
+`CI=true` catching six unused-variable errors after the swap is what surfaced the full
+extent of it: two `useState` pairs and two filters that nothing referenced any more.
+
+### Checks run
+
+- Full suite — **31 suites, 773 tests, pass**
+- `CI=true npm run build` — **compiled successfully**, main bundle **−60 B** gzipped
+- `grep "Search for a context"` — **0 hits**; `grep "No context</option>"` — **5**
+
+---
+
+## Step 12.8 findings — Intentions and Memories parity (2026-09-09)
+
+Both gaps came from one cause: **the spec's page inventory was never complete**, so
+these two pages were skipped by Step 8's row-action sweep and again by Step 9b's sort
+work. 12.1 closed the first half for Intentions; this closes the rest.
+
+### What changed
+
+| Location | Change |
+|---|---|
+| `INTENTION_SORT_OPTIONS` / `INTENTION_ACCESSORS` | new — intentions sort on their own shape |
+| `intentionsSort`, `memoriesSort` | own storage keys |
+| Intentions page | `SortControl`, list through `sortRows` |
+| Memories page | `SortControl`, list through `sortRows` |
+| `IntentionCard` | a "last updated" line in display mode |
+
+### The order was not merely undocumented — there wasn't one
+
+`intentionsWithoutActiveEvent` and `memoriesWithoutContext` are bare `.filter()` calls
+over `loadData`'s `select("*")`, which carries **no `ORDER BY`**. So the row order was
+whatever Postgres returned and could differ between sessions for reasons nothing in the
+app controls.
+
+Step 9b's stated goal was that order be **stable across a reload**. On these two pages it
+was never stable to begin with, which is a stronger failure than the one 9b set out to
+fix and had gone unnoticed because nobody had counted the pages.
+
+### The options, and the two judgement calls
+
+**Intentions — Name, Created, Last modified. Default: Last modified, newest first.**
+Alex's call, and **no scheduled date**, deliberately: the list is
+`intentionsWithoutActiveEvent`, so an intention that has an event drops out of it
+entirely. The field would be null on every row present, the comparator would sort every
+one of them "missing last", and the order would collapse to the title tiebreaker. An
+option that can only ever do nothing is worse than an absent one.
+
+**Memories — the same three, default Last modified, newest first.** My call, as asked:
+
+- It is a list of **items**, and the only other list of items in Alfred — Context
+  detail's Items — has always been `updatedAt` descending.
+- 12.3 established that a newly touched record is expected at the **top**; that was the
+  whole complaint, and defaulting this page to Name would reintroduce the same surprise
+  by a different route.
+- **Name was the alternative**, for consistency with Contexts and Collections, which
+  share this exact option set and both default to Name. It lost because those two are
+  things you *look up*, and Memories is a holding pen for what has not been filed yet —
+  you arrive at it to deal with recent arrivals, not to find a specific one.
+
+### `title` on both accessor bags — and why omitting it fails badly
+
+`comparatorFor` falls through to `get.title(a)` as the universal tiebreaker for **every**
+order, not only when Name is the chosen key. A bag without `title` therefore throws
+inside the comparator on the first tie — not "sorts oddly", not "ignores the tiebreaker".
+It fails in a way that has nothing to do with sorting, from a page that merely rendered a
+list.
+
+Memories reuses `NAMED_RECORD_ACCESSORS`, where `title` is `r.name`. Intentions needed
+its own bag: **an intention has no `name`, it has `text`**, so `INTENTION_ACCESSORS` maps
+`title: (r) => r.text`. Reusing the named-record bag would have made every intention's
+tiebreaker `undefined`, which `text()` coerces to `""` — so all rows would compare equal
+and the order would silently fall back to array order, i.e. back to the arbitrary order
+this step exists to remove. That failure is quiet, which is worse than the throw.
+
+### Storage keys
+
+`alfred.sort.intentions` and `alfred.sort.memories`, independent of the other five.
+Seven pages, seven keys, no sharing — changing the Intentions order must not reorder
+Memories.
+
+### The "last updated" line
+
+`ItemCard` has carried one since Phase 6. `IntentionCard` never got one, so **an
+intention was the only record in Alfred whose "Last modified" order you could now sort by
+but not see**. Same format and placement as ItemCard's — a `text-xs` muted span below the
+metadata row, `last updated: Mon D, YYYY`. No element count, because an intention has no
+elements, so it is the timestamp alone.
+
+### The inventory, counted properly this time
+
+**Seven top-level Alfred list pages. All seven now have a sort control.**
+
+| Page | Options | Default | Since |
+|---|---|---|---|
+| Home (Today tab) | `EVENT_SORT_OPTIONS` | Scheduled date ↑ | 9b |
+| Schedule | `EVENT_SORT_OPTIONS` | Scheduled date ↑ | 9b |
+| Inbox | `INBOX_SORT_OPTIONS` | Created ↓ | 9b |
+| Contexts | `NAMED_RECORD_SORT_OPTIONS` | Name ↑ | 9b |
+| Collections | `NAMED_RECORD_SORT_OPTIONS` | Name ↑ | 9b |
+| **Intentions** | `INTENTION_SORT_OPTIONS` | **Last modified ↓** | **12.8** |
+| **Memories** | `NAMED_RECORD_SORT_OPTIONS` | **Last modified ↓** | **12.8** |
+
+**Remaining omissions, all deliberate, each with a reason on record:**
+
+| Not controlled | Why |
+|---|---|
+| Recycle Bin | Ordered server-side, `updated_at desc nullsFirst:false`, in the query itself. Stable across reloads already, and "most recently deleted first" is the only order a recycle bin wants. |
+| Home's Active / Paused tabs | `ExecutionBadge` rows, ordered `started_at desc` by the query. Recorded in 9b; they have none of the sortable fields. |
+| Five detail-page sub-lists | Context detail's Items / Intentions / Collections, Item detail's Related Intentions, Collection detail's members. Step 9b's explicit scope call: "the spec covers list pages; detail pages hold five such sub-lists between them, and giving each a control is a different decision." Context detail's Items has a fixed order and, as of 12.3, runs through the shared comparator. |
+| SAM library | Has its own control and its own option list from Step 9a — "Last played" does not generalise. |
+| Timer, Games | Not lists of records. |
+
+So: **7 of 7 controlled, and every uncontrolled list is uncontrolled on purpose.** The
+inventory is now complete and written down, which it was not before — that is the actual
+fix here, the two controls being the consequence.
+
+### Surprise
+
+**Both pages were skipped twice by two different sweeps, and the reason is that neither
+sweep worked from a list.** Step 8 worked from the spec's row-action table and Step 9b
+from "the five list pages"; both phrases were written from memory of the app rather than
+from the nav, and both inherited the same blind spot. Nothing checked either count
+against the seven entries in `VIEW_TO_PATH` that actually render a list of records —
+which takes about a minute and would have caught it the first time.
+
+### Checks run
+
+- Full suite — **31 suites, 773 tests, pass**
+- `CI=true npm run build` — **compiled successfully**, main bundle **+133 B** gzipped
+
+The sort machinery itself is covered by `sortOrders`' and SAM's tests. The two new
+call sites and the accessor bags are in `Alfred.jsx`, which has none, so the
+`title`-tiebreaker behaviour needs the by-hand check below.
+
+---
+
+### For the routing thread — `executionEditReturn` is a fourth return-address mechanism
+
+**Named here rather than left to be discovered at slice 3.**
+
+Step 12.2 added `executionEditReturn` to `Alfred.jsx`: a slot holding
+`{ executionId, itemId }`, written when the execution screen opens its underlying item
+and read once when Back leaves that item.
+
+The routing thread's own inventory lists three return-address mechanisms to unpick —
+`itemHistoryStack`, `intentionReturnView`, and `previousView` — and instructs:
+
+> "Until then, keep all three, and **add no new writers**. Every new `setPreviousView`
+> call is another site to unpick later. If a new screen needs a return address after
+> slice 2 lands, it should use `navigate(-1)`."
+
+**This is not a new `setPreviousView` writer** — that rule is honoured. But it is a
+fourth slot of the same kind, so it belongs on the same list.
+
+Two things in its favour when slice 3 gets to it:
+
+- **It holds an ID, not an object**, which is the direction slice 2's own list asks for
+  ("`execution-detail` holds an object, not an id — convert to id-plus-lookup").
+- **It should be the cheapest of the four to remove.** One writer, one reader, and its
+  replacement already exists: the execution URL carries its id, so `navigate(-1)` — or
+  an explicit `goToExecution` — covers it with no lookup to invent.
+
+The one thing to preserve when it goes: the return must reach `goToExecution`, **not**
+`setView("execution-detail")`. `viewToPath("execution-detail")` is deliberately always
+the bare, id-less `/schedule/execution`, so `setView` renders the right screen under an
+address that has lost the id, and a refresh from there redirects to Schedule. It looks
+correct until the refresh, which is why it is written down.
+
+---
 
 ### Notes
 

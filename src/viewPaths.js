@@ -24,8 +24,14 @@ export const VIEW_TO_PATH = {
   "execution-detail": "/schedule/execution",
   intentions: "/intentions",
   "intention-detail": "/intentions/detail",
+  // Step 12.6. Add forms became real pages. Both this and "item-add" below carry
+  // an optional TARGET in a later segment — see the add sub-routes at the bottom —
+  // and the bare form is a legitimate address in its own right: an add page with
+  // nothing preselected.
+  "intention-add": "/intentions/new",
   memories: "/memories",
   "item-detail": "/memories/detail",
+  "item-add": "/memories/new",
   "item-add-to-collection": "/memories/add-to-collection",
   collections: "/collections",
   "collection-detail": "/collections/detail",
@@ -66,6 +72,9 @@ export function pathToView(pathname) {
   if (isSamPath(pathname)) return "sam";
   // /schedule/execution/:id is the same view as the bare /schedule/execution.
   if (executionIdFromPath(pathname)) return "execution-detail";
+  // /memories/new/context/:id is the same view as the bare /memories/new.
+  const add = addRouteFromPath(pathname);
+  if (add) return add.view;
   return PATH_TO_VIEW[normalizePath(pathname)] || DEFAULT_VIEW;
 }
 
@@ -86,6 +95,10 @@ export function isKnownPath(pathname) {
   // /schedule/execution/a/b has no extractable id and stays unknown, so it is
   // redirected to home like any other nonsense path rather than half-served.
   if (executionIdFromPath(pathname)) return true;
+  // A malformed add path — a bad kind, a missing id, an extra segment — returns
+  // null here and is redirected to home like any other nonsense path, rather
+  // than half-serving an add form with no target.
+  if (addRouteFromPath(pathname)) return true;
   return Boolean(PATH_TO_VIEW[normalizePath(pathname)]);
 }
 
@@ -98,6 +111,16 @@ const PARENT_OVERRIDES = {};
 export function parentPath(pathname) {
   const path = normalizePath(pathname);
   if (PARENT_OVERRIDES[path]) return PARENT_OVERRIDES[path];
+  // Both add forms fall back to the LIST, not to their own bare form: stripping
+  // one segment off /memories/new/context/:id lands on /memories/new/context,
+  // which is not an address at all. Same one-correction-not-two reasoning as the
+  // execution branch below.
+  const add = addRouteFromPath(path);
+  if (add) {
+    const base = VIEW_TO_PATH[add.view];
+    const cut = base.lastIndexOf("/");
+    return cut > 0 ? base.slice(0, cut) : DEFAULT_PATH;
+  }
   // An id-bearing execution path falls back to the schedule list, not to the
   // bare /schedule/execution. Stripping one segment would land on a path that
   // is itself unrenderable cold and would redirect again — one visible
@@ -141,6 +164,72 @@ export function executionIdFromPath(pathname) {
   const id = path.slice(EXECUTION_PREFIX.length);
   if (!id || id.includes("/")) return null;
   return decodeURIComponent(id);
+}
+
+// --- Add sub-routes (Step 12.6) ----------------------------------------------
+//
+// The add forms used to render inline, wedged between a section header and the
+// list below it. They are now real pages with real addresses, following the
+// execution precedent above rather than inventing a second pattern.
+//
+// TWO pages, not four, across four entry points. The entry point is expressed as
+// a TARGET in the path — `/memories/new/context/:contextId`,
+// `/intentions/new/item/:itemId` — so one page serves every caller and the
+// difference between callers is data, not code. Four near-identical routes is
+// the copy-paste drift that produced the three collection rows in Step 4a.
+//
+// The bare form is a legitimate address: an add page with nothing preselected,
+// which is exactly what the Intentions page needs. So the view map stays a
+// bijection — `viewToPath("item-add")` is always "/memories/new" — while
+// `pathToView` resolves both forms, the same arrangement the execution route
+// uses.
+//
+// Two target kinds, and no more without a reason: `context` (add into this
+// context) and `item` (add an intention against this item). An unrecognised
+// kind is not a target with a bad value — it is not an address, and
+// `isKnownPath` says so.
+
+const ADD_VIEWS = ["item-add", "intention-add"];
+const ADD_TARGET_KINDS = ["context", "item"];
+
+/**
+ * Build an add-page address.
+ *
+ * @param {string} view - "item-add" or "intention-add".
+ * @param {{kind: string, id: string}|null} [target] - omit for the bare form.
+ */
+export function addPath(view, target = null) {
+  if (!ADD_VIEWS.includes(view)) return DEFAULT_PATH;
+  const base = VIEW_TO_PATH[view];
+  if (!target || !target.id || !ADD_TARGET_KINDS.includes(target.kind)) {
+    return base;
+  }
+  return `${base}/${target.kind}/${encodeURIComponent(target.id)}`;
+}
+
+/**
+ * Resolve an add address.
+ *
+ * @returns {{view: string, target: {kind: string, id: string}|null}|null}
+ *   null for any path that is not an add address, INCLUDING a malformed one.
+ */
+export function addRouteFromPath(pathname) {
+  const path = normalizePath(pathname);
+  for (const view of ADD_VIEWS) {
+    const base = VIEW_TO_PATH[view];
+    if (path === base) return { view, target: null };
+    if (!path.startsWith(`${base}/`)) continue;
+
+    const parts = path.slice(base.length + 1).split("/");
+    // Exactly kind + id. Anything else is malformed rather than partial: a
+    // half-read target would open an add form pointing somewhere unintended,
+    // which is worse than not opening at all.
+    if (parts.length !== 2) return null;
+    const [kind, rawId] = parts;
+    if (!ADD_TARGET_KINDS.includes(kind) || !rawId) return null;
+    return { view, target: { kind, id: decodeURIComponent(rawId) } };
+  }
+  return null;
 }
 
 // --- SAM sub-routes (Step 8) -------------------------------------------------

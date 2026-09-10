@@ -3,11 +3,13 @@
 Companion to `technical-spec-ui-standardization.md` (Revision 2). Everything here
 came out of a review of the Alfred context's captured items after Steps 1–11.
 
-Eight items. Two are unfinished rows in the original spec rather than new requests —
-those are marked. 12.8 was added later, on 2026-09-09, out of what 12.3 turned up.
-The governing rules and the deferred list in the main spec still apply unchanged.
+Nine items. Two are unfinished rows in the original spec rather than new requests —
+those are marked. 12.8 and 12.9 were added later, both on 2026-09-09: 12.8 out of what
+12.3 turned up, 12.9 out of what 12.2 turned up. The governing rules and the deferred
+list in the main spec still apply unchanged.
 
-Build order, fixed by Alex: **12.1, 12.3, 12.4, 12.5, 12.2, 12.6, 12.7, then 12.8.**
+Build order, fixed by Alex: **12.1, 12.3, 12.4, 12.5, 12.2, 12.6, 12.7, then 12.8 and
+12.9.**
 
 ---
 
@@ -68,6 +70,12 @@ currently no way to record it without abandoning the execution.
 **Target:** an Edit action on the execution detail screen that opens the underlying
 item for editing and returns to the running execution afterwards.
 
+**Scope settled 2026-09-09: this is a LINK, not an edit surface.** A link on the
+execution screen that opens the underlying item already in edit mode, skipping the
+extra tap on "Edit Item". That is the whole feature. No in-place editing, and no
+"applies next time" note — a link that visibly navigates to an edit page leaves no
+ambiguity about what it changed.
+
 **The snapshot question is settled — it was already answered by the code.**
 Element-based executions snapshot the item's elements at start: `startExecution`
 copies each element (`{ ...el }`), flattens it, stamps fresh completion fields, and
@@ -77,18 +85,40 @@ was hoping for, already in place and needing no work. Collection-based execution
 the opposite: they resolve live, with `onRefreshCollection` re-fetching on an
 interval.
 
-Two things remain to work out:
+### CORRECTION — executions DO carry their id in the URL
 
-- **Where the edit happens.** Navigating away to item detail and back has to preserve
-  the execution's in-progress state — which lives in `activeExecution` as a whole
-  object rather than an id, so it is not reconstructible from a URL. Editing in place
-  on the execution screen may be simpler than navigating.
-- **What Edit means for a collection-based execution.** This is now the substantive
-  open question. Such an execution may have no single underlying item to edit, and it
-  already resolves live rather than from a snapshot — so the action either targets
-  something else, or is absent in that case. Report what it should do before building.
+An earlier draft of this section said `activeExecution` "lives as a whole object
+rather than an id, so it is not reconstructible from a URL." **That is false, and it
+was the load-bearing premise of the question.**
 
-Report on both before writing code.
+Executions are the ONE detail view that carries its id in the URL, deliberately.
+`executionPath(id)` produces `/schedule/execution/:id`, and `useExecutionRoute`
+cold-loads it via `storage.get`. `detailStateMissing` exempts execution-detail for
+exactly this reason. `viewPaths.js` states the intent outright: the other detail views
+can afford to redirect to a parent on a cold load, but "an execution cannot afford
+that: a chained notification links back to the execution it came from."
+
+So the round trip was never blocked. What it costs is narrower and specific:
+
+- `viewToPath("execution-detail")` is always the bare, **id-less**
+  `/schedule/execution` — the view map is kept a bijection. Returning via `setView`
+  renders the right screen under an address that has lost the id. **Return with
+  `goToExecution`.**
+- `previousView` is a single shared slot any navigation clobbers, which is why
+  `intentionReturnView` exists. **The return trip needs its own slot.**
+- Progress is durable either way: element and collection ticks both write to the
+  execution row on every toggle, so navigating away cannot lose a partly-done
+  checklist. Back landing correctly is convenience, not correctness.
+
+### Decisions
+
+- **Exactly one item, or no link.** `itemIds` is an array and `flattenElements` pulls
+  in nested referenced items, so the underlying item is neither guaranteed to exist
+  nor guaranteed to be singular. Rather than guess, the link is absent unless the
+  answer is unambiguous.
+- **Collection-based executions get no link.** They carry `itemIds: []` by
+  construction and resolve live from the collection; there is no underlying item.
+  Tappable collection rows are **12.9**, separate.
 
 ## 12.3 New items sort to the bottom
 
@@ -239,12 +269,29 @@ Whether Memories also needs the "last updated" line is already answered: it rend
 
 ---
 
+## 12.9 — Tappable collection rows
+
+**Added 2026-09-09, out of 12.2.** Collection rows inside an execution are the only
+list rows in Alfred that are not tappable: the checkbox reacts, the quantity input
+reacts, and the item name is plain text. Every other list in the app opens a detail
+view on a row tap.
+
+Deliberately NOT folded into 12.2, which is about an execution's single underlying
+item. This is about the rows of a collection-based execution, which has none — a
+different target, a different gesture, and a different execution type.
+
+Watch the tap-target collision with the checkbox and the quantity field, which
+already occupy the row. Step 8c's 12px spacing rule applies.
+
+---
+
 ## Success criteria
 
 - IntentionCard list rows have an always-visible Archive, correctly guarded, absent
   from add and edit forms.
-- The execution screen offers a way to edit the underlying item, with the snapshot
-  question answered explicitly.
+- The execution screen links to its underlying item, opening it already in edit
+  mode, and only when there is exactly one such item.
+- Back from that item returns to the running execution, with its id intact in the URL.
 - A newly created item appears at the top of a list sorted by last modified.
 - The collections saving indicator is gone, or replaced with something better.
 - Nothing in the app chrome is teal without a recorded reason.
