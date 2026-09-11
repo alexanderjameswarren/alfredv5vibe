@@ -787,7 +787,9 @@ test("daily REJECTS day_of_week rather than silently ignoring it", async () => {
 test("bad enums, times and grace values are all rejected", async () => {
   const db = makeDb();
   const base = { app: "dj", job: "j", executor: "claude", cadence: "daily" };
-  await assert.rejects(() => sched(db, { ...base, app: "ken" }), /`app` must be one of/);
+  // Not "ken" — ken became a real app on 2026-09-11 (ken_003), and is accepted below.
+  await assert.rejects(() => sched(db, { ...base, app: "homer" }), /`app` must be one of/);
+  await assert.doesNotReject(() => sched(db, { ...base, app: "ken", job: "ken_seed_check" }));
   await assert.rejects(() => sched(db, { ...base, executor: "cron" }), /`executor` must be one of/);
   await assert.rejects(() => sched(db, { ...base, cadence: "hourly" }), /`cadence` must be one of/);
   await assert.rejects(() => sched(db, { ...base, expected_by: "8am" }), /HH:MM/);

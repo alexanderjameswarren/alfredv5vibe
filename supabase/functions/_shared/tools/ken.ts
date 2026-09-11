@@ -18,6 +18,13 @@ const ITEM_COLS =
   "ground_truth, verified_at, mastery, priority, status, superseded_by, " +
   "last_seen, created_at";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// A value inside a PostgREST or()/in() filter. Free text (a subtopic) can hold
+// the filter grammar's reserved characters — , . : ( ) — so it is always
+// double-quoted, with backslash and quote escaped.
+const pgrstQuote = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+
 // ---------------------------------------------------------------------------
 // get_ken_quiz_batch — tier 1
 //
@@ -54,6 +61,13 @@ export const getKenQuizBatchTool = defineTool({
     }
 
     const ids = rows.map((r: { id: string }) => r.id);
+    const subtopics = [
+      ...new Set(
+        rows
+          .map((r: { subtopic: string | null }) => r.subtopic)
+          .filter((s: string | null): s is string => !!s),
+      ),
+    ];
 
     // Recent attempts across the batch. Bounded by construction: at most a
     // handful per item, and the batch itself is already clamped.
@@ -66,12 +80,22 @@ export const getKenQuizBatchTool = defineTool({
 
     if (attemptsErr) throw new Error(`get_ken_quiz_batch: ${attemptsErr.message}`);
 
-    // Misconceptions anchored to either side of a confusion pair.
+    // Misconceptions touching the batch: anchored to either side of a
+    // confusion pair, OR scoped only to a subtopic (no item) that a batch item
+    // sits in. Item-anchored misconceptions on items outside the batch are not
+    // pulled in just for sharing a subtopic — only the subtopic-scoped ones.
+    const idList = ids.join(",");
+    const scopes = [`item_id.in.(${idList})`, `related_item_id.in.(${idList})`];
+    if (subtopics.length > 0) {
+      scopes.push(
+        `and(item_id.is.null,subtopic.in.(${subtopics.map(pgrstQuote).join(",")}))`,
+      );
+    }
     const { data: misconceptions, error: miscErr } = await ctx.db
       .from("ken_misconceptions")
       .select("id, item_id, related_item_id, subtopic, note, status, updated_at")
       .eq("status", "active")
-      .or(`item_id.in.(${ids.join(",")}),related_item_id.in.(${ids.join(",")})`)
+      .or(scopes.join(","))
       .limit(50);
 
     if (miscErr) throw new Error(`get_ken_quiz_batch: ${miscErr.message}`);
@@ -266,7 +290,18 @@ export const getKenMisconceptionsTool = defineTool({
       .select("id, item_id, related_item_id, subtopic, note, status, created_at, updated_at");
 
     q = q.eq("status", (args.status as string | undefined) ?? "active");
-    if (args.item_id) q = q.eq("item_id", args.item_id as string);
+    if (args.item_id) {
+      // Either side of a confusion pair — the pair is the unit, so a read that
+      // sees only the anchor side is half-blind. Validated first because the
+      // value is interpolated into a PostgREST or() filter.
+      const itemId = args.item_id as string;
+      if (!UUID_RE.test(itemId)) {
+        throw new Error(
+          `get_ken_misconceptions: item_id must be a uuid, got ${JSON.stringify(itemId)}.`,
+        );
+      }
+      q = q.or(`item_id.eq.${itemId},related_item_id.eq.${itemId}`);
+    }
     if (args.subtopic) q = q.eq("subtopic", args.subtopic as string);
 
     q = q.order("updated_at", { ascending: false }).limit(LIMIT);

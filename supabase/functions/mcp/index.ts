@@ -1072,7 +1072,7 @@ export function createMcpServer(token: string) {
       description:
         "Stamp one attempted job run — scheduled or on-demand — in platform_runs. Append-only. Call this on EVERY run including failures: a poll that could not reach YouTube still writes status 'failed' or 'auth_expired', and that row is what staleness detection and the phase-6 failure tests read. Absence of a row is the only signal for both 'the task never fired' and 'it fired but could not reach Supabase', so a missing stamp is indistinguishable from a missing run. Tier 1.",
       inputSchema: {
-        app: z.enum(["dj", "sam", "alfred", "workshop"]).describe("Which app this job belongs to."),
+        app: z.enum(["dj", "sam", "alfred", "workshop", "ken"]).describe("Which app this job belongs to."),
         job: z.string().describe("Job name, e.g. 'daily_history_sync'. Stable across runs — staleness queries group on it."),
         executor: z.enum(["workshop", "claude", "alfred"]).describe("Who actually ran it. Different executors fail in different ways."),
         status: RUN_STATUS
@@ -1097,7 +1097,7 @@ export function createMcpServer(token: string) {
       description:
         "Read the job run log, most recent first. The gap-detection read: call with app, job and status 'ok', limit 1 to get the newest successful run, then backfill anything between its covered_to and today. Also the staleness and failure-triage read. Tier 1.",
       inputSchema: {
-        app: z.enum(["dj", "sam", "alfred", "workshop"]).optional().describe("Filter to one app."),
+        app: z.enum(["dj", "sam", "alfred", "workshop", "ken"]).optional().describe("Filter to one app."),
         job: z.string().optional().describe("Filter to one job name."),
         status: RUN_STATUS.optional().describe("Filter by outcome. Use 'ok' for gap detection; use 'running' to find ORPHANS - runs that opened and never closed because the task died mid-flight. Nothing closes those automatically."),
         unnotified_only: z.boolean().optional().describe("Only runs whose failure has not yet been surfaced (notified_at is null)."),
@@ -1442,7 +1442,7 @@ export function createMcpServer(token: string) {
         "Re-seeding the same (app, job) UPDATES its definition rather than duplicating: a schedule is a definition, unlike platform_runs which is an append-only log. " +
         "⚠️ `day_of_week` uses the POSTGRES convention where 0 = SUNDAY — not ISO, where 1 = Monday. Required for weekly, rejected for daily. Tier 2.",
       inputSchema: {
-        app: z.enum(["dj", "sam", "alfred", "workshop"]).describe("Which app this job belongs to."),
+        app: z.enum(["dj", "sam", "alfred", "workshop", "ken"]).describe("Which app this job belongs to."),
         job: z.string().describe("Job name, matching the `job` used in create_platform_run — staleness queries join on it."),
         executor: z.enum(["workshop", "claude", "alfred"]).describe("Who is supposed to run it."),
         cadence: z.enum(["daily", "weekly"]).describe("How often."),
@@ -1464,7 +1464,7 @@ export function createMcpServer(token: string) {
         "Read the cadence definitions — what is supposed to run. These are DEFINITIONS, not occurrences (spec §4.5). `day_of_week` uses the Postgres convention where 0 = SUNDAY. " +
         "⚠️ Staleness is deliberately NOT computed here: it needs the newest matching run from get_platform_runs AND a timezone to resolve `expected_by` against, and it must be reconciled against dj_plays rather than trusting the run log, which asserts coverage and cannot be audited against the data (spec §11.4). Tier 1, read-only.",
       inputSchema: {
-        app: z.enum(["dj", "sam", "alfred", "workshop"]).optional().describe("Filter to one app."),
+        app: z.enum(["dj", "sam", "alfred", "workshop", "ken"]).optional().describe("Filter to one app."),
         job: z.string().optional().describe("Filter to one job name."),
         enabled: z.boolean().optional().describe("Filter to enabled or suspended definitions."),
         limit: z.number().optional().describe("Max rows (default 20, cap 50)."),
@@ -1483,7 +1483,7 @@ export function createMcpServer(token: string) {
       title: "Get Ken Quiz Batch",
       description:
         "Start or continue a quiz. Returns a weighted-random batch of askable Ken items PLUS their recent attempts and the active misconceptions touching them, in ONE call — enough for the next several questions with no further reads. Selection runs in Postgres (ken_select_batch), weighted by item priority and area priority; only active items are eligible. " +
-        "Response: { items, attempts, misconceptions }. `attempts` are the most recent across the batch, capped at 5× the number of items overall — not a guaranteed five per item. `misconceptions` are the active ones anchored on a batch item on EITHER side of a confusion pair; subtopic-only misconceptions (no item) are NOT included — read those with get_ken_misconceptions. " +
+        "Response: { items, attempts, misconceptions }. `attempts` are the most recent across the batch, capped at 5× the number of items overall — not a guaranteed five per item. `misconceptions` are the active ones touching the batch: anchored on a batch item on EITHER side of a confusion pair, or scoped only to a subtopic (no item) that a batch item sits in. Capped at 50. " +
         "Items never carry tricky_fragments: call get_ken_lyric_fragments before quizzing a lyric item. Buffer results in the conversation and flush them with record_ken_attempts at natural seams, not after every question. Tier 1, read-only.",
       inputSchema: {
         area_id: z.string().optional().describe("Restrict the batch to one area (uuid from get_ken_areas). Omit to interleave across every area — the default, and usually right, because mixing cold topics in is the point."),
@@ -1606,9 +1606,9 @@ export function createMcpServer(token: string) {
       title: "Get Ken Misconceptions",
       description:
         "Read curated misconceptions — durable, qualitative error patterns ('often conflates timbre and tone; the distinction is X') — most recently updated first. ACTIVE only unless `status` says otherwise. A misconception is scoped to an item, a confusion PAIR of items, or a subtopic. " +
-        "⚠️ `item_id` matches only misconceptions ANCHORED on that item, not ones where it is the related_item_id half of a pair. get_ken_quiz_batch matches both sides. Tier 1, read-only.",
+        "`item_id` matches EITHER side of a confusion pair — misconceptions anchored on the item and ones where it is the related_item_id half. Tier 1, read-only.",
       inputSchema: {
-        item_id: z.string().optional().describe("Misconceptions anchored on this item (its item_id column, not related_item_id)."),
+        item_id: z.string().optional().describe("uuid. Misconceptions touching this item on EITHER side of a confusion pair (item_id or related_item_id)."),
         subtopic: z.string().optional().describe("Misconceptions scoped to this subtopic — exact match."),
         status: z.enum(["active", "resolved"]).optional().describe("Defaults to 'active'. 'resolved' = patterns that stopped recurring, kept as history."),
         limit: z.coerce.number().optional().describe("Max rows (default 20, cap 50)."),

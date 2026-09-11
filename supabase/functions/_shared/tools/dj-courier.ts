@@ -820,7 +820,9 @@ export const updatePlatformRunTool = defineTool({
 // silently — which is the exact problem this table exists to detect. Staleness
 // is derived at read time by comparing the due occurrence against platform_runs.
 
-const VALID_APP = ["dj", "sam", "alfred", "workshop"];
+// Mirrors platform_schedules_app_check / platform_runs_app_check. The zod enums
+// on the four platform tools in mcp/index.ts carry the same list.
+const VALID_APP = ["dj", "sam", "alfred", "workshop", "ken"];
 const VALID_EXECUTOR = ["workshop", "claude", "alfred"];
 const VALID_CADENCE = ["daily", "weekly"];
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
