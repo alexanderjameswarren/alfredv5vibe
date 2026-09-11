@@ -91,22 +91,34 @@ export const getKenQuizBatchTool = defineTool({
         `and(item_id.is.null,subtopic.in.(${subtopics.map(pgrstQuote).join(",")}))`,
       );
     }
-    const { data: misconceptions, error: miscErr } = await ctx.db
+    // Newest first, so the cap cuts the stalest patterns. The exact count is
+    // what tells a clamped 50 from a genuine 50.
+    const MISC_CAP = 50;
+    const { data: misconceptions, error: miscErr, count: miscTotal } = await ctx.db
       .from("ken_misconceptions")
-      .select("id, item_id, related_item_id, subtopic, note, status, updated_at")
+      .select("id, item_id, related_item_id, subtopic, note, status, updated_at", {
+        count: "exact",
+      })
       .eq("status", "active")
       .or(scopes.join(","))
-      .limit(50);
+      .order("updated_at", { ascending: false })
+      .limit(MISC_CAP);
 
     if (miscErr) throw new Error(`get_ken_quiz_batch: ${miscErr.message}`);
 
+    const misc = misconceptions ?? [];
+    const miscTruncated = typeof miscTotal === "number" && miscTotal > misc.length;
+
+    // The misconceptions list is the only one here that can be cut: items are a
+    // selection, not a list, and attempts are a recent window by design. For a
+    // non-array payload the MCP wrapper renders `limit_applied` as the "shown"
+    // count, so on truncation it must be the misconceptions cap — otherwise the
+    // NOTE would read "truncated to 20" off the item limit.
     return envelope(
-      {
-        items: rows,
-        attempts: attempts ?? [],
-        misconceptions: misconceptions ?? [],
-      },
-      { limit_applied: LIMIT, truncated: false },
+      { items: rows, attempts: attempts ?? [], misconceptions: misc },
+      miscTruncated
+        ? { limit_applied: MISC_CAP, truncated: true, total: miscTotal }
+        : { limit_applied: LIMIT, truncated: false },
     );
   },
 });
@@ -165,6 +177,59 @@ export const createKenAreaTool = defineTool({
       .single();
 
     if (error) throw new Error(`create_ken_area: ${error.message}`);
+    return envelope(data);
+  },
+});
+
+// update_ken_area — tier 2, updates an existing row.
+//
+// Exists mainly for source_ref. An area created in conversation has none, and
+// with no way to set it afterwards the seed check would list that Alfred seed
+// as unseeded in every nudge, forever.
+export const updateKenAreaTool = defineTool({
+  name: "update_ken_area",
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const id = args.id as string;
+
+    // Absent leaves a field alone; an explicit null clears it (description,
+    // source_ref). `??` would collapse the two.
+    const patch: Record<string, unknown> = {};
+    if (args.name !== undefined) patch.name = args.name as string;
+    if (args.description !== undefined) patch.description = args.description as string | null;
+    if (args.source_ref !== undefined) patch.source_ref = args.source_ref as string | null;
+    if (args.priority !== undefined) patch.priority = args.priority as number;
+    if (Object.keys(patch).length === 0) {
+      throw new Error(
+        "update_ken_area: nothing to change. Pass at least one of name, description, " +
+          "source_ref, priority.",
+      );
+    }
+    patch.updated_at = new Date().toISOString();
+
+    const { data, error } = await ctx.db
+      .from("ken_areas")
+      .update(patch)
+      .eq("id", id)
+      .select("id, name, description, source_ref, priority, created_at, updated_at")
+      .maybeSingle();
+
+    if (error) {
+      // ken_areas_source_ref_key: one Alfred seed seeds one area.
+      if (error.code === "23505") {
+        throw new Error(
+          `update_ken_area: source_ref ${JSON.stringify(patch.source_ref)} is already set ` +
+            "on another area. One Alfred seed seeds one area — find that area with " +
+            "get_ken_areas. Nothing was written.",
+        );
+      }
+      throw new Error(`update_ken_area: ${error.message}`);
+    }
+    if (!data) {
+      throw new Error(
+        `update_ken_area: no area with id ${id}. Nothing was written. Find it with get_ken_areas.`,
+      );
+    }
     return envelope(data);
   },
 });

@@ -40,6 +40,7 @@ import {
   getKenQuizBatchTool,
   recordKenAttemptsTool,
   createKenAreaTool,
+  updateKenAreaTool,
   createKenItemTool,
   getKenAreasTool,
   getKenItemsTool,
@@ -1483,7 +1484,7 @@ export function createMcpServer(token: string) {
       title: "Get Ken Quiz Batch",
       description:
         "Start or continue a quiz. Returns a weighted-random batch of askable Ken items PLUS their recent attempts and the active misconceptions touching them, in ONE call — enough for the next several questions with no further reads. Selection runs in Postgres (ken_select_batch), weighted by item priority and area priority; only active items are eligible. " +
-        "Response: { items, attempts, misconceptions }. `attempts` are the most recent across the batch, capped at 5× the number of items overall — not a guaranteed five per item. `misconceptions` are the active ones touching the batch: anchored on a batch item on EITHER side of a confusion pair, or scoped only to a subtopic (no item) that a batch item sits in. Capped at 50. " +
+        "Response: { items, attempts, misconceptions }. `attempts` are the most recent across the batch, capped at 5× the number of items overall — not a guaranteed five per item. `misconceptions` are the active ones touching the batch: anchored on a batch item on EITHER side of a confusion pair, or scoped only to a subtopic (no item) that a batch item sits in. Most recently updated first, capped at 50. ⚠️ A truncation NOTE on this tool always means the MISCONCEPTIONS list was cut (items and attempts never are); read the rest with get_ken_misconceptions by item_id or subtopic. " +
         "Items never carry tricky_fragments: call get_ken_lyric_fragments before quizzing a lyric item. Buffer results in the conversation and flush them with record_ken_attempts at natural seams, not after every question. Tier 1, read-only.",
       inputSchema: {
         area_id: z.string().optional().describe("Restrict the batch to one area (uuid from get_ken_areas). Omit to interleave across every area — the default, and usually right, because mixing cold topics in is the point."),
@@ -1528,6 +1529,24 @@ export function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(createKenAreaTool, args, token),
+  );
+
+  server.registerTool(
+    "update_ken_area",
+    {
+      title: "Update Ken Area",
+      description:
+        "Change an existing area: rename it, rewrite its description, re-heat it, or — the main reason this exists — set its source_ref. An area created in conversation has no source_ref, so the ken_seed_check job lists its Alfred seed as unseeded in every nudge until one is set here. " +
+        "Omitting a field leaves it alone; passing description or source_ref as null clears it. An id matching no area is an error and nothing is written. Tier 2 — updates an existing row; audited and reversible.",
+      inputSchema: {
+        id: z.string().describe("uuid of the area, from get_ken_areas."),
+        name: z.string().optional().describe("New area name."),
+        description: z.string().nullable().optional().describe("New description, or null to clear it."),
+        source_ref: z.string().nullable().optional().describe("The Alfred item id this area was seeded from — text like 'mtw2g9lb8cbs0xhsdij', NOT a uuid. Set it to link an area created in conversation to its seed; null unlinks it. Unique per user: an id already on another area is REFUSED."),
+        priority: z.coerce.number().optional().describe("Heat multiplier over every item in the area during quiz selection; must be > 0. Lower it to cool the whole area — it can be cooled, never silenced."),
+      },
+    },
+    async (args) => runToolForMcp(updateKenAreaTool, args, token),
   );
 
   server.registerTool(

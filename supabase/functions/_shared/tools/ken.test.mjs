@@ -1,4 +1,4 @@
-// Handler tests for the two Ken reads that see misconceptions.
+// Handler tests for the Ken reads that see misconceptions, and update_ken_area.
 //
 // Run:
 //   node --experimental-strip-types --test supabase/functions/_shared/tools/ken.test.mjs
@@ -7,9 +7,11 @@
 // ../platform.ts import, import from a temp copy.
 //
 // ⚠️ THE FAKE PARSES .or() FOR REAL, nested and() and quoted in() values
-// included. Both fixes live entirely inside an or() string, so a fake that
-// ignored it would pass a handler that never applied the filter — and a subtopic
-// holding a comma is exactly the value a naive split would mangle.
+// included. Both misconception fixes live entirely inside an or() string, so a
+// fake that ignored it would pass a handler that never applied the filter — and
+// a subtopic holding a comma is exactly the value a naive split would mangle.
+// It also honours order() and { count: "exact" }, because the truncation
+// signal depends on both.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -73,14 +75,18 @@ function term(t) {
   return (r) => r[col] != null && vals.includes(String(r[col]));
 }
 
-function makeDb({ items = [], misconceptions = [], attempts = [] } = {}) {
-  const tables = { ken_items: items, ken_misconceptions: misconceptions, ken_attempts: attempts };
+function makeDb({ items = [], misconceptions = [], attempts = [], areas = [], failWith = null } = {}) {
+  const tables = {
+    ken_items: items, ken_misconceptions: misconceptions,
+    ken_attempts: attempts, ken_areas: areas,
+  };
   const orCalls = [];
+  const updates = [];
   function builder(rows) {
     const filters = [];
-    let lim = null;
+    let lim = null, sortBy = null, wantCount = false, patch = null, one = false;
     const api = {
-      select() { return api; },
+      select(_cols, opts) { if (opts?.count === "exact") wantCount = true; return api; },
       eq(c, v) { filters.push((r) => r[c] === v); return api; },
       in(c, v) { filters.push((r) => v.includes(r[c])); return api; },
       or(expr) {
@@ -89,18 +95,34 @@ function makeDb({ items = [], misconceptions = [], attempts = [] } = {}) {
         filters.push((r) => terms.some((f) => f(r)));
         return api;
       },
-      order() { return api; },
+      order(col, { ascending = true } = {}) { sortBy = { col, ascending }; return api; },
       limit(n) { lim = n; return api; },
+      update(p) { patch = p; return api; },
+      maybeSingle() { one = true; return api; },
+      single() { one = true; return api; },
       then(resolve) {
+        if (failWith) return resolve({ data: null, error: failWith });
         let hit = rows.filter((r) => filters.every((f) => f(r)));
+        if (patch) {
+          updates.push(patch);
+          for (const r of hit) Object.assign(r, patch);
+          return resolve({ data: one ? hit[0] ?? null : hit, error: null });
+        }
+        if (sortBy) {
+          const { col, ascending } = sortBy;
+          hit = [...hit].sort((a, b) => (a[col] < b[col] ? -1 : a[col] > b[col] ? 1 : 0) * (ascending ? 1 : -1));
+        }
+        const count = wantCount ? hit.length : null;
         if (lim !== null) hit = hit.slice(0, lim);
-        return resolve({ data: hit, error: null });
+        if (one) return resolve({ data: hit[0] ?? null, error: null, count });
+        return resolve({ data: hit, error: null, count });
       },
     };
     return api;
   }
   return {
     orCalls,
+    updates,
     from: (t) => builder(tables[t]),
     // ken_select_batch: the batch is simply every item handed in.
     rpc: () => builder(items),
@@ -173,4 +195,70 @@ test("get_ken_quiz_batch with no subtopics in the batch adds no subtopic clause"
   await mod.getKenQuizBatchTool.handler({}, { db });
   assert.equal(db.orCalls.length, 1);
   assert.ok(!db.orCalls[0].includes("subtopic"), db.orCalls[0]);
+});
+
+test("get_ken_quiz_batch past 50 misconceptions: newest kept, truncation flagged with the true total", async () => {
+  // 55 matching rows; updated_at rises with n, so the newest are m-54 … m-5.
+  const misconceptions = Array.from({ length: 55 }, (_, n) => ({
+    id: `m-${n}`, item_id: A, related_item_id: null, subtopic: null, status: "active",
+    updated_at: `2026-09-01T00:00:${String(n).padStart(2, "0")}Z`,
+  }));
+  const db = makeDb({ items: [{ id: A, subtopic: null }], misconceptions });
+  const out = await mod.getKenQuizBatchTool.handler({ limit: 10 }, { db });
+  assert.equal(out.data.misconceptions.length, 50);
+  assert.equal(out.data.misconceptions[0].id, "m-54");
+  assert.ok(!out.data.misconceptions.some((r) => ["m-0", "m-4"].includes(r.id)));
+  // limit_applied is the misconceptions cap, not the item limit (10): the MCP
+  // wrapper prints it as the "shown" count for an object payload.
+  assert.deepEqual(out.meta, { limit_applied: 50, truncated: true, total: 55 });
+});
+
+test("get_ken_quiz_batch at or under 50 misconceptions is not flagged", async () => {
+  const misconceptions = Array.from({ length: 50 }, (_, n) => ({
+    id: `m-${n}`, item_id: A, related_item_id: null, subtopic: null, status: "active",
+    updated_at: `2026-09-01T00:00:${String(n).padStart(2, "0")}Z`,
+  }));
+  const db = makeDb({ items: [{ id: A, subtopic: null }], misconceptions });
+  const out = await mod.getKenQuizBatchTool.handler({ limit: 10 }, { db });
+  assert.equal(out.data.misconceptions.length, 50);
+  assert.deepEqual(out.meta, { limit_applied: 10, truncated: false });
+});
+
+// --- update_ken_area ---------------------------------------------------------
+
+const AREA = () => ({ id: A, name: "Physics", description: "old", source_ref: null, priority: 1 });
+
+test("update_ken_area sets source_ref and leaves omitted fields alone", async () => {
+  const db = makeDb({ areas: [AREA()] });
+  const out = await mod.updateKenAreaTool.handler({ id: A, source_ref: "mtw2hc4joechy2juiim" }, { db });
+  assert.equal(out.data.source_ref, "mtw2hc4joechy2juiim");
+  assert.equal(out.data.name, "Physics");
+  assert.equal(out.data.description, "old");
+  assert.deepEqual(Object.keys(db.updates[0]).sort(), ["source_ref", "updated_at"]);
+});
+
+test("update_ken_area: explicit null clears, and is not the same as omitting", async () => {
+  const db = makeDb({ areas: [{ ...AREA(), source_ref: "x" }] });
+  const out = await mod.updateKenAreaTool.handler({ id: A, source_ref: null }, { db });
+  assert.equal(out.data.source_ref, null);
+  assert.equal(out.data.description, "old");
+});
+
+test("update_ken_area with nothing to change writes nothing", async () => {
+  const db = makeDb({ areas: [AREA()] });
+  await assert.rejects(mod.updateKenAreaTool.handler({ id: A }, { db }), /nothing to change/);
+  assert.equal(db.updates.length, 0);
+});
+
+test("update_ken_area on an unknown id is an error, not a silent no-op", async () => {
+  const db = makeDb({ areas: [AREA()] });
+  await assert.rejects(mod.updateKenAreaTool.handler({ id: B, name: "X" }, { db }), /no area with id/);
+});
+
+test("update_ken_area names the duplicate source_ref instead of passing on a raw 23505", async () => {
+  const db = makeDb({ areas: [AREA()], failWith: { code: "23505", message: "duplicate key value" } });
+  await assert.rejects(
+    mod.updateKenAreaTool.handler({ id: A, source_ref: "mtw2hc4joechy2juiim" }, { db }),
+    /already set on another area/,
+  );
 });

@@ -231,7 +231,7 @@ test("dry_run_dj_playlist is deliberately NOT an MCP tool either", () => {
     "dry_run_dj_playlist is now registered as an MCP tool - was that deliberate?");
 });
 
-test("the tool count is 54 after Ken", () => {
+test("the tool count is 55 after Ken", () => {
   // The number quoted at every reconnect. 36 through step 0 and step 1, which
   // added an endpoint and a non-registered tool on purpose. Step 2 adds three:
   // get_dj_concerts, update_dj_concert, record_dj_feedback - batched into ONE
@@ -252,8 +252,11 @@ test("the tool count is 54 after Ken", () => {
   // record_ken_attempts, create_ken_area, create_ken_item, get_ken_areas,
   // get_ken_items, get_ken_lyric_fragments, get_ken_misconceptions,
   // create_ken_misconception, update_ken_misconception, propose_ken_fact_update.
-  assert.equal(registered.length, 54,
-    `expected 54 registered tools, found ${registered.length}: ` +
+  //
+  // 2026-09-11, +1: update_ken_area, so an area created in conversation can be
+  // linked to its Alfred seed via source_ref.
+  assert.equal(registered.length, 55,
+    `expected 55 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -264,7 +267,7 @@ test("Ken schemas advertise exactly the args their handlers read", () => {
   // `args.<key>` inside it. Tier 3 adds `confirmed`, which defineTool's gate reads.
   const src = readFileSync(join(TOOLS, "ken.ts"), "utf-8");
   const blocks = src.split("defineTool({").slice(1);
-  assert.equal(blocks.length, 11, `expected 11 Ken tools in ken.ts, found ${blocks.length}`);
+  assert.equal(blocks.length, 12, `expected 12 Ken tools in ken.ts, found ${blocks.length}`);
   for (const b of blocks) {
     const name = /name:\s*"([^"]+)"/.exec(b)[1];
     const tier = Number(/tier:\s*(\d)/.exec(b)[1]);
