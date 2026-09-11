@@ -9,8 +9,8 @@ no Workshop code for this job. The prompt below is the whole program.
 - **App / job:** `ken` / `ken_seed_check` (schedule row `b5b2d972-76ae-41a3-a125-959bbfb9b3fe`).
 - **Tools:** Alfred connector only. No Workshop call is needed; see the notes at the bottom.
 - **Prerequisite:** the Alfred connector must have been **reconnected after the 2026-09-11
-  deploy**. `get_ken_areas`, and `app: "ken"` on the platform-run tools, exist only in that
-  manifest.
+  `source_refs` deploy**. `get_ken_areas` with `source_refs`, and `app: "ken"` on the
+  platform-run tools, exist only in that manifest.
 - **Edit rule:** change this file, then paste it into the task. Never edit the task alone.
 
 > ## 🛑 A CHANGE TO THIS FILE DOES NOTHING UNTIL IT IS PASTED INTO THE TASK
@@ -19,7 +19,7 @@ no Workshop code for this job. The prompt below is the whole program.
 > version and Step 8 echoes it. An older version (or none) in a report means the task is running
 > stale text.
 >
-> ### `PROMPT VERSION: 2026-09-11b`
+> ### `PROMPT VERSION: 2026-09-11c`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -83,24 +83,32 @@ Run days are **exactly Monday, Wednesday and Friday.**
 **Not a run day:** go to Step 6 and close as `ok` with
 `details: { run_day: false, skipped: "off_day", local_date, weekday }`. Read nothing else.
 
-### Step 3 — Read the seeds and the areas
+### Step 3 — Read the seeds, then ask which of them already have an area
 
 1. `get_items` with `context_id: "msxh8sz8ci2ldf6t02k"` (the Alfred **Ken** context) and
    `limit: 50`. Keep each item's `id` and `name`. These are the seeds.
-2. `get_ken_areas`. Keep every **non-null** `source_ref`.
 
-**If either response starts with `NOTE: results truncated`, STOP**, with
-`failure_kind: "read_truncated"` and the NOTE as `error_message`. A count taken from a partial
-read is wrong, and it is not obvious which way: missing seeds hide work, and missing areas make
-seeded items look unseeded.
+   **If the response starts with `NOTE: results truncated`, STOP**, with
+   `failure_kind: "read_truncated"` and the NOTE as `error_message`. The Ken context holds more
+   than 50 seeds and `get_items` does not page, so any count from here would be wrong. A loud
+   failure beats a wrong count. If `get_items` errors, STOP with `failure_kind: "alfred_read"`.
 
-If `get_items` errors, STOP with `failure_kind: "alfred_read"`. If `get_ken_areas` errors, STOP
-with `failure_kind: "ken_read"`.
+   **No seeds at all:** N = 0. Go to Step 6 and close as `ok`. Do not call `get_ken_areas`.
+
+2. `get_ken_areas` with `source_refs: [<every seed id from 3.1>]` and `limit: 50`. It returns
+   **only** the areas whose `source_ref` is one of those ids. Keep the `source_ref` of each area
+   that comes back. **Do not read all areas**: you only need to know which seeds are linked.
+
+   `source_ref` is unique per user, so this can never return more areas than the ids you passed,
+   and it cannot truncate. **If it ever starts with `NOTE: results truncated`, STOP anyway**,
+   with `failure_kind: "read_truncated"`: something is wrong that this prompt does not
+   understand. If it errors, STOP with `failure_kind: "ken_read"`.
 
 ### Step 4 — Count the unseeded seeds
 
-A seed is **seeded** when its Alfred `id` is **exactly equal** to some area's `source_ref`.
-Otherwise it is **unseeded**. Let **N** be the number of unseeded seeds.
+A seed is **seeded** when its Alfred `id` is **exactly equal** to the `source_ref` of one of the
+areas returned in 3.2. A seed with no area simply does not come back, and that absence is what
+"unseeded" means. Let **N** be the number of unseeded seeds.
 
 > ⚠️ **THE ID TYPES DIFFER, AND ONLY ONE COMPARISON IS MEANINGFUL.**
 > - Alfred item ids are short **text**, e.g. `mtw2g9lb8cbs0xhsdij`.
@@ -163,7 +171,7 @@ re-stamped, and `details` can only be written while closing.
 - **`status`:** `ok` for every outcome in Steps 2–5 (off day, zero, suppressed, nudged).
   `failed` **only** when a step said STOP.
 - **`details`**, always: `run_day`, `local_date`, `weekday`. On a run day, also `seeds_read`,
-  `areas_read`, `unseeded_count` (N), and `unseeded_ids`. Then **one** of `inbox_item_id`
+  `areas_matched` (the number of areas 3.2 returned), `unseeded_count` (N), and `unseeded_ids`. Then **one** of `inbox_item_id`
   (nudged), `suppressed_by` (pending nudge found), or neither (N = 0). Add
   `inbox_read_truncated: true` if Step 5 set it. If this run was started by hand rather than by
   the schedule, add `manual: true`.
@@ -237,7 +245,7 @@ failure item wearing it would suppress every nudge until it was triaged.
 | `failure_kind` | ACTION |
 |---|---|
 | `run_open` | If the error is an **input validation error naming the allowed `app` values**: *"Redeploy the mcp function, then reconnect the Alfred connector so it refetches the tool manifest."* If it is a **Postgres check-constraint error**: *"platform_runs does not accept app 'ken' — check migration ken_003 is applied."* |
-| `read_truncated` | *"The Ken context or ken_areas has outgrown a capped read (get_items 50, get_ken_areas 20). This job cannot count correctly until those reads page — needs a code change, not a retry."* |
+| `read_truncated` | If it came from **`get_items`**: *"The Alfred Ken context holds more than 50 seeds, and get_items does not page. This job cannot count correctly past 50 — needs a code change, not a retry. Triaging seeds out of the Ken context also clears it."* If it came from **`get_ken_areas`**: *"get_ken_areas truncated a source_refs read, which should be impossible because source_ref is unique per user. Needs investigation."* |
 | `alfred_read`, `ken_read`, `inbox_read`, `inbox_write` | If the error mentions **JWT, token, auth or connector**: *"Reconnect the Alfred v5 connector. Use 'Use your own OAuth client' with client_id `2804f812-ea1a-4827-9443-3421fc4771f5` and a blank secret. Do NOT use 'No client ID — register one automatically'; dynamic registration fails on reconnect."* Otherwise: *"No known remedy for this error — needs investigation."* |
 | `unknown` | *"No known remedy for this error — needs investigation."* |
 
@@ -266,10 +274,10 @@ Nobody may read this. Write it anyway, in exactly this shape:
 
 ```
 Ken seed check — <local_date> (<weekday>)
-  prompt version: 2026-09-11b
+  prompt version: 2026-09-11c
   run id: <id | none — run_open failed>
   run day: <yes | no — skipped>
-  seeds read: <n>   areas read: <n>
+  seeds read: <n>   areas matched: <n>
   unseeded: <n>   <names, if any>
   nudge: <created <id> | suppressed — pending nudge <id> | none — zero unseeded |
           none — off day | none — failed>
@@ -305,8 +313,10 @@ sync does the same). The schedule row currently says `executor: "workshop"`.
 `source_ref` leaves that seed "unseeded", and it is listed in every nudge. Fix it with
 `update_ken_area id=<area uuid> source_ref=<alfred id>` rather than by creating a second area.
 
-**Known ceiling:** `get_ken_areas` has no limit knob and caps at 20. Past 20 areas, Step 3 fails
-every run with `read_truncated`, by design, because counting from a partial read would be wrong.
+**Known ceiling: 50 seeds.** `get_items` caps at 50 and does not page, so past 50 seeds in the
+Ken context Step 3 fails every run with `read_truncated` and raises a weekly failure item. That
+is deliberate: a wrong count is worse than a loud failure. The areas side has no ceiling. The
+`source_refs` read returns at most one area per seed passed, however many areas exist.
 
 **Day-one check:** after the first scheduled firing, call `get_platform_runs` with `app: "ken"`,
 `job: "ken_seed_check"` and confirm a run was stamped and closed.

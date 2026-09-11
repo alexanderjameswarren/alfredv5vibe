@@ -25,6 +25,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // double-quoted, with backslash and quote escaped.
 const pgrstQuote = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 
+// Truncation judged from the exact count, never rows.length >= limit: a result
+// of exactly `limit` rows is complete, and reporting it as cut makes the caller
+// distrust a whole read (the seed check fails on one by design).
+function listMeta(limit: number, rows: unknown[], count: number | null) {
+  return typeof count === "number" && count > rows.length
+    ? { limit_applied: limit, truncated: true, total: count }
+    : { limit_applied: limit, truncated: false };
+}
+
 // ---------------------------------------------------------------------------
 // get_ken_quiz_batch — tier 1
 //
@@ -282,19 +291,35 @@ export const createKenItemTool = defineTool({
 export const getKenAreasTool = defineTool({
   name: "get_ken_areas",
   tier: 1,
-  handler: async (_args: Record<string, unknown>, ctx) => {
-    // Small fixed collection — internal cap, no exposed limit knob.
-    const LIMIT = clampLimit(undefined);
+  handler: async (args: Record<string, unknown>, ctx) => {
+    // source_refs answers "which of these Alfred seeds already have an area?"
+    // — the seed check's whole question — without reading every area. An empty
+    // array is no filter, as with get_ken_items' tags.
+    const sourceRefs = Array.isArray(args.source_refs) && args.source_refs.length > 0
+      ? (args.source_refs as string[])
+      : null;
+    if (sourceRefs && sourceRefs.length > 50) {
+      throw new Error(
+        `get_ken_areas: source_refs takes at most 50 ids, got ${sourceRefs.length}. ` +
+          "Nothing was read.",
+      );
+    }
 
-    const { data, error } = await ctx.db
+    // With source_refs the limit defaults to how many ids were passed.
+    // source_ref is unique per user, so the result cannot exceed that — the
+    // read cannot truncate, and there is nothing to page.
+    const LIMIT = clampLimit((args.limit as number | undefined) ?? sourceRefs?.length);
+
+    let q = ctx.db
       .from("ken_areas")
-      .select("id, name, description, source_ref, priority, created_at")
-      .order("name")
-      .limit(LIMIT);
+      .select("id, name, description, source_ref, priority, created_at", { count: "exact" });
+    if (sourceRefs) q = q.in("source_ref", sourceRefs);
+
+    const { data, error, count } = await q.order("name").limit(LIMIT);
 
     if (error) throw new Error(`get_ken_areas: ${error.message}`);
     const rows = data ?? [];
-    return envelope(rows, { limit_applied: LIMIT, truncated: rows.length >= LIMIT });
+    return envelope(rows, listMeta(LIMIT, rows, count));
   },
 });
 
@@ -304,7 +329,7 @@ export const getKenItemsTool = defineTool({
   handler: async (args: Record<string, unknown>, ctx) => {
     const LIMIT = clampLimit(args.limit as number | undefined);
 
-    let q = ctx.db.from("ken_items").select(ITEM_COLS);
+    let q = ctx.db.from("ken_items").select(ITEM_COLS, { count: "exact" });
 
     // Every filter is a predicate reaching Postgres, applied before the limit.
     q = q.eq("status", (args.status as string | undefined) ?? "active");
@@ -320,11 +345,11 @@ export const getKenItemsTool = defineTool({
 
     q = q.order("created_at", { ascending: false }).limit(LIMIT);
 
-    const { data, error } = await q;
+    const { data, error, count } = await q;
     if (error) throw new Error(`get_ken_items: ${error.message}`);
 
     const rows = data ?? [];
-    return envelope(rows, { limit_applied: LIMIT, truncated: rows.length >= LIMIT });
+    return envelope(rows, listMeta(LIMIT, rows, count));
   },
 });
 
@@ -352,7 +377,9 @@ export const getKenMisconceptionsTool = defineTool({
 
     let q = ctx.db
       .from("ken_misconceptions")
-      .select("id, item_id, related_item_id, subtopic, note, status, created_at, updated_at");
+      .select("id, item_id, related_item_id, subtopic, note, status, created_at, updated_at", {
+        count: "exact",
+      });
 
     q = q.eq("status", (args.status as string | undefined) ?? "active");
     if (args.item_id) {
@@ -371,11 +398,11 @@ export const getKenMisconceptionsTool = defineTool({
 
     q = q.order("updated_at", { ascending: false }).limit(LIMIT);
 
-    const { data, error } = await q;
+    const { data, error, count } = await q;
     if (error) throw new Error(`get_ken_misconceptions: ${error.message}`);
 
     const rows = data ?? [];
-    return envelope(rows, { limit_applied: LIMIT, truncated: rows.length >= LIMIT });
+    return envelope(rows, listMeta(LIMIT, rows, count));
   },
 });
 

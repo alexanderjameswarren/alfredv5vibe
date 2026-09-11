@@ -224,6 +224,92 @@ test("get_ken_quiz_batch at or under 50 misconceptions is not flagged", async ()
   assert.deepEqual(out.meta, { limit_applied: 10, truncated: false });
 });
 
+// --- get_ken_areas -----------------------------------------------------------
+
+const areas = (n) => Array.from({ length: n }, (_, i) => ({
+  id: `a-${String(i).padStart(2, "0")}`, name: `Area ${String(i).padStart(2, "0")}`,
+  source_ref: `seed-${i}`,
+}));
+
+test("get_ken_areas honours limit, clamps it at 50, and defaults to 20", async () => {
+  const db = makeDb({ areas: areas(60) });
+  const dflt = await mod.getKenAreasTool.handler({}, { db });
+  assert.equal(dflt.data.length, 20);
+  assert.deepEqual(dflt.meta, { limit_applied: 20, truncated: true, total: 60 });
+  const fifty = await mod.getKenAreasTool.handler({ limit: 50 }, { db });
+  assert.equal(fifty.data.length, 50);
+  const over = await mod.getKenAreasTool.handler({ limit: 500 }, { db });
+  assert.equal(over.meta.limit_applied, 50);
+});
+
+test("get_ken_areas is not flagged truncated when everything fits", async () => {
+  const db = makeDb({ areas: areas(21) });
+  const out = await mod.getKenAreasTool.handler({ limit: 50 }, { db });
+  assert.equal(out.data.length, 21);
+  assert.equal(out.meta.truncated, false);
+});
+
+test("get_ken_areas with EXACTLY limit areas is not a truncation", async () => {
+  // rows.length >= LIMIT would call this cut, and the seed check would treat a
+  // complete read as unusable.
+  const db = makeDb({ areas: areas(50) });
+  const out = await mod.getKenAreasTool.handler({ limit: 50 }, { db });
+  assert.equal(out.data.length, 50);
+  assert.deepEqual(out.meta, { limit_applied: 50, truncated: false });
+});
+
+test("get_ken_areas source_refs returns only the areas linked to those seeds", async () => {
+  const db = makeDb({ areas: areas(60) });
+  const out = await mod.getKenAreasTool.handler(
+    { source_refs: ["seed-3", "seed-41", "not-an-area"] }, { db });
+  assert.deepEqual(out.data.map((a) => a.source_ref).sort(), ["seed-3", "seed-41"]);
+  // The limit defaults to the ids passed, so 60 areas in the table is no cut.
+  assert.deepEqual(out.meta, { limit_applied: 3, truncated: false });
+});
+
+test("get_ken_areas source_refs cannot truncate even when every id has an area", async () => {
+  const db = makeDb({ areas: areas(60) });
+  const refs = Array.from({ length: 50 }, (_, i) => `seed-${i}`);
+  const out = await mod.getKenAreasTool.handler({ source_refs: refs }, { db });
+  assert.equal(out.data.length, 50);
+  assert.equal(out.meta.truncated, false);
+});
+
+test("get_ken_areas refuses more than 50 source_refs rather than clipping them", async () => {
+  const db = makeDb({ areas: areas(5) });
+  const refs = Array.from({ length: 51 }, (_, i) => `seed-${i}`);
+  await assert.rejects(mod.getKenAreasTool.handler({ source_refs: refs }, { db }), /at most 50/);
+});
+
+test("get_ken_areas with an empty source_refs is the same as omitting it", async () => {
+  const db = makeDb({ areas: areas(30) });
+  const out = await mod.getKenAreasTool.handler({ source_refs: [] }, { db });
+  assert.equal(out.data.length, 20);
+  assert.deepEqual(out.meta, { limit_applied: 20, truncated: true, total: 30 });
+});
+
+// --- exact-count truncation on the other two list reads ----------------------
+
+const stamp = (i) => `2026-09-01T00:00:${String(i).padStart(2, "0")}Z`;
+
+test("get_ken_items: exactly limit rows is complete; one more is a truncation with the total", async () => {
+  const rows = (n) => Array.from({ length: n }, (_, i) => ({ id: `i-${i}`, status: "active", created_at: stamp(i) }));
+  const exact = await mod.getKenItemsTool.handler({}, { db: makeDb({ items: rows(20) }) });
+  assert.deepEqual(exact.meta, { limit_applied: 20, truncated: false });
+  const over = await mod.getKenItemsTool.handler({}, { db: makeDb({ items: rows(21) }) });
+  assert.deepEqual(over.meta, { limit_applied: 20, truncated: true, total: 21 });
+});
+
+test("get_ken_misconceptions: exactly limit rows is complete; one more is a truncation with the total", async () => {
+  const rows = (n) => Array.from({ length: n }, (_, i) => ({
+    id: `m-${i}`, item_id: A, related_item_id: null, subtopic: null, status: "active", updated_at: stamp(i),
+  }));
+  const exact = await mod.getKenMisconceptionsTool.handler({}, { db: makeDb({ misconceptions: rows(20) }) });
+  assert.deepEqual(exact.meta, { limit_applied: 20, truncated: false });
+  const over = await mod.getKenMisconceptionsTool.handler({}, { db: makeDb({ misconceptions: rows(21) }) });
+  assert.deepEqual(over.meta, { limit_applied: 20, truncated: true, total: 21 });
+});
+
 // --- update_ken_area ---------------------------------------------------------
 
 const AREA = () => ({ id: A, name: "Physics", description: "old", source_ref: null, priority: 1 });

@@ -1580,10 +1580,15 @@ export function createMcpServer(token: string) {
     {
       title: "Get Ken Areas",
       description:
-        "List Ken's subject areas — id, name, description, source_ref, priority — alphabetically. A small fixed collection, so there are no filters and no limit knob; it is capped internally at 20 and the response NOTE says so if that ever cuts. Use it to resolve an area_id, and to check source_ref before seeding an area from Alfred. Tier 1, read-only.",
-      inputSchema: {},
+        "List Ken's subject areas — id, name, description, source_ref, priority — alphabetically. Use it to resolve an area_id. " +
+        "To ask WHICH ALFRED SEEDS ALREADY HAVE AN AREA, pass their ids as `source_refs` rather than reading every area: only the linked areas come back, and an id with no area is simply absent — that absence is what 'unseeded' means. source_ref is unique per user, so a source_refs read can never return more areas than ids passed and never truncates. " +
+        "Capped by `limit`; the response NOTE says so when it cuts. Tier 1, read-only.",
+      inputSchema: {
+        source_refs: z.array(z.string()).optional().describe("Alfred item ids — text like 'mtw2g9lb8cbs0xhsdij', NOT uuids. Returns only areas whose source_ref is one of these. Max 50; more is refused. An empty array is the same as omitting it."),
+        limit: z.coerce.number().optional().describe("Max areas (cap 50). Defaults to the number of source_refs when those are passed, otherwise 20."),
+      },
     },
-    async () => runToolForMcp(getKenAreasTool, {}, token),
+    async (args) => runToolForMcp(getKenAreasTool, args, token),
   );
 
   server.registerTool(
