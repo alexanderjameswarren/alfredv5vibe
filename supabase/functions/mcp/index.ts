@@ -37,6 +37,19 @@ import {
 import { getDjArtistsTool, upsertDjArtistTool, recordDjArtistTagTool, getDjArtistTagsTool } from "../_shared/tools/dj-artists.ts";
 import { recordDjAlbumTool, getDjAlbumsTool } from "../_shared/tools/dj-albums.ts";
 import {
+  getKenQuizBatchTool,
+  recordKenAttemptsTool,
+  createKenAreaTool,
+  createKenItemTool,
+  getKenAreasTool,
+  getKenItemsTool,
+  getKenLyricFragmentsTool,
+  getKenMisconceptionsTool,
+  createKenMisconceptionTool,
+  updateKenMisconceptionTool,
+  proposeKenFactUpdateTool,
+} from "../_shared/tools/ken.ts";
+import {
   getItems,
   searchItems,
   getExecutionHistory,
@@ -1458,6 +1471,204 @@ export function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(getPlatformSchedulesTool, args, token),
+  );
+
+  // --- Ken -------------------------------------------------------------------
+  // Handlers in _shared/tools/ken.ts. Each schema below advertises exactly the
+  // args.* its handler reads — index.test.mjs checks that mechanically.
+
+  server.registerTool(
+    "get_ken_quiz_batch",
+    {
+      title: "Get Ken Quiz Batch",
+      description:
+        "Start or continue a quiz. Returns a weighted-random batch of askable Ken items PLUS their recent attempts and the active misconceptions touching them, in ONE call — enough for the next several questions with no further reads. Selection runs in Postgres (ken_select_batch), weighted by item priority and area priority; only active items are eligible. " +
+        "Response: { items, attempts, misconceptions }. `attempts` are the most recent across the batch, capped at 5× the number of items overall — not a guaranteed five per item. `misconceptions` are the active ones anchored on a batch item on EITHER side of a confusion pair; subtopic-only misconceptions (no item) are NOT included — read those with get_ken_misconceptions. " +
+        "Items never carry tricky_fragments: call get_ken_lyric_fragments before quizzing a lyric item. Buffer results in the conversation and flush them with record_ken_attempts at natural seams, not after every question. Tier 1, read-only.",
+      inputSchema: {
+        area_id: z.string().optional().describe("Restrict the batch to one area (uuid from get_ken_areas). Omit to interleave across every area — the default, and usually right, because mixing cold topics in is the point."),
+        mode: z.enum(["recall", "concept", "lyric", "procedure"]).optional().describe("Restrict to one mode. recall = hard facts said cold, graded near-exact. concept = vocabulary and fluency; you evaluate a free-text answer and the feedback is the teaching. lyric = fill-in-the-blank against Alex's OWN stored lyric text. procedure = a method run against an input you generate (e.g. Doomsday weekday); nothing is stored to compare against — compute the answer, never estimate."),
+        limit: z.coerce.number().optional().describe("Items in the batch (default 20, cap 50). Attempts and misconceptions ride along for every item returned."),
+      },
+    },
+    async (args) => runToolForMcp(getKenQuizBatchTool, args, token),
+  );
+
+  server.registerTool(
+    "record_ken_attempts",
+    {
+      title: "Record Ken Attempts",
+      description:
+        "Flush buffered quiz results. One call appends a whole batch to ken_attempts and updates each item's mastery in place (via ken_record_attempts); returns the new mastery per item so you can see the move without a re-read. " +
+        "Hold results in the conversation and flush at natural seams — a topic change, a pause, the batch running dry — NOT once per question. " +
+        "⚠️ Max 50 attempts per call; over that the call is REJECTED and nothing is written, so flush more often rather than splitting after the fact. Tier 1 — an append plus own progress state.",
+      inputSchema: {
+        attempts: z.array(z.object({
+          item_id: z.string().describe("uuid of the ken_items row that was asked."),
+          result: z.enum(["hit", "partial", "miss"]).describe("hit = correct. partial = partly correct. miss = wrong, or no answer."),
+          user_answer: z.string().optional().describe("What Alex actually answered. Worth keeping on a partial or miss: it is what lets a later session spot the SAME wrong answer recurring before it becomes a misconception."),
+          ken_assessment: z.string().optional().describe("Your one-line judgement of the answer — what was right, what was confused. Shows up in get_ken_quiz_batch's attempts window for pattern-spotting."),
+        })).describe("The buffered results, 1-50 per call, one entry per question asked."),
+      },
+    },
+    async (args) => runToolForMcp(recordKenAttemptsTool, args, token),
+  );
+
+  server.registerTool(
+    "create_ken_area",
+    {
+      title: "Create Ken Area",
+      description:
+        "Create a top-level subject area. FLAT BY DESIGN: an area holds items directly and ken_items.subtopic is the only sub-grouping — there are no nested areas, so never create an area to stand in for a subtopic. Check get_ken_areas first. Tier 1, additive.",
+      inputSchema: {
+        name: z.string().describe("Area name, e.g. 'Physics' or 'Music theory'."),
+        description: z.string().optional().describe("What the area covers, in a sentence."),
+        source_ref: z.string().optional().describe("The Alfred item id this area was seeded from (Alfred ids are text, not uuids). Omit for an area created directly in conversation. Unique per user — a second area with the same source_ref is REFUSED, which is what keeps the periodic Alfred seed check idempotent."),
+        priority: z.coerce.number().optional().describe("Heat multiplier applied over every item in the area during quiz selection. Default 1.0; must be > 0. Lower it to cool a whole area — it can be cooled but never silenced, because the occasional ambush from a cold topic is the point of interleaving."),
+      },
+    },
+    async (args) => runToolForMcp(createKenAreaTool, args, token),
+  );
+
+  server.registerTool(
+    "create_ken_item",
+    {
+      title: "Create Ken Item",
+      description:
+        "Add one quizzable unit — a fact, concept, lyric line or procedure — to an area. Check get_ken_items first to avoid a near-duplicate. " +
+        "Defaults are applied by this tool, not the database, and any of them can be overridden: `accuracy` is 'loose' for concept and 'strict' for recall, lyric and procedure; `volatility` is 'stable' on strict items and FORCED to null on loose ones. " +
+        "⚠️ A strict recall item saved without a ground_truth is NOT ASKABLE — get_ken_quiz_batch skips it until it has one. Capture is deliberately friction-free; the strict guarantee is enforced at the point of asking. " +
+        "⚠️ To change the answer of an EXISTING fact, do not create a second item — use propose_ken_fact_update, which keeps the old answer as history. Tier 1, additive.",
+      inputSchema: {
+        area_id: z.string().describe("uuid of the area, from get_ken_areas or create_ken_area."),
+        mode: z.enum(["recall", "concept", "lyric", "procedure"]).describe("recall = a hard fact said cold, graded near-exact. concept = vocabulary and fluency; you evaluate free text and the feedback IS the teaching. lyric = fill-in-the-blank against Alex's OWN lyric text, stored in `prompt` — never reproduce lyrics from the web or from model memory. procedure = a method executed against an input you generate (Doomsday weekday, interval spelling, unit conversion); you invent the question and compute the answer, so there is nothing stored to compare against."),
+        prompt: z.string().describe("The question or cue. For a lyric item, the lyric text itself, as Alex supplied it. For a procedure item, the method — the concrete question is generated fresh each time."),
+        accuracy: z.enum(["strict", "loose"]).optional().describe("strict = you must be right: back every checkable claim with the stored ground_truth or a live search, never from memory alone (on a procedure: compute deterministically, never estimate). loose = directionally right is fine. Omit to take the mode default: loose for concept, strict for everything else."),
+        volatility: z.enum(["stable", "volatile"]).optional().describe("Strict items only — IGNORED and stored as null when accuracy is loose. stable = true once and done (historical dates, settled science). volatile = the value drifts; store the last-known answer with verified_at so it can be re-checked on age ('as of March it was X — still current?'). Defaults to stable."),
+        ground_truth: z.string().optional().describe("The verified answer for a strict item. Omit if not yet verified — the item is saved but not asked until it has one. IGNORED for mode=procedure, which has no stored answer by design."),
+        verified_at: z.string().optional().describe("ISO timestamp of when ground_truth was checked. Pass it whenever you supply a verified answer, and always for a volatile fact — it is what re-checking on age reads."),
+        subtopic: z.string().optional().describe("Free-text grouping within the area, e.g. 'wave mechanics'. The ONLY sub-grouping Ken has, and mastery rollups are derived by it — reuse an existing spelling (see get_ken_items) rather than coining a near-duplicate."),
+        tags: z.array(z.string()).optional().describe("Cross-cutting labels. get_ken_items filters on them with any-of matching."),
+        tricky_fragments: z.unknown().optional().describe("Lyric items only; leave it out everywhere else. JSON marking the mondegreen-prone words to blank — 'kiss the sky', not 'kiss this guy'. Heavy: never returned by list reads, fetched on demand with get_ken_lyric_fragments."),
+        priority: z.coerce.number().optional().describe("Item heat within rotation. Default 1.0; must be > 0. Lower it to cool an item without hiding it — a cooled item still turns up occasionally, by design."),
+      },
+    },
+    async (args) => runToolForMcp(createKenItemTool, args, token),
+  );
+
+  server.registerTool(
+    "get_ken_areas",
+    {
+      title: "Get Ken Areas",
+      description:
+        "List Ken's subject areas — id, name, description, source_ref, priority — alphabetically. A small fixed collection, so there are no filters and no limit knob; it is capped internally at 20 and the response NOTE says so if that ever cuts. Use it to resolve an area_id, and to check source_ref before seeding an area from Alfred. Tier 1, read-only.",
+      inputSchema: {},
+    },
+    async () => runToolForMcp(getKenAreasTool, {}, token),
+  );
+
+  server.registerTool(
+    "get_ken_items",
+    {
+      title: "Get Ken Items",
+      description:
+        "Browse or search Ken items, newest first. ACTIVE items only unless `status` says otherwise; every filter is applied in Postgres before the limit. tricky_fragments is never included (use get_ken_lyric_fragments). " +
+        "Use it to find an item_id, to check for an existing item before creating one, or to review what an area holds. To QUIZ, use get_ken_quiz_batch — it selects, and brings attempts and misconceptions along. Tier 1, read-only.",
+      inputSchema: {
+        area_id: z.string().optional().describe("Filter to one area (uuid)."),
+        subtopic: z.string().optional().describe("Filter to one subtopic — exact match."),
+        mode: z.enum(["recall", "concept", "lyric", "procedure"]).optional().describe("Filter to one mode."),
+        tags: z.array(z.string()).optional().describe("Items carrying ANY of these tags."),
+        search_text: z.string().optional().describe("Case-insensitive substring match on `prompt` only — not ground_truth, not subtopic."),
+        status: z.enum(["active", "deprecated"]).optional().describe("Defaults to 'active'. 'deprecated' returns retired items, including superseded facts whose superseded_by points at the replacement — the history that lets Ken un-teach an old answer."),
+        limit: z.coerce.number().optional().describe("Max rows (default 20, cap 50)."),
+      },
+    },
+    async (args) => runToolForMcp(getKenItemsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_ken_lyric_fragments",
+    {
+      title: "Get Ken Lyric Fragments",
+      description:
+        "Lazy-load the one heavy column for a single item: returns { id, prompt, tricky_fragments }. Call it only when about to quiz a lyric item — quiz batches and list reads deliberately leave tricky_fragments out. An item_id matching no item is an error. Tier 1, read-only.",
+      inputSchema: {
+        item_id: z.string().describe("uuid of the lyric item."),
+      },
+    },
+    async (args) => runToolForMcp(getKenLyricFragmentsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_ken_misconceptions",
+    {
+      title: "Get Ken Misconceptions",
+      description:
+        "Read curated misconceptions — durable, qualitative error patterns ('often conflates timbre and tone; the distinction is X') — most recently updated first. ACTIVE only unless `status` says otherwise. A misconception is scoped to an item, a confusion PAIR of items, or a subtopic. " +
+        "⚠️ `item_id` matches only misconceptions ANCHORED on that item, not ones where it is the related_item_id half of a pair. get_ken_quiz_batch matches both sides. Tier 1, read-only.",
+      inputSchema: {
+        item_id: z.string().optional().describe("Misconceptions anchored on this item (its item_id column, not related_item_id)."),
+        subtopic: z.string().optional().describe("Misconceptions scoped to this subtopic — exact match."),
+        status: z.enum(["active", "resolved"]).optional().describe("Defaults to 'active'. 'resolved' = patterns that stopped recurring, kept as history."),
+        limit: z.coerce.number().optional().describe("Max rows (default 20, cap 50)."),
+      },
+    },
+    async (args) => runToolForMcp(getKenMisconceptionsTool, args, token),
+  );
+
+  server.registerTool(
+    "create_ken_misconception",
+    {
+      title: "Create Ken Misconception",
+      description:
+        "Record a durable misconception: a specific, RECURRING, qualitative error pattern — the part a mastery score cannot capture. Write sparingly and deliberately, once a pattern has actually recurred (the attempts window in get_ken_quiz_batch is where you spot it); never buffer single misses here. Check get_ken_misconceptions first and update an existing pattern rather than duplicating it. " +
+        "⚠️ SCOPE IS REQUIRED: pass item_id, subtopic, or both — the database refuses a misconception with neither. For a confusion between two items pass item_id AND related_item_id; the pair is the unit. Tier 1, additive.",
+      inputSchema: {
+        note: z.string().describe("The pattern and its correction, in a sentence or two — e.g. 'often conflates timbre and tone; the distinction is X'."),
+        item_id: z.string().optional().describe("uuid of the item the error is about."),
+        related_item_id: z.string().optional().describe("The OTHER item in a confusion pair. Must differ from item_id. If that item is later removed the misconception survives, because it is still true of the one that remains."),
+        subtopic: z.string().optional().describe("Scope to a subtopic when the error spans several items rather than one."),
+      },
+    },
+    async (args) => runToolForMcp(createKenMisconceptionTool, args, token),
+  );
+
+  server.registerTool(
+    "update_ken_misconception",
+    {
+      title: "Update Ken Misconception",
+      description:
+        "Revise a misconception's note, or mark it resolved once it has stopped recurring (resolved rows drop out of quiz batches and default reads but are kept). Pass `note`, `status`, or both — with neither, the only effect is bumping updated_at. Scope (item_id, related_item_id, subtopic) cannot be changed here; create a new misconception and resolve the old one. An id matching no row is an error. Tier 2 — updates an existing row; audited and reversible.",
+      inputSchema: {
+        id: z.string().describe("uuid of the misconception, from get_ken_misconceptions or a quiz batch."),
+        note: z.string().optional().describe("Replacement text. REPLACES the whole note — it does not append."),
+        status: z.enum(["active", "resolved"]).optional().describe("'resolved' = no longer recurring. 'active' re-opens one that came back."),
+      },
+    },
+    async (args) => runToolForMcp(updateKenMisconceptionTool, args, token),
+  );
+
+  server.registerTool(
+    "propose_ken_fact_update",
+    {
+      title: "Propose Ken Fact Update",
+      description:
+        "Supersede the answer to a fact that has CHANGED — a volatile value drifted, or a stored answer was wrong. NEVER an overwrite: writes a NEW active item carrying the new ground_truth (area, subtopic, tags, mode, accuracy, volatility and priority copied from the old one), then flips the old item to 'deprecated' with superseded_by pointing at the replacement. The old row is the history that lets Ken actively un-teach a drilled-in wrong answer. " +
+        "🛑 TIER 3 — TWO CALLS. The first call, without `confirmed`, writes NOTHING and returns a proposal. Show Alex the change — old answer, new answer, and your source — and only after he agrees, call again with the same arguments plus `confirmed: true`. " +
+        "⚠️ The replacement starts with fresh mastery (it is not copied) and does NOT carry tricky_fragments. Refused if the item is already deprecated. Not for procedure items, which have no stored answer.",
+      inputSchema: {
+        item_id: z.string().describe("uuid of the CURRENT active item whose answer changed."),
+        ground_truth: z.string().describe("The new, verified answer."),
+        prompt: z.string().optional().describe("Replacement question text, only if the wording must change too. Omit to keep the old prompt."),
+        verified_at: z.string().optional().describe("ISO timestamp of when the new answer was verified. Defaults to now — pass it only if the check happened earlier."),
+        confirmed: z
+          .boolean()
+          .optional()
+          .describe("Tier-3 gate. Set to true on the second call, after Alex has agreed, to actually write. Omit / false on the first call to see a proposal."),
+      },
+    },
+    async (args) => runToolForMcp(proposeKenFactUpdateTool, args, token),
   );
 
   return server;

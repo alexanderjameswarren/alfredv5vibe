@@ -231,7 +231,7 @@ test("dry_run_dj_playlist is deliberately NOT an MCP tool either", () => {
     "dry_run_dj_playlist is now registered as an MCP tool - was that deliberate?");
 });
 
-test("the tool count is 43 after the Jazz thread", () => {
+test("the tool count is 54 after Ken", () => {
   // The number quoted at every reconnect. 36 through step 0 and step 1, which
   // added an endpoint and a non-registered tool on purpose. Step 2 adds three:
   // get_dj_concerts, update_dj_concert, record_dj_feedback - batched into ONE
@@ -247,9 +247,35 @@ test("the tool count is 43 after the Jazz thread", () => {
   // 2026-09-08, +2 for the Jazz thread: get_dj_albums (coverage as a fraction)
   // and record_dj_album (the memory — the canon is knowledge the model holds,
   // so a suggestion that is not written is a suggestion a later session repeats).
-  assert.equal(registered.length, 43,
-    `expected 43 registered tools, found ${registered.length}: ` +
+  //
+  // 2026-09-11, +11 for Ken, all additions: get_ken_quiz_batch,
+  // record_ken_attempts, create_ken_area, create_ken_item, get_ken_areas,
+  // get_ken_items, get_ken_lyric_fragments, get_ken_misconceptions,
+  // create_ken_misconception, update_ken_misconception, propose_ken_fact_update.
+  assert.equal(registered.length, 54,
+    `expected 54 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
+});
+
+test("Ken schemas advertise exactly the args their handlers read", () => {
+  // A param honored but unadvertised is invisible to every future session; one
+  // advertised but ignored is a lie to the caller. The handler is the source of
+  // truth, so this reads ken.ts itself: one block per defineTool call, and every
+  // `args.<key>` inside it. Tier 3 adds `confirmed`, which defineTool's gate reads.
+  const src = readFileSync(join(TOOLS, "ken.ts"), "utf-8");
+  const blocks = src.split("defineTool({").slice(1);
+  assert.equal(blocks.length, 11, `expected 11 Ken tools in ken.ts, found ${blocks.length}`);
+  for (const b of blocks) {
+    const name = /name:\s*"([^"]+)"/.exec(b)[1];
+    const tier = Number(/tier:\s*(\d)/.exec(b)[1]);
+    const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+    if (tier === 3) read.add("confirmed");
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    const advertised = Object.keys(t.cfg.inputSchema ?? {}).sort();
+    assert.deepEqual(advertised, [...read].sort(),
+      `${name}: schema advertises [${advertised}] but the handler reads [${[...read].sort()}]`);
+  }
 });
 
 test("no duplicate tool names", () => {
