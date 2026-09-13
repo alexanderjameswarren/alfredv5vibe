@@ -27,7 +27,24 @@ export default function StatsBar({
       <span>Loop: <strong className="text-dark">{loopCount}</strong></span>
       <span>Hits: <strong className="text-success">{hitCount}</strong></span>
       <span>Misses: <strong className="text-destructive">{missCount}</strong></span>
-      <span>Accuracy: <strong className="text-dark">{sessionStats.accuracyPercent}%</strong></span>
+      <span>Session Accuracy: <strong className="text-dark">{sessionStats.accuracyPercent}%</strong></span>
+      {/* The current pass through the snippet, so a clean run reads 100% even
+          when earlier fumbles are still dragging the session average down. */}
+      <span>
+        Playthrough Accuracy:{" "}
+        <strong className={
+          sessionStats.hasPlaythrough && sessionStats.playthroughAccuracyPercent === 100
+            ? "text-success"
+            : "text-dark"
+        }>
+          {sessionStats.hasPlaythrough ? `${sessionStats.playthroughAccuracyPercent}%` : "—"}
+        </strong>
+        {sessionStats.hasPlaythrough && (
+          <span className="ml-1 opacity-70">
+            ({sessionStats.playthroughHits}/{sessionStats.playthroughScored})
+          </span>
+        )}
+      </span>
       {sessionStats.avgTimingDeltaMs !== 0 && (
         <span>
           Avg timing: <strong className="text-dark">

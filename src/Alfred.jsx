@@ -60,15 +60,17 @@ import {
   Settings,
   Archive,
   Sparkles,
+  Activity,
   Wifi,
   WifiOff,
-  Home,
+  House,
   Inbox,
   FolderOpen,
   Calendar,
-  Lightbulb,
-  Star,
-  ClipboardList,
+  CalendarClock,
+  Navigation2,
+  File,
+  Layers,
   Music,
   Pin,
   Bot,
@@ -99,6 +101,88 @@ import {
 } from "./utils/collectionMembers";
 import SamPlayer from "./sam/SamPlayer";
 import TimerPage from "./timer/TimerPage";
+
+// --- Alfred's icon vocabulary (Step 12.10) ----------------------------------
+//
+// ONE map, so a context looks like a context wherever you meet it: in the nav,
+// on a pinned card, at the top of its own page, and on a chip inside an event.
+//
+// Before this the only icons in the app lived inside the mobile drawer's own
+// array and nothing else referenced them. That is exactly how Intentions came
+// to be a lightbulb in the menu while its chip was something else entirely —
+// two vocabularies, neither aware of the other. A second list is the bug.
+//
+// Keyed by OBJECT, not by view: "item" rather than "memories", because what
+// the reader is identifying is the record, not the screen it happens to be on.
+// The Memories tab therefore carries the item glyph, and the Schedule tab the
+// schedule glyph, while a single event carries its own. The two entries that
+// are screens rather than objects — home and inbox — live here too, because
+// the nav needs them and there is no second place for them to go.
+const OBJECT_ICONS = {
+  home: House,
+  inbox: Inbox,
+  context: FolderOpen,
+  schedule: Calendar,
+  event: CalendarClock,
+  intention: Navigation2,
+  item: File,
+  collection: Layers,
+  // A run of an event. Deliberately NOT a play triangle: bare Play is already
+  // the Start/Continue BUTTON on every event row, so a play-ish glyph beside
+  // the title would put a near-twin of a control next to the thing the control
+  // acts on. A pulse says "live" and collides with nothing.
+  execution: Activity,
+  timer: Timer,
+  sam: Music,
+  games: Gamepad2,
+};
+
+/**
+ * The glyph for one of Alfred's objects.
+ *
+ * The size is passed in rather than fixed, because the same glyph appears at
+ * three scales: 14px on an event-card chip, 16px in the nav and on a card row,
+ * and 24px beside a page title. `aria-hidden` on all of them — every one of
+ * these sits next to the name it illustrates, so announcing it would just read
+ * the same thing twice.
+ *
+ * `align="first-line"` is for a glyph that leads a title which can WRAP. The
+ * default centring is right for a nav tab or a chip, where there is exactly
+ * one line; on a card whose name runs to three, it floats the glyph down to
+ * the vertical middle of the paragraph, where it stops looking attached to the
+ * name at all. Pairs with `items-start` on the row.
+ *
+ * The offset is in `em` deliberately: it has to hold at 14px on an event row
+ * and at 24px on a page header, and one fixed pixel value cannot do both.
+ * 0.2em lands within half a pixel of true first-line centring at every size
+ * these titles actually use.
+ */
+function ObjectIcon({ type, className = "w-4 h-4", align = "center" }) {
+  const Glyph = OBJECT_ICONS[type];
+  if (!Glyph) return null;
+  const offset = align === "first-line" ? " mt-[0.2em]" : "";
+  return <Glyph className={`${className} shrink-0${offset}`} aria-hidden="true" />;
+}
+
+// The nav, as data. Rendered twice — a row of tabs on desktop, a list in the
+// mobile drawer — from this one array, so the two cannot drift again.
+//
+// `count` names which counter decorates the label. `remembersReturn` marks the
+// two destinations that record where you came from, so their own Back works;
+// it was previously spelled as a `key === "sam" || key === "timer"` test in
+// the drawer and as two hand-written onNavigate bodies on desktop.
+const NAV_ITEMS = [
+  { key: "home", label: "Home", icon: "home" },
+  { key: "inbox", label: "Inbox", icon: "inbox", count: "inbox" },
+  { key: "contexts", label: "Contexts", icon: "context" },
+  { key: "schedule", label: "Schedule", icon: "schedule", count: "schedule" },
+  { key: "intentions", label: "Intentions", icon: "intention" },
+  { key: "memories", label: "Memories", icon: "item" },
+  { key: "collections", label: "Collections", icon: "collection" },
+  { key: "timer", label: "Timer", icon: "timer", remembersReturn: true },
+  { key: "sam", label: "Sam", icon: "sam", remembersReturn: true },
+  { key: "games", label: "Games", icon: "games" },
+];
 
 const storage = {
   // Map key prefixes to table names
@@ -1665,6 +1749,22 @@ export default function Alfred() {
   function guardedSetView(newView) {
     if (!confirmDiscardIfDirty()) return;
     setView(newView);
+  }
+
+  // The counter for one NAV_ITEMS entry — Step 12.11.
+  //
+  // Returns the NUMBER, not a formatted label, because the desktop tabs drop
+  // their text below xl and the count has to survive that. A tab reading just
+  // an inbox glyph tells you nothing about whether there is anything in it.
+  //
+  // Zero renders nothing rather than "0": an empty inbox is the goal, and the
+  // tab should look calm when you get there.
+  function navCount(item) {
+    const counts = {
+      inbox: inboxItems.length,
+      schedule: allNonArchivedEvents.length,
+    };
+    return item.count ? counts[item.count] || 0 : 0;
   }
 
   useEffect(() => {
@@ -4960,23 +5060,12 @@ export default function Alfred() {
               </div>
             </div>
             <div className="p-2">
-              {[
-                { key: "home", label: "Home", icon: <Home className="w-4 h-4" /> },
-                { key: "inbox", label: `Inbox${inboxItems.length > 0 ? ` (${inboxItems.length})` : ""}`, icon: <Inbox className="w-4 h-4" /> },
-                { key: "contexts", label: "Contexts", icon: <FolderOpen className="w-4 h-4" /> },
-                { key: "schedule", label: `Schedule${allNonArchivedEvents.length > 0 ? ` (${allNonArchivedEvents.length})` : ""}`, icon: <Calendar className="w-4 h-4" /> },
-                { key: "intentions", label: "Intentions", icon: <Lightbulb className="w-4 h-4" /> },
-                { key: "memories", label: "Memories", icon: <Star className="w-4 h-4" /> },
-                { key: "collections", label: "Collections", icon: <ClipboardList className="w-4 h-4" /> },
-                { key: "timer", label: "Timer", icon: <Timer className="w-4 h-4" /> },
-                { key: "sam", label: "Sam", icon: <Music className="w-4 h-4" /> },
-                { key: "games", label: "Games", icon: <Gamepad2 className="w-4 h-4" /> },
-              ].map((item) => (
+              {NAV_ITEMS.map((item) => (
                 <button
                   key={item.key}
                   onClick={() => {
                     if (!confirmDiscardIfDirty()) return;
-                    if (item.key === "sam" || item.key === "timer") setPreviousView(view);
+                    if (item.remembersReturn) setPreviousView(view);
                     setView(item.key);
                     setMenuOpen(false);
                   }}
@@ -4987,7 +5076,13 @@ export default function Alfred() {
                   }`}
                 >
                   <span className="flex items-center gap-2">
-                    {item.icon} {item.label}
+                    <ObjectIcon type={item.icon} />
+                    {item.label}
+                    {navCount(item) > 0 && (
+                      <span className="text-xs tabular-nums opacity-75">
+                        {navCount(item)}
+                      </span>
+                    )}
                   </span>
                 </button>
               ))}
@@ -5058,128 +5153,69 @@ export default function Alfred() {
             </div>
           </div>
 
-          {/* Desktop navigation tabs */}
-          <nav className="flex gap-2 mt-3 pb-1">
-            <AppLink
-              view="home"
-              onNavigate={() => guardedSetView("home")}
-              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
-                view === "home"
-                  ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-foreground border border-border hover:border-primary"
-              }`}
-            >
-              Home
-            </AppLink>
-            <AppLink
-              view="inbox"
-              onNavigate={() => guardedSetView("inbox")}
-              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
-                view === "inbox"
-                  ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-foreground border border-border hover:border-primary"
-              }`}
-            >
-              Inbox {inboxItems.length > 0 && `(${inboxItems.length})`}
-            </AppLink>
-            <AppLink
-              view="contexts"
-              onNavigate={() => guardedSetView("contexts")}
-              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
-                view === "contexts"
-                  ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-foreground border border-border hover:border-primary"
-              }`}
-            >
-              Contexts
-            </AppLink>
-            <AppLink
-              view="schedule"
-              onNavigate={() => guardedSetView("schedule")}
-              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
-                view === "schedule"
-                  ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-foreground border border-border hover:border-primary"
-              }`}
-            >
-              Schedule{" "}
-              {allNonArchivedEvents.length > 0 &&
-                `(${allNonArchivedEvents.length})`}
-            </AppLink>
-            <AppLink
-              view="intentions"
-              onNavigate={() => guardedSetView("intentions")}
-              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
-                view === "intentions"
-                  ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-foreground border border-border hover:border-primary"
-              }`}
-            >
-              Intentions
-            </AppLink>
-            <AppLink
-              view="memories"
-              onNavigate={() => guardedSetView("memories")}
-              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
-                view === "memories"
-                  ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-foreground border border-border hover:border-primary"
-              }`}
-            >
-              Memories
-            </AppLink>
-            <AppLink
-              view="collections"
-              onNavigate={() => guardedSetView("collections")}
-              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
-                view === "collections"
-                  ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-foreground border border-border hover:border-primary"
-              }`}
-            >
-              Collections
-            </AppLink>
-            <AppLink
-              view="timer"
-              onNavigate={() => {
-                if (!confirmDiscardIfDirty()) return;
-                setPreviousView(view);
-                setView("timer");
-              }}
-              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
-                view === "timer"
-                  ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-foreground border border-border hover:border-primary"
-              }`}
-            >
-              Timer
-            </AppLink>
-            <AppLink
-              view="sam"
-              onNavigate={() => {
-                if (!confirmDiscardIfDirty()) return;
-                setPreviousView(view);
-                setView("sam");
-              }}
-              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
-                view === "sam"
-                  ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-foreground border border-border hover:border-primary"
-              }`}
-            >
-              Sam
-            </AppLink>
-            <AppLink
-              view="games"
-              onNavigate={() => guardedSetView("games")}
-              className={`inline-flex items-center px-4 py-2 rounded whitespace-nowrap min-h-[44px] ${
-                view === "games"
-                  ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-foreground border border-border hover:border-primary"
-              }`}
-            >
-              Games
-            </AppLink>
+          {/* Desktop navigation tabs — Step 12.10.
+
+              Was ten hand-written AppLinks, each repeating the same class
+              string and its own copy of the active-state ternary. They are now
+              one map over NAV_ITEMS, which is the same array the mobile drawer
+              renders.
+
+              The icons are the reason for the merge, not a side effect of it:
+              adding a glyph to each of two independent lists is precisely how
+              the drawer's icons drifted from everything else in the first
+              place. One array, one vocabulary, no way to update half of it. */}
+          {/* Step 12.11. This bar has to hold ten destinations from 640px —
+              where the mobile drawer stops — up to a wide desktop, and every
+              one of them has to stay ONE tap away. That rules out an overflow
+              menu: burying Sam behind a chevron is the one outcome worth
+              avoiding.
+
+              So the tabs compact instead of collapsing, in three tiers:
+
+                640–1023   icon only, ~44px each — all ten fit in ~480px
+                1024–1279  icon + label, tighter padding and text-sm
+                1280+      icon + label, full padding
+
+              `flex-wrap` is the safety net under all three. If a label ever
+              runs longer than the arithmetic above assumes, the bar takes a
+              second row rather than clipping Games off the end — a wrapped tab
+              is still one tap, a clipped one is unreachable.
+
+              The count survives the label: an inbox glyph on its own says
+              nothing about whether there is anything in it, so the number
+              renders separately and stays at every width. */}
+          <nav className="flex flex-wrap gap-2 mt-3 pb-1">
+            {NAV_ITEMS.map((item) => {
+              const count = navCount(item);
+              return (
+                <AppLink
+                  key={item.key}
+                  view={item.key}
+                  onNavigate={() => {
+                    if (!confirmDiscardIfDirty()) return;
+                    if (item.remembersReturn) setPreviousView(view);
+                    setView(item.key);
+                  }}
+                  // The label is hidden at narrow widths, not removed, so the
+                  // accessible name has to come from somewhere that survives.
+                  title={item.label}
+                  aria-label={item.label}
+                  className={`inline-flex items-center justify-center gap-2 px-3 xl:px-4 py-2 rounded whitespace-nowrap min-h-[44px] min-w-[44px] text-sm xl:text-base ${
+                    view === item.key
+                      ? "bg-primary text-white shadow-sm"
+                      : "bg-white text-foreground border border-border hover:border-primary"
+                  }`}
+                >
+                  <ObjectIcon type={item.icon} />
+                  <span className="hidden lg:inline">{item.label}</span>
+                  {count > 0 && (
+                    <span className="text-xs tabular-nums opacity-75">
+                      {count}
+                    </span>
+                  )}
+                </AppLink>
+              );
+            })}
           </nav>
         </div>
       </div>
@@ -5296,6 +5332,10 @@ export default function Alfred() {
                           executions={allLiveExecutions}
                           onOpenExecution={openExecution}
                           onCancelExecution={cancelExecutionForEvent}
+                          items={items}
+                          onViewIntention={(id) => viewIntentionDetail(id, "home")}
+                          onViewItem={(id) => viewItemDetail(id, "home")}
+                          onViewContextDetail={viewContextDetail}
                         />
                       );
                     })
@@ -5550,6 +5590,7 @@ export default function Alfred() {
             onActivate={activate}
             getIntentDisplay={getIntentDisplay}
             onViewItemDetail={(id) => viewItemDetail(id, "intention-detail")}
+            onViewContextDetail={viewContextDetail}
             executions={allLiveExecutions}
             onOpenExecution={openExecution}
             onCancelExecution={cancelExecutionForEvent}
@@ -5757,6 +5798,10 @@ export default function Alfred() {
                       executions={allLiveExecutions}
                       onOpenExecution={openExecution}
                       onCancelExecution={cancelExecutionForEvent}
+                      items={items}
+                      onViewIntention={(id) => viewIntentionDetail(id, "schedule")}
+                      onViewItem={(id) => viewItemDetail(id, "schedule")}
+                      onViewContextDetail={viewContextDetail}
                     />
                   );
                 })}
@@ -8340,9 +8385,15 @@ function ContextCard({ context, onClick, onEdit, showSettings = false }) {
           inconsistency this step exists to remove. */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex-1 min-w-0">
+          {/* Step 12.10. The type glyph LEADS and the pin trails: one is what
+              this record is, the other is a flag on it, and identity should not
+              queue behind status. The pin stays because the Contexts list mixes
+              pinned and unpinned rows and is the only place that says which is
+              which — in the Pinned section above it is merely redundant. */}
           <div className="flex items-center gap-2">
-            {context.pinned && <Pin className="w-4 h-4 text-muted-foreground" />}
+            <ObjectIcon type="context" className="w-4 h-4 text-primary" />
             <h3 className="font-medium text-foreground">{context.name}</h3>
+            {context.pinned && <Pin className="w-3.5 h-3.5 text-muted-foreground" />}
           </div>
           {context.description && (
             <p className="text-sm text-muted-foreground mt-1">{context.description}</p>
@@ -8438,11 +8489,13 @@ function CollectionCard({
           what sits on the other side of that gap is the card's own onClick. */}
       <div className="flex items-center justify-between gap-3">
         <div>
+          {/* See ContextCard — same ordering, same reason. */}
           <div className="flex items-center gap-2">
-            {collection.pinned && (
-              <Pin className="w-4 h-4 text-muted-foreground" />
-            )}
+            <ObjectIcon type="collection" className="w-4 h-4 text-primary" />
             <p className="font-medium">{collection.name}</p>
+            {collection.pinned && (
+              <Pin className="w-3.5 h-3.5 text-muted-foreground" />
+            )}
           </div>
           <div className="flex items-center gap-2 mt-1">
             <span className="text-sm text-muted-foreground">
@@ -8588,7 +8641,10 @@ function ContextDetailView({
 
       <div className="mb-4 sm:mb-6">
         <div className="flex items-start justify-between gap-2 mb-2">
-          <h2 className="text-xl sm:text-2xl font-bold">{context.name}</h2>
+          <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold">
+            <ObjectIcon type="context" className="w-6 h-6 text-primary" align="first-line" />
+            <span className="min-w-0">{context.name}</span>
+          </h2>
           {/* Record actions, top right. The spec asks for Edit · Archive here;
               Archive is absent because `contexts` has no `archived` column and
               adding one is a migration. See the Step 5 findings. */}
@@ -8809,6 +8865,9 @@ function IntentionDetailView({
   onActivate,
   getIntentDisplay,
   onViewItemDetail,
+  // Step 12.9. Threaded through purely so the event cards below can make their
+  // context badge a link; nothing else on this page uses it.
+  onViewContextDetail,
   executions = [],
   onOpenExecution,
   onCancelExecution,
@@ -8896,7 +8955,10 @@ function IntentionDetailView({
       <div className="mb-4 sm:mb-6">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-2">
           <div className="flex-1">
-            <h2 className="text-xl sm:text-2xl font-bold">{intention.text}</h2>
+            <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold">
+              <ObjectIcon type="intention" className="w-6 h-6 text-primary" align="first-line" />
+              <span className="min-w-0">{intention.text}</span>
+            </h2>
             {contextName && (
               <span className="inline-block mt-2 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
                 {contextName}
@@ -9022,6 +9084,11 @@ function IntentionDetailView({
                 executions={executions}
                 onOpenExecution={onOpenExecution}
                 onCancelExecution={onCancelExecution}
+                items={items}
+                onViewItem={onViewItemDetail}
+                onViewContextDetail={onViewContextDetail}
+                // No onViewIntention: this page IS the intention, so the link
+                // would point at the screen you are already reading.
               />
             ))}
           </div>
@@ -9187,7 +9254,10 @@ function ItemDetailView({
       <div className="mb-4 sm:mb-6">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-2">
           <div className="flex-1">
-            <h2 className="text-xl sm:text-2xl font-bold">{item.name}</h2>
+            <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold">
+              <ObjectIcon type="item" className="w-6 h-6 text-primary" align="first-line" />
+              <span className="min-w-0">{item.name}</span>
+            </h2>
             {contextName && (
               <span className="inline-block mt-2 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
                 {contextName}
@@ -9247,7 +9317,7 @@ function ItemDetailView({
                 onClick={onAddToCollection}
                 className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
               >
-                <ClipboardList className="w-4 h-4" />
+                <ObjectIcon type="collection" className="w-4 h-4" />
                 <span className="hidden sm:inline">Add to Collection</span>
                 <span className="sm:hidden">Collect</span>
               </button>
@@ -9682,7 +9752,10 @@ function ExecutionDetailView({
 
       <div className="mb-4 sm:mb-6">
         <div className="flex items-start justify-between gap-3">
-          <h2 className="text-xl sm:text-2xl font-bold text-foreground">{displayName}</h2>
+          <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold text-foreground">
+            <ObjectIcon type="execution" className="w-6 h-6 text-primary" align="first-line" />
+            <span className="min-w-0">{displayName}</span>
+          </h2>
           {/* Step 12.2 — a LINK, not an edit surface.
 
               Shown only when the execution has EXACTLY ONE underlying item.
@@ -10010,8 +10083,15 @@ function ExecutionBadge({ exec, intents, contexts, getIntentDisplay, onOpen }) {
           : "bg-warning-light border-2 border-warning"
       }`}
     >
-      <p className="font-medium text-foreground">
-        {intent ? getIntentDisplay(intent) : "Execution"}
+      {/* The glyph says this card is a RUN; the Play/Pause line below says
+          which state that run is in. Two different jobs, which is why the
+          badge carries both — it previously carried only the second, and so
+          never said what kind of record it was. */}
+      <p className="flex items-start gap-1.5 font-medium text-foreground">
+        <ObjectIcon type="execution" className="w-4 h-4" align="first-line" />
+        <span className="min-w-0">
+          {intent ? getIntentDisplay(intent) : "Execution"}
+        </span>
       </p>
       {exec.contextId && (
         <p className="text-sm text-foreground">
@@ -10676,7 +10756,10 @@ function ItemCard({
         }
       }}
     >
-      <p className="font-medium mb-2">{item.name}</p>
+      <p className="flex items-start gap-1.5 font-medium mb-2">
+        <ObjectIcon type="item" className="w-4 h-4 text-primary" align="first-line" />
+        <span className="min-w-0">{item.name}</span>
+      </p>
       {item.tags && item.tags.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-2">
           {item.tags.slice(0, 3).map((tag) => (
@@ -11646,7 +11729,10 @@ function IntentionCard({
     >
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <p className="font-medium">{getIntentDisplay(intent)}</p>
+          <p className="flex items-start gap-1.5 font-medium">
+            <ObjectIcon type="intention" className="w-4 h-4 text-primary" align="first-line" />
+            <span className="min-w-0">{getIntentDisplay(intent)}</span>
+          </p>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             {showScheduling && (
               <span className="text-sm text-muted-foreground">
@@ -11775,6 +11861,11 @@ function IntentionCard({
       </div>
       {relatedEvents.length > 0 && (
         <div className="mt-2 space-y-2">
+          {/* No items / onViewIntention / onViewItem / onViewContextDetail on
+              the cards below. Each is rendered INSIDE the intention it belongs
+              to, whose own row already carries the intention name, the context
+              badge and the navigation to all of it — see the prop comments on
+              EventCard. The chips would duplicate the line directly above. */}
           {relatedEvents.map((ev) => (
             <EventCard
               key={ev.id}
@@ -11788,13 +11879,64 @@ function IntentionCard({
               onOpenExecution={onOpenExecution}
               onCancelExecution={onCancelExecution}
               nested
-              items={[]}
-              collections={[]}
             />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * One metadata link in an EventCard's chip row — Step 12.9.
+ *
+ * Shared by the intention and item links because they differ only in icon and
+ * wording, and because the name-collapsing rule has to be applied identically
+ * to both or the row starts contradicting itself.
+ *
+ * The icon carries the record TYPE, replacing an "Intention:" / "Item:" word
+ * prefix. It comes from OBJECT_ICONS, the one vocabulary the nav, the cards
+ * and the page headers all read from — so the glyph on this chip is the same
+ * glyph on the tab that lists these records and on the header of the record
+ * itself. That repetition is the point: it is what makes the association
+ * learnable.
+ *
+ * `name` is dropped when it equals the card's own title, leaving the icon
+ * alone. Most events carry no `text` of their own — `moveToPlanner` does not
+ * set one — so their title IS the intention display, and an intention with no
+ * text displays as its linked item's name. Spelling the name out would
+ * therefore print the same string twice on the majority of rows. The link
+ * stays, because reaching the record is the whole point; only the redundant
+ * half goes. `title`/`aria-label` always name the destination in full, which
+ * is what keeps the collapsed form readable to a screen reader and on hover.
+ *
+ * `guard` is for the edit form, where leaving the screen discards whatever is
+ * typed. Display mode passes none.
+ *
+ * Deliberately not 44px tall, unlike every button in the row strip. Inline
+ * metadata cannot be without wrecking the line, and these are secondary
+ * affordances: the whole card and Start/Continue remain the touch targets, and
+ * `py-1` buys enough slop that a near-miss lands on the card — which opens the
+ * event — rather than between two links.
+ */
+function EventMetaLink({ icon, name, showName, onClick, guard, title }) {
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        if (guard && !guard()) return;
+        onClick();
+      }}
+      title={title}
+      aria-label={title}
+      className="inline-flex items-center gap-1 py-1 text-left text-primary hover:text-primary-hover"
+    >
+      {icon}
+      {/* max-w + truncate because the row is the card's third line, not a
+          paragraph: a long item name wraps the chips onto two rows and then
+          still overflows. The full name stays in the tooltip either way. */}
+      {showName && <span className="max-w-[14rem] truncate">{name}</span>}
+    </button>
   );
 }
 
@@ -11809,6 +11951,21 @@ function EventCard({
   onOpenExecution,
   onCancelExecution,
   nested = false,
+  // Step 12.9. An event card used to name only itself — a title, a date, a
+  // status — so an event carrying its own `text` was a dead end: nothing on it
+  // said which intention it came from or which item that intention is about,
+  // and neither was reachable.
+  //
+  // Each of the three links is gated on ITS OWN handler rather than on
+  // `nested`, because "already established by the surrounding UI" is a fact
+  // about the caller, not about depth. Intention detail passes onViewItem and
+  // onViewContextDetail but not onViewIntention — you are standing on the
+  // intention. The nested site inside IntentionCard passes none of the three:
+  // the card immediately above already carries all of them.
+  items = [],
+  onViewIntention,
+  onViewItem,
+  onViewContextDetail,
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [scheduledDate, setScheduledDate] = useState(event.time);
@@ -11855,6 +12012,105 @@ function EventCard({
   // deciding whether to grey a button out.
   const hasActiveExecution = Boolean(execution);
 
+  // The title, hoisted out of the JSX because the two links below compare
+  // against it to decide whether to spell their own name out.
+  const eventTitle = event.text || getIntentDisplay(intent);
+  const intentionName = intent ? getIntentDisplay(intent) : null;
+  const linkedItem = intent?.itemId
+    ? items.find((i) => i.id === intent.itemId)
+    : null;
+
+  // Events copy `contextId` from their intention at creation — see
+  // `moveToPlanner` — so most carry one. Two cases where the copy is not the
+  // answer: an event made by a path that never set it, and an intention
+  // re-homed after its event was already scheduled, which leaves the copy
+  // pointing at the old context. Falling back to the intention's context
+  // covers both. The event's own value still wins where it has one, because an
+  // event deliberately scheduled into a different context is a real thing.
+  const contextId = event.contextId || intent?.contextId || null;
+  const contextName = contextId
+    ? contexts.find((c) => c.id === contextId)?.name
+    : null;
+
+  // Following a link out of the EDIT form unmounts it and drops whatever is
+  // typed. EventCard never joined the app's `onDirtyChange` plumbing — that is
+  // wired to ItemCard and IntentionCard, the two page-sized surfaces that own
+  // a whole screen — so this small inline form asks on its own, reusing the
+  // wording `handleBackFromIntentionDetail` uses for the same situation.
+  const isDirty =
+    eventName !== (event.text || intent?.text || "") ||
+    scheduledDate !== event.time;
+
+  function confirmLeaveEditForm() {
+    if (!isDirty) return true;
+    return window.confirm(
+      "You have unsaved changes to this event. Discard and navigate away?",
+    );
+  }
+
+  // Rendered in BOTH modes, so it is a function rather than two copies of the
+  // markup. A plain call, not a `<Component/>` — it closes over everything the
+  // chips need, which is a dozen values that would otherwise become props, and
+  // calling it inline keeps React out of the remount question entirely.
+  //
+  // `guard` is the only thing that differs between the two call sites.
+  const showIntentionLink = Boolean(onViewIntention && intent?.id);
+  const showItemLink = Boolean(onViewItem && linkedItem);
+  // Hoisted rather than left as an early return inside the renderer, because
+  // the edit form needs the answer BEFORE it decides whether to draw a label
+  // above the row — and asking by calling the renderer and testing the result
+  // means rendering it twice.
+  const hasMetaRow = Boolean(contextName || showIntentionLink || showItemLink);
+
+  function renderMetaRow(guard) {
+    if (!hasMetaRow) return null;
+
+    return (
+      <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-xs">
+        {contextName &&
+          (onViewContextDetail ? (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (guard && !guard()) return;
+                onViewContextDetail(contextId);
+              }}
+              title={`Open context: ${contextName}`}
+              className="inline-flex items-center gap-1 bg-warning-light hover:bg-warning text-foreground px-2 py-1 rounded transition-colors"
+            >
+              <ObjectIcon type="context" className="w-3.5 h-3.5" />
+              {contextName}
+            </button>
+          ) : (
+            <span className="inline-flex items-center gap-1 bg-warning-light text-foreground px-2 py-1 rounded">
+              <ObjectIcon type="context" className="w-3.5 h-3.5" />
+              {contextName}
+            </span>
+          ))}
+        {showIntentionLink && (
+          <EventMetaLink
+            icon={<ObjectIcon type="intention" className="w-3.5 h-3.5" />}
+            name={intentionName}
+            showName={intentionName !== eventTitle}
+            onClick={() => onViewIntention(intent.id)}
+            guard={guard}
+            title={`Open intention: ${intentionName}`}
+          />
+        )}
+        {showItemLink && (
+          <EventMetaLink
+            icon={<ObjectIcon type="item" className="w-3.5 h-3.5" />}
+            name={linkedItem.name}
+            showName={linkedItem.name !== eventTitle}
+            onClick={() => onViewItem(linkedItem.id)}
+            guard={guard}
+            title={`Open item: ${linkedItem.name}`}
+          />
+        )}
+      </div>
+    );
+  }
+
   // Show editable form when there's no execution
   if (isEditing) {
     return (
@@ -11884,6 +12140,27 @@ function EventCard({
               className="w-full px-3 py-2 min-h-[44px] border border-border rounded"
             />
           </div>
+
+          {/* The same chips the display row carries. Opening the form used to
+              be a one-way door: the two things an event is ABOUT stopped being
+              visible at exactly the moment you were looking at the event
+              closely enough to edit it.
+
+              Labelled, unlike the display row, because here they sit among
+              labelled inputs and an unlabelled chip strip would read as a third
+              field. Read-only — these navigate, they do not edit — hence the
+              dirty guard on every one of them.
+
+              Same `!nested` rule as display mode: one rule for the card, not
+              one per mode. */}
+          {!nested && hasMetaRow && (
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-1">
+                Linked records
+              </label>
+              {renderMetaRow(confirmLeaveEditForm)}
+            </div>
+          )}
 
           {/* Standard footer order: primary, Cancel, gap, Archive pushed right.
               This was Save · Archive · Close, with the destructive action sitting
@@ -11962,16 +12239,26 @@ function EventCard({
     >
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <p className="font-medium text-foreground hover:text-primary">
-            {nested ? `Event: ${event.text || getIntentDisplay(intent)}` : (event.text || getIntentDisplay(intent))}
+          {/* The glyph replaces the "Event: " prefix the nested variant used
+              to carry. Same job — say what kind of record this row is — done
+              in the vocabulary every other surface uses, and done on the
+              top-level rows too, which never had the prefix and so were the
+              one place an event did not announce itself. */}
+          <p className="flex items-start gap-1.5 font-medium text-foreground hover:text-primary">
+            <ObjectIcon type="event" className="w-4 h-4" align="first-line" />
+            <span className="min-w-0">{eventTitle}</span>
           </p>
           <p className="text-sm text-muted-foreground">
             {formatEventDate(event.time)} • {execution ? (execution.status === "active" ? "In progress" : "Paused") : "Not started"}
           </p>
-          {event.contextId && (
-            <span className="inline-block mt-1 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
-              {contexts.find((c) => c.id === event.contextId)?.name}
-            </span>
+          {/* Suppressed entirely when nested. The IntentionCard this sits
+              inside renders the same context badge two lines above, and its
+              own row IS the intention — so every chip here would be a repeat
+              of something already on screen within about 40px. The three link
+              handlers are withheld at that site for the same reason; this
+              guard covers the badge, which has no handler to withhold. */}
+          {!nested && hasMetaRow && (
+            <div className="mt-1">{renderMetaRow()}</div>
           )}
         </div>
         {/* Row action strip: Start/Continue then Archive, right-aligned and

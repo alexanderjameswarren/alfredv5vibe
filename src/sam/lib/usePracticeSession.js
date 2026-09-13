@@ -1,15 +1,51 @@
 import { useState, useRef, useCallback } from "react";
 import { supabase } from "../../supabaseClient";
 
+const EMPTY_STATS = {
+  hits: 0,
+  misses: 0,
+  partials: 0,
+  totalBeats: 0,
+  accuracyPercent: 0,
+  avgTimingDeltaMs: 0,
+  playthroughAccuracyPercent: 0,
+  playthroughHits: 0,
+  playthroughMisses: 0,
+  playthroughScored: 0,
+  playthroughLoop: 0,
+  hasPlaythrough: false,
+};
+
+function newPlaythrough(loop) {
+  return { loop, hits: 0, misses: 0, partials: 0, totalBeats: 0 };
+}
+
+// Accuracy counts hits against hits+misses; partials sit outside the ratio.
+// Same rule for a pass as for the whole session, so the two numbers on screen
+// are directly comparable.
+function accuracyOf(c) {
+  const total = c.hits + c.misses;
+  return total > 0 ? Math.round((c.hits / total) * 100) : 0;
+}
+
+// Which pass the "Playthrough Accuracy" readout describes: the one in progress
+// once it has a scored beat, otherwise the last completed one. That second case
+// covers the moment just after a loop wraps and the gap between a pause or stop
+// and the next note — a clean pass stays on screen instead of blanking to 0%.
+function playthroughStats(current, last) {
+  const p = current.hits + current.misses > 0 ? current : last || current;
+  return {
+    playthroughAccuracyPercent: accuracyOf(p),
+    playthroughHits: p.hits,
+    playthroughMisses: p.misses,
+    playthroughScored: p.hits + p.misses,
+    playthroughLoop: p.loop,
+    hasPlaythrough: p.hits + p.misses > 0,
+  };
+}
+
 export default function usePracticeSession({ onSessionEnded } = {}) {
-  const [stats, setStats] = useState({
-    hits: 0,
-    misses: 0,
-    partials: 0,
-    totalBeats: 0,
-    accuracyPercent: 0,
-    avgTimingDeltaMs: 0,
-  });
+  const [stats, setStats] = useState(EMPTY_STATS);
 
   const sessionIdRef = useRef(null);
   const songIdRef = useRef(null);
@@ -17,6 +53,15 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
   const timingDeltasRef = useRef([]);
   const countersRef = useRef({ hits: 0, misses: 0, partials: 0, totalBeats: 0 });
   const loopCountRef = useRef(0);
+
+  // Per-playthrough counters. `playthroughRef` is the pass in progress;
+  // `lastPlaythroughRef` is the most recently completed one, kept so the
+  // displayed number doesn't blank out the instant a loop wraps (and so a
+  // clean 100% pass is still on screen after the wrap, on pause and on stop).
+  // `playthroughLogRef` accumulates finished passes for the session summary.
+  const playthroughRef = useRef(newPlaythrough(0));
+  const lastPlaythroughRef = useRef(null);
+  const playthroughLogRef = useRef([]);
 
   // Fires after a session's ended_at update resolves in Supabase. Held in a
   // ref so consumers can pass an inline arrow without retriggering the
@@ -30,9 +75,12 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     timingDeltasRef.current = [];
     countersRef.current = { hits: 0, misses: 0, partials: 0, totalBeats: 0 };
     loopCountRef.current = 0;
+    playthroughRef.current = newPlaythrough(0);
+    lastPlaythroughRef.current = null;
+    playthroughLogRef.current = [];
     sessionIdRef.current = null;
     songIdRef.current = songId || null;
-    setStats({ hits: 0, misses: 0, partials: 0, totalBeats: 0, accuracyPercent: 0, avgTimingDeltaMs: 0 });
+    setStats(EMPTY_STATS);
 
     // Create session row in Supabase (fire-and-forget style — don't block UI)
     if (!songId) {
@@ -74,19 +122,19 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     };
     eventsRef.current.push(evt);
 
-    // Update running counters
+    // Update running counters — session-wide and for the pass in progress
     const c = countersRef.current;
+    const p = playthroughRef.current;
     c.totalBeats++;
-    if (result === "hit") c.hits++;
-    else if (result === "partial") c.partials++;
-    else c.misses++; // "miss" or "wrong"
+    p.totalBeats++;
+    if (result === "hit") { c.hits++; p.hits++; }
+    else if (result === "partial") { c.partials++; p.partials++; }
+    else { c.misses++; p.misses++; } // "miss" or "wrong"
 
     if (timingDeltaMs != null) {
       timingDeltasRef.current.push(timingDeltaMs);
     }
 
-    const total = c.hits + c.misses;
-    const accuracy = total > 0 ? Math.round((c.hits / total) * 100) : 0;
     const avgTiming = timingDeltasRef.current.length > 0
       ? Math.round(timingDeltasRef.current.reduce((a, b) => a + b, 0) / timingDeltasRef.current.length)
       : 0;
@@ -96,13 +144,36 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
       misses: c.misses,
       partials: c.partials,
       totalBeats: c.totalBeats,
-      accuracyPercent: accuracy,
+      accuracyPercent: accuracyOf(c),
       avgTimingDeltaMs: avgTiming,
+      ...playthroughStats(p, lastPlaythroughRef.current),
     });
   }, []);
 
+  // ScrollEngine calls this on every loop wrap (and with 0 when a run starts),
+  // which is the only playthrough boundary there is: at the wrap it resets
+  // every beat event to pending, so no scoring from the outgoing pass arrives
+  // afterwards.
   const setLoopIteration = useCallback((n) => {
+    if (n === loopCountRef.current) return;
+    const finished = playthroughRef.current;
+    if (finished.hits + finished.misses > 0) {
+      lastPlaythroughRef.current = { ...finished };
+      playthroughLogRef.current.push({
+        loop: finished.loop,
+        hits: finished.hits,
+        misses: finished.misses,
+        partials: finished.partials,
+        totalBeats: finished.totalBeats,
+        accuracyPercent: accuracyOf(finished),
+      });
+    }
     loopCountRef.current = n;
+    playthroughRef.current = newPlaythrough(n);
+    setStats((prev) => ({
+      ...prev,
+      ...playthroughStats(playthroughRef.current, lastPlaythroughRef.current),
+    }));
   }, []);
 
   const endSession = useCallback(async () => {
@@ -113,19 +184,37 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     }
 
     const c = countersRef.current;
-    const total = c.hits + c.misses;
     const avgTiming = timingDeltasRef.current.length > 0
       ? Math.round(timingDeltasRef.current.reduce((a, b) => a + b, 0) / timingDeltasRef.current.length)
       : 0;
+
+    // The pass in progress when the run ended counts as a playthrough too —
+    // a session that never wrapped still has one worth recording.
+    const inProgress = playthroughRef.current;
+    const playthroughs = [...playthroughLogRef.current];
+    if (inProgress.hits + inProgress.misses > 0) {
+      playthroughs.push({
+        loop: inProgress.loop,
+        hits: inProgress.hits,
+        misses: inProgress.misses,
+        partials: inProgress.partials,
+        totalBeats: inProgress.totalBeats,
+        accuracyPercent: accuracyOf(inProgress),
+      });
+    }
 
     const summary = {
       totalBeats: c.totalBeats,
       hits: c.hits,
       misses: c.misses,
       partials: c.partials,
-      accuracyPercent: total > 0 ? Math.round((c.hits / total) * 100) : 0,
+      accuracyPercent: accuracyOf(c),
       avgTimingDeltaMs: avgTiming,
       loopCount: loopCountRef.current,
+      playthroughs,
+      bestPlaythroughAccuracyPercent: playthroughs.length
+        ? Math.max(...playthroughs.map((p) => p.accuracyPercent))
+        : null,
     };
 
     const now = new Date().toISOString();

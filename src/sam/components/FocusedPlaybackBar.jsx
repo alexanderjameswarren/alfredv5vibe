@@ -8,7 +8,7 @@ import LiveSessionCounter from "./LiveSessionCounter";
 // parent renders this instead of the full SettingsBar / StatsBar stack.
 //
 // Row 1  → Pause | Session badge + live Today (LiveSessionCounter)
-// Row 2  → Loop / Hits / Misses / Accuracy (muted, secondary)
+// Row 2  → Loop / Hits / Misses / Session + Playthrough accuracy (muted, secondary)
 export default function FocusedPlaybackBar({
   onPause,
   todayMinutes,
@@ -16,6 +16,8 @@ export default function FocusedPlaybackBar({
   hitCount,
   missCount,
   accuracyPercent,
+  playthroughPercent,
+  hasPlaythrough,
 }) {
   return (
     <>
@@ -38,7 +40,15 @@ export default function FocusedPlaybackBar({
         <span>Loop: <strong className="text-dark">{loopCount}</strong></span>
         <span>Hits: <strong className="text-success">{hitCount}</strong></span>
         <span>Misses: <strong className="text-destructive">{missCount}</strong></span>
-        <span>Accuracy: <strong className="text-dark">{accuracyPercent}%</strong></span>
+        <span>Session Accuracy: <strong className="text-dark">{accuracyPercent}%</strong></span>
+        <span>
+          Playthrough Accuracy:{" "}
+          <strong className={
+            hasPlaythrough && playthroughPercent === 100 ? "text-success" : "text-dark"
+          }>
+            {hasPlaythrough ? `${playthroughPercent}%` : "—"}
+          </strong>
+        </span>
       </div>
     </>
   );

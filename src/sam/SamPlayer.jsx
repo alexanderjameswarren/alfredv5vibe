@@ -862,6 +862,8 @@ export default function SamPlayer({ onBack }) {
                 hitCount={hitCount}
                 missCount={missCount}
                 accuracyPercent={sessionStats.accuracyPercent}
+                playthroughPercent={sessionStats.playthroughAccuracyPercent}
+                hasPlaythrough={sessionStats.hasPlaythrough}
               />
             ) : (
               <>
