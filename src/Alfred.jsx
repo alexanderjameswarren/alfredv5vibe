@@ -1443,6 +1443,10 @@ export default function Alfred() {
   // Which member row has its tag editor open, or null. One at a time — the
   // picker is too tall to have several expanded on a phone.
   const [editingTagsItemId, setEditingTagsItemId] = useState(null);
+  // The row currently holding an open tag editor. Attached to whichever row
+  // that is, so the dismissal effect below can ask whether a tap landed inside
+  // it. One ref rather than one per row: only ever one is open.
+  const editingTagsRowRef = useRef(null);
   const [selectedCollectionId, setSelectedCollectionId] = useState(null);
   const [collDragIdx, setCollDragIdx] = useState(null);
   const [collectionContextFilter, setCollectionContextFilter] = useState("");
@@ -1961,6 +1965,37 @@ export default function Alfred() {
     // in a loop. They close over nothing render-scoped.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, selectedCollectionId]);
+
+  /**
+   * Tapping outside an open tag editor closes it — the whole thing, input and
+   * all, not just the dropdown.
+   *
+   * `mousedown` and NOT `touchstart`, deliberately. A tap fires both; a scroll
+   * fires only touchstart. Listening to touchstart would close the editor the
+   * moment a finger landed to scroll the list, which is not a dismissal.
+   *
+   * "Outside" means outside the whole row, not just the editor. That is what
+   * makes the row's own Tag button work: the tap lands inside, this handler
+   * ignores it, and `toggleTagEditor` closes the editor by itself rather than
+   * the two racing. Same for the row's chips — removing a tag mid-edit should
+   * not throw you out of the editor.
+   *
+   * Routed through `closeTagEditor` like every other way of closing, so the
+   * poll resumes and uncommitted text is discarded rather than committed —
+   * a tag is created only by an explicit act.
+   */
+  useEffect(() => {
+    if (!editingTagsItemId) return undefined;
+    function handlePointerDown(e) {
+      const row = editingTagsRowRef.current;
+      if (row && !row.contains(e.target)) closeTagEditor();
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+    // closeTagEditor is recreated every render but only calls a stable setter,
+    // so a stale closure cannot go wrong here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingTagsItemId]);
 
   // Keep the poll's guard current. Read from a ref, not state, because the
   // interval callback below closes over the render that created it.
@@ -6331,6 +6366,7 @@ export default function Alfred() {
                         return (
                           <div
                             key={member.id || member.itemId || index}
+                            ref={tagsOpen ? editingTagsRowRef : undefined}
                             className={`p-3 bg-card border border-border rounded-lg ${collDragIdx === index ? "opacity-50" : ""}`}
                             draggable={!collectionFilterTag && !tagsOpen}
                             onDragStart={(e) => { setCollDragIdx(index); e.dataTransfer.effectAllowed = "move"; }}
@@ -6360,22 +6396,53 @@ export default function Alfred() {
                               <p className="font-medium text-sm truncate">
                                 <ItemNameLabel name={linkedItem?.name} />
                               </p>
-                              {/* Store chips, under the name rather than beside
+                              {/* Tag chips, under the name rather than beside
                                   it. At 360px the row has no spare width — name,
                                   quantity and the two buttons already fill it —
-                                  and the store has to be readable at a glance in
+                                  and the tag has to be readable at a glance in
                                   an aisle, which a count badge or an icon is not.
                                   A second line only appears when a row actually
                                   has tags, so an untagged list is exactly as
-                                  compact as it was before this phase. */}
+                                  compact as it was before this phase.
+
+                                  Each chip removes itself. Removing a tag used
+                                  to mean opening the editor to reach a second
+                                  copy of the same chips; now it is one tap on
+                                  the chip you are already looking at, and the
+                                  editor is only for ADDING.
+
+                                  The × is a 32px target inside a ~30px chip, not
+                                  the usual 44px. 44 would make a chip taller than
+                                  the item name it sits under and would crowd the
+                                  row it is meant to annotate. 32 is a
+                                  comfortable deliberate tap, and mis-taps while
+                                  scrolling are not the risk they look like —
+                                  a browser cancels the click once the finger
+                                  moves, so a scroll never fires one. gap-1.5
+                                  keeps two ×s from sitting shoulder to shoulder,
+                                  which is the mis-tap that could happen. */}
                               {memberTags.length > 0 && (
-                                <div className="flex flex-wrap gap-1 mt-1">
+                                <div className="flex flex-wrap gap-1.5 mt-1">
                                   {memberTags.map((tag) => (
                                     <span
                                       key={tag}
-                                      className="px-2 py-0.5 bg-warning-light text-accent-foreground text-xs rounded-full"
+                                      className="inline-flex items-center gap-0.5 pl-2.5 pr-0.5 bg-warning-light text-accent-foreground text-xs rounded-full"
                                     >
                                       {tag}
+                                      <button
+                                        onClick={() =>
+                                          saveMemberTags(
+                                            coll.id,
+                                            member.itemId,
+                                            memberTags.filter((t) => t !== tag),
+                                          )
+                                        }
+                                        aria-label={`Remove tag ${tag}`}
+                                        title={`Remove tag ${tag}`}
+                                        className="min-h-[32px] min-w-[32px] flex items-center justify-center rounded-full hover:text-destructive"
+                                      >
+                                        <X className="w-3 h-3" />
+                                      </button>
                                     </span>
                                   ))}
                                 </div>
@@ -6453,9 +6520,19 @@ export default function Alfred() {
                           </div>
 
                           {/* The editor, expanded under its own row. One at a
-                              time — the picker is a text field plus a dropdown
-                              plus chips, and two of them open at once would push
-                              the list off a phone screen.
+                              time — two of them open at once would push the list
+                              off a phone screen.
+
+                              Input and dropdown ONLY. It used to carry its own
+                              copy of the chips and a Done button; the chips are
+                              now removable in the row directly above, which
+                              makes both redundant. What is left is the one thing
+                              the editor is for: adding. The row's chips stay
+                              visible while it is open, so a tag landing is still
+                              confirmed on screen.
+
+                              No Done button either — tapping anywhere outside
+                              the row closes it. See the dismissal effect.
 
                               Its pool is the COLLECTION pool: this collection's
                               members plus its removal history. It never mixes
@@ -6470,21 +6547,20 @@ export default function Alfred() {
                                 onChange={(next) =>
                                   saveMemberTags(coll.id, member.itemId, next)
                                 }
-                                placeholder="Search or add a store…"
-                                label="Search or add a store"
+                                // Not "a store": a collection's tags are
+                                // whatever splits the list usefully, and that is
+                                // not always a shop.
+                                placeholder="Search or add"
+                                label="Search or add a tag"
                                 // Opened by tapping the Tag button, so it is
                                 // ready to type into. Raises the keyboard
                                 // immediately, which is the intent. The four
                                 // item/intention pickers do NOT pass this —
                                 // they sit in a form you may be scrolling past.
                                 autoFocus
+                                // The row above already shows these, removably.
+                                showChips={false}
                               />
-                              <button
-                                onClick={closeTagEditor}
-                                className="mt-2 px-3 py-2 min-h-[44px] text-sm text-primary hover:text-primary-hover"
-                              >
-                                Done
-                              </button>
                             </div>
                           )}
                           </div>

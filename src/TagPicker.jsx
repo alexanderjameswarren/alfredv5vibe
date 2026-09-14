@@ -104,6 +104,7 @@ export default function TagPicker({
   placeholder = "Search or add a tag…",
   label = "Search or add a tag",
   autoFocus = false,
+  showChips = true,
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -325,8 +326,14 @@ export default function TagPicker({
 
       {error && <p className="text-xs text-destructive mt-1">{error}</p>}
 
-      {/* Chips render `value` exactly as stored — never re-normalised. */}
-      {value.length > 0 && (
+      {/* Chips render `value` exactly as stored — never re-normalised.
+          `showChips={false}` turns them off for a caller that already displays
+          the same tags itself: the collection member row shows removable chips
+          above the editor, and a second copy inside it was two places to remove
+          the same tag from. `value` is still needed either way — it drives
+          dedupe, the "already added" line, and hiding applied tags from the
+          suggestions. */}
+      {showChips && value.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-2">
           {value.map((tag) => (
             <span

@@ -7,13 +7,20 @@ const POOL = ["breadcrumbs", "whole foods", "tjs", "stir fry", "middle eastern"]
 
 // The picker owns its own query; the caller owns the chip list. This is the
 // caller.
-function Harness({ initial = [], pool = POOL, onChange, autoFocus = false }) {
+function Harness({
+  initial = [],
+  pool = POOL,
+  onChange,
+  autoFocus = false,
+  showChips = true,
+}) {
   const [value, setValue] = useState(initial);
   return (
     <TagPicker
       value={value}
       pool={pool}
       autoFocus={autoFocus}
+      showChips={showChips}
       onChange={(next) => {
         setValue(next);
         if (onChange) onChange(next);
@@ -579,5 +586,194 @@ describe("TagPicker — switching between rows", () => {
     fireEvent.click(tagButton("eggs"));
 
     expect(screen.queryAllByPlaceholderText("Search or add a tag…")).toHaveLength(0);
+  });
+});
+
+describe("TagPicker — showChips", () => {
+  test("renders no chip list when told not to", () => {
+    // The collection member row shows its own removable chips directly above
+    // the editor; a second copy inside it was two places to remove the same tag
+    // from, and only one of them was reachable without opening the editor.
+    render(<Harness initial={["tjs", "whole foods"]} showChips={false} />);
+    expect(chips()).toEqual([]);
+  });
+
+  test("value still drives everything else", () => {
+    // Suppressing the display must not suppress the behaviour: applied tags are
+    // still hidden from suggestions, still deduplicated, and still reported as
+    // already added.
+    render(<Harness initial={["tjs"]} showChips={false} />);
+    focus();
+    expect(rows()).not.toContain("tjs");
+
+    type("TJ's");
+    expect(createRow()).toBeUndefined();
+    expect(screen.getByText('"tjs" is already added')).toBeTruthy();
+  });
+
+  test("chips are on by default, for the item and intention forms", () => {
+    render(<Harness initial={["tjs"]} />);
+    expect(chips()).toEqual(["tjs"]);
+  });
+});
+
+describe("TagPicker — the collection editor", () => {
+  // Models the collection member row: removable chips above, an editor below
+  // holding only the input and dropdown, and a mousedown listener that closes
+  // the whole editor on a tap outside the row. Same structure and same close
+  // path as the collection detail view.
+  function Row({ onClose }) {
+    const [open, setOpen] = useState(false);
+    const [tags, setTags] = useState([]);
+    const rowRef = React.useRef(null);
+
+    React.useEffect(() => {
+      if (!open) return undefined;
+      const onDown = (e) => {
+        if (rowRef.current && !rowRef.current.contains(e.target)) {
+          setOpen(false);
+          if (onClose) onClose();
+        }
+      };
+      document.addEventListener("mousedown", onDown);
+      return () => document.removeEventListener("mousedown", onDown);
+    }, [open, onClose]);
+
+    return (
+      <div>
+        <div ref={rowRef} data-testid="row">
+          <span>Eggs</span>
+          {tags.map((tag) => (
+            <button
+              key={tag}
+              aria-label={`Remove tag ${tag}`}
+              onClick={() => setTags(tags.filter((t) => t !== tag))}
+            >
+              x
+            </button>
+          ))}
+          <button aria-label="Tag this item" onClick={() => setOpen(!open)}>
+            tag
+          </button>
+          {open && (
+            <TagPicker
+              autoFocus
+              showChips={false}
+              value={tags}
+              pool={POOL}
+              onChange={setTags}
+              placeholder="Search or add"
+            />
+          )}
+        </div>
+        <div data-testid="outside">elsewhere on the page</div>
+      </div>
+    );
+  }
+
+  const editorBox = () => screen.queryByPlaceholderText("Search or add");
+  const openEditor = () =>
+    fireEvent.click(screen.getByRole("button", { name: "Tag this item" }));
+  const rowChips = () =>
+    screen
+      .queryAllByRole("button", { name: /^Remove tag / })
+      .map((b) => b.getAttribute("aria-label").replace("Remove tag ", ""));
+
+  test("adding a tag does NOT close the editor", () => {
+    // Settled in Phase 4 and load-bearing here: the dropdown closes and focus
+    // drops so the new chip is visible, but the input stays so a second tag is
+    // one tap away.
+    render(<Row />);
+    openEditor();
+    fireEvent.change(editorBox(), { target: { value: "tjs" } });
+    fireEvent.keyDown(editorBox(), { key: "Enter" });
+
+    expect(rowChips()).toEqual(["tjs"]);
+    expect(editorBox()).toBeTruthy();
+  });
+
+  test("two tags can be added in one editor session", () => {
+    render(<Row />);
+    openEditor();
+
+    fireEvent.change(editorBox(), { target: { value: "tjs" } });
+    fireEvent.keyDown(editorBox(), { key: "Enter" });
+    fireEvent.focus(editorBox());
+    fireEvent.change(editorBox(), { target: { value: "whole foods" } });
+    fireEvent.keyDown(editorBox(), { key: "Enter" });
+
+    expect(rowChips()).toEqual(["tjs", "whole foods"]);
+    expect(editorBox()).toBeTruthy();
+  });
+
+  test("tapping outside closes the whole editor, input and all", () => {
+    render(<Row />);
+    openEditor();
+    expect(editorBox()).toBeTruthy();
+
+    fireEvent.mouseDown(screen.getByTestId("outside"));
+
+    expect(editorBox()).toBeNull();
+  });
+
+  test("uncommitted text is discarded on an outside tap", () => {
+    render(<Row />);
+    openEditor();
+    fireEvent.change(editorBox(), { target: { value: "wo" } });
+
+    fireEvent.mouseDown(screen.getByTestId("outside"));
+
+    expect(rowChips()).toEqual([]);
+    expect(editorBox()).toBeNull();
+
+    // And it is not carried back in when the editor is reopened.
+    openEditor();
+    expect(editorBox().value).toBe("");
+  });
+
+  test("tapping inside the row does not close it", () => {
+    // The row's own Tag button and its chips live here; closing on those would
+    // fight the toggle and make removing a tag mid-edit throw you out.
+    render(<Row />);
+    openEditor();
+
+    fireEvent.mouseDown(screen.getByText("Eggs"));
+
+    expect(editorBox()).toBeTruthy();
+  });
+
+  test("the row's Tag button still closes it", () => {
+    render(<Row />);
+    openEditor();
+    openEditor();
+    expect(editorBox()).toBeNull();
+  });
+
+  test("a chip can be removed from the row with no editor open", () => {
+    // The change the rest depend on: removing a tag used to mean opening the
+    // editor to reach a second copy of the chips.
+    render(<Row />);
+    openEditor();
+    fireEvent.change(editorBox(), { target: { value: "tjs" } });
+    fireEvent.keyDown(editorBox(), { key: "Enter" });
+    fireEvent.mouseDown(screen.getByTestId("outside"));
+    expect(editorBox()).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove tag tjs" }));
+
+    expect(rowChips()).toEqual([]);
+    expect(editorBox()).toBeNull();
+  });
+
+  test("removing a chip while the editor is open leaves it open", () => {
+    render(<Row />);
+    openEditor();
+    fireEvent.change(editorBox(), { target: { value: "tjs" } });
+    fireEvent.keyDown(editorBox(), { key: "Enter" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove tag tjs" }));
+
+    expect(rowChips()).toEqual([]);
+    expect(editorBox()).toBeTruthy();
   });
 });
