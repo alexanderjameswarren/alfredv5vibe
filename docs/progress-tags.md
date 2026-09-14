@@ -1,8 +1,6 @@
 # Progress — Tags: spaces, autocomplete picker, collection tags, removals since midnight
 
-Status: Phases 1, 1b, 2, 2c, 3, 4 and 5 complete and verified. Phase 6
-complete, verified on the phone, two interaction fixes applied — awaiting
-re-verification. Phase 7 not started.
+Status: **COMPLETE.** All phases done and verified on the phone.
 Spec: `docs/technical-spec-tags.md`
 Investigation: `docs/history/investigation-tags-and-collections.md`
 
@@ -240,18 +238,46 @@ fixes" at the end of this file.
       keyboard for a row low in a long list. Reported, not fixed — see findings
       for the three options.
 
+### Editor simplification (2026-09-14)
+
+Four connected changes, one shape: the row's chips become the tag UI and the
+editor becomes only the input. See "Phase 6 editor simplification" at the end
+of this file.
+
+- [x] Placeholder is "Search or add" — a collection's tags are not always stores
+- [x] **Row chips are removable**, each with its own ×, no editor needed. The
+      change the other three depend on.
+- [x] Editor renders no chip list of its own — `showChips={false}`
+- [x] Done button gone; tapping outside the row closes the whole editor
+- [x] Adding a tag still does NOT close the editor — Phase 4's rule holding
+- [x] Outside-tap routed through `closeTagEditor()`, so the poll resumes and
+      uncommitted text is discarded
+- [x] 11 more tests; 38 suites / 934 tests green
+- [x] **Fixed: tapping the tag button on a row BELOW an open editor did
+      nothing.** A layout bug, not a state bug — confirmed before changing
+      anything. See "Phase 6 — the row-switching bug" at the end of this file.
+      7 more tests; 38 suites / 941 tests green.
+
 **Gate:** on a phone — tag eggs `tjs` and milk `whole foods`; filter to `tjs`;
 remove eggs, restore it, tag still there; add a fresh item, no tags on it; add
 a recipe containing an already-tagged item, tag unchanged.
 
 ## Phase 7 — Removals since midnight
 
-- [ ] `loadRemovals` gains `since`, allows no limit
-- [ ] `MAX_REMOVALS` ceiling lifted
-- [ ] `limit: 25` removed from the panel fetch
-- [ ] `.slice(0, 5)` removed from the render
-- [ ] `reason: 'manual'` filter kept
-- [ ] Still-in-collection filter kept
+_Done 2026-09-14. See "Phase 7 findings" below._
+
+- [x] `loadRemovals` gains `since`, allows no limit
+- [x] `MAX_REMOVALS` ceiling lifted — bypassed entirely by `limit: null`, and
+      still guarding the history view, which is where it belongs
+- [x] `limit: 25` removed from the panel fetch
+- [x] `.slice(0, 5)` removed from the render
+- [x] `reason: 'manual'` filter kept
+- [x] Still-in-collection filter kept
+- [x] Uses `startOfPacificDay` from Phase 1 — nothing new written
+- [x] Duplication check first: no third day-boundary helper exists
+- [x] 17 new tests; 39 suites / 958 tests green
+- [x] **Removals show their tags and quantity**, in both the panel and the
+      history view — read-only. 18 more tests; 40 suites / 976 tests green.
 
 **Gate:** remove more than five items and see all of them; yesterday's
 removals are absent; correct from a browser set to a non-Pacific timezone.
@@ -1145,3 +1171,364 @@ itself was not touched.
 `TagPicker`'s commit behaviour — a test asserts blur still does not commit with
 `autoFocus` on. Normalisation, matching, the four dirty-check comparisons, and
 Phase 7's three removal caps all untouched.
+
+### Phase 6 editor simplification (2026-09-14)
+
+`TagPicker.jsx` and the collection detail view only. 11 more tests (60 on
+TagPicker, was 49), 38 suites / 934 tests green.
+
+Four changes that are really one: **the row's chips become the tag UI, and the
+editor becomes only the way to add.** Each made the next possible.
+
+#### What was wrong
+
+The editor carried its own copy of the row's chips, each with an ×, plus a Done
+button. The chips under the item name were read-only. So removing a tag meant
+opening an editor to reach a second copy of the thing you were already looking
+at — and tapping away left the input and Done stranded on screen, because only
+the dropdown closed.
+
+#### 1. Removable chips in the row — the one the rest depend on
+
+Each chip now carries its own ×. Removing a tag is one tap on the chip in front
+of you, with no editor involved. Once that exists, the editor's chip list is a
+duplicate and Done has nothing left to do.
+
+**Tap target: a 32px × inside a ~30px chip, not the usual 44px.** 44 would make
+a chip taller than the item name it sits under and crowd the row it is meant to
+annotate — the chips are an annotation on a list you are scanning, not a
+primary control. 32px is a comfortable deliberate tap.
+
+Accidental activation while scrolling is less of a risk than it looks: a
+browser cancels the click once the finger moves, so a scroll never fires one.
+The mis-tap that *could* happen is two ×s sitting shoulder to shoulder, so the
+chip row went from `gap-1` to `gap-1.5` to keep them apart.
+
+#### 2. The editor is now input and dropdown only
+
+`TagPicker` gained `showChips`, default true. The four item/intention pickers
+are untouched — they sit inside forms where the chips have nowhere else to
+live. The collection editor passes `showChips={false}`.
+
+`value` is still passed and still does everything else: deduplication, hiding
+applied tags from the suggestions, and the "already added" line. Only the
+display is suppressed. A test pins that.
+
+The row's chips sit directly above and stay visible while the editor is open,
+so a tag landing is still confirmed on screen — which is what the Phase 4 fix
+was for, and it survives.
+
+#### 3. Tapping outside closes the whole editor
+
+Done is gone. A `mousedown` listener on the document closes the editor when a
+tap lands outside the row.
+
+**`mousedown` and NOT `touchstart`.** A tap fires both; a scroll fires only
+`touchstart`. Listening to `touchstart` would have closed the editor the moment
+a finger landed to scroll the list, which is not a dismissal.
+
+**"Outside" means outside the whole row, not just the editor.** That is what
+makes the row's own Tag button keep working: the tap lands inside, the listener
+ignores it, and `toggleTagEditor` closes the editor by itself rather than the
+two racing to do it. Same for the row's chips — removing a tag mid-edit should
+not throw you out of the editor. Both are tested.
+
+The listener is attached only while an editor is open, and removed when it
+closes.
+
+#### 4. Adding a tag still does not close the editor
+
+The thing most at risk from the other three, and it holds. `TagPicker.dismiss()`
+closes its dropdown and drops focus so the new chip is visible; the editor
+container is owned by the row and stays mounted. Two tests: one tag added
+leaves the input present, and two tags go in without reopening anything.
+
+Closing happens only on an explicit dismissal — outside tap, or the Tag button
+again.
+
+#### Everything closes through one path
+
+The outside tap calls `closeTagEditor()`, the same function Done used to call
+and the same one the Tag button and a view change call. So the poll resumes
+correctly on the new path without the poll-pause expression changing at all,
+and uncommitted text is discarded rather than committed — Phase 4's rule, that
+a tag is created only by an explicit act, and tapping away is not one.
+
+#### Not changed
+
+Normalisation, matching, `TagPicker`'s commit behaviour, the four dirty-check
+comparisons, the poll-pause expression, and Phase 7's three removal caps.
+
+### Phase 6 — the row-switching bug (2026-09-14)
+
+With row A's tag editor open, tapping the tag button on a row **below** A closed
+A and opened nothing. Tapping a row **above** A worked. `Alfred.jsx` and the
+test file only; 7 more tests, 38 suites / 941 tests green.
+
+#### It was layout, and that was confirmed before anything changed
+
+A stale-state bug looks identical from the outside, so the state machine was
+ruled out first — two ways.
+
+**By inspection.** `toggleTagEditor("B")` compares `editingTagsItemId === "B"`.
+At the moment B's click would run, that value is either `null` (the mousedown
+dismissal already committed) or `"A"` (it has not). Both are `!== "B"`, so both
+take the `openTagEditor("B")` branch. **There is no reachable state in which
+tapping B's button fails to open B.**
+
+**By experiment.** A throwaway probe reproduced the exact structure and the
+exact event sequence in jsdom — mousedown on B (dismissal closes A), then click
+on B — and B opened correctly. jsdom has no layout engine, so the one thing it
+cannot reproduce is the reflow. It behaving correctly there is the evidence
+that the fault is not in the logic.
+
+**The cause.** An open editor makes its row taller, so every row below sits
+lower. Closing A on mousedown moved those rows back UP between the press and
+the release, so the button under the finger on press was elsewhere on release
+and the click never completed on it. Rows above an open editor never move,
+which is exactly why tapping upward worked. The directional asymmetry was the
+whole clue.
+
+#### The fix: switch on the press
+
+Two parts, both needed.
+
+**The tag button acts on `onMouseDown` rather than `onClick.`** The whole switch
+— close A, open B — completes on the press, so no click has to land anywhere
+and the reflow becomes irrelevant rather than merely less likely.
+`preventDefault` keeps focus off the button, which also stops the phone
+keyboard flickering between editors.
+
+`onClick` survives for keyboard only, guarded on `e.detail === 0`. Enter and
+Space produce a click with detail 0 and no mousedown; a pointer click carries 1
+or more and was already handled on the press. The guard doubles as protection
+against a stray click that a reflow lands on the wrong button.
+
+**The dismissal listener now exempts any row's tag button**, matched on a
+`data-tag-toggle` attribute. Without it the two race and the symptom is
+identical: React's handlers run at the root container and the dismissal runs at
+the document, so the button would open B and the dismissal, seeing the press
+land outside A, would immediately close it.
+
+Neither the outside-tap dismissal nor the editor's height was touched — both
+were ruled out as fixes because both would undo verified behaviour.
+
+#### What the tests prove, and what they do not
+
+jsdom cannot reproduce a reflow, so **no test here can fail for the original
+reason**. What they pin instead is the property that makes the reflow harmless.
+
+The central one fires **mousedown and no click at all** — which is precisely
+the situation the device produced, since the click was the thing being lost.
+Move the handler back to `onClick` and it fails.
+
+Verified by reverting the harness to the pre-fix shape: that test failed, and so
+did the one covering the dismissal exemption. Notably the "full tap" test still
+**passed** on the broken shape, because in jsdom the click always lands — which
+is the clearest statement of what jsdom can and cannot catch, and why the
+press-only test is the one that matters.
+
+**None of this proves the fix works on a phone. Only the phone proves that.**
+
+#### Still true afterwards
+
+Adding a tag does not close the editor; scrolling does not close it; tapping
+inside the row does not close it; tapping the same row's button closes it;
+tapping outside closes everything. All still routed through `closeTagEditor()`,
+so the poll resumes and uncommitted text is discarded. The poll-pause
+expression, normalisation, matching, `TagPicker`'s commit behaviour and the
+four dirty-check comparisons are all unchanged.
+
+#### A narrower residual, not fixed
+
+The same reflow affects any control on a row below an open editor, not just the
+tag button — the remove-× would mis-land the same way. It is much less likely
+to be hit (the row visibly moves first), and fixing it generally would mean
+either exempting every button from the dismissal or making the editor not
+change row height, both of which undo verified behaviour. Left alone
+deliberately. Note that the quantity field is NOT affected: focus happens as
+the press is dispatched, before the re-render.
+
+### Phase 7 findings (2026-09-14)
+
+`collectionMembers.js` and `Alfred.jsx`; one new test file. 17 tests, 39 suites
+/ 958 tests green, bundle +339 B.
+
+#### Duplication check first — no third helper exists
+
+Asked for before writing anything, because recent SAM work touched "today's
+activity". Searched `src/sam/lib/`, `src/utils/` and the rest for day-boundary
+or today-comparison helpers.
+
+| File | Returns | TZ-aware | Tested | Verdict |
+|---|---|---|---|---|
+| `sam/lib/practiceTimeFormat.js` | date **keys** (`"YYYY-MM-DD"`) | yes, PT | yes | pre-existing |
+| `utils/localDay.js` | an **instant** (`Date`) | yes, PT | yes, 12 tests | pre-existing |
+| `sam/lib/usePracticeStats.js` | — | — | — | **consumer, not a helper** |
+| `sam/components/PracticeWeekSnapshot.jsx` | — | — | — | display only |
+| `RepeatBlockDialog.jsx` | — | — | — | comment match only |
+
+The SAM work added **no new boundary helper**. `usePracticeStats` imports
+`ptDateKey` / `dateKeyMinusDays` from `practiceTimeFormat.js` and buckets by
+date-key strings — it delegates rather than rolling its own, which is what that
+module's header rule requires. `PracticeWeekSnapshot` compares strings it is
+handed.
+
+So it remains the deliberate two-way split in spec §5.3 — keys for SAM,
+instants for Alfred — and `localDay.js` was used as planned.
+
+#### All three caps, and why the first one was not simply deleted
+
+- **`limit: 25`** on the panel fetch — gone.
+- **`.slice(0, 5)`** on the render — gone.
+- **`MAX_REMOVALS = 200`** — *bypassed* rather than deleted. The panel passes
+  `limit: null`, which skips the `.limit()` call entirely. The constant stays
+  and still clamps the history view, which asks for 50 and should keep a
+  ceiling. Deleting it would have removed a bound that is doing real work
+  somewhere else.
+
+`limit: null` and an omitted limit are deliberately different: `null` means "no
+ceiling, I meant it", `undefined` means "I did not think about it" and still
+gets `DEFAULT_REMOVALS`. That is what leaves the history view untouched, and a
+test pins both.
+
+Moving only one or two of the three would have looked like it worked: a heavy
+shopping day exceeds 25 long before it exceeds 200, so the panel would have
+gone on hiding the older half of the same day.
+
+#### The day boundary, stated accurately
+
+`removed_at` is a server timestamp and the boundary comes from an IANA rule, so
+the device's **timezone** is consulted for nothing — a phone in Tokyo and a
+phone at home show the same list at the same moment.
+
+The device **clock** is not entirely out of it, and an earlier draft of the code
+comment overclaimed that it was. `startOfPacificDay()` reads `new Date()` to
+decide which Pacific day is current, which is unavoidable for a window meaning
+"today". A clock wrong by minutes or hours lands on the same day and changes
+nothing; only one wrong enough to cross a Pacific day boundary picks a different
+day. The comment now says this, and it is also what makes the change testable
+without waiting a day — see verification.
+
+#### What the tests assert
+
+The mock records the **query chain** rather than simulating PostgREST, because
+what is under test is the query: which bounds get applied and, more to the
+point, which do not. A count ceiling silently reappearing under a time window is
+invisible in returned rows.
+
+So the tests assert that `.limit()` is never called for the panel's
+combination, that `.gte("removed_at", …)` carries a Pacific midnight — checked
+by rendering the ISO back through `Intl` and asserting it reads `00:00` in
+Los Angeles — and that everything that had to survive did: the `manual` reason
+filter, the collection scope, the unknown-reason rejection, error reporting, and
+camelCased rows **with tags**, which Put back reads to restore them.
+
+#### One cosmetic inconsistency, not fixed
+
+`friendlyDate` labels each row using the **browser's** timezone while the
+selection is now Pacific. On a device far enough ahead, a row correctly inside
+today's Pacific window can be labelled "Yesterday at …". It needs roughly an
+eight-hour-plus offset and a late-in-the-Pacific-day viewing to show up.
+
+Left alone deliberately: `friendlyDate` is shared with the inbox and the full
+history view, and pinning it to Pacific would change timestamps on screens this
+project has no business touching. The rows shown are correct either way; only
+the label can disagree.
+
+#### Not changed
+
+Normalisation, matching, `TagPicker`, everything from Phase 6, and the four
+dirty-check comparisons. No SQL — both migrations were already applied.
+
+### Phase 7 — removals show what they carried (2026-09-14)
+
+Tags and quantity now render on every removal, in both the panel and the
+history view. `Alfred.jsx` plus one new component; 18 tests, 40 suites / 976
+tests green, bundle +27 B.
+
+#### The two views are two CALLS, not two queries
+
+Checked before building anything, because the brief reasonably assumed the
+history view had its own query. It does not: `loadCollectionRemovals` and
+`loadCollectionHistory` both call `loadRemovals`, which selects `"*"`. Both
+were already carrying `tags` and `quantity` — snapshotted at removal time since
+Phase 6 and Phase 3 respectively.
+
+**So no query changed.** A test pins the `select("*")` and asserts both call
+shapes — the panel's `since` + `limit: null`, and the history view's
+`limit: 50` — return both fields, because "the history view has its own query"
+is an easy and wrong thing to act on later.
+
+#### One component, three places
+
+A removal renders in three places: the panel, a single entry in the history
+view, and a row inside a grouped bulk entry. `RemovalMeta` is the one component
+behind all three, extracted to `src/RemovalMeta.jsx` rather than left inline —
+the same call made for `TagPicker`, and it is what makes the three testable at
+all without standing up the whole of `Alfred.jsx`.
+
+Quantity renders verbatim, as the member row shows it. `"6 + 3"` is a real
+value `addOrMergeMembers` produces, and nothing here parses or reformats it.
+
+Chips use the app's standard read-only tag styling — the same fill and shape as
+an item card, an intention card, and a collection member row's chips minus the
+× only a removable one needs.
+
+**Read-only, and a test asserts there are no buttons at all.** A removal is a
+record of something that happened; editing it would be editing history. Tags
+are edited on the member row, which is where the item is.
+
+Nothing renders when a removal has neither — no empty row, no stray gap. Rows
+recorded before Migration B have no `tags` at all, and are handled without
+throwing.
+
+#### Not changed
+
+The since-midnight window, the still-a-member filter, the panel's manual-only
+filter, and the history view's own behaviour — no reason filter, its own limit.
+Normalisation, matching, `TagPicker`, and the four dirty-check comparisons.
+
+---
+
+## Project complete
+
+Every phase is done and verified on the phone. Tags may contain spaces, tag
+entry is an autocomplete picker everywhere, collection items carry per-trip
+tags that survive remove-and-restore, and "recently removed" shows everything
+since Pacific midnight.
+
+40 suites / 976 tests green.
+
+### Deliberately left open
+
+Two known issues, both judged not worth the change they would require. Recorded
+so they are found on purpose rather than rediscovered as bugs.
+
+**1. `friendlyDate` labels rows in the browser's timezone, not Pacific.**
+The removals panel SELECTS by Pacific midnight, so which rows appear is correct
+on any device. The label beside each row is device-local, so on a device roughly
+eight or more hours ahead, a row correctly inside today's Pacific window can
+read "Yesterday at …". Left alone because `friendlyDate` is shared with the
+inbox and the full history view, and pinning it to Pacific would change
+timestamps on screens this project has no business touching. The list is right
+either way; only the label can disagree.
+
+**2. The reflow affects the remove-× on rows below an open tag editor.**
+An open editor makes its row taller. Closing it moves every row below back up,
+so a control pressed on one of those rows can be somewhere else on release and
+its click never lands. This was fixed for the tag button by doing the whole
+switch on the press. The remove-× on a row below an open editor has the same
+exposure. Much less likely to be hit — the row visibly moves first — and fixing
+it generally would mean either exempting every button from the outside-tap
+dismissal or making the editor not change row height, both of which undo
+behaviour that is verified and wanted. The quantity field is NOT affected:
+focus happens as the press is dispatched, before the re-render.
+
+### Also still outstanding, from Phase 2
+
+`/mnt/skills/user/alfred-enrich/SKILL.md` still tells the model to write tags
+underscore-separated. It lives in the Claude.ai skills environment, not this
+repo, so Alex has to edit it there. Not a correctness problem — the normaliser
+enforces the rule regardless of what the skill says — just a stale instruction
+that will make the model's suggestions get rewritten on save.
