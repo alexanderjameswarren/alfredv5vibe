@@ -50,7 +50,16 @@ const VALID_REASONS = [REMOVAL_MANUAL, REMOVAL_COMPLETED];
 /** Postgres unique_violation. Raised by collection_items_unique_member. */
 const UNIQUE_VIOLATION = "23505";
 
-/** Ceiling on a removal-history read. The panel asks for 5, the history view 50. */
+/**
+ * Ceiling on a removal-history read, applied only when a caller asks for a
+ * numeric limit. The history view asks for 50.
+ *
+ * NOT a floor under `since`. The "recently removed" panel asks for everything
+ * removed since local midnight and passes no limit at all, because a heavy
+ * shopping day can produce far more than 200 removals and a cap would silently
+ * hide the older half of the same day — the exact failure this bound used to
+ * cause when the panel asked for 25.
+ */
 const MAX_REMOVALS = 200;
 const DEFAULT_REMOVALS = 50;
 
@@ -99,12 +108,24 @@ export async function loadMembers(collectionId) {
 }
 
 /**
- * Load recent removals for a collection, most recent first.
+ * Load removals for a collection, most recent first.
+ *
+ * Bounded by `since`, by `limit`, by both, or by neither.
+ *
+ * `since` is what the "recently removed" panel uses: everything removed since
+ * local midnight, with NO limit, because a window bounded by time should not
+ * also be bounded by count. The table is indexed on
+ * `(collection_id, removed_at DESC)`, so the range scan is the same shape as
+ * the old ordered read and needs no new index.
+ *
+ * Passing `limit: null` is how a caller says "no ceiling" explicitly. Omitting
+ * it entirely still gives DEFAULT_REMOVALS, so the history view is unchanged.
  *
  * @param {string} collectionId
  * @param {Object} [options]
  * @param {string} [options.reason] - REMOVAL_MANUAL or REMOVAL_COMPLETED. Omit for both.
- * @param {number} [options.limit=50] - Clamped to 1..200.
+ * @param {number|null} [options.limit=50] - Clamped to 1..200. `null` for no limit.
+ * @param {string|Date} [options.since] - Only removals at or after this instant.
  * @returns {Promise<{data: Array<Object>|null, error: string|null}>}
  *   Removals as `{ id, collectionId, itemId, itemName, quantity, tags, position,
  *   reason, removedAt, removedBy }`. `itemName` may be null — see removeMembers.
@@ -112,21 +133,33 @@ export async function loadMembers(collectionId) {
 export async function loadRemovals(collectionId, options = {}) {
   if (!collectionId) return fail("loadRemovals", "collectionId is required");
 
-  const { reason, limit } = options;
+  const { reason, limit, since } = options;
   if (reason && !VALID_REASONS.includes(reason)) {
     return fail("loadRemovals", `Unknown reason "${reason}"`);
   }
 
-  const requested = Number.isFinite(limit) ? limit : DEFAULT_REMOVALS;
-  const clamped = Math.max(1, Math.min(requested, MAX_REMOVALS));
+  let sinceIso = null;
+  if (since !== undefined && since !== null) {
+    const at = since instanceof Date ? since : new Date(since);
+    if (Number.isNaN(at.getTime()))
+      return fail("loadRemovals", `Invalid "since" value`);
+    sinceIso = at.toISOString();
+  }
 
   let query = supabase
     .from(REMOVALS_TABLE)
     .select("*")
     .eq("collection_id", collectionId)
-    .order("removed_at", { ascending: false })
-    .limit(clamped);
+    .order("removed_at", { ascending: false });
 
+  // `null` means the caller deliberately wants no ceiling. `undefined` means it
+  // did not think about it, which still gets the default.
+  if (limit !== null) {
+    const requested = Number.isFinite(limit) ? limit : DEFAULT_REMOVALS;
+    query = query.limit(Math.max(1, Math.min(requested, MAX_REMOVALS)));
+  }
+
+  if (sinceIso) query = query.gte("removed_at", sinceIso);
   if (reason) query = query.eq("reason", reason);
 
   const { data, error } = await query;

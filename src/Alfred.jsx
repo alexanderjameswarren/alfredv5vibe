@@ -29,6 +29,7 @@ import { useSortPreference } from "./SortControl";
 import ListToolbar, { NoMatches } from "./ListToolbar";
 import ItemPicker, { PickedItem } from "./ItemPicker";
 import TagPicker from "./TagPicker";
+import { startOfPacificDay } from "./utils/localDay";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
 import { offsetPatch, isFirstStep } from "./utils/elementOffsets";
@@ -4038,7 +4039,26 @@ export default function Alfred() {
   async function loadCollectionRemovals(collectionId, options = {}) {
     const result = await loadRemovals(collectionId, {
       reason: REMOVAL_MANUAL,
-      limit: 25,
+      // Everything removed since midnight, uncapped. It used to be the most
+      // recent 25, trimmed to 5 on render — which meant a shopping trip that
+      // took more than five things off the list could not show you the sixth,
+      // and one that took off more than 25 had already lost them before the
+      // render ever saw them.
+      //
+      // PACIFIC midnight, not the browser's. `removed_at` is a server
+      // timestamp and the boundary comes from an IANA rule, so the device's
+      // TIMEZONE is consulted for nothing: a phone in Tokyo and a phone at home
+      // show the same list, at the same moment, for the same collection.
+      //
+      // The device clock is not entirely out of it, and the comment here used
+      // to overclaim that. `startOfPacificDay()` reads `new Date()` to decide
+      // WHICH Pacific day is current — unavoidable for a window meaning
+      // "today". A clock wrong by minutes or hours lands on the same day and
+      // changes nothing; only one wrong enough to cross a Pacific day boundary
+      // would pick the wrong day. That is also what makes this testable without
+      // waiting: set the phone a day forward and the panel should empty.
+      since: startOfPacificDay(),
+      limit: null,
     });
     if (result.error) {
       // Surfaced in the panel rather than as an alert: this is a background read
@@ -6234,9 +6254,16 @@ export default function Alfred() {
             ? members.filter((m) => (m.tags || []).includes(collectionFilterTag))
             : members;
           const tagPoolForCollection = collectionTagPool[coll.id] || [];
-          const recentRemovals = (collectionRemovals[coll.id] || [])
-            .filter((r) => !memberItemIds.has(r.itemId))
-            .slice(0, 5);
+          // No .slice() any more — the fetch is already bounded to today, and
+          // capping a time window by count as well is what hid the older half
+          // of a heavy shopping day.
+          //
+          // The still-a-member filter STAYS. It is how "Put back" clears a row
+          // without needing its own optimistic update: re-adding the member is
+          // enough to drop its removal out of the panel.
+          const recentRemovals = (collectionRemovals[coll.id] || []).filter(
+            (r) => !memberItemIds.has(r.itemId),
+          );
           const history = collectionHistory[coll.id] || [];
           return (
             <div>
