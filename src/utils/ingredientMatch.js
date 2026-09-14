@@ -13,7 +13,14 @@
  * original text survives. A wrong product name is visible to the user on the
  * Add to Collection page and can be corrected there; silently mangled text is
  * not.
+ *
+ * The comparison fold that `keyOf` and `contentTokens` are built on used to be
+ * a private `normalize` here. It now lives in `utils/search.js` as `foldText`,
+ * shared with the tag picker's loose matcher, so there is one definition of
+ * "ignore case and punctuation" rather than two that can drift apart.
  */
+
+import { foldText } from "./search";
 
 // Unicode vulgar fractions. The corpus only uses ¼ and ½, but the whole block
 // is covered so a new recipe cannot introduce an unhandled one.
@@ -334,11 +341,6 @@ export function parseIngredient(line) {
   return { quantity, product: product || collapse(src) };
 }
 
-/** Lowercase, drop punctuation, collapse whitespace. */
-function normalize(s) {
-  return collapse(String(s || "").toLowerCase().replace(/[^a-z0-9\s]/g, " "));
-}
-
 /** Crude but sufficient English singulariser for grocery nouns. */
 function singularize(word) {
   if (word.length <= 3) return word;
@@ -350,11 +352,11 @@ function singularize(word) {
 }
 
 function keyOf(s) {
-  return normalize(s).split(" ").filter(Boolean).map(singularize).join(" ");
+  return foldText(s).split(" ").filter(Boolean).map(singularize).join(" ");
 }
 
 function contentTokens(s) {
-  return normalize(s)
+  return foldText(s)
     .split(" ")
     .filter((t) => t && !STOPWORDS.has(t))
     .map(singularize);
