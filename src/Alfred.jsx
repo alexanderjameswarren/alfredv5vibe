@@ -803,6 +803,56 @@ function TagFilter({ entities, activeTag, onFilter }) {
   );
 }
 
+/**
+ * The metadata under a detail view's title: which context the record lives in,
+ * and its tags. One component so the item and intention pages cannot drift.
+ *
+ * The context is PLAIN TEXT behind the context glyph, not a pill. It used to be
+ * a rounded `bg-warning-light` badge — the same fill, size and very nearly the
+ * same shape as a tag chip — so the one thing in the header that was not a tag
+ * was the thing that looked most like one. The glyph is the same `FolderOpen`
+ * the Contexts list puts beside a context row, which is what makes this read as
+ * a location rather than a label someone attached.
+ *
+ * Tags render in FULL. The list-view cards stop at three and add "+N more"
+ * because they are summaries competing for room on a crowded row; a detail view
+ * is the page you opened in order to see everything, so there is nothing left
+ * to abbreviate for. The chip styling is copied from those cards deliberately —
+ * a tag should look like a tag wherever you meet it.
+ *
+ * Display only. Editing tags stays in the edit form until the tag picker lands.
+ *
+ * Renders nothing when there is neither a context nor a tag, rather than an
+ * empty row that reads as a gap under the title.
+ */
+function DetailMeta({ contextName, tags }) {
+  const shown = Array.isArray(tags) ? tags : [];
+  if (!contextName && shown.length === 0) return null;
+
+  return (
+    <div className="mt-2 space-y-2">
+      {contextName && (
+        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <ObjectIcon type="context" className="w-4 h-4 text-primary" />
+          <span className="min-w-0 break-words">{contextName}</span>
+        </p>
+      )}
+      {shown.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {shown.map((tag) => (
+            <span
+              key={tag}
+              className="px-2 py-0.5 bg-warning-light text-accent-foreground text-xs rounded-full"
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItems, collection, onCreateItem }) {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState({});
@@ -8952,90 +9002,96 @@ function IntentionDetailView({
         Back
       </button>
 
-      <div className="mb-4 sm:mb-6">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-2">
-          <div className="flex-1">
-            <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold">
-              <ObjectIcon type="intention" className="w-6 h-6 text-primary" align="first-line" />
-              <span className="min-w-0">{intention.text}</span>
-            </h2>
-            {contextName && (
-              <span className="inline-block mt-2 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
-                {contextName}
-              </span>
-            )}
-          </div>
-          {/* Record actions, top right, in the spec's order:
-              Do Today · Schedule Later · Start Now · Edit · Archive.
+      {/* Header, as of Phase 1b: title on its own full-width row, then the
+          record's metadata, then the actions on a row of their own.
 
-              Do Today and Start Now are gated on having no events, matching
-              IntentionCard: once something is scheduled, scheduling it again
-              from the same screen is not the action anyone wants. */}
-          <div className="flex flex-wrap justify-end gap-2 shrink-0">
-            {/* The slot Step 5 left open. No form to save here, so these commit
-                the schedule directly. Opening downward — this bar is at the top
-                of the page. */}
-            {onSchedule && intentionEvents.length === 0 && (
-              <>
-                <SchedulePopover
-                  label="Do Today"
-                  initialDate={getTodayDate()}
-                  onPick={(date) => onSchedule(intention.id, date)}
-                  className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-                />
-                <SchedulePopover
-                  label="Schedule Later"
-                  onPick={(date) => onSchedule(intention.id, date)}
-                  className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-                />
-              </>
-            )}
-            {onStartNow && intentionEvents.length === 0 && (
-              <button
-                onClick={() => onStartNow(intention.id)}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-              >
-                <Play className="w-4 h-4" />
-                Start Now
-              </button>
-            )}
-            <button
-              onClick={() => setIsEditing(true)}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-            >
-              <Settings className="w-4 h-4" />
-              <span className="hidden sm:inline">Edit Intention</span>
-              <span className="sm:hidden">Edit</span>
-            </button>
-            {/* Archive was previously reachable only from inside the edit form.
-                The same active-execution guard IntentionCard applies, but read
-                from the `executions` prop already in hand rather than with a
-                fresh query — the card does its own round trip, which this page
-                does not need. */}
-            {onArchiveIntention && (
-              <button
-                onClick={() => onArchiveIntention(intention.id)}
-                disabled={hasActiveExecutions}
-                title={
-                  hasActiveExecutions
-                    ? "Cannot archive: active execution in progress"
-                    : "Archive this intention and all related events"
-                }
-                className={`flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base ${
-                  hasActiveExecutions
-                    ? "bg-secondary text-muted-foreground cursor-not-allowed"
-                    : "bg-destructive hover:bg-destructive-hover text-white"
-                }`}
-              >
-                <Archive className="w-4 h-4" />
-                <span className="hidden sm:inline">Archive</span>
-              </button>
-            )}
-          </div>
-        </div>
-        <p className="text-sm text-muted-foreground">
+          The title and the buttons used to share a flex row, the buttons
+          holding a fixed width on the right. A long intention was squeezed into
+          whatever column was left and broke across four or five lines while
+          empty space sat beside it. Nothing here competes for horizontal room
+          any more. Structurally identical to ItemDetailView's header. */}
+      <div className="mb-4 sm:mb-6">
+        <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold">
+          <ObjectIcon type="intention" className="w-6 h-6 text-primary" align="first-line" />
+          <span className="min-w-0">{intention.text}</span>
+        </h2>
+
+        <DetailMeta contextName={contextName} tags={intention.tags} />
+
+        <p className="text-sm text-muted-foreground mt-2">
           Recurrence: {getRecurrenceDisplayString(getRecurrenceConfig(intention), intention.endDate)}
         </p>
+
+        {/* Record actions, in the spec's order:
+            Do Today · Schedule Later · Start Now · Edit · Archive.
+
+            Left-aligned now that they have their own row — they line up with
+            the title above rather than floating off to the right of it.
+
+            Do Today and Start Now are gated on having no events, matching
+            IntentionCard: once something is scheduled, scheduling it again
+            from the same screen is not the action anyone wants. */}
+        <div className="flex flex-wrap gap-2 mt-3">
+          {/* The slot Step 5 left open. No form to save here, so these commit
+              the schedule directly. Opening downward — this bar is at the top
+              of the page. */}
+          {onSchedule && intentionEvents.length === 0 && (
+            <>
+              <SchedulePopover
+                label="Do Today"
+                initialDate={getTodayDate()}
+                onPick={(date) => onSchedule(intention.id, date)}
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              />
+              <SchedulePopover
+                label="Schedule Later"
+                onPick={(date) => onSchedule(intention.id, date)}
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              />
+            </>
+          )}
+          {onStartNow && intentionEvents.length === 0 && (
+            <button
+              onClick={() => onStartNow(intention.id)}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+            >
+              <Play className="w-4 h-4" />
+              Start Now
+            </button>
+          )}
+          <button
+            onClick={() => setIsEditing(true)}
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+          >
+            <Settings className="w-4 h-4" />
+            <span className="hidden sm:inline">Edit Intention</span>
+            <span className="sm:hidden">Edit</span>
+          </button>
+          {/* Archive was previously reachable only from inside the edit form.
+              The same active-execution guard IntentionCard applies, but read
+              from the `executions` prop already in hand rather than with a
+              fresh query — the card does its own round trip, which this page
+              does not need. */}
+          {onArchiveIntention && (
+            <button
+              onClick={() => onArchiveIntention(intention.id)}
+              disabled={hasActiveExecutions}
+              title={
+                hasActiveExecutions
+                  ? "Cannot archive: active execution in progress"
+                  : "Archive this intention and all related events"
+              }
+              className={`flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base ${
+                hasActiveExecutions
+                  ? "bg-secondary text-muted-foreground cursor-not-allowed"
+                  : "bg-destructive hover:bg-destructive-hover text-white"
+              }`}
+            >
+              <Archive className="w-4 h-4" />
+              <span className="hidden sm:inline">Archive</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Linked Item Section */}
@@ -9251,93 +9307,98 @@ function ItemDetailView({
         Back
       </button>
 
+      {/* Header, as of Phase 1b: title on its own full-width row, then the
+          record's metadata, then the actions on a row of their own.
+
+          The title and the buttons used to share a flex row, the buttons
+          holding a fixed width on the right. A long item name was squeezed into
+          whatever column was left and broke across four or five lines while
+          empty space sat beside it. Nothing here competes for horizontal room
+          any more. Structurally identical to IntentionDetailView's header. */}
       <div className="mb-4 sm:mb-6">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-2">
-          <div className="flex-1">
-            <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold">
-              <ObjectIcon type="item" className="w-6 h-6 text-primary" align="first-line" />
-              <span className="min-w-0">{item.name}</span>
-            </h2>
-            {contextName && (
-              <span className="inline-block mt-2 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
-                {contextName}
-              </span>
-            )}
-          </div>
-          {/* Record actions, top right, in the spec's order:
-              Start Now · Clone · Edit · Archive. flex-wrap because four
-              buttons no longer fit one line on a narrow screen. */}
-          <div className="flex flex-wrap justify-end gap-2">
-            {onStartNow && (
-              // bg-primary, not bg-success. Item detail was the only site using
-              // success for this verb; the other three — intention detail,
-              // IntentionCard's row, and EventCard's "Start" — are all primary,
-              // and EventCard's "Start" is literally the same action.
-              //
-              // The deciding argument is what success already means: it carries
-              // "Do Today" and "Complete". On intention detail Do Today sits two
-              // buttons from Start Now, so giving them the same fill would erase
-              // the only visual difference between "schedule it for later today"
-              // and "begin it right now" — the two actions most easily confused.
-              <button
-                onClick={() => onStartNow(item.id)}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-              >
-                <Play className="w-4 h-4" />
-                Start Now
-              </button>
-            )}
-            {onClone && (
-              <button
-                onClick={() => {
-                  setCloneName(item.name + " (Copy)");
-                  setShowCloneDialog(true);
-                }}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-              >
-                <Copy className="w-4 h-4" />
-                <span className="hidden sm:inline">Clone</span>
-              </button>
-            )}
+        <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold">
+          <ObjectIcon type="item" className="w-6 h-6 text-primary" align="first-line" />
+          <span className="min-w-0">{item.name}</span>
+        </h2>
+
+        <DetailMeta contextName={contextName} tags={item.tags} />
+
+        {/* Record actions, in the spec's order:
+            Start Now · Clone · Edit · Add to Collection · Archive.
+
+            Left-aligned now that they have their own row — they line up with
+            the title above rather than floating off to the right of it.
+            flex-wrap because five buttons do not fit one line on a phone. */}
+        <div className="flex flex-wrap gap-2 mt-3">
+          {onStartNow && (
+            // bg-primary, not bg-success. Item detail was the only site using
+            // success for this verb; the other three — intention detail,
+            // IntentionCard's row, and EventCard's "Start" — are all primary,
+            // and EventCard's "Start" is literally the same action.
+            //
+            // The deciding argument is what success already means: it carries
+            // "Do Today" and "Complete". On intention detail Do Today sits two
+            // buttons from Start Now, so giving them the same fill would erase
+            // the only visual difference between "schedule it for later today"
+            // and "begin it right now" — the two actions most easily confused.
             <button
-              onClick={() => setIsEditing(true)}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              onClick={() => onStartNow(item.id)}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
-              <Settings className="w-4 h-4" />
-              <span className="hidden sm:inline">Edit Item</span>
-              <span className="sm:hidden">Edit</span>
+              <Play className="w-4 h-4" />
+              Start Now
             </button>
-            {/* Fifth button. Sits before Archive, not after it: the documented
-                order puts the destructive action last, and that convention
-                outranks "append the new one at the end". Present on every item,
-                not just recipes — `collectable` is a generic flag and a packing
-                list should work the same way. */}
-            {onAddToCollection && (
-              <button
-                onClick={onAddToCollection}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-              >
-                <ObjectIcon type="collection" className="w-4 h-4" />
-                <span className="hidden sm:inline">Add to Collection</span>
-                <span className="sm:hidden">Collect</span>
-              </button>
-            )}
-            {/* New here. Archiving was previously reachable only from inside the
-                edit form, which broke governing rule 4 — a state change hidden
-                behind a content-editing surface. `onUpdateItem` already offers
-                the Undo, so there is no confirmation and nothing to add.
-                Leaves the page because it is showing the record just archived. */}
+          )}
+          {onClone && (
             <button
               onClick={() => {
-                onUpdateItem(item.id, { archived: true });
-                onBack();
+                setCloneName(item.name + " (Copy)");
+                setShowCloneDialog(true);
               }}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
-              <Archive className="w-4 h-4" />
-              <span className="hidden sm:inline">Archive</span>
+              <Copy className="w-4 h-4" />
+              <span className="hidden sm:inline">Clone</span>
             </button>
-          </div>
+          )}
+          <button
+            onClick={() => setIsEditing(true)}
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+          >
+            <Settings className="w-4 h-4" />
+            <span className="hidden sm:inline">Edit Item</span>
+            <span className="sm:hidden">Edit</span>
+          </button>
+          {/* Fifth button. Sits before Archive, not after it: the documented
+              order puts the destructive action last, and that convention
+              outranks "append the new one at the end". Present on every item,
+              not just recipes — `collectable` is a generic flag and a packing
+              list should work the same way. */}
+          {onAddToCollection && (
+            <button
+              onClick={onAddToCollection}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+            >
+              <ObjectIcon type="collection" className="w-4 h-4" />
+              <span className="hidden sm:inline">Add to Collection</span>
+              <span className="sm:hidden">Collect</span>
+            </button>
+          )}
+          {/* New here. Archiving was previously reachable only from inside the
+              edit form, which broke governing rule 4 — a state change hidden
+              behind a content-editing surface. `onUpdateItem` already offers
+              the Undo, so there is no confirmation and nothing to add.
+              Leaves the page because it is showing the record just archived. */}
+          <button
+            onClick={() => {
+              onUpdateItem(item.id, { archived: true });
+              onBack();
+            }}
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+          >
+            <Archive className="w-4 h-4" />
+            <span className="hidden sm:inline">Archive</span>
+          </button>
         </div>
       </div>
 
