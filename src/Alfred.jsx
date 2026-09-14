@@ -29,6 +29,7 @@ import { useSortPreference } from "./SortControl";
 import ListToolbar, { NoMatches } from "./ListToolbar";
 import ItemPicker, { PickedItem } from "./ItemPicker";
 import TagPicker from "./TagPicker";
+import RemovalMeta from "./RemovalMeta";
 import { startOfPacificDay } from "./utils/localDay";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
@@ -6678,7 +6679,11 @@ export default function Alfred() {
                                 <p className="font-medium text-sm truncate">
                                   <ItemNameLabel name={removal.itemName} />
                                 </p>
-                                <p className="text-xs text-muted-foreground">
+                                <RemovalMeta
+                                  quantity={removal.quantity}
+                                  tags={removal.tags}
+                                />
+                                <p className="text-xs text-muted-foreground mt-1">
                                   {friendlyDate(removal.removedAt)}
                                 </p>
                               </div>
@@ -6791,7 +6796,11 @@ export default function Alfred() {
                           <p className="font-medium text-sm truncate">
                             <ItemNameLabel name={group.rows[0].itemName} />
                           </p>
-                          <p className="text-xs text-muted-foreground">
+                          <RemovalMeta
+                            quantity={group.rows[0].quantity}
+                            tags={group.rows[0].tags}
+                          />
+                          <p className="text-xs text-muted-foreground mt-1">
                             {friendlyDate(group.removedAt)}
                           </p>
                         </div>
@@ -6821,9 +6830,18 @@ export default function Alfred() {
                         </div>
                         <div className="space-y-1">
                           {group.rows.map((removal) => (
-                            <p key={removal.id} className="text-sm truncate">
-                              <ItemNameLabel name={removal.itemName} />
-                            </p>
+                            <div key={removal.id} className="min-w-0">
+                              <p className="text-sm truncate">
+                                <ItemNameLabel name={removal.itemName} />
+                              </p>
+                              {/* The group heading already states the time and
+                                  the reason once; what a row still needs to say
+                                  for itself is what it was. */}
+                              <RemovalMeta
+                                quantity={removal.quantity}
+                                tags={removal.tags}
+                              />
+                            </div>
                           ))}
                         </div>
                       </div>
