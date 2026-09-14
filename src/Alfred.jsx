@@ -58,6 +58,7 @@ import {
   Copy,
   ChevronDown,
   GripVertical,
+  Tag,
   Settings,
   Archive,
   Sparkles,
@@ -96,6 +97,8 @@ import {
   removeMembers,
   reAddRemoval,
   updateMemberQuantity,
+  updateMemberTags,
+  loadCollectionTagPool,
   reorderMembers,
   REMOVAL_MANUAL,
   REMOVAL_COMPLETED,
@@ -1426,6 +1429,20 @@ export default function Alfred() {
   const pollPausedRef = useRef(false);
   const memberWriteInFlight = useRef(0);
   const [filterTag, setFilterTag] = useState(null);
+  // Separate from `filterTag` on purpose. That one is shared across Intentions,
+  // Memories and Context Detail, all of which draw from the item/intent tag
+  // pool. Collection tags are a different vocabulary entirely — per-shopping-
+  // trip store labels — so filtering a list to "tjs" must not leave that filter
+  // set when you open a context, where no such tag exists and the list would
+  // silently come back empty.
+  const [collectionFilterTag, setCollectionFilterTag] = useState(null);
+  // Suggestions for the tag control on a collection member row, keyed by
+  // collection id. Drawn from that collection's members AND its removal
+  // history, so the vocabulary survives the list being emptied.
+  const [collectionTagPool, setCollectionTagPool] = useState({});
+  // Which member row has its tag editor open, or null. One at a time — the
+  // picker is too tall to have several expanded on a phone.
+  const [editingTagsItemId, setEditingTagsItemId] = useState(null);
   const [selectedCollectionId, setSelectedCollectionId] = useState(null);
   const [collDragIdx, setCollDragIdx] = useState(null);
   const [collectionContextFilter, setCollectionContextFilter] = useState("");
@@ -1917,6 +1934,12 @@ export default function Alfred() {
 
   useEffect(() => {
     setFilterTag(null);
+    setCollectionFilterTag(null);
+    // Through the same close path as Done and the Tag button, so leaving the
+    // view cannot drift from the other ways of closing. Hoisted, so calling it
+    // from an effect declared above it is fine.
+    closeTagEditor();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
   // Load removal history when a collection view is opened. One-shot fetches on
@@ -1930,6 +1953,7 @@ export default function Alfred() {
       loadCollectionMembers([selectedCollectionId]);
       loadCollectionRemovals(selectedCollectionId);
       loadCollectionHistory(selectedCollectionId);
+      loadCollectionTags(selectedCollectionId);
     } else if (view === "collection-history") {
       loadCollectionHistory(selectedCollectionId);
     }
@@ -1942,8 +1966,14 @@ export default function Alfred() {
   // interval callback below closes over the render that created it.
   useEffect(() => {
     pollPausedRef.current =
-      collDragIdx !== null || editingQuantityItemId !== null || isLoading;
-  }, [collDragIdx, editingQuantityItemId, isLoading]);
+      collDragIdx !== null ||
+      editingQuantityItemId !== null ||
+      // An open tag editor is the same hazard as an open quantity field: a
+      // five-second tick would replace `members` underneath the picker and
+      // throw away chips added since the last write.
+      editingTagsItemId !== null ||
+      isLoading;
+  }, [collDragIdx, editingQuantityItemId, editingTagsItemId, isLoading]);
 
   /**
    * Live refresh for the open collection: a five-second poll, the same cadence
@@ -4072,6 +4102,100 @@ export default function Alfred() {
   // As of Step 12.4 removeItemFromCollection and putBackRemoval are in this set
   // too — every write on the shopping path now holds the poll off explicitly
   // rather than as a side effect of raising a full-screen overlay.
+  /**
+   * Load the tag vocabulary for one collection's picker.
+   *
+   * Non-fatal by design: a picker with no suggestions still lets you create a
+   * tag, so a failure here logs and leaves the pool empty rather than blocking
+   * the control or raising an alert mid-shop.
+   */
+  /**
+   * Close whichever collection tag editor is open.
+   *
+   * THE single close path. Tapping Done, tapping the open row's own Tag button,
+   * switching to a different row, and leaving the view all route through here,
+   * so none of them can drift from the others as this grows. Right now the
+   * cleanup is one state write; the point is that when it stops being one, it
+   * stops being one everywhere at once.
+   *
+   * Uncommitted text in the picker is discarded rather than committed, which is
+   * the Phase 4 rule holding: a tag is created only by an explicit act. The
+   * picker unmounts with the row, taking its query state with it.
+   *
+   * Clearing this also un-pauses the collection poll, via the effect that reads
+   * `editingTagsItemId`.
+   */
+  function closeTagEditor() {
+    setEditingTagsItemId(null);
+  }
+
+  /**
+   * Open the tag editor on one member row, closing any other first.
+   *
+   * The close goes through `closeTagEditor` rather than being implied by
+   * overwriting the id, so switching rows and closing a row share a path. React
+   * batches the two writes, so the outgoing picker unmounts and the incoming
+   * one mounts in a single commit — no flicker, and no window where the poll
+   * sees "nothing open" and resumes mid-switch.
+   */
+  function openTagEditor(itemId) {
+    closeTagEditor();
+    setEditingTagsItemId(itemId);
+  }
+
+  /** Tapping a row's Tag button: close it if it is the open one, else switch. */
+  function toggleTagEditor(itemId) {
+    if (editingTagsItemId === itemId) closeTagEditor();
+    else openTagEditor(itemId);
+  }
+
+  async function loadCollectionTags(collectionId) {
+    const result = await loadCollectionTagPool(collectionId);
+    if (result.error) {
+      console.error("[collections] failed to load the tag pool:", result.error);
+      return;
+    }
+    setCollectionTagPool((prev) => ({ ...prev, [collectionId]: result.data }));
+  }
+
+  /**
+   * Write a member row's tags.
+   *
+   * Optimistic, like the quantity save: the chips change on the tap and the
+   * write follows. A failure reloads membership so the row snaps back to what
+   * the database actually holds rather than lying about it.
+   *
+   * The new tag is folded into the pool immediately so it is offered on the
+   * next row without waiting for a refetch — tagging three items for the same
+   * store in a row is the normal case, and only the first should cost a
+   * "Create".
+   */
+  async function saveMemberTags(collectionId, itemId, tags) {
+    memberWriteInFlight.current += 1;
+    try {
+      setCollectionTagPool((prev) => {
+        const pool = prev[collectionId] || [];
+        const added = tags.filter((tag) => !pool.includes(tag));
+        return added.length === 0
+          ? prev
+          : { ...prev, [collectionId]: [...pool, ...added] };
+      });
+
+      const result = await updateMemberTags(collectionId, itemId, tags);
+      if (result.error) {
+        reportMembershipError("save those tags", result.error);
+        await loadCollectionMembers([collectionId]);
+        return false;
+      }
+      setMembersFor(collectionId, (prev) =>
+        prev.map((m) => (m.itemId === itemId ? result.data : m)),
+      );
+      return true;
+    } finally {
+      memberWriteInFlight.current -= 1;
+    }
+  }
+
   async function saveMemberQuantity(collectionId, itemId, quantity) {
     memberWriteInFlight.current += 1;
     try {
@@ -6055,6 +6179,14 @@ export default function Alfred() {
           // of a panel meant for unresolved ones. The removal record itself stays
           // in the table — the history stays honest.
           const memberItemIds = new Set(members.map((m) => m.itemId));
+          // Filtered for display only. Drag-to-reorder still works against the
+          // full `members` list — reordering a filtered subset would write
+          // positions that mean nothing once the filter is cleared, so the
+          // handles are hidden while a filter is on.
+          const visibleMembers = collectionFilterTag
+            ? members.filter((m) => (m.tags || []).includes(collectionFilterTag))
+            : members;
+          const tagPoolForCollection = collectionTagPool[coll.id] || [];
           const recentRemovals = (collectionRemovals[coll.id] || [])
             .filter((r) => !memberItemIds.has(r.itemId))
             .slice(0, 5);
@@ -6173,17 +6305,34 @@ export default function Alfred() {
                     <p className="text-xs text-destructive mb-2">Maximum 200 items reached.</p>
                   )}
 
+                  {/* Store filter. Same component the item and intention lists
+                      use, handed the members so it counts this collection's
+                      tags — but wired to `collectionFilterTag`, which is NOT
+                      the `filterTag` those lists share. See the state
+                      declaration for why they must stay apart. */}
+                  <TagFilter
+                    entities={members}
+                    activeTag={collectionFilterTag}
+                    onFilter={setCollectionFilterTag}
+                  />
+
                   {members.length === 0 ? (
                     <p className="text-muted-foreground text-sm py-4 text-center">No items in this collection</p>
+                  ) : visibleMembers.length === 0 ? (
+                    <p className="text-muted-foreground text-sm py-4 text-center">
+                      No items tagged &quot;{collectionFilterTag}&quot;
+                    </p>
                   ) : (
                     <div className="space-y-2">
-                      {members.map((member, index) => {
+                      {visibleMembers.map((member, index) => {
                         const linkedItem = items.find((i) => i.id === member.itemId);
+                        const memberTags = member.tags || [];
+                        const tagsOpen = editingTagsItemId === member.itemId;
                         return (
                           <div
                             key={member.id || member.itemId || index}
-                            className={`flex items-center gap-2 p-3 bg-card border border-border rounded-lg ${collDragIdx === index ? "opacity-50" : ""}`}
-                            draggable
+                            className={`p-3 bg-card border border-border rounded-lg ${collDragIdx === index ? "opacity-50" : ""}`}
+                            draggable={!collectionFilterTag && !tagsOpen}
                             onDragStart={(e) => { setCollDragIdx(index); e.dataTransfer.effectAllowed = "move"; }}
                             onDragOver={(e) => {
                               e.preventDefault();
@@ -6201,11 +6350,36 @@ export default function Alfred() {
                               saveMemberOrder(coll.id, members);
                             }}
                           >
-                            <GripVertical className="w-4 h-4 text-muted-foreground cursor-move flex-shrink-0" title="Drag to reorder" />
+                          <div className="flex items-center gap-2">
+                            {/* Hidden while filtering: the visible rows are a
+                                subset, so a drop position would be a lie. */}
+                            {!collectionFilterTag && (
+                              <GripVertical className="w-4 h-4 text-muted-foreground cursor-move flex-shrink-0" title="Drag to reorder" />
+                            )}
                             <div className="flex-1 min-w-0">
                               <p className="font-medium text-sm truncate">
                                 <ItemNameLabel name={linkedItem?.name} />
                               </p>
+                              {/* Store chips, under the name rather than beside
+                                  it. At 360px the row has no spare width — name,
+                                  quantity and the two buttons already fill it —
+                                  and the store has to be readable at a glance in
+                                  an aisle, which a count badge or an icon is not.
+                                  A second line only appears when a row actually
+                                  has tags, so an untagged list is exactly as
+                                  compact as it was before this phase. */}
+                              {memberTags.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {memberTags.map((tag) => (
+                                    <span
+                                      key={tag}
+                                      className="px-2 py-0.5 bg-warning-light text-accent-foreground text-xs rounded-full"
+                                    >
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                             {/* Quantity is disabled when the item cannot be shown:
                                 setting an amount on something you cannot identify
@@ -6237,6 +6411,31 @@ export default function Alfred() {
                               placeholder="Qty"
                               className="w-20 sm:w-24 px-2 py-2 border border-border rounded text-base disabled:opacity-50 disabled:cursor-not-allowed"
                             />
+                            {/* Opens the picker below this row, one at a time.
+                                Disabled for an unreadable item for the same
+                                reason quantity is: tagging something you cannot
+                                identify is a guess. */}
+                            <button
+                              onClick={() =>
+                                toggleTagEditor(member.itemId)
+                              }
+                              disabled={!linkedItem}
+                              aria-label={tagsOpen ? "Done tagging" : "Tag this item"}
+                              title={
+                                linkedItem
+                                  ? tagsOpen
+                                    ? "Done tagging"
+                                    : "Tag this item"
+                                  : "This item cannot be shown, so it cannot be tagged"
+                              }
+                              className={`p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg disabled:opacity-50 disabled:cursor-not-allowed ${
+                                tagsOpen
+                                  ? "bg-primary text-white"
+                                  : "text-muted-foreground hover:text-primary"
+                              }`}
+                            >
+                              <Tag className="w-4 h-4" />
+                            </button>
                             <button
                               // No overlay — Step 12.4. This is THE shopping
                               // action: one-handed, in an aisle, once per item.
@@ -6251,6 +6450,43 @@ export default function Alfred() {
                             >
                               <X className="w-4 h-4" />
                             </button>
+                          </div>
+
+                          {/* The editor, expanded under its own row. One at a
+                              time — the picker is a text field plus a dropdown
+                              plus chips, and two of them open at once would push
+                              the list off a phone screen.
+
+                              Its pool is the COLLECTION pool: this collection's
+                              members plus its removal history. It never mixes
+                              with the item/intent pool — "tjs" has no business
+                              on a recipe and "vegetarian" none on a shopping
+                              row. */}
+                          {tagsOpen && (
+                            <div className="mt-3 pt-3 border-t border-border">
+                              <TagPicker
+                                value={memberTags}
+                                pool={tagPoolForCollection}
+                                onChange={(next) =>
+                                  saveMemberTags(coll.id, member.itemId, next)
+                                }
+                                placeholder="Search or add a store…"
+                                label="Search or add a store"
+                                // Opened by tapping the Tag button, so it is
+                                // ready to type into. Raises the keyboard
+                                // immediately, which is the intent. The four
+                                // item/intention pickers do NOT pass this —
+                                // they sit in a form you may be scrolling past.
+                                autoFocus
+                              />
+                              <button
+                                onClick={closeTagEditor}
+                                className="mt-2 px-3 py-2 min-h-[44px] text-sm text-primary hover:text-primary-hover"
+                              >
+                                Done
+                              </button>
+                            </div>
+                          )}
                           </div>
                         );
                       })}

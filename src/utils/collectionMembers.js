@@ -54,6 +54,13 @@ const UNIQUE_VIOLATION = "23505";
 const MAX_REMOVALS = 200;
 const DEFAULT_REMOVALS = 50;
 
+/**
+ * How far back the tag pool looks through removal history. Separate from
+ * MAX_REMOVALS because this read fetches one column and never renders a row —
+ * it is gathering vocabulary, not history.
+ */
+const TAG_POOL_REMOVALS = 500;
+
 // ─── Result helpers ──────────────────────────────────────────────────────────
 
 function ok(data, extra) {
@@ -75,7 +82,8 @@ function fail(context, error, extra) {
  *
  * @param {string} collectionId
  * @returns {Promise<{data: Array<Object>|null, error: string|null}>}
- *   Members as `{ id, collectionId, itemId, quantity, position, addedAt, addedBy }`.
+ *   Members as `{ id, collectionId, itemId, quantity, tags, position, addedAt,
+ *   addedBy }`.
  */
 export async function loadMembers(collectionId) {
   if (!collectionId) return fail("loadMembers", "collectionId is required");
@@ -98,7 +106,7 @@ export async function loadMembers(collectionId) {
  * @param {string} [options.reason] - REMOVAL_MANUAL or REMOVAL_COMPLETED. Omit for both.
  * @param {number} [options.limit=50] - Clamped to 1..200.
  * @returns {Promise<{data: Array<Object>|null, error: string|null}>}
- *   Removals as `{ id, collectionId, itemId, itemName, quantity, position,
+ *   Removals as `{ id, collectionId, itemId, itemName, quantity, tags, position,
  *   reason, removedAt, removedBy }`. `itemName` may be null — see removeMembers.
  */
 export async function loadRemovals(collectionId, options = {}) {
@@ -124,6 +132,82 @@ export async function loadRemovals(collectionId, options = {}) {
   const { data, error } = await query;
   if (error) return fail("loadRemovals", error);
   return ok((data || []).map((row) => toCamelCase(row)));
+}
+
+/**
+ * Every tag ever used on this collection, most-used first.
+ *
+ * The suggestion pool for the tag control on a member row. Two sources, unioned:
+ * the tags on current members, and the tags on this collection's removal
+ * history.
+ *
+ * ─── Why the removals half is the important half ─────────────────────────────
+ *
+ * Without it the pool empties the moment the shopping trip does. Tick the last
+ * item off the list and "tjs" and "whole foods" cease to exist, so next week
+ * they get retyped from scratch — and retyped slightly differently, which is
+ * the duplicate problem this whole project exists to prevent. The removal
+ * history is the only place a finished trip's vocabulary survives.
+ *
+ * 500 rows is generous for a shopping list and bounds the read. They are the
+ * most recent 500, so a tag that has not been used in a very long time
+ * eventually drops out of the suggestions — which is the right way round.
+ *
+ * ─── Kept separate from the item/intent pool, always ─────────────────────────
+ *
+ * These are per-trip labels. "tjs" has no business being offered on a recipe,
+ * and "vegetarian" has none being offered on a shopping row. The two pools are
+ * built by different functions from different tables and never merge.
+ *
+ * Failure is non-fatal and returns what it could get: a picker with no
+ * suggestions still lets you create a tag, which is worse than the full list
+ * but far better than a blocked control.
+ *
+ * @param {string} collectionId
+ * @returns {Promise<{data: string[]|null, error: string|null}>}
+ */
+export async function loadCollectionTagPool(collectionId) {
+  if (!collectionId)
+    return fail("loadCollectionTagPool", "collectionId is required");
+
+  const [membersResult, removalsResult] = await Promise.all([
+    supabase.from(MEMBERS_TABLE).select("tags").eq("collection_id", collectionId),
+    supabase
+      .from(REMOVALS_TABLE)
+      .select("tags")
+      .eq("collection_id", collectionId)
+      .order("removed_at", { ascending: false })
+      .limit(TAG_POOL_REMOVALS),
+  ]);
+
+  if (membersResult.error && removalsResult.error)
+    return fail("loadCollectionTagPool", membersResult.error);
+
+  // One arm failing still yields a usable pool. Log it, use the other.
+  if (membersResult.error)
+    console.error("[collectionMembers] loadCollectionTagPool members:", membersResult.error);
+  if (removalsResult.error)
+    console.error("[collectionMembers] loadCollectionTagPool removals:", removalsResult.error);
+
+  const counts = new Map();
+  for (const rows of [membersResult.data, removalsResult.data]) {
+    for (const row of rows || []) {
+      for (const tag of row?.tags || []) {
+        if (typeof tag === "string" && tag !== "") {
+          counts.set(tag, (counts.get(tag) || 0) + 1);
+        }
+      }
+    }
+  }
+
+  // Frequency first, ties alphabetical — the same ordering the item/intent pool
+  // uses, so the two controls behave identically even though they never share
+  // a tag.
+  return ok(
+    [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([tag]) => tag),
+  );
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
@@ -175,6 +259,24 @@ async function fetchItemNames(itemIds) {
   return names;
 }
 
+/**
+ * Coerce a tags value into something safe to store in a `text[]` column.
+ *
+ * Deliberately does NOT normalise the tag text. `normaliseTag` runs where a tag
+ * is committed in the UI; by the time a tag reaches this module it is already
+ * canonical, and folding it again here would be a second copy of the rule that
+ * could drift from the first. All this does is guarantee the shape: an array of
+ * non-empty strings, deduplicated.
+ */
+function normaliseTagsArray(tags) {
+  if (!Array.isArray(tags)) return [];
+  const seen = new Set();
+  for (const tag of tags) {
+    if (typeof tag === "string" && tag !== "") seen.add(tag);
+  }
+  return [...seen];
+}
+
 /** Empty-string quantities were normalised to null on backfill. Stay consistent. */
 function normaliseQuantity(quantity) {
   if (quantity === undefined || quantity === null) return null;
@@ -190,8 +292,12 @@ function normaliseQuantity(quantity) {
  * Items already in the collection are skipped rather than erroring — the unique
  * index on (collection_id, item_id) is resolved with ON CONFLICT DO NOTHING.
  *
+ * Tags default to `[]`. Nothing in the app passes them on a FRESH add — a new
+ * collection row always starts untagged, per spec §11 — but `reAddRemoval` does,
+ * which is how a tag survives being removed and put back.
+ *
  * @param {string} collectionId
- * @param {Array<{itemId: string, quantity?: string}>} entries
+ * @param {Array<{itemId: string, quantity?: string, tags?: string[]}>} entries
  * @param {Object} [options]
  * @param {string} [options.userId] - Recorded as added_by. Null when absent.
  * @returns {Promise<{data: Array<Object>|null, error: string|null, skipped: Array<string>}>}
@@ -214,6 +320,9 @@ export async function addMembers(collectionId, entries, options = {}) {
       collectionId,
       itemId: entry.itemId,
       quantity: normaliseQuantity(entry.quantity),
+      // Defaults to []. A fresh add is always untagged (spec §11); the only
+      // caller that passes anything is reAddRemoval, restoring a snapshot.
+      tags: normaliseTagsArray(entry.tags),
       position: position + index,
       addedBy: userId || null,
     }),
@@ -254,6 +363,7 @@ export async function addMembers(collectionId, entries, options = {}) {
  * @param {string} itemId
  * @param {Object} [options]
  * @param {string} [options.quantity]
+ * @param {string[]} [options.tags] - Defaults to []. Only reAddRemoval passes this.
  * @param {string} [options.userId]
  * @returns {Promise<{data: Object|null, error: string|null, alreadyPresent: boolean}>}
  *   `alreadyPresent` is true when the item was already a member; that is a
@@ -265,7 +375,7 @@ export async function addMember(collectionId, itemId, options = {}) {
 
   const result = await addMembers(
     collectionId,
-    [{ itemId, quantity: options.quantity }],
+    [{ itemId, quantity: options.quantity, tags: options.tags }],
     { userId: options.userId },
   );
 
@@ -463,6 +573,11 @@ export async function addOrMergeMembers(collectionId, entries, options = {}) {
 /**
  * Update a member's free-text quantity. Empty string is stored as null.
  *
+ * ⚠️ DO NOT WIDEN THIS TO ALSO WRITE TAGS. `addOrMergeMembers` calls it in a
+ * loop to merge quantities, and a tags column in this payload would overwrite
+ * whatever store a row was tagged with every time a recipe was added. Tags have
+ * their own targeted writer, `updateMemberTags`, immediately below.
+ *
  * @param {string} collectionId
  * @param {string} itemId
  * @param {string} quantity
@@ -482,6 +597,43 @@ export async function updateMemberQuantity(collectionId, itemId, quantity) {
   if (error) return fail("updateMemberQuantity", error);
   if (!data || data.length === 0)
     return fail("updateMemberQuantity", "Item is no longer in this collection");
+
+  return ok(toCamelCase(data[0]));
+}
+
+/**
+ * Replace a member's tags.
+ *
+ * Deliberately separate from `updateMemberQuantity` rather than a widened
+ * version of it — see the warning on that function. This one is called only
+ * from the tag control on a member row, never in a loop.
+ *
+ * The full array is written, not merged: the tag picker already holds the
+ * complete set for that row, so an incoming `[]` means "the user removed the
+ * last chip" and must clear the column rather than be ignored.
+ *
+ * Scoped by collection_id as well as item_id, so tagging a row somebody else
+ * removed mid-edit matches nothing and reports it, rather than resurrecting it.
+ *
+ * @param {string} collectionId
+ * @param {string} itemId
+ * @param {string[]} tags - The complete tag list for this row.
+ * @returns {Promise<{data: Object|null, error: string|null}>}
+ */
+export async function updateMemberTags(collectionId, itemId, tags) {
+  if (!collectionId || !itemId)
+    return fail("updateMemberTags", "collectionId and itemId are required");
+
+  const { data, error } = await supabase
+    .from(MEMBERS_TABLE)
+    .update({ tags: normaliseTagsArray(tags) })
+    .eq("collection_id", collectionId)
+    .eq("item_id", itemId)
+    .select("*");
+
+  if (error) return fail("updateMemberTags", error);
+  if (!data || data.length === 0)
+    return fail("updateMemberTags", "Item is no longer in this collection");
 
   return ok(toCamelCase(data[0]));
 }
@@ -589,6 +741,10 @@ export async function removeMembers(collectionId, itemIds, options = {}) {
       itemId: member.itemId,
       itemName: names.has(member.itemId) ? names.get(member.itemId) : null,
       quantity: member.quantity ?? null,
+      // Snapshotted so a tag survives remove-and-restore. Without this, taking
+      // an item off the list and putting it back would silently lose which
+      // store it belonged to — the single thing the tags are for.
+      tags: normaliseTagsArray(member.tags),
       position: member.position ?? null,
       reason,
       removedBy: userId || null,
@@ -649,6 +805,8 @@ export async function removeMember(collectionId, itemId, options = {}) {
  * is absorbed as a no-op, and comes back with `alreadyPresent: true` rather than
  * an error.
  *
+ * Quantity AND tags are restored from the snapshot. Position is not — see below.
+ *
  * The removal record is left in place. `collection_item_removals` is append-only
  * and re-adding is a plain insert, not an undo — so the history keeps saying the
  * item was removed at that time, which remains true. Deciding whether the panel
@@ -668,6 +826,8 @@ export async function reAddRemoval(removal, options = {}) {
 
   return addMember(removal.collectionId, removal.itemId, {
     quantity: removal.quantity,
+    // The other half of the round trip. removeMembers snapshotted these.
+    tags: removal.tags,
     userId: options.userId,
   });
 }

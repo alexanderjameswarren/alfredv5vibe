@@ -268,3 +268,76 @@ describe("addOrMergeMembers — the ignoreDuplicates race", () => {
     expect(res.data[0].quantity).toBe("9 raced + 3");
   });
 });
+
+// ─── The guard that stops item tags leaking onto collection rows ─────────────
+//
+// `collapseEntries` rebuilds every entry as `{itemId, quantity}`, discarding
+// anything else. Since Phase 6 taught `addMembers` to accept `entry.tags`, that
+// discard is the ONLY thing standing between an item's own tags — "vegetarian",
+// "recipe" — and its row on the shopping list.
+//
+// It is one line, it looks like tidying, and widening it would look like a
+// helpful generalisation. These tests are why it cannot be.
+describe("item tags must not leak into collection rows", () => {
+  it("drops tags carried on an entry through the recipe→collection flow", async () => {
+    // Exactly the shape addElementsToCollection would build if somebody
+    // "helpfully" passed the source item's tags along.
+    const res = await addOrMergeMembers("c1", [
+      { itemId: "limes", quantity: "6", tags: ["vegetarian", "recipe"] },
+    ]);
+
+    expect(res.error).toBeNull();
+    const written = __state.members.find((m) => m.item_id === "limes");
+    expect(written.tags).toEqual([]);
+  });
+
+  it("drops them for every entry in a multi-item recipe add", async () => {
+    const res = await addOrMergeMembers("c1", [
+      { itemId: "limes", quantity: "6", tags: ["vegetarian"] },
+      { itemId: "beans", quantity: "2 cans", tags: ["recipe", "pantry"] },
+      { itemId: "salt", tags: ["seasoning"] },
+    ]);
+
+    expect(res.error).toBeNull();
+    expect(__state.members.map((m) => m.tags)).toEqual([[], [], []]);
+  });
+
+  it("leaves an existing row's tags alone when a recipe re-adds that item", async () => {
+    // The merge policy: quantity merges, tags are untouched. This is the case
+    // where a shopping row already tagged "tjs" gets pulled in by a recipe.
+    __state.members.push({
+      ...member("limes", "3", 0),
+      tags: ["tjs"],
+    });
+
+    const res = await addOrMergeMembers("c1", [
+      { itemId: "limes", quantity: "6", tags: ["vegetarian"] },
+    ]);
+
+    expect(res.error).toBeNull();
+    expect(res.merged).toEqual(["limes"]);
+
+    // The stored row keeps its tags: the merge writes quantity only, so nothing
+    // in the update payload can touch them. (The mock returns the patched row
+    // rather than mutating state, so the merged quantity is read from `data`.)
+    expect(__state.members.find((m) => m.item_id === "limes").tags).toEqual([
+      "tjs",
+    ]);
+    expect(res.data[0].quantity).toBe("3 + 6");
+    expect(res.data[0].tags).toEqual(["tjs"]);
+  });
+
+  it("still drops them when the same item appears twice in one call", async () => {
+    // collapseEntries merges the two into one entry; the tags must not survive
+    // that merge either.
+    const res = await addOrMergeMembers("c1", [
+      { itemId: "limes", quantity: "3", tags: ["vegetarian"] },
+      { itemId: "limes", quantity: "3", tags: ["recipe"] },
+    ]);
+
+    expect(res.error).toBeNull();
+    const rows = __state.members.filter((m) => m.item_id === "limes");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].tags).toEqual([]);
+  });
+});
