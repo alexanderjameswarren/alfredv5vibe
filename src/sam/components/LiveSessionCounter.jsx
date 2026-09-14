@@ -17,7 +17,11 @@ import { formatMinutesLong } from "../lib/practiceTimeFormat";
 // On transition into "playing" (whether from "stopped" or "paused"), the
 // effect re-runs and resets startMs — Session counter snaps back to 0:00,
 // the Today total continues smoothly from the just-refetched value.
-export default function LiveSessionCounter({ playbackState, todayMinutes }) {
+//
+// `children` render between the Session badge and Today, so a caller can sit
+// its own badge right next to the timer (the playthrough-accuracy readout)
+// and have it appear and disappear with the rest of the playing-only chrome.
+export default function LiveSessionCounter({ playbackState, todayMinutes, children }) {
   const [startMs, setStartMs] = useState(null);
   const [, setTick] = useState(0);
 
@@ -50,6 +54,7 @@ export default function LiveSessionCounter({ playbackState, todayMinutes }) {
           {sessionLabel}
         </span>
       </div>
+      {children}
       <span className="text-sm text-muted-foreground">
         Today: <strong className="text-dark">{formatMinutesLong(liveTodayMin)}</strong>
       </span>

@@ -7,8 +7,12 @@ import LiveSessionCounter from "./LiveSessionCounter";
 // status, metronome radios, etc.) is dropped from the tree entirely — the
 // parent renders this instead of the full SettingsBar / StatsBar stack.
 //
-// Row 1  → Pause | Session badge + live Today (LiveSessionCounter)
-// Row 2  → Loop / Hits / Misses / Session + Playthrough accuracy (muted, secondary)
+// Row 1  → Pause | Session badge + Playthrough badge + live Today
+// Row 2  → Loop / Hits / Misses / Session accuracy (muted, secondary)
+//
+// Playthrough accuracy is the one number worth reading mid-play, so it gets
+// the same oversized badge treatment as the Session timer rather than a slot
+// in the muted row. The paused/stopped StatsBar keeps it inline instead.
 export default function FocusedPlaybackBar({
   onPause,
   todayMinutes,
@@ -32,7 +36,18 @@ export default function FocusedPlaybackBar({
 
         {/* LiveSessionCounter self-gates on playing; passing "playing"
             since FocusedPlaybackBar itself only renders during play. */}
-        <LiveSessionCounter playbackState="playing" todayMinutes={todayMinutes} />
+        <LiveSessionCounter playbackState="playing" todayMinutes={todayMinutes}>
+          <div className="flex items-center gap-2 px-3 py-1 rounded-md bg-secondary/40 border border-border">
+            <span className="text-xs uppercase tracking-wide text-muted-foreground">
+              Playthrough
+            </span>
+            <span className={`text-2xl font-mono font-bold tabular-nums leading-none ${
+              hasPlaythrough && playthroughPercent === 100 ? "text-success" : "text-primary"
+            }`}>
+              {hasPlaythrough ? `${playthroughPercent}%` : "—"}
+            </span>
+          </div>
+        </LiveSessionCounter>
       </div>
 
       {/* Second row: compact practice-progress numbers */}
@@ -41,14 +56,6 @@ export default function FocusedPlaybackBar({
         <span>Hits: <strong className="text-success">{hitCount}</strong></span>
         <span>Misses: <strong className="text-destructive">{missCount}</strong></span>
         <span>Session Accuracy: <strong className="text-dark">{accuracyPercent}%</strong></span>
-        <span>
-          Playthrough Accuracy:{" "}
-          <strong className={
-            hasPlaythrough && playthroughPercent === 100 ? "text-success" : "text-dark"
-          }>
-            {hasPlaythrough ? `${playthroughPercent}%` : "—"}
-          </strong>
-        </span>
       </div>
     </>
   );
