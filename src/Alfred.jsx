@@ -28,6 +28,7 @@ import UndoMessage, { useUndo } from "./UndoMessage";
 import { useSortPreference } from "./SortControl";
 import ListToolbar, { NoMatches } from "./ListToolbar";
 import ItemPicker, { PickedItem } from "./ItemPicker";
+import TagPicker from "./TagPicker";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
 import { offsetPatch, isFirstStep } from "./utils/elementOffsets";
@@ -681,87 +682,6 @@ function LoadingOverlay({ message }) {
   );
 }
 
-function TagInput({ value = [], onChange, placeholder = "Add tags (comma separated)" }) {
-  const [inputValue, setInputValue] = useState("");
-  const [error, setError] = useState("");
-
-  function processTags(raw) {
-    return raw
-      .split(",")
-      .map((t) => t.toLowerCase().trim())
-      .filter((t) => t.length > 0 && t.length <= 50)
-      .filter((t) => /^[a-z0-9_-]+$/.test(t));
-  }
-
-  function addTags() {
-    if (!inputValue.trim()) return;
-    const rawParts = inputValue.split(",").map((t) => t.toLowerCase().trim()).filter((t) => t.length > 0);
-    const validTags = processTags(inputValue);
-    const rejected = rawParts.filter((t) => !validTags.includes(t));
-    if (rejected.length > 0) {
-      setError("Invalid tags removed (use only letters, numbers, hyphens, underscores)");
-      setTimeout(() => setError(""), 3000);
-    }
-    if (value.length >= 20) {
-      setError("Maximum 20 tags allowed");
-      setTimeout(() => setError(""), 3000);
-      setInputValue("");
-      return;
-    }
-    const merged = [...new Set([...value, ...validTags])].slice(0, 20);
-    onChange(merged);
-    setInputValue("");
-  }
-
-  function removeTag(tag) {
-    onChange(value.filter((t) => t !== tag));
-  }
-
-  function handleKeyDown(e) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      addTags();
-    }
-  }
-
-  return (
-    <div>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onBlur={addTags}
-          placeholder={placeholder}
-          className="flex-1 min-w-0 px-3 py-2 min-h-[44px] border border-border rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-primary"
-        />
-      </div>
-      {error && (
-        <p className="text-xs text-destructive mt-1">{error}</p>
-      )}
-      {value.length > 0 && (
-        <div className="flex flex-wrap gap-1 mt-2">
-          {value.map((tag) => (
-            <span
-              key={tag}
-              className="inline-flex items-center gap-1 px-2 py-0.5 bg-warning-light text-accent-foreground text-xs rounded-full"
-            >
-              {tag}
-              <button
-                onClick={() => removeTag(tag)}
-                className="p-1 hover:text-primary"
-              >
-                <X size={12} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function TagFilter({ entities, activeTag, onFilter }) {
   const tagCounts = {};
   for (const entity of entities) {
@@ -801,6 +721,37 @@ function TagFilter({ entities, activeTag, onFilter }) {
       )}
     </div>
   );
+}
+
+/**
+ * Every tag currently in use across the records passed in, most-used first.
+ *
+ * This is the suggestion pool the tag picker offers. Derived client-side from
+ * rows already loaded — the same thing `TagFilter` above does with its counts,
+ * and for the same reason: there is no query worth adding for a dozen strings
+ * that are already sitting in state.
+ *
+ * Frequency order, ties broken alphabetically. The tags you reach for most are
+ * the ones worth putting under your thumb, and it matches the order `TagFilter`
+ * already shows its pills in.
+ *
+ * Items and intentions share one pool. Collections get their own in Phase 6 —
+ * per-trip tags like "tjs" have no business being suggested on a recipe.
+ */
+function tagPoolFrom(...recordLists) {
+  const counts = new Map();
+  for (const list of recordLists) {
+    for (const record of list || []) {
+      for (const tag of record?.tags || []) {
+        if (typeof tag === "string" && tag) {
+          counts.set(tag, (counts.get(tag) || 0) + 1);
+        }
+      }
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([tag]) => tag);
 }
 
 /**
@@ -1444,6 +1395,10 @@ export default function Alfred() {
   const [contexts, setContexts] = useState([]);
   const [items, setItems] = useState([]);
   const [intents, setIntents] = useState([]);
+  // Suggestions for every tag picker on an item or an intention. Recomputed
+  // when either list changes, so a tag invented on one record is offered on the
+  // next one without a reload.
+  const tagPool = useMemo(() => tagPoolFrom(items, intents), [items, intents]);
   const [events, setEvents] = useState([]);
   const [activeExecution, setActiveExecution] = useState(null); // currently viewed
   const [activeExecutions, setActiveExecutions] = useState([]);
@@ -5487,6 +5442,7 @@ export default function Alfred() {
               <div className="space-y-3">
                 {visibleInboxItems.map((inboxItem) => (
                   <InboxCard
+                    tagPool={tagPool}
                     key={inboxItem.id}
                     inboxItem={inboxItem}
                     contexts={contexts}
@@ -5580,6 +5536,7 @@ export default function Alfred() {
         {/* Context Detail View */}
         {view === "context-detail" && selectedContextId && (
           <ContextDetailView
+            tagPool={tagPool}
             onOpenAddItem={() =>
               openAddPage("item-add", { kind: "context", id: selectedContextId })
             }
@@ -5640,6 +5597,7 @@ export default function Alfred() {
         {/* Intention Detail View */}
         {view === "intention-detail" && selectedIntentionId && (
           <IntentionDetailView
+            tagPool={tagPool}
             intention={intents.find((i) => i.id === selectedIntentionId)}
             events={events}
             contexts={contexts}
@@ -5677,6 +5635,7 @@ export default function Alfred() {
             onBack={closeAddPage}
           >
             <ItemCard
+              tagPool={tagPool}
               item={{
                 id: null,
                 name: "",
@@ -5709,6 +5668,7 @@ export default function Alfred() {
             onBack={closeAddPage}
           >
             <IntentionCard
+              tagPool={tagPool}
               intent={{
                 id: null,
                 // Seeded from the item's name when adding against an item, which
@@ -5740,6 +5700,7 @@ export default function Alfred() {
 
         {view === "item-detail" && selectedItemId && (
           <ItemDetailView
+            tagPool={tagPool}
             onOpenAddIntention={(itemId) =>
               openAddPage("intention-add", { kind: "item", id: itemId })
             }
@@ -5919,6 +5880,7 @@ export default function Alfred() {
               <div className="space-y-3">
                 {visibleIntentions.map((intent) => (
                   <IntentionCard
+                    tagPool={tagPool}
                     key={intent.id}
                     intent={intent}
                     contexts={contexts}
@@ -5974,6 +5936,7 @@ export default function Alfred() {
               <div className="space-y-3">
                 {visibleMemories.map((item) => (
                   <ItemCard
+                    tagPool={tagPool}
                     key={item.id}
                     item={item}
                     contexts={contexts}
@@ -6967,6 +6930,7 @@ function InboxCard({
   contexts,
   items,
   collections,
+  tagPool = [],
   onSave,
   // Renamed with the behaviour in Step 10: this hard-deletes the row now
   // rather than flagging it, and a prop still called onArchive would be the
@@ -7803,7 +7767,7 @@ function InboxCard({
             {/* Tags */}
             <div>
               <label className="block text-sm font-medium text-foreground mb-1">Tags</label>
-              <TagInput value={intentTags} onChange={setIntentTags} />
+              <TagPicker value={intentTags} onChange={setIntentTags} pool={tagPool} />
             </div>
 
             {/* Schedule Event */}
@@ -8073,7 +8037,7 @@ function InboxCard({
             {/* Tags */}
             <div>
               <label className="block text-sm font-medium text-foreground mb-1">Tags</label>
-              <TagInput value={itemTags} onChange={setItemTags} />
+              <TagPicker value={itemTags} onChange={setItemTags} pool={tagPool} />
             </div>
           </div>
         )}
@@ -8605,6 +8569,7 @@ function CollectionCard({
 }
 
 function ContextDetailView({
+  tagPool = [],
   // Step 12.6: both add forms are pages now, so this view only has to say
   // "open the add page for THIS context" — the target travels in the URL.
   onOpenAddItem,
@@ -8803,6 +8768,7 @@ function ContextDetailView({
                 <div className="space-y-2">
                   {visibleItems.map((item) => (
                     <ItemCard
+                      tagPool={tagPool}
                       key={item.id}
                       item={item}
                       contexts={contexts}
@@ -8851,6 +8817,7 @@ function ContextDetailView({
                 <div className="space-y-2">
                   {visibleIntents.map((intent) => (
                     <IntentionCard
+                      tagPool={tagPool}
                       key={intent.id}
                       intent={intent}
                       contexts={contexts}
@@ -8918,6 +8885,7 @@ function ContextDetailView({
 }
 
 function IntentionDetailView({
+  tagPool = [],
   intention,
   events,
   contexts,
@@ -8977,6 +8945,7 @@ function IntentionDetailView({
         </button>
 
         <IntentionCard
+          tagPool={tagPool}
           intent={intention}
           contexts={contexts}
           items={items}
@@ -9117,6 +9086,7 @@ function IntentionDetailView({
             const linkedItem = items.find((i) => i.id === intention.itemId);
             return linkedItem ? (
               <ItemCard
+                tagPool={tagPool}
                 item={linkedItem}
                 contexts={contexts}
                 onUpdate={onUpdateItem}
@@ -9213,6 +9183,7 @@ function AddPageChrome({ title, subtitle, onBack, children }) {
 }
 
 function ItemDetailView({
+  tagPool = [],
   // Step 12.6. Takes the item id so the add page can seed the intention against
   // it, exactly as the inline form did.
   onOpenAddIntention,
@@ -9288,6 +9259,7 @@ function ItemDetailView({
         </button>
 
         <ItemCard
+          tagPool={tagPool}
           item={item}
           contexts={contexts}
           onUpdate={(id, updates) => {
@@ -9687,6 +9659,7 @@ function ItemDetailView({
           <div className="space-y-2">
             {itemIntentions.map((intent) => (
               <IntentionCard
+                tagPool={tagPool}
                 key={intent.id}
                 intent={intent}
                 contexts={contexts}
@@ -10193,6 +10166,7 @@ function ExecutionBadge({ exec, intents, contexts, getIntentDisplay, onOpen }) {
 function ItemCard({
   item,
   contexts,
+  tagPool = [],
   onUpdate,
   isEditing: initialEditing = false,
   onCancel,
@@ -10502,7 +10476,7 @@ function ItemCard({
             <label className="block text-sm font-medium text-foreground mb-1">
               Tags
             </label>
-            <TagInput value={tags} onChange={setTags} />
+            <TagPicker value={tags} onChange={setTags} pool={tagPool} />
           </div>
 
           <label className="flex items-center gap-2">
@@ -11482,6 +11456,7 @@ function IntentionCard({
   intent,
   contexts,
   items,
+  tagPool = [],
   onUpdate,
   onSchedule,
   onStartNow,
@@ -11683,7 +11658,7 @@ function IntentionCard({
             <label className="block text-sm font-medium text-foreground mb-1">
               Tags
             </label>
-            <TagInput value={tags} onChange={setTags} />
+            <TagPicker value={tags} onChange={setTags} pool={tagPool} />
           </div>
 
           {showScheduling && (
