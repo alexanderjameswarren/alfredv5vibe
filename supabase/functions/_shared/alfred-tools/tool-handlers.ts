@@ -1,5 +1,6 @@
 import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { ToolResult } from "./types.ts";
+import { normaliseTags } from "../tags.ts";
 
 export async function getContexts(
   client: SupabaseClient,
@@ -8,7 +9,12 @@ export async function getContexts(
   try {
     let query = client
       .from("contexts")
-      .select("id, name, description, keywords, shared, pinned, tags, created_at")
+      // No `tags`. The column is dropped by the tags project's Migration A —
+      // it had a GIN index, two rows of data and no user interface, and was
+      // never reachable from the app. `keywords` is the field that actually
+      // does work during inbox triage. Selecting a dropped column is a hard
+      // PostgREST error, so this had to stop before the migration ran.
+      .select("id, name, description, keywords, shared, pinned, created_at")
       .order("pinned", { ascending: false })
       .order("name");
 
@@ -593,7 +599,11 @@ export async function createInboxItem(
       suggested_intent_recurrence: params.suggested_intent_recurrence || null,
       suggest_event: params.suggest_event || false,
       suggested_event_date: params.suggested_event_date || null,
-      suggested_tags: params.suggested_tags || [],
+      // Normalised, not stored verbatim. A model supplies these, and they flow
+      // into items.tags / intents.tags unchanged on triage if the user never
+      // opens the tag box — so this is a write path that could otherwise put a
+      // non-canonical tag in the database. See _shared/tags.ts.
+      suggested_tags: normaliseTags(params.suggested_tags),
       suggested_collection_id: params.suggested_collection_id || null,
       // AI enrichment status
       ai_status: params.ai_status || "enriched",
@@ -674,7 +684,9 @@ export async function updateInboxItem(
     if (params.suggested_intent_recurrence !== undefined) updates.suggested_intent_recurrence = params.suggested_intent_recurrence;
     if (params.suggest_event !== undefined) updates.suggest_event = params.suggest_event;
     if (params.suggested_event_date !== undefined) updates.suggested_event_date = params.suggested_event_date;
-    if (params.suggested_tags !== undefined) updates.suggested_tags = params.suggested_tags;
+    // Normalised on the way in, same reasoning as createInboxItem above. Also
+    // covers the MCP update_inbox_item tool, which delegates here.
+    if (params.suggested_tags !== undefined) updates.suggested_tags = normaliseTags(params.suggested_tags);
     if (params.suggested_collection_id !== undefined) updates.suggested_collection_id = params.suggested_collection_id;
 
     const { data, error } = await client

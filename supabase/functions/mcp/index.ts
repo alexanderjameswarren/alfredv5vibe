@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { clampLimit, defineTool, envelope } from "../_shared/platform.ts";
+import { normaliseTags } from "../_shared/tags.ts";
 import {
   createSamSongTool,
   appendSamMeasuresTool,
@@ -93,7 +94,10 @@ const getContextsTool = defineTool({
     const LIMIT = clampLimit(50);
     let query = ctx.db
       .from("contexts")
-      .select("id, name, description, keywords, shared, pinned, tags, created_at")
+      // No `tags` — see the note on the twin select in
+      // _shared/alfred-tools/tool-handlers.ts. The column is dropped by
+      // Migration A and selecting it afterwards is a hard PostgREST error.
+      .select("id, name, description, keywords, shared, pinned, created_at")
       .order("pinned", { ascending: false })
       .order("name")
       .limit(LIMIT);
@@ -170,7 +174,10 @@ const createInboxItemTool = defineTool({
       suggested_intent_recurrence: (args.suggested_intent_recurrence as string) || null,
       suggest_event: (args.suggest_event as boolean) || false,
       suggested_event_date: (args.suggested_event_date as string) || null,
-      suggested_tags: (args.suggested_tags as string[]) || [],
+      // Normalised, not stored verbatim — this tool's caller is a model. These
+      // values reach items.tags / intents.tags unchanged on triage if the user
+      // never opens the tag box. See _shared/tags.ts.
+      suggested_tags: normaliseTags(args.suggested_tags),
       suggested_collection_id: (args.suggested_collection_id as string) || null,
       ai_confidence: (args.ai_confidence as number) ?? null,
       ai_reasoning: (args.ai_reasoning as string) || null,
@@ -766,7 +773,7 @@ export function createMcpServer(token: string) {
         suggested_intent_recurrence: z.string().optional().describe("Recurrence pattern: 'once', 'daily', 'weekly', 'monthly', 'yearly'"),
         suggest_event: z.boolean().optional().describe("Is there a specific date associated? (true if user mentions a date/time)"),
         suggested_event_date: z.string().optional().describe("Suggested date in YYYY-MM-DD format. Resolve relative dates like 'tomorrow', 'next Tuesday' to absolute dates."),
-        suggested_tags: z.array(z.string()).optional().describe("Suggested tags — use get_tags first to match existing taxonomy. Lowercase, underscore-separated."),
+        suggested_tags: z.array(z.string()).optional().describe("Suggested tags — use get_tags first to match existing taxonomy. Lowercase, spaces between words, no punctuation (e.g. \"whole foods\"). Normalised on save."),
         suggested_collection_id: z.string().optional().describe("ID of an existing collection to add to (use get_collections to find it). E.g., grocery list."),
         ai_confidence: z.number().optional().describe("Your confidence in these suggestions, 0.0 to 1.0"),
         ai_reasoning: z.string().optional().describe("Brief explanation of why you made these suggestions"),
@@ -797,7 +804,7 @@ export function createMcpServer(token: string) {
         suggested_intent_recurrence: z.enum(["once", "daily", "weekly", "monthly", "yearly"]).optional().describe("Recurrence pattern"),
         suggest_event: z.boolean().optional().describe("Is there a specific date associated?"),
         suggested_event_date: z.string().optional().describe("Date in YYYY-MM-DD format"),
-        suggested_tags: z.array(z.string()).optional().describe("Suggested tags, lowercase, underscore-separated (use get_tags to match existing taxonomy)"),
+        suggested_tags: z.array(z.string()).optional().describe("Suggested tags: lowercase, spaces between words, no punctuation (e.g. \"whole foods\"). Normalised on save. Use get_tags to match existing taxonomy."),
         suggested_collection_id: z.string().optional().describe("ID of an existing collection (use get_collections to find it)"),
       },
     },

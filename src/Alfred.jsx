@@ -4200,9 +4200,24 @@ export default function Alfred() {
       // item_collections.id — an empty string would violate it. Normalise here,
       // at the single point every caller funnels through.
       const defaultCollection = defaultCollectionId || null;
+
+      // `tags` is stripped, deliberately. Contexts carried a jsonb tags column
+      // with a GIN index and no user interface; the tags project's Migration A
+      // drops it.
+      //
+      // This matters because `existing` comes from `select("*")` and
+      // `storage.set` UPSERTS THE WHOLE OBJECT — so a spread would send a
+      // `tags` key to a table that no longer has that column, and PostgREST
+      // rejects the write outright (PGRST204). The window is narrow but real:
+      // a tab that loaded contexts before the migration and saves one after it.
+      // Costs nothing to be safe, and a context edit failing is not a failure
+      // anyone would connect back to a dropped column.
+      const { tags: _droppedContextTags, ...existingWithoutTags } =
+        existing || {};
+
       const context = existing
         ? {
-            ...existing,
+            ...existingWithoutTags,
             name,
             shared,
             keywords,

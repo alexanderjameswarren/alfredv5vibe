@@ -12,6 +12,7 @@ import {
   getTags,
 } from "../_shared/alfred-tools/tool-handlers.ts";
 import type { ToolResult } from "../_shared/alfred-tools/types.ts";
+import { normaliseTags } from "../_shared/tags.ts";
 
 // --- Constants ---
 const MAX_TOOL_CALLS = 10;
@@ -136,7 +137,8 @@ const SHARED_TOOLS: Anthropic.Tool[] = [
         suggested_tags: {
           type: "array",
           items: { type: "string" },
-          description: "Suggested tags (lowercase, underscore-separated)",
+          description:
+            "Suggested tags: lowercase, spaces between words, no punctuation (e.g. \"whole foods\")",
         },
         suggested_collection_id: { type: "string", description: "ID of an existing collection" },
         ai_confidence: { type: "number", description: "Confidence score 0.0-1.0" },
@@ -260,7 +262,10 @@ RULES:
 6. You can suggest BOTH an item and an intent (e.g., recipe item + "cook tonight" intent)
 7. Set ai_confidence lower when you're uncertain
 8. When done, call submit_suggestions with your final recommendations
-9. Tags should be lowercase, underscore-separated
+9. Tags should be lowercase, with spaces between words, and no punctuation
+   (e.g. "whole foods", "stir fry" — NOT "Whole_Foods" or "stir-fry"). Tags are
+   normalised on save, so anything else is silently rewritten; matching what the
+   rule produces keeps your suggestion identical to what gets stored.
 10. Element types are exactly three: "header", "bullet", "step". There is no
     "ingredient" type. Any other value renders as a numbered step and corrupts
     the step numbering of the whole item.
@@ -568,7 +573,13 @@ Deno.serve(async (req) => {
         suggested_intent_recurrence: suggestions.suggested_intent_recurrence ?? null,
         suggest_event: suggestions.suggest_event ?? false,
         suggested_event_date: suggestions.suggested_event_date ?? null,
-        suggested_tags: suggestions.suggested_tags ?? [],
+        // Normalised rather than stored verbatim. This is THE path spec §8 is
+        // about: whatever the model returns here lands in items.tags /
+        // intents.tags unchanged on triage if the user never opens the tag box.
+        // Prompt wording alone cannot guarantee canonical output — a model
+        // asked for lowercase still returns capitals sometimes, and now that
+        // spaces are legal it will return punctuation too. See _shared/tags.ts.
+        suggested_tags: normaliseTags(suggestions.suggested_tags),
         suggested_collection_id: suggestions.suggested_collection_id ?? null,
       };
 
