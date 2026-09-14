@@ -777,3 +777,148 @@ describe("TagPicker — the collection editor", () => {
     expect(editorBox()).toBeTruthy();
   });
 });
+
+describe("TagPicker — switching rows survives the editor's own reflow", () => {
+  // ─── What this can and cannot prove ────────────────────────────────────────
+  //
+  // The bug was LAYOUT, not state. An open editor makes its row taller, so
+  // closing one on mousedown moved every row below it back up between the press
+  // and the release — and the click never completed on the button that had been
+  // under the finger. Tapping a row BELOW the open one did nothing; tapping one
+  // ABOVE worked, because rows above never move.
+  //
+  // jsdom has no layout engine, so it CANNOT reproduce that reflow, and a test
+  // here can never fail for the original reason. What it CAN do is pin the
+  // property that makes the reflow harmless: the switch completes on the PRESS,
+  // with no click required. So the central test below fires mousedown and NO
+  // click at all — which is precisely the situation the device produced, since
+  // the click was lost. If the handler is ever moved back to onClick, that test
+  // fails.
+  //
+  // It does not prove the fix works on a phone. Only the phone proves that.
+
+  const TAG_TOGGLE_ATTR = "data-tag-toggle";
+
+  function Rows() {
+    const [openId, setOpenId] = useState(null);
+    const rowRef = React.useRef(null);
+    const close = () => setOpenId(null);
+    const open = (id) => { close(); setOpenId(id); };
+    const toggle = (id) => (openId === id ? close() : open(id));
+
+    React.useEffect(() => {
+      if (!openId) return undefined;
+      const onDown = (e) => {
+        if (e.target.closest?.(`[${TAG_TOGGLE_ATTR}]`)) return;
+        if (rowRef.current && !rowRef.current.contains(e.target)) close();
+      };
+      document.addEventListener("mousedown", onDown);
+      return () => document.removeEventListener("mousedown", onDown);
+    }, [openId]);
+
+    return (
+      <div>
+        {["A", "B"].map((id) => (
+          <div key={id} ref={openId === id ? rowRef : undefined}>
+            <span>row {id}</span>
+            <button
+              {...{ [TAG_TOGGLE_ATTR]: "" }}
+              aria-label={`tag ${id}`}
+              onMouseDown={(e) => { e.preventDefault(); toggle(id); }}
+              onClick={(e) => { if (e.detail === 0) toggle(id); }}
+            >
+              tag
+            </button>
+            {openId === id && (
+              <TagPicker
+                autoFocus
+                showChips={false}
+                value={[]}
+                pool={POOL}
+                onChange={() => {}}
+                placeholder={`editor ${id}`}
+              />
+            )}
+          </div>
+        ))}
+        <div data-testid="outside">elsewhere</div>
+      </div>
+    );
+  }
+
+  const tagBtn = (id) => screen.getByRole("button", { name: `tag ${id}` });
+  const editor = (id) => screen.queryByPlaceholderText(`editor ${id}`);
+  // A real pointer tap: press, then a click carrying detail 1.
+  const tap = (el) => {
+    fireEvent.mouseDown(el);
+    fireEvent.click(el, { detail: 1 });
+  };
+
+  test("the switch completes on the PRESS, with no click at all", () => {
+    // The regression guard. On the device the click was lost to the reflow, so
+    // mousedown has to be sufficient on its own.
+    render(<Rows />);
+    tap(tagBtn("A"));
+    expect(editor("A")).toBeTruthy();
+
+    fireEvent.mouseDown(tagBtn("B")); // deliberately no click
+
+    expect(editor("A")).toBeNull();
+    expect(editor("B")).toBeTruthy();
+  });
+
+  test("a full tap on another row's button switches, and does not double-toggle", () => {
+    // If both handlers fired, B would open on mousedown and close on click —
+    // which looks exactly like the original bug.
+    render(<Rows />);
+    tap(tagBtn("A"));
+    tap(tagBtn("B"));
+
+    expect(editor("A")).toBeNull();
+    expect(editor("B")).toBeTruthy();
+  });
+
+  test("the dismissal listener does not close what the button just opened", () => {
+    // React's handlers run at the root container and the dismissal runs at the
+    // document, so the dismissal sees the press second. Without the tag-button
+    // exemption it would close B immediately and nothing would be open — the
+    // same symptom, a different cause.
+    render(<Rows />);
+    tap(tagBtn("A"));
+    fireEvent.mouseDown(tagBtn("B"));
+
+    expect(editor("B")).toBeTruthy();
+  });
+
+  test("tapping the same row's button still closes it", () => {
+    render(<Rows />);
+    tap(tagBtn("A"));
+    tap(tagBtn("A"));
+    expect(editor("A")).toBeNull();
+  });
+
+  test("keyboard activation still works", () => {
+    // Enter and Space produce a click with detail 0 and no mousedown.
+    render(<Rows />);
+    fireEvent.click(tagBtn("A"), { detail: 0 });
+    expect(editor("A")).toBeTruthy();
+
+    fireEvent.click(tagBtn("B"), { detail: 0 });
+    expect(editor("B")).toBeTruthy();
+    expect(editor("A")).toBeNull();
+  });
+
+  test("tapping outside still closes everything", () => {
+    render(<Rows />);
+    tap(tagBtn("A"));
+    fireEvent.mouseDown(screen.getByTestId("outside"));
+    expect(editor("A")).toBeNull();
+  });
+
+  test("tapping inside the open row still does not close it", () => {
+    render(<Rows />);
+    tap(tagBtn("A"));
+    fireEvent.mouseDown(screen.getByText("row A"));
+    expect(editor("A")).toBeTruthy();
+  });
+});

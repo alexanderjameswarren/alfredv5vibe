@@ -727,6 +727,14 @@ function TagFilter({ entities, activeTag, onFilter }) {
 }
 
 /**
+ * Marks a collection row's tag button.
+ *
+ * Two things read it: the button handles its own switch on the press, and the
+ * outside-tap dismissal skips any press that lands on one. See both.
+ */
+const TAG_TOGGLE_ATTR = "data-tag-toggle";
+
+/**
  * Every tag currently in use across the records passed in, most-used first.
  *
  * This is the suggestion pool the tag picker offers. Derived client-side from
@@ -1974,11 +1982,14 @@ export default function Alfred() {
    * fires only touchstart. Listening to touchstart would close the editor the
    * moment a finger landed to scroll the list, which is not a dismissal.
    *
-   * "Outside" means outside the whole row, not just the editor. That is what
-   * makes the row's own Tag button work: the tap lands inside, this handler
-   * ignores it, and `toggleTagEditor` closes the editor by itself rather than
-   * the two racing. Same for the row's chips — removing a tag mid-edit should
-   * not throw you out of the editor.
+   * "Outside" means outside the whole row, not just the editor. Same for the
+   * row's chips — removing a tag mid-edit should not throw you out.
+   *
+   * ANY row's tag button is exempt, including other rows'. That button owns the
+   * switch itself, on the press (see `TAG_TOGGLE_ATTR`). Without this exemption
+   * the two would race: React's handlers run at the root container and this one
+   * runs at the document, so the button would open its editor and this listener
+   * would immediately close it again.
    *
    * Routed through `closeTagEditor` like every other way of closing, so the
    * poll resumes and uncommitted text is discarded rather than committed —
@@ -1987,6 +1998,7 @@ export default function Alfred() {
   useEffect(() => {
     if (!editingTagsItemId) return undefined;
     function handlePointerDown(e) {
+      if (e.target.closest?.(`[${TAG_TOGGLE_ATTR}]`)) return;
       const row = editingTagsRowRef.current;
       if (row && !row.contains(e.target)) closeTagEditor();
     }
@@ -6483,9 +6495,36 @@ export default function Alfred() {
                                 reason quantity is: tagging something you cannot
                                 identify is a guess. */}
                             <button
-                              onClick={() =>
-                                toggleTagEditor(member.itemId)
-                              }
+                              {...{ [TAG_TOGGLE_ATTR]: "" }}
+                              // Switches on the PRESS, not the click, and this
+                              // is load-bearing rather than stylistic.
+                              //
+                              // An open editor makes its row taller, so every
+                              // row below it sits lower. Closing one on
+                              // mousedown moved those rows back UP between the
+                              // press and the release, so the button that was
+                              // under the finger on press was somewhere else on
+                              // release and the click never completed on it.
+                              // Tapping a row BELOW the open one did nothing;
+                              // tapping one ABOVE worked, because rows above
+                              // never move. Doing the whole switch on the press
+                              // means no click has to land anywhere.
+                              //
+                              // preventDefault keeps focus off the button, so
+                              // the phone keyboard does not flicker on the way
+                              // from one editor to the next.
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                toggleTagEditor(member.itemId);
+                              }}
+                              // Keyboard only. A click from Enter or Space
+                              // carries detail 0; a pointer click carries 1 or
+                              // more and was already handled above. The guard
+                              // also absorbs a stray click that reflow lands on
+                              // the wrong button.
+                              onClick={(e) => {
+                                if (e.detail === 0) toggleTagEditor(member.itemId);
+                              }}
                               disabled={!linkedItem}
                               aria-label={tagsOpen ? "Done tagging" : "Tag this item"}
                               title={
