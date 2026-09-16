@@ -2,7 +2,7 @@
 //
 // Spec: docs/technical-spec-analyzer-port.md §4 M4.
 //
-// No Supabase import: the caller hands in its client (the sam-scores Edge
+// No Supabase import: the caller hands in its client (the sam-song-scores Edge
 // Function builds one from the caller's JWT; an MCP tool would pass ctx.db),
 // so RLS always confines the work to the caller's own songs.
 //

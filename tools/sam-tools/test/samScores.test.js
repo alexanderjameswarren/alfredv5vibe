@@ -1,4 +1,4 @@
-// The sam-scores compute path (supabase/functions/_shared/samScores.ts),
+// The sam-song-scores compute path (supabase/functions/_shared/samScores.ts),
 // driven with a fake database client that records every table and function it
 // touches. What must hold:
 //

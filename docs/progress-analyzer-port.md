@@ -1,6 +1,6 @@
 # Progress: Difficulty Analyzer in Supabase (Phase 3)
 
-## Status: M5 verified (two post-verification fixes awaiting redeploy) — M6 next
+## Status: M6 built — awaiting migration 028, the rename deploy, and verification
 
 Branch: `analyzer-port` (pushed). M1 `602d18e`, onsets/tempo-free `81f8dfc`,
 M2 `7e39443`, M3 `549832f` (run by Alex: CONFORMANT, 38 tables), M4 (verified
@@ -79,9 +79,9 @@ Verification: `docs/sql/verify-analyzer-port-m3.sql`. Run
 
 ### M4 — Compute and store
 
-Code: `supabase/functions/_shared/samScores.ts`, `supabase/functions/sam-scores/`,
+Code (paths as renamed in M6): `supabase/functions/_shared/samScores.ts`, `supabase/functions/sam-song-scores/`,
 `supabase/migrations/027_sam_song_scores_functions.sql`,
-`scripts/sam-scores.js` (console: backfill / compute / twice),
+`scripts/sam-song-scores.js` (console: backfill / compute / twice),
 `tools/sam-tools/bin/compare-scores.js`, `docs/sql/verify-analyzer-port-m4.sql`.
 
 - [x] `deno check` run EARLY — before any M4 code: the port type-checks clean
@@ -110,7 +110,7 @@ Code: `supabase/functions/_shared/samScores.ts`, `supabase/functions/sam-scores/
 ### M5 — The read tool
 
 Code: `supabase/functions/_shared/samScoresRead.ts` (logic),
-`supabase/functions/_shared/tools/sam-scores.ts` (tool), registration in
+`supabase/functions/_shared/tools/sam-song-scores.ts` (tool; `sam-scores.ts` before M6), registration in
 `supabase/functions/mcp/index.ts`, tests in
 `tools/sam-tools/test/samScoresRead.test.js`.
 
@@ -129,7 +129,7 @@ Code: `supabase/functions/_shared/samScoresRead.ts` (logic),
 - [x] Inline recompute before the read, status reported; the description says
       loudly that this `get_*` tool writes
 - [x] Deployed — Alex: `npx supabase functions deploy mcp --no-verify-jwt`
-- [ ] Redeploy with the two post-verification fixes (see the M5 notes)
+- [x] Redeploy with the two post-verification fixes — verified by Alex
 
 **Exit criteria** — all verified by Alex in claude.ai, 2026-09-16 (9 of 9 checks pass)
 - [x] Flags match the CLI on Someone Like You at its goal tempo — 69 flagged, identical
@@ -160,20 +160,32 @@ Code: `supabase/functions/_shared/samScoresRead.ts` (logic),
       (`trg_lyrics_stamp_edited`, INSERT/UPDATE/DELETE, per row) — not dead
 - [x] Decision recorded (spec M6): non-notation writes invalidate scores; M4's
       freshness check must be the cheap first step
-- [ ] Trigger query, as originally written:
-      ```sql
-      select c.relname, t.tgname, pg_get_triggerdef(t.oid)
-      from pg_trigger t join pg_class c on c.oid = t.tgrelid
-      where c.relname in ('sam_songs','sam_song_measures') and not t.tgisinternal;
-      ```
-- [ ] Recomputation hangs off existing `measures_edited_at` stamps, not a new
-      parallel mechanism
+- [x] Approach proposed and chosen (Alex, 2026-09-16): **pull only, plus a
+      statement-level INSERT/DELETE stamping trigger.** No push from any write
+      path, including `append_sam_measures`. No "current rows" view.
+- [x] Migration `028_sam_song_measures_statement_stamps.sql`: AFTER INSERT and
+      AFTER DELETE, FOR EACH STATEMENT, transition tables, one function; stamps
+      each affected song once per statement with `now()`
+- [x] Left alone: the per-row UPDATE trigger `bump_parent_edited_at`, and the
+      app-code stamps
+- [x] Edge Function renamed `sam-scores` → `sam-song-scores` (the name
+      `sam-scores` is the MusicXML Storage bucket). The tool file and the
+      console script were renamed to match. 028 also restates 027's function
+      comment, which named the old function.
+- [x] Verification SQL `docs/sql/verify-analyzer-port-m6.sql` written
+- [ ] Migration 028 run — Alex
+- [ ] `sam-song-scores` deployed, old `sam-scores` function deleted, `mcp`
+      redeployed — Alex
+- [ ] Verification SQL returns `all_pass: true`, 0 scratch songs left,
+      CONFORMANT — Alex
 
-**Exit criteria**
-- [ ] Importing a song leaves scores present and fresh
-- [ ] `append_sam_measures` invalidates and recomputes
-- [ ] The repair script invalidates
-- [ ] An unchanged song is not recomputed
+**Exit criteria** (restated for pull, 2026-09-16)
+- [ ] After an import, the next read reports `recomputed` and matches the CLI
+- [ ] After `append_sam_measures`, the next read reports `recomputed`
+- [ ] After the repair script, the next read reports `recomputed`
+- [x] An unchanged song reads `fresh` — proved by M5 check 9
+- [ ] A raw-SQL insert or delete moves the stamp — the test that the trigger
+      closes the gap (verification SQL, checks 1–4)
 
 ---
 
@@ -646,3 +658,75 @@ fresh claude.ai thread.
 yields identical numbers. This is the accepted cost of the non-notation
 invalidation decision. The reasoning is in the spec's M6 section ("Accepted
 cost").
+
+#### M6
+
+**Decisions (Alex, 2026-09-16)**
+- **Pull only.** `get_sam_song_scores` already refreshes inline, and it is the
+  only reader. Push would warm a cache for a reader that does not exist, and it
+  would give every writer one more thing to remember, which is the same
+  weakness that produced the stamp gap. A lone push in
+  `append_sam_measures` was declined too: one push path is more confusing
+  than none.
+- **Add the statement-level trigger.** In the old design, `fanOutMeasures`
+  deleted, inserted, and then stamped in a SEPARATE request. That was the only
+  failure mode that reported stale as fresh; everything else fails safe by
+  recomputing. The trigger stamps in the write's own transaction, for every
+  writer. It costs about two extra blob-carrying audit rows per import, a fixed
+  number.
+- **No view** of current rows. Nothing reads the table directly.
+- **Rename** the Edge Function to `sam-song-scores`. Nothing depended on the
+  old name except the console script.
+
+**Design (028)**
+- One function, `stamp_songs_from_measure_statement()`, and two triggers,
+  because Postgres allows transition tables only on single-event triggers.
+  The function picks `new_rows` or `old_rows` by `TG_OP` and runs one
+  `UPDATE sam_songs … WHERE id IN (SELECT DISTINCT song_id …)`.
+- The function has no "already equal" guard. A statement stamps each of its
+  songs exactly once, which keeps the once-per-statement property measurable.
+  Several statements in one transaction each stamp; that is rare, and it
+  costs only audit rows.
+- The function is SECURITY INVOKER with `search_path ''`, and execute is
+  revoked from public and anon. The writer can already see the parent song,
+  because measures RLS is parent-scoped.
+- `now()` never meets another timestamp in a comparison: the scores check is
+  equality.
+- The app-code stamps stay. They also set `measures_compiled_at`, which the blob
+  recompile relies on. For import, the stamps now come from three places: the
+  DELETE statement, each INSERT batch, and the app. That is harmless, because
+  equality only needs the value to move.
+
+**Verification SQL design.** One function call that writes and then undoes all
+of it:
+- The test runs in a subtransaction that ends by raising a private exception.
+  The handler returns the collected results, so no scratch rows or audit rows
+  survive.
+- The number of stamps is measured as the change in
+  `pg_stat_xact_user_tables.n_tup_upd` for `sam_songs` across one statement.
+  The `platform.audit_log` DDL is not in the repo, so its columns could not be
+  relied on.
+- Checks:
+  1. a 3-row insert stamps its song once, with `now()`, and leaves the other
+     song alone;
+  2. a 4-row insert across two songs makes 2 updates;
+  3. a 1-row delete makes 1;
+  4. a 3-row delete across two songs makes 2;
+  5. a delete of no rows makes 0;
+  6. deleting a song that still has measures raises no error, and the song
+     and its measures are gone.
+- The result also lists the triggers on `sam_song_measures` with their level,
+  and conformance.
+
+**Checks run here:** `npm test` 269 pass. `deno check` is clean on
+`sam-song-scores/index.ts`; `mcp/index.ts` is unchanged at 82 errors. The
+migration and the verification SQL have NOT been executed. Claude has no
+database, so both are unrun until Alex runs them.
+
+**Rename:** `git mv` of `supabase/functions/sam-scores/` → `sam-song-scores/`,
+`_shared/tools/sam-scores.ts` → `sam-song-scores.ts`, and
+`scripts/sam-scores.js` → `scripts/sam-song-scores.js`. `config.toml`,
+imports, the script's URL and log prefixes were updated. Earlier notes in this
+file keep the old name where they describe what happened at the time. The
+Storage bucket, `SongLoader.jsx` and the schema files are untouched: those
+references are to the bucket.

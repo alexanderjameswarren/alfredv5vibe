@@ -209,6 +209,13 @@ Requirements:
 
 Hang recomputation off the existing write paths rather than adding a parallel mechanism.
 
+**As built (Alex, 2026-09-16): pull only, plus statement-level INSERT/DELETE
+stamping** (migration 028). The read tool refreshes stale scores inline and is
+the only reader, so nothing pushes a recompute. What M6 adds is coverage: every
+INSERT or DELETE of measure rows now moves `measures_edited_at` in its own
+transaction. The equality check can therefore only ever fail safe. The option
+analysis below is kept as the record of the choice.
+
 #### Findings from the trigger investigation (2026-09-16) — read before building
 
 **Triggers already stamp `measures_edited_at`. The earlier assumption that none
@@ -302,7 +309,7 @@ bug:
   `measures_edited_at` moves, or by suppressing the recompute. Revisit only if
   recomputes become measurably expensive.
 
-#### Option under consideration — do not change yet: extend the measures trigger to INSERT and DELETE
+#### The INSERT/DELETE trigger option — CHOSEN in its statement-level form (migration 028)
 
 What it would buy: every writer stamps, including future writers and raw SQL,
 with nothing to remember. Import, append and backfill would no longer depend
@@ -332,13 +339,32 @@ statement and only when the value would change. An import would stamp about
 twice regardless of measure count, and it could replace both per-row triggers.
 The audit cost per stamp remains while `sam_songs` carries the blob.
 
-Not decided. M6 chooses.
+**Chosen: the statement-level shape**, as INSERT and DELETE triggers only.
+The per-row UPDATE trigger and the app-code stamps stay as they are. The
+guard ("only when the value would change") was dropped: each statement stamps
+each of its songs exactly once, which keeps that property testable.
 
-**Exit criteria**
-- [ ] Importing a song leaves it with scores present and fresh
-- [ ] Appending measures via MCP invalidates and recomputes
-- [ ] Running the repair script invalidates
-- [ ] A song whose measures did not change is not recomputed
+#### Considered and declined (Alex, 2026-09-16)
+- **Push from the write paths**, with import, append and repair each calling
+  `computeSongScores`. It would warm a cache for a reader that does not exist.
+  It would also give every writer one more thing to remember, which is the
+  weakness that produced the stamp gap in the first place. A lone push in
+  `append_sam_measures` was declined as well: one push path is more confusing
+  than none.
+- **Push from the database** (a trigger calling the function over the
+  network): per row event, asynchronous, and it needs secrets.
+- **A view that returns only current rows**: nothing reads the table
+  directly, and a guard for a consumer that does not exist is the same mistake
+  as adding `source_measure`.
+
+**Exit criteria** (restated for pull, 2026-09-16; the original first criterion,
+"scores present straight after import", became "present on first read")
+- [ ] After an import, the next read reports `recomputed` and matches the CLI
+- [ ] After `append_sam_measures`, the next read reports `recomputed`
+- [ ] After the repair script, the next read reports `recomputed`
+- [ ] An unchanged song reads `fresh` (M5 check 9 already proved this)
+- [ ] A raw-SQL insert or delete moves the stamp — the test that the trigger
+      closes the gap
 
 ---
 

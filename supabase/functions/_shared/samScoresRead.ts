@@ -1,7 +1,7 @@
 // SAM difficulty scores — the read behind get_sam_song_scores (M5).
 //
 // Spec: docs/technical-spec-analyzer-port.md §4 M5. The MCP tool wrapper lives
-// in _shared/tools/sam-scores.ts; this file is the logic, with the database
+// in _shared/tools/sam-song-scores.ts; this file is the logic, with the database
 // client passed in (ctx.db) and no Supabase or platform import, so it can be
 // tested directly.
 //

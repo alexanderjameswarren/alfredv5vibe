@@ -30,7 +30,7 @@ import {
   createDjConcertTool,
 } from "../_shared/tools/dj-playlists.ts";
 import { getDjPlaysTool, getDjManagedPlaylistsTool } from "../_shared/tools/dj-reads.ts";
-import { getSamSongScoresTool } from "../_shared/tools/sam-scores.ts";
+import { getSamSongScoresTool } from "../_shared/tools/sam-song-scores.ts";
 import {
   getDjConcertsTool,
   updateDjConcertTool,

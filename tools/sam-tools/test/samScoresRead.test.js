@@ -295,7 +295,7 @@ test("flagged_only filters the rows, never the rollup, and labels both", async (
 
 test("the tool file reaches the database only through ctx.db", async () => {
   const fs = await import("node:fs");
-  for (const f of ["tools/sam-scores.ts", "samScoresRead.ts"]) {
+  for (const f of ["tools/sam-song-scores.ts", "samScoresRead.ts"]) {
     const src = fs.readFileSync(new URL(`../../../supabase/functions/_shared/${f}`, import.meta.url), "utf8");
     assert.doesNotMatch(src, /supabase-js|createClient/, f);
   }

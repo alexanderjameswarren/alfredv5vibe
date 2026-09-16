@@ -13,8 +13,8 @@
 //                                            call must be `fresh` with
 //                                            measures_read 0
 //
-// Each call goes to the sam-scores Edge Function with your own session, so RLS
-// confines it to your songs. `fresh` means the stored scores were already
+// Each call goes to the sam-song-scores Edge Function with your own session,
+// so RLS confines it to your songs. `fresh` means the stored scores were already
 // current: nothing was read and nothing was written. No service-role key.
 
 (function () {
@@ -43,7 +43,7 @@
   });
 
   async function compute(songId) {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/sam-scores`, {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/sam-song-scores`, {
       method: "POST",
       headers: headers(),
       body: JSON.stringify({ song_id: songId }),

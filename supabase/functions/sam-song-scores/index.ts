@@ -4,7 +4,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { computeSongScores, SongNotFoundError } from "../_shared/samScores.ts";
 
-// sam-scores — bring one song's stored difficulty facts (sam_song_scores) up
+// sam-song-scores — bring one song's stored difficulty facts (sam_song_scores) up
 // to date. Analyzer port M4; spec docs/technical-spec-analyzer-port.md.
 //
 //   POST { "song_id": "<uuid>" }
@@ -13,7 +13,7 @@ import { computeSongScores, SongNotFoundError } from "../_shared/samScores.ts";
 //
 // status: "fresh" (nothing read, nothing written), "computed", "no-measures",
 // or "cleared". One song per request: a whole-library backfill is a loop of
-// these (scripts/sam-scores.js), which keeps every request well inside the
+// these (scripts/sam-song-scores.js), which keeps every request well inside the
 // edge runtime's CPU budget.
 //
 // A standalone function, not an MCP tool — the same shape as push-send. JWT
@@ -63,7 +63,7 @@ Deno.serve(async (req) => {
     return json(await computeSongScores(supabase, songId));
   } catch (e) {
     if (e instanceof SongNotFoundError) return json({ error: e.message }, 404);
-    console.error("[sam-scores]", songId, e);
+    console.error("[sam-song-scores]", songId, e);
     return json({ error: e instanceof Error ? e.message : String(e) }, 500);
   }
 });

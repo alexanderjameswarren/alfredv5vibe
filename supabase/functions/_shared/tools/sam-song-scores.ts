@@ -1,5 +1,5 @@
 // ============================================================================
-// supabase/functions/_shared/tools/sam-scores.ts
+// supabase/functions/_shared/tools/sam-song-scores.ts
 //
 // get_sam_song_scores — tier 1. Per-measure difficulty scores for one SAM song
 // at a tempo, with a rollup. Analyzer port M5
