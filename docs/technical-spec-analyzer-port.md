@@ -186,6 +186,14 @@ Requirements:
 - **Every param the handler reads must appear in the input JSON schema.**
 - Return bare data via `envelope()`; the wrapper strips the envelope.
 
+**As built (Alex's decisions, 2026-09-16; details in the progress file's M5 notes):**
+- **Signature:** `get_sam_song_scores(song_id, start_measure?, end_measure?, bpm?, limit?, flagged_only?)`.
+- **Staleness:** the tool **recomputes if stale**, inline, and reports `scores.status`. The description states plainly that this `get_*` tool writes derived, unaudited rows.
+- **Limit:** not `clampLimit`. The default is the whole requested range, capped at 200. The reason is in the tool description: "a truncated list says it is partial; a rollup over a fragment does not." When a range is cut, the response reports it in `meta` and names the analyzed range. The rollup is labelled with the measures it covers, and the response gives the next `start_measure`.
+- **`flagged_only`:** filters the returned rows only. The rollup still covers every analyzed measure, and the response says so.
+- **Rows are lean:** `beats` and the onset counts are not returned.
+- **The last exit criterion changes:** a whole-song read no longer exceeds the cap, so truncation is checked with an explicit `limit`.
+
 **Exit criteria**
 - [ ] `get_sam_song_scores` on Someone Like You at its goal tempo flags the same measures the CLI does
 - [ ] Omitting `bpm` uses `goal_effective_bpm` and says so in the response

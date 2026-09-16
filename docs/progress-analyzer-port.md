@@ -1,10 +1,10 @@
 # Progress: Difficulty Analyzer in Supabase (Phase 3)
 
-## Status: M4 built — awaiting migration 027, deploy, backfill and verification
+## Status: M5 built — awaiting MCP deploy and verification in claude.ai
 
 Branch: `analyzer-port` (pushed). M1 `602d18e`, onsets/tempo-free `81f8dfc`,
-M2 `7e39443`, M3 `549832f` (run by Alex: CONFORMANT, 38 tables), and the M4
-commit.
+M2 `7e39443`, M3 `549832f` (run by Alex: CONFORMANT, 38 tables), M4 (verified
+by Alex), the `[{result}]` fix `a7e34dd`, and the M5 commit.
 
 `main` was fast-forwarded to `sam-tools-verify-and-ties` (`256010c` ->
 `c19c6e0`) before M2 — a clean fast-forward — so `analyzer-port` sits directly
@@ -90,40 +90,57 @@ Code: `supabase/functions/_shared/samScores.ts`, `supabase/functions/sam-scores/
 - [x] No-op when `computed_from_edited_at` matches and `scores_version` matches —
       checked FIRST, by `sam_song_scores_freshness`, before any measure read
 - [x] Uses `analyzeSongFacts`; nothing in M4 takes a bpm
-- [ ] Migration 027 run — Alex
-- [ ] `sam-scores` deployed — Alex
-- [ ] Backfill across every non-archived song with measures — Alex, console
+- [x] Migration 027 run — Alex
+- [x] `sam-scores` deployed — Alex (so the `src/sam/lib/keySignature.js`
+      cross-tree import does bundle)
+- [x] Backfill across every non-archived song with measures — Alex, console
 
-**Exit criteria**
-- [ ] Every song with measures has scores — verify query 1
-- [ ] Recomputing an unchanged song writes nothing AND reads no measure rows —
-      verify query 3 (`twice`, then a `--all-columns` diff); proved in unit tests
-- [ ] Stored values match the CLI exactly on all four reference songs — verify
-      query 2 + `compare-scores.js cli`
-- [ ] **Mutation test:** edit one measure, recompute, confirm that measure's
-      scores changed and every other measure's are identical — verify query 4
+**Exit criteria** — all verified by Alex, 2026-09-16
+- [x] Every song with measures has scores — verify query 1: 32/32 songs
+- [x] Recomputing an unchanged song writes nothing AND reads no measure rows —
+      verify query 3: `diff --all-columns` reports 0 changed
+- [x] Stored values match the CLI exactly on all four reference songs — verify
+      query 2 + `compare-scores.js cli`: 5,604 values, 0 mismatches
+- [x] **Mutation test:** edit one measure, recompute, confirm that measure's
+      scores changed and every other measure's are identical — verify query 4:
+      only m10 changed (rh_stack 1→2, rh_stretch 0→36, rh_jump 7→39)
 
 ---
 
 ### M5 — The read tool
 
-- [ ] `get_sam_song_scores`, tier 1, `ctx.db` only
-- [ ] Params: `song_id`, `start_measure`, `end_measure`, `bpm`, `limit` — every
-      one advertised in the input JSON schema
-- [ ] Tempo resolution: argument → `goal_effective_bpm` → error. Never
-      `goal_bpm`, never `default_bpm`. Comment explaining why at the resolution site
-- [ ] Response states the tempo used and its source
-- [ ] Measure-range filter pushed into the query before `.limit()`
-- [ ] `clampLimit`; truncation NOTE not suppressed
-- [ ] Rollup over the returned range: median, p90, max, flagged list
-- [ ] Bare data via `envelope()`
+Code: `supabase/functions/_shared/samScoresRead.ts` (logic),
+`supabase/functions/_shared/tools/sam-scores.ts` (tool), registration in
+`supabase/functions/mcp/index.ts`, tests in
+`tools/sam-tools/test/samScoresRead.test.js`.
 
-**Exit criteria**
+- [x] `get_sam_song_scores`, tier 1, `ctx.db` only
+- [x] Params: `song_id`, `start_measure`, `end_measure`, `bpm`, `limit` — every
+      one advertised in the input JSON schema — plus `flagged_only` (Alex's
+      addition), also advertised
+- [x] Tempo resolution: argument → `goal_effective_bpm` → error. Never
+      `goal_bpm`, never `default_bpm`. Comment explaining why at the resolution site
+- [x] Response states the tempo used and its source
+- [x] Measure-range filter pushed into the query before `.limit()`
+- [x] ~~`clampLimit`~~ **replaced (Alex):** default = the whole requested range,
+      cap 200 (`MAX_MEASURES`); truncation reported, never suppressed
+- [x] Rollup over the analyzed range: median, p90, max, flagged list
+- [x] Bare data via `envelope()`
+- [x] Inline recompute before the read, status reported; the description says
+      loudly that this `get_*` tool writes
+- [ ] Deployed — Alex: `npx supabase functions deploy mcp --no-verify-jwt`
+
+**Exit criteria** (unit-tested; live checks need Alex, in a fresh claude.ai thread)
 - [ ] Flags match the CLI on Someone Like You at its goal tempo
 - [ ] Omitting `bpm` uses the goal and says so
 - [ ] A range returns only that range, with a rollup over that range
-- [ ] A song with no goal and no `bpm` errors rather than guessing
-- [ ] A whole-song read on a 160-measure song reports truncation
+- [x] A song with no goal and no `bpm` errors rather than guessing — **unit test
+      only**: no live song can reach it (see the M5 notes)
+- [ ] ~~A whole-song read on a 160-measure song reports truncation~~
+      **Superseded by the cap of 200:** a whole-song read of Say It Ain't So
+      (160) must now come back COMPLETE, `truncated: false`. Truncation is
+      checked instead with an explicit small `limit`.
+- [ ] `flagged_only` lists only flagged rows, with the same rollup as a full read
 
 ---
 
@@ -511,3 +528,98 @@ database write access or SQL access, and did not deploy. Also unverified: that
 the deploy bundles `src/sam/lib/keySignature.js`. push-send's identical import
 says it will; if it does not, the deploy fails loudly, and the fix is to vendor
 that one small function.
+
+#### M5
+
+**Decisions (Alex, 2026-09-16), each a change from the spec as first written:**
+
+- **No `clampLimit`.** Its default of 20 and cap of 50 would cut most songs, and
+  a cut list is harmless only when it looks cut. The tool description says it:
+  "a truncated list says it is partial; a rollup over a fragment does not." A
+  median, p90 and flagged list over measures 1–50 read exactly like a
+  whole-song answer. So the default is the whole requested range and the cap
+  is a local `MAX_MEASURES = 200` (longest song: 160). A whole-song read of Say
+  It Ain't So is about 42 KB compact, about 17k tokens pretty-printed; that
+  cost was accepted.
+- **When the cap or `limit` does cut:** `meta` carries `truncated`, `total` and
+  `limit_applied` (so `runToolForMcp` prints its NOTE line); `range.analyzed`
+  names the first and last measure actually covered; `rollup.covers` says the
+  rollup describes only those; `range.note` gives the `start_measure` for the
+  next call. Truncation is judged from the exact count, never from
+  `rows.length >= limit` (the `ken.ts` rule): exactly `limit` rows is complete.
+- **`flagged_only`** (sixth param). The rollup is computed over EVERY analyzed
+  measure first; only the returned rows are filtered. `rows.filter` reads
+  `flagged_only` and `rows.note` says the rollup still covers all N measures.
+  `meta` is the same as for the unfiltered read, since it describes the
+  analyzed range.
+- **Lean rows.** Returned per measure: `measure`, `notes_per_second`,
+  `rh/lh_notes_per_beat`, `rh/lh_stack`, `rh/lh_stretch`, `rh/lh_jump`,
+  `rhythm_variety`, `accidentals`, `flags`. `beats` and the onset counts are
+  dropped: they are the inputs to the rates, and remain in the table.
+- **Inline recompute.** The read calls `computeSongScores(ctx.db, song_id)`
+  first. When fresh that is one cheap call (M4); when stale it recomputes and
+  replaces the rows. `scores.status` reports `fresh`, `recomputed`,
+  `no-measures` or `cleared`. **This is a `get_*` tool that writes**, which
+  departs from the naming convention. The tool description says so up front:
+  the rows are derived, the table's comment calls them safe to delete and
+  recompute, and auditing is off, so the refresh leaves no audit trail. Stale
+  scores are never returned silently.
+- **The no-goal error path is tested in unit tests only.** `goal_bpm` is NOT
+  NULL and the fill trigger sets it on insert, so no live song lacks a
+  `goal_effective_bpm`. The code comment says the path guards a state the
+  database currently prevents, so nobody deletes it as dead code.
+
+**Design**
+- Order: validate every argument (including `bpm`) → read `sam_songs`
+  (`id, title, goal_effective_bpm` — the wrong tempo columns are not even
+  selected) → resolve the tempo → `computeSongScores` → read `sam_song_scores`
+  with `.eq/.gte/.lte/.order` then `.limit`, `count: "exact"` →
+  `measureAtTempo` per row (the analyzer's own derivation, not a second copy)
+  → rollup with the analyzer's `quantile` and `SUMMARY_METRICS` → filter rows
+  if `flagged_only`.
+- A bad argument, an unknown song or a missing tempo all fail BEFORE the
+  freshness check, so none of them can trigger a write.
+- Metric names in the response are snake_case. Fractional values (the rates,
+  and the rollup) are rounded to 2 dp for display; flags and the rollup are
+  computed from unrounded values. `thresholds` is included, with the flag
+  codes spelled out.
+- The logic lives in `_shared/samScoresRead.ts`, which imports neither Supabase
+  nor the platform, so node:test drives it directly. The tool file only binds
+  it to `ctx.db` and wraps the result in `envelope()`.
+
+**Checks run here**
+- `npm test` in sam-tools: 269 pass (17 new in `samScoresRead.test.js`):
+  - flags, flagged list and every rollup stat equal the CLI's
+    `analyzeSong(SLY, {bpm: 67})`; the rows equal the CLI per measure;
+  - an explicit bpm (120) is used, labelled `argument`, and matches the CLI
+    at 120;
+  - the song select is exactly `id, title, goal_effective_bpm`;
+  - no goal (null, undefined, 0) and no bpm: error, and the only call made is
+    the song read; a bpm rescues it;
+  - nine bad-argument cases fail before any call; an unknown song fails before
+    freshness;
+  - fresh: call order is song → freshness → scores, and nothing is written;
+  - stale: song → freshness → song → measures → replace → scores, status
+    `recomputed`;
+  - a range: the query ops are `select, eq, gte, lte, order, limit` in that
+    order; only m20–30 come back; rollup equals the CLI over that slice;
+  - the default limit is 200, and `limit: 5000` clamps to 200;
+  - a 160-row song is returned whole, not truncated;
+  - `start_measure 11, limit 30`: `meta {truncated, total 72, limit_applied
+    30}`, analyzed 11–40, the note names `start_measure=41`, and the rollup is
+    labelled as covering only those 30 measures;
+  - exactly `limit` rows is not truncated;
+  - `flagged_only`: identical rollup and meta, rows equal the flagged list,
+    and the note is present;
+  - neither new `.ts` file mentions supabase-js or `createClient`.
+- **Mutations**, both caught and reverted: computing the rollup over the
+  filtered rows (fails the `flagged_only` test); ignoring `limit` in the query
+  (fails the truncation test).
+- `deno check --no-lock`: `samScoresRead.ts` and `tools/sam-scores.ts` clean
+  (the tool file needs `--node-modules-dir=none` to resolve supabase-js
+  through platform.ts). `mcp/index.ts` now reports 82 errors against 81 on
+  the current base. The one new error is the new registration's `async
+  (args)` callback: the same implicit-`any` as every other registration.
+
+**Not verified here — needs Alex:** the deploy, and the live exit criteria in a
+fresh claude.ai thread.
