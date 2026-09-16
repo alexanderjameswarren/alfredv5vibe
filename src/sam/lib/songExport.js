@@ -28,9 +28,12 @@
 import { fifthsFromKeyLabel } from "./keySignature";
 
 // 1 == the original unversioned export {title, artist, defaultBpm, measures}.
-// 2 == this document: key/fifths, lineage, source path, lyrics, fingerings,
-//      and always-present audioOffsetMs.
-export const SONG_EXPORT_FORMAT_VERSION = 2;
+// 2 == key/fifths, lineage, source path, lyrics, fingerings, and
+//      always-present audioOffsetMs.
+// 3 == this document: 2 plus goalBpm / goalPlaybackSpeed. A v3 document always
+//      carries both keys (null = no goal known); v1/v2 never do, which is what
+//      the version number lets a reader tell apart.
+export const SONG_EXPORT_FORMAT_VERSION = 3;
 
 // Drop the inline `lyric` key from a voice-event list. Both hands are cleaned:
 // recompileMeasures only injects into rh, but the PARSER can attach a lyric to
@@ -114,6 +117,14 @@ export function buildSongExport({
     title: song.title,
     artist: song.artist ?? null,
     defaultBpm: song.defaultBpm || fallbackBpm,
+
+    // --- goal tempo (v3) ----------------------------------------------------
+    // Deliberately NOT derived from defaultBpm or the live tempo: defaultBpm is
+    // the practice tempo and drifts, the goal only changes when edited. null
+    // means the song in hand does not know its goal (e.g. a MusicXML import
+    // not yet reopened); the importer then lets the database trigger decide.
+    goalBpm: song.goalBpm ?? null,
+    goalPlaybackSpeed: song.goalPlaybackSpeed ?? null,
 
     // --- song-level additions ---------------------------------------------
     // `key` is the stored label, kept so commitImport's key_signature write is

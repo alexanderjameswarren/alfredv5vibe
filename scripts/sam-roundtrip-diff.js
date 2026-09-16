@@ -104,7 +104,7 @@
     console.log(`\n=== SAM round-trip diff ===\n  source: ${sourceId}\n  copy:   ${copyId}\n`);
 
     const SONG_COLS =
-      "id,title,artist,key_signature,time_signature,default_bpm,song_type,parent_song_id,difficulty_tier,source_xml_path";
+      "id,title,artist,key_signature,time_signature,default_bpm,goal_bpm,goal_playback_speed,song_type,parent_song_id,difficulty_tier,source_xml_path";
     const MEASURE_COLS =
       "number,rh,lh,time_signature,audio_offset_ms,chord,section,source_measure";
 
@@ -139,6 +139,9 @@
     // title is expected to differ (the copy is deliberately renamed).
     for (const col of [
       "artist", "key_signature", "time_signature", "default_bpm",
+      // The goal survives only if the export carries it (format v3); a copy
+      // made from an older export gets goal_bpm = its default_bpm instead.
+      "goal_bpm", "goal_playback_speed",
       "song_type", "parent_song_id", "difficulty_tier", "source_xml_path",
     ]) {
       check(

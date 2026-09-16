@@ -884,7 +884,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get SAM Songs",
       description:
-        "Get songs in the SAM music practice app. Returns song metadata (title, artist, key, BPM). Use search_text to find specific songs. Does not return measure data — use get_database_schema for full details if needed.",
+        "Get songs in the SAM music practice app. Returns song metadata (title, artist, key, default_bpm, and the goal tempo). Use search_text to find specific songs. Does not return measure data — use get_database_schema for full details if needed. TEMPO FIELDS: default_bpm is the tempo the song loads at and drifts whenever practice tempo is saved — it is NOT the target. goal_bpm is the deliberately set goal tempo (tempo-box units, quarter notes per minute) and goal_playback_speed its paired speed percent; goal_effective_bpm = round(goal_bpm * goal_playback_speed / 100) is the goal tempo actually heard, directly comparable with sam_passes.effective_bpm.",
       inputSchema: {
         search_text: z.string().optional().describe("Search song titles and artists"),
       },
@@ -964,7 +964,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get SAM Song Measures",
       description:
-        "Read measures for a SAM song, with optional range filter. Returns measure notation (RH/LH events), metadata, any placed lyrics, and any placed RH fingerings (each with note_index, finger 1-5, and source 'manual'|'musicxml').",
+        "Read measures for a SAM song, with optional range filter. Returns measure notation (RH/LH events), metadata, any placed lyrics, and any placed RH fingerings (each with note_index, finger 1-5, and source 'manual'|'musicxml'). The `song` block carries `bpm` (default_bpm: the load tempo, not a target) and the goal tempo: goal_bpm, goal_playback_speed, and goal_effective_bpm (the goal tempo actually heard).",
       inputSchema: {
         song_id: z.string().describe("UUID of the song"),
         start_measure: z.number().optional().describe("First measure number to return (inclusive)"),
@@ -1042,7 +1042,7 @@ export function createMcpServer(token: string) {
     {
       title: "Create SAM Song",
       description:
-        "Create an empty SAM song row (no notation). Use this before append_sam_measures to lay down a song shell — title, artist, key, time signature, default BPM, and lineage (song_type, parent_song_id, difficulty_tier, generation_notes). This tool does NOT write any measures; call append_sam_measures afterward. Tier 3 — requires `confirmed: true` in args to actually write.",
+        "Create an empty SAM song row (no notation). Use this before append_sam_measures to lay down a song shell — title, artist, key, time signature, default BPM, goal tempo, and lineage (song_type, parent_song_id, difficulty_tier, generation_notes). GOAL TEMPO: pass goalBpm (and optionally goalPlaybackSpeed) only when a goal is actually known. When goalBpm is omitted, a simplified song inherits its parent's goal pair, and any other song gets goal_bpm = its default BPM (set by the database). This tool does NOT write any measures; call append_sam_measures afterward, and it cannot edit an existing song's goal. Tier 3 — requires `confirmed: true` in args to actually write.",
       inputSchema: {
         title: z.string().describe("Song title (required)"),
         songType: z
@@ -1076,6 +1076,22 @@ export function createMcpServer(token: string) {
           .optional()
           .describe("Song-level default in 'N/M' form, e.g. '4/4'. Per-measure timeSignature overrides."),
         defaultBpm: z.number().optional().describe("Default tempo. Defaults to 68."),
+        goalBpm: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Goal tempo in tempo-box units (quarter notes per minute). Separate from defaultBpm, which is only the load tempo. Omit unless a goal is actually known: a simplified song then inherits its parent's goal, anything else gets its default BPM."
+          ),
+        goalPlaybackSpeed: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Playback speed percent paired with goalBpm (100 = full speed). Only used when goalBpm is given; defaults to 100."
+          ),
         confirmed: z
           .boolean()
           .optional()

@@ -715,7 +715,7 @@ export async function getSamSongs(
       // or MusicXML imports whose Storage upload failed. Exposed here
       // so Alex can verify post-re-import coverage over MCP instead of
       // eyeballing the dashboard.
-      .select("id, title, artist, source, key_signature, time_signature, default_bpm, source_xml_path, created_at, updated_at")
+      .select("id, title, artist, source, key_signature, time_signature, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, source_xml_path, created_at, updated_at")
       .eq("archived", false)
       .order("title");
 
@@ -1004,7 +1004,7 @@ export async function getSamSongMeasures(
     // 1. Fetch song metadata
     const { data: song, error: songError } = await client
       .from("sam_songs")
-      .select("id, title, artist, default_bpm, time_signature, key_signature")
+      .select("id, title, artist, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, time_signature, key_signature")
       .eq("id", params.song_id)
       .single();
 
@@ -1106,7 +1106,14 @@ export async function getSamSongMeasures(
 
     return {
       data: {
-        song: { title: song.title, artist: song.artist, bpm: song.default_bpm },
+        song: {
+          title: song.title,
+          artist: song.artist,
+          bpm: song.default_bpm,
+          goal_bpm: song.goal_bpm,
+          goal_playback_speed: song.goal_playback_speed,
+          goal_effective_bpm: song.goal_effective_bpm,
+        },
         total_measures: totalMeasures || 0,
         measures: formatted,
       },

@@ -27,6 +27,10 @@ export function mapSongRow(row, measures) {
     artist: row.artist,
     defaultBpm: row.default_bpm,
     playbackSpeed: row.playback_speed ?? 100,
+    // Goal tempo — separate from defaultBpm, which drifts whenever practice
+    // tempo is saved. Carried so the exporter can round-trip it.
+    goalBpm: row.goal_bpm ?? null,
+    goalPlaybackSpeed: row.goal_playback_speed ?? null,
     defaultTimingWindowMs: row.default_timing_window_ms ?? null,
     defaultChordMs: row.default_chord_ms ?? null,
     defaultMeasureWidth: row.default_measure_width ?? null,

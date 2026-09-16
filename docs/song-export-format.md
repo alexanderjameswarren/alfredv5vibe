@@ -13,9 +13,13 @@ Structure is enforced by [`sam-drill-format.schema.json`](../sam-drill-format.sc
 at the repo root, which is the machine-readable authority; this document
 explains it and records the conventions the schema cannot express.
 
-**Version 2** — `formatVersion: 2`. Version 1 is the original unversioned export
+**Version 3** — `formatVersion: 3`. Version 1 is the original unversioned export
 carrying only `title`, `artist`, `defaultBpm`, `measures`; a document with no
-`formatVersion` key is v1 and still imports.
+`formatVersion` key is v1 and still imports. Version 2 added key/`fifths`,
+lineage, `sourceXmlPath`, `lyrics`, `fingerings` and the always-present
+`audioOffsetMs`. Version 3 adds the goal tempo pair (`goalBpm`,
+`goalPlaybackSpeed`, §7). All three versions import; a v1 or v2 document simply
+has no goal keys, which the importer treats exactly like `null`.
 
 ---
 
@@ -44,10 +48,12 @@ A consumer should read every measure-level optional as `m.chord ?? null`.
 
 | Field | Type | Notes |
 |---|---|---|
-| `formatVersion` | `integer` | `2`. Absent ⇒ v1. |
+| `formatVersion` | `integer` | `3`. Absent ⇒ v1. |
 | `title` | `string` | Required, non-empty. |
 | `artist` | `string \| null` | |
 | `defaultBpm` | `number` | Quarter-note BPM. Always present from the Export button (falls back to the live transport BPM). **Unreliable as a performance tempo** — see §7. |
+| `goalBpm` | `integer ≥ 1 \| null` | v3. The goal tempo, in the same units as `defaultBpm`. **Not** derived from `defaultBpm`. `null` = the song in hand does not know its goal. See §7. |
+| `goalPlaybackSpeed` | `integer ≥ 1 \| null` | v3. Playback speed percent paired with `goalBpm` (100 = full speed). Only read when `goalBpm` is set. |
 | `key` | `string \| null` | Display label, e.g. `"A major"`. **The mode is not trustworthy** — see §6. |
 | `fifths` | `integer \| null` | MusicXML `<fifths>`, −7…7. The authoritative key signature. |
 | `timeSignature` | `string \| null` | Song-level default, `"N/M"`. Per-measure `timeSignature` overrides it. |
@@ -204,7 +210,39 @@ Tools that need a tempo must **take one explicitly**. `tools/sam-tools`'
 analyzer requires `--bpm` and prints the value it used.
 
 BPM throughout SAM means **quarter notes per minute**, matching the
-quarter-note beat unit used by `durations.js`.
+quarter-note beat unit used by `durations.js`. That holds in compound time too:
+a 6/8 song at `defaultBpm: 65` plays at quarter = 65, and the metronome clicks
+quarters.
+
+### Goal tempo — `goalBpm` / `goalPlaybackSpeed`
+
+`defaultBpm` is the tempo a song *loads* at, and it changes every time practice
+tempo is saved. The goal tempo is the target, and changes only when
+deliberately edited. They are separate columns (`default_bpm`, `goal_bpm`) and
+separate export keys.
+
+- The tempo actually heard at the goal is
+  `round(goalBpm × goalPlaybackSpeed / 100)` — the database's
+  `goal_effective_bpm`, comparable with `sam_passes.effective_bpm`.
+- **Export** writes both keys on every v3 document, from the song's stored
+  goal. A song whose goal is not known in memory (a MusicXML import that has
+  not been reopened yet) exports `null`. The exporter never substitutes
+  `defaultBpm`.
+- **Import** applies one rule (`src/sam/lib/goalTempo.js`; `create_sam_song`
+  mirrors it):
+  1. `goalBpm` set → used as given, with `goalPlaybackSpeed` if set (else 100).
+  2. No `goalBpm`, `songType: "simplified"` with a `parentSongId` → the parent's
+     goal pair is inherited.
+  3. Otherwise (originals, drills, an unreadable parent) → no goal is sent, and
+     the database trigger `sam_songs_fill_goal_tempo` sets `goal_bpm` from
+     `default_bpm`. That trigger is the only place the copy happens.
+
+  The pair travels together: a document that sets its own `goalBpm` never picks
+  up its parent's speed. Drills never inherit, even when they have a parent.
+- A simplified variant built by `tools/sam-tools` copies the input's song-level
+  fields, so a variant of a v3 export carries its parent's goal explicitly.
+- MusicXML has no goal tempo. A MusicXML import's goal is its `<sound tempo>`
+  (via `defaultBpm` and the trigger), or 68 when the score has none.
 
 ---
 
@@ -236,7 +274,8 @@ notes.
 Not currently round-tripped; anything relying on these must read the database:
 
 - `playback_speed`, `default_timing_window_ms`, `default_chord_ms`,
-  `default_measure_width` — per-song practice settings.
+  `default_measure_width` — per-song practice settings. (The goal's
+  `goalPlaybackSpeed` *is* exported; the practice `playback_speed` is not.)
 - `audio_file_path` — the backing track. `audioOffsetMs` values survive but the
   track they reference does not.
 - `show_imported_fingerings`, `archived`, `created_at`/`updated_at`.

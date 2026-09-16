@@ -216,6 +216,23 @@ test("the output document inherits and re-labels correctly", () => {
   assert.deepEqual(doc.generationNotes, report);
 });
 
+test("a v3 input's goal tempo carries into the variant unchanged", () => {
+  // A variant is practised toward the same goal as its parent, so the pair
+  // passes through with the rest of the inherited song-level fields.
+  const { plan, result, report } = runPlan();
+  const input = { ...SLY, formatVersion: 3, goalBpm: 72, goalPlaybackSpeed: 90 };
+  const doc = buildOutputDoc({ input, measures: result.measures, plan, report });
+  assert.equal(doc.formatVersion, 3);
+  assert.equal(doc.goalBpm, 72);
+  assert.equal(doc.goalPlaybackSpeed, 90);
+
+  // An older input has no goal keys, and none are invented — the importer
+  // then inherits the parent's goal from the database.
+  const old = buildOutputDoc({ input: SLY, measures: result.measures, plan, report });
+  assert.equal("goalBpm" in old, false);
+  assert.equal("goalPlaybackSpeed" in old, false);
+});
+
 test("the title is unchanged when the plan has no label", () => {
   const { plan, result, report } = runPlan({ ...REFERENCE, label: undefined });
   const doc = buildOutputDoc({ input: SLY, measures: result.measures, plan, report });

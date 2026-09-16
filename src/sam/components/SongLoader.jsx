@@ -7,6 +7,7 @@ import { fanOutMeasures, recompileMeasures } from "../lib/measureCompiler";
 import { importMusicxmlFingerings } from "../lib/fingeringsApi";
 import { importLyrics } from "../lib/lyricsApi";
 import { fetchSongById } from "../lib/songLoad";
+import { fetchParentGoalTempo, goalTempoInsertFields } from "../lib/goalTempo";
 import { validateSongDocument } from "../lib/songSchema";
 import { scanMeasuresForDuplicatePitches } from "../lib/noteDuplicates";
 import usePracticeStats from "../lib/usePracticeStats";
@@ -439,32 +440,40 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
     // Load into memory (this is the "commit" from the user's POV)
     onSongLoaded(song);
 
-    // Fire-and-forget DB insert
-    supabase
-      .from("sam_songs")
-      .insert({
-        title: song.title || defaultTitle,
-        artist: song.artist || null,
-        source,
-        source_file: sourceFile,
-        key_signature: song.key || null,
-        time_signature: song.timeSignature || "4/4",
-        // Inherited from the document when it carries one. A simplified song
-        // must point at the same score its parent came from, or the lineage
-        // leads to a row that can no longer be traced back to a source
-        // document. Overwritten below for MusicXML imports, which upload
-        // their own copy and know the new path.
-        source_xml_path: song.sourceXmlPath || null,
-        default_bpm: song.defaultBpm || 68,
-        measures: song.measures,
-        // Imported fingerings shown by default (the DB column defaults to
-        // false; override on import so editorial fingering is visible without
-        // a toggle). No-op for imports that carry none.
-        show_imported_fingerings: true,
-        ...lineageFields(song),
-      })
-      .select("id, user_id")
-      .single()
+    // Fire-and-forget DB insert. A simplified song with no goal of its own
+    // inherits its parent's, which needs one read first; everything else
+    // resolves immediately (see goalTempo.js for the rule).
+    fetchParentGoalTempo(song, supabase)
+      .then((parentGoal) => supabase
+          .from("sam_songs")
+          .insert({
+            title: song.title || defaultTitle,
+            artist: song.artist || null,
+            source,
+            source_file: sourceFile,
+            key_signature: song.key || null,
+            time_signature: song.timeSignature || "4/4",
+            // Inherited from the document when it carries one. A simplified song
+            // must point at the same score its parent came from, or the lineage
+            // leads to a row that can no longer be traced back to a source
+            // document. Overwritten below for MusicXML imports, which upload
+            // their own copy and know the new path.
+            source_xml_path: song.sourceXmlPath || null,
+            default_bpm: song.defaultBpm || 68,
+            // Goal tempo only when the file (or, for a simplified song, its
+            // parent) actually has one. Otherwise omitted, and the database
+            // trigger fills goal_bpm from default_bpm — never copied here.
+            ...goalTempoInsertFields(song, parentGoal),
+            measures: song.measures,
+            // Imported fingerings shown by default (the DB column defaults to
+            // false; override on import so editorial fingering is visible without
+            // a toggle). No-op for imports that carry none.
+            show_imported_fingerings: true,
+            ...lineageFields(song),
+          })
+          .select("id, user_id")
+          .single()
+      )
       .then(async ({ data, error: dbError }) => {
         if (dbError) {
           console.error("[Sam] Supabase save error:", dbError);

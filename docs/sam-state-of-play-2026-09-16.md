@@ -331,7 +331,7 @@ No MCP tool writes `sam_passes` or `sam_sessions`.
 | SAM, 09-10 → 09-16 | Whole-song repeat, rest default 0, playthrough accuracy, pass counter (`sam_passes`, 09-14), session tempo/MIDI metadata, pass `playback_speed`/accuracy columns (09-16), UI tidy-ups |
 | SAM data | New songs: Clementi, Minuet in G, Autumn Leaves, three MCP-authored Autumn Leaves drills. Pastorale tempo now 65 (`updated_at` 09-16) |
 | Non-SAM | Notifications (a lot), DJ, Ken, search, tags project, collections history |
-| Docs, 09-14 | `a783a4e` moved project docs into `docs/history/`, including the unfinished Phase 2/6 progress files and `song-export-format.md` (see B8) |
+| Docs, 09-14 | `a783a4e` moved project docs into `docs/history/`, including the unfinished Phase 2/6 progress files and `song-export-format.md` (the export doc has since been moved back to `docs/`; see B8) |
 
 ## B2. Current code
 
@@ -985,9 +985,9 @@ console.log(
 console.log(`seams (printed-number jumps): ${r.seams.length ? "m" + r.seams.join(", m") : "none"}`);
 ```
 
-### docs/history/song-export-format.md (full)
+### docs/song-export-format.md (full)
 
-Note: this file now lives under `docs/history/`, not `docs/` (see B8).
+Note: this is the text as it stood on 2026-09-16, before the goal-tempo fields were added. The file was briefly under `docs/history/` and has been moved back to `docs/` (see B8).
 
 ````markdown
 # SAM song export format
@@ -1686,12 +1686,11 @@ Analyzer runs at `--bpm 60` for reference (committed JSON exports from 08-17):
 
 ## B8. Things that are different from what you remembered
 
-- **Doc path.** `docs/song-export-format.md` is now
-  `docs/history/song-export-format.md` (moved by `a783a4e`, 09-14). Its
-  `../src/…` links are broken, and so are the path references in
-  `tools/sam-tools/lib/analyze.js` line 3 and `tools/sam-tools/bin/analyze.js`
-  line 22. The unfinished Phase 2 and Phase 6 progress files were moved into
-  `docs/history/` too.
+- **Doc path.** `a783a4e` (09-14) moved `docs/song-export-format.md` into
+  `docs/history/`, breaking its `../src/…` links and the path references in
+  `tools/sam-tools`. **Resolved 09-16:** it has been moved back to
+  `docs/song-export-format.md`, so those references are correct again. The
+  unfinished Phase 2 and Phase 6 progress files are still in `docs/history/`.
 - **Phase 6 M2 is built**, including opacity and per-hand toggles; only human
   verification is outstanding.
 - **Phase 2 went past M7** (Entertainer, Say It Ain't So, Scientist plans,

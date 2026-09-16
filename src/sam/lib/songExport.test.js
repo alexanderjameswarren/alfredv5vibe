@@ -158,6 +158,22 @@ describe("buildSongExport", () => {
     expect(doc.formatVersion).toBe(SONG_EXPORT_FORMAT_VERSION);
   });
 
+  test("exports the goal tempo as its own pair, never derived from defaultBpm", () => {
+    const doc = buildSongExport({
+      song: { ...makeSong(), goalBpm: 80, goalPlaybackSpeed: 90 },
+      fallbackBpm: 99,
+    });
+    expect(doc.goalBpm).toBe(80);
+    expect(doc.goalPlaybackSpeed).toBe(90);
+    expect(Object.keys(doc).slice(4, 6)).toEqual(["goalBpm", "goalPlaybackSpeed"]);
+
+    // A song that does not know its goal says so with null — it does not
+    // borrow defaultBpm or the live tempo.
+    const bare = buildSongExport({ song: makeSong(), fallbackBpm: 99 });
+    expect(bare.goalBpm).toBeNull();
+    expect(bare.goalPlaybackSpeed).toBeNull();
+  });
+
   test("falls back to the live bpm exactly as before", () => {
     const doc = buildSongExport({ song: { ...makeSong(), defaultBpm: null }, fallbackBpm: 99 });
     expect(doc.defaultBpm).toBe(99);
@@ -165,7 +181,8 @@ describe("buildSongExport", () => {
 
   test("emits absent song-level fields as null, never omitted", () => {
     const doc = buildSongExport({ song: { title: "Bare", measures: [] } });
-    for (const k of ["artist", "key", "fifths", "timeSignature", "sourceXmlPath",
+    for (const k of ["artist", "goalBpm", "goalPlaybackSpeed",
+                     "key", "fifths", "timeSignature", "sourceXmlPath",
                      "songType", "parentSongId", "difficultyTier", "generationNotes"]) {
       expect(doc).toHaveProperty(k);
       expect(doc[k]).toBeNull();

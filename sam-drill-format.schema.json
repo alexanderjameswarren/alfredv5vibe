@@ -37,9 +37,19 @@
     },
     "timeSignature": { "type": ["string", "null"], "description": "Song-level default, e.g. '4/4'. Per-measure timeSignature overrides." },
     "defaultBpm": { "type": ["number", "null"] },
+    "goalBpm": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Goal tempo in tempo-box units (quarter notes per minute, like defaultBpm). Separate from defaultBpm, which is the practice tempo a song loads at. Null or absent = no goal specified: the database fills it from defaultBpm on insert, except that a simplified song inherits its parent's goal pair."
+    },
+    "goalPlaybackSpeed": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Playback speed percent paired with goalBpm (100 = full recording tempo). Only read when goalBpm is given; null or absent = 100."
+    },
     "formatVersion": {
       "type": ["integer", "null"],
-      "description": "Export format version. Absent / null == the original unversioned {title, artist, defaultBpm, measures} export. 2 adds key/fifths, lineage, sourceXmlPath, lyrics, fingerings, and an always-present per-measure audioOffsetMs."
+      "description": "Export format version. Absent / null == the original unversioned {title, artist, defaultBpm, measures} export. 2 adds key/fifths, lineage, sourceXmlPath, lyrics, fingerings, and an always-present per-measure audioOffsetMs. 3 adds goalBpm and goalPlaybackSpeed (always present, null when unknown)."
     },
     "sourceXmlPath": {
       "type": ["string", "null"],

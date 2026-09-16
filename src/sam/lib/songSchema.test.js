@@ -58,6 +58,33 @@ describe("errors — these still block the import", () => {
   });
 });
 
+describe("goal tempo (format v3)", () => {
+  test("a positive whole goalBpm / goalPlaybackSpeed is accepted, and so is null", () => {
+    for (const goal of [
+      { goalBpm: 72, goalPlaybackSpeed: 90 },
+      { goalBpm: 72 },
+      { goalBpm: null, goalPlaybackSpeed: null },
+      {},
+    ]) {
+      const { valid, errors } = validateSongDocument({ ...doc([fullMeasure()]), formatVersion: 3, ...goal });
+      expect(errors).toEqual([]);
+      expect(valid).toBe(true);
+    }
+  });
+
+  test("a zero, fractional or non-numeric goal is an error", () => {
+    for (const goal of [
+      { goalBpm: 0 },
+      { goalBpm: 72.5 },
+      { goalBpm: "72" },
+      { goalBpm: 72, goalPlaybackSpeed: 0 },
+    ]) {
+      const { valid } = validateSongDocument({ ...doc([fullMeasure()]), ...goal });
+      expect(valid).toBe(false);
+    }
+  });
+});
+
 describe("warnings — these no longer block", () => {
   test("an overlong hand is a warning and the document stays valid", () => {
     const m = fullMeasure();

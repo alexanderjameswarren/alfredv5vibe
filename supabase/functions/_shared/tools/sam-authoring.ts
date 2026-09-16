@@ -220,6 +220,40 @@ export const createSamSongTool = defineTool({
       throw new Error("create_sam_song: songType='simplified' requires a parentSongId.");
     }
 
+    // Goal tempo. Same rule as src/sam/lib/goalTempo.js (Deno cannot import
+    // from src/; keep the two in step):
+    //   goalBpm given              -> use it, plus goalPlaybackSpeed if given
+    //   simplified, no goalBpm     -> inherit the parent's goal pair
+    //   otherwise (incl. drills)   -> omit; trigger sam_songs_fill_goal_tempo
+    //                                 fills goal_bpm from default_bpm
+    // default_bpm is never copied into the goal here.
+    const isSet = (v: unknown) => v !== undefined && v !== null;
+    for (const k of ["goalBpm", "goalPlaybackSpeed"]) {
+      const v = args[k];
+      if (isSet(v) && !(Number.isInteger(v) && (v as number) > 0)) {
+        throw new Error(`create_sam_song: \`${k}\` must be a positive whole number, got ${JSON.stringify(v)}.`);
+      }
+    }
+    const goalFields: Record<string, number> = {};
+    if (isSet(args.goalBpm)) {
+      goalFields.goal_bpm = args.goalBpm as number;
+      if (isSet(args.goalPlaybackSpeed)) {
+        goalFields.goal_playback_speed = args.goalPlaybackSpeed as number;
+      }
+    } else if (songType === "simplified" && parentSongId) {
+      const { data: parent, error: parentErr } = await ctx.db
+        .from("sam_songs")
+        .select("goal_bpm, goal_playback_speed")
+        .eq("id", parentSongId)
+        .maybeSingle();
+      if (parentErr) throw new Error(`create_sam_song: parent goal lookup failed: ${parentErr.message}`);
+      if (!parent) throw new Error(`create_sam_song: parent song ${parentSongId} not found.`);
+      if (isSet(parent.goal_bpm)) goalFields.goal_bpm = parent.goal_bpm as number;
+      if (isSet(parent.goal_playback_speed)) {
+        goalFields.goal_playback_speed = parent.goal_playback_speed as number;
+      }
+    }
+
     const record = {
       title,
       artist: (args.artist as string | null | undefined) || null,
@@ -230,6 +264,7 @@ export const createSamSongTool = defineTool({
       key_signature: (args.key as string | null | undefined) || null,
       time_signature: (args.timeSignature as string | null | undefined) || "4/4",
       default_bpm: (args.defaultBpm as number | null | undefined) || 68,
+      ...goalFields,
       // measures is NOT NULL; empty array is the correct initial value.
       // measures_compiled_at stays null — no fan-out has happened yet.
       measures: [],
@@ -239,7 +274,7 @@ export const createSamSongTool = defineTool({
     const { data, error } = await ctx.db
       .from("sam_songs")
       .insert(record)
-      .select("id, title, song_type, parent_song_id")
+      .select("id, title, song_type, parent_song_id, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm")
       .single();
     if (error) throw new Error(`create_sam_song: ${error.message}`);
     return data;
