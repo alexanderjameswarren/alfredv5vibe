@@ -202,50 +202,87 @@ export function findSeams(measures) {
  * An unmatched END is not automatically corruption: at a seam the note it
  * continued from lives in a measure the flattening skipped. Those are labelled
  * `seam`; the rest are `orphan`.
+ *
+ * KEYING — READ THIS BEFORE CHASING A "CORRUPT" TIE. A note carries only its
+ * pitch and a tie marker; there is no voice or chain id to say which start an
+ * end belongs to. So chains are matched by (hand, midi), and that key is NOT
+ * unique: two voices in unison hold two chains on the same pitch at once
+ * (Say It Ain't So rh m70, F4 in both voices). Two rules make that come out
+ * right, and both are required:
+ *
+ *   1. Each (hand, midi) holds a STACK of open chains, not one slot. An end
+ *      closes the most recent; whatever is left when the song ends is
+ *      reported, every entry of it. With a single slot, a start on an
+ *      already-open pitch silently replaced the older chain, so unclosed
+ *      starts were under-reported (The Entertainer's printed m35 -> X2 volta
+ *      chains vanished this way).
+ *   2. Within one event, every END is processed before any START. An event
+ *      can close one voice's chain and open the other's on the same pitch —
+ *      m70 event 1 is [F4 start, F4 end]. Taken in array order, the start
+ *      clobbered the chain the end was about to close, and the next event's
+ *      `both` was reported as a false orphan.
+ *
+ * Matching by pitch is still a heuristic: with two chains open on one pitch,
+ * LIFO may pair an end with the other voice's start. The counts are right
+ * either way; `crossings` endpoints can be swapped between the two voices.
+ * A report on a unison passage is therefore an analyzer limitation to rule
+ * out before it is treated as data corruption.
  */
 export function analyzeTies(measures, seams) {
   const crossings = [];
   const unmatchedEnds = [];
   const unclosedStarts = [];
+  const numberOf = (mi) => measures[mi].number ?? mi + 1;
 
   for (const hand of ["rh", "lh"]) {
-    const open = new Map(); // midi -> {measureIndex}
+    const open = new Map(); // midi -> stack of {measureIndex, eventIndex}, newest last
+    const unclosedForHand = [];
+
     measures.forEach((measure, mi) => {
       (measure[hand] || []).forEach((e, ei) => {
         if (isRest(e)) return;
+
+        // Rule 2, first half: close.
         for (const n of e.notes) {
-          const tie = n.tie;
-          if (tie === "end" || tie === "both") {
-            const started = open.get(n.midi);
-            if (started === undefined) {
-              const atSeam = seams.has(mi);
-              unmatchedEnds.push({
-                hand, measure: measure.number ?? mi + 1, eventIndex: ei,
-                midi: n.midi, kind: atSeam ? "seam" : "orphan",
-              });
-            } else {
-              if (started.measureIndex !== mi) {
-                crossings.push({
-                  hand, midi: n.midi,
-                  from: measures[started.measureIndex].number ?? started.measureIndex + 1,
-                  to: measure.number ?? mi + 1,
-                });
-              }
-              open.delete(n.midi);
-            }
+          if (n.tie !== "end" && n.tie !== "both") continue;
+          const started = open.get(n.midi)?.pop();
+          if (started === undefined) {
+            unmatchedEnds.push({
+              hand, measure: numberOf(mi), eventIndex: ei,
+              midi: n.midi, kind: seams.has(mi) ? "seam" : "orphan",
+            });
+          } else if (started.measureIndex !== mi) {
+            crossings.push({
+              hand, midi: n.midi,
+              from: numberOf(started.measureIndex),
+              to: numberOf(mi),
+            });
           }
-          if (tie === "start" || tie === "both") {
-            open.set(n.midi, { measureIndex: mi });
-          }
+        }
+
+        // Rule 2, second half: open.
+        for (const n of e.notes) {
+          if (n.tie !== "start" && n.tie !== "both") continue;
+          if (!open.has(n.midi)) open.set(n.midi, []);
+          open.get(n.midi).push({ measureIndex: mi, eventIndex: ei });
         }
       });
     });
-    for (const [midi, started] of open) {
-      unclosedStarts.push({
-        hand, midi,
-        measure: measures[started.measureIndex].number ?? started.measureIndex + 1,
-      });
+
+    // Rule 1: every chain still open is reported, not just the newest.
+    for (const [midi, stack] of open) {
+      for (const started of stack) {
+        unclosedForHand.push({
+          hand, midi,
+          measure: numberOf(started.measureIndex),
+          eventIndex: started.eventIndex,
+          _order: started.measureIndex,
+        });
+      }
     }
+    unclosedForHand
+      .sort((x, y) => x._order - y._order || x.eventIndex - y.eventIndex || x.midi - y.midi)
+      .forEach(({ _order, ...t }) => unclosedStarts.push(t));
   }
   return { crossings, unmatchedEnds, unclosedStarts };
 }
