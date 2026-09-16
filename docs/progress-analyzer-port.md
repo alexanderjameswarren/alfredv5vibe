@@ -1,9 +1,9 @@
 # Progress: Difficulty Analyzer in Supabase (Phase 3)
 
-## Status: M2 complete — awaiting verification
+## Status: M3 migration written — awaiting the trigger check, the run, and verification
 
-Branch: `analyzer-port`. Commits: `602d18e` (M1), `81f8dfc` (onset counts and
-the tempo-free entry point), and the M2 commit.
+Branch: `analyzer-port` (pushed). Commits: `602d18e` (M1), `81f8dfc` (onset
+counts and the tempo-free entry point), `7e39443` (M2), and the M3 commit.
 
 `main` was fast-forwarded to `sam-tools-verify-and-ties` (`256010c` ->
 `c19c6e0`) before M2 — a clean fast-forward, local only, not pushed —
@@ -52,13 +52,19 @@ Stop after each milestone and wait for verification. Work on a branch.
 
 ### M3 — The scores table
 
-- [ ] `sam_song_scores` created, PK `(song_id, measure_number)`
-- [ ] Tempo-independent columns only — no `notes_per_second`, no flags
-- [ ] `scores_version`, `computed_from_edited_at`, `computed_at`
-- [ ] `platform.register_table(..., p_policy_mode => 'none', p_audited => false)`
+SQL: `supabase/migrations/026_sam_song_scores.sql` (written, **not yet run**).
+Verification: `docs/sql/verify-analyzer-port-m3.sql`. Run
+`docs/sql/analyzer-port-trigger-check.sql` first.
+
+- [x] `sam_song_scores` created, PK `(song_id, measure_number)` — in the SQL
+- [x] Tempo-independent columns only — no `notes_per_second`, no flags
+- [x] `scores_version`, `computed_from_edited_at`, `computed_at`
+- [x] `platform.register_table(..., p_policy_mode => 'none', p_audited => false)`
       with notes explaining why auditing is off (derived rows, no user intent)
-- [ ] Hand-written parent-scoped RLS policy, mirroring `sam_song_lyrics`
-- [ ] Column comments on every column
+- [x] Hand-written parent-scoped RLS policy, mirroring `sam_song_lyrics`
+- [x] Column comments on every column
+- [ ] Trigger query (M6 section) run and reported — **handed to Alex; see Notes**
+- [ ] Migration run
 
 **Exit criteria**
 - [ ] `check_platform_conformance()` returns `CONFORMANT`
@@ -317,3 +323,58 @@ exports, 7 current exports):
 - The Entertainer **eighth**-grid plan still refuses to write on invariant 9
   (m92/m108 G3+G3 in the source), as reported earlier. Unrelated to M2;
   repairing the source song fixes it.
+
+#### M3
+
+**The trigger query was not run by Claude.** No MCP tool executes arbitrary
+SQL, and `get_database_schema` does not report triggers. It is in
+`docs/sql/analyzer-port-trigger-check.sql` for Alex to run before the
+migration. The file also searches every function body for
+`measures_edited_at`, which would catch a stamping trigger defined on some
+other table. The only evidence so far is indirect: the drills-and-lineage
+verification (`docs/history/progress-sam-drills-and-lineage.md:123`) logged
+exactly one `UPDATE sam_songs` audit row for an append that inserted two
+measure rows — the tool's own explicit stamp — which a row-level stamping
+trigger would have multiplied. The migration does not depend on the answer;
+M6 does.
+
+**Decisions in the migration**
+- **File location.** `supabase/migrations/026_*`, the numbered sequence the
+  most recent schema migrations (DJ 005–025) use. The SAM pass-counter
+  migrations went to `docs/migrations/`; the numbered folder was chosen for
+  this one because it is a new table, not a column change.
+- **`beats` is `double precision`.** It is the analyzer's JS number, and M4
+  requires stored values to match the CLI exactly. Postgres 12+ prints float8
+  in shortest-exact form, so the value round-trips through PostgREST
+  unchanged. `numeric` would also hold 3.5, but would change the type a reader
+  gets back for no gain.
+- **Counts are `integer` with `>= 0` checks, and `measure_number >= 1`.** They
+  document the invariants and would reject an analyzer bug at write time.
+  `accidentals` is nullable (unknown key), with the same check when present.
+- **`computed_from_edited_at` is nullable**, and freshness is
+  `IS NOT DISTINCT FROM`, so a song whose `measures_edited_at` is NULL still
+  compares equal to a row computed from NULL. Recorded in the table and column
+  comments, since M4 and M5 will both implement the check.
+- **No `updated_at`.** Rows are replaced wholesale, never updated.
+- **No index beyond the primary key.** `(song_id, measure_number)` serves both
+  read paths: every row for a song, and a measure range within one.
+- **The policy is `TO authenticated`** — the spec's form. `sam_song_lyrics`'s
+  policy expression is mirrored exactly (`EXISTS … sam_songs.user_id =
+  auth.uid()`, FOR ALL, USING only, which Postgres also applies as the WITH
+  CHECK). `register_table` has already stripped anon's grants either way.
+- **`p_notes` states the audit exemption**, and the migration's comment block
+  carries the full reasoning: derived rows, replaced wholesale, no user intent,
+  reproducible by re-running the analyzer. The intent-bearing change (a
+  measure edit) is audited where it happens.
+- **Not added: a `source_measure` column.** The spec's column list does not
+  have one. It would help with the repeated-measures hazard (§6): a whole-song
+  aggregate could skip written-out repeats. Raised as a question rather than
+  added.
+
+**Verification design.** `docs/sql/verify-analyzer-port-m3.sql` checks shape,
+constraints, policy, registry and conformance. The cascade and RLS checks run
+in one `DO` block that creates a throwaway song and score row, reads them as
+the owner, as a random other user, and as anon, tries an insert as the other
+user, deletes the song, and then **always raises an error** whose message is
+the result. The error rolls back everything the block did, so nothing can be
+left behind whatever happens; a third query confirms it.
