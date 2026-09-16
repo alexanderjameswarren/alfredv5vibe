@@ -273,6 +273,33 @@ must cost 371 cheap no-ops, not 371 full recomputes. Built that way in M4
 Whatever M6 hangs recomputation on must work **per song**, never per row event:
 a trigger-driven recompute would run 160 or 371 times for one edit.
 
+#### Accepted cost — NOT a bug: non-notation edits cause full recomputes
+
+Seen in M5 verification (2026-09-16): a chord-label edit on Timing & Spacing
+Test made the next `get_sam_song_scores` call report `recomputed`, and the
+recompute produced numbers identical to the ones it replaced. The same happens
+after:
+- a chord or section edit (`update_sam_song_measures`);
+- any lyric placement, load or clear;
+- any UPDATE of a measure row, even one that changes nothing.
+
+All three stamp `measures_edited_at` through the triggers found above.
+
+This is the trade decided above, recorded here so it is not rediscovered as a
+bug:
+- **Why not a narrower staleness check** (a notation-only stamp, or a hash of
+  `rh`/`lh`)? It would be a second staleness mechanism, one more thing that
+  every writer and trigger has to keep in sync with the first. When it drifted,
+  it would fail silently the dangerous way: it would call stale scores fresh.
+  The current check can only fail the safe way, by recomputing when it did not
+  need to.
+- **Why the cost is acceptable:** one recompute is a single read of the song's
+  measures and one replace call, well within a tool call's budget. It happens at
+  most once per edit burst, because the next read finds the scores fresh again.
+- **Do not "fix" this** by making the freshness check ignore
+  `measures_edited_at` moves, or by suppressing the recompute. Revisit only if
+  recomputes become measurably expensive.
+
 #### Option under consideration — do not change yet: extend the measures trigger to INSERT and DELETE
 
 What it would buy: every writer stamps, including future writers and raw SQL,

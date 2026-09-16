@@ -589,11 +589,15 @@ async function runToolForMcp(
       // signals the cut without claiming a false total.
       const total = result.meta.total;
       const ofClause = total !== undefined ? `of ${total}` : "(more available)";
+      // A separate block, but clients (claude.ai) join text blocks with no
+      // separator, so the NOTE ran straight into the JSON ("subset.{"). The
+      // trailing blank line keeps the joined text splittable; the JSON block
+      // itself stays pure JSON.
       blocks.push({
         type: "text" as const,
         text:
           `NOTE: results truncated to ${shown} ${ofClause}. ` +
-          `Narrow the query or request a specific subset.`,
+          `Narrow the query or request a specific subset.\n\n`,
       });
     }
     blocks.push({
@@ -983,7 +987,7 @@ export function createMcpServer(token: string) {
         "Per-measure difficulty scores for one SAM song at a tempo, plus a rollup (median, p90 and max per metric) and the flagged measures. The same analysis as the sam-tools CLI. " +
         "⚠️ THIS get_* TOOL WRITES. Before reading, it brings the song's stored scores up to date: when the notation changed since they were computed, it recomputes and replaces the song's sam_song_scores rows. Those rows are derived data (the table's comment says they are safe to delete and recompute) and the table is NOT audited, so the refresh leaves no audit trail. This breaks the get_ = read-only naming convention on purpose, so that stale scores are never returned. `scores.status` reports what happened: fresh (nothing written), recomputed, no-measures or cleared. " +
         "TEMPO: `bpm` (quarter notes per minute) if given, otherwise the song's goal tempo (goal_effective_bpm); `tempo.source` says which (argument | goal). It never falls back to default_bpm, the load tempo. notes_per_second, the per-beat rates and the flags depend on the tempo; the other metrics do not. " +
-        "RANGE AND LIMIT: by default the whole requested range is analyzed, up to 200 measures (the longest song is 160). The limit is high because a truncated list says it is partial; a rollup over a fragment does not. If `limit` or the cap cuts the range, the response says so: meta.truncated and total, `range.analyzed` names the measures actually covered, `rollup.covers` says the rollup describes only those, and `range.note` gives the start_measure for the next call. " +
+        "RANGE AND LIMIT: by default the whole requested range is analyzed, up to 200 measures (the longest song is 160). The limit is high because a truncated list says it is partial; a rollup over a fragment does not. If `limit` or the cap cuts the range, the response says so: a leading NOTE line, `range.truncated: true`, `range.measures_in_range` (the total), `range.analyzed` names the measures actually covered, `rollup.covers` says the rollup describes only those, and `range.note` gives the start_measure for the next call. " +
         "FLAGGED_ONLY: lists only the flagged measures in `rows`. The rollup still covers EVERY analyzed measure, not just the rows shown. `rows.filter` and `rows.note` label this. " +
         "Rows are lean: measure, notes_per_second, rh/lh_notes_per_beat, rh/lh_stack, rh/lh_stretch, rh/lh_jump, rhythm_variety, accidentals (null when the key is unknown), flags. Tier 1.",
       inputSchema: {

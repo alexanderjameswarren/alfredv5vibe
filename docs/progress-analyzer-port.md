@@ -1,6 +1,6 @@
 # Progress: Difficulty Analyzer in Supabase (Phase 3)
 
-## Status: M5 built — awaiting MCP deploy and verification in claude.ai
+## Status: M5 verified (two post-verification fixes awaiting redeploy) — M6 next
 
 Branch: `analyzer-port` (pushed). M1 `602d18e`, onsets/tempo-free `81f8dfc`,
 M2 `7e39443`, M3 `549832f` (run by Alex: CONFORMANT, 38 tables), M4 (verified
@@ -128,19 +128,23 @@ Code: `supabase/functions/_shared/samScoresRead.ts` (logic),
 - [x] Bare data via `envelope()`
 - [x] Inline recompute before the read, status reported; the description says
       loudly that this `get_*` tool writes
-- [ ] Deployed — Alex: `npx supabase functions deploy mcp --no-verify-jwt`
+- [x] Deployed — Alex: `npx supabase functions deploy mcp --no-verify-jwt`
+- [ ] Redeploy with the two post-verification fixes (see the M5 notes)
 
-**Exit criteria** (unit-tested; live checks need Alex, in a fresh claude.ai thread)
-- [ ] Flags match the CLI on Someone Like You at its goal tempo
-- [ ] Omitting `bpm` uses the goal and says so
-- [ ] A range returns only that range, with a rollup over that range
+**Exit criteria** — all verified by Alex in claude.ai, 2026-09-16 (9 of 9 checks pass)
+- [x] Flags match the CLI on Someone Like You at its goal tempo — 69 flagged, identical
+- [x] Omitting `bpm` uses the goal and says so — 67, `goal`; `bpm: 120` → `argument`, 79 flagged
+- [x] A range returns only that range, with a rollup over that range — m20–30
 - [x] A song with no goal and no `bpm` errors rather than guessing — **unit test
       only**: no live song can reach it (see the M5 notes)
-- [ ] ~~A whole-song read on a 160-measure song reports truncation~~
+- [x] ~~A whole-song read on a 160-measure song reports truncation~~
       **Superseded by the cap of 200:** a whole-song read of Say It Ain't So
       (160) must now come back COMPLETE, `truncated: false`. Truncation is
       checked instead with an explicit small `limit`.
-- [ ] `flagged_only` lists only flagged rows, with the same rollup as a full read
+- [x] `flagged_only` lists only flagged rows, with the same rollup as a full read
+- [x] Also verified: Say It Ain't So whole (160, no NOTE); `limit: 50` truncates
+      with the NOTE, range 1–50, labelled rollup, next 51; `bpm: 0` errors; a
+      chord edit → `recomputed`, then `fresh`
 
 ---
 
@@ -623,3 +627,22 @@ that one small function.
 
 **Not verified here — needs Alex:** the deploy, and the live exit criteria in a
 fresh claude.ai thread.
+
+**Verification (Alex, 2026-09-16): 9 of 9 pass; two bugs found, both fixed after:**
+
+1. **The NOTE line ran straight into the JSON** (`...a specific subset.{`), so a
+   consumer parsing the joined text as JSON failed. Cause: `runToolForMcp`
+   already emits the NOTE as its OWN content block, but claude.ai joins text
+   blocks with no separator. The wrapper is shared, so this affected **every
+   tool that truncates**, not just this one. Fix, in the wrapper: the NOTE block
+   ends with a blank line. The JSON block is unchanged and still pure JSON.
+2. **The description promised `meta.truncated`, which the caller never sees.**
+   `runToolForMcp` serializes only `data`; `meta` reaches the caller only as the
+   NOTE line. The description now names the fields the caller does get: the
+   NOTE line, `range.truncated`, `range.measures_in_range`, `range.analyzed`,
+   `rollup.covers` and `range.note`.
+
+**Recorded, not fixed:** a chord-label edit triggers a full recompute that
+yields identical numbers. This is the accepted cost of the non-notation
+invalidation decision. The reasoning is in the spec's M6 section ("Accepted
+cost").
