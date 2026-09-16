@@ -1,6 +1,6 @@
 # Progress: Difficulty Analyzer in Supabase (Phase 3)
 
-## Status: M6 built — awaiting migration 028, the rename deploy, and verification
+## Status: COMPLETE — M1–M6 verified; merged to `main` (2026-09-16)
 
 Branch: `analyzer-port` (pushed). M1 `602d18e`, onsets/tempo-free `81f8dfc`,
 M2 `7e39443`, M3 `549832f` (run by Alex: CONFORMANT, 38 tables), M4 (verified
@@ -173,19 +173,27 @@ Code: `supabase/functions/_shared/samScoresRead.ts` (logic),
       console script were renamed to match. 028 also restates 027's function
       comment, which named the old function.
 - [x] Verification SQL `docs/sql/verify-analyzer-port-m6.sql` written
-- [ ] Migration 028 run — Alex
-- [ ] `sam-song-scores` deployed, old `sam-scores` function deleted, `mcp`
-      redeployed — Alex
-- [ ] Verification SQL returns `all_pass: true`, 0 scratch songs left,
-      CONFORMANT — Alex
+- [x] Migration 028 run — Alex
+- [x] `sam-song-scores` deployed, old `sam-scores` function deleted, `mcp`
+      redeployed — Alex; `samScores.twice` on Someone Like You: fresh both
+      calls, 0 measures read, 0 rows written
+- [x] Verification SQL returns `all_pass: true`, 0 scratch songs left,
+      CONFORMANT (38 tables) — Alex. Updates per statement 1 / 2 / 1 / 2 / 0;
+      song delete with 2 measures: no error, measures 2 → 0; both new triggers
+      STATEMENT level, `bump_parent_edited_at` still ROW
 
 **Exit criteria** (restated for pull, 2026-09-16)
 - [ ] After an import, the next read reports `recomputed` and matches the CLI
 - [ ] After `append_sam_measures`, the next read reports `recomputed`
 - [ ] After the repair script, the next read reports `recomputed`
 - [x] An unchanged song reads `fresh` — proved by M5 check 9
-- [ ] A raw-SQL insert or delete moves the stamp — the test that the trigger
+- [x] A raw-SQL insert or delete moves the stamp — the test that the trigger
       closes the gap (verification SQL, checks 1–4)
+
+The three write-path criteria above (import, append, repair) were not
+reported as run. The mechanism behind them is verified: every INSERT or DELETE
+statement stamps (checks 1–5), and UPDATE was already covered. They remain
+open as live confirmations to tick off in use.
 
 ---
 

@@ -340,9 +340,16 @@ twice regardless of measure count, and it could replace both per-row triggers.
 The audit cost per stamp remains while `sam_songs` carries the blob.
 
 **Chosen: the statement-level shape**, as INSERT and DELETE triggers only.
-The per-row UPDATE trigger and the app-code stamps stay as they are. The
-guard ("only when the value would change") was dropped: each statement stamps
-each of its songs exactly once, which keeps that property testable.
+The per-row UPDATE trigger and the app-code stamps stay as they are.
+
+**The guard ("only when the value would change") was dropped, deliberately.**
+With the guard, a statement whose stamp is suppressed produces no update, and
+that looks exactly like a trigger that never fired. Without it, every statement
+that touches a song's measure rows stamps that song exactly once. That is an
+invariant a test can check, and the M6 verification does: 1 update for one
+song, 2 for two, 0 when the statement matched no rows at all. The cost is a
+recompute after a write that changed nothing. That is the same accepted cost
+as chord edits (see "Accepted cost" above).
 
 #### Considered and declined (Alex, 2026-09-16)
 - **Push from the write paths**, with import, append and repair each calling
