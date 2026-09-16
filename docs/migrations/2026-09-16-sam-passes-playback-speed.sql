@@ -1,3 +1,9 @@
+-- NOTE (2026-09-16b): the column comments below were superseded by
+-- docs/migrations/2026-09-16b-sam-passes-comment-wording.sql. They said NULL
+-- meant "every row written before 2026-09-16", which reads as a midnight
+-- boundary; the columns actually began recording when they were deployed,
+-- part-way through that day. The SQL below is left exactly as it was run.
+--
 -- SAM passes: record playback speed alongside bpm, and derive effective tempo.
 --
 -- Run this in the Supabase SQL editor BEFORE deploying the app code and the

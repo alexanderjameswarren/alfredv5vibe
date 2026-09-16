@@ -870,16 +870,23 @@ export async function getSamPasses(
       query = query.is("snippet_id", null);
     }
 
-    // Drop playback tests: passes where no MIDI note arrived. This is a fact on
-    // the row, not an inference from the song's name or from passes landing a
-    // round number of seconds apart. Rows predating 2026-09-16 have a NULL
-    // notes_played ("not recorded") and are excluded too — the filter promises
-    // passes known to have been played, and an unknown is not a known.
+    // `notes_played` has THREE states, and these two filters are deliberately
+    // NOT opposites:
+    //
+    //   > 0    played, and measurable
+    //   = 0    a playback test — nothing arrived
+    //   NULL   never recorded (the pass predates the column being deployed
+    //          part-way through 2026-09-16)
+    //
+    // `.gt(0)` and `.eq(0)` both exclude NULL, so a caller applying one and
+    // then the other does not cover the set. That is correct — an unknown is
+    // not a known, and promoting NULL into either bucket would be a guess — but
+    // it is easy to misread from the parameter names alone, so the tool
+    // description says so explicitly.
     if (params.exclude_zero_note) {
       query = query.gt("notes_played", 0);
     }
 
-    // The inverse, for auditing what would be dropped.
     if (params.only_zero_note) {
       query = query.eq("notes_played", 0);
     }

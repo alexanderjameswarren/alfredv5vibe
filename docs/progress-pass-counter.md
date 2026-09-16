@@ -221,8 +221,8 @@ legend were over-engineered. Scrapped.
       reading still creates/adopts/selects nothing
 
 ### M4.3 — Layout option D, and Back goes up one level
-Chosen from a four-option static mockup (`src/mockups`, still present — Alex
-deletes it). Three rows instead of five, and every figure names its own scope.
+Chosen from a four-option static mockup, since removed along with its
+`/stats-mockup` route and the guard in `src/index.js`. Three rows instead of five, and every figure names its own scope.
 
 - [x] Row 1: Back / Play / Full Song / title / MIDI, with Export…Change Song at
       the right
@@ -380,6 +380,110 @@ CONFORMANT.
 - [ ] Read behaviour for existing rows — reported, awaiting Alex's decision.
       Nothing applied to historical data
       (`docs/sql/midi-heuristic-impact-2026-09-16.sql`)
+
+### Tool descriptions — the same mistake, one layer up
+The column comments were corrected in 2026-09-16b; the TOOL's descriptions kept
+three problems, found by a fresh reader who had to derive the semantics from the
+data instead of from what the tool said.
+
+- [x] `only_zero_note` claimed to exist "for auditing what exclude_zero_note
+      drops". False, and the most misleading line of the three: on 42 rows,
+      `exclude_zero_note` drops 41 and `only_zero_note` returns 1. Phrase removed
+- [x] Both parameter descriptions AND the tool description now state plainly
+      that the two filters are NOT complements and do NOT partition the result,
+      and that NULL-note-count rows are returned by neither
+- [x] The date-boundary wording is gone from the tool description too. It said
+      unrecorded rows were "from before 2026-09-16"; ten of Alex's forty
+      unrecorded rows are FROM that day, two of them carrying a playback_speed
+      while still having no note count — correct, because the two columns
+      deployed ~27 minutes apart (~07:01 and ~07:28 PT). Same wording as the
+      column comments now: began recording when DEPLOYED, part-way through the
+      day, and `completed_at` cannot be used to infer what a NULL should have
+      been
+- [x] Confirmed nothing writes a pass without a note count:
+      `useSamPasses.recordPass` is the ONLY writer to `sam_passes` in the app or
+      the edge functions, and it writes
+      `notes_played: playthrough?.notesPlayed ?? 0` — a number on every path,
+      even when the playthrough object is missing. A NULL therefore always means
+      the row predates the column. The tool description now says so, so a reader
+      can rule it out without reading the code
+
+### Convention — no double quotes inside tool description strings
+A deploy failed to bundle because a description contained an unescaped inner
+double quote:
+
+    "... NULL does NOT mean "before 2026-09-16": notes_played began ..."
+
+The literal terminates at the second quote and the parser reports
+`Expected ',', got 'before'`. The rule going forward, in `mcp/index.ts` and any
+other tool description: **use single quotes, or no quotes at all, inside these
+strings — never escaped double quotes.** Escaping works but is one keystroke
+from breaking a deploy, and these strings are long, edited often, and written by
+hand.
+
+Three pre-existing descriptions do carry escaped `\"` (lines ~806, ~837, ~1187).
+They are correct and were left alone; they are the reason to prefer the rule
+rather than evidence against it.
+
+**Verifying before handing over a deploy command:** `tsc` in this repo is broken
+(its binary is missing from node_modules), and neither `deno` nor `esbuild` is
+installed — an early check using tsc reported "no syntax errors" while never
+actually running. `@babel/parser` with the TypeScript plugin does parse these
+files and DOES catch the fault, reproducing Supabase's error at the same
+location. Any such check must be run with a control: re-introduce the bug, prove
+the check fails, then prove the fixed file passes. A check that cannot fail
+proves nothing.
+
+### Settled decisions — do not relitigate
+
+**Snippet lists render at FULL HEIGHT. No `max-height`, no `overflow-y`, no
+inner scrollbar** — on either the saved list or the archived list. Collapsing
+the snippet panel is the control over how much room it takes (M1.7). An inner
+scrollbar inside an already-collapsible panel is two competing controls for one
+thing, and it hides snippets behind a scroll the user did not ask for.
+
+This has been re-added once, in M4.1, and the reasoning that did it was
+plausible enough to be worth naming so it does not work a third time: M4.1
+deleted the separate "Snippet breakdown" table and carried its `max-h-48
+overflow-y-auto` across as "a good property worth keeping". The cap was right
+for the breakdown, because the breakdown was NEW stacked vertical space that
+would otherwise have grown the page. The snippet list is not new space — it only
+exists while the panel is open, and the panel already closes. A guard comment
+now sits at both sites in `SnippetPanel.jsx`.
+
+**No third boolean filter on `get_sam_passes`.** `exclude_zero_note` and
+`only_zero_note` are not opposites and do not partition the result: passes whose
+`notes_played` was never recorded match neither. That is correct — an unknown is
+not a known — and it is documented in the tool description rather than
+"fixed" with another parameter.
+
+Reasons, recorded so they are not re-argued: the unrecorded set is a fixed
+historical block that stops growing, since every pass from now on records a note
+count; three interacting booleans is more surface area than a read tool needs,
+and two of them already invited a misreading; and asking for the unrecorded rows
+is one-off archaeology that SQL answers in a line (`where notes_played is null`).
+
+**Fallback design, if it ever becomes a real need:** REPLACE the two booleans
+with a single three-valued parameter — `played: "yes" | "no" | "unknown" |
+"any"` — rather than adding a third boolean. That partitions by construction and
+cannot be misread. It is a breaking change to a deployed tool, so it is not
+worth making on speculation.
+
+### Corrections — comment wording and filter semantics
+- [x] Column comments said NULL meant "every row written before 2026-09-16",
+      which reads as a midnight boundary. Each column actually began recording
+      when it was DEPLOYED, part-way through that day — `playback_speed` ~07:01
+      PT, the accuracy group ~07:28 PT — so passes from 2026-09-16 exist on both
+      sides of both cutovers. Rewritten to say "not recorded, because the row
+      predates the column's deployment" and to state that `completed_at` cannot
+      be used to infer what a NULL should have been.
+      `docs/migrations/2026-09-16b-sam-passes-comment-wording.sql`
+- [x] The two superseded migration files carry a header note pointing at the
+      correction; their executed SQL is left exactly as it ran
+- [x] `get_sam_passes` description now states that `exclude_zero_note` means
+      "only passes known to have been played", that the two filters are NOT
+      opposites, and that NULL-note-count rows match neither
+- [x] Comment-only change; `check_platform_conformance` → CONFORMANT
 
 ### Pass accuracy and hand mode (item E-1, built)
 Migration: `docs/migrations/2026-09-16-sam-passes-accuracy.sql`.
@@ -602,6 +706,33 @@ are not searched, since `savedSnippets` excludes them and archived means retired
 Side effect worth knowing: `sam_sessions.snippet_id` starts being populated
 correctly from now on too, for free. Historic session rows stay null — they
 record what was actually known at the time and are not being rewritten.
+
+#### Why a third filter state was NOT added
+
+`notes_played` has three states — a positive count, 0, and NULL for never
+recorded — so `exclude_zero_note` and `only_zero_note` genuinely do not
+partition the set. Together they covered 2 of 42 rows; the other 40 have a NULL
+count and match neither. The behaviour is right (an unknown is not a known, and
+promoting NULL into either bucket would be a guess), but the names invite the
+wrong assumption.
+
+The fix is the description, not a third filter. Reasons:
+
+- The unrecorded set is a **fixed historical block that stops growing**. Every
+  pass from now on records a note count, so within weeks the 40 rows become a
+  shrinking fraction of a shrinking question. A permanent parameter for a
+  temporary condition is the wrong trade.
+- Three interacting booleans is more surface area than a read tool needs, and
+  two of them are already easy to misread. A third makes the misreading more
+  likely, not less.
+- Asking for the unrecorded rows is a one-off archaeology question, and SQL
+  answers it in a line: `where notes_played is null`.
+
+If it ever does become a real need, the right move is to REPLACE the two
+booleans with one three-valued parameter (`played: "yes" | "no" | "unknown" |
+"any"`) rather than adding a third boolean. That partitions by construction and
+cannot be misread — but it is a breaking change to a tool deployed days ago, so
+it is not worth making on speculation.
 
 #### Pass accuracy — the premise that turned out to be wrong
 
@@ -868,11 +999,15 @@ snippet id, and the panel renders numbers for whatever it was already showing.
 An archived snippet with no history reads 0 like any other, which is both
 simpler and more honest than hiding it.
 
-**What was kept from the deleted section:** laziness (no query until the snippet
-panel is open) and a bounded height (`max-h-48 overflow-y-auto` on both lists,
-so twenty snippets scroll rather than pushing the score off screen). What was
-dropped: the sort by practice — the panel's `created_at` descending order is
-deliberate and M1.7 established it.
+**What was kept from the deleted section:** laziness — no query until the
+snippet panel is open. What was dropped: the sort by practice, since the panel's
+`created_at` descending order is deliberate and M1.7 established it.
+
+**What should NOT have been kept, and was reverted later:** the breakdown's
+bounded height (`max-h-48 overflow-y-auto`) was carried onto both snippet lists
+as "a good property". It was not. The cap belonged to the breakdown because the
+breakdown was new stacked vertical space; the snippet list only exists while the
+panel is open, and the panel already closes. See "Settled decisions" above.
 
 One loose end, harmless: browsers that opened the M4 breakdown still hold a
 `sam.snippetPracticeTable.open` key in localStorage. Nothing reads it now.

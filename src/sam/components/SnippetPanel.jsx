@@ -391,10 +391,19 @@ export default function SnippetPanel({
           {savedSnippets.length > 0 && (
             <div className="mt-3 border-t border-border pt-3">
               <div className="text-xs text-muted-foreground mb-2 font-medium">Saved snippets</div>
-              {/* Capped and scrollable so a song with many snippets cannot grow
-                  the page without bound — the one property worth keeping from
-                  the breakdown section this replaced. */}
-              <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+              {/* DO NOT add a max-height or overflow-y here. This list renders
+                  at full height by design (M1.7): collapsing the snippet panel
+                  is the control over how much room it takes, and an inner
+                  scrollbar inside an already-collapsible panel is two competing
+                  controls for one thing.
+
+                  It has been added back once already. M4.1 deleted the separate
+                  "Snippet breakdown" table and carried its height cap onto this
+                  list as a "good property worth keeping" — but that cap belonged
+                  to the breakdown, which was NEW stacked vertical space. This
+                  list is not: it only exists while the panel is open, and the
+                  panel already closes. */}
+              <div className="flex flex-col gap-1">
                 {savedSnippets.map((s) => (
                   <div
                     key={s.id}
@@ -453,7 +462,8 @@ export default function SnippetPanel({
               {showArchived && (
                 <div className="mt-1 text-left">
                   <div className="text-xs text-muted-foreground mb-2 font-medium">Archived</div>
-                  <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+                  {/* Full height, same rule as the saved list above. */}
+                  <div className="flex flex-col gap-1">
                     {archivedSnippets.map((s) => (
                       <div
                         key={s.id}
