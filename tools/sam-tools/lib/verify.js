@@ -1,4 +1,5 @@
-// The eight output invariants (spec §5).
+// The output invariants: the eight of spec §5, plus a ninth (repeated pitch)
+// that makes this harness agree with the app's import validator.
 //
 // Built BEFORE any transform exists, and proved against an identity run and
 // four deliberate mutations. A check that has never failed has not been tested.
@@ -7,11 +8,18 @@
 // report all of them at once; `assertVerified` is the throwing wrapper. Every
 // violation is an ERROR — none of these is advisory.
 //
-// Duration math goes through durations.js and tie/seam analysis through
-// analyze.js. Nothing here re-implements either.
+// Duration math goes through durations.js, tie/seam analysis through
+// analyze.js, and the repeated-pitch rule through the app's own module.
+// Nothing here re-implements any of them.
 
 import { sumEvents } from "./durations.js";
 import { analyzeTies, findSeams } from "./analyze.js";
+// The app's duplicate-pitch predicate, imported rather than restated.
+// vendor/noteDuplicates.js is a verbatim copy of src/sam/lib/noteDuplicates.js
+// (`npm run sync`), the same module the app's import validator, the parser and
+// the Edge Function port all use — so this check and the import cannot
+// disagree about what counts as a repeated pitch.
+import { duplicatePitches, duplicatePitchMessage } from "../vendor/noteDuplicates.js";
 
 const num = (m, i) => m?.number ?? i + 1;
 const isRest = (e) => !e || !Array.isArray(e.notes) || e.notes.length === 0;
@@ -33,6 +41,7 @@ export const INVARIANTS = [
   "RH event count",
   "tie integrity",
   "passthrough fields",
+  "no repeated pitch",
 ];
 
 function violation(list, n, measure, detail) {
@@ -137,12 +146,35 @@ export function verify(input, output) {
     violation(v, 7, t.measure, `${t.hand} tie start with no end (midi ${t.midi})`);
   }
 
+  // 9 — no repeated pitch within one event, unless one copy is a tie
+  // continuation. The app's import rejects any such event, so an output that
+  // carries one cannot be imported. Checked ABSOLUTELY, not relative to the
+  // input like invariant 7: a repeat the source already had still makes the
+  // output unimportable, so the run must stop either way. The detail says
+  // which case it is, because the fix differs — a transform bug, or a source
+  // song that needs repairing (scripts/sam-repair-duplicates.js).
+  b.forEach((mo, i) => {
+    for (const hand of ["rh", "lh"]) {
+      (mo?.[hand] || []).forEach((e, ei) => {
+        for (const midi of duplicatePitches(e?.notes)) {
+          const src = a[i]?.[hand]?.[ei];
+          const inherited = duplicatePitches(src?.notes).includes(midi);
+          violation(
+            v, 9, num(mo, i),
+            `${hand}[${ei}]: ${duplicatePitchMessage(e.notes, midi)}` +
+              (inherited ? " Already present in the input — repair the source song." : "")
+          );
+        }
+      });
+    }
+  });
+
   return v;
 }
 
 /** Human-readable violation report. */
 export function formatViolations(violations, { limit = 20 } = {}) {
-  if (violations.length === 0) return "all 8 invariants hold";
+  if (violations.length === 0) return `all ${INVARIANTS.length} invariants hold`;
   const shown = violations.slice(0, limit);
   const lines = shown.map(
     (x) => `  • [${x.invariant}: ${x.name}]${x.measure != null ? ` m${x.measure}` : ""} — ${x.detail}`

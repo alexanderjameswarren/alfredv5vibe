@@ -314,6 +314,67 @@ test("a changed passthrough field is caught (invariant 8)", () => {
   assertCaught(SLY, srcChanged, 8, /sourceMeasure/);
 });
 
+// --- invariant 9: repeated pitch ------------------------------------------
+//
+// The simplifier once wrote G3 twice in one LH chord (The Entertainer m92/m108)
+// and only the app's import noticed. These pin verify() to the app's rule.
+
+test("MUTATION 5: a pitch struck twice in one RH event is caught (invariant 9)", () => {
+  const i = SLY.measures.findIndex((m) => (m.rh || []).some((e) => (e.notes || []).length > 0));
+  const e = SLY.measures[i].rh.findIndex((x) => (x.notes || []).length > 0);
+  const broken = mutate(SLY, i, (m) => {
+    const n = m.rh[e].notes[0];
+    m.rh[e].notes.splice(1, 0, { midi: n.midi, name: n.name });
+  });
+  const hit = assertCaught(SLY, broken, 9, /duplicate pitch/);
+  assert.equal(hit.length, 1);
+  assert.match(hit[0].detail, new RegExp(`^rh\\[${e}\\]: `));
+  assert.doesNotMatch(hit[0].detail, /Already present/);
+});
+
+test("MUTATION 5b: the LH is checked too", () => {
+  const i = LA_CANDEUR.measures.findIndex((m) => (m.lh || []).some((e) => (e.notes || []).length > 0));
+  const broken = mutate(LA_CANDEUR, i, (m) => {
+    const ev = m.lh.find((x) => (x.notes || []).length > 0);
+    ev.notes.push({ ...ev.notes[0], tie: "start" }); // a start is still a fresh strike
+  });
+  assertCaught(LA_CANDEUR, broken, 9, /^lh\[\d+\]: duplicate pitch/);
+});
+
+test("a repeated pitch where one copy is a tie continuation is allowed", () => {
+  for (const tie of ["end", "both"]) {
+    const held = mutate(SLY, 3, (m) => {
+      const ev = m.rh.find((x) => (x.notes || []).length > 0);
+      ev.notes.push({ ...ev.notes[0], tie });
+    });
+    const v = verify(SLY, held).filter((x) => x.invariant === 9);
+    assert.deepEqual(v, [], `tie "${tie}" continuation was wrongly flagged`);
+  }
+});
+
+test("a repeated pitch already in the input still fails, and says so", () => {
+  // The output could not be imported either way, so the run must stop — but
+  // the fix is to repair the source, and the message has to say that.
+  const dirty = mutate(LA_CANDEUR, 0, (m) => {
+    m.lh[0].notes.push({ midi: m.lh[0].notes[0].midi, name: m.lh[0].notes[0].name });
+  });
+  const hit = assertCaught(dirty, runIdentity(dirty), 9, /Already present in the input/);
+  assert.equal(hit.length, 1);
+});
+
+test("verify's repeated-pitch rule is the app's module, byte for byte", async () => {
+  // verify.js imports vendor/noteDuplicates.js; this fails if that copy has
+  // drifted from the app's, so the two validators cannot disagree unnoticed.
+  // Fix with `npm run sync`.
+  const fs = await import("node:fs");
+  const read = (p) => fs.readFileSync(new URL(p, import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.equal(
+    read("../vendor/noteDuplicates.js"),
+    read("../../../src/sam/lib/noteDuplicates.js"),
+    "vendor/noteDuplicates.js is out of date — run `npm run sync`"
+  );
+});
+
 test("formatViolations names the invariant and the measure", () => {
   const broken = mutate(LA_CANDEUR, 2, (m) => { m.lh[0].duration = "h"; });
   const text = formatViolations(verify(LA_CANDEUR, broken));

@@ -98,7 +98,7 @@ try {
 const output = { ...song, measures: result.measures };
 
 // Invariants are hard errors (§5), not warnings. Nothing is written if any
-// one of the eight fails.
+// one of them fails (verify.js INVARIANTS).
 try {
   assertVerified(song, output);
 } catch (e) {
