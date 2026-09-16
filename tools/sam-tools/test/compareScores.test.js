@@ -66,6 +66,34 @@ test("cli: a stamp that differs from the song's fails; a missing song fails", ()
   assert.match(r.stdout, /^MISSING/m);
 });
 
+test("cli: accepts every shape the SQL editor hands back", () => {
+  const dump = dumpFor(EXPORT);
+  const shapes = {
+    bare: dump,
+    wrapped: [{ result: dump }],                           // the editor's own JSON copy
+    rowObject: { result: dump },
+    wrappedText: [{ result: JSON.stringify(dump) }],
+    quotedWrapped: JSON.stringify(JSON.stringify([{ result: dump }])),
+  };
+  for (const [name, value] of Object.entries(shapes)) {
+    const r = run("cli", write(`${name}.json`, value), write("export.json", EXPORT));
+    assert.equal(r.status, 0, `${name}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /^MATCH/m, name);
+  }
+});
+
+test("diff: accepts the editor's [{ result }] wrapper too", () => {
+  const before = [{ result: dumpFor(EXPORT) }];
+  const r = run("diff", write("wb.json", before), write("wa.json", before), "--all-columns");
+  assert.match(r.stdout, /73 measures — 0 changed, 73 identical/);
+});
+
+test("unwrapResult leaves an export document alone", async () => {
+  const { unwrapResult } = await import("../bin/compare-scores.js");
+  assert.equal(unwrapResult(EXPORT), EXPORT);
+  assert.deepEqual(unwrapResult([{ result: { a: 1 } }]), { a: 1 });
+});
+
 test("cli: accepts a cell pasted with surrounding quotes", () => {
   const quoted = JSON.stringify(JSON.stringify(dumpFor(EXPORT)));
   assert.equal(run("cli", write("quoted.json", quoted), write("export.json", EXPORT)).status, 0);

@@ -20,6 +20,7 @@
 //       which is how a no-op is proved: nothing at all may change.
 
 import fs from "node:fs";
+import { pathToFileURL } from "node:url";
 import { analyzeSongFacts } from "../lib/analyze.js";
 
 // Stored column -> analyzer fact. The only columns the CLI can vouch for.
@@ -49,12 +50,39 @@ function usage(msg) {
   process.exit(2);
 }
 
+/**
+ * Read a saved file, peeling off whatever the Supabase SQL editor wrapped the
+ * `result` cell in. All of these are accepted and mean the same dump:
+ *   { ...dump }                      the cell's value, pasted as-is
+ *   "{ ...dump }"                    the cell copied as a quoted string
+ *   [{ "result": { ...dump } }]      the editor's "copy as JSON" of the row
+ *   { "result": { ...dump } }        a single row object
+ *   [{ "result": "{ ...dump }" }]    either of the above with a text cell
+ * An export document never has `result` as its only key, so exports pass
+ * through untouched.
+ */
+export function unwrapResult(value) {
+  for (;;) {
+    if (typeof value === "string") {
+      value = JSON.parse(value);
+    } else if (Array.isArray(value) && value.length === 1 && isResultRow(value[0])) {
+      value = value[0].result;
+    } else if (isResultRow(value)) {
+      value = value.result;
+    } else {
+      return value;
+    }
+  }
+}
+
+function isResultRow(v) {
+  return v !== null && typeof v === "object" && !Array.isArray(v) &&
+    Object.keys(v).length === 1 && "result" in v;
+}
+
 function readJson(file) {
   if (!fs.existsSync(file)) usage(`no such file: ${file}`);
-  let text = fs.readFileSync(file, "utf8").trim();
-  // The SQL editor sometimes wraps a copied cell in quotes; accept both.
-  if (text.startsWith('"')) text = JSON.parse(text);
-  return typeof text === "string" ? JSON.parse(text) : text;
+  return unwrapResult(fs.readFileSync(file, "utf8").trim());
 }
 
 function cli(dumpFile, exportFiles) {
@@ -138,8 +166,11 @@ function diff(beforeFile, afterFile, allColumns) {
   }
 }
 
-const [mode, ...rest] = process.argv.slice(2);
-if (mode === "cli") {
+const isMain = import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
+const [mode, ...rest] = isMain ? process.argv.slice(2) : [null];
+if (!isMain) {
+  // imported (tests)
+} else if (mode === "cli") {
   if (rest.length < 2) usage("cli needs a dump and at least one export");
   cli(rest[0], rest.slice(1));
 } else if (mode === "diff") {

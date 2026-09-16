@@ -1,8 +1,10 @@
 -- Analyzer port M4 — verification queries. Supabase SQL editor.
 --
 -- Each numbered query is ONE statement returning ONE JSON cell (`result`).
--- Select it, Run, copy the cell. Where a step says "save as", paste the cell
--- into that file under tools/sam-tools/ and run the compare command shown.
+-- Select it, Run, copy the result. Where a step says "save as", paste it into
+-- that file under tools/sam-tools/ and run the compare command shown. Either
+-- the bare cell or the editor's [{ "result": ... }] JSON copy works —
+-- compare-scores.js unwraps it.
 --
 -- Scores version 1 is hard-coded below; it must equal SCORES_VERSION in
 -- supabase/functions/_shared/samScores.ts.
