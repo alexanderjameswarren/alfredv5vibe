@@ -63,7 +63,9 @@ Verification: `docs/sql/verify-analyzer-port-m3.sql`. Run
       with notes explaining why auditing is off (derived rows, no user intent)
 - [x] Hand-written parent-scoped RLS policy, mirroring `sam_song_lyrics`
 - [x] Column comments on every column
-- [ ] Trigger query (M6 section) run and reported — **handed to Alex; see Notes**
+- [x] Trigger query (M6 section) run and reported — by Alex: `bump_parent_edited_at`
+      exists (see M6 and the M3 notes)
+- [x] `source_measure` column: left out (Alex, reasons in the M3 notes)
 - [ ] Migration run
 
 **Exit criteria**
@@ -112,7 +114,14 @@ Verification: `docs/sql/verify-analyzer-port-m3.sql`. Run
 
 ### M6 — Keep scores fresh
 
-- [ ] Trigger query run and reported BEFORE choosing an approach:
+- [x] Trigger query run and reported BEFORE choosing an approach — **a trigger
+      exists**: `bump_parent_edited_at`, AFTER UPDATE, per row, on
+      `sam_song_measures`. Findings and the INSERT/DELETE trade-off are in the
+      spec's M6 section.
+- [ ] `docs/sql/analyzer-port-stamp-functions.sql` run: `bump_parent_edited_at`'s
+      definition (clock, no-op handling) and whether `stamp_song_edited` is dead
+      or detached
+- [ ] Trigger query, as originally written:
       ```sql
       select c.relname, t.tgname, pg_get_triggerdef(t.oid)
       from pg_trigger t join pg_class c on c.oid = t.tgrelid
@@ -378,3 +387,20 @@ the owner, as a random other user, and as anon, tries an insert as the other
 user, deletes the song, and then **always raises an error** whose message is
 the result. The error rolls back everything the block did, so nothing can be
 left behind whatever happens; a third query confirms it.
+
+**Follow-up: the trigger check found a trigger (Alex, 2026-09-16).**
+- `bump_parent_edited_at` on `sam_song_measures`, AFTER UPDATE, per row. Not
+  INSERT or DELETE, so the delete-and-reinsert import path is stamped only by
+  app code. Per-row firing means any M6 recomputation must work per song, never
+  per row event. Full findings, corrected write-path table, and the cost of
+  extending it to INSERT/DELETE: spec §4 M6.
+- `stamp_song_edited` mentions `measures_edited_at` but is attached to no
+  trigger on the two SAM tables. Neither function has ever been in the repo or
+  its git history (`git log --all -S` finds nothing), so dead-vs-detached can
+  only be settled from the database: `docs/sql/analyzer-port-stamp-functions.sql`
+  (triggers on every table, event triggers, pg_cron, callers by name, CLI
+  migration history, and both definitions).
+- **`source_measure` stays out** (Alex): it would be a copy, not a fact, with
+  nothing keeping it in sync with `sam_song_measures`; the join on
+  `(song_id, number)` is trivial and indexed on both sides; and how repeats
+  should count is still an open decision (spec §6).
