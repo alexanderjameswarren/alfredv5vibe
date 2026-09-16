@@ -1,10 +1,10 @@
 import React, { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { SAM_PATH, samSongPath, samSongIdFromPath } from "../viewPaths";
-import { ArrowLeft } from "lucide-react";
 import ScoreRenderer from "./components/ScoreRenderer";
 import ScrollEngine from "./components/ScrollEngine";
 import SongLoader from "./components/SongLoader";
+import BackButton from "./components/BackButton";
 import SettingsBar from "./components/SettingsBar";
 import StatsBar from "./components/StatsBar";
 import SnippetPanel from "./components/SnippetPanel";
@@ -12,6 +12,9 @@ import AudioControls from "./components/AudioControls";
 import FocusedPlaybackBar from "./components/FocusedPlaybackBar";
 import useMIDI from "./lib/useMIDI";
 import usePracticeSession from "./lib/usePracticeSession";
+import useSamPasses from "./lib/useSamPasses";
+import usePassCounts from "./lib/usePassCounts";
+import { ensureSnippetSaved, sameLoadedRange } from "./lib/snippetsApi";
 import usePracticeStats from "./lib/usePracticeStats";
 import useLyricEditor from "./lib/useLyricEditor";
 import useFingeringEditor from "./lib/useFingeringEditor";
@@ -121,13 +124,32 @@ export default function SamPlayer({ onBack }) {
   // moment the just-ended session is committed.
   const [practiceStatsRefetchSignal, setPracticeStatsRefetchSignal] = useState(0);
 
-  const { startSession, endSession, recordEvent, setLoopIteration, stats: sessionStats } = usePracticeSession({
+  const { startSession, endSession, recordEvent, setLoopIteration, getSessionId, stats: sessionStats } = usePracticeSession({
     onSessionEnded: () => setPracticeStatsRefetchSignal((n) => n + 1),
+  });
+
+  // Pass counting (spec: docs/technical-spec-pass-counter.md).
+  //
+  // `usePassCounts` reads today's count for the loaded range and seeds the
+  // display from the database, so the number is right the instant Play is
+  // pressed rather than counting up from zero each sitting. It is declared
+  // first because `useSamPasses` increments it: `countPass` fires when a pass
+  // row actually lands. Arming lives in the transport handlers below; the
+  // credit itself hangs off ScrollEngine's end-of-range signals in
+  // `handleLoopCount` and `handleRangeEnded`.
+  const {
+    rangeTodayCount: passesToday,
+    songTodayCount: songPassesToday,
+    songTotalCount: songPassesTotal,
+    countPass,
+  } = usePassCounts({ songId: songDbId, snippet });
+  const { armPass, disarmPass, recordPass } = useSamPasses({
+    onPassRecorded: countPass,
   });
 
   // Hoisted from StatsBar so the playback-row LiveSessionCounter and the
   // stopped/paused PracticeTimeIndicator share one fetch.
-  const { todayMinutes, perSongTotalSeconds } = usePracticeStats({
+  const { todayMinutes, perSongTotalSeconds, perSongTodaySeconds } = usePracticeStats({
     currentSongId: songDbId,
     refetchSignal: practiceStatsRefetchSignal,
   });
@@ -258,7 +280,14 @@ export default function SamPlayer({ onBack }) {
     }
 
     return allMeasures.map(normalizeMeasure);
-  }, [song, snippet, songRepeat, songRestMeasures, lyricPlacements]);
+    // Keyed on the snippet's RANGE rather than the snippet object. Play
+    // auto-saves an ad-hoc range and swaps in a new snippet object carrying the
+    // id (M1.5); keying on the object would make that swap produce a fresh
+    // measures array, which tears down and rebuilds ScrollEngine's SVG
+    // (`setSvgReady(false)` on cleanup) at the exact instant playback starts —
+    // restarting the scroll after the audio start had already been scheduled.
+    // Only these three properties change what is drawn, so they are the key.
+  }, [song, snippet?.startMeasure, snippet?.endMeasure, snippet?.restMeasures, songRepeat, songRestMeasures, lyricPlacements]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Parent measures for the ghost overlay, sliced IDENTICALLY to the child.
   //
@@ -450,11 +479,65 @@ export default function SamPlayer({ onBack }) {
     window.colorBeatEls = colorBeatEls;
   }, []);
 
+  // Everything the pass writer needs, refreshed every render and read at the
+  // instant a pass completes. It has to be a ref: ScrollEngine captures
+  // `onLoopCount` inside its scroll effect, whose dep list does not include the
+  // callback, so a `handleLoopCount` whose identity changed mid-playback would
+  // simply never be called. Keeping that callback stable and reading mutable
+  // values through here is what makes the row carry the tempo at the finish
+  // line rather than the tempo the run started at.
+  const passContextRef = useRef({ songId: null, snippet: null, bpm: null });
+  passContextRef.current = { songId: songDbId, snippet, bpm: bpm.value };
+
+  // Credit one completed playthrough of the loaded range.
+  //
+  // Called from ScrollEngine's rAF frame, so it must not throw and must not
+  // block — `recordPass` owns both guarantees.
+  const creditPass = useCallback(() => {
+    const ctx = passContextRef.current;
+    recordPass({
+      songId: ctx.songId,
+      snippet: ctx.snippet,
+      sessionId: getSessionId(),
+      bpm: ctx.bpm,
+    });
+  }, [recordPass, getSessionId]);
+
+  // ScrollEngine's loop signal is the end-of-range event for looped playback:
+  // `n` is 0 when a run arms and increments by exactly one at each teleport,
+  // and a teleport happens precisely when the range's last measure crosses the
+  // target line. So every `n > 0` is one completed cycle.
+  //
+  // The `n !== lastLoopCountRef` guard exists because a mid-play setting change
+  // (bpm, timing window, measure width) re-runs ScrollEngine's scroll effect,
+  // which resets its internal counter and re-emits 0. The sequence can read
+  // 1, 2, 3, 0, 1 across one sitting; comparing against the last value seen
+  // counts that trailing 1 as the new cycle it is, instead of ignoring it as a
+  // repeat of the earlier one.
+  const lastLoopCountRef = useRef(0);
+
   const handleLoopCount = useCallback((n) => {
     setLoopCount(n);
     setLoopIteration(n);
     if (n > 0) setPausedMeasure(null);
-  }, [setLoopIteration]);
+    if (n > 0 && n !== lastLoopCountRef.current) creditPass();
+    lastLoopCountRef.current = n;
+  }, [setLoopIteration, creditPass]);
+
+  // `handleStop` is a plain function declared further down the component, so it
+  // is re-created every render. Reaching it through a ref keeps
+  // `handleRangeEnded` stable for the same reason `handleLoopCount` has to be.
+  const handleStopRef = useRef(null);
+
+  // End-of-range for NON-looping playback (whole song, repeat off). ScrollEngine
+  // fires `onEnded` at the same geometric instant it would otherwise teleport,
+  // and the two paths are mutually exclusive — the teleport branch returns early
+  // when `loop` is false — so there is no way for one completion to be counted
+  // twice. Credit before stopping, because `handleStop` disarms.
+  const handleRangeEnded = useCallback(() => {
+    creditPass();
+    handleStopRef.current?.();
+  }, [creditPass]);
 
   const handleBeatMiss = useCallback((evt) => {
     missCountRef.current++;
@@ -484,7 +567,9 @@ export default function SamPlayer({ onBack }) {
     playbackSpeed.reset(loadedSong.playbackSpeed ?? DEFAULTS.playbackSpeed);
     setPlaybackState("stopped");
     setPausedMeasure(null);
+    disarmPass();
     setLoopCount(0);
+    lastLoopCountRef.current = 0;
     setMissCount(0);
     setHitCount(0);
     setLastResult(null);
@@ -547,6 +632,13 @@ export default function SamPlayer({ onBack }) {
     const prev = prevSnippetRef.current;
     prevSnippetRef.current = snippet;
     if (prev === snippet) return;
+    // Resolving a range's database id is not a range change. Play auto-saves an
+    // ad-hoc range and swaps in the saved snippet in the same breath as it
+    // starts playback (M1.5); without this guard that swap would be read as
+    // "the user picked a different snippet" and stop playback on the spot.
+    // `sameLoadedRange` compares the four identity properties and ignores
+    // `dbId`, so a genuine range change still falls through to the reset.
+    if (sameLoadedRange(prev, snippet)) return;
     // Selecting a snippet clears whole-song repeat rather than parking it:
     // returning to the full song should not silently re-enable a loop the
     // user last touched several snippets ago.
@@ -590,10 +682,13 @@ export default function SamPlayer({ onBack }) {
     setLastResult(null);
   }
 
-  function beginSession() {
+  // `activeSnippet` is passed explicitly rather than read from state because
+  // Play resolves an ad-hoc range to a saved one and then begins the session in
+  // the same tick, before React has re-rendered with the new state.
+  function beginSession(activeSnippet = snippet) {
     startSession({
       songId: songDbId,
-      snippetId: snippet?.dbId || null,
+      snippetId: activeSnippet?.dbId || null,
       settings: {
         bpm: bpm.value,
         windowMs: timingWindowMs.value,
@@ -630,20 +725,69 @@ export default function SamPlayer({ onBack }) {
     return audioCtxRef.current;
   }
 
-  function handlePlay() {
-    ensureAudioContext();
+  // Guards the await inside `handlePlay`. Until the snippet lookup resolves the
+  // Play button is still on screen, so a second click would run a second lookup
+  // and — finding nothing saved yet — insert a duplicate snippet.
+  const playStartingRef = useRef(false);
+
+  // Shared tail of Play and Restart: both enter at the first measure of the
+  // loaded range, so both arm a pass and both seek to the top.
+  // `activeSnippet` is threaded through because Play may have just resolved it.
+  function startFromTopOfRange(activeSnippet) {
     resetCounters();
     setPausedMeasure(null);
-    beginSession();
+    lastLoopCountRef.current = 0;
+    armPass();
+    beginSession(activeSnippet);
     clearTimers();
 
     const audioOffsetMs1 = activeMeasures[0]?.audioOffsetMs ?? 0;
-    const seekMs = snippet ? getSeekForMeasure(snippet.startMeasure) : audioOffsetMs1;
+    const seekMs = activeSnippet ? getSeekForMeasure(activeSnippet.startMeasure) : audioOffsetMs1;
     prepareAudioSeek(seekMs);
 
     setPlaybackState("playing");
   }
 
+  // Make sure the range about to be played has a `sam_snippets` row behind it,
+  // and hand back the snippet to play (id attached when one could be resolved).
+  //
+  // M1.5: the snippet panel can still hand us a range with no id — a range the
+  // user typed and never saved. Rather than leave it unattributable, Play saves
+  // it. An identical saved snippet is adopted instead of duplicated, so playing
+  // the same ad-hoc range twice yields one snippet, not two.
+  //
+  // The full song is never a snippet: `snippet` is null there and this returns
+  // null untouched, so a whole-song pass keeps writing a null `snippet_id` and
+  // no snippet is created, not even one spanning every measure.
+  async function ensureRangeIsSaved(current) {
+    if (!current || current.dbId || !songDbId) return current;
+
+    const result = await ensureSnippetSaved({ songDbId, range: current });
+    if (!result) {
+      // Already logged. Play on without an id: losing one row of practice data
+      // beats a Play button that doesn't play.
+      return current;
+    }
+    // Same range, now carrying its id — `sameLoadedRange` keeps the reset
+    // effect from reading this as a snippet switch and stopping playback.
+    setSnippet(result.snippet);
+    return result.snippet;
+  }
+
+  async function handlePlay() {
+    if (playStartingRef.current) return;
+    playStartingRef.current = true;
+    try {
+      ensureAudioContext();
+      const activeSnippet = await ensureRangeIsSaved(snippet);
+      startFromTopOfRange(activeSnippet);
+    } finally {
+      playStartingRef.current = false;
+    }
+  }
+
+  // Deliberately leaves pass eligibility alone: pause and resume are one
+  // playthrough interrupted, not two (spec rule 4).
   function handlePause() {
     clearTimers();
     const meas = getCurrentMeasure();
@@ -668,22 +812,25 @@ export default function SamPlayer({ onBack }) {
     setPlaybackState("playing");
   }
 
-  function handleRestart() {
-    ensureAudioContext();
-    resetCounters();
-    setPausedMeasure(null);
-    beginSession();
-    clearTimers();
-
-    const audioOffsetMs1 = activeMeasures[0]?.audioOffsetMs ?? 0;
-    const seekMs = snippet ? getSeekForMeasure(snippet.startMeasure) : audioOffsetMs1;
-    prepareAudioSeek(seekMs);
-
-    setPlaybackState("playing");
+  // Restart re-enters at the first measure, so the abandoned playthrough is
+  // dropped and a fresh one armed in the same breath. It is only reachable from
+  // the paused state — where the snippet panel is still on screen and the range
+  // may have been edited since Play — so it ensures the range is saved too.
+  async function handleRestart() {
+    if (playStartingRef.current) return;
+    playStartingRef.current = true;
+    try {
+      ensureAudioContext();
+      const activeSnippet = await ensureRangeIsSaved(snippet);
+      startFromTopOfRange(activeSnippet);
+    } finally {
+      playStartingRef.current = false;
+    }
   }
 
   function handleStop() {
     clearTimers();
+    disarmPass();
     setPlaybackState("stopped");
     endSession();
     if (audioElement) {
@@ -692,8 +839,13 @@ export default function SamPlayer({ onBack }) {
     }
   }
 
+  // Published for `handleRangeEnded`, which is created before `handleStop` and
+  // must not re-create itself when `handleStop` does.
+  handleStopRef.current = handleStop;
+
   function handleFullStop() {
     clearTimers();
+    disarmPass();
     endSession();
     resetCounters();
     setPausedMeasure(null);
@@ -702,6 +854,14 @@ export default function SamPlayer({ onBack }) {
       audioElement.currentTime = 0;
     }
     setPlaybackState("stopped");
+  }
+
+  // Selecting, clearing, or editing a snippet changes what "the loaded range"
+  // means, so whatever playthrough was in flight belonged to a range that is no
+  // longer loaded. Banked passes are untouched — they are rows.
+  function handleSnippetChange(next) {
+    disarmPass();
+    setSnippet(next);
   }
 
   function handleScoreTap() {
@@ -710,16 +870,19 @@ export default function SamPlayer({ onBack }) {
     else if (playbackState === "paused") handleResume();
   }
 
-  function handleChangeSong() {
-    // Closing a song is a route change now — the URL drops back to /sam and
-    // the effect below does the teardown. Keeping the teardown in one place
-    // is what makes the Back button and this button behave identically.
+  // Back to the song library. Closing a song is a route change: the URL drops
+  // back to /sam and the effect below does the teardown, so every way out of a
+  // song shares one code path. This used to back the "Change song" link as
+  // well; that link was removed once the back arrow started coming here, since
+  // the two did exactly the same thing.
+  function handleBackToLibrary() {
     navigate(SAM_PATH);
   }
 
   // The actual teardown, shared by the Change-song button and browser Back.
   function closeOpenSong() {
     clearTimers();
+    disarmPass();
     if (playbackState === "playing") endSession();
     if (audioElement) audioElement.pause();
     setAudioElement(null);
@@ -816,23 +979,59 @@ export default function SamPlayer({ onBack }) {
     URL.revokeObjectURL(url);
   }
 
+  // Score-editing buttons that used to sit on a row of their own beneath the
+  // stats (M3.5). Rendered into SettingsBar's top-right cluster instead, and
+  // only when stopped — exactly when that row used to appear — so nothing about
+  // when they are available changes, only where they sit.
+  const scoreToolButtons = playbackState === "stopped" ? (
+    <>
+      {hasImported && (
+        <button
+          onClick={toggleShowImported}
+          aria-pressed={showImportedFingerings}
+          className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors"
+        >
+          {showImportedFingerings ? "Hide Imported" : "Show Imported"}
+        </button>
+      )}
+      {parentSong && (
+        <button
+          onClick={() => setGhostMode((on) => !on)}
+          aria-pressed={ghostMode}
+          className={`min-h-[44px] px-4 rounded-lg text-sm font-medium border transition-colors ${
+            ghostMode
+              ? "bg-foreground text-background border-transparent"
+              : "bg-card text-foreground border-border hover:bg-muted"
+          }`}
+        >
+          {ghostMode ? "Diff: on" : "Diff"}
+        </button>
+      )}
+      <button
+        onClick={toggleFingeringMode}
+        aria-pressed={fingeringMode}
+        className={`min-h-[44px] px-4 rounded-lg text-sm font-medium border transition-colors ${
+          fingeringMode
+            ? "text-white border-transparent"
+            : "bg-card text-foreground border-border hover:bg-muted"
+        }`}
+        style={fingeringMode ? { backgroundColor: "var(--fingering-accent)" } : undefined}
+      >
+        {fingeringMode ? "Fingering mode: on" : "Fingering mode"}
+      </button>
+    </>
+  ) : null;
+
   return (
     <div className="min-h-screen bg-primary-bg">
-      <header className="sticky top-0 z-10 bg-card border-b border-border shadow-sm">
-        <div className="max-w-4xl mx-auto px-3 sm:px-4 py-3 flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground rounded"
-            title="Back to Alfred"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <h1 className="text-lg sm:text-2xl font-bold text-dark">
-            Sam — Piano Practice
-          </h1>
-        </div>
-      </header>
-
+      {/* The "Sam — Piano Practice" header row is gone (M4 part 1) — it cost
+          ~68px, the tallest row on the page, for a title that says where you
+          already know you are. Its back-to-Alfred button survives, moved to the
+          far left of whichever control row is on screen. That rule matters:
+          `onBack` appeared ONLY in that header, and the transport row does not
+          exist while playing or before a song is open, so putting it there
+          alone would have made Alfred unreachable from the song library and
+          two clicks away (pause, then back) during playback. */}
       <div ref={scrollContainerRef} className="mx-auto px-3 sm:px-4 py-6">
         {importError && (
           <div className="mb-4 mx-3 sm:mx-4 p-3 bg-red-50 border border-red-200 rounded flex items-start justify-between gap-3 text-sm text-red-700">
@@ -847,17 +1046,25 @@ export default function SamPlayer({ onBack }) {
           </div>
         )}
         {!song ? (
-          <SongLoader
-            onSongLoaded={handleSongLoaded}
-            onSongSaved={setSongDbId}
-            onImportError={setImportError}
-          />
+          <>
+            <div className="flex items-center mb-2">
+              {/* The only level above the song library is Alfred itself, and
+                  this is the only route out of SAM — see BackButton. */}
+              <BackButton onBack={onBack} title="Back to Alfred" />
+            </div>
+            <SongLoader
+              onSongLoaded={handleSongLoaded}
+              onSongSaved={setSongDbId}
+              onImportError={setImportError}
+            />
+          </>
         ) : (
           <>
             {playbackState === "playing" ? (
               <FocusedPlaybackBar
                 onPause={handlePause}
                 todayMinutes={todayMinutes}
+                passesToday={passesToday}
                 loopCount={loopCount}
                 hitCount={hitCount}
                 missCount={missCount}
@@ -868,6 +1075,7 @@ export default function SamPlayer({ onBack }) {
             ) : (
               <>
                 <SettingsBar
+                  onBack={handleBackToLibrary}
                   song={song} snippet={snippet}
                   bpm={bpm}
                   timingWindowMs={timingWindowMs}
@@ -876,13 +1084,12 @@ export default function SamPlayer({ onBack }) {
                   playbackSpeed={playbackSpeed}
                   playbackState={playbackState} songDbId={songDbId}
                   onPlay={handlePlay} onPause={handlePause} onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
-                  onChangeSong={handleChangeSong}
                   onExport={handleExport}
                   midiConnected={midiConnected} midiDevice={midiDevice}
                   pausedMeasure={pausedMeasure}
                   onSongUpdate={setSong}
                   onAudioUploaded={handleAudioUploaded}
-                  onFullSong={() => setSnippet(null)}
+                  onFullSong={() => handleSnippetChange(null)}
                   onLyricsChanged={setLyricPlacements}
                   skipTiedNotes={skipTiedNotes}
                   hasImportedFingerings={hasImported}
@@ -890,6 +1097,12 @@ export default function SamPlayer({ onBack }) {
                   onSongRepeatChange={setSongRepeat}
                   songRestMeasures={songRestMeasures}
                   onSongRestMeasuresChange={setSongRestMeasures}
+                  toolsSlot={scoreToolButtons}
+                  metronome={metronome}
+                  setMetronome={setMetronome}
+                  scorePlayback={scorePlayback}
+                  setScorePlayback={setScorePlayback}
+                  todayMinutes={todayMinutes}
                 />
 
                 <AudioControls audioElement={audioElement} playbackState={playbackState} />
@@ -916,28 +1129,30 @@ export default function SamPlayer({ onBack }) {
                   missCount={missCount}
                   sessionStats={sessionStats}
                   lastResult={lastResult}
-                  metronome={metronome}
-                  setMetronome={setMetronome}
-                  scorePlayback={scorePlayback}
-                  setScorePlayback={setScorePlayback}
                   playbackState={playbackState}
-                  todayMinutes={todayMinutes}
-                  perSongTotalSeconds={perSongTotalSeconds}
+                  songTodaySeconds={perSongTodaySeconds}
+                  songTotalSeconds={perSongTotalSeconds}
+                  songPassesToday={songPassesToday}
+                  songPassesTotal={songPassesTotal}
                 />
 
                 <SnippetPanel
                   songDbId={songDbId}
                   totalMeasures={song.measures.length}
                   snippet={snippet}
-                  onSnippetChange={setSnippet}
+                  onSnippetChange={handleSnippetChange}
                 />
               </>
             )}
 
             {playbackState === "stopped" ? (
               <>
-                <div className="flex items-center gap-2 px-1 mb-2">
-                  {fingeringMode && (
+                {/* Only the fingering-entry widgets remain on a row of their
+                    own, and only while fingering mode is on — the row used to
+                    render unconditionally, almost always holding nothing but
+                    the Fingering mode button, which now sits in the top row. */}
+                {fingeringMode && (
+                  <div className="flex items-center gap-2 px-1 mb-2">
                     <FingeringBar
                       hasSelection={!!fingeringSelection}
                       currentFinger={selectedCurrentFinger}
@@ -949,53 +1164,15 @@ export default function SamPlayer({ onBack }) {
                       onAdvance={handleFingeringAdvance}
                       onPickNotehead={handlePickNotehead}
                     />
-                  )}
-                  <div className="flex items-center gap-2 ml-auto">
-                    {fingeringMode && (
-                      <button
-                        onClick={undoFingering}
-                        disabled={!canUndoFingering}
-                        className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        ↺ Undo
-                      </button>
-                    )}
-                    {hasImported && (
-                      <button
-                        onClick={toggleShowImported}
-                        aria-pressed={showImportedFingerings}
-                        className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors"
-                      >
-                        {showImportedFingerings ? "Hide Imported" : "Show Imported"}
-                      </button>
-                    )}
-                    {parentSong && (
-                      <button
-                        onClick={() => setGhostMode((on) => !on)}
-                        aria-pressed={ghostMode}
-                        className={`min-h-[44px] px-4 rounded-lg text-sm font-medium border transition-colors ${
-                          ghostMode
-                            ? "bg-foreground text-background border-transparent"
-                            : "bg-card text-foreground border-border hover:bg-muted"
-                        }`}
-                      >
-                        {ghostMode ? "Diff: on" : "Diff"}
-                      </button>
-                    )}
                     <button
-                      onClick={toggleFingeringMode}
-                      aria-pressed={fingeringMode}
-                      className={`min-h-[44px] px-4 rounded-lg text-sm font-medium border transition-colors ${
-                        fingeringMode
-                          ? "text-white border-transparent"
-                          : "bg-card text-foreground border-border hover:bg-muted"
-                      }`}
-                      style={fingeringMode ? { backgroundColor: "var(--fingering-accent)" } : undefined}
+                      onClick={undoFingering}
+                      disabled={!canUndoFingering}
+                      className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed ml-auto"
                     >
-                      {fingeringMode ? "Fingering mode: on" : "Fingering mode"}
+                      ↺ Undo
                     </button>
                   </div>
-                </div>
+                )}
                 {ghostMode && parentSong && (
                   <div className="flex flex-wrap items-center gap-4 mb-2 mx-1 p-2 rounded-lg border border-border bg-card text-sm">
                     <span className="text-muted-foreground">
@@ -1101,7 +1278,7 @@ export default function SamPlayer({ onBack }) {
                     : 0
                 }
                 loop={!!snippet || songRepeatActive}
-                onEnded={handleStop}
+                onEnded={handleRangeEnded}
                 timingWindowMs={timingWindowMs.value}
                 audioElement={audioElement}
                 audioAnchors={audioAnchors}

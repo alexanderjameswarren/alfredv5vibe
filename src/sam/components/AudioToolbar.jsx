@@ -1,11 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Download, Upload, RefreshCw, Wand2 } from "lucide-react";
+import { Download, Upload, RefreshCw, Wand2, MoreHorizontal } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 import { uploadAudio } from "../lib/audioPlayer";
 import { recompileMeasures } from "../lib/measureCompiler";
 
 // Right-hand utility cluster: Export, Audio upload, Refresh (recompile lyrics
-// blob from rows), Auto-Match (assign syllables to RH notes), Change Song.
+// blob from rows), Auto-Match (assign syllables to RH notes).
+//
+// "Change song" used to sit here too. The back arrow at the far left of the
+// transport row now goes to the song library, so the link was a second control
+// doing the identical thing, and it went.
 export default function AudioToolbar({
   song,
   songDbId,
@@ -14,7 +18,6 @@ export default function AudioToolbar({
   onAudioUploaded,
   onLyricsChanged,
   onExport,
-  onChangeSong,
 }) {
   const [uploading, setUploading] = useState(false);
   const [hasLyrics, setHasLyrics] = useState(false);
@@ -159,60 +162,114 @@ export default function AudioToolbar({
     }
   }
 
+  // The utility actions as data, so the wide row and the narrow overflow menu
+  // are two renderings of one list rather than two lists that drift apart —
+  // the same reasoning that merged Alfred's desktop tabs and mobile drawer
+  // into one NAV_ITEMS array.
+  const actions = [
+    {
+      key: "export",
+      label: "Export",
+      icon: <Download className="w-3.5 h-3.5" />,
+      onClick: onExport,
+      disabled: false,
+      show: true,
+    },
+    {
+      key: "audio",
+      label: uploading ? "Uploading..." : "Audio",
+      icon: <Upload className="w-3.5 h-3.5" />,
+      onClick: () => audioInputRef.current?.click(),
+      disabled: uploading,
+      show: !!songDbId,
+    },
+    {
+      key: "refresh",
+      label: refreshing ? "Refreshing..." : "Refresh",
+      icon: <RefreshCw className={`w-3.5 h-3.5${refreshing ? " animate-spin" : ""}`} />,
+      onClick: handleRefresh,
+      disabled: refreshing,
+      show: !!songDbId,
+    },
+    {
+      key: "automatch",
+      label: autoMatching ? "Matching..." : "Auto-Match",
+      icon: <Wand2 className="w-3.5 h-3.5" />,
+      onClick: () => setShowAutoMatchConfirm(true),
+      disabled: autoMatching,
+      show: !!songDbId && hasLyrics,
+    },
+  ].filter((a) => a.show);
+
   return (
     <>
-      <div className="flex items-center gap-2">
-        <button
-          onClick={onExport}
-          className="flex items-center gap-1 text-sm text-foreground hover:text-primary min-h-[44px] px-2"
-        >
-          <Download className="w-3.5 h-3.5" />
-          Export
-        </button>
-        {songDbId && (
+      {/* Progressive collapse, in three tiers.
+          
+          Tiers one and two follow Alfred's desktop nav exactly: Tailwind
+          breakpoints, not measurement, and the label is HIDDEN rather than
+          removed so `title` and `aria-label` keep the accessible name at every
+          width.
+
+            >= 1024px (lg)  icon and label
+            640-1023px      icons only, tooltips and screen-reader labels intact
+            < 640px (sm)    one overflow menu
+
+          The third tier is the deliberate difference from Alfred, whose comment
+          rules an overflow menu out on the grounds that burying a destination
+          behind a chevron is the worst outcome. That reasoning is about
+          NAVIGATION — ten places that must each stay one tap away. These are
+          four rarely-used utility actions on a screen whose real job is the
+          score, so trading a second tap for the row is the right way round
+          here. Export and Audio are not Sam. */}
+      <div className="hidden sm:flex items-center gap-2 shrink-0">
+        {actions.map((a) => (
           <button
-            onClick={() => audioInputRef.current?.click()}
-            disabled={uploading}
-            className="flex items-center gap-1 text-sm text-foreground hover:text-primary min-h-[44px] px-2 disabled:opacity-50"
+            key={a.key}
+            onClick={a.onClick}
+            disabled={a.disabled}
+            title={a.label}
+            aria-label={a.label}
+            className="flex items-center justify-center gap-1 text-sm text-foreground hover:text-primary min-h-[44px] min-w-[44px] px-2 disabled:opacity-50"
           >
-            <Upload className="w-3.5 h-3.5" />
-            {uploading ? "Uploading..." : "Audio"}
+            {a.icon}
+            <span className="hidden lg:inline">{a.label}</span>
           </button>
-        )}
-        <input
-          ref={audioInputRef}
-          type="file"
-          accept=".mp3,audio/mpeg"
-          onChange={handleAudioUpload}
-          className="hidden"
-        />
-        {songDbId && (
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing}
-            className="flex items-center gap-1 text-sm text-foreground hover:text-primary min-h-[44px] px-2 disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3.5 h-3.5${refreshing ? " animate-spin" : ""}`} />
-            {refreshing ? "Refreshing..." : "Refresh"}
-          </button>
-        )}
-        {songDbId && hasLyrics && (
-          <button
-            onClick={() => setShowAutoMatchConfirm(true)}
-            disabled={autoMatching}
-            className="flex items-center gap-1 text-sm text-foreground hover:text-primary min-h-[44px] px-2 disabled:opacity-50"
-          >
-            <Wand2 className="w-3.5 h-3.5" />
-            {autoMatching ? "Matching..." : "Auto-Match"}
-          </button>
-        )}
-        <button
-          onClick={onChangeSong}
-          className="text-sm text-foreground hover:text-primary min-h-[44px] px-2"
-        >
-          Change song
-        </button>
+        ))}
       </div>
+
+      {/* Narrowest tier. A native <details> rather than a hand-rolled dropdown:
+          no open/close state to keep, no outside-click handler to get wrong,
+          and it is keyboard accessible as it stands. */}
+      <details className="sm:hidden relative shrink-0">
+        <summary
+          title="More actions"
+          aria-label="More actions"
+          className="flex items-center justify-center min-h-[44px] min-w-[44px] text-foreground hover:text-primary cursor-pointer list-none"
+        >
+          <MoreHorizontal className="w-4 h-4" />
+        </summary>
+        <div className="absolute right-0 z-20 mt-1 w-44 bg-card border border-border rounded-lg shadow-sm p-1">
+          {actions.map((a) => (
+            <button
+              key={a.key}
+              onClick={a.onClick}
+              disabled={a.disabled}
+              className="w-full flex items-center gap-2 text-sm text-foreground hover:text-primary hover:bg-secondary rounded min-h-[44px] px-2 disabled:opacity-50"
+            >
+              {a.icon}
+              {a.label}
+            </button>
+          ))}
+        </div>
+      </details>
+
+      <input
+        ref={audioInputRef}
+        type="file"
+        accept=".mp3,audio/mpeg"
+        onChange={handleAudioUpload}
+        className="hidden"
+      />
 
       {showAutoMatchConfirm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">

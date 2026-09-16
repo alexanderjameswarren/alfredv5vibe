@@ -7,7 +7,7 @@ import LiveSessionCounter from "./LiveSessionCounter";
 // status, metronome radios, etc.) is dropped from the tree entirely — the
 // parent renders this instead of the full SettingsBar / StatsBar stack.
 //
-// Row 1  → Pause | Session badge + Playthrough badge + live Today
+// Row 1  → Pause | Session badge + Playthrough badge + Completed Passes + live Today
 // Row 2  → Loop / Hits / Misses / Session accuracy (muted, secondary)
 //
 // Playthrough accuracy is the one number worth reading mid-play, so it gets
@@ -16,6 +16,7 @@ import LiveSessionCounter from "./LiveSessionCounter";
 export default function FocusedPlaybackBar({
   onPause,
   todayMinutes,
+  passesToday,
   loopCount,
   hitCount,
   missCount,
@@ -36,7 +37,11 @@ export default function FocusedPlaybackBar({
 
         {/* LiveSessionCounter self-gates on playing; passing "playing"
             since FocusedPlaybackBar itself only renders during play. */}
-        <LiveSessionCounter playbackState="playing" todayMinutes={todayMinutes}>
+        <LiveSessionCounter
+          playbackState="playing"
+          todayMinutes={todayMinutes}
+          passesToday={passesToday}
+        >
           <div className="flex items-center gap-2 px-3 py-1 rounded-md bg-secondary/40 border border-border">
             <span className="text-xs uppercase tracking-wide text-muted-foreground">
               Playthrough

@@ -1,6 +1,6 @@
 import React from "react";
 import { midiDisplayName } from "../lib/vexflowHelpers";
-import PracticeTimeIndicator from "./PracticeTimeIndicator";
+import PracticeFigures from "./PracticeFigures";
 
 export default function StatsBar({
   lastNote,
@@ -9,13 +9,11 @@ export default function StatsBar({
   missCount,
   sessionStats,
   lastResult,
-  metronome,
-  setMetronome,
-  scorePlayback,
-  setScorePlayback,
   playbackState,
-  todayMinutes = 0,
-  perSongTotalSeconds = 0,
+  songTodaySeconds = 0,
+  songTotalSeconds = 0,
+  songPassesToday = 0,
+  songPassesTotal = 0,
 }) {
   return (
     <div className="flex items-center gap-4 mb-2 px-1 text-sm text-muted-foreground flex-wrap">
@@ -53,91 +51,22 @@ export default function StatsBar({
         </span>
       )}
 
-      {/* Metronome radio group */}
-      <span className="flex items-center gap-2">
-        <span>Metronome:</span>
-        <label className="flex items-center gap-1 cursor-pointer">
-          <input
-            type="radio"
-            name="metronome"
-            value="off"
-            checked={metronome === "off"}
-            onChange={(e) => setMetronome(e.target.value)}
-            className="w-3 h-3"
-          />
-          <span>Off</span>
-        </label>
-        <label className="flex items-center gap-1 cursor-pointer">
-          <input
-            type="radio"
-            name="metronome"
-            value="beat"
-            checked={metronome === "beat"}
-            onChange={(e) => setMetronome(e.target.value)}
-            className="w-3 h-3"
-          />
-          <span>Beat (♩)</span>
-        </label>
-        <label className="flex items-center gap-1 cursor-pointer">
-          <input
-            type="radio"
-            name="metronome"
-            value="halfbeat"
-            checked={metronome === "halfbeat"}
-            onChange={(e) => setMetronome(e.target.value)}
-            className="w-3 h-3"
-          />
-          <span>Half Beat (♪)</span>
-        </label>
-        <label className="flex items-center gap-1 cursor-pointer">
-          <input
-            type="radio"
-            name="metronome"
-            value="quarterbeat"
-            checked={metronome === "quarterbeat"}
-            onChange={(e) => setMetronome(e.target.value)}
-            className="w-3 h-3"
-          />
-          <span>Quarter Beat (♬)</span>
-        </label>
-      </span>
-
-      {/* Score playback radio group — a separate dimension from the metronome
-          (spec D4), so synth and click can be on at once. Like the metronome,
-          this row is unmounted during playback, which is why the mode is fixed
-          for the duration of a run (D5).
-
-          LH / RH sound one hand only. This is independent of a snippet's
-          handMode (which selects the hand the PLAYER is scored on), so the two
-          compose: practise RH while the synth plays LH. LH/RH labels match
-          SnippetPanel's vocabulary; "Full" is both hands. */}
-      <span className="flex items-center gap-2">
-        <span>Score playback:</span>
-        {[
-          ["off", "Off"],
-          ["lh", "LH"],
-          ["rh", "RH"],
-          ["full", "Full (♫)"],
-        ].map(([value, label]) => (
-          <label key={value} className="flex items-center gap-1 cursor-pointer">
-            <input
-              type="radio"
-              name="scorePlayback"
-              value={value}
-              checked={scorePlayback === value}
-              onChange={(e) => setScorePlayback(e.target.value)}
-              className="w-3 h-3"
-            />
-            <span>{label}</span>
-          </label>
-        ))}
-      </span>
-
+      {/* This song's own passes and practice time, on the same row as the
+          session numbers (option D). Every figure names its own scope, and all
+          four are song-scoped — the all-songs "Practiced today" lives on the
+          settings row above, so nothing here is borrowing a label that means
+          something else. The pass numbers count only rows where `snippet_id` is
+          null, so a loaded snippet's practice never inflates them. */}
       {playbackState !== "playing" && (
-        <PracticeTimeIndicator
-          todayMinutes={todayMinutes}
-          perSongTotalSeconds={perSongTotalSeconds}
-        />
+        <span className="flex items-center gap-2 flex-wrap">
+          <span className="font-medium text-dark">This song</span>
+          <PracticeFigures
+            passesToday={songPassesToday}
+            passesAllTime={songPassesTotal}
+            timeTodayMinutes={songTodaySeconds / 60}
+            timeAllTimeMinutes={songTotalSeconds / 60}
+          />
+        </span>
       )}
 
       {lastResult && (

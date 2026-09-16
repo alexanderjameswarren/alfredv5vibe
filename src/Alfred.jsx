@@ -2334,6 +2334,42 @@ export default function Alfred() {
     }
   }
 
+  // A permanent delete the database refused because rows still point at the
+  // target. `sam_snippets` is the case that actually happens: both
+  // `sam_sessions.snippet_id` and (since 2026-09-15) `sam_passes.snippet_id`
+  // reference it with no ON DELETE rule, so a snippet carrying practice history
+  // raises 23503 instead of taking that history down with it. The raw Postgres
+  // text names a constraint and tells the user nothing about what to do next.
+  function recycleDeleteErrorMessage(e, tab, count = 1) {
+    if (e?.code !== "23503") return "Failed to delete: " + e.message;
+
+    if (tab === "snippets") {
+      const subject =
+        count > 1
+          ? `${count} of the selected snippets have`
+          : "This snippet has";
+      return (
+        `${subject} practice history recorded against it — passes, ` +
+        "sessions, or both — and deleting it would take that history with it.\n\n" +
+        "Archive it instead. An archived snippet leaves the snippet list but " +
+        "keeps everything recorded against it, and playing its range again " +
+        "restores it with its history intact."
+      );
+    }
+
+    if (tab === "songs") {
+      return (
+        "This song still has practice history recorded against it, so it " +
+        "cannot be deleted.\n\nArchive it instead to keep that history."
+      );
+    }
+
+    return (
+      "Cannot delete: other records still reference this row, and removing " +
+      "it would destroy or orphan them.\n\n" + e.message
+    );
+  }
+
   async function recyclePermanentDelete(tab, id) {
     // Re-check emptiness at the far end, not just at archive time. The empty
     // rule is what makes context archiving safe at all, and children can appear
@@ -2381,7 +2417,7 @@ export default function Alfred() {
       setRecycleData(prev => prev.filter(r => r.id !== id));
     } catch (e) {
       console.error("[Recycle] Delete error:", e);
-      alert("Failed to delete: " + e.message);
+      alert(recycleDeleteErrorMessage(e, tab));
     } finally {
       setRecycleLoading(false);
     }
@@ -2485,7 +2521,9 @@ export default function Alfred() {
       setRecycleSelected(new Set());
     } catch (e) {
       console.error("[Recycle] Bulk delete error:", e);
-      alert("Failed to delete: " + e.message);
+      // The delete is one statement, so a single protected row fails the whole
+      // batch and nothing is removed — say so rather than implying a partial.
+      alert(recycleDeleteErrorMessage(e, recycleTab, recycleSelected.size));
     } finally {
       setRecycleLoading(false);
     }

@@ -26,6 +26,12 @@ import {
 //   todayMinutes         — convenience alias for sevenDayTotals[0].minutes.
 //   perSongTotalSeconds  — raw seconds for currentSongId across all time.
 //                          Display formatting happens in the consumer.
+//   perSongTodaySeconds  — raw seconds for currentSongId TODAY (PT). Added so
+//                          the stats row can show this song's own practice
+//                          today beside its lifetime, instead of borrowing the
+//                          all-songs `todayMinutes` for a label that reads as
+//                          though it were song-scoped. Free: it comes out of
+//                          the same single pass over the same fetched rows.
 //   perSongTotals        — Map<song_id, seconds> across every song with at
 //                          least one ended session. Landing-page rows do
 //                          O(1) lookups off this.
@@ -82,7 +88,9 @@ export default function usePracticeStats({ currentSongId, refetchSignal = 0 } = 
   const derived = useMemo(() => {
     const buckets = new Map();
     const perSongTotals = new Map();
+    const perSongTodayTotals = new Map();
     const lastPracticedBySong = new Map();
+    const todayKey = ptDateKey(new Date());
     for (const s of sessions) {
       const startMs = new Date(s.started_at).getTime();
       const endMs = new Date(s.ended_at).getTime();
@@ -97,11 +105,18 @@ export default function usePracticeStats({ currentSongId, refetchSignal = 0 } = 
         (perSongTotals.get(s.song_id) || 0) + secs
       );
 
+      if (dayKey === todayKey) {
+        perSongTodayTotals.set(
+          s.song_id,
+          (perSongTodayTotals.get(s.song_id) || 0) + secs
+        );
+      }
+
       if (!lastPracticedBySong.has(s.song_id)) {
         lastPracticedBySong.set(s.song_id, s.started_at);
       }
     }
-    return { buckets, perSongTotals, lastPracticedBySong };
+    return { buckets, perSongTotals, perSongTodayTotals, lastPracticedBySong };
   }, [sessions]);
 
   const sevenDayTotals = useMemo(() => {
@@ -127,10 +142,15 @@ export default function usePracticeStats({ currentSongId, refetchSignal = 0 } = 
     ? derived.perSongTotals.get(currentSongId) ?? 0
     : 0;
 
+  const perSongTodaySeconds = currentSongId
+    ? derived.perSongTodayTotals.get(currentSongId) ?? 0
+    : 0;
+
   return {
     sevenDayTotals,
     todayMinutes,
     perSongTotalSeconds,
+    perSongTodaySeconds,
     perSongTotals: derived.perSongTotals,
     lastPracticedBySong: derived.lastPracticedBySong,
     loading,

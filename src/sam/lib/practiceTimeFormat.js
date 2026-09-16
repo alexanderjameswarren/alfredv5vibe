@@ -74,6 +74,50 @@ export function daysBetween(earlierKey, laterKey) {
 }
 
 /**
+ * Units-only duration, for figures that sit inline with a label that already
+ * says what they are ("Time 4 min today"). Spelling out "4 minutes" four times
+ * per row is what made the earlier layouts unreadable; "min" and "h" are the
+ * only abbreviations allowed anywhere in these displays.
+ *
+ *   0    -> "0 min"
+ *   4    -> "4 min"
+ *   47   -> "47 min"
+ *   60   -> "1 h"
+ *   65   -> "1 h 5 min"
+ *   125  -> "2 h 5 min"
+ */
+export function formatMinutesUnits(mins) {
+  const m = Math.max(0, Math.round(mins));
+  if (m < 60) return `${m} min`;
+  const hours = Math.floor(m / 60);
+  const rem = m % 60;
+  return rem === 0 ? `${hours} h` : `${hours} h ${rem} min`;
+}
+
+/**
+ * "Total:" form for a SNIPPET's lifetime practice.
+ *
+ * Identical wording to `formatTotalHours` once an hour has been reached, and
+ * long-form minutes below that. The song-level Total floors to whole hours and
+ * renders anything under one as "<1 hour", which is right for a song and
+ * useless for a snippet: almost every snippet would read "<1 hour" for months
+ * and the figure would say nothing. Reaching for minutes under the hour keeps
+ * the number informative without inventing a second vocabulary — both halves
+ * are the existing formatters, unchanged.
+ *
+ *   0      -> "0 minutes"
+ *   660    -> "11 minutes"
+ *   3540   -> "59 minutes"
+ *   3600   -> "1 hour"
+ *   7200   -> "2 hours"
+ */
+export function formatTotalHoursOrMinutes(seconds) {
+  const s = Math.max(0, seconds);
+  if (s >= 3600) return formatTotalHours(s);
+  return formatMinutesLong(s / 60);
+}
+
+/**
  * Compact "Xh Ym" / "X minutes" form. Used in the 7-day snapshot and the
  * live "Today" counter.
  *

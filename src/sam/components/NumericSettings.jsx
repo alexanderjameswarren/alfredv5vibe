@@ -1,6 +1,8 @@
-import React, { useState } from "react";
-import { AudioWaveform, Save, Repeat } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { AudioWaveform, Save, Repeat, SlidersHorizontal } from "lucide-react";
 import RestControl from "./RestControl";
+import SegmentedControl from "./SegmentedControl";
+import { formatMinutesUnits } from "../lib/practiceTimeFormat";
 import { supabase } from "../../supabaseClient";
 import { DEFAULTS } from "../lib/samConstants";
 
@@ -22,6 +24,28 @@ import { DEFAULTS } from "../lib/samConstants";
 // persisted and resets on song reload. The toggle is hidden while a snippet
 // is selected: snippet loop and song repeat are mutually exclusive, since
 // both drive `loop` / `audioEndMs` / the appended rest measures.
+// The "Tuning" group's open/closed state, remembered between sessions.
+// Wrapped because storage access throws outright in some contexts (private
+// windows, site data blocked), and a settings row that cannot render is a much
+// worse outcome than a group that forgets it was open.
+const ADVANCED_OPEN_KEY = "sam.numericSettings.tuningOpen";
+
+function readAdvancedOpen() {
+  try {
+    return window.localStorage.getItem(ADVANCED_OPEN_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeAdvancedOpen(open) {
+  try {
+    window.localStorage.setItem(ADVANCED_OPEN_KEY, open ? "true" : "false");
+  } catch {
+    /* ignore — the group just won't be remembered */
+  }
+}
+
 export default function NumericSettings({
   song,
   snippet,
@@ -37,9 +61,20 @@ export default function NumericSettings({
   songRestMeasures,
   onSongRestMeasuresChange,
   onSongUpdate,
+  metronome,
+  setMetronome,
+  scorePlayback,
+  setScorePlayback,
+  todayMinutes = 0,
 }) {
   const [showBpmEdit, setShowBpmEdit] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  // Above the early return below: this component bails out during playback, and
+  // hooks must run in the same order on every render.
+  const [advancedOpen, setAdvancedOpen] = useState(readAdvancedOpen);
+  useEffect(() => {
+    writeAdvancedOpen(advancedOpen);
+  }, [advancedOpen]);
 
   if (playbackState === "playing") return null;
 
@@ -88,6 +123,11 @@ export default function NumericSettings({
 
   return (
     <div className="flex items-center gap-3 mb-3 flex-wrap">
+      {/* Advanced group toggle. Timing / Chord / Measure W are set once and
+          then left alone for months, but they were costing a permanent slot in
+          this row and pushing it onto a second line on a laptop screen (M3.5).
+          Collapsed by default, and the choice is remembered between sessions.
+          BPM, Repeat and Speed stay out here because they get changed mid-run. */}
       {!hasAudio && (
         <label className="text-sm text-foreground">
           BPM:{" "}
@@ -102,6 +142,23 @@ export default function NumericSettings({
           />
         </label>
       )}
+      <button
+        type="button"
+        onClick={() => setAdvancedOpen((open) => !open)}
+        aria-expanded={advancedOpen}
+        title="Timing window, chord grouping and measure width"
+        className={`flex items-center gap-1.5 px-2 py-1 border rounded text-sm min-h-[44px] transition-colors ${
+          advancedOpen
+            ? "border-primary bg-primary-light text-primary"
+            : "border-border text-muted-foreground hover:text-dark"
+        }`}
+      >
+        <SlidersHorizontal className="w-4 h-4" />
+        Tuning
+      </button>
+
+      {advancedOpen && (
+        <>
       <label className="text-sm text-foreground">
         Timing ±ms:{" "}
         <input
@@ -138,6 +195,9 @@ export default function NumericSettings({
           min={150} max={600} step={50}
         />
       </label>
+        </>
+      )}
+
       {!snippet && (
         <>
           <label
@@ -209,6 +269,56 @@ export default function NumericSettings({
           {savingSettings ? "Saving..." : "Save"}
         </button>
       )}
+
+      {/* Metronome and score playback moved here from the stats row (option D).
+          They are playback settings, so they belong with BPM, Tuning and
+          Repeat — and the stats row needed the width back to carry this song's
+          passes and practice time on one line. Still one click to change, still
+          not inside the collapsed Tuning group.
+
+          Wrapped together in one flex item so they can never be separated: a
+          wrap point between them is what put Score playback alone on a row.
+          What gives first is their text labels, hidden below 1280px by
+          `SegmentedControl` itself; only after that can this pair move, and it
+          moves as a pair. */}
+      <span className="flex items-center gap-3 shrink-0">
+      <SegmentedControl
+        label="Metronome:"
+        value={metronome}
+        onChange={setMetronome}
+        options={[
+          ["off", "Off", "No click"],
+          ["beat", "Beat", "Click on every beat (♩)"],
+          ["halfbeat", "½", "Click on every half beat (♪)"],
+          ["quarterbeat", "¼", "Click on every quarter beat (♬)"],
+        ]}
+      />
+
+      <SegmentedControl
+        label="Score playback:"
+        value={scorePlayback}
+        onChange={setScorePlayback}
+        options={[
+          ["off", "Off", "No synth"],
+          ["lh", "LH", "Synth plays the left hand"],
+          ["rh", "RH", "Synth plays the right hand"],
+          ["full", "Full", "Synth plays both hands (♫)"],
+        ]}
+      />
+      </span>
+
+      {/* Pushed right so it lands under the utility cluster on the row
+          above. That separation is the point: this is a fact about the DAY,
+          across every song, and it used to sit inline with song-scoped figures
+          under a "Today:" label that read as though it were about this song. */}
+      {/* `pr-2` matches the `px-2` on the toolbar buttons in the row above, so
+          the two right edges line up. Without it this text sits flush to the
+          row while those buttons are inset by their own padding, and the
+          mismatch reads as a stray 8px. */}
+      <span className="ml-auto pr-2 shrink-0 whitespace-nowrap flex items-center gap-2 text-sm text-muted-foreground">
+        <span>Practiced today</span>
+        <strong className="text-dark">{formatMinutesUnits(todayMinutes)}</strong>
+      </span>
     </div>
   );
 }

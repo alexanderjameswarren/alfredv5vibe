@@ -1,7 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 
 export const supabaseUrl = 'https://zuqjyfqnvhddnchhpbcz.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp1cWp5ZnFudmhkZG5jaGhwYmN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA3Mzc4NTYsImV4cCI6MjA4NjMxMzg1Nn0.BSRF3b5KZEWiVXm9f4eon6esqyrFPUM1qvlCzgwbJDo'; // Paste your anon public key here
+// Exported because the page-hide session close (see usePracticeSession) has to
+// bypass the JS client: `fetch` with `keepalive` is the only request that
+// survives the page going away, and the client offers no way to set it. That
+// call builds its own REST request and needs this key as the apikey header.
+// The anon key is public by design — it is already shipped in this bundle.
+export const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp1cWp5ZnFudmhkZG5jaGhwYmN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA3Mzc4NTYsImV4cCI6MjA4NjMxMzg1Nn0.BSRF3b5KZEWiVXm9f4eon6esqyrFPUM1qvlCzgwbJDo'; // Paste your anon public key here
 
 // Step 4b of docs/technical-spec-navigation-urls.md.
 //

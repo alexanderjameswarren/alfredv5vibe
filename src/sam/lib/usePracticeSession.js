@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from "react";
-import { supabase } from "../../supabaseClient";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { supabase, supabaseUrl, supabaseAnonKey } from "../../supabaseClient";
 
 const EMPTY_STATS = {
   hits: 0,
@@ -176,13 +176,9 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     }));
   }, []);
 
-  const endSession = useCallback(async () => {
-    const sessionId = sessionIdRef.current;
-    if (!sessionId) {
-      console.warn("[Sam] No session to end");
-      return;
-    }
-
+  // Shared by `endSession` and the page-hide safety net below, so a session
+  // closed by either route carries the same summary shape.
+  const buildSummary = useCallback(() => {
     const c = countersRef.current;
     const avgTiming = timingDeltasRef.current.length > 0
       ? Math.round(timingDeltasRef.current.reduce((a, b) => a + b, 0) / timingDeltasRef.current.length)
@@ -203,7 +199,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
       });
     }
 
-    const summary = {
+    return {
       totalBeats: c.totalBeats,
       hits: c.hits,
       misses: c.misses,
@@ -216,7 +212,16 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
         ? Math.max(...playthroughs.map((p) => p.accuracyPercent))
         : null,
     };
+  }, []);
 
+  const endSession = useCallback(async () => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) {
+      console.warn("[Sam] No session to end");
+      return;
+    }
+
+    const summary = buildSummary();
     const now = new Date().toISOString();
 
     const events = eventsRef.current;
@@ -302,7 +307,93 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
 
     sessionIdRef.current = null;
     songIdRef.current = null;
+  }, [buildSummary]);
+
+  // --- Page-hide safety net ------------------------------------------------
+  //
+  // `endSession` only runs on pause, stop, or closing the song. Closing the
+  // tab, refreshing, or a crash ran none of it, and the row kept a null
+  // `ended_at` forever — 28 such rows exist in the data, from February to late
+  // August. Practice-time totals exclude them, so the whole sitting is lost
+  // rather than miscounted, but lost is still lost.
+  //
+  // `visibilitychange -> hidden` is the last moment a page is reliably given:
+  // `beforeunload` is skipped outright on mobile, and `pagehide` is not
+  // guaranteed when an OS discards a backgrounded tab. Both are registered
+  // here; whichever fires first does the work and the other finds nothing to do.
+  //
+  // It has to bypass the Supabase JS client. A normal request is cancelled when
+  // the page goes away; `fetch` with `keepalive` is not, and the client has no
+  // way to set that flag — hence the hand-built REST call. `navigator.
+  // sendBeacon` cannot carry an Authorization header, so it is not an option
+  // either. Events are deliberately not sent: `keepalive` bodies are capped at
+  // 64KB and a long session's event array would blow through it, taking the
+  // `ended_at` with it. The summary is small and fixed-size.
+  //
+  // `sessionIdRef` is deliberately NOT cleared. Hiding a tab is not the same as
+  // finishing, and this write is a floor, not a verdict: come back, keep
+  // playing, press Stop, and `endSession` overwrites `ended_at` with the real
+  // finish time plus the full summary and events. If you never come back, the
+  // row still closes at roughly the moment you left. Either way one row, and
+  // the worst case is an under-count rather than an invented number.
+  const accessTokenRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!cancelled) accessTokenRef.current = data?.session?.access_token ?? null;
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      accessTokenRef.current = session?.access_token ?? null;
+    });
+    return () => {
+      cancelled = true;
+      sub?.subscription?.unsubscribe();
+    };
   }, []);
 
-  return { startSession, endSession, recordEvent, setLoopIteration, stats };
+  useEffect(() => {
+    function closeOpenSessionOnHide() {
+      if (document.visibilityState !== "hidden") return;
+      const sessionId = sessionIdRef.current;
+      const token = accessTokenRef.current;
+      if (!sessionId || !token) return;
+
+      try {
+        fetch(`${supabaseUrl}/rest/v1/sam_sessions?id=eq.${sessionId}`, {
+          method: "PATCH",
+          keepalive: true,
+          headers: {
+            apikey: supabaseAnonKey,
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            Prefer: "return=minimal",
+          },
+          body: JSON.stringify({
+            ended_at: new Date().toISOString(),
+            summary: buildSummary(),
+          }),
+        }).catch(() => {
+          /* The page is going away; there is nobody left to tell. */
+        });
+      } catch {
+        /* Same. Never let this throw on the way out. */
+      }
+    }
+
+    document.addEventListener("visibilitychange", closeOpenSessionOnHide);
+    window.addEventListener("pagehide", closeOpenSessionOnHide);
+    return () => {
+      document.removeEventListener("visibilitychange", closeOpenSessionOnHide);
+      window.removeEventListener("pagehide", closeOpenSessionOnHide);
+    };
+  }, [buildSummary]);
+
+  // The session row currently open, or null between sessions and during the
+  // insert that creates one. Read by the pass writer so a pass row can point
+  // at the sitting it belonged to; nullable there by design, so a pass that
+  // completes inside that insert window is still recorded.
+  const getSessionId = useCallback(() => sessionIdRef.current, []);
+
+  return { startSession, endSession, recordEvent, setLoopIteration, getSessionId, stats };
 }
