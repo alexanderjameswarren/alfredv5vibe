@@ -43,7 +43,7 @@ const SONGS = {
 const TEMPOS = [30, 60, 67, 90, 152, 72.5];
 
 const METRICS = [
-  "number", "sourceMeasure", "beats", "seconds", "notesPerSecond",
+  "number", "sourceMeasure", "beats", "rhOnsets", "lhOnsets", "seconds", "notesPerSecond",
   "rhNotesPerBeat", "lhNotesPerBeat", "rhStack", "lhStack", "rhStretch",
   "lhStretch", "rhJump", "lhJump", "rhythmVariety", "accidentals",
 ];
@@ -71,6 +71,8 @@ function compareMeasures(song, bpm, a, b) {
     // Every key the CLI emits must be one we compare, so a new metric cannot
     // slip past this test unchecked.
     assert.deepEqual(Object.keys(mb), Object.keys(ma), `${song} @${bpm} m${ma.number}: keys`);
+    const unchecked = Object.keys(ma).filter((k) => k !== "flags" && !METRICS.includes(k));
+    assert.deepEqual(unchecked, [], `${song}: per-measure keys the comparison does not cover`);
     for (const k of METRICS) {
       if (!Object.is(mb[k], ma[k])) {
         assert.fail(`${song} @${bpm} m${ma.number} ${k}: CLI=${ma[k]} port=${mb[k]}`);
@@ -122,6 +124,89 @@ test("the port rejects what the CLI rejects, with the same message", () => {
     try { CLI.analyzeSong(doc, opts); } catch (e) { cliErr = e.message; }
     assert.ok(cliErr, "the CLI should reject this input");
     assert.throws(() => PORT.analyzeSong(doc, opts), { message: cliErr });
+  }
+});
+
+// --- the tempo-free facts ----------------------------------------------------
+
+// What a stored score row holds. Nothing here may depend on tempo.
+const FACT_KEYS = [
+  "number", "sourceMeasure", "beats", "rhOnsets", "lhOnsets", "rhStack", "lhStack",
+  "rhStretch", "lhStretch", "rhJump", "lhJump", "rhythmVariety", "accidentals",
+];
+
+test("analyzeSongFacts is identical in both copies, and takes no tempo", () => {
+  for (const [song, { doc }] of Object.entries(SONGS)) {
+    const a = CLI.analyzeSongFacts(doc);
+    const b = PORT.analyzeSongFacts(doc);
+    assert.equal(JSON.stringify(b), JSON.stringify(a), song);
+    assert.equal(a.measures.length, doc.measures.length, song);
+    for (const f of a.measures) {
+      assert.deepEqual(Object.keys(f), FACT_KEYS, `${song} m${f.number}: fact keys`);
+      assert.ok(Number.isInteger(f.rhOnsets) && Number.isInteger(f.lhOnsets),
+        `${song} m${f.number}: onsets are counts`);
+    }
+  }
+  // The entry point has one parameter: there is nowhere to pass a tempo.
+  assert.equal(CLI.analyzeSongFacts.length, 1);
+  assert.equal(PORT.analyzeSongFacts.length, 1);
+});
+
+test("the facts are the same whatever tempo analyzeSong is later asked for", () => {
+  const doc = SONGS["Someone Like You"].doc;
+  const facts = CLI.analyzeSongFacts(doc);
+  for (const bpm of TEMPOS) {
+    const digest = CLI.analyzeSong(doc, { bpm });
+    digest.measures.forEach((m, i) => {
+      for (const k of FACT_KEYS) assert.ok(Object.is(m[k], facts.measures[i][k]), `@${bpm} m${m.number} ${k}`);
+    });
+  }
+});
+
+test("analyzeSong is exactly measureAtTempo over analyzeSongFacts, in both copies", () => {
+  for (const [name, lib] of [["CLI", CLI], ["PORT", PORT]]) {
+    for (const [song, { doc }] of Object.entries(SONGS)) {
+      for (const bpm of [60, 72.5]) {
+        const direct = lib.analyzeSong(doc, { bpm }).measures;
+        const viaFacts = lib.analyzeSongFacts(doc).measures.map((f) => lib.measureAtTempo(f, bpm));
+        assert.equal(JSON.stringify(viaFacts), JSON.stringify(direct), `${name} ${song} @${bpm}`);
+      }
+    }
+  }
+});
+
+test("measureAtTempo matches across copies and rejects a missing tempo the same way", () => {
+  const facts = CLI.analyzeSongFacts(SONGS["Say It Ain't So"].doc).measures;
+  for (const bpm of TEMPOS) {
+    for (const f of facts) {
+      assert.equal(JSON.stringify(PORT.measureAtTempo(f, bpm)), JSON.stringify(CLI.measureAtTempo(f, bpm)));
+    }
+  }
+  for (const bad of [undefined, null, 0, -60, NaN]) {
+    assert.throws(() => CLI.measureAtTempo(facts[0], bad), /A positive --bpm is required/);
+    assert.throws(() => PORT.measureAtTempo(facts[0], bad), /A positive --bpm is required/);
+  }
+});
+
+test("rates are derived from the stored counts, not the other way round", () => {
+  // A 7/8 bar with 5 RH onsets: 5 / 3.5 is not a round number, and the count
+  // must survive untouched while the rate is computed from it.
+  const doc = {
+    measures: [{
+      number: 1,
+      timeSignature: { beats: 7, beatType: 8 },
+      rh: Array.from({ length: 5 }, (_, i) => ({ duration: i < 3 ? "8" : "q", notes: [{ midi: 60 + i, name: "x" }] })),
+      lh: [{ duration: "qdd", notes: [] }, { duration: "q", notes: [{ midi: 48, name: "C3" }] }],
+    }],
+  };
+  for (const lib of [CLI, PORT]) {
+    const [f] = lib.analyzeSongFacts(doc).measures;
+    assert.equal(f.rhOnsets, 5);
+    assert.equal(f.lhOnsets, 1, "a rest is not an onset");
+    assert.equal(f.beats, 3.5);
+    const m = lib.measureAtTempo(f, 70);
+    assert.equal(m.rhNotesPerBeat, 5 / 3.5);
+    assert.equal(m.notesPerSecond, 6 / ((3.5 * 60) / 70));
   }
 });
 

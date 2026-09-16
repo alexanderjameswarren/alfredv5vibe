@@ -188,14 +188,35 @@ function handMetrics(events: VoiceEvent[] | null | undefined, hand: Hand) {
   return { onsets: walked.length, stack, stretch, jump };
 }
 
-export interface MeasureAnalysis {
+// --- per-measure facts, and the tempo derivation on top of them ------------
+//
+// A measure's difficulty splits in two. Almost everything — onsets, stack,
+// stretch, jump, rhythm variety, accidentals, beats — is a pure function of
+// the notes. Exactly one metric, notesPerSecond, depends on tempo (and the NS
+// flag with it).
+//
+// measureFacts returns the first kind, and it stores COUNTS. The stored
+// column is meant to be the tempo-independent fact; rhNotesPerBeat is that
+// fact already divided by beats, and multiplying back is a floating-point
+// round trip on a value that should never have been divided. Store the count,
+// derive the rate.
+//
+// It takes NO tempo, on purpose. Requiring a bpm to compute tempo-free facts
+// invites a caller to pass default_bpm "because it needs something" — exactly
+// the trap the tempo rule exists to prevent (explicit argument ->
+// goal_effective_bpm -> error; never goal_bpm, never default_bpm). If the
+// output does not depend on tempo, the input must not demand one.
+//
+// measureAtTempo derives the tempo-dependent view from those facts. It is the
+// only place that happens, so analyzeSong and any reader of stored facts
+// compute notesPerSecond and flags identically.
+
+export interface MeasureFacts {
   number: number;
   sourceMeasure: string | null;
   beats: number;
-  seconds: number;
-  notesPerSecond: number;
-  rhNotesPerBeat: number;
-  lhNotesPerBeat: number;
+  rhOnsets: number;
+  lhOnsets: number;
   rhStack: number;
   lhStack: number;
   rhStretch: number;
@@ -204,16 +225,23 @@ export interface MeasureAnalysis {
   lhJump: number;
   rhythmVariety: number;
   accidentals: number | null;
+}
+
+export interface MeasureAnalysis extends MeasureFacts {
+  seconds: number;
+  notesPerSecond: number;
+  rhNotesPerBeat: number;
+  lhNotesPerBeat: number;
   flags: string[];
 }
 
-function analyzeMeasure(
+/** Tempo-independent facts for one measure. `scale` from scalePitchClasses. */
+export function measureFacts(
   measure: Measure,
   index: number,
-  { bpm, scale }: { bpm: number; scale: Set<number> | null },
-): MeasureAnalysis {
+  scale: Set<number> | null,
+): MeasureFacts {
   const beats = measureBeats(measure.timeSignature) ?? 0;
-  const seconds = beats > 0 ? (beats * 60) / bpm : 0;
 
   const rh = handMetrics(measure.rh, "rh");
   const lh = handMetrics(measure.lh, "lh");
@@ -245,14 +273,12 @@ function analyzeMeasure(
     }
   }
 
-  const m = {
+  return {
     number: measure.number ?? index + 1,
     sourceMeasure: measure.sourceMeasure ?? null,
     beats,
-    seconds,
-    notesPerSecond: seconds > 0 ? (rh.onsets + lh.onsets) / seconds : 0,
-    rhNotesPerBeat: beats > 0 ? rh.onsets / beats : 0,
-    lhNotesPerBeat: beats > 0 ? lh.onsets / beats : 0,
+    rhOnsets: rh.onsets,
+    lhOnsets: lh.onsets,
     rhStack: rh.stack,
     lhStack: lh.stack,
     rhStretch: rh.stretch,
@@ -261,6 +287,24 @@ function analyzeMeasure(
     lhJump: lh.jump,
     rhythmVariety: Math.max(varietyOf(measure.rh), varietyOf(measure.lh)),
     accidentals,
+  };
+}
+
+/**
+ * One measure's facts viewed at `bpm` quarter notes per minute: the facts,
+ * plus seconds, notesPerSecond, the per-beat rates, and the flags. The caller
+ * resolves `bpm`; this never chooses one.
+ */
+export function measureAtTempo(facts: MeasureFacts, bpm: number): MeasureAnalysis {
+  if (!(bpm > 0)) throw new Error("A positive --bpm is required.");
+  const { beats, rhOnsets, lhOnsets } = facts;
+  const seconds = beats > 0 ? (beats * 60) / bpm : 0;
+  const m = {
+    ...facts,
+    seconds,
+    notesPerSecond: seconds > 0 ? (rhOnsets + lhOnsets) / seconds : 0,
+    rhNotesPerBeat: beats > 0 ? rhOnsets / beats : 0,
+    lhNotesPerBeat: beats > 0 ? lhOnsets / beats : 0,
   } as MeasureAnalysis;
   m.flags = FLAG_SPECS.filter((f) => m[f.metric] > f.limit).map((f) => f.code);
   return m;
@@ -500,6 +544,38 @@ export const SUMMARY_METRICS: [string, SummaryKey][] = [
 export interface SummaryStat { median: number | null; p90: number | null; max: number | null }
 
 /**
+ * Everything the analyzer knows about a song that does NOT depend on tempo:
+ * per-measure facts plus the whole-song structure (seams, ties, tuplets,
+ * melody blips). Takes no bpm — see the note above measureFacts.
+ *
+ * @param doc - parsed export document
+ */
+export function analyzeSongFacts(doc: SongDocument) {
+  if (!doc || !Array.isArray(doc.measures)) {
+    throw new Error("Not a SAM export document: no `measures` array.");
+  }
+
+  const scale = scalePitchClasses(doc.fifths);
+  const seams = findSeams(doc.measures);
+
+  return {
+    title: doc.title ?? "(untitled)",
+    artist: doc.artist ?? null,
+    key: doc.key ?? null,
+    fifths: Number.isInteger(doc.fifths) ? (doc.fifths as number) : null,
+    measureCount: doc.measures.length,
+    measures: doc.measures.map((m, i) => measureFacts(m, i, scale)),
+    seams: [...seams].map((i) => doc.measures[i]?.number ?? i + 1),
+    ties: analyzeTies(doc.measures, seams),
+    tuplets: analyzeTuplets(doc.measures),
+    blips: analyzeMelodyBlips(doc.measures),
+  };
+}
+
+/**
+ * The full digest at one tempo: the facts, each measure viewed at `bpm`, a
+ * summary, and the flagged measures.
+ *
  * @param doc - parsed export document
  * @param opts.bpm - target tempo in quarter notes per minute, already
  *   resolved by the caller (see the TEMPO note at the top of this file)
@@ -510,9 +586,8 @@ export function analyzeSong(doc: SongDocument, { bpm }: { bpm: number }) {
   }
   if (!(bpm > 0)) throw new Error("A positive --bpm is required.");
 
-  const scale = scalePitchClasses(doc.fifths);
-  const measures = doc.measures.map((m, i) => analyzeMeasure(m, i, { bpm, scale }));
-  const seams = findSeams(doc.measures);
+  const facts = analyzeSongFacts(doc);
+  const measures = facts.measures.map((f) => measureAtTempo(f, bpm));
 
   const summary = {} as Record<SummaryKey, SummaryStat>;
   for (const [, key] of SUMMARY_METRICS) {
@@ -525,18 +600,18 @@ export function analyzeSong(doc: SongDocument, { bpm }: { bpm: number }) {
   }
 
   return {
-    title: doc.title ?? "(untitled)",
-    artist: doc.artist ?? null,
-    key: doc.key ?? null,
-    fifths: Number.isInteger(doc.fifths) ? (doc.fifths as number) : null,
+    title: facts.title,
+    artist: facts.artist,
+    key: facts.key,
+    fifths: facts.fifths,
     bpm,
-    measureCount: measures.length,
+    measureCount: facts.measureCount,
     measures,
     summary,
     flagged: measures.filter((m) => m.flags.length > 0).map((m) => m.number),
-    seams: [...seams].map((i) => doc.measures[i]?.number ?? i + 1),
-    ties: analyzeTies(doc.measures, seams),
-    tuplets: analyzeTuplets(doc.measures),
-    blips: analyzeMelodyBlips(doc.measures),
+    seams: facts.seams,
+    ties: facts.ties,
+    tuplets: facts.tuplets,
+    blips: facts.blips,
   };
 }
