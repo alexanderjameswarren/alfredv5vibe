@@ -1,6 +1,8 @@
 # Progress: Difficulty Analyzer in Supabase (Phase 3)
 
-## Status: Not Started
+## Status: M1 complete — awaiting verification
+
+Branch: `analyzer-port` (from `sam-tools-verify-and-ties` at `c19c6e0`). M1 is uncommitted.
 
 Spec: `docs/technical-spec-analyzer-port.md`
 
@@ -10,19 +12,19 @@ Stop after each milestone and wait for verification. Work on a branch.
 
 ### M1 — Port the analyzer to Deno
 
-- [ ] `measureBeats` added to `supabase/functions/_shared/durations.ts`
-- [ ] `analyze.js` ported to `_shared/` as TypeScript
-- [ ] Parity test extended to every exported function across all four copies
+- [x] `measureBeats` added to `supabase/functions/_shared/durations.ts`
+- [x] `analyze.js` ported to `_shared/` as TypeScript (`_shared/analyze.ts`)
+- [x] Parity test extended to every exported function across all four copies
       (`tools/sam-tools/lib`, `src/sam/lib`, `tools/sam-tools/vendor`,
       `_shared/durations.ts`) — currently it compares only the `BASE` map, and
       nothing tests `tools/sam-tools/lib/durations.js` at all
 
 **Exit criteria**
-- [ ] Ported analyzer output is byte-identical to the CLI on all four reference
+- [x] Ported analyzer output is byte-identical to the CLI on all four reference
       songs: Someone Like You (82), Say It Ain't So (160), The Entertainer
       (152), The Scientist (73)
-- [ ] Compared NUMERICALLY, per measure, per metric — not by eye
-- [ ] Tuplet beat math matches (Someone Like You has 22 tuplet groups)
+- [x] Compared NUMERICALLY, per measure, per metric — not by eye
+- [x] Tuplet beat math matches (Someone Like You has 22 tuplet groups)
 
 ---
 
@@ -118,3 +120,93 @@ Stop after each milestone and wait for verification. Work on a branch.
 ### Notes
 
 _Decisions and surprises during execution._
+
+#### M1
+
+**What landed**
+- `supabase/functions/_shared/durations.ts` — `measureBeats` added, mirroring
+  the CLI copy. Nothing else was ported into it: the analyzer needs only
+  `measureBeats` and `sumEvents`. `ALL_TOKENS`, `beatsToToken(s)` and
+  `isKnownToken` stay JS-only, and the parity test pins each copy's export list
+  so an unported addition fails rather than going unnoticed.
+- `supabase/functions/_shared/analyze.ts` — a faithful port of
+  `tools/sam-tools/lib/analyze.js` at HEAD (including the stack-based
+  `analyzeTies` from `461321d`). Function bodies are copied statement for
+  statement; only type annotations were added. Its header states the tempo
+  rule (argument -> `goal_effective_bpm` -> error, never `goal_bpm` or
+  `default_bpm`) for callers; the actual resolution site arrives in M5.
+- `tools/sam-tools/test/durationsParity.test.js` — all four copies, every shared
+  function, exact equality over edge-case inputs (0-3 dots, junk tokens,
+  non-strings, every beats×beatType pair to 16×32, 513 beat values in 1/64
+  steps plus non-representable ones, 400 seeded random event lists with five
+  tuplet ratios). Also checks VENDOR is byte-identical to SRC and DENO's
+  `BASE` is exactly the JS base vocabulary.
+- `tools/sam-tools/test/analyzerParity.test.js` — CLI vs port on the four
+  reference songs at six tempos (30, 60, 67, 90, 152, and 72.5 so a
+  division-order difference can't hide behind a round number). Compared per
+  measure, per metric with `Object.is` (no tolerance), then structurally for
+  the whole-song fields, then as JSON bytes. Also: same errors for bad input,
+  no input mutation, and the tuplet round trip.
+
+**Results**
+- Committed references: 4 songs × 6 tempos, every metric of every measure
+  identical, and JSON bytes identical.
+- One-off check on the current `Downloads/rebuild` exports (not in the suite):
+  14,944 per-measure values across the four songs at their working tempo and
+  72.5 — 0 mismatches, JSON bytes identical.
+- Tuplets: Someone Like You has 22 groups in 16 measures (spec confirmed). Every
+  tuplet measure's tuplet-bearing hands sum, tuplet-scaled, to the bar length in
+  both LIB and DENO, and survive a JSON round trip unchanged.
+- `npm test` in tools/sam-tools: 217 pass. App jest `durations.test.js`: 24 pass.
+
+**Proved it can fail**
+- The comparator itself is tested: a one-ulp `measureBeats` difference and a
+  `beats / (bpm / 60)` vs `beats * 60 / bpm` difference both fail the check.
+- Real mutations of `analyze.ts`, reverted afterwards:
+  - `seconds = beats / (bpm / 60)` — a float-only reordering — failed the
+    per-metric and JSON tests on three of the four songs.
+  - Opening ties before closing them — failed the Someone Like You whole-song
+    and round-trip tests.
+
+**Decisions**
+- **Where the parity tests live.** In `tools/sam-tools/test` (node:test), not the
+  app's jest suite: Node >= 23.6 runs the `.ts` port directly through type
+  stripping, which is the same JavaScript Deno executes; jest cannot import it
+  without new config. The app's jest BASE test stays as an app-side guard and
+  now points at the full test. Consequence: `npm test` in sam-tools needs
+  Node 23.6+ (README updated); the CLIs still run on 18.
+- **`--disable-warning=MODULE_TYPELESS_PACKAGE_JSON`** added to the sam-tools test
+  script. Node warns that the repo root `package.json` has no `"type"` when it
+  loads `_shared/*.ts` and `src/sam/lib/durations.js`. The alternative — a
+  `package.json` under `supabase/functions` — risks changing how Deno resolves
+  the functions, so the warning is silenced instead.
+- **"Byte-identical to the CLI"** was taken as the `analyzeSong` result object
+  (compared as JSON bytes). The CLI's text digest is only a rendering of that
+  object.
+- **Reference documents.** Someone Like You is parsed from its `.mxl` fixture
+  (the committed suite has no SLY export); the other three are the committed
+  `tools/sam-tools/*.json` exports from 08-17. Those predate the 08-27
+  duplicate-note repair, which doesn't matter for parity — both analyzers get
+  the same input — and the current exports were checked separately.
+
+**Not verified here**
+- The port has not been type-checked. Deno is not installed, and the repo's
+  TypeScript (4.9.5) predates `.ts` import extensions. The code runs and
+  matches under Node's type stripping; `deno check` (or the M4 deploy bundle)
+  is the first real type check.
+
+**Surprises / for later milestones**
+- **M4 needs two things the analyzer doesn't provide yet.**
+  - The stored columns `rh_onsets` / `lh_onsets` aren't in the analyzer's
+    per-measure output, which carries only `rhNotesPerBeat` /
+    `lhNotesPerBeat` (onsets ÷ beats). Recovering onsets by multiplying back
+    is a float round trip.
+  - `analyzeSong` requires a positive `bpm` even though the stored facts are
+    tempo-free.
+  - Proposal for M4: expose `rhOnsets` / `lhOnsets` per measure, and a
+    tempo-free entry point, in BOTH copies in the same commit (the parity
+    test's key check forces that), rather than working around them in the
+    Edge Function.
+- **Export-doc path.** The spec cites `docs/song-export-format.md`; since
+  `c19c6e0` it lives at `docs/history/song-export-format.md`. The port's comments
+  cite the actual path.

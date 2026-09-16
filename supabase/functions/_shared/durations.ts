@@ -10,8 +10,15 @@
 //
 // If you add a token here (or change a base value), MIRROR IT in
 // src/sam/lib/durations.js — the parity test enforces this both ways.
-// Anything richer than BASE + tokenToBeats + sumEvents belongs in the
-// browser copy only (Edge Function has no timeline lift/lower work).
+// This copy carries what the Edge Functions need: BASE + tokenToBeats +
+// sumEvents (append_sam_measures' duration check) and measureBeats (the
+// difficulty analyzer, _shared/analyze.ts). Anything richer belongs in the
+// browser copy only (no timeline lift/lower work happens here).
+//
+// Every function here is checked numerically against all three JS copies —
+// tools/sam-tools/lib/durations.js (the original, which the CLI analyzer
+// imports), src/sam/lib/durations.js and tools/sam-tools/vendor/durations.js
+// — by tools/sam-tools/test/durationsParity.test.js.
 
 // PARITY-MARKER-START — do not remove, the parity test reads between markers
 export const BASE: Record<string, number> = {
@@ -36,6 +43,20 @@ export function tokenToBeats(token: string | null | undefined): number | null {
     total += add;
   }
   return total;
+}
+
+/**
+ * Measure length in quarter-note beats for a {beats, beatType} signature.
+ * A 6/8 bar is 3.0: BPM throughout SAM means quarter notes per minute.
+ * Mirrors tools/sam-tools/lib/durations.js#measureBeats.
+ */
+export function measureBeats(
+  timeSignature: { beats?: number; beatType?: number } | null | undefined,
+): number | null {
+  if (!timeSignature) return null;
+  const { beats, beatType } = timeSignature;
+  if (!beats || !beatType) return null;
+  return (beats * 4) / beatType;
 }
 
 type EvtLike = {

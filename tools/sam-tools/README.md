@@ -5,7 +5,10 @@ Local CLI for SAM song data. Phase 0a: parser validation.
 ## Setup
 
 Lives at `alfred-v5/tools/sam-tools/`. Standalone — its own package.json, its own
-node_modules, not part of the app build. Requires Node 18+.
+node_modules, not part of the app build. The CLIs run on Node 18+; `npm test`
+needs Node 23.6+, because the parity tests load the Deno ports in
+`supabase/functions/_shared/` (`analyze.ts`, `durations.ts`) through Node's
+built-in TypeScript type stripping.
 
     cd tools/sam-tools
     npm install

@@ -255,6 +255,12 @@ describe("toTimeline / fromTimeline round-trip", () => {
 // ---------------------------------------------------------------------------
 // Deno-copy BASE parity — spec §M9
 //
+// The FULL four-copy parity check — every shared function, numerically, across
+// tools/sam-tools/lib, src/sam/lib, tools/sam-tools/vendor and the Deno port —
+// lives in tools/sam-tools/test/durationsParity.test.js (`npm test` there),
+// because Node can load the .ts port directly and jest cannot. This BASE test
+// stays as the app-side guard that runs with the app's own suite.
+//
 // supabase/functions/_shared/durations.ts is a Deno/TS port of this file for
 // the sam-authoring Edge Function tool (Alex, 2026-08-06: opted for a
 // duplicate + parity-test over build-time codegen). Both files must agree
