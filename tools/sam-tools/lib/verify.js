@@ -136,10 +136,11 @@ export function verify(input, output) {
     violation(v, 7, t.measure, `${t.hand} tie end with no start (midi ${t.midi}) — not at a seam`);
   }
 
-  // Unclosed STARTS. analyzeTies does not seam-label these, so a transform that
-  // legitimately leaves one at a seam would be reported. That cannot currently
-  // happen — §5.1 requires a tie chain to be removed whole or not at all — so
-  // the stricter check is the safer one until a transform needs otherwise.
+  // Unclosed STARTS. analyzeTies now labels these `seam` / `orphan` too, but
+  // the label is deliberately NOT consulted here: any unclosed start the input
+  // did not already have is a violation, seam or not. A transform cannot
+  // legitimately create one — §5.1 requires a tie chain to be removed whole or
+  // not at all — so the stricter check stays until a transform needs otherwise.
   const priorStarts = new Set(tiesIn.unclosedStarts.map(key));
   for (const t of tiesOut.unclosedStarts) {
     if (priorStarts.has(key(t))) continue;

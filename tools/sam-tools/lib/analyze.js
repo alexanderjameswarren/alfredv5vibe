@@ -22,6 +22,7 @@
 // that test.
 
 import { measureBeats, sumEvents } from "./durations.js";
+import { voltaSeamSources, isVoltaSeamStart } from "./voltaSeams.js";
 
 // A measure is flagged when it EXCEEDS any threshold. Single source so nothing
 // drifts into a scattered literal.
@@ -242,6 +243,14 @@ export function findSeams(measures) {
  * continued from lives in a measure the flattening skipped. Those are labelled
  * `seam`; the rest are `orphan`.
  *
+ * Neither is an unclosed START. Before a first/second ending, the last note of
+ * the bar is often tied into the first ending; on the flattened second pass
+ * that bar continues into the second ending, which does not close the tie.
+ * Those starts are labelled `seam` by the volta-seam rule in voltaSeams.*
+ * (shared with validate.js's `volta_seam_tie`); the rest are `orphan`.
+ * `findSeams` cannot be used for this: it parses printed numbers, and MuseScore
+ * labels ending brackets X1–X4, so exactly these seams parse as NaN.
+ *
  * KEYING — READ THIS BEFORE CHASING A "CORRUPT" TIE. A note carries only its
  * pitch and a tie marker; there is no voice or chain id to say which start an
  * end belongs to. So chains are matched by (hand, midi), and that key is NOT
@@ -272,9 +281,10 @@ export function analyzeTies(measures, seams) {
   const unmatchedEnds = [];
   const unclosedStarts = [];
   const numberOf = (mi) => measures[mi].number ?? mi + 1;
+  const seamSources = voltaSeamSources(measures);
 
   for (const hand of ["rh", "lh"]) {
-    const open = new Map(); // midi -> stack of {measureIndex, eventIndex}, newest last
+    const open = new Map(); // midi -> stack of {measureIndex, eventIndex, seam}, newest last
     const unclosedForHand = [];
 
     measures.forEach((measure, mi) => {
@@ -303,7 +313,11 @@ export function analyzeTies(measures, seams) {
         for (const n of e.notes) {
           if (n.tie !== "start" && n.tie !== "both") continue;
           if (!open.has(n.midi)) open.set(n.midi, []);
-          open.get(n.midi).push({ measureIndex: mi, eventIndex: ei });
+          open.get(n.midi).push({
+            measureIndex: mi,
+            eventIndex: ei,
+            seam: isVoltaSeamStart(seamSources, measure, hand, ei),
+          });
         }
       });
     });
@@ -315,6 +329,7 @@ export function analyzeTies(measures, seams) {
           hand, midi,
           measure: numberOf(started.measureIndex),
           eventIndex: started.eventIndex,
+          kind: started.seam ? "seam" : "orphan",
           _order: started.measureIndex,
         });
       }

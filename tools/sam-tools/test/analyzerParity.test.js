@@ -25,6 +25,8 @@ const CLI = await import("../lib/analyze.js");
 const PORT = await import("../../../supabase/functions/_shared/analyze.ts");
 const LIB_DUR = await import("../lib/durations.js");
 const DENO_DUR = await import("../../../supabase/functions/_shared/durations.ts");
+const LIB_SEAMS = await import("../lib/voltaSeams.js");
+const DENO_SEAMS = await import("../../../supabase/functions/_shared/voltaSeams.ts");
 
 const readJson = (f) => JSON.parse(fs.readFileSync(new URL(`../${f}`, import.meta.url), "utf8"));
 const fromFixture = (f) =>
@@ -208,6 +210,84 @@ test("rates are derived from the stored counts, not the other way round", () => 
     assert.equal(m.rhNotesPerBeat, 5 / 3.5);
     assert.equal(m.notesPerSecond, 6 / ((3.5 * 60) / 70));
   }
+});
+
+// --- the volta-seam rule --------------------------------------------------------
+
+test("voltaSeams.ts agrees with voltaSeams.js on the corpus and on edge cases", () => {
+  assert.deepEqual(Object.keys(DENO_SEAMS).sort(), Object.keys(LIB_SEAMS).sort());
+
+  const edgeCases = [
+    [],
+    [{}],
+    [{ sourceMeasure: null }, { sourceMeasure: null }],
+    [{ sourceMeasure: "1" }, { sourceMeasure: "X1" }, { sourceMeasure: "1" }, { sourceMeasure: "X2" }],
+    [{ sourceMeasure: 7 }, { sourceMeasure: "8" }, { sourceMeasure: "7" }],
+    [{ sourceMeasure: "3" }, {}, { sourceMeasure: "3" }, { sourceMeasure: "4" }],
+    [{ sourceMeasure: "5" }, { sourceMeasure: "6" }, { sourceMeasure: "5" }, { sourceMeasure: "6" }],
+  ].map((measures) => ({ measures: measures.map((m) => ({ ...m, rh: [{}, {}], lh: [] })) }));
+  const docs = [...Object.values(SONGS).map((x) => x.doc), ...edgeCases];
+
+  let checked = 0;
+  for (const doc of docs) {
+    const a = LIB_SEAMS.voltaSeamSources(doc.measures);
+    const b = DENO_SEAMS.voltaSeamSources(doc.measures);
+    assert.deepEqual([...b], [...a]);
+    doc.measures.forEach((m) => {
+      for (const hand of ["rh", "lh"]) {
+        for (let ei = -1; ei <= (m[hand] || []).length; ei++) {
+          assert.equal(
+            DENO_SEAMS.isVoltaSeamStart(b, m, hand, ei),
+            LIB_SEAMS.isVoltaSeamStart(a, m, hand, ei),
+          );
+          checked++;
+        }
+      }
+    });
+  }
+  assert.ok(checked > 1000);
+  // Not agreement on nothing: the corpus has seams.
+  assert.ok(LIB_SEAMS.voltaSeamSources(SONGS["The Entertainer"].doc.measures).size > 0);
+});
+
+test("tie labelling matches across copies where the reference songs cannot tell", () => {
+  // Every unclosed start in the four reference songs is a seam, so a port that
+  // labelled everything `seam` would pass the song tests. These synthetic songs
+  // carry orphan starts, seam starts, orphan ends, seam ends and a unison
+  // passage, so the labels have to be computed, not assumed.
+  const F = (tie) => (tie ? { midi: 65, name: "F4", tie } : { midi: 65, name: "F4" });
+  const doc = (pairs) => ({
+    fifths: 0,
+    measures: pairs.map(([label, events], i) => ({
+      number: i + 1,
+      ...(label === undefined ? {} : { sourceMeasure: label }),
+      timeSignature: { beats: 4, beatType: 4 },
+      rh: events.map((marks) => ({ duration: "q", notes: marks.map(F) })),
+      lh: [{ duration: "w", notes: [] }],
+    })),
+  });
+  const cases = [
+    // volta seam start
+    doc([["1", [[null]]], ["2", [[null], ["start"]]], ["X1", [["end"]]],
+         ["1", [[null]]], ["2", [[null], ["start"]]], ["X2", [[null]]]]),
+    // orphan start, mid-bar
+    doc([["1", [[null]]], ["2", [["start"], [null]]], ["3", [[null]]]]),
+    // seam end and orphan end
+    doc([["1", [[null]]], ["5", [["end"]]], ["6", [["end"]]]]),
+    // unlabelled bars: never a seam
+    doc([[undefined, [[null], ["start"]]], [undefined, [[null]]], [undefined, [[null], ["start"]]]]),
+    // unison: start + end in one event, plus a start left open
+    doc([["1", [["start"], ["start", "end"], ["both"], ["end"]]], ["2", [["start"]]]]),
+  ];
+  const kinds = new Set();
+  for (const d of cases) {
+    const a = CLI.analyzeSongFacts(d).ties;
+    const b = PORT.analyzeSongFacts(d).ties;
+    assert.deepEqual(b, a);
+    for (const x of a.unclosedStarts) kinds.add(`start:${x.kind}`);
+    for (const x of a.unmatchedEnds) kinds.add(`end:${x.kind}`);
+  }
+  assert.deepEqual([...kinds].sort(), ["end:orphan", "end:seam", "start:orphan", "start:seam"]);
 });
 
 // --- tuplets ----------------------------------------------------------------

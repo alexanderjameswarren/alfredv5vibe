@@ -37,6 +37,7 @@
 // that test.
 
 import { measureBeats, sumEvents } from "./durations.ts";
+import { voltaSeamSources, isVoltaSeamStart } from "./voltaSeams.ts";
 
 // --- document shapes (docs/history/song-export-format.md) -------------------
 
@@ -343,7 +344,13 @@ export interface UnmatchedEnd {
   midi: number;
   kind: "seam" | "orphan";
 }
-export interface UnclosedStart { hand: Hand; midi: number; measure: number; eventIndex: number }
+export interface UnclosedStart {
+  hand: Hand;
+  midi: number;
+  measure: number;
+  eventIndex: number;
+  kind: "seam" | "orphan";
+}
 
 /**
  * Tie chains per hand. A chain opens on `start`/`both` and closes on
@@ -352,6 +359,14 @@ export interface UnclosedStart { hand: Hand; midi: number; measure: number; even
  * An unmatched END is not automatically corruption: at a seam the note it
  * continued from lives in a measure the flattening skipped. Those are labelled
  * `seam`; the rest are `orphan`.
+ *
+ * Neither is an unclosed START. Before a first/second ending, the last note of
+ * the bar is often tied into the first ending; on the flattened second pass
+ * that bar continues into the second ending, which does not close the tie.
+ * Those starts are labelled `seam` by the volta-seam rule in voltaSeams.*
+ * (shared with validate.js's `volta_seam_tie`); the rest are `orphan`.
+ * `findSeams` cannot be used for this: it parses printed numbers, and MuseScore
+ * labels ending brackets X1–X4, so exactly these seams parse as NaN.
  *
  * KEYING — READ THIS BEFORE CHASING A "CORRUPT" TIE. A note carries only its
  * pitch and a tie marker; there is no voice or chain id to say which start an
@@ -383,10 +398,11 @@ export function analyzeTies(measures: Measure[], seams: Set<number>) {
   const unmatchedEnds: UnmatchedEnd[] = [];
   const unclosedStarts: UnclosedStart[] = [];
   const numberOf = (mi: number): number => measures[mi].number ?? mi + 1;
+  const seamSources = voltaSeamSources(measures);
 
   for (const hand of ["rh", "lh"] as const) {
-    // midi -> stack of {measureIndex, eventIndex}, newest last
-    const open = new Map<number, { measureIndex: number; eventIndex: number }[]>();
+    // midi -> stack of {measureIndex, eventIndex, seam}, newest last
+    const open = new Map<number, { measureIndex: number; eventIndex: number; seam: boolean }[]>();
     const unclosedForHand: (UnclosedStart & { _order: number })[] = [];
 
     measures.forEach((measure, mi) => {
@@ -415,7 +431,11 @@ export function analyzeTies(measures: Measure[], seams: Set<number>) {
         for (const n of e.notes) {
           if (n.tie !== "start" && n.tie !== "both") continue;
           if (!open.has(n.midi)) open.set(n.midi, []);
-          open.get(n.midi)!.push({ measureIndex: mi, eventIndex: ei });
+          open.get(n.midi)!.push({
+            measureIndex: mi,
+            eventIndex: ei,
+            seam: isVoltaSeamStart(seamSources, measure, hand, ei),
+          });
         }
       });
     });
@@ -427,6 +447,7 @@ export function analyzeTies(measures: Measure[], seams: Set<number>) {
           hand, midi,
           measure: numberOf(started.measureIndex),
           eventIndex: started.eventIndex,
+          kind: started.seam ? "seam" : "orphan",
           _order: started.measureIndex,
         });
       }

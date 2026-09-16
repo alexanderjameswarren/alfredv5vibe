@@ -134,14 +134,20 @@ console.log(
 const { crossings, unmatchedEnds, unclosedStarts } = r.ties;
 const seamEnds = unmatchedEnds.filter((t) => t.kind === "seam");
 const orphanEnds = unmatchedEnds.filter((t) => t.kind === "orphan");
+const seamStarts = unclosedStarts.filter((t) => t.kind === "seam");
+const orphanStarts = unclosedStarts.filter((t) => t.kind === "orphan");
 console.log(
   `ties crossing barline: ${crossings.length} · unmatched ends: ${unmatchedEnds.length} ` +
-    `(${seamEnds.length} at seam, ${orphanEnds.length} orphan) · unclosed starts: ${unclosedStarts.length}`
+    `(${seamEnds.length} at seam, ${orphanEnds.length} orphan) · unclosed starts: ${unclosedStarts.length} ` +
+    `(${seamStarts.length} at seam, ${orphanStarts.length} orphan)`
 );
-if (orphanEnds.length) {
-  const o = orphanEnds.slice(0, 8).map((t) => `${t.hand} m${t.measure}`);
-  console.log(`  orphan ends: ${o.join(", ")}${orphanEnds.length > 8 ? ", …" : ""}`);
-}
+const listOrphans = (label, list) => {
+  if (!list.length) return;
+  const o = list.slice(0, 8).map((t) => `${t.hand} m${t.measure}`);
+  console.log(`  ${label}: ${o.join(", ")}${list.length > 8 ? ", …" : ""}`);
+};
+listOrphans("orphan ends", orphanEnds);
+listOrphans("orphan starts", orphanStarts);
 
 const tupletMeasures = [...new Set(r.tuplets.map((t) => t.measure))];
 console.log(

@@ -4,6 +4,7 @@
 import { JSDOM } from "jsdom";
 import { buildTruth, TIER_OF } from "./xmlTruth.js";
 import { tokenToBeats, sumEvents, measureBeats, beatsToToken } from "./durations.js";
+import { voltaSeamSources, isVoltaSeamStart } from "./voltaSeams.js";
 
 // songParser.js expects a browser global.
 const shim = new JSDOM("", { contentType: "text/html" });
@@ -515,7 +516,7 @@ export function validate(xmlString, label) {
   // ---- Tie integrity across the whole song --------------------------------
   //
   // Tracks per-midi start context (stack of {playIdx, sourceIdx,
-  // isLastEvent}) so end-of-song orphans can be classified. The stack
+  // isSeam, nextSource}) so end-of-song orphans can be classified. The stack
   // handles the rare case of a midi opened, opened again, then closed
   // once — pop the most recent start. Dedup at classification time (one
   // finding per (midi, hand)) matches the pre-narrowing behaviour so
@@ -523,26 +524,13 @@ export function validate(xmlString, label) {
   //
   // Narrowed volta-seam classifier (Alex, 2026-08-05): a tie start
   // orphaned at end-of-song classifies as VOLTA_SEAM_TIE (informational)
-  // iff EVERY open instance of that midi was in a source measure that
-  //   (1) has multiple play positions in playback.order, AND
-  //   (2) whose next-played source differs across those plays, AND
-  //   (3) the start itself was the FINAL event of its measure's hand.
-  // Otherwise it stays ORPHAN_TIE (severity 3 — still capable of
+  // iff EVERY open instance of that midi is a volta-seam start — the rule
+  // itself lives in voltaSeams.js, shared with analyze.js so the two cannot
+  // disagree. Otherwise it stays ORPHAN_TIE (severity 3 — still capable of
   // blocking). A single genuine mid-measure orphan on ANY midi keeps
   // that midi at ORPHAN_TIE even if other instances of the same midi
   // are seams.
-  const sourceNextsByPlay = new Map(); // sourceIdx -> [nextSourceIdx per play]
-  for (let i = 0; i < parsed.measures.length; i++) {
-    const src = parsed.measures[i].sourceMeasure;
-    const next = i + 1 < parsed.measures.length ? parsed.measures[i + 1].sourceMeasure : null;
-    if (!sourceNextsByPlay.has(src)) sourceNextsByPlay.set(src, []);
-    sourceNextsByPlay.get(src).push(next);
-  }
-  const hasVoltaSeam = (src) => {
-    const nexts = sourceNextsByPlay.get(src) || [];
-    if (nexts.length < 2) return false;
-    return new Set(nexts).size > 1;
-  };
+  const seamSources = voltaSeamSources(parsed.measures);
   for (const hand of ["rh", "lh"]) {
     const open = new Map(); // midi -> [{playIdx, sourceIdx, isLastEvent, nextSource}]
     for (let pi = 0; pi < parsed.measures.length; pi++) {
@@ -569,7 +557,7 @@ export function validate(xmlString, label) {
           open.get(s).push({
             playIdx: pi,
             sourceIdx: m.sourceMeasure,
-            isLastEvent: ei === events.length - 1,
+            isSeam: isVoltaSeamStart(seamSources, m, hand, ei),
             nextSource: pi + 1 < parsed.measures.length ? parsed.measures[pi + 1].sourceMeasure : null,
           });
         }
@@ -577,9 +565,7 @@ export function validate(xmlString, label) {
     }
     for (const [midi, stack] of open) {
       if (stack.length === 0) continue;
-      const allSeams = stack.every(
-        (ctx) => ctx.isLastEvent && hasVoltaSeam(ctx.sourceIdx)
-      );
+      const allSeams = stack.every((ctx) => ctx.isSeam);
       if (allSeams) {
         // Every open instance of this midi is a volta seam — report
         // as informational with the specific seams named.
