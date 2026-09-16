@@ -1,13 +1,14 @@
 # Progress: Difficulty Analyzer in Supabase (Phase 3)
 
-## Status: M3 migration written — awaiting the trigger check, the run, and verification
+## Status: M4 built — awaiting migration 027, deploy, backfill and verification
 
-Branch: `analyzer-port` (pushed). Commits: `602d18e` (M1), `81f8dfc` (onset
-counts and the tempo-free entry point), `7e39443` (M2), and the M3 commit.
+Branch: `analyzer-port` (pushed). M1 `602d18e`, onsets/tempo-free `81f8dfc`,
+M2 `7e39443`, M3 `549832f` (run by Alex: CONFORMANT, 38 tables), and the M4
+commit.
 
 `main` was fast-forwarded to `sam-tools-verify-and-ties` (`256010c` ->
-`c19c6e0`) before M2 — a clean fast-forward, local only, not pushed —
-so `analyzer-port` now sits directly on `main`.
+`c19c6e0`) before M2 — a clean fast-forward — so `analyzer-port` sits directly
+on `main`.
 
 Spec: `docs/technical-spec-analyzer-port.md`
 
@@ -66,10 +67,11 @@ Verification: `docs/sql/verify-analyzer-port-m3.sql`. Run
 - [x] Trigger query (M6 section) run and reported — by Alex: `bump_parent_edited_at`
       exists (see M6 and the M3 notes)
 - [x] `source_measure` column: left out (Alex, reasons in the M3 notes)
-- [ ] Migration run
+- [x] Migration run — Alex; `check_platform_conformance` returns CONFORMANT
+      (38 tables); schema confirmed via `get_database_schema`
 
 **Exit criteria**
-- [ ] `check_platform_conformance()` returns `CONFORMANT`
+- [x] `check_platform_conformance()` returns `CONFORMANT`
 - [ ] Deleting a song cascades its scores away
 - [ ] RLS verified: another user's scores are invisible
 
@@ -77,16 +79,29 @@ Verification: `docs/sql/verify-analyzer-port-m3.sql`. Run
 
 ### M4 — Compute and store
 
-- [ ] Edge Function computes and replaces one song's scores wholesale
-- [ ] No-op when `computed_from_edited_at` matches and `scores_version` matches
-- [ ] Backfill across every non-archived song with measures
+Code: `supabase/functions/_shared/samScores.ts`, `supabase/functions/sam-scores/`,
+`supabase/migrations/027_sam_song_scores_functions.sql`,
+`scripts/sam-scores.js` (console: backfill / compute / twice),
+`tools/sam-tools/bin/compare-scores.js`, `docs/sql/verify-analyzer-port-m4.sql`.
+
+- [x] `deno check` run EARLY — before any M4 code: the port type-checks clean
+- [x] Edge Function computes and replaces one song's scores wholesale
+      (`replace_sam_song_scores`: delete + insert in one transaction)
+- [x] No-op when `computed_from_edited_at` matches and `scores_version` matches —
+      checked FIRST, by `sam_song_scores_freshness`, before any measure read
+- [x] Uses `analyzeSongFacts`; nothing in M4 takes a bpm
+- [ ] Migration 027 run — Alex
+- [ ] `sam-scores` deployed — Alex
+- [ ] Backfill across every non-archived song with measures — Alex, console
 
 **Exit criteria**
-- [ ] Every song with measures has scores
-- [ ] Recomputing an unchanged song writes nothing
-- [ ] Stored values match the CLI exactly on all four reference songs
+- [ ] Every song with measures has scores — verify query 1
+- [ ] Recomputing an unchanged song writes nothing AND reads no measure rows —
+      verify query 3 (`twice`, then a `--all-columns` diff); proved in unit tests
+- [ ] Stored values match the CLI exactly on all four reference songs — verify
+      query 2 + `compare-scores.js cli`
 - [ ] **Mutation test:** edit one measure, recompute, confirm that measure's
-      scores changed and every other measure's are identical
+      scores changed and every other measure's are identical — verify query 4
 
 ---
 
@@ -118,9 +133,12 @@ Verification: `docs/sql/verify-analyzer-port-m3.sql`. Run
       exists**: `bump_parent_edited_at`, AFTER UPDATE, per row, on
       `sam_song_measures`. Findings and the INSERT/DELETE trade-off are in the
       spec's M6 section.
-- [ ] `docs/sql/analyzer-port-stamp-functions.sql` run: `bump_parent_edited_at`'s
-      definition (clock, no-op handling) and whether `stamp_song_edited` is dead
-      or detached
+- [x] `docs/sql/analyzer-port-stamp-functions.sql` run (Alex):
+      `bump_song_edited_at` stamps with `now()` and has no no-op guard;
+      `stamp_song_edited` is attached to `sam_song_lyrics`
+      (`trg_lyrics_stamp_edited`, INSERT/UPDATE/DELETE, per row) — not dead
+- [x] Decision recorded (spec M6): non-notation writes invalidate scores; M4's
+      freshness check must be the cheap first step
 - [ ] Trigger query, as originally written:
       ```sql
       select c.relname, t.tgname, pg_get_triggerdef(t.oid)
@@ -404,3 +422,92 @@ left behind whatever happens; a third query confirms it.
   nothing keeping it in sync with `sam_song_measures`; the join on
   `(song_id, number)` is trivial and indexed on both sides; and how repeats
   should count is still an open decision (spec §6).
+
+#### M4
+
+**Before any code: 026 confirmed and `deno check` run.** 026 is live and
+`check_platform_conformance` returns CONFORMANT (38 non-exempt tables).
+`deno check` (Deno 2.9.6, through `npx deno@2` — nothing installed globally) on
+`_shared/analyze.ts`, `durations.ts` and `voltaSeams.ts`: **clean** — the
+port's first real type check. For reference, the existing
+`mcp/index.ts` reports 78 errors, all implicit-`any` handler parameters. They
+predate this work; deploys do not type-check, so they have never blocked
+anything. The new M4 files check clean.
+
+**Finding: the Edge Function bundle is NOT limited to `supabase/functions/**`.**
+`push-send/index.ts` imports `../../../src/utils/vapidFingerprint.js`, and
+push-send is deployed and working. M1's premise — that the analyzer had to be
+vendored because the deploy only bundles `supabase/functions/**` — came from an
+older progress note and looks wrong. M4 uses the precedent:
+`samScores.ts` imports the app's `src/sam/lib/keySignature.js` directly rather
+than adding another copy. The analyzer port stays as it is — parity-tested, so
+it is safe either way — but whether to replace it with a direct import of
+`tools/sam-tools/lib/analyze.js` is now a real option. Not acted on.
+
+**Design**
+- `supabase/functions/_shared/samScores.ts` does the work and takes the client
+  as a parameter (no Supabase import), so an MCP tool in M5 can pass `ctx.db`.
+  Order:
+  1. `sam_song_scores_freshness(song, SCORES_VERSION)` — one call. Fresh ->
+     return `{status: "fresh", measures_read: 0, rows_written: 0}`.
+  2. Otherwise read the song's title and key label, read measures (paged by
+     1000 — PostgREST's cap), build the analyzer document exactly as an export
+     of that song looks (`fifths` from the key label via the app's own
+     `fifthsFromKeyLabel`), run `analyzeSongFacts`, map facts to columns in
+     `toScoreRow`, and call `replace_sam_song_scores`.
+  - Statuses: `fresh`, `computed`, `no-measures` (nothing to store, nothing
+    stored), `cleared` (measures gone, old rows removed).
+  - `SCORES_VERSION = 1`, the only copy of the number in code. The verify SQL
+    hard-codes 1 and says so.
+- `supabase/functions/sam-scores/` — standalone function, same shape as
+  push-send: `verify_jwt = true`, client built from the caller's
+  Authorization header, so RLS confines it to the caller's songs. One song per
+  request; the backfill is a loop in `scripts/sam-scores.js`, keeping each
+  request well inside the edge runtime's CPU budget. Registered in
+  `supabase/config.toml`.
+- **027 adds two SQL functions, both SECURITY INVOKER** (RLS applies as for a
+  direct query; execute granted to `authenticated` only, revoked from anon):
+  - `sam_song_scores_freshness` — why SQL and not a JS comparison: PostgREST
+    returns timestamptz with microseconds and a JS `Date` would truncate them,
+    so equality is decided in Postgres (`IS NOT DISTINCT FROM`). It never
+    touches `sam_song_measures`.
+  - `replace_sam_song_scores` — why a function: PostgREST runs each request in
+    its own transaction, so a client-side delete then insert could leave a song
+    with no scores. A function call is one transaction. It raises on a song the
+    caller cannot see, because under RLS that would otherwise be a silent no-op.
+- **The stamp is read BEFORE the measures.** If the measures change
+  mid-compute, the rows carry the older stamp and the next check recomputes.
+  Reading them the other way round could mark stale scores fresh.
+- **The stamp is passed back verbatim** — the string PostgREST returned — so the
+  stored value equals the song's exactly.
+- **No bpm anywhere in M4.** `analyzeSongFacts` takes the document only.
+
+**Tests** (`npm test` in sam-tools: 249 pass)
+- `samScores.test.js` (11), with a fake client that records every table and
+  function touched:
+  - fresh: exactly one call (`sam_song_scores_freshness`), no table read, no
+    write;
+  - unseen song and a failed freshness check both error before any read;
+  - stale: call order is freshness -> `sam_songs` -> `sam_song_measures` ->
+    `replace_sam_song_scores`; the stamp goes back verbatim (microseconds); the
+    rows equal the CLI's `analyzeSongFacts` on Someone Like You, every column,
+    `Object.is`;
+  - an unknown key label stores `accidentals` as null;
+  - paging reads 2,500 measures in three pages and scores all of them;
+  - no-measures writes nothing; measures-gone clears;
+  - `toScoreRow`'s keys equal the column list `replace_sam_song_scores`
+    unpacks (read from 027) and each is a real column in 026; and every fact
+    is mapped except the printed label.
+- `compareScores.test.js` (7): the comparison tool matches equal data, and
+  fails on a one-value difference, on a last-bit float difference, on a stamp
+  mismatch and on a missing song; `diff` isolates one changed measure and
+  `--all-columns` catches a rewrite.
+- **Mutation:** deleting the fresh-path early return in `samScores.ts` fails the
+  fresh test (reverted).
+
+**Not verified here — needs Alex:** running 027, deploying `sam-scores`, the
+backfill, and the four exit criteria against the live database. Claude has no
+database write access or SQL access, and did not deploy. Also unverified: that
+the deploy bundles `src/sam/lib/keySignature.js`. push-send's identical import
+says it will; if it does not, the deploy fails loudly, and the fix is to vendor
+that one small function.

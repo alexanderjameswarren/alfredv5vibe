@@ -199,66 +199,73 @@ Requirements:
 
 Hang recomputation off the existing write paths rather than adding a parallel mechanism.
 
-#### Findings from the trigger check (2026-09-16) — read before building
+#### Findings from the trigger investigation (2026-09-16) — read before building
 
-**There IS a trigger. The earlier assumption that none existed was wrong.**
-`bump_parent_edited_at` is attached to `sam_song_measures`, **AFTER UPDATE,
-FOR EACH ROW** — not INSERT, not DELETE. Neither it nor `stamp_song_edited`
-has ever existed in this repo or its git history: both were created by hand in
-the SQL editor, almost certainly with the Feb 2026 data-layer schema (whose
-prompt says "triggers … bump `measures_edited_at` on the parent song"). Their
-definitions live only in the database;
-`docs/sql/analyzer-port-stamp-functions.sql` retrieves them.
+**Triggers already stamp `measures_edited_at`. The earlier assumption that none
+did was wrong.** Neither trigger nor function has ever been in this repo or its
+git history — they were created by hand in the SQL editor (almost certainly
+with the Feb 2026 data-layer schema) — so the database is the only record.
 
-So `measures_edited_at` is stamped by TWO mechanisms covering different halves
-of one job, neither aware of the other:
+| trigger | on | fires | function | stamps |
+|---|---|---|---|---|
+| `bump_parent_edited_at` | `sam_song_measures` | AFTER UPDATE, per row | `bump_song_edited_at` | `UPDATE public.sam_songs SET measures_edited_at = now() WHERE id = NEW.song_id` |
+| `trg_lyrics_stamp_edited` | `sam_song_lyrics` | AFTER INSERT OR UPDATE OR DELETE, per row | `stamp_song_edited` | the same statement, keyed on `COALESCE(NEW.song_id, OLD.song_id)` so it survives DELETE |
 
-| path | what changes rows | who stamps `measures_edited_at` |
+`stamp_song_edited` is therefore NOT dead code. It looked unattached only
+because the first check listed triggers on `sam_songs` and `sam_song_measures`
+alone.
+
+What stamps `measures_edited_at`, path by path:
+
+| path | what changes rows | who stamps |
 |---|---|---|
-| `commitImport` → `fanOutMeasures` | DELETE all, then INSERT all | **app code only** (sets both `compiled_at` and `edited_at`) — no trigger fires |
-| `append_sam_measures` (MCP tier 3) | INSERT | **app code only** (`edited_at`) — no trigger fires |
-| `scripts/backfill-measures.mjs` | INSERT | **app code only** (both) |
-| `scripts/sam-repair-duplicates.js` | UPDATE `rh`/`lh` | **trigger, once per row**, then app code (`edited_at`, nulls `compiled_at`) |
-| `update_sam_song_measures` (MCP tier 2) | UPDATE `chord`/`section`/`audio_offset_ms` | **trigger, once per row** — this path DOES stamp, although no notation changed |
-| any UPDATE, from anywhere, of any column | UPDATE | **trigger, once per row** |
+| `commitImport` → `fanOutMeasures` | DELETE all measures, INSERT all | **app code only** — no trigger fires on measure INSERT/DELETE |
+| `append_sam_measures` (MCP tier 3) | INSERT measures | **app code only** |
+| `scripts/backfill-measures.mjs` | INSERT measures | **app code only** |
+| `scripts/sam-repair-duplicates.js` | UPDATE `rh`/`lh` | **trigger, per row**, then app code |
+| `update_sam_song_measures` (MCP tier 2) | UPDATE `chord`/`section`/`audio_offset_ms` | **trigger, per row** — although no notation changed |
+| lyric placement, loading, clearing (app and MCP) | INSERT/UPDATE/DELETE `sam_song_lyrics` | **trigger, per row** — although no notation changed |
+| any UPDATE of a measure row, from anywhere | UPDATE | **trigger, per row** |
 
-Corrections this forces on earlier notes:
+Facts that follow:
 
-- `update_sam_song_measures` was recorded as "does not stamp". It does, through
-  the trigger. Its "Recompilation triggered" message is therefore true: the
-  blob is marked stale and rebuilt on next open. For scores it is a false
-  positive — metadata changed, notation did not — so a recompute produces
-  identical rows. Wasteful, not wrong.
-- The blob-only audio-offset path in `SamPlayer` writes `sam_songs.measures`,
-  not measure rows, so nothing fires. Unchanged.
+- **Per row, no debounce.** Updating 160 measure rows stamps the song 160
+  times. Placing Someone Like You's 371 syllables stamps it 371 times.
+- **No no-op guard.** Every row UPDATE stamps, even one that changes nothing.
+- **Non-notation writes invalidate scores.** Metadata edits and every lyric
+  write move `measures_edited_at`, so the song's scores read as stale even
+  though the notes are unchanged.
+- **Two clocks.** The triggers stamp with `now()`, the DATABASE clock. App code
+  stamps with the CLIENT's (`new Date()`). The compiled-blob check
+  (`isMeasuresStale`: `edited_at > compiled_at`) compares values from the two
+  and can be wrong in either direction. **This is why M3 stores the stamp and
+  checks EQUALITY** (`computed_from_edited_at IS NOT DISTINCT FROM
+  measures_edited_at`): equality never compares two clocks, so the scores
+  table is immune — the reason that choice was right, not just tidy.
+- The delete-and-reinsert path (import) is covered only because its app code
+  remembers to stamp. A future writer that forgets leaves scores and the blob
+  silently stale.
+- Unrelated, noted, not acted on: `update_modified_column` and
+  `update_updated_at` are byte-identical duplicate functions under two names.
 
-**Consequence 1 — the trigger fires per ROW.** A statement that updates 160
-measure rows stamps the parent 160 times. Harmless for a timestamp. **Not
-harmless if recomputation hangs off the trigger**: that would be 160
-recomputes of one song. Whatever M6 does must work at the song level — key off
-the song's resulting `measures_edited_at` value (equality, as M3 stores it),
-or debounce per song — never react per row event.
+#### Decision (Alex, 2026-09-16): accept non-notation invalidation
 
-**Consequence 2 — the delete-and-reinsert path relies entirely on app code.**
-Import and append are covered only because their authors remembered to stamp.
-A future writer that forgets leaves scores (and the compiled blob) silently
-stale, with nothing to catch it.
+Lyric and metadata writes will keep invalidating scores. A recompute is fast
+and produces the correct (identical) result, whereas a second staleness
+mechanism that tried to tell notation edits apart would be one more thing to
+keep in sync.
 
-**Consequence 3 — the stamps come from two clocks.** The trigger presumably
-uses the database clock; app code uses the client's (`new Date()`).
-`isMeasuresStale` compares `edited_at > compiled_at`, which can be wrong in
-either direction when one side came from each clock. M3's scores do not
-compare timestamps (they store the value and check equality), so they are
-immune; the blob check is not. Confirm the trigger's clock from its
-definition.
+**That puts the weight on M4 being cheap when nothing changed.** The freshness
+check is the FIRST thing a compute does — `sam_song_scores_freshness`, one call
+reading `sam_songs` and `sam_song_scores` — and it returns without reading a
+single measure row when the stored rows match. A 371-syllable lyric session
+must cost 371 cheap no-ops, not 371 full recomputes. Built that way in M4
+(`supabase/functions/_shared/samScores.ts`).
 
-**`stamp_song_edited`** mentions `measures_edited_at` but is attached to no
-trigger on `sam_songs` or `sam_song_measures`. Dead code or detached is
-**undetermined** until `analyzer-port-stamp-functions.sql` is run: that query
-also checks triggers on every other table, event triggers, pg_cron jobs,
-callers by name, and CLI migration history. Nothing in the repo refers to it.
+Whatever M6 hangs recomputation on must work **per song**, never per row event:
+a trigger-driven recompute would run 160 or 371 times for one edit.
 
-#### Option under consideration — do not change yet: extend the trigger to INSERT and DELETE
+#### Option under consideration — do not change yet: extend the measures trigger to INSERT and DELETE
 
 What it would buy: every writer stamps, including future writers and raw SQL,
 with nothing to remember. Import, append and backfill would no longer depend
@@ -267,31 +274,28 @@ on app code.
 What it would cost, if done by extending the existing per-row trigger:
 
 - **Write amplification.** A 160-measure import (DELETE 160 + INSERT 160) would
-  UPDATE the parent 320 times instead of once, and the delete fires once per
-  row even inside one statement.
+  UPDATE the parent 320 times instead of once.
 - **Audit volume — the real cost.** `sam_songs` is audited, and the audit
   trigger stores before AND after images of the whole row, **including the
   heavy `measures` blob**. 320 parent updates would write 320 audit rows, each
-  carrying the full blob twice: for a long song, megabytes of audit log per
-  import that record nothing but a timestamp moving. The existing UPDATE
-  trigger already pays this once per updated row (e.g. the repair script).
+  carrying the full blob twice: megabytes of audit log per import recording a
+  timestamp moving. The existing per-row triggers already pay this for every
+  measure UPDATE and every lyric write — 371 blob-carrying audit rows for one
+  lyric placement session.
 - **Cascade deletes.** Deleting a song cascades to its measure rows; a DELETE
-  trigger would try to UPDATE the parent that is being deleted. That is
-  expected to affect zero rows (harmless), but it should be confirmed.
-- **Clock mixing gets more common** (consequence 3): the trigger would stamp
-  with the database clock on every import, just before the app stamps with the
-  client's.
+  trigger would UPDATE the parent being deleted. Expected to affect zero rows;
+  unverified. (`stamp_song_edited` already does exactly this for lyrics.)
+- **More clock mixing:** the database clock would stamp every import just
+  before the app stamps with the client's.
 
 A cheaper shape, if the gap is closed: **statement-level** triggers (one per
 event — INSERT, UPDATE, DELETE — sharing one function) using transition tables
-(`REFERENCING NEW TABLE` / `OLD TABLE`), which stamp each affected song ONCE
-per statement, and only when its value would actually change. An import would
-then stamp twice (the delete statement and one insert batch) regardless of
-measure count, and could replace the per-row UPDATE trigger outright. The audit
-cost per stamp remains while `sam_songs` carries the blob.
+(`REFERENCING NEW TABLE` / `OLD TABLE`), stamping each affected song ONCE per
+statement and only when the value would change. An import would stamp about
+twice regardless of measure count, and it could replace both per-row triggers.
+The audit cost per stamp remains while `sam_songs` carries the blob.
 
-Decision deferred to M6, informed by `bump_parent_edited_at`'s actual
-definition (clock, and whether it skips no-op stamps).
+Not decided. M6 chooses.
 
 **Exit criteria**
 - [ ] Importing a song leaves it with scores present and fresh

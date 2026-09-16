@@ -31,6 +31,15 @@ verify_jwt = true
 import_map = "./functions/push-send/deno.json"
 entrypoint = "./functions/push-send/index.ts"
 
+[functions.sam-scores]
+enabled = true
+# JWT verification ON. Called by a logged-in user (the browser, or the backfill
+# console script) with their own token; RLS confines it to their songs. Same
+# shape as push-send. Analyzer port M4.
+verify_jwt = true
+import_map = "./functions/sam-scores/deno.json"
+entrypoint = "./functions/sam-scores/index.ts"
+
 [functions.notify-dispatch]
 enabled = true
 # 🛑 JWT verification OFF. Called by pg_cron via pg_net, which has no user token
