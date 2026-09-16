@@ -194,6 +194,8 @@ Requirements:
 - **Rows are lean:** `beats` and the onset counts are not returned.
 - **The last exit criterion changes:** a whole-song read no longer exceeds the cap, so truncation is checked with an explicit `limit`.
 
+**Considered and declined (Alex, 2026-09-16): a tool-specific NOTE line.** In M5 verification, the NOTE line was found to be generic ("Narrow the query or request a specific subset"). It does not name the next start measure; only `range.note` does. It stays generic. The NOTE comes from `runToolForMcp`, which every tool shares. Making it tool-specific would mean either every tool composes its own NOTE, or the wrapper learns about scores. Both are worse than a reader looking one field further into a response they are already parsing.
+
 **Exit criteria**
 - [ ] `get_sam_song_scores` on Someone Like You at its goal tempo flags the same measures the CLI does
 - [ ] Omitting `bpm` uses `goal_effective_bpm` and says so in the response
