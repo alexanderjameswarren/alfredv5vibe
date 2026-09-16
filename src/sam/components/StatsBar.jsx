@@ -1,6 +1,7 @@
 import React from "react";
 import { midiDisplayName } from "../lib/vexflowHelpers";
 import PracticeFigures from "./PracticeFigures";
+import { formatAccuracy } from "../lib/practiceScoring";
 
 export default function StatsBar({
   lastNote,
@@ -15,6 +16,10 @@ export default function StatsBar({
   songPassesToday = 0,
   songPassesTotal = 0,
 }) {
+  // Accuracy is null when nothing was measured (no MIDI notes, or no scored
+  // beats); formatAccuracy shows that as "—", never 0%.
+  const playthroughPct = sessionStats.hasPlaythrough ? sessionStats.playthroughAccuracyPercent : null;
+  const playthroughMeasured = playthroughPct != null;
   return (
     <div className="flex items-center gap-4 mb-2 px-1 text-sm text-muted-foreground flex-wrap">
       {lastNote != null && (
@@ -25,19 +30,17 @@ export default function StatsBar({
       <span>Loop: <strong className="text-dark">{loopCount}</strong></span>
       <span>Hits: <strong className="text-success">{hitCount}</strong></span>
       <span>Misses: <strong className="text-destructive">{missCount}</strong></span>
-      <span>Session Accuracy: <strong className="text-dark">{sessionStats.accuracyPercent}%</strong></span>
+      <span>Session Accuracy: <strong className="text-dark">{formatAccuracy(sessionStats.accuracyPercent)}</strong></span>
       {/* The current pass through the snippet, so a clean run reads 100% even
           when earlier fumbles are still dragging the session average down. */}
       <span>
         Playthrough Accuracy:{" "}
         <strong className={
-          sessionStats.hasPlaythrough && sessionStats.playthroughAccuracyPercent === 100
-            ? "text-success"
-            : "text-dark"
+          playthroughPct === 100 ? "text-success" : "text-dark"
         }>
-          {sessionStats.hasPlaythrough ? `${sessionStats.playthroughAccuracyPercent}%` : "—"}
+          {formatAccuracy(playthroughPct)}
         </strong>
-        {sessionStats.hasPlaythrough && (
+        {playthroughMeasured && (
           <span className="ml-1 opacity-70">
             ({sessionStats.playthroughHits}/{sessionStats.playthroughScored})
           </span>

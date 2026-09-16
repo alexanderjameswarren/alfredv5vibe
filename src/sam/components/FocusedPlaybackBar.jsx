@@ -1,6 +1,7 @@
 import React from "react";
 import { Pause } from "lucide-react";
 import LiveSessionCounter from "./LiveSessionCounter";
+import { formatAccuracy } from "../lib/practiceScoring";
 
 // Collapsed top chrome during `playbackState === "playing"`. Everything the
 // user doesn't need mid-play (song title, transport speed controls, MIDI
@@ -24,6 +25,8 @@ export default function FocusedPlaybackBar({
   playthroughPercent,
   hasPlaythrough,
 }) {
+  // Null accuracy means nothing was measured; formatAccuracy shows "—".
+  const playthroughPct = hasPlaythrough ? playthroughPercent : null;
   return (
     <>
       {/* Top row: Pause button + Session/Today counters, all left-aligned */}
@@ -47,9 +50,9 @@ export default function FocusedPlaybackBar({
               Playthrough
             </span>
             <span className={`text-2xl font-mono font-bold tabular-nums leading-none ${
-              hasPlaythrough && playthroughPercent === 100 ? "text-success" : "text-primary"
+              playthroughPct === 100 ? "text-success" : "text-primary"
             }`}>
-              {hasPlaythrough ? `${playthroughPercent}%` : "—"}
+              {formatAccuracy(playthroughPct)}
             </span>
           </div>
         </LiveSessionCounter>
@@ -60,7 +63,7 @@ export default function FocusedPlaybackBar({
         <span>Loop: <strong className="text-dark">{loopCount}</strong></span>
         <span>Hits: <strong className="text-success">{hitCount}</strong></span>
         <span>Misses: <strong className="text-destructive">{missCount}</strong></span>
-        <span>Session Accuracy: <strong className="text-dark">{accuracyPercent}%</strong></span>
+        <span>Session Accuracy: <strong className="text-dark">{formatAccuracy(accuracyPercent)}</strong></span>
       </div>
     </>
   );

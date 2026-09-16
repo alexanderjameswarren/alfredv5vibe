@@ -23,6 +23,7 @@ import useAudioSync from "./lib/useAudioSync";
 import useNumericInput from "./lib/useNumericInput";
 import { DEFAULTS } from "./lib/samConstants";
 import { matchChord, findClosestBeat } from "./lib/noteMatching";
+import { onScreenTally } from "./lib/practiceScoring";
 import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
 import { normalizeMeasure } from "./lib/measureUtils";
 import { loadAudio } from "./lib/audioPlayer";
@@ -448,16 +449,21 @@ export default function SamPlayer({ onBack }) {
     if (result === "hit") {
       beat.state = "hit";
       colorBeatEls({ svgEls: activeEls }, "#16a34a");
-      hitCountRef.current++;
-      setHitCount(hitCountRef.current);
     } else if (result === "partial") {
       beat.state = "partial";
       colorBeatEls({ svgEls: activeEls }, "#d97706");
-      hitCountRef.current++;
-      setHitCount(hitCountRef.current);
     } else {
       beat.state = "wrong";
       colorBeatEls({ svgEls: activeEls }, "#dc2626");
+    }
+
+    // On-screen Hits counts full hits only, like sam_passes.hits; a partial
+    // adds to neither counter (recordEvent still tallies it as a partial).
+    const tally = onScreenTally(result);
+    if (tally === "hit") {
+      hitCountRef.current++;
+      setHitCount(hitCountRef.current);
+    } else if (tally === "miss") {
       missCountRef.current++;
       setMissCount(missCountRef.current);
     }

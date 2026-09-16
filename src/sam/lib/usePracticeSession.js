@@ -1,14 +1,15 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { supabase, supabaseUrl, supabaseAnonKey } from "../../supabaseClient";
+import { accuracyOf, bestAccuracy } from "./practiceScoring";
 
 const EMPTY_STATS = {
   hits: 0,
   misses: 0,
   partials: 0,
   totalBeats: 0,
-  accuracyPercent: 0,
+  accuracyPercent: null,
   avgTimingDeltaMs: 0,
-  playthroughAccuracyPercent: 0,
+  playthroughAccuracyPercent: null,
   playthroughHits: 0,
   playthroughMisses: 0,
   playthroughScored: 0,
@@ -25,18 +26,33 @@ function newPlaythrough(loop) {
   return { loop, hits: 0, misses: 0, partials: 0, totalBeats: 0, notesPlayed: 0 };
 }
 
-// Accuracy counts hits against hits+misses; partials sit outside the ratio.
+// Accuracy (`accuracyOf`, practiceScoring.js) counts hits against
+// hits+misses; partials sit outside the ratio. It is null, not 0, when no MIDI
+// note arrived or nothing was scored — the sam_passes.accuracy_percent rule.
 // Same rule for a pass as for the whole session, so the two numbers on screen
 // are directly comparable.
-function accuracyOf(c) {
-  const total = c.hits + c.misses;
-  return total > 0 ? Math.round((c.hits / total) * 100) : 0;
+
+function newSessionCounters() {
+  return { hits: 0, misses: 0, partials: 0, totalBeats: 0, notesPlayed: 0 };
+}
+
+// One entry of `summary.playthroughs`.
+function playthroughEntry(p) {
+  return {
+    loop: p.loop,
+    hits: p.hits,
+    misses: p.misses,
+    partials: p.partials,
+    totalBeats: p.totalBeats,
+    notesPlayed: p.notesPlayed,
+    accuracyPercent: accuracyOf(p),
+  };
 }
 
 // Which pass the "Playthrough Accuracy" readout describes: the one in progress
 // once it has a scored beat, otherwise the last completed one. That second case
 // covers the moment just after a loop wraps and the gap between a pause or stop
-// and the next note — a clean pass stays on screen instead of blanking to 0%.
+// and the next note — a clean pass stays on screen instead of blanking.
 function playthroughStats(current, last) {
   const p = current.hits + current.misses > 0 ? current : last || current;
   return {
@@ -56,7 +72,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
   const songIdRef = useRef(null);
   const eventsRef = useRef([]);
   const timingDeltasRef = useRef([]);
-  const countersRef = useRef({ hits: 0, misses: 0, partials: 0, totalBeats: 0 });
+  const countersRef = useRef(newSessionCounters());
   const loopCountRef = useRef(0);
 
   // Per-playthrough counters. `playthroughRef` is the pass in progress;
@@ -105,7 +121,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     // Reset in-memory state
     eventsRef.current = [];
     timingDeltasRef.current = [];
-    countersRef.current = { hits: 0, misses: 0, partials: 0, totalBeats: 0 };
+    countersRef.current = newSessionCounters();
     loopCountRef.current = 0;
     playthroughRef.current = newPlaythrough(0);
     lastPlaythroughRef.current = null;
@@ -182,7 +198,9 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
 
     // The miss path passes `played: []`; only the MIDI match path carries
     // notes. So this stays 0 for a playthrough nobody played.
-    p.notesPlayed += played?.length || 0;
+    const notes = played?.length || 0;
+    p.notesPlayed += notes;
+    c.notesPlayed += notes;
 
     if (timingDeltaMs != null) {
       timingDeltasRef.current.push(timingDeltaMs);
@@ -226,14 +244,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     const finished = playthroughRef.current;
     if (finished.hits + finished.misses > 0) {
       lastPlaythroughRef.current = { ...finished };
-      playthroughLogRef.current.push({
-        loop: finished.loop,
-        hits: finished.hits,
-        misses: finished.misses,
-        partials: finished.partials,
-        totalBeats: finished.totalBeats,
-        accuracyPercent: accuracyOf(finished),
-      });
+      playthroughLogRef.current.push(playthroughEntry(finished));
     }
     loopCountRef.current = n;
     playthroughRef.current = newPlaythrough(n);
@@ -256,14 +267,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     const inProgress = playthroughRef.current;
     const playthroughs = [...playthroughLogRef.current];
     if (inProgress.hits + inProgress.misses > 0) {
-      playthroughs.push({
-        loop: inProgress.loop,
-        hits: inProgress.hits,
-        misses: inProgress.misses,
-        partials: inProgress.partials,
-        totalBeats: inProgress.totalBeats,
-        accuracyPercent: accuracyOf(inProgress),
-      });
+      playthroughs.push(playthroughEntry(inProgress));
     }
 
     return {
@@ -271,13 +275,14 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
       hits: c.hits,
       misses: c.misses,
       partials: c.partials,
+      notesPlayed: c.notesPlayed,
+      // null when nothing was measured (see accuracyOf). Historic rows keep 0.
       accuracyPercent: accuracyOf(c),
       avgTimingDeltaMs: avgTiming,
       loopCount: loopCountRef.current,
       playthroughs,
-      bestPlaythroughAccuracyPercent: playthroughs.length
-        ? Math.max(...playthroughs.map((p) => p.accuracyPercent))
-        : null,
+      // Unmeasured playthroughs (null) are ignored, never counted as 0.
+      bestPlaythroughAccuracyPercent: bestAccuracy(playthroughs.map((p) => p.accuracyPercent)),
       // `start` deliberately mirrors `settings.bpm`. Both are written once from
       // the same value at session start, so they cannot drift, and carrying it
       // here means the tempo question is answerable from `summary` alone
