@@ -47,8 +47,14 @@ import { supabase } from "../../supabaseClient";
 //   loading             true during either fetch
 //   error               string or null; first non-null error surfaces here
 //   refresh()           forces a re-fetch of sam_songs. Call after any
-//                       mutation (archive / restore / edit-save) so the
-//                       derived shapes rebuild instead of drifting.
+//                       mutation that moves a song between shapes
+//                       (archive / restore) so they rebuild from the DB.
+//   patchSong(id, f)    merges `f` into one song's list row in place, and
+//                       every derived shape (family titles, sort order)
+//                       rebuilds from it. For edits that are already saved
+//                       and only change row fields (the Edit Song dialog),
+//                       so the row updates without a reload or a loading
+//                       flash. Only list columns are worth passing.
 
 const SONG_COLUMNS =
   "id, title, artist, song_type, parent_song_id, difficulty_tier, created_at, archived";
@@ -183,6 +189,10 @@ export default function useSongLibrary({
     setReloadTick((n) => n + 1);
   }, []);
 
+  const patchSong = useCallback((id, fields) => {
+    setSongs((prev) => prev.map((s) => (s.id === id ? { ...s, ...fields } : s)));
+  }, []);
+
   const derived = useMemo(() => {
     const visible = songs.filter((s) => !s.archived);
     const archived = songs.filter((s) => s.archived);
@@ -265,5 +275,6 @@ export default function useSongLibrary({
     loading: songsLoading || statsLoading,
     error: songsError,
     refresh,
+    patchSong,
   };
 }

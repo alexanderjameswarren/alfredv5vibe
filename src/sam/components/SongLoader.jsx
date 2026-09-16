@@ -6,7 +6,7 @@ import { parseMusicXML } from "../lib/songParser";
 import { fanOutMeasures, recompileMeasures } from "../lib/measureCompiler";
 import { importMusicxmlFingerings } from "../lib/fingeringsApi";
 import { importLyrics } from "../lib/lyricsApi";
-import { fetchSongById } from "../lib/songLoad";
+import { fetchSongById, fetchSongForEdit } from "../lib/songLoad";
 import { fetchParentGoalTempo, goalTempoInsertFields } from "../lib/goalTempo";
 import { validateSongDocument } from "../lib/songSchema";
 import { scanMeasuresForDuplicatePitches } from "../lib/noteDuplicates";
@@ -19,6 +19,7 @@ import FamilySheet from "./FamilySheet";
 import BrowseTabs from "./BrowseTabs";
 import AddImportSheet from "./AddImportSheet";
 import StatsPage from "./StatsPage";
+import { SongEditDialog } from "./SongMetadataEditor";
 
 // Stats used to be a private history island here: pushState("/stats") plus a
 // popstate listener, because the app had no router to ask. Step 8 of
@@ -200,23 +201,10 @@ function composeBlockSentence(w) {
   return `${w.tag} ×${w.count}${at}`;
 }
 
-// Extended settings columns needed only by the edit modal. useSongLibrary
-// keeps its list query lean (never the measures blob, and no per-song
-// timing knobs either); we fetch these on-demand when the pencil is tapped.
-const EDIT_COLUMNS =
-  "id, title, artist, default_bpm, playback_speed, default_timing_window_ms, default_chord_ms, default_measure_width, archived";
-
 export default function SongLoader({ onSongLoaded, onSongSaved, onImportError }) {
   const [error, setError] = useState(null);
-  const [editingSong, setEditingSong] = useState(null);
-  const [editTitle, setEditTitle] = useState("");
-  const [editArtist, setEditArtist] = useState("");
-  const [editBpm, setEditBpm] = useState("");
-  const [editPlaybackSpeed, setEditPlaybackSpeed] = useState("");
-  const [editTimingWindow, setEditTimingWindow] = useState("");
-  const [editChordMs, setEditChordMs] = useState("");
-  const [editMeasureWidth, setEditMeasureWidth] = useState("");
-  const [saving, setSaving] = useState(false);
+  // The song whose Edit Song dialog is open: { id, song, hasImportedFingerings }.
+  const [editTarget, setEditTarget] = useState(null);
   const [addSheetOpen, setAddSheetOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
@@ -348,87 +336,25 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
     }
   }
 
+  // Library pencil. Opens the SAME dialog the player uses (SongEditDialog).
+  // The list row is deliberately lean, so load exactly what the dialog needs —
+  // including the goal pair, whether the song has audio, and whether it has
+  // imported fingerings — rather than guessing from the row.
   async function handleEditClick(row) {
-    // useSongLibrary doesn't carry per-song timing knobs (spec: list query
-    // stays lean). Fetch the extended shape on demand so the modal has
-    // everything it needs to render + save.
-    const { data, error: dbError } = await supabase
-      .from("sam_songs")
-      .select(EDIT_COLUMNS)
-      .eq("id", row.id)
-      .single();
-
-    if (dbError || !data) {
-      console.error("[Sam] Failed to fetch song for edit:", dbError);
+    try {
+      const { song, hasImportedFingerings } = await fetchSongForEdit(row.id, supabase);
+      setEditTarget({ id: row.id, song, hasImportedFingerings });
+    } catch (e) {
+      console.error("[Sam] Failed to fetch song for edit:", e);
       setError("Failed to load song settings");
-      return;
     }
-
-    setEditingSong(data);
-    setEditTitle(data.title || "");
-    setEditArtist(data.artist || "");
-    setEditBpm(String(data.default_bpm || 68));
-    setEditPlaybackSpeed(String(data.playback_speed ?? 100));
-    setEditTimingWindow(
-      data.default_timing_window_ms != null ? String(data.default_timing_window_ms) : ""
-    );
-    setEditChordMs(
-      data.default_chord_ms != null ? String(data.default_chord_ms) : ""
-    );
-    setEditMeasureWidth(
-      data.default_measure_width != null ? String(data.default_measure_width) : ""
-    );
   }
 
-  function handleCancelEdit() {
-    setEditingSong(null);
-    setEditTitle("");
-    setEditArtist("");
-    setEditBpm("");
-    setEditPlaybackSpeed("");
-    setEditTimingWindow("");
-    setEditChordMs("");
-    setEditMeasureWidth("");
-  }
-
-  async function handleSaveEdit() {
-    if (!editingSong) return;
-
-    const bpmNum = Number(editBpm);
-    const psNum = Number(editPlaybackSpeed) || 100;
-    if (!editTitle.trim() || !bpmNum || bpmNum <= 0) {
-      alert("Please provide a valid title and BPM");
-      return;
-    }
-
-    const timingNum = editTimingWindow !== "" ? Number(editTimingWindow) : null;
-    const chordNum = editChordMs !== "" ? Number(editChordMs) : null;
-    const widthNum = editMeasureWidth !== "" ? Number(editMeasureWidth) : null;
-
-    setSaving(true);
-    const { error: dbError } = await supabase
-      .from("sam_songs")
-      .update({
-        title: editTitle.trim(),
-        artist: editArtist.trim() || null,
-        default_bpm: bpmNum,
-        playback_speed: psNum,
-        default_timing_window_ms: timingNum,
-        default_chord_ms: chordNum,
-        default_measure_width: widthNum,
-      })
-      .eq("id", editingSong.id);
-
-    setSaving(false);
-
-    if (dbError) {
-      console.error("[Sam] Song update failed:", dbError);
-      alert("Failed to update song");
-      return;
-    }
-
-    lib.refresh();
-    handleCancelEdit();
+  // After a save, update the row in place. Title and artist are the only
+  // saved fields the library list carries.
+  function handleEditSaved(updated) {
+    if (!editTarget) return;
+    lib.patchSong(editTarget.id, { title: updated.title, artist: updated.artist });
   }
 
   // M8 — shared commit path. Both handleFile and handlePastedText
@@ -937,137 +863,16 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
         </div>
       )}
 
-      {/* Edit Modal */}
-      {editingSong && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-card border border-border rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-medium text-dark mb-4">Edit Song</h3>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">
-                  Title
-                </label>
-                <input
-                  type="text"
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                  placeholder="Song title"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">
-                  Artist
-                </label>
-                <input
-                  type="text"
-                  value={editArtist}
-                  onChange={(e) => setEditArtist(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                  placeholder="Artist name (optional)"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">
-                    Default BPM
-                  </label>
-                  <input
-                    type="number"
-                    value={editBpm}
-                    onChange={(e) => setEditBpm(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    placeholder="68"
-                    min={20}
-                    max={300}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">
-                    Playback Speed %
-                  </label>
-                  <input
-                    type="number"
-                    value={editPlaybackSpeed}
-                    onChange={(e) => setEditPlaybackSpeed(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    placeholder="100"
-                    min={10}
-                    max={200}
-                  />
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground -mt-2">BPM = no-audio practice tempo. Speed = audio playback rate (100 = original).</p>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">
-                    Timing ±ms
-                  </label>
-                  <input
-                    type="number"
-                    value={editTimingWindow}
-                    onChange={(e) => setEditTimingWindow(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    placeholder="300"
-                    min={100}
-                    max={2000}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">
-                    Chord ms
-                  </label>
-                  <input
-                    type="number"
-                    value={editChordMs}
-                    onChange={(e) => setEditChordMs(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    placeholder="80"
-                    min={10}
-                    max={500}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">
-                    Measure width
-                  </label>
-                  <input
-                    type="number"
-                    value={editMeasureWidth}
-                    onChange={(e) => setEditMeasureWidth(e.target.value)}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    placeholder="300"
-                    min={150}
-                    max={600}
-                    step={50}
-                  />
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground -mt-1">Leave blank to use app defaults (300ms / 80ms / 300px)</p>
-            </div>
-
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={handleCancelEdit}
-                disabled={saving}
-                className="flex-1 px-4 py-2 border border-border rounded-lg text-sm font-medium text-foreground hover:bg-secondary min-h-[44px] disabled:opacity-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveEdit}
-                disabled={saving}
-                className="flex-1 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-sm font-medium min-h-[44px] disabled:opacity-50 transition-colors"
-              >
-                {saving ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Edit Song — the player's dialog, opened from a library row. */}
+      {editTarget && (
+        <SongEditDialog
+          key={editTarget.id}
+          song={editTarget.song}
+          songDbId={editTarget.id}
+          hasImportedFingerings={editTarget.hasImportedFingerings}
+          onSongUpdate={handleEditSaved}
+          onClose={() => setEditTarget(null)}
+        />
       )}
     </div>
   );

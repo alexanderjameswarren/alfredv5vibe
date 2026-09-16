@@ -88,3 +88,51 @@ export async function fetchSongById(id, supabase) {
 
   return { song: mapSongRow(data, measures), row: data };
 }
+
+// Everything the Edit Song dialog reads, and nothing heavy — never `measures`.
+// mapSongRow tolerates the columns it is not given (they map to null).
+export const SONG_EDIT_COLUMNS =
+  "id, title, artist, default_bpm, playback_speed, goal_bpm, goal_playback_speed, " +
+  "default_timing_window_ms, default_chord_ms, default_measure_width, " +
+  "audio_file_path, show_imported_fingerings";
+
+/**
+ * Load what the Edit Song dialog needs for a song that is NOT open in the
+ * player (the library's pencil). Returns the same in-memory shape the player
+ * holds, so the dialog behaves identically in both places:
+ *
+ *   song                   mapSongRow shape without measures; audio is
+ *                          detected from audio_file_path exactly as the player
+ *                          does (`song.audioFilePath`)
+ *   hasImportedFingerings  whether any musicxml fingering row exists — the
+ *                          player's useFingeringEditor `hasImported`, which
+ *                          gates the "Show imported fingerings" checkbox
+ *
+ * @param {string} id
+ * @param {object} supabase - an authenticated client
+ * @returns {Promise<{song: object, hasImportedFingerings: boolean}>}
+ * @throws {Error} when the song row cannot be read
+ */
+export async function fetchSongForEdit(id, supabase) {
+  const [songRes, fingerRes] = await Promise.all([
+    supabase.from("sam_songs").select(SONG_EDIT_COLUMNS).eq("id", id).single(),
+    supabase
+      .from("sam_song_fingerings")
+      .select("song_id", { count: "exact", head: true })
+      .eq("song_id", id)
+      .eq("source", "musicxml"),
+  ]);
+
+  if (songRes.error || !songRes.data) {
+    throw new Error(`Failed to load song ${id}: ${songRes.error?.message ?? "not found"}`);
+  }
+  if (fingerRes.error) {
+    // Only decides whether one checkbox is shown; not worth failing the edit.
+    console.error("[Sam] Imported-fingering check failed:", fingerRes.error);
+  }
+
+  return {
+    song: mapSongRow(songRes.data, undefined),
+    hasImportedFingerings: (fingerRes.count ?? 0) > 0,
+  };
+}

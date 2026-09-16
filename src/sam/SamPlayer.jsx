@@ -108,7 +108,12 @@ export default function SamPlayer({ onBack }) {
   // picks the hand the synth SOUNDS, so "practise RH against a synth LH" works.
   const [scorePlayback, setScorePlayback] = useState("off");
   const [audioElement, setAudioElement] = useState(null);
-  const [audioFilePath, setAudioFilePath] = useState(null);
+  // Whether the song has audio, and where it lives, is `song.audioFilePath` —
+  // the one value the Edit Song dialog, NumericSettings and the score's
+  // audio-offset control already read. Derived rather than held in a second
+  // state, which used to go stale: an upload updated only the copy, so those
+  // three kept the no-audio layout until the song was reopened.
+  const audioFilePath = song?.audioFilePath ?? null;
   const [audioMuted, setAudioMuted] = useState(false);
   const playbackSpeed = useNumericInput(DEFAULTS.playbackSpeed);
   const beatEventsRef = useRef([]);
@@ -582,7 +587,6 @@ export default function SamPlayer({ onBack }) {
     // Repeat is session-only state, so a reload drops it back to the default.
     setSongRepeat(false);
     setSongRestMeasures(0);
-    setAudioFilePath(loadedSong.audioFilePath || null);
     bpm.reset(loadedSong.defaultBpm || DEFAULTS.bpm);
     timingWindowMs.reset(loadedSong.defaultTimingWindowMs ?? DEFAULTS.timingWindowMs);
     chordMs.reset(loadedSong.defaultChordMs ?? DEFAULTS.chordMs);
@@ -669,8 +673,12 @@ export default function SamPlayer({ onBack }) {
     handleFullStop();
   }, [snippet]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A successful upload (or replacement) is already stored; mirror only the
+  // path into the song in memory. Every audio check reads it from there, and
+  // the load effect above picks up the new file. Nothing else on the song
+  // changes — tempo, speed and goal stay exactly as they were.
   function handleAudioUploaded(path) {
-    setAudioFilePath(path);
+    setSong((s) => (s ? { ...s, audioFilePath: path } : s));
   }
 
   async function handleAudioOffsetChange(measureNumber, audioMs) {
@@ -929,7 +937,6 @@ export default function SamPlayer({ onBack }) {
     if (playbackState === "playing") endSession();
     if (audioElement) audioElement.pause();
     setAudioElement(null);
-    setAudioFilePath(null);
     setPlaybackState("stopped");
     setPausedMeasure(null);
     setSong(null);
