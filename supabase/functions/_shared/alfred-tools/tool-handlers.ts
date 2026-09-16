@@ -810,6 +810,105 @@ export async function getSamSessions(
   }
 }
 
+/**
+ * Completed playthroughs from sam_passes (M5).
+ *
+ * A pass is one complete playthrough of whatever range was loaded — the whole
+ * song when snippet_id is null, otherwise that snippet. Practice instructions
+ * are written as a tempo plus a number of passes ("Pastorale No. 3 at 60, four
+ * to six passes"), so this is the tool that answers whether an instruction was
+ * followed.
+ *
+ * `bpm` is the tempo at the instant the pass FINISHED, not when it started, and
+ * is the authoritative per-pass tempo. Note that it does not account for
+ * playback speed: a pass recorded at 60 may have been played at 80% speed, i.e.
+ * effectively 48. See docs/progress-pass-counter.md (M5 report, item D).
+ */
+export async function getSamPasses(
+  client: SupabaseClient,
+  params: {
+    song_id?: string;
+    snippet_id?: string;
+    whole_song_only?: boolean;
+    date_from?: string;
+    date_to?: string;
+    limit?: number;
+  }
+): Promise<ToolResult> {
+  try {
+    let query = client
+      .from("sam_passes")
+      .select("id, song_id, snippet_id, session_id, bpm, completed_at")
+      .order("completed_at", { ascending: false })
+      .limit(params.limit || 20);
+
+    if (params.song_id) {
+      query = query.eq("song_id", params.song_id);
+    }
+
+    if (params.snippet_id) {
+      query = query.eq("snippet_id", params.snippet_id);
+    }
+
+    // Whole-song passes are rows with a NULL snippet_id. This is a different
+    // question from "no snippet filter given", so it needs its own parameter
+    // rather than being inferred from the absence of snippet_id.
+    if (params.whole_song_only) {
+      query = query.is("snippet_id", null);
+    }
+
+    if (params.date_from) {
+      query = query.gte("completed_at", params.date_from);
+    }
+
+    if (params.date_to) {
+      query = query.lte("completed_at", params.date_to);
+    }
+
+    const { data: passes, error } = await query;
+    if (error) return { error: error.message };
+
+    const songIds = [...new Set((passes || []).map((p: { song_id: string | null }) => p.song_id).filter(Boolean))];
+    let songMap: Record<string, { title: string; artist: string | null }> = {};
+
+    if (songIds.length > 0) {
+      const { data: songs } = await client
+        .from("sam_songs")
+        .select("id, title, artist")
+        .in("id", songIds);
+      if (songs) {
+        songMap = Object.fromEntries(songs.map((s: { id: string; title: string; artist: string | null }) => [s.id, { title: s.title, artist: s.artist }]));
+      }
+    }
+
+    const snippetIds = [...new Set((passes || []).map((p: { snippet_id: string | null }) => p.snippet_id).filter(Boolean))];
+    let snippetMap: Record<string, string> = {};
+
+    if (snippetIds.length > 0) {
+      const { data: snippets } = await client
+        .from("sam_snippets")
+        .select("id, title")
+        .in("id", snippetIds);
+      if (snippets) {
+        snippetMap = Object.fromEntries(snippets.map((s: { id: string; title: string }) => [s.id, s.title]));
+      }
+    }
+
+    const results = (passes || []).map((pass: { song_id: string | null; snippet_id: string | null; [key: string]: unknown }) => ({
+      ...pass,
+      song_title: pass.song_id ? songMap[pass.song_id]?.title || null : null,
+      song_artist: pass.song_id ? songMap[pass.song_id]?.artist || null : null,
+      // Null snippet_id means the pass was the whole song, and saying so
+      // explicitly stops a reader treating it as an unresolved lookup.
+      range_title: pass.snippet_id ? snippetMap[pass.snippet_id] || null : "Whole song",
+    }));
+
+    return { data: results };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
 export async function getSamSnippets(
   client: SupabaseClient,
   params: { song_id?: string; search_text?: string }

@@ -64,6 +64,7 @@ import {
   getDatabaseSchema,
   getSamSongs,
   getSamSessions,
+  getSamPasses,
   getSamSnippets,
   getSamSongMeasures,
   getSamLyricWorkspace,
@@ -428,6 +429,33 @@ const getSamSessionsTool = defineTool({
     });
     if (result.error) throw new Error(`get_sam_sessions: ${result.error}`);
     return result.data;
+  },
+});
+
+// M5. Reads sam_passes so practice instructions ("at 60, four to six passes")
+// can be checked from chat against what was actually played.
+const getSamPassesTool = defineTool({
+  name: "get_sam_passes",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const LIMIT = clampLimit(args.limit as number | undefined);
+    const result = await getSamPasses(ctx.db, {
+      song_id: args.song_id as string | undefined,
+      snippet_id: args.snippet_id as string | undefined,
+      whole_song_only: args.whole_song_only as boolean | undefined,
+      date_from: args.date_from as string | undefined,
+      date_to: args.date_to as string | undefined,
+      limit: LIMIT,
+    });
+    if (result.error) throw new Error(`get_sam_passes: ${result.error}`);
+    const rows = (result.data ?? []) as unknown[];
+    // A clamped result and a genuinely short one look identical to the reader,
+    // and miscounting passes is precisely the failure this tool exists to
+    // prevent — so the truncation flag matters more here than most places.
+    return envelope(rows, {
+      limit_applied: LIMIT,
+      truncated: rows.length >= LIMIT,
+    });
   },
 });
 
@@ -880,6 +908,27 @@ export function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(getSamSessionsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_sam_passes",
+    {
+      title: "Get SAM Passes",
+      description:
+        "Get completed playthroughs (passes) from the SAM music app. One row per complete playthrough of whatever range was loaded: snippet_id null means the whole song, otherwise that snippet. `bpm` is the tempo at the instant the pass FINISHED, and does not account for playback speed — a pass at 60 played at 80% speed was effectively 48. Use this to check practice instructions of the form 'at 60, four to six passes'. Returns most recent passes first, with song and range titles.",
+      inputSchema: {
+        song_id: z.string().optional().describe("Filter by song ID"),
+        snippet_id: z.string().optional().describe("Filter by snippet ID"),
+        whole_song_only: z
+          .boolean()
+          .optional()
+          .describe("Only whole-song passes (rows where snippet_id is null)"),
+        date_from: z.string().optional().describe("Start date filter (ISO 8601 format)"),
+        date_to: z.string().optional().describe("End date filter (ISO 8601 format)"),
+        limit: z.number().optional().describe("Max results to return (default 20)"),
+      },
+    },
+    async (args) => runToolForMcp(getSamPassesTool, args, token),
   );
 
   server.registerTool(

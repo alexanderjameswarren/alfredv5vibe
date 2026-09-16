@@ -1,6 +1,6 @@
 # Progress: Pass Counter
 
-## Status: M1 through M4 part 1 verified. M4.5 implemented, awaiting verification.
+## Status: M1 through M4 part 1 verified. M5 + session metadata implemented, awaiting verification.
 
 Spec: `docs/technical-spec-pass-counter.md`
 
@@ -356,9 +356,32 @@ Layout only, ahead of M4 adding a row per snippet to the practice-time block.
 - [x] Archived snippets appear only when they have practice history, labelled
 - [x] Reading counts still creates, adopts and selects nothing
 
-### M5 — Optional, only if M1–M4 are clean
-- [ ] `get_sam_passes` MCP tool (tier 1, `defineTool`, `ctx.db`, `clampLimit`)
-      so pass history is readable from chat when practice instructions are written
+### M5 — `get_sam_passes` MCP tool
+- [x] Tier 1, `defineTool`, `ctx.db`, `clampLimit`, `envelope` with a truncation
+      flag — a clamped pass count and a real one look identical otherwise, and
+      miscounting passes is the failure this tool exists to prevent
+- [x] Filters: `song_id`, `snippet_id`, `whole_song_only`, `date_from`,
+      `date_to`, `limit`
+- [x] Joins song and range titles; null `snippet_id` renders as "Whole song"
+- [x] Tool description states that `bpm` ignores playback speed
+- [x] `check_platform_conformance` → CONFORMANT (37 tables)
+
+### Session metadata — MIDI, tempo, hand mode
+No migration. `settings` and `summary` are both jsonb with no schema
+constraints, so all three are additive keys. Conformance re-checked anyway:
+CONFORMANT.
+
+- [x] **A. MIDI** — `settings.midiConnected` (at start) and
+      `summary.midi = { atStart, everConnected }`. `everConnected` latches true
+      and never back, so plugging in partway is captured
+- [x] **B. Tempo** — `summary.tempo = { start, end, min, max }`, updated as the
+      tempo changes during the sitting
+- [x] **C. Hand mode** — `settings.handMode`
+- [ ] Read behaviour for existing rows — reported, awaiting Alex's decision.
+      Nothing applied to historical data
+      (`docs/sql/midi-heuristic-impact-2026-09-16.sql`)
+
+### M2 — Playback screen counter
 
 ---
 
@@ -538,6 +561,38 @@ are not searched, since `savedSnippets` excludes them and archived means retired
 Side effect worth knowing: `sam_sessions.snippet_id` starts being populated
 correctly from now on too, for free. Historic session rows stay null — they
 record what was actually known at the time and are not being rewritten.
+
+#### Session metadata — why these homes, and why an envelope for tempo
+
+**`settings` vs `summary` follows the column comments.** `settings` is "a
+snapshot of bpm / timing window in force for this session" — facts known at the
+start. `summary` is the rolled-up result — facts known only at the end. So hand
+mode and MIDI-at-start go in `settings`; the tempo envelope and
+`midi.everConnected` go in `summary`, because neither is knowable until the
+sitting is over.
+
+`summary.tempo.start` deliberately mirrors `settings.bpm`. Both are written once
+from the same value, so they cannot drift, and carrying it means the tempo
+question is answerable from `summary` alone rather than by joining two objects.
+
+**Tempo is recorded as an envelope, not an average.** A time-weighted average
+would be more faithful but needs per-interval accounting, and the fine grain
+already exists: every pass carries its own finishing tempo, and `sam_passes` is
+the authoritative per-pass answer. The session only has to stop being
+misleading. `{ start, end, min, max }` does that, and `min === max` says plainly
+that the tempo never moved.
+
+**Hand mode is forward-looking today.** Only a snippet carries a hand mode, so
+every whole-song sitting records "both". The value now is that it is explicit
+rather than presumed; the value later is that a whole-song hand toggle would
+need no further work.
+
+**MIDI is the one with a read-behaviour consequence**, and the app turned out to
+have nowhere to apply it: `accuracyPercent` is read only live, by
+`FocusedPlaybackBar` and `StatsBar`, for the session in progress. Nothing in the
+app aggregates accuracy across sessions. So the exclusion rule has to be honoured
+by whoever reads the data back — which today is chat, over `get_sam_sessions`.
+The flag is recorded and documented; there was no existing aggregate to change.
 
 #### M4.5 — breakpoints were not the bug
 

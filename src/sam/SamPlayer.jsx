@@ -124,7 +124,10 @@ export default function SamPlayer({ onBack }) {
   // moment the just-ended session is committed.
   const [practiceStatsRefetchSignal, setPracticeStatsRefetchSignal] = useState(0);
 
-  const { startSession, endSession, recordEvent, setLoopIteration, getSessionId, stats: sessionStats } = usePracticeSession({
+  const {
+    startSession, endSession, recordEvent, setLoopIteration, getSessionId,
+    noteTempo, noteMidiConnected, stats: sessionStats,
+  } = usePracticeSession({
     onSessionEnded: () => setPracticeStatsRefetchSignal((n) => n + 1),
   });
 
@@ -695,9 +698,29 @@ export default function SamPlayer({ onBack }) {
         chordGroupMs: chordMs.value,
         measureWidth: measureWidth.value,
         playbackSpeed: playbackSpeed.value,
+        // Which hand the player is SCORED on. Only a snippet carries one, so a
+        // whole-song sitting is always "both" today — recording it explicitly
+        // means a whole-song session stops being merely presumed to be both
+        // hands, and it is already right if a whole-song hand toggle arrives.
+        handMode: activeSnippet?.handMode || "both",
+        // Whether a keyboard was attached when the sitting began. Decides, with
+        // `summary.midi.everConnected`, whether this session's accuracy is a
+        // measurement or an absence of one.
+        midiConnected: !!midiConnected,
       },
     });
   }
+
+  // Tempo and MIDI both change mid-sitting, so the session has to watch them
+  // rather than snapshot them. Both observers are no-ops when no session is
+  // open, so neither needs to know the playback state.
+  useEffect(() => {
+    noteTempo(bpm.value);
+  }, [bpm.value, noteTempo]);
+
+  useEffect(() => {
+    noteMidiConnected(midiConnected);
+  }, [midiConnected, noteMidiConnected]);
 
   // Determine which measure is at the target line right now
   function getCurrentMeasure() {

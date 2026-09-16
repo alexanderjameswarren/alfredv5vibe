@@ -63,6 +63,26 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
   const lastPlaythroughRef = useRef(null);
   const playthroughLogRef = useRef([]);
 
+  // Facts about the sitting that only become known as it runs, so they cannot
+  // live in `settings` (a start-time snapshot) and have to be tracked here.
+  //
+  // Tempo: `settings.bpm` records what the sitting STARTED at, which is not the
+  // same question as what tempo it happened at — a sitting that begins at 40
+  // and works up to 60 reads 40 forever. The envelope (start, end, min, max) is
+  // what gets recorded rather than a time-weighted average: the fine grain
+  // already exists, because every pass carries its own finishing tempo, and
+  // `sam_passes` is the authoritative per-pass answer. The session only has to
+  // stop being misleading.
+  //
+  // MIDI: whether a keyboard was attached decides whether this session's
+  // accuracy MEANS anything. 0 hits and 6 misses with no keyboard is not a bad
+  // performance, it is an unmeasured one, and the two must not aggregate
+  // together. `everConnected` is tracked separately from `atStart` because
+  // plugging in partway through is a real case and makes the later part of the
+  // sitting measurable.
+  const tempoRef = useRef({ start: null, end: null, min: null, max: null });
+  const midiRef = useRef({ atStart: false, everConnected: false });
+
   // Fires after a session's ended_at update resolves in Supabase. Held in a
   // ref so consumers can pass an inline arrow without retriggering the
   // `useCallback` deps — same pattern as `lyricEditRef` in ScoreRenderer.
@@ -70,6 +90,13 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
   onSessionEndedRef.current = onSessionEnded;
 
   const startSession = useCallback(async ({ songId, snippetId, settings }) => {
+    const startBpm = Number.isFinite(settings?.bpm) ? settings.bpm : null;
+    tempoRef.current = { start: startBpm, end: startBpm, min: startBpm, max: startBpm };
+    midiRef.current = {
+      atStart: !!settings?.midiConnected,
+      everConnected: !!settings?.midiConnected,
+    };
+
     // Reset in-memory state
     eventsRef.current = [];
     timingDeltasRef.current = [];
@@ -108,6 +135,23 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
           console.log("[Sam] Session created:", data.id);
         }
       });
+  }, []);
+
+  // Called whenever the tempo changes while a session is open. Cheap enough to
+  // call unconditionally; it only widens the envelope.
+  const noteTempo = useCallback((bpm) => {
+    if (!Number.isFinite(bpm)) return;
+    const t = tempoRef.current;
+    t.end = bpm;
+    t.start = t.start ?? bpm;
+    t.min = t.min == null ? bpm : Math.min(t.min, bpm);
+    t.max = t.max == null ? bpm : Math.max(t.max, bpm);
+  }, []);
+
+  // Latches true and never back: a keyboard attached at any point makes that
+  // part of the sitting measurable, and unplugging it later does not unmake it.
+  const noteMidiConnected = useCallback((connected) => {
+    if (connected) midiRef.current.everConnected = true;
   }, []);
 
   const recordEvent = useCallback(({ beatEvent, played, timingDeltaMs, result, loopIteration }) => {
@@ -211,6 +255,18 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
       bestPlaythroughAccuracyPercent: playthroughs.length
         ? Math.max(...playthroughs.map((p) => p.accuracyPercent))
         : null,
+      // `start` deliberately mirrors `settings.bpm`. Both are written once from
+      // the same value at session start, so they cannot drift, and carrying it
+      // here means the tempo question is answerable from `summary` alone
+      // instead of requiring a reader to join two objects.
+      tempo: { ...tempoRef.current },
+      // The flag that decides whether `accuracyPercent` above is meaningful.
+      // A session with `everConnected: false` has no measured performance and
+      // must be excluded from accuracy aggregates — NOT counted as zero.
+      // Practice time and passes are unaffected: the sitting happened, and a
+      // pass is about playback reaching the end of the range, not about hitting
+      // notes.
+      midi: { ...midiRef.current },
     };
   }, []);
 
@@ -395,5 +451,14 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
   // completes inside that insert window is still recorded.
   const getSessionId = useCallback(() => sessionIdRef.current, []);
 
-  return { startSession, endSession, recordEvent, setLoopIteration, getSessionId, stats };
+  return {
+    startSession,
+    endSession,
+    recordEvent,
+    setLoopIteration,
+    getSessionId,
+    noteTempo,
+    noteMidiConnected,
+    stats,
+  };
 }
