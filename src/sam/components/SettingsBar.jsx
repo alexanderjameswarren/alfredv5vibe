@@ -28,7 +28,6 @@ export default function SettingsBar({
   onSongRepeatChange,
   songRestMeasures,
   onSongRestMeasuresChange,
-  toolsSlot = null,
   metronome,
   setMetronome,
   scorePlayback,
@@ -120,12 +119,6 @@ export default function SettingsBar({
         {/* Anchored right at every width: `shrink-0` so it never compresses,
             and no wrapping so it can never be pushed to a row of its own. */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Score-editing buttons (Fingering mode, Diff, Show Imported) used
-              to own a row of their own below the stats, almost always holding
-              nothing but the one button. They ride here instead (M3.5) — same
-              buttons, same handlers, still one click. SamPlayer passes them
-              only when stopped, which is when they were shown before. */}
-          {toolsSlot}
           <AudioToolbar
             song={song}
             songDbId={songDbId}

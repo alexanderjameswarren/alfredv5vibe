@@ -35,7 +35,7 @@ function SnippetRowFigures({ stats }) {
 }
 
 export default function SnippetPanel({
-  songDbId, totalMeasures, snippet, onSnippetChange,
+  songDbId, totalMeasures, snippet, onSnippetChange, scoreTools = null,
 }) {
   const [open, setOpen] = useState(false);
   const [startMeas, setStartMeas] = useState(snippet?.startMeasure || 1);
@@ -305,18 +305,27 @@ export default function SnippetPanel({
 
   return (
     <div className="mb-3">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-dark min-h-[44px] px-1"
-      >
-        {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-        Snippet
-        {snippet && (
-          <span className="text-xs text-primary ml-1">
-            (m.{snippet.startMeasure}–{snippet.endMeasure})
-          </span>
+      {/* The Snippet toggle is a small control on an otherwise empty row, and
+          this row is the last one before the score — so the score's own
+          controls ride at the far end of it rather than claiming a row. Both
+          sides are `min-h-[44px]`, so this costs no vertical space at all. */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setOpen(!open)}
+          className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-dark min-h-[44px] px-1"
+        >
+          {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          Snippet
+          {snippet && (
+            <span className="text-xs text-primary ml-1">
+              (m.{snippet.startMeasure}–{snippet.endMeasure})
+            </span>
+          )}
+        </button>
+        {scoreTools && (
+          <div className="ml-auto flex items-center gap-2 shrink-0">{scoreTools}</div>
         )}
-      </button>
+      </div>
 
       {open && (
         <div className="mt-1 p-3 bg-card border border-border rounded-lg text-sm">

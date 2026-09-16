@@ -443,6 +443,8 @@ const getSamPassesTool = defineTool({
       song_id: args.song_id as string | undefined,
       snippet_id: args.snippet_id as string | undefined,
       whole_song_only: args.whole_song_only as boolean | undefined,
+      exclude_zero_note: args.exclude_zero_note as boolean | undefined,
+      only_zero_note: args.only_zero_note as boolean | undefined,
       date_from: args.date_from as string | undefined,
       date_to: args.date_to as string | undefined,
       limit: LIMIT,
@@ -915,7 +917,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get SAM Passes",
       description:
-        "Get completed playthroughs (passes) from the SAM music app. One row per complete playthrough of whatever range was loaded: snippet_id null means the whole song, otherwise that snippet. `bpm` is the tempo at the instant the pass FINISHED, and does not account for playback speed — a pass at 60 played at 80% speed was effectively 48. Use this to check practice instructions of the form 'at 60, four to six passes'. Returns most recent passes first, with song and range titles.",
+        "Get completed playthroughs (passes) from the SAM music app. One row per complete playthrough of whatever range was loaded: snippet_id null means the whole song, otherwise that snippet. `bpm` is the score tempo at the instant the pass FINISHED; `effective_bpm` is what was actually heard (bpm scaled by playback_speed), so 60 at 80% reads 48. A NULL playback_speed means NOT RECORDED rather than 100 — passes from before 2026-09-16 predate the column, and their effective_bpm is NULL too. `hits`, `misses` and `notes_played` record how the playthrough went, and `hand_mode` which hand was scored. IMPORTANT: `notes_played` 0 means nothing was played — a playback test — because a miss is raised on elapsed time without consulting MIDI, so a pass with no keyboard scores 0 hits and a full count of misses and is otherwise identical to playing badly. Use exclude_zero_note to drop test data rather than inferring it. `accuracy_percent` is NULL when unmeasurable and 0 when measured-and-all-wrong; never treat NULL as 0. Use this to check practice instructions of the form 'at 60, four to six passes'. Returns most recent passes first, with song and range titles.",
       inputSchema: {
         song_id: z.string().optional().describe("Filter by song ID"),
         snippet_id: z.string().optional().describe("Filter by snippet ID"),
@@ -923,6 +925,16 @@ export function createMcpServer(token: string) {
           .boolean()
           .optional()
           .describe("Only whole-song passes (rows where snippet_id is null)"),
+        exclude_zero_note: z
+          .boolean()
+          .optional()
+          .describe(
+            "Drop passes where no MIDI note arrived (notes_played = 0) — i.e. playback tests. Also drops rows predating 2026-09-16, whose notes_played is NULL (not recorded).",
+          ),
+        only_zero_note: z
+          .boolean()
+          .optional()
+          .describe("Only passes where no MIDI note arrived, for auditing what exclude_zero_note would drop"),
         date_from: z.string().optional().describe("Start date filter (ISO 8601 format)"),
         date_to: z.string().optional().describe("End date filter (ISO 8601 format)"),
         limit: z.number().optional().describe("Max results to return (default 20)"),

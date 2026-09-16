@@ -126,7 +126,7 @@ export default function SamPlayer({ onBack }) {
 
   const {
     startSession, endSession, recordEvent, setLoopIteration, getSessionId,
-    noteTempo, noteMidiConnected, stats: sessionStats,
+    getCurrentPlaythrough, noteTempo, noteMidiConnected, stats: sessionStats,
   } = usePracticeSession({
     onSessionEnded: () => setPracticeStatsRefetchSignal((n) => n + 1),
   });
@@ -489,8 +489,15 @@ export default function SamPlayer({ onBack }) {
   // simply never be called. Keeping that callback stable and reading mutable
   // values through here is what makes the row carry the tempo at the finish
   // line rather than the tempo the run started at.
-  const passContextRef = useRef({ songId: null, snippet: null, bpm: null });
-  passContextRef.current = { songId: songDbId, snippet, bpm: bpm.value };
+  const passContextRef = useRef({ songId: null, snippet: null, bpm: null, playbackSpeed: null });
+  passContextRef.current = {
+    songId: songDbId,
+    snippet,
+    bpm: bpm.value,
+    // Read here for the same reason as bpm: both can change mid-run, and the
+    // pass must record what was true at the finish line.
+    playbackSpeed: playbackSpeed.value,
+  };
 
   // Credit one completed playthrough of the loaded range.
   //
@@ -503,8 +510,13 @@ export default function SamPlayer({ onBack }) {
       snippet: ctx.snippet,
       sessionId: getSessionId(),
       bpm: ctx.bpm,
+      playbackSpeed: ctx.playbackSpeed,
+      handMode: ctx.snippet?.handMode || "both",
+      // Read at credit time, which is why this must run before
+      // `setLoopIteration` rotates the counters — see `handleLoopCount`.
+      playthrough: getCurrentPlaythrough(),
     });
-  }, [recordPass, getSessionId]);
+  }, [recordPass, getSessionId, getCurrentPlaythrough]);
 
   // ScrollEngine's loop signal is the end-of-range event for looped playback:
   // `n` is 0 when a run arms and increments by exactly one at each teleport,
@@ -521,9 +533,17 @@ export default function SamPlayer({ onBack }) {
 
   const handleLoopCount = useCallback((n) => {
     setLoopCount(n);
+    // Credit BEFORE advancing the loop. `setLoopIteration` rotates the
+    // per-playthrough counters, and the pass needs the ones belonging to the
+    // playthrough that just finished. Neither call depends on the other, so the
+    // order is free to choose — and this order is the one that makes the hits
+    // and misses on the pass row belong to the right pass.
+    //
+    // Detection is unchanged: the same signal credits the same passes, at the
+    // same instant.
+    if (n > 0 && n !== lastLoopCountRef.current) creditPass();
     setLoopIteration(n);
     if (n > 0) setPausedMeasure(null);
-    if (n > 0 && n !== lastLoopCountRef.current) creditPass();
     lastLoopCountRef.current = n;
   }, [setLoopIteration, creditPass]);
 
@@ -1002,10 +1022,17 @@ export default function SamPlayer({ onBack }) {
     URL.revokeObjectURL(url);
   }
 
-  // Score-editing buttons that used to sit on a row of their own beneath the
-  // stats (M3.5). Rendered into SettingsBar's top-right cluster instead, and
-  // only when stopped — exactly when that row used to appear — so nothing about
-  // when they are available changes, only where they sit.
+  // Controls that belong to the score: Fingering mode, Diff, Show Imported.
+  //
+  // They have moved twice. M3.5 took them off a row of their own and put them
+  // in SettingsBar's top-right cluster; they now sit at the far end of the
+  // Snippet toggle row, which is the last row before the score and was
+  // otherwise empty. That reads as what they are — score controls, next to the
+  // score — costs no vertical space, since both sides of that row are already
+  // 44px tall, and gives the transport row its width back.
+  //
+  // Still gated on `stopped`, exactly as before, so nothing about WHEN they are
+  // available has changed across any of the moves.
   const scoreToolButtons = playbackState === "stopped" ? (
     <>
       {hasImported && (
@@ -1120,7 +1147,6 @@ export default function SamPlayer({ onBack }) {
                   onSongRepeatChange={setSongRepeat}
                   songRestMeasures={songRestMeasures}
                   onSongRestMeasuresChange={setSongRestMeasures}
-                  toolsSlot={scoreToolButtons}
                   metronome={metronome}
                   setMetronome={setMetronome}
                   scorePlayback={scorePlayback}
@@ -1164,6 +1190,7 @@ export default function SamPlayer({ onBack }) {
                   totalMeasures={song.measures.length}
                   snippet={snippet}
                   onSnippetChange={handleSnippetChange}
+                  scoreTools={scoreToolButtons}
                 />
               </>
             )}

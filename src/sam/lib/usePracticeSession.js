@@ -17,7 +17,12 @@ const EMPTY_STATS = {
 };
 
 function newPlaythrough(loop) {
-  return { loop, hits: 0, misses: 0, partials: 0, totalBeats: 0 };
+  // `notesPlayed` counts MIDI notes that actually arrived. It is the only way
+  // to tell an unmeasured playthrough from a badly played one: ScrollEngine
+  // raises a miss on elapsed time alone, without consulting MIDI, so a pass
+  // with no keyboard attached looks exactly like playing every note wrong —
+  // 0 hits, N misses — in every other counter here.
+  return { loop, hits: 0, misses: 0, partials: 0, totalBeats: 0, notesPlayed: 0 };
 }
 
 // Accuracy counts hits against hits+misses; partials sit outside the ratio.
@@ -175,6 +180,10 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     else if (result === "partial") { c.partials++; p.partials++; }
     else { c.misses++; p.misses++; } // "miss" or "wrong"
 
+    // The miss path passes `played: []`; only the MIDI match path carries
+    // notes. So this stays 0 for a playthrough nobody played.
+    p.notesPlayed += played?.length || 0;
+
     if (timingDeltaMs != null) {
       timingDeltasRef.current.push(timingDeltaMs);
     }
@@ -192,6 +201,20 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
       avgTimingDeltaMs: avgTiming,
       ...playthroughStats(p, lastPlaythroughRef.current),
     });
+  }, []);
+
+  // Counters for the playthrough currently in progress, read by the pass writer
+  // at the instant a pass is credited.
+  //
+  // It must be read BEFORE `setLoopIteration` rotates the counters, which is
+  // why SamPlayer credits the pass first and advances the loop second. Reading
+  // `lastPlaythroughRef` instead would be wrong: that ref is only updated when
+  // the outgoing playthrough had scored beats, so a zero-note playthrough would
+  // silently inherit the PREVIOUS one's hits and misses — precisely the test
+  // data this is meant to make identifiable.
+  const getCurrentPlaythrough = useCallback(() => {
+    const p = playthroughRef.current;
+    return { hits: p.hits, misses: p.misses, notesPlayed: p.notesPlayed };
   }, []);
 
   // ScrollEngine calls this on every loop wrap (and with 0 when a run starts),
@@ -457,6 +480,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     recordEvent,
     setLoopIteration,
     getSessionId,
+    getCurrentPlaythrough,
     noteTempo,
     noteMidiConnected,
     stats,
