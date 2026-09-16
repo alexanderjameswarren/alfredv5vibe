@@ -86,15 +86,29 @@ function fillUnion(walked, cellStart, cellEnd) {
   return [...byMidi.values()];
 }
 
+/** First entry per midi. Order is not preserved; callers sort. */
+function distinctPitches(notes) {
+  const byMidi = new Map();
+  for (const n of notes) if (!byMidi.has(n.midi)) byMidi.set(n.midi, n);
+  return [...byMidi.values()];
+}
+
 /**
  * Drop notes until the event fits `cap` (spec §4.3).
  *
  * `root-third` keeps the lowest `cap` notes. `root-fifth` keeps the lowest and
  * the highest, then fills inward from the bottom — at cap 2 that is the outer
  * pair, which is the case the setting exists for.
+ *
+ * The cap counts DISTINCT PITCHES, not array entries. Real sources carry the
+ * same pitch twice in one chord (The Entertainer m92/m108 LH: G3+G3+C4+E4), and
+ * counting entries made root-third keep G3+G3 — one note struck twice, which
+ * the import validator rejects. Deduping here covers both fill modes. It is
+ * safe to key on midi alone because the grid emits no ties, so the
+ * continuation exception in noteDuplicates.js cannot apply to its output.
  */
 export function applyCap(notes, cap, keep) {
-  const sorted = [...notes].sort((a, b) => a.midi - b.midi);
+  const sorted = distinctPitches(notes).sort((a, b) => a.midi - b.midi);
   if (sorted.length <= cap) return sorted;
   if (keep === "root-fifth") {
     const picked = [sorted[0], sorted[sorted.length - 1]];

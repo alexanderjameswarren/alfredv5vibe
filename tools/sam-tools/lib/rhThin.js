@@ -39,7 +39,15 @@ export function keepIndices(event, rhStack, { measure, eventIndex }) {
   const last = midis.length - 1;
   if (rhStack === "melody-only") return new Set([last]);
   if (rhStack === "melody-plus-one") {
-    return new Set(last > 0 ? [last - 1, last] : [last]);
+    // The "one" is the next DISTINCT pitch below the melody, not the next array
+    // entry: ascending order allows equal neighbours, so [60, 64, 64] would
+    // otherwise keep 64 twice. Among equal entries the highest index wins,
+    // matching how the melody itself is picked.
+    let below = -1;
+    for (let i = last - 1; i >= 0; i--) {
+      if (midis[i] < midis[last]) { below = i; break; }
+    }
+    return new Set(below >= 0 ? [below, last] : [last]);
   }
   return new Set(midis.map((_, i) => i)); // "all"
 }

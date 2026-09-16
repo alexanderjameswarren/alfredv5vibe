@@ -158,6 +158,49 @@ test("cap applies through the grid", () => {
   assert.deepEqual(shape(r.events), ["q:A3", "q:A3", "q:A3", "q:A3"]);
 });
 
+// A pitch stored twice in one chord is real data: The Entertainer m92/m108 LH
+// carried G3, G3:start, C4:start, E4:start. Counting array entries made
+// root-third keep G3+G3, which the import validator rejects.
+const DOUBLED = () => [
+  note(55, "G3"), { ...note(55, "G3"), tie: "start" },
+  { ...note(60, "C4"), tie: "start" }, { ...note(64, "E4"), tie: "start" },
+];
+
+test("the cap counts distinct pitches, not array entries", () => {
+  assert.deepEqual(applyCap(DOUBLED(), 2, "root-third").map((n) => n.name), ["G3", "C4"]);
+  assert.deepEqual(applyCap(DOUBLED(), 2, "root-fifth").map((n) => n.name), ["G3", "E4"]);
+  // Within the cap once deduped: all three pitches, each once.
+  assert.deepEqual(applyCap(DOUBLED(), 4, "root-third").map((n) => n.midi), [55, 60, 64]);
+});
+
+test("no grid output repeats a pitch within an event, whatever the source repeats", () => {
+  const lh = [
+    ev("8", DOUBLED()), ev("8", [note(43, "G2")]),
+    ev("8", DOUBLED()), ev("8", [note(55, "G3"), note(55, "G3")]),
+    ev("8", DOUBLED()), ev("8", DOUBLED()),
+    ev("8", [note(48, "C3")]), ev("8", DOUBLED()),
+  ];
+  const ts = { beats: 4, beatType: 4 };
+  for (const lhGrid of ["quarter", "half", "whole"]) {
+    for (const lhFill of ["onset", "union"]) {
+      for (const lhCap of [1, 2, 3, 4]) {
+        for (const lhKeep of ["root-third", "root-fifth"]) {
+          const s = settings({ lhGrid, lhFill, lhCap, lhKeep });
+          const r = quantizeHand(lh, s, ts);
+          assert.ok(r.changed, `${JSON.stringify(s)} should quantize`);
+          for (const [k, e] of r.events.entries()) {
+            const midis = e.notes.map((n) => n.midi);
+            assert.equal(
+              new Set(midis).size, midis.length,
+              `${JSON.stringify(s)} lh[${k}]: [${midis}]`
+            );
+          }
+        }
+      }
+    }
+  }
+});
+
 // --- density floor --------------------------------------------------------
 
 test("DENSITY FLOOR: a sustained whole-note LH is unchanged at quarter grid", () => {

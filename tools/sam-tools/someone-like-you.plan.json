@@ -1,0 +1,16 @@
+{
+  "planVersion": 1,
+  "sourceSongId": "030333d9-1b9f-4f74-80fb-7fbed587fda6",
+  "label": "melody only · quarter chords",
+  "default": {
+    "lhGrid": "quarter",
+    "lhFill": "onset",
+    "lhCap": 2,
+    "lhKeep": "root-third",
+    "rhStack": "melody-only"
+  },
+  "ranges": [
+    { "measures": "37,57-61,68,79-82", "settings": null },
+    { "measures": "32", "settings": { "lhGrid": "half" } }
+  ]
+}

@@ -19,6 +19,9 @@ import { useState } from "react";
 //   set(n)     — write both value and input to a new committed number
 //   setInput   — raw setter for the draft (used by onChange)
 //   commit     — parse input, fall back / clamp via { min, max, fallback }
+//   preview    — what commit would return right now, without committing.
+//                Lets a caller react to the draft while the field still has
+//                focus (e.g. show Save as soon as a value is typed).
 //   reset(n)   — alias of set(n); exists for caller readability when seeding
 //                from a freshly-loaded song so the intent is "this is the
 //                authoritative new value", not "the user committed".
@@ -31,8 +34,9 @@ export default function useNumericInput(initial) {
     setInput(String(n));
   }
 
-  function commit({ min, max, fallback } = {}) {
-    let n = Number(input);
+  function preview({ min, max, fallback } = {}) {
+    // Number("") is 0, not NaN, so an empty draft needs its own check.
+    let n = input.trim() === "" ? NaN : Number(input);
     // NaN catches "" and non-numeric strings; the explicit check lets a
     // legitimate 0 survive when no min (or min <= 0) is set.
     if (Number.isNaN(n) || (min != null && n < min)) {
@@ -40,6 +44,11 @@ export default function useNumericInput(initial) {
     } else if (max != null && n > max) {
       n = max;
     }
+    return n;
+  }
+
+  function commit(opts) {
+    const n = preview(opts);
     setValue(n);
     setInput(String(n));
     return n;
@@ -51,6 +60,7 @@ export default function useNumericInput(initial) {
     set,
     setInput,
     commit,
+    preview,
     reset: set,
   };
 }

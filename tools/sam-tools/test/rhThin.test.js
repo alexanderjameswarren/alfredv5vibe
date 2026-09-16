@@ -84,6 +84,41 @@ test("keepIndices picks by max(midi), never by array position", () => {
   assert.equal(keepIndices(ev([]), "melody-only", at).size, 0);
 });
 
+// A pitch stored twice in one chord is real data (The Entertainer m92/m108
+// carried G3 twice). Thinning must count pitches, not array entries.
+test("melody-plus-one keeps two DISTINCT pitches when the source repeats one", () => {
+  const at = { measure: 1, eventIndex: 0 };
+  // Doubled melody: the "one" is the next lower pitch, not the twin.
+  assert.deepEqual(
+    [...keepIndices(ev([note(60), note(64), note(64, "start")]), "melody-plus-one", at)].sort(),
+    [0, 2]
+  );
+  // Doubled inner note: one copy of it, the highest index.
+  assert.deepEqual(
+    [...keepIndices(ev([note(60), note(60, "start"), note(64)]), "melody-plus-one", at)].sort(),
+    [1, 2]
+  );
+  // Nothing below the melody but its own twin: the melody alone.
+  assert.deepEqual([...keepIndices(ev([note(64), note(64)]), "melody-plus-one", at)], [1]);
+});
+
+test("thinning never leaves one pitch twice in an event, whatever the source repeats", () => {
+  const doc = tinySong([
+    [ev([note(55), note(55, "start"), note(60), note(64)])],
+    [ev([note(60), note(64), note(64)])],
+    [ev([note(64), note(64)])],
+  ]);
+  for (const rhStack of ["melody-only", "melody-plus-one"]) {
+    const { measures } = thinTiny(doc, () => ({ rhStack, lhGrid: "none" }));
+    for (const m of measures) {
+      for (const [k, e] of m.rh.entries()) {
+        const midis = e.notes.map((n) => n.midi);
+        assert.equal(new Set(midis).size, midis.length, `${rhStack} m${m.number} rh[${k}]: [${midis}]`);
+      }
+    }
+  }
+});
+
 test("a non-ascending notes array is a hard error, not a silent mis-pick", () => {
   assert.throws(
     () => keepIndices(ev([note(67), note(60)]), "melody-only", { measure: 4, eventIndex: 2 }),

@@ -13,10 +13,17 @@ import { DEFAULTS } from "../lib/samConstants";
 //   speed != 100      → BPM auto-hides on Speed blur
 // Inline Save button appears when any field deviates from the loaded song
 // defaults; persisting clears dirty by updating the parent song state.
+// Dirty is judged on the DRAFT (`.preview`), not the committed value, so Save
+// appears while the field still has focus — it is meant to read as a prompt
+// the moment a change is typed, not after a stray tap to blur.
+//
+// Save sits beside whatever is being edited: right of BPM (or Speed/BPM on
+// audio songs) while Tuning is collapsed, after the Tuning fields — i.e. left
+// of Repeat — while it is open.
 //
 // Each numeric input is a `useNumericInput` return value: the component
 // reads `.input` for the draft, calls `.setInput` on change, and
-// `.commit({ min, max, fallback })` on blur.
+// `.commit(RULES.x)` on blur.
 //
 // The whole-song repeat toggle + its rest stepper live here, to the right of
 // Measure W. They are session-only state owned by SamPlayer — deliberately
@@ -29,6 +36,16 @@ import { DEFAULTS } from "../lib/samConstants";
 // windows, site data blocked), and a settings row that cannot render is a much
 // worse outcome than a group that forgets it was open.
 const ADVANCED_OPEN_KEY = "sam.numericSettings.tuningOpen";
+
+// Parse/clamp rules per field. One table so blur, the dirty check and Save can
+// never disagree about what a draft means.
+const RULES = {
+  bpm: { min: 1, fallback: DEFAULTS.bpm },
+  timingWindowMs: { min: 100, fallback: DEFAULTS.timingWindowMs },
+  chordMs: { min: 1, fallback: DEFAULTS.chordMs },
+  measureWidth: { min: 150, max: 600, fallback: 150 },
+  playbackSpeed: { min: 1, max: 200, fallback: DEFAULTS.playbackSpeed },
+};
 
 function readAdvancedOpen() {
   try {
@@ -81,11 +98,11 @@ export default function NumericSettings({
   const hasAudio = !!song?.audioFilePath;
 
   const isDirty =
-    bpm.value !== (song?.defaultBpm ?? DEFAULTS.bpm) ||
-    timingWindowMs.value !== (song?.defaultTimingWindowMs ?? DEFAULTS.timingWindowMs) ||
-    chordMs.value !== (song?.defaultChordMs ?? DEFAULTS.chordMs) ||
-    measureWidth.value !== (song?.defaultMeasureWidth ?? DEFAULTS.measureWidth) ||
-    playbackSpeed.value !== (song?.playbackSpeed ?? DEFAULTS.playbackSpeed);
+    bpm.preview(RULES.bpm) !== (song?.defaultBpm ?? DEFAULTS.bpm) ||
+    timingWindowMs.preview(RULES.timingWindowMs) !== (song?.defaultTimingWindowMs ?? DEFAULTS.timingWindowMs) ||
+    chordMs.preview(RULES.chordMs) !== (song?.defaultChordMs ?? DEFAULTS.chordMs) ||
+    measureWidth.preview(RULES.measureWidth) !== (song?.defaultMeasureWidth ?? DEFAULTS.measureWidth) ||
+    playbackSpeed.preview(RULES.playbackSpeed) !== (song?.playbackSpeed ?? DEFAULTS.playbackSpeed);
 
   function handleEnableBpmEdit() {
     playbackSpeed.set(DEFAULTS.playbackSpeed);
@@ -94,15 +111,28 @@ export default function NumericSettings({
 
   async function handleSaveSettings() {
     if (!songDbId) return;
+    // Commit every draft first. The field being edited may still have focus
+    // (on iOS a tap on a button does not always blur it), so the committed
+    // `.value`s can be stale; `commit` returns the number to save.
+    const v = {
+      bpm: bpm.commit(RULES.bpm),
+      timingWindowMs: timingWindowMs.commit(RULES.timingWindowMs),
+      chordMs: chordMs.commit(RULES.chordMs),
+      measureWidth: measureWidth.commit(RULES.measureWidth),
+      playbackSpeed: playbackSpeed.commit(RULES.playbackSpeed),
+    };
+    // Now drop focus so the phone keyboard closes; the field's own onBlur
+    // re-commits the same draft, which is harmless.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     setSavingSettings(true);
     const { error } = await supabase
       .from("sam_songs")
       .update({
-        default_bpm: bpm.value,
-        default_timing_window_ms: timingWindowMs.value,
-        default_chord_ms: chordMs.value,
-        default_measure_width: measureWidth.value,
-        playback_speed: playbackSpeed.value,
+        default_bpm: v.bpm,
+        default_timing_window_ms: v.timingWindowMs,
+        default_chord_ms: v.chordMs,
+        default_measure_width: v.measureWidth,
+        playback_speed: v.playbackSpeed,
       })
       .eq("id", songDbId);
     if (error) {
@@ -111,15 +141,30 @@ export default function NumericSettings({
     } else if (onSongUpdate) {
       onSongUpdate({
         ...song,
-        defaultBpm: bpm.value,
-        defaultTimingWindowMs: timingWindowMs.value,
-        defaultChordMs: chordMs.value,
-        defaultMeasureWidth: measureWidth.value,
-        playbackSpeed: playbackSpeed.value,
+        defaultBpm: v.bpm,
+        defaultTimingWindowMs: v.timingWindowMs,
+        defaultChordMs: v.chordMs,
+        defaultMeasureWidth: v.measureWidth,
+        playbackSpeed: v.playbackSpeed,
       });
     }
     setSavingSettings(false);
   }
+
+  // `onMouseDown` preventDefault keeps focus in the field being edited, so the
+  // tap lands on Save instead of being spent blurring the input — and blur
+  // re-rendering the row cannot move the button out from under the finger.
+  const saveButton = isDirty && (
+    <button
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={handleSaveSettings}
+      disabled={savingSettings || !songDbId}
+      className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50"
+    >
+      <Save className="w-3.5 h-3.5" />
+      {savingSettings ? "Saving..." : "Save"}
+    </button>
+  );
 
   return (
     <div className="flex items-center gap-3 mb-3 flex-wrap">
@@ -136,12 +181,13 @@ export default function NumericSettings({
             value={bpm.input}
             onFocus={(e) => e.target.select()}
             onChange={(e) => bpm.setInput(e.target.value)}
-            onBlur={() => bpm.commit({ min: 1, fallback: DEFAULTS.bpm })}
+            onBlur={() => bpm.commit(RULES.bpm)}
             className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
             min={20} max={300}
           />
         </label>
       )}
+      {!advancedOpen && !hasAudio && saveButton}
       <button
         type="button"
         onClick={() => setAdvancedOpen((open) => !open)}
@@ -166,7 +212,7 @@ export default function NumericSettings({
           value={timingWindowMs.input}
           onFocus={(e) => e.target.select()}
           onChange={(e) => timingWindowMs.setInput(e.target.value)}
-          onBlur={() => timingWindowMs.commit({ min: 100, fallback: DEFAULTS.timingWindowMs })}
+          onBlur={() => timingWindowMs.commit(RULES.timingWindowMs)}
           className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
           min={100} max={2000}
         />
@@ -178,7 +224,7 @@ export default function NumericSettings({
           value={chordMs.input}
           onFocus={(e) => e.target.select()}
           onChange={(e) => chordMs.setInput(e.target.value)}
-          onBlur={() => chordMs.commit({ min: 1, fallback: DEFAULTS.chordMs })}
+          onBlur={() => chordMs.commit(RULES.chordMs)}
           className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
           min={10} max={500}
         />
@@ -190,11 +236,12 @@ export default function NumericSettings({
           value={measureWidth.input}
           onFocus={(e) => e.target.select()}
           onChange={(e) => measureWidth.setInput(e.target.value)}
-          onBlur={() => measureWidth.commit({ min: 150, max: 600, fallback: 150 })}
+          onBlur={() => measureWidth.commit(RULES.measureWidth)}
           className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
           min={150} max={600} step={50}
         />
       </label>
+      {saveButton}
         </>
       )}
 
@@ -230,7 +277,7 @@ export default function NumericSettings({
               onFocus={(e) => e.target.select()}
               onChange={(e) => playbackSpeed.setInput(e.target.value)}
               onBlur={() => {
-                const n = playbackSpeed.commit({ min: 1, max: 200, fallback: DEFAULTS.playbackSpeed });
+                const n = playbackSpeed.commit(RULES.playbackSpeed);
                 if (n !== DEFAULTS.playbackSpeed) setShowBpmEdit(false);
               }}
               className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
@@ -245,7 +292,7 @@ export default function NumericSettings({
                 value={bpm.input}
                 onFocus={(e) => e.target.select()}
                 onChange={(e) => bpm.setInput(e.target.value)}
-                onBlur={() => bpm.commit({ min: 1, fallback: DEFAULTS.bpm })}
+                onBlur={() => bpm.commit(RULES.bpm)}
                 className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
                 min={20} max={300}
               />
@@ -259,16 +306,7 @@ export default function NumericSettings({
           )}
         </>
       )}
-      {isDirty && (
-        <button
-          onClick={handleSaveSettings}
-          disabled={savingSettings || !songDbId}
-          className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50"
-        >
-          <Save className="w-3.5 h-3.5" />
-          {savingSettings ? "Saving..." : "Save"}
-        </button>
-      )}
+      {!advancedOpen && hasAudio && saveButton}
 
       {/* Metronome and score playback moved here from the stats row (option D).
           They are playback settings, so they belong with BPM, Tuning and
