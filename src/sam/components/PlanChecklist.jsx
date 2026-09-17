@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
-import { itemState, itemTargetText, planSummary } from "../lib/activePlan";
+import { itemRangeText, itemState, itemTargetText, planSummary } from "../lib/activePlan";
 
 // Today's practice plan, on the SAM home page directly above the 7-day
 // snapshot (practice plans spec §7.3). Renders nothing without an active plan.
@@ -31,10 +31,14 @@ function writeExpanded(value) {
   }
 }
 
+// Four lines, so two items on one song never look alike even when a long song
+// title is cut short:
+//   1. song title (truncated), progress kept visible on the right
+//   2. range — "m.1–2 · RH", "Whole song", or "(snippet archived)" — muted
+//   3. target
+//   4. instruction, when there is one
 function ItemRow({ item, progress, onOpen }) {
   const st = itemState(item, progress);
-  const unavailable = item.snippet_unavailable;
-  const snippetTitle = item.snippet?.title;
   const tone = st.done ? "text-muted-foreground" : st.amber ? "text-amber-700" : "text-dark";
   const strike = st.done ? "line-through" : "";
 
@@ -50,25 +54,22 @@ function ItemRow({ item, progress, onOpen }) {
           {st.done && <Check className="w-4 h-4 text-success" role="img" aria-label="Done" />}
         </span>
         <span className="flex-1 min-w-0">
-          <span className={`block text-sm font-medium truncate ${tone} ${strike}`}>
-            {item.song_title}
-            {snippetTitle && !unavailable && ` · ${snippetTitle}`}
-            {unavailable && (
-              <span className="font-normal text-muted-foreground">
-                {snippetTitle ? ` · ${snippetTitle}` : ""} (snippet archived)
-              </span>
-            )}
+          <span className="flex items-baseline gap-3">
+            <span className={`flex-1 min-w-0 text-sm font-medium truncate ${tone} ${strike}`}>
+              {item.song_title}
+            </span>
+            <span
+              className={`text-sm font-mono tabular-nums flex-shrink-0 ${tone}`}
+              aria-label={`${st.shown} of ${st.target} passes${st.done ? ", done" : ""}`}
+            >
+              {st.shown}/{st.target}
+            </span>
           </span>
+          <span className={`block text-xs text-muted-foreground ${strike}`}>{itemRangeText(item)}</span>
           <span className={`block text-xs text-muted-foreground ${strike}`}>{itemTargetText(item)}</span>
           {item.instruction && (
             <span className={`block text-xs text-muted-foreground ${strike}`}>{item.instruction}</span>
           )}
-        </span>
-        <span
-          className={`text-sm font-mono tabular-nums flex-shrink-0 ${tone}`}
-          aria-label={`${st.shown} of ${st.target} passes${st.done ? ", done" : ""}`}
-        >
-          {st.shown}/{st.target}
         </span>
       </button>
     </li>
@@ -90,7 +91,7 @@ export default function PlanChecklist({ plan, progress, onOpenItem }) {
   }
 
   return (
-    <section className="mt-4 w-full bg-card border border-border rounded-lg" aria-label="Today's practice plan">
+    <section className="mt-2 w-full bg-card border border-border rounded-lg" aria-label="Today's practice plan">
       <button
         type="button"
         onClick={toggle}

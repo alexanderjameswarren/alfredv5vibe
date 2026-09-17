@@ -164,6 +164,33 @@ export function planSummary(plan, progress) {
   return text;
 }
 
+// A snippet title the app generated from the range itself ("Measures 1-2 RH
+// No Rest", formatSnippetTitle) says nothing the range line does not.
+const GENERATED_TITLE = /^Measures\s+\d+\s*-\s*\d+(\s+(LH|RH|Both))?(\s+(No Rest|Rest:\s*\d+))?$/i;
+
+function titleAddsInformation(title) {
+  return !!title && title.trim() !== "" && !GENERATED_TITLE.test(title.trim());
+}
+
+/**
+ * The item's range line: "m.1–2 · RH", plus " · <title>" when the snippet's
+ * title says more than the range. "Whole song" for whole-song items. An
+ * archived or missing snippet ends with "(snippet archived)" — after its range
+ * when the snippet row is still readable.
+ */
+export function itemRangeText(item) {
+  if (!item.snippet_id) return "Whole song";
+  const sn = item.snippet;
+  const parts = [];
+  if (sn) {
+    parts.push(`m.${sn.start_measure}–${sn.end_measure}`);
+    if (sn.hand_mode && sn.hand_mode !== "both") parts.push(sn.hand_mode.toUpperCase());
+    if (titleAddsInformation(sn.title)) parts.push(sn.title);
+  }
+  if (item.snippet_unavailable) parts.push("(snippet archived)");
+  return parts.join(" · ");
+}
+
 /** "60 BPM · 90% · 4 passes", or "78 BPM · 2 passes" for free play. */
 export function itemTargetText(item) {
   const passes = `${item.target_passes} pass${item.target_passes === 1 ? "" : "es"}`;

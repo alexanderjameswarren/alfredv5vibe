@@ -28,27 +28,32 @@ jest.mock("./lib/songLoad", () => ({
 }));
 
 // --- Supabase: canned tables, recorded inserts and rpc calls ----------------
-const mockDb = { tables: {}, inserts: [], rpcs: [], froms: [] };
+const mockDb = { tables: {}, inserts: [], updates: [], rpcs: [], froms: [], hangPlans: false };
 jest.mock("../supabaseClient", () => {
   function query(table) {
     mockDb.froms.push(table);
     const filters = [];
     let insert = null;
+    let update = null;
     const rows = () => (mockDb.tables[table] || []).filter((r) => filters.every((f) => f(r)));
     const api = new Proxy({}, {
       get(_, prop) {
         if (prop === "then") {
           return (resolve, reject) => {
             if (insert) mockDb.inserts.push({ table, row: insert });
+            if (update) mockDb.updates.push({ table, row: update });
             return Promise.resolve({ data: insert ? [] : rows(), count: 0, error: null }).then(resolve, reject);
           };
         }
         if (prop === "eq") return (c, v) => { filters.push((r) => r[c] === v); return api; };
         if (prop === "in") return (c, vs) => { filters.push((r) => vs.includes(r[c])); return api; };
         if (prop === "insert") return (row) => { insert = row; return api; };
+        if (prop === "update") return (row) => { update = row; return api; };
         if (prop === "single" || prop === "maybeSingle") {
           return () => ({
             then: (resolve, reject) => {
+              // A plan that has not loaded yet: the request never answers.
+              if (table === "sam_practice_plans" && mockDb.hangPlans) return new Promise(() => {});
               if (insert) mockDb.inserts.push({ table, row: insert });
               const data = insert ? { id: `${table}-new` } : rows()[0] ?? null;
               return Promise.resolve({ data, error: null }).then(resolve, reject);
@@ -116,6 +121,8 @@ function seed() {
   };
   mockDb.progressRows = [{ plan_item_id: "item-whole", day: "2026-09-16", attempts: 2, qualifying: 2 }];
   mockDb.inserts = [];
+  mockDb.updates = [];
+  mockDb.hangPlans = false;
   mockDb.rpcs = [];
   mockDb.froms = [];
 }
@@ -201,11 +208,14 @@ test("regaining focus reloads the plan", async () => {
 });
 
 test("tapping a snippet item opens its song and snippet at the target tempo; the session and pass carry the link", async () => {
-  await openItem("Throwaway · Opening bar");
+  await openItem("m.1–1 · RH · Opening bar");
   expect(mockFetchSongById).toHaveBeenCalledWith(SONG_ID, expect.anything());
   expect(screen.getByLabelText(/BPM:/)).toHaveValue(60);
-  // Tempo is applied for this sitting only — nothing was written to the song.
+  // Song defaults loaded first (65), then the plan tempo on top — for this
+  // sitting only: nothing was written to the song.
+  expect(SONG.defaultBpm).toBe(65);
   expect(mockDb.inserts.filter((i) => i.table === "sam_songs")).toEqual([]);
+  expect(mockDb.updates.filter((u) => u.table === "sam_songs")).toEqual([]);
 
   await pressPlay();
   expect(sessionInserts()[0].row).toMatchObject({
@@ -227,7 +237,7 @@ test("tapping a snippet item opens its song and snippet at the target tempo; the
 });
 
 test("a whole-song item opens without a snippet and links to the whole-song item", async () => {
-  await openItem("55 BPM · 80% · 2 passes");
+  await openItem("Whole song");
   expect(screen.getByLabelText(/BPM:/)).toHaveValue(55);
   await pressPlay();
   const row = sessionInserts()[0].row;
@@ -247,4 +257,34 @@ test("an archived snippet opens the song without it", async () => {
   // Whole song now, so it matches the whole-song item, not the snippet item.
   expect(sessionInserts()[0].row).not.toHaveProperty("snippet_id");
   expect(sessionInserts()[0].row.plan_item_id).toBe("item-whole");
+});
+
+test("the library has a SAM header", async () => {
+  renderHome();
+  expect(await screen.findByRole("heading", { name: "SAM" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Back to Alfred" })).toBeInTheDocument();
+});
+
+test("archiving the planned snippet in the player shows on the strip when you return home", async () => {
+  await openItem("m.1–1 · RH · Opening bar");
+  // What SnippetPanel's archive button writes, as the database would then hold it.
+  mockDb.tables.sam_snippets[0].archived = true;
+  fireEvent.click(screen.getByRole("button", { name: "Back to song library" }));
+  // The strip was left expanded, and remembers it.
+  expect(await screen.findByText("m.1–1 · RH · Opening bar · (snippet archived)")).toBeInTheDocument();
+});
+
+test("a pass completed before the plan has loaded is still written, with null links", async () => {
+  mockDb.hangPlans = true;
+  render(
+    <MemoryRouter initialEntries={[`/sam/songs/${SONG_ID}`]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <SamPlayer onBack={() => {}} />
+    </MemoryRouter>
+  );
+  await screen.findByLabelText(/BPM:/);
+  await pressPlay();
+  expect(sessionInserts()[0].row).toMatchObject({ plan_id: null, plan_item_id: null });
+  await act(async () => { mockScrollProps.onLoopCount(1); });
+  await waitFor(() => expect(passInserts()).toHaveLength(1));
+  expect(passInserts()[0].row).toMatchObject({ song_id: SONG_ID, plan_id: null, plan_item_id: null });
 });

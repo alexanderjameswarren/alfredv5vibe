@@ -38,22 +38,32 @@ export default function useActivePlan() {
     }
   }, []);
 
+  const againRef = useRef(false);
+
   const refresh = useCallback(() => {
     // One load at a time: SAM opening and the home page mounting fire together.
-    if (loadingRef.current) return loadingRef.current;
+    // A request that arrives mid-load may be asking about a change the running
+    // load started too early to see (a snippet archived a moment ago), so it
+    // queues ONE more load rather than trusting the one in flight.
+    if (loadingRef.current) {
+      againRef.current = true;
+      return loadingRef.current;
+    }
     const run = (async () => {
-      try {
-        const next = await loadActivePlan(supabase);
-        planRef.current = next;
-        setPlan(next);
-        await refreshProgress(next?.id ?? null);
-      } catch (e) {
-        // Keep the last good plan; a failed refresh is not "no plan".
-        console.error("[Sam] Active plan fetch failed:", e);
-      } finally {
-        setLoaded(true);
-        loadingRef.current = null;
-      }
+      do {
+        againRef.current = false;
+        try {
+          const next = await loadActivePlan(supabase);
+          planRef.current = next;
+          setPlan(next);
+          await refreshProgress(next?.id ?? null);
+        } catch (e) {
+          // Keep the last good plan; a failed refresh is not "no plan".
+          console.error("[Sam] Active plan fetch failed:", e);
+        }
+      } while (againRef.current);
+      setLoaded(true);
+      loadingRef.current = null;
     })();
     loadingRef.current = run;
     return run;

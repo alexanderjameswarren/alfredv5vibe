@@ -1,6 +1,6 @@
 import {
   loadActivePlan, loadTodayProgress, matchPlanItem, planLinkFor,
-  itemState, planSummary, itemTargetText, todayKey,
+  itemState, planSummary, itemTargetText, itemRangeText, todayKey,
 } from "./activePlan";
 
 const PLAN = {
@@ -162,5 +162,26 @@ describe("loadTodayProgress", () => {
   test("today is the Pacific date", () => {
     // 03:00 UTC on the 17th is still the 16th in Los Angeles.
     expect(todayKey(new Date("2026-09-17T03:00:00Z"))).toBe("2026-09-16");
+  });
+});
+
+describe("itemRangeText", () => {
+  const sn = (over) => ({ id: "s", start_measure: 1, end_measure: 2, hand_mode: "both", title: "Measures 1-2 Both No Rest", ...over });
+  test("whole song", () => {
+    expect(itemRangeText({ snippet_id: null })).toBe("Whole song");
+  });
+  test("range, hand mode only when not Both, generated titles left out", () => {
+    expect(itemRangeText({ snippet_id: "s", snippet: sn() })).toBe("m.1–2");
+    expect(itemRangeText({ snippet_id: "s", snippet: sn({ hand_mode: "rh", title: "Measures 1-2 RH Rest: 1" }) })).toBe("m.1–2 · RH");
+    expect(itemRangeText({ snippet_id: "s", snippet: sn({ hand_mode: "lh", title: "Measures 1 - 2 LH" }) })).toBe("m.1–2 · LH");
+  });
+  test("a title that says more than the range is kept", () => {
+    expect(itemRangeText({ snippet_id: "s", snippet: sn({ start_measure: 37, end_measure: 44, title: "Chorus leap" }) }))
+      .toBe("m.37–44 · Chorus leap");
+  });
+  test("archived keeps its range; missing says only that", () => {
+    expect(itemRangeText({ snippet_id: "s", snippet: sn({ archived: true }), snippet_unavailable: true }))
+      .toBe("m.1–2 · (snippet archived)");
+    expect(itemRangeText({ snippet_id: "s", snippet: null, snippet_unavailable: true })).toBe("(snippet archived)");
   });
 });

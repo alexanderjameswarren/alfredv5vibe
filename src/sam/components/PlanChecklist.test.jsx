@@ -27,11 +27,11 @@ const PLAN = {
   id: "p1",
   day_note: "Work on speed first, then keep the chorus steady without rushing it at the end of the day.",
   items: [
-    item({ id: "a", position: 1, snippet_id: "sn1", snippet: { id: "sn1", title: "Bars 5-12" }, instruction: "Count out loud." }),
+    item({ id: "a", position: 1, snippet_id: "sn1", snippet: { id: "sn1", title: "Bars 5-12", start_measure: 5, end_measure: 12, hand_mode: "rh" }, instruction: "Count out loud." }),
     item({ id: "free", position: 2, is_free_play: true, song_title: "Someone Like You", accuracy_target: null,
       target_bpm: 67, target_playback_speed: 90, target_effective_bpm: 60, target_passes: 2 }),
     item({ id: "b", position: 3, target_passes: 2, accuracy_target: 80, target_effective_bpm: 50 }),
-    item({ id: "c", position: 4, snippet_id: "gone", snippet: { id: "gone", title: "Old bars", archived: true },
+    item({ id: "c", position: 4, snippet_id: "gone", snippet: { id: "gone", title: "Measures 1-2 Both No Rest", start_measure: 1, end_measure: 2, hand_mode: "both", archived: true },
       snippet_unavailable: true, target_passes: 1 }),
   ],
 };
@@ -96,12 +96,14 @@ test("each row: title with snippet, target, instruction, capped progress", () =>
   render(<PlanChecklist plan={PLAN} progress={PROGRESS} />);
   fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
   const a = within(rowFor("Bars 5-12"));
-  expect(a.getByText("Pastorale · Bars 5-12")).toBeInTheDocument();
+  expect(a.getByText("Pastorale")).toHaveClass("truncate");
+  expect(a.getByText("m.5–12 · RH · Bars 5-12")).toHaveClass("text-muted-foreground");
   expect(a.getByText("60 BPM · 90% · 4 passes")).toBeInTheDocument();
   expect(a.getByText("Count out loud.")).toBeInTheDocument();
   expect(a.getByText("4/4")).toBeInTheDocument();
 
   const free = within(rowFor("Someone Like You"));
+  expect(free.getByText("Whole song")).toBeInTheDocument();
   expect(free.getByText("60 BPM · 2 passes")).toBeInTheDocument();
   expect(free.getByText("0/2")).toBeInTheDocument();
 });
@@ -112,7 +114,7 @@ test("done is struck through with a check; attempts short of target are amber; u
 
   const done = rowFor("Bars 5-12");
   expect(done).toHaveAttribute("data-state", "done");
-  expect(within(done).getByText("Pastorale · Bars 5-12")).toHaveClass("line-through");
+  expect(within(done).getByText("Pastorale")).toHaveClass("line-through");
   expect(within(done).getByText("60 BPM · 90% · 4 passes")).toHaveClass("line-through");
   expect(within(done).getByRole("img", { name: "Done" })).toBeInTheDocument();
 
@@ -127,12 +129,40 @@ test("done is struck through with a check; attempts short of target are amber; u
   expect(within(open).queryByRole("img", { name: "Done" })).not.toBeInTheDocument();
 });
 
-test("an archived or missing snippet says so, muted", () => {
-  render(<PlanChecklist plan={PLAN} progress={PROGRESS} />);
+test("an archived or missing snippet says so on the range line, muted", () => {
+  const missing = item({ id: "m", position: 5, snippet_id: "x", snippet: null, snippet_unavailable: true });
+  render(<PlanChecklist plan={{ ...PLAN, items: [...PLAN.items, missing] }} progress={PROGRESS} />);
   fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
-  const muted = screen.getByText(/\(snippet archived\)/);
-  expect(muted).toHaveClass("text-muted-foreground");
-  expect(muted.textContent).toBe(" · Old bars (snippet archived)");
+  // Range still known (archived), and a generated title adds nothing.
+  expect(screen.getByText("m.1–2 · (snippet archived)")).toHaveClass("text-muted-foreground");
+  // Not readable at all.
+  expect(screen.getByText("(snippet archived)")).toHaveClass("text-muted-foreground");
+});
+
+test("a long song title is cut on its own line; the range, archived label and progress stay visible", () => {
+  const LONG = "Pastorale No. 3 in G Major, Op. 100 No. 3 — Burgmüller Études Faciles et Progressives";
+  const plan = {
+    id: "p2",
+    day_note: null,
+    items: [
+      item({ id: "l1", song_title: LONG, snippet_id: "s1",
+        snippet: { id: "s1", title: "Measures 1-2 RH No Rest", start_measure: 1, end_measure: 2, hand_mode: "rh" } }),
+      item({ id: "l2", position: 2, song_title: LONG, snippet_id: "s2",
+        snippet: { id: "s2", title: "Measures 1-2 RH No Rest", start_measure: 1, end_measure: 2, hand_mode: "rh", archived: true },
+        snippet_unavailable: true }),
+    ],
+  };
+  render(<PlanChecklist plan={plan} progress={new Map()} />);
+  fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
+  const titles = screen.getAllByText(LONG);
+  expect(titles).toHaveLength(2);
+  for (const t of titles) expect(t).toHaveClass("truncate");
+  // The two rows differ below the title, where nothing truncates.
+  const liveRange = screen.getByText("m.1–2 · RH");
+  expect(liveRange).not.toHaveClass("truncate");
+  expect(screen.getAllByText("0/4")).toHaveLength(2);
+  for (const p of screen.getAllByText("0/4")) expect(p).toHaveClass("flex-shrink-0");
+  expect(screen.getByText("m.1–2 · RH · (snippet archived)")).not.toHaveClass("truncate");
 });
 
 test("tapping a row opens that item", () => {

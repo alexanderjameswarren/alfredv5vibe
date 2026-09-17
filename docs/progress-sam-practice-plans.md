@@ -2,7 +2,7 @@
 
 Spec: `docs/technical-spec-sam-practice-plans.md`
 
-## Status: Milestone 4 built — awaiting verification against a test plan
+## Status: Milestone 5 in progress (Milestone 4 verified)
 
 Work is committed directly to main. No branches.
 
@@ -36,7 +36,7 @@ SQL docs/migrations/2026-09-16-sam-practice-plans.sql applied 2026-09-16; CONFOR
 - [x] recordPass and session creation write plan_id and plan_item_id (§7.2)
 - [x] Checklist strip on the SAM home page (§7.3)
 - [x] Tapping an item opens the song and snippet at target tempo
-- [ ] Verified against a test plan — tests pass (53 suites, 1072 tests); manual checks awaiting Alex
+- [x] Verified against a test plan — Alex, 2026-09-16: strip counts, expand/collapse persistence, tap-to-open (snippet, whole song, audio), plan tempo not surviving a reload or a normal open, zero-note passes not counting, plan links on passes and sessions. One bug (archived label cut off), fixed in the follow-up below. Test plan deleted.
 
 ### Milestone 5 — Player display (Claude Code)
 - [ ] Plan line with Set tempo button (§7.4)
@@ -404,3 +404,51 @@ progress read.
   session link (3 failures).
 - `npm test`: 53 suites, 1072 tests pass. Lint is clean on every new and
   changed file.
+- **Tap-to-open mechanism** (reported late): neither navigation state nor
+  query parameters.
+  - The strip calls `SamPlayer.openPlanItem` directly (a prop through
+    SongLoader). That function loads the song through the same
+    `handleSongLoaded` path as the library, then applies the snippet and
+    tempo in memory.
+  - The URL then becomes the ordinary `/sam/songs/:id`. So a reload, or
+    opening the song normally, loads the song's own defaults. Alex's manual
+    test confirmed this.
+
+#### Milestone 4 follow-up (2026-09-16)
+
+**A1. Archived label not shown — a layout bug.** The data was fine: the
+snippet's `archived` value is loaded, and the strip reloads when you return
+home (a new end-to-end test archives in the player, returns, and sees the
+label). The label sat inside the title span, which truncates, so a long title
+such as Pastorale's cut off the snippet name and the label with it.
+- **Rows now have four lines.**
+  1. The song title, truncated, with the progress fixed on the right.
+  2. The range, muted: "m.1–2 · RH" (hand mode only when not Both),
+     "Whole song", or "… · (snippet archived)".
+  3. The target.
+  4. The instruction, when there is one.
+- **Snippet titles** are added to the range line only when they say more than
+  the range. Generated titles ("Measures 1-2 RH No Rest") are left out
+  (`itemRangeText`).
+- **An archived snippet keeps its range** in front of the label, so two items
+  on one song never look identical.
+- **Hardening in `useActivePlan`.** A reload requested while another is still
+  running now queues one more load instead of joining it. The running load
+  may have started before the change it was asked about.
+
+**A2. A header on the SAM home page.** The back arrow is followed by lucide
+`Music` (the icon Alfred's navigation uses for SAM) and "SAM", in the
+`text-lg sm:text-xl font-medium` heading style of Alfred's pages. Top padding
+on the library is now `pt-2` (was `py-6`; the player is unchanged). The
+checklist strip and the 7-day strip now use `mt-2` (was `mt-4`).
+
+**Test list from the Milestone 4 brief**
+- **Already covered:** the matching rule; the collapsed line with and without
+  free play; done and amber; ordering with free play last.
+- **Tap-to-open applying the plan tempo** was only partly covered: the test
+  checked for no inserts into `sam_songs`, but a tempo save would be an
+  update. The end-to-end mock now records updates and asserts none reach
+  `sam_songs`.
+- **"Linking doesn't block a pass when the plan hasn't loaded"** was covered
+  only at the hook level. It now also has an end-to-end test: the plan request
+  never answers, and the session and pass are still written, with null links.

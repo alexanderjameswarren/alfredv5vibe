@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { Music } from "lucide-react";
 import { SAM_PATH, samSongPath, samSongIdFromPath } from "../viewPaths";
 import ScoreRenderer from "./components/ScoreRenderer";
 import ScrollEngine from "./components/ScrollEngine";
@@ -1130,7 +1131,9 @@ export default function SamPlayer({ onBack }) {
           exist while playing or before a song is open, so putting it there
           alone would have made Alfred unreachable from the song library and
           two clicks away (pause, then back) during playback. */}
-      <div ref={scrollContainerRef} className="mx-auto px-3 sm:px-4 py-6">
+      {/* The song library sits tighter to the top: its header row replaces the
+          padding (practice plans M4 follow-up). The player keeps py-6. */}
+      <div ref={scrollContainerRef} className={`mx-auto px-3 sm:px-4 ${song ? "py-6" : "pt-2 pb-6"}`}>
         {importError && (
           <div className="mb-4 mx-3 sm:mx-4 p-3 bg-red-50 border border-red-200 rounded flex items-start justify-between gap-3 text-sm text-red-700">
             <span className="whitespace-pre-wrap">{importError}</span>
@@ -1145,10 +1148,13 @@ export default function SamPlayer({ onBack }) {
         )}
         {!song ? (
           <>
-            <div className="flex items-center mb-2">
+            <div className="flex items-center gap-2">
               {/* The only level above the song library is Alfred itself, and
                   this is the only route out of SAM — see BackButton. */}
               <BackButton onBack={onBack} title="Back to Alfred" />
+              {/* Same icon Alfred's navigation uses for SAM. */}
+              <Music className="w-5 h-5 text-primary" aria-hidden="true" />
+              <h2 className="text-lg sm:text-xl font-medium text-foreground">SAM</h2>
             </div>
             <SongLoader
               onSongLoaded={handleSongLoaded}

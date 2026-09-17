@@ -22,7 +22,7 @@ import { ChevronRight } from "lucide-react";
 
 function Skeleton() {
   return (
-    <div className="mt-4 w-full flex items-center gap-3 p-3 bg-card border border-border rounded-lg min-h-[56px]">
+    <div className="mt-2 w-full flex items-center gap-3 p-3 bg-card border border-border rounded-lg min-h-[56px]">
       <div className="text-sm text-muted-foreground">Loading practice stats…</div>
     </div>
   );
@@ -39,7 +39,7 @@ export default function PracticeWeekSnapshot({ sevenDayTotals, loading, onTap })
   return (
     <button
       onClick={onTap}
-      className="mt-4 w-full flex items-center gap-3 p-3 bg-card border border-border rounded-lg hover:bg-secondary/40 transition-colors min-h-[56px] text-left"
+      className="mt-2 w-full flex items-center gap-3 p-3 bg-card border border-border rounded-lg hover:bg-secondary/40 transition-colors min-h-[56px] text-left"
       aria-label="Open practice history"
     >
       <div className="flex-shrink-0">
