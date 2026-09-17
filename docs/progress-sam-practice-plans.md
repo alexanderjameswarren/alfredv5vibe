@@ -635,3 +635,12 @@ posture. Readability only — no layout or behaviour changes.
   a border keeps it visible on a plain white row. On the chip, `foreground`
   is 15.2:1 and `amber-900` 9.1:1.
 - Nothing in the three components is now below `text-sm`, SAM's body size.
+
+**Tap affordance (2026-09-17).** On a tablet there is no hover, so nothing said
+a checklist row could be tapped to open its song. Each row now has its own
+outlined surface (`border-border` on `card`, rounded), a pressed state
+(`active:bg-secondary`) alongside the existing hover, and a trailing
+`ChevronRight` in the same place as the practice snapshot's. Rows are spaced
+`gap-2` and the padding moved from the list to the rows, so the strip is no
+taller than before. Behaviour is unchanged; a test pins the border, the pressed
+state, the 52px target and the chevron.

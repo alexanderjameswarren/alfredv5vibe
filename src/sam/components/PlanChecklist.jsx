@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, ChevronRight } from "lucide-react";
 import { itemRangeText, itemState, itemTargetText, planSummary } from "../lib/activePlan";
 
 // Today's practice plan, on the SAM home page directly above the 7-day
@@ -47,6 +47,11 @@ function writeExpanded(value) {
 //   2. range — "m.1–2 · RH", "Whole song", or "(snippet archived)" — muted
 //   3. target
 //   4. instruction, when there is one
+//
+// Each row is a tap target that opens the song (and its snippet) at the item's
+// tempo, so it has to LOOK like one on a tablet, where there is no hover to
+// discover it with: its own outlined surface, a chevron at the trailing edge,
+// and a pressed state.
 function ItemRow({ item, progress, onOpen }) {
   const st = itemState(item, progress);
   // Done is struck through, never dimmed; amber stays full-contrast too.
@@ -58,7 +63,7 @@ function ItemRow({ item, progress, onOpen }) {
       <button
         type="button"
         onClick={() => onOpen?.(item)}
-        className="w-full flex items-start gap-3 px-2 py-2 rounded-lg text-left hover:bg-secondary/60 transition-colors min-h-[52px]"
+        className="w-full flex items-start gap-3 px-3 py-2.5 rounded-lg text-left border border-border bg-card hover:bg-secondary/60 active:bg-secondary transition-colors min-h-[52px]"
         data-state={st.done ? "done" : st.amber ? "amber" : "open"}
       >
         <span className="w-5 h-5 mt-0.5 flex-shrink-0 flex items-center justify-center">
@@ -75,6 +80,9 @@ function ItemRow({ item, progress, onOpen }) {
             >
               {st.shown}/{st.target}
             </span>
+            {/* The "this opens" cue, in the same place as the practice
+                snapshot's. Decorative: the row's own text is its name. */}
+            <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" aria-hidden="true" />
           </span>
           <span className={`block text-sm text-muted-foreground ${strike}`}>{itemRangeText(item)}</span>
           <span className={`block text-sm ${tone} ${strike}`}>{itemTargetText(item)}</span>
@@ -122,21 +130,21 @@ export default function PlanChecklist({ plan, progress, onOpenItem }) {
       </button>
 
       {expanded && (
-        <div className="px-1 pb-2">
+        <div className="px-2 pb-3">
           {plan.day_note && (
-            <p className="px-2 pb-2 text-sm text-foreground whitespace-pre-wrap">{plan.day_note}</p>
+            <p className="pb-3 text-sm text-foreground whitespace-pre-wrap">{plan.day_note}</p>
           )}
-          <ul>
+          <ul className="flex flex-col gap-2">
             {main.map((item) => (
               <ItemRow key={item.id} item={item} progress={progress} onOpen={onOpenItem} />
             ))}
           </ul>
           {free.length > 0 && (
             <>
-              <div className="px-2 pt-3 pb-1 text-sm uppercase tracking-wide text-muted-foreground">
+              <div className="pt-3 pb-2 text-sm uppercase tracking-wide text-muted-foreground">
                 Optional Free Play
               </div>
-              <ul>
+              <ul className="flex flex-col gap-2">
                 {free.map((item) => (
                   <ItemRow key={item.id} item={item} progress={progress} onOpen={onOpenItem} />
                 ))}

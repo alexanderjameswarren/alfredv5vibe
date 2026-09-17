@@ -186,6 +186,21 @@ test("a long song title is cut on its own line; the range, archived label and pr
   expect(screen.getByText("m.1–2 · RH · (snippet archived)")).not.toHaveClass("truncate");
 });
 
+test("every row looks tappable: its own surface, a pressed state and a chevron", () => {
+  render(<PlanChecklist plan={PLAN} progress={PROGRESS} />);
+  fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
+  const rows = [rowFor("Bars 5-12"), rowFor("Someone Like You"), rowFor("(snippet archived)")];
+  for (const row of rows) {
+    // A tablet has no hover to discover the target with, so the row carries a
+    // visible edge and a pressed state of its own.
+    expect(row).toHaveClass("border", "border-border", "active:bg-secondary");
+    expect(row).toHaveClass("min-h-[52px]");
+    // ...and the trailing "this opens" chevron.
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(row.querySelectorAll("svg[aria-hidden='true']")).toHaveLength(1);
+  }
+});
+
 test("tapping a row opens that item", () => {
   const onOpenItem = jest.fn();
   render(<PlanChecklist plan={PLAN} progress={PROGRESS} onOpenItem={onOpenItem} />);
