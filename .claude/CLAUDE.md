@@ -15,6 +15,14 @@ list, e.g. 031_backfill_sam_session_events.sql. Alex runs every migration himsel
 in the Supabase SQL editor — never apply one, and never assume one has been
 applied.
 
+supabase/migrations/ now holds three kinds of file, and the MOVED header on each
+says which: schema changes that must be applied in order; one-off data repairs
+and backfills, applied once; and read-only diagnostics and verification queries
+that are never "applied" at all. Do not treat the folder as a sequence to run end
+to end, and do not assume a numbered file was ever run — Alex runs each one
+himself and says so. Files 001-030 are schema changes; 031-056 are mixed, and
+were renumbered from docs/ on 2026-09-18.
+
 ## Supabase verification queries
 
 When you ask me to run more than one SELECT query in the Supabase SQL Editor,
