@@ -32,6 +32,18 @@ import {
 import { getDjPlaysTool, getDjManagedPlaylistsTool } from "../_shared/tools/dj-reads.ts";
 import { getSamSongScoresTool } from "../_shared/tools/sam-song-scores.ts";
 import {
+  SAM_DATA_RULES,
+  getSamPracticePlanTool,
+  getSamPracticePlansTool,
+  getSamPlanProgressTool,
+  getSamGoalsTool,
+  createSamPracticePlanTool,
+  updateSamPlanReviewNoteTool,
+  updateSamSongGoalTool,
+  createSamGoalTool,
+  updateSamGoalTool,
+} from "../_shared/tools/sam-plans.ts";
+import {
   getDjConcertsTool,
   updateDjConcertTool,
   recordDjFeedbackTool,
@@ -426,6 +438,8 @@ const getSamSessionsTool = defineTool({
       snippet_id: args.snippet_id as string | undefined,
       date_from: args.date_from as string | undefined,
       date_to: args.date_to as string | undefined,
+      plan_id: args.plan_id as string | undefined,
+      plan_item_id: args.plan_item_id as string | undefined,
       limit: clampLimit(args.limit as number | undefined),
     });
     if (result.error) throw new Error(`get_sam_sessions: ${result.error}`);
@@ -448,6 +462,8 @@ const getSamPassesTool = defineTool({
       only_zero_note: args.only_zero_note as boolean | undefined,
       date_from: args.date_from as string | undefined,
       date_to: args.date_to as string | undefined,
+      plan_id: args.plan_id as string | undefined,
+      plan_item_id: args.plan_item_id as string | undefined,
       limit: LIMIT,
     });
     if (result.error) throw new Error(`get_sam_passes: ${result.error}`);
@@ -889,7 +905,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get SAM Songs",
       description:
-        "Get songs in the SAM music practice app. Returns song metadata (title, artist, key, default_bpm, and the goal tempo). Use search_text to find specific songs. Does not return measure data — use get_database_schema for full details if needed. TEMPO FIELDS: default_bpm is the tempo the song loads at and drifts whenever practice tempo is saved — it is NOT the target. goal_bpm is the deliberately set goal tempo (tempo-box units, quarter notes per minute) and goal_playback_speed its paired speed percent; goal_effective_bpm = round(goal_bpm * goal_playback_speed / 100) is the goal tempo actually heard, directly comparable with sam_passes.effective_bpm.",
+        "Get songs in the SAM music practice app. Returns song metadata (title, artist, key, default_bpm, and the goal tempo). Use search_text to find specific songs. Does not return measure data — use get_database_schema for full details if needed. TEMPO FIELDS: default_bpm is the tempo the song loads at and drifts whenever practice tempo is saved — it is NOT the target. goal_bpm is the goal in tempo-box units (quarter notes per minute) and goal_playback_speed its paired speed percent; goal_effective_bpm = round(goal_bpm * goal_playback_speed / 100) is the goal tempo actually heard, directly comparable with sam_passes.effective_bpm. goal_set_at is when the goal was confirmed; NULL means the goal is a placeholder. " + SAM_DATA_RULES,
       inputSchema: {
         search_text: z.string().optional().describe("Search song titles and artists"),
       },
@@ -902,7 +918,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get SAM Practice Sessions",
       description:
-        "Get practice sessions from the SAM music app. Sessions record when the user started and ended practicing a song or snippet plus a performance summary; elapsed time is derived from started_at and ended_at (there is no stored duration column). A session with ended_at NULL was abandoned mid-way and should not be counted toward practice totals. Returns most recent sessions first. Use date_from/date_to to filter by time period. Includes song and snippet titles in results.",
+        "Get practice sessions from the SAM music app. Sessions record when the user started and ended practicing a song or snippet plus a performance summary; elapsed time is derived from started_at and ended_at (there is no stored duration column). A session with ended_at NULL was abandoned mid-way and should not be counted toward practice totals. Returns most recent sessions first. Use date_from/date_to to filter by time period. Includes song and snippet titles in results. plan_id / plan_item_id record the practice plan active when the session began and the item matching its range (null before plans existed); they are history only — plan progress comes from get_sam_plan_progress. " + SAM_DATA_RULES,
       inputSchema: {
         song_id: z.string().optional().describe("Filter by song ID"),
         snippet_id: z.string().optional().describe("Filter by snippet ID"),
@@ -911,6 +927,8 @@ export function createMcpServer(token: string) {
           .optional()
           .describe("Start date filter (ISO 8601 format, e.g. 2025-01-01)"),
         date_to: z.string().optional().describe("End date filter (ISO 8601 format)"),
+        plan_id: z.string().optional().describe("Only sessions recorded while this practice plan was active"),
+        plan_item_id: z.string().optional().describe("Only sessions recorded against this plan item"),
         limit: z.number().optional().describe("Max results to return (default 20)"),
       },
     },
@@ -922,7 +940,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get SAM Passes",
       description:
-        "Get completed playthroughs (passes) from the SAM music app. One row per complete playthrough of whatever range was loaded: snippet_id null means the whole song, otherwise that snippet. `bpm` is the score tempo at the instant the pass FINISHED; `effective_bpm` is what was actually heard (bpm scaled by playback_speed), so 60 at 80% reads 48. A NULL playback_speed means NOT RECORDED rather than 100: that column began recording when it was DEPLOYED, part-way through 2026-09-16, so passes from that day exist both with and without a value. effective_bpm is NULL wherever the speed is. `hits`, `misses` and `notes_played` record how the playthrough went, and `hand_mode` which hand was scored. IMPORTANT: `notes_played` 0 means nothing was played — a playback test — because a miss is raised on elapsed time without consulting MIDI, so a pass with no keyboard scores 0 hits and a full count of misses and is otherwise identical to playing badly. Use exclude_zero_note to drop test data rather than inferring it. `accuracy_percent` is NULL when unmeasurable and 0 when measured-and-all-wrong; never treat NULL as 0. NOTE ON THE FILTERS: notes_played has THREE states — a positive count (played), 0 (a playback test, nothing arrived), and NULL (never recorded). exclude_zero_note and only_zero_note are therefore NOT opposites and do NOT partition the result: rows with a NULL note count are returned by NEITHER, so the two filters together can account for a small fraction of the table. Call with no filter to see everything. A NULL does not mean the pass is from before 2026-09-16: notes_played began recording when it was DEPLOYED, part-way through that day, so passes from 2026-09-16 exist on both sides of the change and completed_at cannot be used to infer what a NULL should have been. The columns were deployed at different moments, so a pass can legitimately carry a playback_speed and still have no note count. Nothing writes a pass without a note count today — a NULL always means the row predates the column. Use this to check practice instructions of the form 'at 60, four to six passes'. Returns most recent passes first, with song and range titles.",
+        "Get completed playthroughs (passes) from the SAM music app. One row per complete playthrough of whatever range was loaded: snippet_id null means the whole song, otherwise that snippet. `bpm` is the score tempo at the instant the pass FINISHED; `effective_bpm` is what was actually heard (bpm scaled by playback_speed), so 60 at 80% reads 48. A NULL playback_speed means NOT RECORDED rather than 100: that column began recording when it was DEPLOYED, part-way through 2026-09-16, so passes from that day exist both with and without a value. effective_bpm is NULL wherever the speed is. `hits`, `misses` and `notes_played` record how the playthrough went, and `hand_mode` which hand was scored. IMPORTANT: `notes_played` 0 means nothing was played — a playback test — because a miss is raised on elapsed time without consulting MIDI, so a pass with no keyboard scores 0 hits and a full count of misses and is otherwise identical to playing badly. Use exclude_zero_note to drop test data rather than inferring it. `accuracy_percent` is NULL when unmeasurable and 0 when measured-and-all-wrong; never treat NULL as 0. NOTE ON THE FILTERS: notes_played has THREE states — a positive count (played), 0 (a playback test, nothing arrived), and NULL (never recorded). exclude_zero_note and only_zero_note are therefore NOT opposites and do NOT partition the result: rows with a NULL note count are returned by NEITHER, so the two filters together can account for a small fraction of the table. Call with no filter to see everything. A NULL does not mean the pass is from before 2026-09-16: notes_played began recording when it was DEPLOYED, part-way through that day, so passes from 2026-09-16 exist on both sides of the change and completed_at cannot be used to infer what a NULL should have been. The columns were deployed at different moments, so a pass can legitimately carry a playback_speed and still have no note count. Nothing writes a pass without a note count today — a NULL always means the row predates the column. Use this to check practice instructions of the form 'at 60, four to six passes'. Returns most recent passes first, with song and range titles. plan_id / plan_item_id record the practice plan active when the pass was recorded and the item matching its range; they are history only and are never rewritten — plan progress matches passes on song and snippet (get_sam_plan_progress), so a pass can count toward a plan it was not recorded under. " + SAM_DATA_RULES,
       inputSchema: {
         song_id: z.string().optional().describe("Filter by song ID"),
         snippet_id: z.string().optional().describe("Filter by snippet ID"),
@@ -944,6 +962,8 @@ export function createMcpServer(token: string) {
           ),
         date_from: z.string().optional().describe("Start date filter (ISO 8601 format)"),
         date_to: z.string().optional().describe("End date filter (ISO 8601 format)"),
+        plan_id: z.string().optional().describe("Only passes recorded while this practice plan was active"),
+        plan_item_id: z.string().optional().describe("Only passes recorded against this plan item (history; progress does not use it)"),
         limit: z.number().optional().describe("Max results to return (default 20)"),
       },
     },
@@ -969,7 +989,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get SAM Song Measures",
       description:
-        "Read measures for a SAM song, with optional range filter. Returns measure notation (RH/LH events), metadata, any placed lyrics, and any placed RH fingerings (each with note_index, finger 1-5, and source 'manual'|'musicxml'). The `song` block carries `bpm` (default_bpm: the load tempo, not a target) and the goal tempo: goal_bpm, goal_playback_speed, and goal_effective_bpm (the goal tempo actually heard).",
+        "Read measures for a SAM song, with optional range filter. Returns measure notation (RH/LH events), metadata, any placed lyrics, and any placed RH fingerings (each with note_index, finger 1-5, and source 'manual'|'musicxml'). The `song` block carries `bpm` (default_bpm: the load tempo, not a target) and the goal tempo: goal_bpm, goal_playback_speed, goal_effective_bpm (the goal tempo actually heard) and goal_set_at (null = placeholder goal). " + SAM_DATA_RULES,
       inputSchema: {
         song_id: z.string().describe("UUID of the song"),
         start_measure: z.number().optional().describe("First measure number to return (inclusive)"),
@@ -1000,6 +1020,179 @@ export function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(getSamSongScoresTool, args, token),
+  );
+
+  // ---- SAM practice plans and goals (practice plans spec §6) ----------------
+
+  server.registerTool(
+    "get_sam_practice_plan",
+    {
+      title: "Get SAM Practice Plan",
+      description:
+        "Read one practice plan in full — Claude's view, including internal_notes and review_instructions. Defaults to the ACTIVE plan; with no active plan it returns { plan: null } (not an error). Returns `plan` (every column: status, starts_on, ended_at, supersedes_plan_id, day_note, internal_notes, review_instructions, review_note, review_noted_at, timestamps), `songs` in position order (song_title, song_note, internal_notes, has_audio, default_bpm, goal_effective_bpm, goal_set_at) and `items` in checklist order (every item column plus song_title, snippet_title, start_measure, end_measure, hand_mode; a null snippet_id is \"Whole song\" with null range fields). Plans are never edited: a change is a new plan via create_sam_practice_plan. Tier 1. " + SAM_DATA_RULES,
+      inputSchema: {
+        plan_id: z.string().optional().describe("UUID of the plan. Omit for the active plan."),
+      },
+    },
+    async (args) => runToolForMcp(getSamPracticePlanTool, args, token),
+  );
+
+  server.registerTool(
+    "get_sam_practice_plans",
+    {
+      title: "Get SAM Practice Plans",
+      description:
+        "Plan history, newest first: plan headers (every plan column) without items. With song_id, only plans that contain that song, each with `song` (that song's plan-song row: song_note, internal_notes, position) and `items` (that song's items in the plan, with snippet title and measure range) — use this to answer how a song has gone across plans, together with get_sam_plan_progress per plan. Tier 1. " + SAM_DATA_RULES,
+      inputSchema: {
+        status: z.enum(["active", "superseded"]).optional().describe("Filter by plan status"),
+        song_id: z.string().optional().describe("Only plans containing this song; attaches that song's notes and items"),
+        limit: z.number().optional().describe("Max plans to return (default 20, max 50)"),
+      },
+    },
+    async (args) => runToolForMcp(getSamPracticePlansTool, args, token),
+  );
+
+  server.registerTool(
+    "get_sam_plan_progress",
+    {
+      title: "Get SAM Plan Progress",
+      description:
+        "Progress on a practice plan, computed by the database exactly as the app's checklist computes it. `items`: one row per plan item per Pacific day with at least one attempt — attempts, qualifying, best_accuracy, best_effective_bpm, last_completed_at — joined to the item's position, song_title, snippet_title and targets. An ATTEMPT is a pass on the item's exact song and snippet (null = whole song) with notes_played > 0; it QUALIFIES when effective_bpm >= target_effective_bpm and, unless Free Play, accuracy_percent >= accuracy_target. Matching ignores the plan_item_id stored on passes, so passes played under an earlier plan count if they fit. An item with no row for a day had no attempts that day (a skip — never a reason for concern on its own). `unplanned`: attempts per song, snippet and day that match no item in the plan (improvised practice). `range`: the dates actually read. Defaults: date_from = the plan's starts_on; date_to = today (Pacific) for an active plan, or the Pacific date it ended for a superseded one. At most 31 days: a longer range keeps the LATEST 31 and `range.capped` / `range.note` say so. Defaults to the active plan; no active plan returns { plan: null }. Tier 1. " + SAM_DATA_RULES,
+      inputSchema: {
+        plan_id: z.string().optional().describe("UUID of the plan. Omit for the active plan."),
+        date_from: z.string().optional().describe("Pacific date YYYY-MM-DD. Default: the plan's starts_on."),
+        date_to: z.string().optional().describe("Pacific date YYYY-MM-DD. Default: today (active plan) or the day the plan ended."),
+      },
+    },
+    async (args) => runToolForMcp(getSamPlanProgressTool, args, token),
+  );
+
+  server.registerTool(
+    "get_sam_goals",
+    {
+      title: "Get SAM Goals",
+      description:
+        "The learning goals list: songs to learn, techniques and chord progressions, each with a status (someday | active | done | dropped), optional song link (with song_title), notes and completed_at. Newest-updated first. Tier 1. " + SAM_DATA_RULES,
+      inputSchema: {
+        status: z.enum(["someday", "active", "done", "dropped"]).optional().describe("Filter by status"),
+        kind: z.enum(["song", "technique", "progression"]).optional().describe("Filter by kind"),
+        song_id: z.string().optional().describe("Only goals linked to this song"),
+        limit: z.number().optional().describe("Max goals to return (default 50, max 50)"),
+      },
+    },
+    async (args) => runToolForMcp(getSamGoalsTool, args, token),
+  );
+
+  server.registerTool(
+    "create_sam_practice_plan",
+    {
+      title: "Create SAM Practice Plan",
+      description:
+        "Create a new practice plan in ONE call. Call ONLY after Alex has explicitly said yes to the plan in conversation. The new plan is active immediately and SUPERSEDES the current active plan (which stays readable in history). Plans are never edited; any change is a new plan. " +
+        "Tier 3: the first call (without confirmed) writes nothing and returns a readable `proposal` (day note, review instructions, each song with its song note, each item with snippet and measure range, target heard tempo, passes, accuracy or Free Play, instruction, and which plan it supersedes) — show it to Alex, and call again with `confirmed: true` only after he approves. The whole plan is validated before the proposal and again by the database on confirm; any failure rejects the whole plan, and database refusals arrive as `validation error:` with the database's own message. On success returns the new plan as get_sam_practice_plan does. " +
+        "RULES: every song and snippet must exist and not be archived, and each snippet must belong to its song. A song may appear once; put all its items under it. Items are checklist-ordered by array order; at most 20 items. Non-free-play items need target_bpm and accuracy_target (1-100). Free Play items must not have accuracy_target; their tempo defaults to the song's goal pair when omitted. TEMPO (§4): for a song WITH audio, target_bpm must equal the song's default_bpm and the target is expressed through target_playback_speed; for a song WITHOUT audio, target_playback_speed is 100 (or omitted) and target_bpm is the target. A pass counts only at or above the heard target tempo AND (unless Free Play) at or above the accuracy target. Use played measure numbers in all text. day_note and song_note are shown to Alex in the app; internal_notes and review_instructions are Claude-only. review_instructions tell the daily review job, in plain language, when to post a review note. " + SAM_DATA_RULES,
+      inputSchema: {
+        day_note: z.string().optional().describe("VISIBLE on the Sam tab: the day's goal in one short line."),
+        internal_notes: z.string().optional().describe("Claude only: reasoning behind the plan."),
+        review_instructions: z.string().describe("Required. Claude only: when the daily review job should post a review note."),
+        songs: z
+          .array(
+            z.object({
+              song_id: z.string().describe("UUID of the song"),
+              song_note: z.string().optional().describe("VISIBLE in the player: the song goal, played measure numbers."),
+              internal_notes: z.string().optional().describe("Claude only."),
+              items: z
+                .array(
+                  z.object({
+                    snippet_id: z.string().optional().describe("UUID of a snippet of this song. Omit for the whole song."),
+                    is_free_play: z.boolean().optional().describe("Optional Free Play item: tempo target, no accuracy target. Default false."),
+                    target_bpm: z.number().optional().describe("Tempo-box BPM. Required unless Free Play. Songs with audio: must equal default_bpm."),
+                    target_playback_speed: z.number().optional().describe("Speed percent, default 100. Songs without audio: must be 100."),
+                    target_passes: z.number().describe("Qualifying passes needed today."),
+                    accuracy_target: z.number().optional().describe("1-100. Required unless Free Play; forbidden for Free Play."),
+                    instruction: z.string().optional().describe("VISIBLE: one short line, e.g. 'Count out loud.'"),
+                  }),
+                )
+                .optional()
+                .describe("Checklist items for this song, in order. May be empty (song note only)."),
+            }),
+          )
+          .describe("Songs in plan order, each with its items."),
+        confirmed: z
+          .boolean()
+          .optional()
+          .describe("Tier-3 gate. Omit on the first call to get the proposal; set to true only after Alex approves it."),
+      },
+    },
+    async (args) => runToolForMcp(createSamPracticePlanTool, args, token),
+  );
+
+  server.registerTool(
+    "update_sam_plan_review_note",
+    {
+      title: "Update SAM Plan Review Note",
+      description:
+        "Write the review note on the ACTIVE practice plan, once, when its review_instructions are met — the signal that a plan conversation is due. Refuses a superseded plan. NEVER overwrites: if the plan already has a review note, nothing is written and the result is { already_noted: true, review_note, review_noted_at } with the existing note. Otherwise returns { already_noted: false, plan_id, review_note, review_noted_at }. Skipped items alone are never a reason for a note. Tier 2. " + SAM_DATA_RULES,
+      inputSchema: {
+        plan_id: z.string().describe("UUID of the active plan"),
+        review_note: z.string().describe("The note: what was observed and why a new plan is due. Non-empty."),
+      },
+    },
+    async (args) => runToolForMcp(updateSamPlanReviewNoteTool, args, token),
+  );
+
+  server.registerTool(
+    "update_sam_song_goal",
+    {
+      title: "Update SAM Song Goal",
+      description:
+        "Set or confirm a song's goal tempo, always with Alex's agreement. Pass song_id plus EXACTLY ONE of: goal_bpm (songs WITHOUT audio only; speed is set to 100), goal_playback_speed (songs WITH audio only; goal_bpm is held at the song's default_bpm, the scroll-sync calibration), or confirm_only: true (mark the current goal as a real target, applying the same rule). The wrong field for the song's audio state is a validation error that says which field to use. Every write sets goal_set_at = now, which is what makes a goal confirmed; a goal with null goal_set_at is a placeholder. Tier 3: the first call (without confirmed) writes nothing and returns a `proposal` with the song title, current heard goal and whether it is a placeholder, and the new heard goal. Returns the updated song goal fields. " + SAM_DATA_RULES,
+      inputSchema: {
+        song_id: z.string().describe("UUID of the song"),
+        goal_bpm: z.number().optional().describe("New goal BPM. Songs without audio only."),
+        goal_playback_speed: z.number().optional().describe("New goal speed percent. Songs with audio only."),
+        confirm_only: z.boolean().optional().describe("true = confirm the current goal as a real target without changing it (beyond applying the audio rule)."),
+        confirmed: z
+          .boolean()
+          .optional()
+          .describe("Tier-3 gate. Omit on the first call to get the proposal; set to true only after Alex approves it."),
+      },
+    },
+    async (args) => runToolForMcp(updateSamSongGoalTool, args, token),
+  );
+
+  server.registerTool(
+    "create_sam_goal",
+    {
+      title: "Create SAM Goal",
+      description:
+        "Add a learning goal: a song to learn, a technique, or a chord progression. Status defaults to someday; done sets completed_at. Returns the goal with song_title. Tier 1. " + SAM_DATA_RULES,
+      inputSchema: {
+        title: z.string().describe("e.g. 'Play Someone Like You start to finish'"),
+        kind: z.enum(["song", "technique", "progression"]).describe("What kind of goal"),
+        status: z.enum(["someday", "active", "done", "dropped"]).optional().describe("Default someday"),
+        song_id: z.string().optional().describe("UUID of the song this goal is about"),
+        notes: z.string().optional().describe("Free text"),
+      },
+    },
+    async (args) => runToolForMcp(createSamGoalTool, args, token),
+  );
+
+  server.registerTool(
+    "update_sam_goal",
+    {
+      title: "Update SAM Goal",
+      description:
+        "Change a learning goal: goal_id plus at least one of title, status, song_id (null unlinks), notes. Changing status to done sets completed_at; changing it away from done clears completed_at. There is no delete — use status dropped. Returns the goal with song_title. Tier 2. " + SAM_DATA_RULES,
+      inputSchema: {
+        goal_id: z.string().describe("UUID of the goal"),
+        title: z.string().optional().describe("New title"),
+        status: z.enum(["someday", "active", "done", "dropped"]).optional().describe("New status"),
+        song_id: z.string().nullable().optional().describe("UUID of the song to link, or null to unlink"),
+        notes: z.string().optional().describe("New notes (replaces the old)"),
+      },
+    },
+    async (args) => runToolForMcp(updateSamGoalTool, args, token),
   );
 
   server.registerTool(

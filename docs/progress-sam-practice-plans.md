@@ -2,7 +2,7 @@
 
 Spec: `docs/technical-spec-sam-practice-plans.md`
 
-## Status: Milestone 2 built — awaiting manual verification
+## Status: Milestone 3 built — awaiting deploy and verification in a fresh thread
 
 Work is committed directly to main. No branches.
 
@@ -23,13 +23,14 @@ SQL docs/migrations/2026-09-16-sam-practice-plans.sql applied 2026-09-16; CONFOR
 ### Milestone 2 — Data cleanup (Claude Code)
 - [x] On-screen Hits excludes partial chords (§7.1)
 - [x] Session accuracy shows "—" and stores null when nothing was measured
-- [ ] Tests pass; manual checks verified — tests pass (49 suites, 1038 tests); manual checks awaiting Alex
+- [x] Tests pass; manual checks verified — tests pass (49 suites, 1038 tests); desktop checks verified by Alex 2026-09-16: newest session stores null accuracy, null best, notesPlayed 0
 
 ### Milestone 3 — Claude tools (Claude Code)
-- [ ] get_sam_practice_plan, get_sam_practice_plans, get_sam_plan_progress, get_sam_goals (§6.1)
-- [ ] plan_id / plan_item_id filters and columns on get_sam_passes and get_sam_sessions
-- [ ] create_sam_practice_plan, update_sam_plan_review_note, update_sam_song_goal, create_sam_goal, update_sam_goal (§6.2)
-- [ ] Deployed; verified from a fresh thread
+- [x] get_sam_practice_plan, get_sam_practice_plans, get_sam_plan_progress, get_sam_goals (§6.1)
+- [x] plan_id / plan_item_id filters and columns on get_sam_passes and get_sam_sessions
+- [x] create_sam_practice_plan, update_sam_plan_review_note, update_sam_song_goal, create_sam_goal, update_sam_goal (§6.2)
+- [x] goal_set_at on get_sam_songs and the get_sam_song_measures song block; get_sam_snippets already returned created_at
+- [ ] Deployed; verified from a fresh thread — handler tests pass; deploy and live checks awaiting Alex
 
 ### Milestone 4 — Links and checklist strip (Claude Code)
 - [ ] recordPass and session creation write plan_id and plan_item_id (§7.2)
@@ -153,3 +154,152 @@ them. `sam_passes.accuracy_percent` was already null-safe and is untouched.
 - `accuracyDisplay.test.jsx`: StatsBar and FocusedPlaybackBar show "—" when
   unmeasured, with no "0%", "NaN" or "null%", and show percentages when
   measured.
+
+#### Milestone 3 — Claude tools (2026-09-16)
+
+**Tools**
+
+| Tool | Tier | Status |
+|---|---|---|
+| get_sam_practice_plan | 1 | new |
+| get_sam_practice_plans | 1 | new |
+| get_sam_plan_progress | 1 | new |
+| get_sam_goals | 1 | new |
+| create_sam_practice_plan | 3 | new |
+| update_sam_plan_review_note | 2 | new |
+| update_sam_song_goal | 3 | new |
+| create_sam_goal | 1 | new |
+| update_sam_goal | 2 | new |
+| get_sam_passes | 1 | changed: plan_id and plan_item_id as filters and columns |
+| get_sam_sessions | 1 | changed: plan_id and plan_item_id as filters and columns |
+| get_sam_songs | 1 | changed: returns goal_set_at |
+| get_sam_song_measures | 1 | changed: song block returns goal_set_at |
+| get_sam_snippets | 1 | unchanged; it already returned created_at |
+
+The registered tool count goes from 57 to 66. The index test still expected
+55: `get_sam_passes` and `get_sam_song_scores` had landed without updating
+it. The count is now corrected, and the test comment names all eleven.
+
+**Code**
+- New `supabase/functions/_shared/tools/sam-plans.ts` holds all nine tools.
+  Database access is only through `ctx.db`.
+- `_shared/alfred-tools/tool-handlers.ts` carries the pass, session, song and
+  measures changes; `mcp/index.ts` has the registrations and descriptions.
+- Every new or changed description ends with the same `SAM_DATA_RULES` text:
+  - compare heard tempos only, never `goal_bpm` or `default_bpm`;
+  - passes with `notes_played` 0 are test data;
+  - measure numbers are played numbers;
+  - a goal with null `goal_set_at` is a placeholder;
+  - days are Pacific dates.
+- The `get_sam_songs` description used to call `goal_bpm` "the deliberately
+  set goal tempo", which contradicts §4. It now says `goal_bpm` is the goal in
+  tempo-box units, and points to `goal_effective_bpm` and `goal_set_at`.
+
+**Platform change: an optional `propose` in `defineTool`** (`_shared/platform.ts`)
+- **Why it was needed.** `create_sam_song`'s tier-3 flow comes from
+  `defineTool`'s built-in gate, which answers an unconfirmed call before the
+  handler runs, with no database access. So it can only echo the args. The
+  required proposals need song and snippet titles, measure ranges, heard
+  tempos and the plan being superseded.
+- **What changed.** `DefineToolOptions` gained an optional
+  `propose(args, ctx)`.
+  - The gate still intercepts every unconfirmed tier-3 call and returns the
+    same envelope.
+  - When `propose` is given, its read-only result is added as `proposal`.
+  - If `propose` throws, the error surfaces like a handler error. A request
+    that cannot succeed is therefore refused before anyone is asked to
+    approve it.
+- **Existing tools are unaffected.** A tier-3 tool without `propose` returns
+  exactly the old shape, and a test pins this.
+
+**Decisions**
+- **Proposals are validated in full.**
+  - `create_sam_practice_plan` checks the §6.2 rules while building its
+    proposal: songs and snippets exist and aren't archived, each snippet
+    belongs to its song, tempo and accuracy rules, the §4 audio rule, and at
+    most 20 items. Every problem is listed in one error. The database checks
+    again on confirm and remains the authority.
+  - `update_sam_song_goal` runs the same validation in its proposal and its
+    handler, through the shared `planSongGoal`, so the two cannot disagree.
+- **Database refusals** (SQLSTATE P0001, and classes 22 and 23) surface as
+  `<tool>: validation error: <database message, unchanged>`. Other database
+  errors are reported as operational, with no do-not-retry wording.
+- **`p_plan` is exactly the §6.2 input shape.**
+  - Omitted optional values are sent as null or left out.
+  - An item's `target_bpm`, `target_playback_speed` and `accuracy_target` are
+    left out when not given. That lets the function apply the free-play
+    default (the song's goal pair).
+  - The function's result is read as the new plan id: a bare uuid, with a
+    row-shaped reply also accepted.
+- **Plan views.**
+  - Every plan column is returned except `user_id`.
+  - A whole-song item has `snippet_title` "Whole song" and null
+    `start_measure`, `end_measure` and `hand_mode`.
+  - A snippet's hand mode comes from `sam_snippets.settings.handMode`
+    (default "both"), because the table has no `hand_mode` column.
+- **Progress range.**
+  - "31 days" means 31 calendar days inclusive.
+  - When the range is capped, `range` gains `capped: true`,
+    `requested_from` and a `note`.
+  - A reversed range is an error, and so is a malformed or impossible date
+    such as 2026-02-30.
+  - Item rows are sorted by day, then position.
+- **`update_sam_plan_review_note` guards twice.** It reads the plan first
+  (`already_noted` or a refusal), and the update itself is filtered on
+  `status = 'active'` and `review_note is null`. If a concurrent write wins,
+  the tool re-reads and reports what it found instead of overwriting.
+- **`update_sam_song_goal` applies the audio rule in all three modes,**
+  including `confirm_only`:
+  - on audio songs, `goal_bpm` is set to `default_bpm`;
+  - on other songs, `goal_playback_speed` is set to 100.
+  - A stale pair can therefore change the heard goal on confirm. The proposal
+    shows the current and new heard tempo, so that change is visible before
+    approval.
+  - `goal_set_at` is written from the Edge Function's clock.
+- **`update_sam_goal`:**
+  - `song_id: null` unlinks the song;
+  - `completed_at` is set only on a change into `done` and cleared on a change
+    out of it, so editing the notes of a done goal keeps its date.
+- **`get_sam_goals`** defaults to 50 rows (`clampLimit(limit ?? 50)`), newest
+  update first.
+
+**Not visible from here.** The Milestone 1 SQL is not in the repo, and the
+schema tool shows tables but not function bodies. The table shapes were
+confirmed live. The `sam_create_practice_plan` input keys and return value,
+and the column names the two progress functions return, follow the spec
+(§5.7, §6.2). A mismatch would show at the first confirmed plan or the first
+progress read.
+
+**Tests**
+- `node --test supabase/functions/_shared/tools/sam-plans.test.mjs`: 28 pass.
+  - The suite loads the REAL `platform.ts`, with only its Deno imports
+    stubbed, so the tier-3 tests go through the actual gate.
+  - Covered:
+    - both tier-3 proposals without `confirmed`, with nothing written;
+    - a plan that would be refused, with every problem listed;
+    - the exact `p_plan` passed to the function;
+    - a P0001 refusal passed through unchanged;
+    - `update_sam_song_goal` rejecting `goal_bpm` on an audio song and
+      `goal_playback_speed` on a no-audio song, with and without `confirmed`;
+    - the audio and no-audio writes;
+    - review note `already_noted` (nothing written), a superseded plan, and
+      the guarded update;
+    - progress range defaults (active, and superseded using the Pacific end
+      date), the 31-day cap keeping the latest 31, and a reversed range;
+    - bad date formats;
+    - the progress handler's function arguments and joins;
+    - plan views, history by song, truncation, and goals;
+    - the gate itself.
+  - Mutations caught: removing the review-note pre-check, and removing
+    `propose` from the gate (10 failures).
+- `node --test supabase/functions/mcp/index.test.mjs`: 12 pass. It checks:
+  - the new tools register;
+  - the pass and session schemas and handlers carry the plan filters;
+  - the nine schemas advertise exactly the args their handlers read,
+    including args read through helpers (a removed schema field fails the
+    test);
+  - the count is 66.
+- All other Edge Function suites and `tools/sam-tools` (269) still pass.
+- `deno check`: `sam-plans.ts`, `platform.ts` and `tool-handlers.ts` are
+  clean. `mcp/index.ts` gains only the nine implicit-`any` `args` warnings
+  every registration already has.

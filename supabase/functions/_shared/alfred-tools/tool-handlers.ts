@@ -715,7 +715,7 @@ export async function getSamSongs(
       // or MusicXML imports whose Storage upload failed. Exposed here
       // so Alex can verify post-re-import coverage over MCP instead of
       // eyeballing the dashboard.
-      .select("id, title, artist, source, key_signature, time_signature, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, source_xml_path, created_at, updated_at")
+      .select("id, title, artist, source, key_signature, time_signature, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, goal_set_at, source_xml_path, created_at, updated_at")
       .eq("archived", false)
       .order("title");
 
@@ -740,13 +740,15 @@ export async function getSamSessions(
     snippet_id?: string;
     date_from?: string;
     date_to?: string;
+    plan_id?: string;
+    plan_item_id?: string;
     limit?: number;
   }
 ): Promise<ToolResult> {
   try {
     let query = client
       .from("sam_sessions")
-      .select("id, song_id, snippet_id, started_at, ended_at, settings, summary")
+      .select("id, song_id, snippet_id, plan_id, plan_item_id, started_at, ended_at, settings, summary")
       .order("started_at", { ascending: false })
       .limit(params.limit || 20);
 
@@ -764,6 +766,16 @@ export async function getSamSessions(
 
     if (params.date_to) {
       query = query.lte("started_at", params.date_to);
+    }
+
+    // Practice plans (M3). plan_id is the plan active when the session began;
+    // plan_item_id the item matching its song and snippet. History only.
+    if (params.plan_id) {
+      query = query.eq("plan_id", params.plan_id);
+    }
+
+    if (params.plan_item_id) {
+      query = query.eq("plan_item_id", params.plan_item_id);
     }
 
     const { data: sessions, error } = await query;
@@ -845,13 +857,15 @@ export async function getSamPasses(
     only_zero_note?: boolean;
     date_from?: string;
     date_to?: string;
+    plan_id?: string;
+    plan_item_id?: string;
     limit?: number;
   }
 ): Promise<ToolResult> {
   try {
     let query = client
       .from("sam_passes")
-      .select("id, song_id, snippet_id, session_id, bpm, playback_speed, effective_bpm, hits, misses, notes_played, accuracy_percent, hand_mode, completed_at")
+      .select("id, song_id, snippet_id, session_id, plan_id, plan_item_id, bpm, playback_speed, effective_bpm, hits, misses, notes_played, accuracy_percent, hand_mode, completed_at")
       .order("completed_at", { ascending: false })
       .limit(params.limit || 20);
 
@@ -897,6 +911,16 @@ export async function getSamPasses(
 
     if (params.date_to) {
       query = query.lte("completed_at", params.date_to);
+    }
+
+    // Practice plans (M3). Recorded for history only: plan progress matches
+    // passes on song and snippet, never on these columns.
+    if (params.plan_id) {
+      query = query.eq("plan_id", params.plan_id);
+    }
+
+    if (params.plan_item_id) {
+      query = query.eq("plan_item_id", params.plan_item_id);
     }
 
     const { data: passes, error } = await query;
@@ -1004,7 +1028,7 @@ export async function getSamSongMeasures(
     // 1. Fetch song metadata
     const { data: song, error: songError } = await client
       .from("sam_songs")
-      .select("id, title, artist, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, time_signature, key_signature")
+      .select("id, title, artist, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, goal_set_at, time_signature, key_signature")
       .eq("id", params.song_id)
       .single();
 
@@ -1113,6 +1137,8 @@ export async function getSamSongMeasures(
           goal_bpm: song.goal_bpm,
           goal_playback_speed: song.goal_playback_speed,
           goal_effective_bpm: song.goal_effective_bpm,
+          // Null = the goal is a placeholder, not a confirmed target.
+          goal_set_at: song.goal_set_at,
         },
         total_measures: totalMeasures || 0,
         measures: formatted,

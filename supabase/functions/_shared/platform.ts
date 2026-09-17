@@ -40,6 +40,16 @@ export interface DefineToolOptions<Args, Result> {
   name: string;
   tier: Tier;
   handler: (args: Args, ctx: Context) => Promise<Result>;
+  /**
+   * Tier 3 only, optional. Builds a human-readable description of what the
+   * write WOULD do, for the person approving it (looking up titles, current
+   * values and so on through `ctx.db`, read-only). It runs in place of the
+   * handler on an unconfirmed call and its result is returned as
+   * `proposal.proposal`. It may throw a validation error, which surfaces
+   * exactly as a handler error would: a request that cannot succeed is
+   * refused before anyone is asked to approve it. It must not write.
+   */
+  propose?: (args: Args, ctx: Context) => Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -358,14 +368,14 @@ function isEnvelope(v: unknown): v is { data: unknown; meta: EnvelopeMeta } {
 export function defineTool<Args extends Record<string, unknown>, Result>(
   options: DefineToolOptions<Args, Result>
 ) {
-  const { name, tier, handler } = options;
+  const { name, tier, handler, propose } = options;
   return async function invoke(args: Args, req: Request) {
     const ctx = await createContext(req);
     await enforceBudget(ctx, name, args);
 
     if (tier === 3 && !args?.confirmed) {
       // Tier-3 gate: return a proposal envelope instead of writing.
-      const proposal = {
+      const proposal: Record<string, unknown> = {
         tool: name,
         tier: 3,
         args,
@@ -373,6 +383,8 @@ export function defineTool<Args extends Record<string, unknown>, Result>(
         message:
           "Tier 3 write not applied. Re-invoke this tool with `confirmed: true` in args to proceed.",
       };
+      // Optional readable summary (see DefineToolOptions.propose). Read-only.
+      if (propose) proposal.proposal = await propose(args, ctx);
       return envelope(proposal);
     }
 

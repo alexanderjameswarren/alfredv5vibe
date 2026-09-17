@@ -231,7 +231,7 @@ test("dry_run_dj_playlist is deliberately NOT an MCP tool either", () => {
     "dry_run_dj_playlist is now registered as an MCP tool - was that deliberate?");
 });
 
-test("the tool count is 55 after Ken", () => {
+test("the tool count is 66 after SAM practice plans", () => {
   // The number quoted at every reconnect. 36 through step 0 and step 1, which
   // added an endpoint and a non-registered tool on purpose. Step 2 adds three:
   // get_dj_concerts, update_dj_concert, record_dj_feedback - batched into ONE
@@ -255,8 +255,17 @@ test("the tool count is 55 after Ken", () => {
   //
   // 2026-09-11, +1: update_ken_area, so an area created in conversation can be
   // linked to its Alfred seed via source_ref.
-  assert.equal(registered.length, 55,
-    `expected 55 registered tools, found ${registered.length}: ` +
+  //
+  // 2026-09-16, +2 that landed without updating this count (it read 57 against
+  // 55 until practice plans M3): get_sam_passes (session playback metrics) and
+  // get_sam_song_scores (analyzer port M5).
+  //
+  // 2026-09-16, +9 for SAM practice plans M3, all additions:
+  // get_sam_practice_plan, get_sam_practice_plans, get_sam_plan_progress,
+  // get_sam_goals, create_sam_practice_plan, update_sam_plan_review_note,
+  // update_sam_song_goal, create_sam_goal, update_sam_goal.
+  assert.equal(registered.length, 66,
+    `expected 66 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -272,6 +281,57 @@ test("Ken schemas advertise exactly the args their handlers read", () => {
     const name = /name:\s*"([^"]+)"/.exec(b)[1];
     const tier = Number(/tier:\s*(\d)/.exec(b)[1]);
     const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+    if (tier === 3) read.add("confirmed");
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    const advertised = Object.keys(t.cfg.inputSchema ?? {}).sort();
+    assert.deepEqual(advertised, [...read].sort(),
+      `${name}: schema advertises [${advertised}] but the handler reads [${[...read].sort()}]`);
+  }
+});
+
+test("the SAM practice plan tools are registered, and the pass/session reads take the plan filters", () => {
+  for (const name of ["get_sam_practice_plan", "get_sam_practice_plans", "get_sam_plan_progress",
+                      "get_sam_goals", "create_sam_practice_plan", "update_sam_plan_review_note",
+                      "update_sam_song_goal", "create_sam_goal", "update_sam_goal"]) {
+    assert.ok(registered.some((r) => r.name === name), `${name} not registered`);
+  }
+  for (const name of ["get_sam_passes", "get_sam_sessions"]) {
+    const keys = Object.keys(registered.find((r) => r.name === name).cfg.inputSchema ?? {});
+    for (const k of ["plan_id", "plan_item_id"]) {
+      assert.ok(keys.includes(k), `${name} input schema is missing ${k}`);
+    }
+  }
+  // The handlers in index.ts must pass them through, or the schema is a lie.
+  const src = readFileSync(join(HERE, "index.ts"), "utf-8");
+  for (const tool of ["getSamPassesTool", "getSamSessionsTool"]) {
+    const block = src.split(`const ${tool} = defineTool({`)[1].split("\n});")[0];
+    for (const k of ["plan_id", "plan_item_id"]) {
+      assert.match(block, new RegExp(`${k}: args\\.${k}\\b`), `${tool} does not pass ${k}`);
+    }
+  }
+});
+
+test("SAM plan schemas advertise exactly the args their handlers read", () => {
+  // Same rule as the Ken test. Two tools read args through helper functions
+  // (normalisePlanInput, planSongGoal), so a helper's reads count for every
+  // tool body that calls it. `args[k]` lookups inside planSongGoal cover keys
+  // that also appear literally, so literal `args.<key>` reads are enough.
+  const src = readFileSync(join(TOOLS, "sam-plans.ts"), "utf-8").replace(/\r\n/g, "\n");
+  const helpers = {};
+  for (const m of src.matchAll(/^export (?:async )?function (\w+)\(([^)]*)\)[^{]*\{([\s\S]*?)^\}/gm)) {
+    if (/\bargs\b/.test(m[2])) helpers[m[1]] = new Set([...m[3].matchAll(/\bargs\.(\w+)/g)].map((x) => x[1]));
+  }
+  assert.ok(helpers.normalisePlanInput && helpers.planSongGoal, "helper functions not found in sam-plans.ts");
+  const blocks = src.split("defineTool({").slice(1).map((b) => b.split("\n});")[0]);
+  assert.equal(blocks.length, 9, `expected 9 tools in sam-plans.ts, found ${blocks.length}`);
+  for (const b of blocks) {
+    const name = /name:\s*"([^"]+)"/.exec(b)[1];
+    const tier = Number(/tier:\s*(\d)/.exec(b)[1]);
+    const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+    for (const [fn, keys] of Object.entries(helpers)) {
+      if (new RegExp(`\\b${fn}\\(`).test(b)) for (const k of keys) read.add(k);
+    }
     if (tier === 3) read.add("confirmed");
     const t = registered.find((r) => r.name === name);
     assert.ok(t, `${name} not registered`);
