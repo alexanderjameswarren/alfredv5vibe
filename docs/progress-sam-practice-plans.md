@@ -2,7 +2,7 @@
 
 Spec: `docs/technical-spec-sam-practice-plans.md`
 
-## Status: Milestone 3 built — awaiting deploy and verification in a fresh thread
+## Status: Milestone 4 in progress (Milestone 3 verified)
 
 Work is committed directly to main. No branches.
 
@@ -30,7 +30,7 @@ SQL docs/migrations/2026-09-16-sam-practice-plans.sql applied 2026-09-16; CONFOR
 - [x] plan_id / plan_item_id filters and columns on get_sam_passes and get_sam_sessions
 - [x] create_sam_practice_plan, update_sam_plan_review_note, update_sam_song_goal, create_sam_goal, update_sam_goal (§6.2)
 - [x] goal_set_at on get_sam_songs and the get_sam_song_measures song block; get_sam_snippets already returned created_at
-- [ ] Deployed; verified from a fresh thread — handler tests pass; deploy and live checks awaiting Alex
+- [x] Deployed; verified from a fresh thread — Alex, 2026-09-16: all nine new tools, both validation rejections, progress counting, the review-note guard, the goal tool, and a tier-3 regression check on create_sam_song. Test data deleted.
 
 ### Milestone 4 — Links and checklist strip (Claude Code)
 - [ ] recordPass and session creation write plan_id and plan_item_id (§7.2)
