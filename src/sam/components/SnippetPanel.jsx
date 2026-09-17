@@ -35,12 +35,19 @@ function SnippetRowFigures({ stats }) {
 }
 
 // Practice plan tag on a snippet row: "Plan · 60 BPM · 2/4", or "Plan ✓".
+//
+// READABILITY (2026-09-17): the same size as the row's own figures (text-sm),
+// and it has to stay legible on a selected row, which is filled with
+// `primary-light`. So the chip carries its own `card` background with a
+// border instead of `secondary`, which was nearly the same colour as the
+// selected row: `foreground` on card is 15.2:1, and amber-900 on card is
+// 9.1:1. (On `primary-light`, amber-700 was 2.7:1 and amber-800 3.8:1.)
 function PlanTag({ tag }) {
   if (!tag) return null;
-  const tone = tag.state === "amber" ? "text-amber-700" : "text-muted-foreground";
+  const tone = tag.state === "amber" ? "text-amber-900" : "text-foreground";
   return (
     <span
-      className={`text-xs px-1.5 py-0.5 rounded bg-secondary font-normal pointer-events-none ${tone}`}
+      className={`text-sm px-1.5 py-0.5 rounded bg-card border border-border font-normal pointer-events-none ${tone}`}
       data-state={tag.state}
     >
       {tag.text}

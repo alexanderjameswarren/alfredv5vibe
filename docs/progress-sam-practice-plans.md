@@ -601,3 +601,37 @@ hasn't made yet.
 - Every other Edge Function suite passes.
 - `deno check` is clean on `sam-snippets.ts`. `mcp/index.ts` gains only the
   usual implicit-`any` `args` warning.
+
+#### Readability pass (2026-09-17)
+
+Alex plays without glasses; the plan UI had to be legible from a playing
+posture. Readability only — no layout or behaviour changes.
+
+| element | before | after |
+|---|---|---|
+| Checklist range / target / instruction | `text-xs`, `text-muted-foreground` | `text-sm`; target and instruction `text-foreground`, range stays `text-muted-foreground` |
+| Checklist progress count | `text-sm font-mono` | `text-base font-mono font-semibold` (a step above the title) |
+| Checklist done item | `text-muted-foreground` + strikethrough | `text-foreground` + strikethrough |
+| Checklist amber | `text-amber-700` | `text-amber-800` |
+| Checklist collapsed day note, Free Play label | `text-xs` | `text-sm` |
+| Checklist summary, expanded day note | `text-dark` (an undefined class) | `text-foreground` |
+| Plan line | `text-dark` / `text-muted-foreground` when done | `text-foreground` (body size already) |
+| Plan line amber | `text-amber-700` | `text-amber-800` |
+| Song note | `text-muted-foreground` | `text-foreground` |
+| Snippet plan tag | `text-xs`, `bg-secondary`, `text-muted-foreground` / `text-amber-700` | `text-sm`, `bg-card border border-border`, `text-foreground` / `text-amber-900` |
+
+**Why these tokens** (contrast against their own background):
+- `text-dark` and `text-muted` are used 63 times in the app but are NOT
+  defined in `tailwind.config.js` or `index.css`. They do nothing; the text
+  merely inherits. Every one of them in these components is now an explicit
+  token.
+- `foreground` #2A2520 is 15.2:1 on the card, 14.5:1 on the background.
+- `muted-foreground` #524D48 is 8.4:1 on the card. It is the darkest muted
+  token there is — the range line's problem was its size, not its colour.
+- Amber on the card: `amber-700` 5.0:1, `amber-800` 7.1:1, `amber-900` 9.1:1.
+- The snippet tag also sits on a selected row filled with `primary-light`
+  #D4B8A8, where `amber-700` is 2.7:1 and `amber-800` 3.8:1 — both too low.
+  Giving the chip its own `card` background fixes that for every state, and
+  a border keeps it visible on a plain white row. On the chip, `foreground`
+  is 15.2:1 and `amber-900` 9.1:1.
+- Nothing in the three components is now below `text-sm`, SAM's body size.

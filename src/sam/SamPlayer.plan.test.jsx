@@ -309,7 +309,7 @@ test("plan line for the whole-song item; Set tempo applies the item tempo withou
   renderSong();
   // Song default 65; the whole-song item is done today (2 of 2 qualifying).
   const line = await screen.findByText("Plan · 55 BPM · 80% · Done 2/2 today");
-  expect(line).toHaveClass("text-muted-foreground");
+  expect(line).toHaveClass("text-foreground");
   expect(screen.getByLabelText(/BPM:/)).toHaveValue(65);
   fireEvent.click(screen.getByRole("button", { name: "Set tempo" }));
   expect(screen.getByLabelText(/BPM:/)).toHaveValue(55);
@@ -345,7 +345,7 @@ test("song note under the plan line, and alone when the loaded range has no item
 test("while playing: a compact plan count next to Completed Passes, amber, then ✓ after the pass that finishes it", async () => {
   mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 2, qualifying: 3 }];
   await openItem("m.1–1 · RH · Opening bar");
-  expect(screen.getByText("Plan · 60 BPM · 90% · 3/4 today · Count out loud.")).toHaveClass("text-amber-700");
+  expect(screen.getByText("Plan · 60 BPM · 90% · 3/4 today · Count out loud.")).toHaveClass("text-amber-800");
   await pressPlay();
   const badge = await screen.findByText("Plan 3/4");
   expect(badge).toHaveAttribute("data-state", "amber");
@@ -373,6 +373,10 @@ test("the planned snippet's row in the Snippet panel carries a plan tag", async 
   fireEvent.click(screen.getByRole("button", { name: /Snippet/ }));
   const tag = await screen.findByText("Plan · 60 BPM · 0/4");
   expect(tag).toHaveAttribute("data-state", "open");
+  // Legible on a plain row and on the selected (filled) row: the row's own
+  // figures size, its own card background, and full contrast.
+  expect(tag).toHaveClass("text-sm", "text-foreground", "bg-card", "border");
+  expect(tag).not.toHaveClass("text-xs");
 });
 
 test("a finished snippet's tag reads Plan ✓", async () => {

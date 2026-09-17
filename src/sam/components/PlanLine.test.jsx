@@ -26,7 +26,7 @@ test("an item: the plan line, no Set tempo while the heard tempo matches", () =>
   render(<PlanLine item={ITEM} state={stateOf(ITEM, 3, 2)} heardTempo={60} onSetTempo={() => {}} />);
   const line = screen.getByText("Plan · 60 BPM · 90% · 2/4 today · Count out loud");
   // 3 attempts, 2 qualifying, target 4: in progress today, so amber.
-  expect(line).toHaveClass("text-amber-700");
+  expect(line).toHaveClass("text-amber-800");
   expect(screen.queryByRole("button", { name: "Set tempo" })).not.toBeInTheDocument();
   expect(screen.queryByRole("img", { name: "Done" })).not.toBeInTheDocument();
 });
@@ -36,17 +36,22 @@ test("a free play item", () => {
   expect(screen.getByText("Free play · 60 BPM · 0/1 today")).toBeInTheDocument();
 });
 
-test("done: a check mark and 'Done 4/4 today', muted", () => {
+test("done: a check mark and 'Done 4/4 today', at full contrast and body size", () => {
   render(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} />);
   expect(screen.getByRole("img", { name: "Done" })).toBeInTheDocument();
-  expect(screen.getByText("Plan · 60 BPM · 90% · Done 4/4 today · Count out loud")).toHaveClass("text-muted-foreground");
+  // Done keeps its check mark and full contrast — it is read from the keyboard.
+  const doneLine = screen.getByText("Plan · 60 BPM · 90% · Done 4/4 today · Count out loud");
+  expect(doneLine).toHaveClass("text-foreground");
+  expect(doneLine).not.toHaveClass("text-muted-foreground");
+  // Body size comes from the block, which nothing inside reduces.
+  expect(screen.getByLabelText("Practice plan")).toHaveClass("text-sm");
 });
 
 test("amber: attempts today, not done; no attempts is plain", () => {
   const { rerender } = render(<PlanLine item={ITEM} state={stateOf(ITEM, 2, 1)} heardTempo={60} />);
-  expect(screen.getByText(/1\/4 today/)).toHaveClass("text-amber-700");
+  expect(screen.getByText(/1\/4 today/)).toHaveClass("text-amber-800");
   rerender(<PlanLine item={ITEM} state={stateOf(ITEM, 0, 0)} heardTempo={60} />);
-  expect(screen.getByText(/0\/4 today/)).toHaveClass("text-dark");
+  expect(screen.getByText(/0\/4 today/)).toHaveClass("text-foreground");
 });
 
 test("Set tempo appears only when the heard tempo differs, and calls back", () => {
@@ -64,7 +69,7 @@ test("song note under the plan line, truncated until tapped", () => {
   const note = "Master m.16–17 hands separately, then put them together slowly before moving on to m.18.";
   render(<PlanLine item={ITEM} state={stateOf(ITEM, 0, 0)} songNote={note} heardTempo={60} />);
   const btn = screen.getByRole("button", { name: `Song goal: ${note}` });
-  expect(btn).toHaveClass("truncate");
+  expect(btn).toHaveClass("truncate", "text-foreground");
   expect(btn).toHaveAttribute("aria-expanded", "false");
   fireEvent.click(btn);
   expect(btn).not.toHaveClass("truncate");

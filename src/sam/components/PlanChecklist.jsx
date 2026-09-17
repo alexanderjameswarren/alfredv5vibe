@@ -12,6 +12,16 @@ import { itemRangeText, itemState, itemTargetText, planSummary } from "../lib/ac
 //
 // Every count comes from `progress` — sam_plan_item_progress for today — and
 // is never worked out from passes here.
+//
+// READABILITY (2026-09-17): this is read from across the room, without
+// glasses. Nothing here is smaller than text-sm, the body size used across
+// SAM; the progress count is a step larger than the title because it is the
+// number glanced at most. The target and instruction carry full `foreground`
+// contrast (15.2:1 on the card) and only the range line stays muted
+// (`muted-foreground`, 8.4:1 — the darkest muted token there is). A done item
+// keeps its strikethrough but NOT reduced contrast: finished still has to be
+// readable. Amber is `amber-800` (7.1:1 on the card), which stays clearly
+// apart from the plain rows at this weight; `amber-700` was 5.0:1.
 
 const STORAGE_KEY = "sam.planChecklist.expanded";
 
@@ -39,7 +49,8 @@ function writeExpanded(value) {
 //   4. instruction, when there is one
 function ItemRow({ item, progress, onOpen }) {
   const st = itemState(item, progress);
-  const tone = st.done ? "text-muted-foreground" : st.amber ? "text-amber-700" : "text-dark";
+  // Done is struck through, never dimmed; amber stays full-contrast too.
+  const tone = st.amber ? "text-amber-800" : "text-foreground";
   const strike = st.done ? "line-through" : "";
 
   return (
@@ -59,16 +70,16 @@ function ItemRow({ item, progress, onOpen }) {
               {item.song_title}
             </span>
             <span
-              className={`text-sm font-mono tabular-nums flex-shrink-0 ${tone}`}
+              className={`text-base font-mono font-semibold tabular-nums flex-shrink-0 ${tone}`}
               aria-label={`${st.shown} of ${st.target} passes${st.done ? ", done" : ""}`}
             >
               {st.shown}/{st.target}
             </span>
           </span>
-          <span className={`block text-xs text-muted-foreground ${strike}`}>{itemRangeText(item)}</span>
-          <span className={`block text-xs text-muted-foreground ${strike}`}>{itemTargetText(item)}</span>
+          <span className={`block text-sm text-muted-foreground ${strike}`}>{itemRangeText(item)}</span>
+          <span className={`block text-sm ${tone} ${strike}`}>{itemTargetText(item)}</span>
           {item.instruction && (
-            <span className={`block text-xs text-muted-foreground ${strike}`}>{item.instruction}</span>
+            <span className={`block text-sm ${tone} ${strike}`}>{item.instruction}</span>
           )}
         </span>
       </button>
@@ -99,9 +110,9 @@ export default function PlanChecklist({ plan, progress, onOpenItem }) {
         className="w-full flex items-center gap-3 p-3 text-left rounded-lg hover:bg-secondary/40 transition-colors min-h-[56px]"
       >
         <span className="flex-1 min-w-0">
-          <span className="block text-sm font-medium text-dark">{planSummary(plan, progress)}</span>
+          <span className="block text-sm font-medium text-foreground">{planSummary(plan, progress)}</span>
           {!expanded && plan.day_note && (
-            <span className="block text-xs text-muted-foreground truncate">{plan.day_note}</span>
+            <span className="block text-sm text-muted-foreground truncate">{plan.day_note}</span>
           )}
         </span>
         <ChevronDown
@@ -113,7 +124,7 @@ export default function PlanChecklist({ plan, progress, onOpenItem }) {
       {expanded && (
         <div className="px-1 pb-2">
           {plan.day_note && (
-            <p className="px-2 pb-2 text-sm text-dark whitespace-pre-wrap">{plan.day_note}</p>
+            <p className="px-2 pb-2 text-sm text-foreground whitespace-pre-wrap">{plan.day_note}</p>
           )}
           <ul>
             {main.map((item) => (
@@ -122,7 +133,7 @@ export default function PlanChecklist({ plan, progress, onOpenItem }) {
           </ul>
           {free.length > 0 && (
             <>
-              <div className="px-2 pt-3 pb-1 text-xs uppercase tracking-wide text-muted-foreground">
+              <div className="px-2 pt-3 pb-1 text-sm uppercase tracking-wide text-muted-foreground">
                 Optional Free Play
               </div>
               <ul>

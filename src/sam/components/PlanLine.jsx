@@ -15,11 +15,17 @@ import { planLineText } from "../lib/activePlan";
 //
 // "Set tempo" appears only when the heard tempo differs from the item's target.
 // It changes the tempo box for this sitting; nothing is saved to the song.
+//
+// READABILITY (2026-09-17): read from the keyboard, further away than normal
+// use. Everything here is body size (text-sm) at full `foreground` contrast —
+// a done item keeps its check mark rather than being dimmed — and amber is
+// `amber-800` (7.1:1 on the card). The song note stays a step down in weight
+// only, not in contrast.
 export default function PlanLine({ item, state, songNote, heardTempo, onSetTempo }) {
   const [noteOpen, setNoteOpen] = useState(false);
   if (!item && !songNote) return null;
 
-  const tone = !item ? "" : state.done ? "text-muted-foreground" : state.amber ? "text-amber-700" : "text-dark";
+  const tone = item && state.amber ? "text-amber-800" : "text-foreground";
   const showSetTempo = item && heardTempo !== item.target_effective_bpm;
 
   return (
@@ -48,7 +54,7 @@ export default function PlanLine({ item, state, songNote, heardTempo, onSetTempo
           type="button"
           onClick={() => setNoteOpen((o) => !o)}
           aria-expanded={noteOpen}
-          className={`block w-full text-left text-muted-foreground ${noteOpen ? "whitespace-pre-wrap" : "truncate"}`}
+          className={`block w-full text-left text-foreground ${noteOpen ? "whitespace-pre-wrap" : "truncate"}`}
         >
           Song goal: {songNote}
         </button>

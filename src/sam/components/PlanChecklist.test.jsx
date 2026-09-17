@@ -108,6 +108,24 @@ test("each row: title with snippet, target, instruction, capped progress", () =>
   expect(free.getByText("0/2")).toBeInTheDocument();
 });
 
+test("readability: detail lines are body size, target and instruction at full contrast", () => {
+  render(<PlanChecklist plan={PLAN} progress={PROGRESS} />);
+  fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
+  const a = within(rowFor("Bars 5-12"));
+  // Nothing in the row is smaller than the body size.
+  for (const t of ["m.5–12 · RH · Bars 5-12", "60 BPM · 90% · 4 passes", "Count out loud."]) {
+    expect(a.getByText(t)).toHaveClass("text-sm");
+    expect(a.getByText(t)).not.toHaveClass("text-xs");
+  }
+  expect(a.getByText("60 BPM · 90% · 4 passes")).toHaveClass("text-foreground");
+  expect(a.getByText("Count out loud.")).toHaveClass("text-foreground");
+  // The range line stays muted, at the darkest muted token.
+  expect(a.getByText("m.5–12 · RH · Bars 5-12")).toHaveClass("text-muted-foreground");
+  // The count is a step larger than the title, which is body size.
+  expect(a.getByText("4/4")).toHaveClass("text-base");
+  expect(a.getByText("Pastorale")).toHaveClass("text-sm");
+});
+
 test("done is struck through with a check; attempts short of target are amber; untouched is neither", () => {
   render(<PlanChecklist plan={PLAN} progress={PROGRESS} />);
   fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
@@ -115,12 +133,15 @@ test("done is struck through with a check; attempts short of target are amber; u
   const done = rowFor("Bars 5-12");
   expect(done).toHaveAttribute("data-state", "done");
   expect(within(done).getByText("Pastorale")).toHaveClass("line-through");
+  // Struck through, but NOT dimmed: still readable at a glance.
+  expect(within(done).getByText("Pastorale")).toHaveClass("text-foreground");
+  expect(within(done).getByText("4/4")).toHaveClass("text-foreground");
   expect(within(done).getByText("60 BPM · 90% · 4 passes")).toHaveClass("line-through");
   expect(within(done).getByRole("img", { name: "Done" })).toBeInTheDocument();
 
   const amber = rowFor("50 BPM · 80% · 2 passes");
   expect(amber).toHaveAttribute("data-state", "amber");
-  expect(within(amber).getByText("1/2")).toHaveClass("text-amber-700");
+  expect(within(amber).getByText("1/2")).toHaveClass("text-amber-800");
   expect(within(amber).getByText("50 BPM · 80% · 2 passes")).not.toHaveClass("line-through");
   expect(within(amber).queryByRole("img", { name: "Done" })).not.toBeInTheDocument();
 
