@@ -254,6 +254,35 @@ handler parity.
 - **`create_sam_goal`** — tier 1. `title, kind, status?, song_id?, notes?`.
 - **`update_sam_goal`** — tier 2. `goal_id` plus any of `title, status, song_id, notes`.
   Status `done` sets `completed_at`. No delete; use `dropped`.
+- **`create_sam_snippet`** — tier 1. Added 2026-09-17 so a plan can use snippets the app has not
+  made yet.
+  - **Intended flow:** Alex approves a plan in conversation, Claude creates any snippets it needs
+    with this tool, then passes their ids to `create_sam_practice_plan` as `snippet_id`.
+  - **Input:** `song_id`, `start_measure`, `end_measure` (played measure numbers), plus
+    `hand_mode` (`both | lh | rh`, default `both`) and `rest_measures` (≥ 0, default 0). There is
+    no title, tags or notes input.
+  - **Validation.** Any failure writes nothing:
+    - the song exists and isn't archived;
+    - `start_measure` ≥ 1;
+    - `end_measure` ≥ `start_measure`;
+    - `end_measure` ≤ the song's highest `sam_song_measures.number` (a song with no measures is
+      refused).
+  - **Behaviour** is the app's `ensureSnippetSaved`. It matches first on the app's identity rule
+    (song, `start_measure`, `end_measure`, `rest_measures` with null = 0, and `settings.handMode`
+    with missing = `both`), archived rows included.
+    - A live match is returned unchanged.
+    - If only an archived snippet matches, it is restored (`archived = false`), keeping its id and
+      `created_at`.
+    - Otherwise a new row is inserted with exactly what the app writes: `song_id`, `title` (the
+      app's `formatSnippetTitle`, e.g. "Measures 17-17 RH No Rest"), `start_measure`,
+      `end_measure`, `rest_measures` and `settings = {handMode}`. Everything else takes the
+      column defaults.
+    - Tempo, timing window and chord grouping are never stored on a snippet; the song's defaults
+      apply.
+  - **Returns** bare data, id first: `{ id, song_id, title, start_measure, end_measure,
+    rest_measures, hand_mode, archived, created_at, created, restored }`. Repeated calls are safe
+    and never duplicate. The database has no uniqueness constraint, so matching first is the only
+    guard.
 
 ## 7. App changes
 

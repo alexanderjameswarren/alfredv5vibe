@@ -43,6 +43,7 @@ import {
   createSamGoalTool,
   updateSamGoalTool,
 } from "../_shared/tools/sam-plans.ts";
+import { createSamSnippetTool } from "../_shared/tools/sam-snippets.ts";
 import {
   getDjConcertsTool,
   updateDjConcertTool,
@@ -1193,6 +1194,28 @@ export function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(updateSamGoalTool, args, token),
+  );
+
+  server.registerTool(
+    "create_sam_snippet",
+    {
+      title: "Create SAM Snippet",
+      description:
+        "Find or create the SAM snippet for a measure range of one song, exactly as the app's Save New does, and return it. The returned `id` is the `snippet_id` to use in create_sam_practice_plan. " +
+        "INTENDED FLOW: Alex approves a plan in conversation; Claude creates any snippets the plan needs with this tool; then Claude calls create_sam_practice_plan with their ids. " +
+        "SAFE TO REPEAT, NEVER DUPLICATES: a snippet is its song + start_measure + end_measure + rest_measures + hand_mode. If a live snippet already matches, it is returned unchanged (created: false, restored: false); if only an archived one matches, it is restored with its original id and history (restored: true); only otherwise is a new one inserted (created: true). " +
+        "MEASURE NUMBERS ARE PLAYED NUMBERS (repeats written out) — the numbers get_sam_song_measures and the score use; end_measure may not pass the song's last measure. " +
+        "A new snippet gets the app's standard title (e.g. 'Measures 17-17 RH No Rest') and stores only its hand mode: tempo, timing window and chord grouping always come from the song's own defaults. " +
+        "Refuses an archived or missing song, or a song with no measures. Tier 1. " + SAM_DATA_RULES,
+      inputSchema: {
+        song_id: z.string().describe("UUID of the song"),
+        start_measure: z.number().describe("First measure (played number), 1 or more"),
+        end_measure: z.number().describe("Last measure (played number), not before start_measure and not past the song's last measure"),
+        hand_mode: z.enum(["both", "lh", "rh"]).optional().describe("Which hand is scored. Default 'both'."),
+        rest_measures: z.number().optional().describe("Silent measures between loop repetitions, 0 or more. Default 0."),
+      },
+    },
+    async (args) => runToolForMcp(createSamSnippetTool, args, token),
   );
 
   server.registerTool(

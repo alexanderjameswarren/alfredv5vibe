@@ -30,6 +30,8 @@ SQL docs/migrations/2026-09-16-sam-practice-plans.sql applied 2026-09-16; CONFOR
 - [x] plan_id / plan_item_id filters and columns on get_sam_passes and get_sam_sessions
 - [x] create_sam_practice_plan, update_sam_plan_review_note, update_sam_song_goal, create_sam_goal, update_sam_goal (§6.2)
 - [x] goal_set_at on get_sam_songs and the get_sam_song_measures song block; get_sam_snippets already returned created_at
+- [x] create_sam_snippet (tier 1), added 2026-09-17 (§6.2)
+- [ ] create_sam_snippet deployed; verified from a fresh thread
 - [x] Deployed; verified from a fresh thread — Alex, 2026-09-16: all nine new tools, both validation rejections, progress counting, the review-note guard, the goal tool, and a tier-3 regression check on create_sam_song. Test data deleted.
 
 ### Milestone 4 — Links and checklist strip (Claude Code)
@@ -549,3 +551,53 @@ checklist strip and the 7-day strip now use `mt-2` (was `mt-4`).
   - Behaviour is unchanged.
   - The plan line's "Set tempo" button already used the Save style; it now
     matches it exactly (`flex items-center gap-1` added).
+
+#### create_sam_snippet (2026-09-17)
+
+Built from the snippet fact-finding report, so plans can use snippets the app
+hasn't made yet.
+
+**Code**
+- New `supabase/functions/_shared/tools/sam-snippets.ts`, registered in
+  `mcp/index.ts`. The tool count is now 67.
+- **What it writes:** exactly what the app's Save New writes, after matching
+  first with the app's identity rule, archived rows included. It restores an
+  archived match rather than duplicating it.
+- **Title:** `formatSnippetTitle` is ported. The Edge Function can't import
+  `src/sam/lib/snippetsApi.js`, because that file imports the browser Supabase
+  client. The test lifts the app's function out of that file and checks both
+  give identical output for 120 inputs (every hand mode, including missing;
+  rests 0, 1, 2, 10, missing and null; four ranges).
+- **Validation:** refuses a missing or archived song, a song with no measures,
+  `start_measure` < 1, `end_measure` < `start_measure` or past the last
+  measure, a bad `hand_mode`, and a negative or fractional `rest_measures`.
+  Nothing is written in any of these cases.
+- **Errors:** house style, `create_sam_snippet: …`. A database error reads
+  "… failed: <message> [code]", with no do-not-retry wording.
+
+**Tests**
+- `sam-snippets.test.mjs`: 25 pass. It uses the real `defineTool`, as the
+  plan tools' tests do. Covered:
+  - title parity;
+  - an insert whose payload is exactly the app's (settings exactly
+    `{handMode}`), with `id` first in the result;
+  - the defaults (`both`, 0);
+  - a live match returned with nothing written, including on a repeated
+    call;
+  - an archived match restored with the same id and `created_at`;
+  - a live match winning over an archived twin;
+  - legacy settings without `handMode`, and null settings, matching `both`;
+  - a different hand mode creating a separate snippet;
+  - a different rest count creating a separate snippet, and a null rest
+    matching 0;
+  - another song's snippet never matching;
+  - all 13 validation errors, with nothing written;
+  - `end_measure` equal to the last measure allowed;
+  - the wording of an operational error.
+- Mutations caught: a changed title in the port (3 failures); inserting even
+  when a live match exists (4).
+- `mcp/index.test.mjs`: 13 pass. The new test checks the registration, tier 1,
+  and that the schema lists exactly the five args the handler reads.
+- Every other Edge Function suite passes.
+- `deno check` is clean on `sam-snippets.ts`. `mcp/index.ts` gains only the
+  usual implicit-`any` `args` warning.

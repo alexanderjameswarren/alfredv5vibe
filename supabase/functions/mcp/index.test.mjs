@@ -231,7 +231,7 @@ test("dry_run_dj_playlist is deliberately NOT an MCP tool either", () => {
     "dry_run_dj_playlist is now registered as an MCP tool - was that deliberate?");
 });
 
-test("the tool count is 66 after SAM practice plans", () => {
+test("the tool count is 67 after create_sam_snippet", () => {
   // The number quoted at every reconnect. 36 through step 0 and step 1, which
   // added an endpoint and a non-registered tool on purpose. Step 2 adds three:
   // get_dj_concerts, update_dj_concert, record_dj_feedback - batched into ONE
@@ -264,8 +264,11 @@ test("the tool count is 66 after SAM practice plans", () => {
   // get_sam_practice_plan, get_sam_practice_plans, get_sam_plan_progress,
   // get_sam_goals, create_sam_practice_plan, update_sam_plan_review_note,
   // update_sam_song_goal, create_sam_goal, update_sam_goal.
-  assert.equal(registered.length, 66,
-    `expected 66 registered tools, found ${registered.length}: ` +
+  //
+  // 2026-09-17, +1: create_sam_snippet, so a plan can use snippets the app has
+  // not made yet.
+  assert.equal(registered.length, 67,
+    `expected 67 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -339,6 +342,17 @@ test("SAM plan schemas advertise exactly the args their handlers read", () => {
     assert.deepEqual(advertised, [...read].sort(),
       `${name}: schema advertises [${advertised}] but the handler reads [${[...read].sort()}]`);
   }
+});
+
+test("create_sam_snippet registers and advertises exactly the args its handler reads", () => {
+  const t = registered.find((r) => r.name === "create_sam_snippet");
+  assert.ok(t, "create_sam_snippet not registered");
+  const src = readFileSync(join(TOOLS, "sam-snippets.ts"), "utf-8");
+  const block = src.split("defineTool({")[1];
+  assert.match(block, /tier:\s*1\b/);
+  const read = [...new Set([...block.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]))].sort();
+  assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), read);
+  assert.deepEqual(read, ["end_measure", "hand_mode", "rest_measures", "song_id", "start_measure"]);
 });
 
 test("no duplicate tool names", () => {
