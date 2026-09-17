@@ -231,7 +231,7 @@ A practice session is a single sitting. It logs every attempt at every note.
 - `missingNotes` — notes that were expected but not played
 - `extraNotes` — notes played that weren't expected
 - `wrongNotes` / `expectedWrong` — when the right number of notes were played but wrong pitches
-- `timingDeltaMs` — negative = early, positive = late, null = not played
+- `timingDeltaMs` — POSITIVE = early, NEGATIVE = late, null = not played (corrected 2026-09-18; this line had the sign backwards)
 - `expectedTimeMs` — milliseconds from session start when note should have been played
 - `actualTimeMs` — when it was actually played
 - `velocity` — array matching playedNotes order, useful for dynamics analysis
@@ -246,7 +246,7 @@ With this structure, these analyses become simple queries:
 ```
 Filter events where measure=17, beat=3
 Across all sessions for this snippet
-Average timingDeltaMs → if consistently positive, you're late
+Average timingDeltaMs → if consistently NEGATIVE, you're late; positive means rushing (corrected 2026-09-18)
 ```
 
 ### "Your accuracy on the D-E transition improves over time"

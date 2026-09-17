@@ -302,6 +302,44 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     };
   }, []);
 
+  // Write the fanned-out rows, and never let one bad row cost the rest.
+  //
+  // Until migration 029 the result check accepted only 'hit' and 'miss', so a
+  // batch carrying a 'partial' or a 'wrong' was rejected whole — and the old
+  // code returned on the first failure, dropping every later batch of the
+  // session too. That is why 1,067 of 2,204 ended sessions have no rows at all.
+  // Now a failed batch is retried ROW BY ROW, so every row the database will
+  // accept lands, whatever else is in the batch, and what was refused is
+  // reported with its reason.
+  //
+  // This runs after the session row itself is saved and is fully guarded:
+  // telemetry must never cost the sitting.
+  async function insertSessionEvents(rows, batchSize = 500) {
+    let inserted = 0;
+    const rejected = [];
+
+    for (let i = 0; i < rows.length; i += batchSize) {
+      const batch = rows.slice(i, i + batchSize);
+      const { error } = await supabase.from("sam_session_events").insert(batch);
+      if (!error) {
+        inserted += batch.length;
+        continue;
+      }
+
+      // One row in this batch (or more) was refused; find out which.
+      for (const row of batch) {
+        const { error: rowError } = await supabase.from("sam_session_events").insert(row);
+        if (rowError) {
+          rejected.push({ row, message: rowError.message, code: rowError.code });
+        } else {
+          inserted++;
+        }
+      }
+    }
+
+    return { inserted, rejected };
+  }
+
   const endSession = useCallback(async () => {
     const sessionId = sessionIdRef.current;
     if (!sessionId) {
@@ -373,21 +411,24 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
             measure_id: measureIdMap[evt.measure] || null,
           }));
 
-          // Insert in batches of 500
-          const BATCH_SIZE = 500;
-          for (let i = 0; i < eventRows.length; i += BATCH_SIZE) {
-            const batch = eventRows.slice(i, i + BATCH_SIZE);
-            const { error: insertError } = await supabase
-              .from("sam_session_events")
-              .insert(batch);
+          const { inserted, rejected } = await insertSessionEvents(eventRows);
 
-            if (insertError) {
-              console.error("[Sam] Failed to insert session events:", insertError);
-              return;
+          if (rejected.length > 0) {
+            // Grouped, not one line per row: a bad batch is usually one cause
+            // repeated hundreds of times.
+            const byReason = {};
+            for (const r of rejected) {
+              const key = `${r.message} (result: ${r.row.result}, m.${r.row.measure_number})`;
+              byReason[key] = (byReason[key] || 0) + 1;
             }
+            console.error(
+              `[Sam] Session events: ${rejected.length} of ${eventRows.length} row(s) rejected —`,
+              byReason
+            );
           }
-
-          console.log(`[Sam] Session events fan-out complete: ${eventRows.length} events`);
+          console.log(
+            `[Sam] Session events fan-out complete: ${inserted} of ${eventRows.length} events stored`
+          );
         } catch (e) {
           console.error("[Sam] Session events fan-out failed:", e);
         }

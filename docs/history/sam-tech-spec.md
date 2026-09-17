@@ -159,7 +159,7 @@ The `events` JSONB array stores every note event for the session. A 15-minute se
 }
 ```
 
-Fields: `result` is one of `"hit"`, `"miss"`, `"partial"`, `"wrong_note"`. `timingDeltaMs` is negative=early, positive=late, null=not played. `velocity` array matches `playedNotes` order.
+Fields: `result` is one of `"hit"`, `"miss"`, `"partial"`, `"wrong_note"`. `timingDeltaMs` is POSITIVE=early, NEGATIVE=late, null=not played (corrected 2026-09-18; this line had the sign backwards). `velocity` array matches `playedNotes` order.
 
 ---
 

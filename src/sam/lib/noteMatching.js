@@ -49,8 +49,19 @@ export function findClosestBeat(beatEvents, scrollState, windowMs = 300, handMod
     const activeMidi = handMode === "lh" ? (evt.lhMidi || evt.allMidi) : handMode === "rh" ? (evt.rhMidi || evt.allMidi) : evt.allMidi;
     if (activeMidi.length === 0) continue;
 
-    // Positive timingDelta = beat is in the future (player is early)
-    // Negative timingDelta = beat is in the past (player is late)
+    // 🛑 THE SIGN, STATED ONCE AND RELIED ON EVERYWHERE:
+    //   POSITIVE = EARLY (the beat is still in the future — the player rushed)
+    //   NEGATIVE = LATE  (the beat is already past — the player dragged)
+    // This is the source of `sam_session_events.timing_delta_ms` and of
+    // `sam_sessions.summary.avgTimingDeltaMs`, so a negative average means
+    // dragging. The database column comment said the opposite until migration
+    // 029 (2026-09-18) corrected it to match this line; the sign itself has
+    // never changed.
+    //
+    // Two things bound what the number can say. A keypress further out than
+    // `windowMs` matches no beat at all and is never recorded, so the
+    // magnitude is truncated and any average is pulled toward zero; and a
+    // fixed MIDI or audio latency rides along as a constant offset.
     const timingDeltaMs = evt.targetTimeMs - elapsed;
     const dist = Math.abs(timingDeltaMs);
 

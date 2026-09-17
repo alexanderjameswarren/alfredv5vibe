@@ -5,18 +5,31 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 
 const mockUpdates = [];
 const mockInserts = [];
+// Set by a test to refuse some inserts, as a check constraint would:
+// (table, payload) => error | null. `payload` is a row or an array of rows.
+let mockRefuse = null;
 jest.mock("../../supabaseClient", () => {
   function query(table) {
     let update = null;
+    let insertPayload = null;
+    let insertError = null;
     const api = {
-      insert: (payload) => { mockInserts.push({ table, payload }); return api; },
+      insert: (payload) => {
+        insertPayload = payload;
+        insertError = mockRefuse ? mockRefuse(table, payload) : null;
+        mockInserts.push({ table, payload, refused: !!insertError });
+        return api;
+      },
       select: () => api,
       eq: () => api,
       update: (payload) => { update = payload; return api; },
       single: () => Promise.resolve({ data: { id: "session-1" }, error: null }),
       then: (resolve, reject) => {
         if (update) mockUpdates.push({ table, payload: update });
-        return Promise.resolve({ data: [], error: null }).then(resolve, reject);
+        const result = insertPayload && insertError
+          ? { data: null, error: insertError }
+          : { data: [], error: null };
+        return Promise.resolve(result).then(resolve, reject);
       },
     };
     return api;
@@ -41,7 +54,9 @@ const BEAT = { meas: 1, beat: 1, allMidi: [60] };
 beforeEach(() => {
   mockUpdates.length = 0;
   mockInserts.length = 0;
+  mockRefuse = null;
   jest.spyOn(console, "log").mockImplementation(() => {});
+  jest.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => jest.restoreAllMocks());
 
@@ -197,4 +212,73 @@ test("without a plan link (no plan, or not loaded) both columns are null", async
   });
   expect(mockInserts[0].payload).toMatchObject({ plan_id: null, plan_item_id: null });
   expect(mockInserts[0].payload).not.toHaveProperty("snippet_id");
+});
+
+// --- the fan-out to sam_session_events -----------------------------------------
+//
+// Telemetry must never cost the sitting, and one refused row must never cost
+// the rest of the session (the bug that left 1,067 of 2,204 ended sessions
+// with no rows at all).
+
+const eventRows = () => mockInserts.filter((i) => i.table === "sam_session_events");
+const storedRows = () =>
+  eventRows().filter((i) => !i.refused).flatMap((i) => (Array.isArray(i.payload) ? i.payload : [i.payload]));
+
+async function playAndEnd(session) {
+  hit(session); partial(session); wrong(session); hit(session);
+  await waitFor(() => expect(session.current.getSessionId()).toBe("session-1"));
+  await act(async () => { await session.current.endSession(); });
+  await waitFor(() => expect(eventRows().length).toBeGreaterThan(0));
+}
+
+test("every beat is fanned out, with the app's four result values", async () => {
+  const session = await openSession();
+  await playAndEnd(session);
+  const rows = storedRows();
+  expect(rows).toHaveLength(4);
+  expect(rows.map((r) => r.result)).toEqual(["hit", "partial", "wrong", "hit"]);
+  expect(rows[0]).toMatchObject({
+    session_id: "session-1", song_id: "song-1", measure_number: 1, beat: 1,
+    expected_notes: [60], played_notes: [60], loop_iteration: 0,
+  });
+  // No measure rows in this fake, so measure_id stays null rather than guessing.
+  expect(rows[0].measure_id).toBeNull();
+});
+
+test("a refused row costs only itself: the rest of the session still lands", async () => {
+  // A check constraint that refuses 'wrong', as the database did before 029.
+  mockRefuse = (table, payload) => {
+    if (table !== "sam_session_events") return null;
+    const rows = Array.isArray(payload) ? payload : [payload];
+    return rows.some((r) => r.result === "wrong")
+      ? { message: 'new row violates check constraint "sam_session_events_result_check"', code: "23514" }
+      : null;
+  };
+  const session = await openSession();
+  await playAndEnd(session);
+
+  // The batch was refused, then retried row by row: three of the four stored.
+  const rows = storedRows();
+  expect(rows).toHaveLength(3);
+  expect(rows.map((r) => r.result)).toEqual(["hit", "partial", "hit"]);
+  expect(eventRows().some((i) => i.refused)).toBe(true);
+  // ...and the refusal was reported, with its reason.
+  expect(console.error).toHaveBeenCalledWith(
+    expect.stringContaining("1 of 4 row(s) rejected"),
+    expect.objectContaining({
+      [`new row violates check constraint "sam_session_events_result_check" (result: wrong, m.1)`]: 1,
+    })
+  );
+});
+
+test("the session itself is saved even when every event row is refused", async () => {
+  mockRefuse = (table) => (table === "sam_session_events" ? { message: "boom", code: "XX000" } : null);
+  const session = await openSession();
+  await playAndEnd(session);
+  expect(storedRows()).toHaveLength(0);
+  // ended_at and the summary still landed.
+  expect(mockUpdates).toHaveLength(1);
+  expect(mockUpdates[0].table).toBe("sam_sessions");
+  expect(mockUpdates[0].payload.ended_at).toBeTruthy();
+  expect(mockUpdates[0].payload.summary.totalBeats).toBe(4);
 });

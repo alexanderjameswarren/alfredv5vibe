@@ -159,7 +159,7 @@ This is the implementation roadmap for building Sam within the Alfred project. E
 - Playing subset of chord: beat turns amber, shows "partial"
 - Playing wrong notes: beat turns red, miss counter increments
 - Playing with no nearby pending beat: no crash, flash shows "♪ note name"
-- Timing delta displays (positive = late, negative = early)
+- Timing delta displays (positive = EARLY, negative = LATE — corrected 2026-09-18; this line had the sign backwards. See src/sam/lib/noteMatching.js.)
 
 ---
 
