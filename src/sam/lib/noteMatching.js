@@ -35,6 +35,31 @@ export function matchChord(played, expected) {
  * scrollState: { scrollStartT }
  * windowMs: how far ahead/behind (in ms) to search
  */
+/**
+ * The pending beat nearest to now, IGNORING the matching window, with its
+ * signed offset (same sign rule as findClosestBeat: positive = early).
+ *
+ * This is not a matcher and must never be used to score: it exists so a
+ * keystroke that matched nothing can still be recorded against the measure
+ * that was playing, as an `extra` event. Returns null when nothing is pending.
+ */
+export function nearestBeat(beatEvents, scrollState, handMode = "both") {
+  if (!scrollState || !beatEvents.length) return null;
+  const elapsed = scrollState.elapsed ?? (performance.now() - scrollState.scrollStartT);
+
+  let best = null;
+  for (const evt of beatEvents) {
+    if (evt.state !== "pending") continue;
+    const activeMidi = handMode === "lh" ? (evt.lhMidi || evt.allMidi) : handMode === "rh" ? (evt.rhMidi || evt.allMidi) : evt.allMidi;
+    if (activeMidi.length === 0) continue;
+    const timingDeltaMs = evt.targetTimeMs - elapsed;
+    if (!best || Math.abs(timingDeltaMs) < Math.abs(best.timingDeltaMs)) {
+      best = { beat: evt, timingDeltaMs };
+    }
+  }
+  return best;
+}
+
 export function findClosestBeat(beatEvents, scrollState, windowMs = 300, handMode = "both") {
   if (!scrollState || !beatEvents.length) return null;
 

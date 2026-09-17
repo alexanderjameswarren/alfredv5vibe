@@ -17,6 +17,11 @@ const EMPTY_STATS = {
   hasPlaythrough: false,
 };
 
+// How many `extra` rows one measure may contribute in one pass. A brushed key
+// is one row; a key stuck against the felt is hundreds. Twelve is well past
+// what a real fumble produces and far short of a flood.
+const EXTRAS_PER_MEASURE_PER_PASS = 12;
+
 function newPlaythrough(loop) {
   // `notesPlayed` counts MIDI notes that actually arrived. It is the only way
   // to tell an unmeasured playthrough from a badly played one: ScrollEngine
@@ -81,6 +86,8 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
   // clean 100% pass is still on screen after the wrap, on pause and on stop).
   // `playthroughLogRef` accumulates finished passes for the session summary.
   const playthroughRef = useRef(newPlaythrough(0));
+  // Extras per `${measure}:${loopIteration}`, for the cap below.
+  const extraCountsRef = useRef(new Map());
   const lastPlaythroughRef = useRef(null);
   const playthroughLogRef = useRef([]);
 
@@ -126,6 +133,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     playthroughRef.current = newPlaythrough(0);
     lastPlaythroughRef.current = null;
     playthroughLogRef.current = [];
+    extraCountsRef.current = new Map();
     sessionIdRef.current = null;
     songIdRef.current = songId || null;
     setStats(EMPTY_STATS);
@@ -223,6 +231,41 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
       avgTimingDeltaMs: avgTiming,
       ...playthroughStats(p, lastPlaythroughRef.current),
     });
+  }, []);
+
+  // A keystroke that belongs to no expected beat: a wrong key, or a note so far
+  // from its beat that the matcher refused it. Recorded as an `extra` event so
+  // "what am I hitting instead" is answerable, and DELIBERATELY SCORELESS.
+  //
+  // 🛑 IT TOUCHES NO COUNTER. Not `countersRef` (hits, misses, partials,
+  // totalBeats, notesPlayed), not `playthroughRef` (which is what sam_passes
+  // writes), not `timingDeltasRef` (the session's average), and not `setStats`,
+  // so nothing on screen moves either. It only appends to `eventsRef`, which
+  // feeds sam_session_events and the events blob. A wrong key corrected inside
+  // the window still scores as a hit — that is the app's rule and this does not
+  // change it; it only records what was struck.
+  //
+  // Capped per measure per loop iteration: a stuck or repeatedly brushed key
+  // could otherwise write hundreds of rows for one bar. Reaching the cap drops
+  // further extras for that bar in that pass, and nothing else is affected.
+  const recordExtra = useCallback(({ measure, beat, played, timingDeltaMs, loopIteration }) => {
+    if (!played?.length) return false;
+    const loop = loopIteration ?? loopCountRef.current;
+    const key = `${measure}:${loop}`;
+    const seen = extraCountsRef.current.get(key) || 0;
+    if (seen >= EXTRAS_PER_MEASURE_PER_PASS) return false;
+    extraCountsRef.current.set(key, seen + 1);
+
+    eventsRef.current.push({
+      loopIteration: loop,
+      measure,
+      beat: beat ?? 0,
+      expectedNotes: [],
+      playedNotes: played,
+      result: "extra",
+      timingDeltaMs: timingDeltaMs != null ? Math.round(timingDeltaMs) : null,
+    });
+    return true;
   }, []);
 
   // Counters for the playthrough currently in progress, read by the pass writer
@@ -531,6 +574,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     setLoopIteration,
     getSessionId,
     getCurrentPlaythrough,
+    recordExtra,
     noteTempo,
     noteMidiConnected,
     stats,

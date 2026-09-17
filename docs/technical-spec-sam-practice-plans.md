@@ -58,6 +58,11 @@ never edited after they are saved.
 
 ## 3. Existing system this builds on (verified 2026-09-16)
 
+- **Scoring definitions: `docs/sam-scoring-definitions.md`** — what hit / miss / partial /
+  extra mean, that accuracy is hits / (hits + misses) with partials outside the ratio, that a
+  corrected wrong key still scores as a hit, the timing sign (positive = early), and why the
+  same passage at different `windowMs` settings is not comparable. Read it before computing
+  anything from practice data.
 - `sam_passes`: one row per completed playthrough. Records `song_id`, `snippet_id` (null means
   whole song), `session_id`, `bpm`, `playback_speed`, generated `effective_bpm`, `hits`,
   `misses`, `notes_played`, `hand_mode`, generated `accuracy_percent` (null when nothing was

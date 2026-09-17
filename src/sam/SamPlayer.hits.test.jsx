@@ -26,13 +26,24 @@ jest.mock("./lib/useMIDI", () => ({ onChord }) => {
 });
 
 let mockNextResult = "hit";
+// "none" = the matcher finds no beat in the window (a stray keystroke).
 jest.mock("./lib/noteMatching", () => ({
-  findClosestBeat: () => ({
-    beat: { meas: 1, beat: 1, allMidi: [60, 64], rhMidi: [60, 64], lhMidi: [], svgEls: [], state: "pending" },
-    timingDeltaMs: 0,
+  findClosestBeat: () =>
+    mockNextResult === "none"
+      ? null
+      : {
+          beat: { meas: 1, beat: 1, allMidi: [60, 64], rhMidi: [60, 64], lhMidi: [], svgEls: [], state: "pending" },
+          timingDeltaMs: 0,
+        },
+  // Used only to name the measure an unmatched keystroke happened in.
+  nearestBeat: () => ({
+    beat: { meas: 7, beat: 3, allMidi: [60], rhMidi: [60], lhMidi: [], svgEls: [], state: "pending" },
+    timingDeltaMs: -412,
   }),
   matchChord: () =>
-    mockNextResult === "hit"
+    mockNextResult === "allwrong"
+      ? { result: "miss", missingNotes: [60, 64], extraNotes: [61] }
+      : mockNextResult === "hit"
       ? { result: "hit", missingNotes: [], extraNotes: [] }
       : mockNextResult === "partial"
         ? { result: "partial", missingNotes: [64], extraNotes: [] }
@@ -183,4 +194,23 @@ test("partials only: nothing is measured, so Session Accuracy is a dash, not 0%"
   await play("hit");
   await play("wrong");
   expect(counter("Session Accuracy")).toBe("50%");
+});
+
+// --- `extra` rows: what was struck, recorded without scoring it ---------------
+
+test("a stray keystroke and an all-wrong chord move no counter on screen", async () => {
+  await startPlaying();
+  await play("hit");
+  expect(counter("Hits")).toBe("1");
+  expect(counter("Session Accuracy")).toBe("100%");
+
+  // A keystroke that matches no beat at all.
+  await play("none");
+  // An all-wrong chord: the beat is left pending, so it is not scored either.
+  await play("allwrong");
+
+  expect(counter("Hits")).toBe("1");
+  expect(counter("Misses")).toBe("0");
+  expect(counter("Session Accuracy")).toBe("100%");
+  expect(counter("Loop")).toBe("0");
 });

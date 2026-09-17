@@ -81,6 +81,9 @@ function wrong(session) {
 function partial(session) {
   act(() => session.current.recordEvent({ beatEvent: BEAT, played: [60], timingDeltaMs: 0, result: "partial" }));
 }
+function extra(session, over = {}) {
+  act(() => session.current.recordExtra({ measure: 4, beat: 2, played: [61], timingDeltaMs: -120, ...over }));
+}
 function wrap(session, n) {
   act(() => session.current.setLoopIteration(n));
 }
@@ -282,3 +285,63 @@ test("the session itself is saved even when every event row is refused", async (
   expect(mockUpdates[0].payload.ended_at).toBeTruthy();
   expect(mockUpdates[0].payload.summary.totalBeats).toBe(4);
 });
+
+// --- `extra` rows: recorded, and scoreless by construction ---------------------
+
+test("an extra changes no counter, no accuracy, no timing average and no pass figures", async () => {
+  const session = await openSession();
+  hit(session); wrong(session);           // a measured 50%
+  const before = { ...session.current.stats };
+  const beforePass = { ...session.current.getCurrentPlaythrough() };
+
+  extra(session);
+  extra(session, { measure: 5, played: [62, 63] });
+
+  expect(session.current.stats).toEqual(before);
+  expect(session.current.getCurrentPlaythrough()).toEqual(beforePass);
+  expect(session.current.stats.accuracyPercent).toBe(50);
+
+  const summary = await endAndGetSummary(session);
+  // Counters and the pass-facing figures ignore them entirely.
+  expect(summary).toMatchObject({ hits: 1, misses: 1, partials: 0, totalBeats: 2, notesPlayed: 2, accuracyPercent: 50 });
+  // -120 would have dragged a 0 average down if it had been counted.
+  expect(summary.avgTimingDeltaMs).toBe(0);
+  expect(summary.playthroughs[0]).toMatchObject({ hits: 1, misses: 1, totalBeats: 2, accuracyPercent: 50 });
+});
+
+test("an extra IS written to the telemetry, with the struck pitch and no expected notes", async () => {
+  const session = await openSession();
+  hit(session);
+  extra(session);
+  await playAndEndNoExtraPlay(session);
+  const rows = storedRows();
+  expect(rows.map((r) => r.result)).toEqual(["hit", "extra"]);
+  expect(rows[1]).toMatchObject({
+    measure_number: 4, beat: 2, result: "extra",
+    played_notes: [61], expected_notes: [], timing_delta_ms: -120, loop_iteration: 0,
+  });
+});
+
+test("extras are capped per measure per pass, and an empty keystroke is ignored", async () => {
+  const session = await openSession();
+  for (let i = 0; i < 20; i++) extra(session);
+  // A different measure, and the same measure in the next pass, both have their
+  // own allowance.
+  for (let i = 0; i < 3; i++) extra(session, { measure: 9 });
+  wrap(session, 1);
+  for (let i = 0; i < 3; i++) extra(session);
+  expect(session.current.recordExtra({ measure: 4, played: [] })).toBe(false);
+
+  await playAndEndNoExtraPlay(session);
+  const rows = storedRows().filter((r) => r.result === "extra");
+  expect(rows.filter((r) => r.measure_number === 4 && r.loop_iteration === 0)).toHaveLength(12);
+  expect(rows.filter((r) => r.measure_number === 9)).toHaveLength(3);
+  expect(rows.filter((r) => r.measure_number === 4 && r.loop_iteration === 1)).toHaveLength(3);
+});
+
+// Ends the session without adding more scored beats.
+async function playAndEndNoExtraPlay(session) {
+  await waitFor(() => expect(session.current.getSessionId()).toBe("session-1"));
+  await act(async () => { await session.current.endSession(); });
+  await waitFor(() => expect(eventRows().length).toBeGreaterThan(0));
+}

@@ -28,7 +28,7 @@ import FingeringBar from "./components/FingeringBar";
 import useAudioSync from "./lib/useAudioSync";
 import useNumericInput from "./lib/useNumericInput";
 import { DEFAULTS } from "./lib/samConstants";
-import { matchChord, findClosestBeat } from "./lib/noteMatching";
+import { matchChord, findClosestBeat, nearestBeat } from "./lib/noteMatching";
 import { onScreenTally } from "./lib/practiceScoring";
 import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
 import { normalizeMeasure } from "./lib/measureUtils";
@@ -138,7 +138,7 @@ export default function SamPlayer({ onBack }) {
 
   const {
     startSession, endSession, recordEvent, setLoopIteration, getSessionId,
-    getCurrentPlaythrough, noteTempo, noteMidiConnected, stats: sessionStats,
+    getCurrentPlaythrough, noteTempo, noteMidiConnected, recordExtra, stats: sessionStats,
   } = usePracticeSession({
     onSessionEnded: () => setPracticeStatsRefetchSignal((n) => n + 1),
   });
@@ -445,6 +445,18 @@ export default function SamPlayer({ onBack }) {
     if (!match) {
       console.log(`[PLAY] No pending beat found within ±${timingWindowMs.value}ms`);
       const names = played.map((m) => midiDisplayName(m)).join(", ");
+      // Nothing to score — but record WHAT was struck and where, as an `extra`
+      // event. The nearest pending beat names the measure and the offset; it is
+      // used for bookkeeping only and never consumed or marked.
+      const near = nearestBeat(beatEventsRef.current, scrollState, hm);
+      if (near) {
+        recordExtra({
+          measure: near.beat.meas,
+          beat: near.beat.beat,
+          played,
+          timingDeltaMs: near.timingDeltaMs,
+        });
+      }
       setLastResult({ result: "none", timingMs: 0, noteName: names });
       return;
     }
@@ -471,6 +483,22 @@ export default function SamPlayer({ onBack }) {
     // Leave it pending so the player can try again before the miss scanner catches it.
     if (result === "miss" && missingNotes.length === activeMidi.length) {
       console.log(`[SKIP] All notes wrong — beat NOT consumed, stays pending`);
+      // What was struck used to be thrown away here: the beat stays pending and
+      // is later timed out by the scanner as a plain miss with `played: []`, so
+      // the wrong keys vanished. Record them as their own `extra` row rather
+      // than attaching them to that miss:
+      //   - the miss may never happen (play it right in time and this becomes a
+      //     hit), and a row already written could not be taken back;
+      //   - several wrong attempts can precede one beat, and a single
+      //     `played_notes` array could not hold them separately;
+      //   - `extra` rows are scoreless by construction, so this cannot leak
+      //     into the miss's meaning.
+      recordExtra({
+        measure: beat.meas,
+        beat: beat.beat,
+        played,
+        timingDeltaMs,
+      });
       return;
     }
 
@@ -513,7 +541,7 @@ export default function SamPlayer({ onBack }) {
       timingMs: Math.round(timingDeltaMs),
       noteName: `${sign}${Math.round(timingDeltaMs)}ms`,
     });
-  }, [playbackState, recordEvent, timingWindowMs.value, snippet?.handMode]);
+  }, [playbackState, recordEvent, recordExtra, timingWindowMs.value, snippet?.handMode]);
 
   const { connected: midiConnected, deviceName: midiDevice, lastNote } = useMIDI({
     onChord: handleChord,
