@@ -7,7 +7,7 @@
 // noteMatching to decide what each chord scores.
 
 import React from "react";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { MemoryRouter } from "react-router-dom";
 
@@ -26,19 +26,19 @@ jest.mock("./lib/useMIDI", () => ({ onChord }) => {
 });
 
 let mockNextResult = "hit";
+// How far the nearest pending beat is when a keystroke matches nothing.
+let mockNearestDelta = -412;
+// ONE beat object, so a later onBeatMiss can be handed the very beat the
+// chord was played at — which is how the app links the two.
+const THE_BEAT = { meas: 1, beat: 1, allMidi: [60, 64], rhMidi: [60, 64], lhMidi: [], svgEls: [], state: "pending" };
 // "none" = the matcher finds no beat in the window (a stray keystroke).
 jest.mock("./lib/noteMatching", () => ({
   findClosestBeat: () =>
-    mockNextResult === "none"
-      ? null
-      : {
-          beat: { meas: 1, beat: 1, allMidi: [60, 64], rhMidi: [60, 64], lhMidi: [], svgEls: [], state: "pending" },
-          timingDeltaMs: 0,
-        },
+    mockNextResult === "none" ? null : { beat: THE_BEAT, timingDeltaMs: 0 },
   // Used only to name the measure an unmatched keystroke happened in.
   nearestBeat: () => ({
     beat: { meas: 7, beat: 3, allMidi: [60], rhMidi: [60], lhMidi: [], svgEls: [], state: "pending" },
-    timingDeltaMs: -412,
+    timingDeltaMs: mockNearestDelta,
   }),
   matchChord: () =>
     mockNextResult === "allwrong"
@@ -60,12 +60,21 @@ jest.mock("./lib/songLoad", () => ({
 }));
 
 // Every read is empty; an insert returns an id.
+const mockInserts = [];
 jest.mock("../supabaseClient", () => {
-  function query() {
+  function query(table) {
     const api = new Proxy(
       {},
       {
         get(_, prop) {
+          if (prop === "insert") {
+            return (payload) => {
+              for (const row of Array.isArray(payload) ? payload : [payload]) {
+                mockInserts.push({ table, row });
+              }
+              return api;
+            };
+          }
           if (prop === "then") {
             return (resolve, reject) =>
               Promise.resolve({ data: [], count: 0, error: null }).then(resolve, reject);
@@ -84,7 +93,7 @@ jest.mock("../supabaseClient", () => {
   }
   return {
     supabase: {
-      from: () => query(),
+      from: (table) => query(table),
       auth: {
         getUser: async () => ({ data: { user: { id: "u1" } } }),
         getSession: async () => ({ data: { session: null } }),
@@ -120,6 +129,9 @@ const SONG = {
 beforeEach(() => {
   mockScrollProps = null;
   mockOnChord = null;
+  mockInserts.length = 0;
+  mockNearestDelta = -412;
+  THE_BEAT.state = "pending";
   mockFetchSongById.mockReset().mockResolvedValue({
     song: JSON.parse(JSON.stringify(SONG)),
     row: { id: SONG_ID },
@@ -213,4 +225,65 @@ test("a stray keystroke and an all-wrong chord move no counter on screen", async
   expect(counter("Misses")).toBe("0");
   expect(counter("Session Accuracy")).toBe("100%");
   expect(counter("Loop")).toBe("0");
+});
+
+// --- one fumble, one row -------------------------------------------------------
+
+const eventRows = () =>
+  mockInserts.filter((i) => i.table === "sam_session_events").map((i) => i.row);
+
+// Pause ends the session, which is what flushes the events.
+async function stop() {
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+  await waitFor(() => expect(eventRows().length).toBeGreaterThan(0));
+}
+
+test("an all-wrong chord produces exactly ONE row carrying those pitches — the miss", async () => {
+  await startPlaying();
+  await play("allwrong");
+  // The beat was left pending; the scanner times it out later.
+  await act(async () => { mockScrollProps.onBeatMiss(THE_BEAT); });
+  await stop();
+
+  const rows = eventRows();
+  const withPitches = rows.filter((r) => (r.played_notes || []).includes(60));
+  expect(withPitches).toHaveLength(1);
+  expect(withPitches[0]).toMatchObject({
+    result: "miss", measure_number: 1, beat: 1, played_notes: [60], timing_delta_ms: null,
+  });
+  // No companion extra: that is what made one fumble two rows.
+  expect(rows.filter((r) => r.result === "extra")).toHaveLength(0);
+
+  // And it is still a miss, on screen and in the counters.
+  expect(counter("Misses")).toBe("1");
+  expect(counter("Hits")).toBe("0");
+  // The wrong keys are NOT counted as notes played, so accuracy stays unmeasured.
+  expect(counter("Session Accuracy")).toBe("—");
+});
+
+test("a corrected all-wrong chord leaves no row at all: nothing was missed", async () => {
+  await startPlaying();
+  await play("allwrong");   // held against the beat
+  await play("hit");        // corrected in time — the beat is consumed as a hit
+  await stop();
+
+  const rows = eventRows();
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ result: "hit", played_notes: [60] });
+  expect(counter("Hits")).toBe("1");
+});
+
+test("an extra keeps its offset only when the nearest beat is within reach", async () => {
+  await startPlaying();
+  mockNearestDelta = -412;          // inside 2 x 300ms
+  await play("none");
+  mockNearestDelta = 4389;          // the live value that prompted this rule
+  await play("none");
+  await stop();
+
+  const extras = eventRows().filter((r) => r.result === "extra");
+  expect(extras).toHaveLength(2);
+  expect(extras[0]).toMatchObject({ measure_number: 7, beat: 3, played_notes: [60], timing_delta_ms: -412 });
+  expect(extras[1].timing_delta_ms).toBeNull();
+  expect(extras[1].played_notes).toEqual([60]);
 });

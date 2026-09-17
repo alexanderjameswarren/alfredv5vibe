@@ -15,9 +15,9 @@ Every expected beat produces exactly one row in `sam_session_events`.
 | result | meaning |
 |---|---|
 | `hit` | Every note the beat called for was played within the matching window. |
-| `miss` | The beat passed unplayed. Raised on elapsed time **without consulting MIDI**, so a session played with no keyboard attached records a full count of misses rather than nothing. |
+| `miss` | The beat was not played correctly. Either nothing was struck at it — raised on elapsed time **without consulting MIDI**, so a session with no keyboard attached records a full count of misses — or what was struck was wrong, in which case `played_notes` carries those keys. |
 | `partial` | Some but not all of the beat's notes were played. |
-| `extra` | A keystroke belonging to no expected beat: a wrong key, or a note too far from its beat to match. Not a beat outcome at all. |
+| `extra` | A keystroke that was **not an attempt at any beat**: it matched nothing within the window. Not a beat outcome at all. An attempt at a beat that was simply wrong is a `miss` carrying its pitches. |
 
 `wrong` is permitted by the constraint but **has never been written**, and is
 not expected to be. An all-wrong chord is deliberately left pending so the
@@ -44,8 +44,27 @@ scores as a **hit**.
 
 This is deliberate, not an oversight. The score answers "did I play the
 passage", and penalising a slip that was recovered in time makes that number
-less useful. What was struck is not lost: since 2026-09-18 it is recorded as its
-own `extra` row, which changes no score.
+less useful. What was struck is not lost: an unattached keystroke becomes its
+own `extra` row, and a wrong attempt AT a beat is kept on that beat's `miss`
+row, neither of which changes a score.
+
+## One fumble is one row
+
+Wrong notes are recorded against the beat they belong to:
+
+- **A chord with some wrong notes** already scores a `miss`, and its
+  `played_notes` holds what was struck.
+- **An all-wrong chord** leaves the beat pending so it can be corrected. If it
+  is not, the scanner's `miss` for that beat carries the keys that were struck.
+  (For one day, 2026-09-18, this also wrote a companion `extra` row. That is
+  withdrawn, because it made one fumble two rows and a per-measure count could
+  double it.)
+- **Notes carried on a miss are not counted.** They never reach `notesPlayed`,
+  so no score moves.
+- **An `extra`** is only a keystroke that belonged to no beat at all.
+
+So a count of wrong notes should read both `extra` rows and the `played_notes`
+of `miss` rows, and can trust that one attempt appears once.
 
 ## Timing
 
@@ -63,6 +82,14 @@ Three limits on any average:
    session's `settings.windowMs` matches no beat and is never recorded as a
    timing value, so the extremes are invisible and the mean is pulled toward
    zero. Whatever the window is, the magnitude cannot exceed it.
+   - **On an `extra` row** the value is the distance to the nearest pending
+     beat, and is stored **only when that is within twice the window** — null
+     otherwise. A keystroke a beat and a half from anything is unattached, not
+     early or late. Twice the window, rather than a fraction of a beat, because
+     `windowMs` is already the app's definition of "close enough to be an
+     attempt at this beat", so the rule scales with how strict the session was
+     rather than with its tempo. **Extras from before 2026-09-18 stored the
+     number regardless; values of several seconds exist and are noise.**
 2. **Latency rides along.** Any fixed MIDI or audio latency appears as a
    constant offset on every row.
 3. **Different windows aren't comparable** (below).

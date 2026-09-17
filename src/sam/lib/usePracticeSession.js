@@ -187,13 +187,18 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
     if (connected) midiRef.current.everConnected = true;
   }, []);
 
-  const recordEvent = useCallback(({ beatEvent, played, timingDeltaMs, result, loopIteration }) => {
+  // `attempted` carries pitches that were struck AT this beat but must not be
+  // counted: the keys of a chord that was all wrong, which left the beat
+  // pending until the scanner timed it out. They ride on the row so the wrong
+  // notes stay attached to the beat they belong to, and they are deliberately
+  // absent from `played` so no counter — notesPlayed included — moves.
+  const recordEvent = useCallback(({ beatEvent, played, attempted, timingDeltaMs, result, loopIteration }) => {
     const evt = {
       loopIteration: loopIteration ?? loopCountRef.current,
       measure: beatEvent.meas,
       beat: beatEvent.beat,
       expectedNotes: beatEvent.allMidi,
-      playedNotes: played || [],
+      playedNotes: played?.length ? played : (attempted || []),
       result,
       timingDeltaMs: timingDeltaMs != null ? Math.round(timingDeltaMs) : null,
     };

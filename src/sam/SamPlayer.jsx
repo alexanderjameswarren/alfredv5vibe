@@ -37,6 +37,12 @@ import { buildSongExport } from "./lib/songExport";
 import { fetchSongById } from "./lib/songLoad";
 import { supabase } from "../supabaseClient";
 
+// How far from a beat an unattached keystroke may be and still have its offset
+// recorded, as a multiple of the session's matching window. Beyond it the
+// offset is stored as null: the pitch and the measure are still the answer to
+// "what am I hitting", but the number would mean nothing.
+const EXTRA_TIMING_REACH = 2;
+
 function AudioMsCounter({ audioElement }) {
   const [ms, setMs] = useState(0);
   const rafRef = useRef(null);
@@ -124,6 +130,9 @@ export default function SamPlayer({ onBack }) {
   const [audioMuted, setAudioMuted] = useState(false);
   const playbackSpeed = useNumericInput(DEFAULTS.playbackSpeed);
   const beatEventsRef = useRef([]);
+  // Beat event -> the pitches struck at it in an all-wrong attempt, waiting for
+  // the miss scanner to claim them. See handleChord's all-wrong branch.
+  const attemptedNotesRef = useRef(new Map());
   const scrollStateExtRef = useRef(null);
   const hitCountRef = useRef(0);
   const missCountRef = useRef(0);
@@ -446,15 +455,24 @@ export default function SamPlayer({ onBack }) {
       console.log(`[PLAY] No pending beat found within ±${timingWindowMs.value}ms`);
       const names = played.map((m) => midiDisplayName(m)).join(", ");
       // Nothing to score — but record WHAT was struck and where, as an `extra`
-      // event. The nearest pending beat names the measure and the offset; it is
-      // used for bookkeeping only and never consumed or marked.
+      // event. The nearest pending beat names the measure; it is used for
+      // bookkeeping only and never consumed or marked.
+      //
+      // ITS OFFSET IS ONLY KEPT WHEN IT MEANS SOMETHING. A keystroke a beat and
+      // a half from anything is not early or late, it is unattached, and
+      // storing "4389 ms early" invites a reader to average it. The cutoff is
+      // twice the session's own matching window: windowMs is already the app's
+      // definition of "close enough to be an attempt at this beat", so twice it
+      // is a near miss, and the rule scales with how strict the session was
+      // rather than with the tempo.
       const near = nearestBeat(beatEventsRef.current, scrollState, hm);
       if (near) {
+        const withinReach = Math.abs(near.timingDeltaMs) <= timingWindowMs.value * EXTRA_TIMING_REACH;
         recordExtra({
           measure: near.beat.meas,
           beat: near.beat.beat,
           played,
-          timingDeltaMs: near.timingDeltaMs,
+          timingDeltaMs: withinReach ? near.timingDeltaMs : null,
         });
       }
       setLastResult({ result: "none", timingMs: 0, noteName: names });
@@ -485,20 +503,16 @@ export default function SamPlayer({ onBack }) {
       console.log(`[SKIP] All notes wrong — beat NOT consumed, stays pending`);
       // What was struck used to be thrown away here: the beat stays pending and
       // is later timed out by the scanner as a plain miss with `played: []`, so
-      // the wrong keys vanished. Record them as their own `extra` row rather
-      // than attaching them to that miss:
-      //   - the miss may never happen (play it right in time and this becomes a
-      //     hit), and a row already written could not be taken back;
-      //   - several wrong attempts can precede one beat, and a single
-      //     `played_notes` array could not hold them separately;
-      //   - `extra` rows are scoreless by construction, so this cannot leak
-      //     into the miss's meaning.
-      recordExtra({
-        measure: beat.meas,
-        beat: beat.beat,
-        played,
-        timingDeltaMs,
-      });
+      // the wrong keys vanished. Hold them against this beat instead, and let
+      // the miss carry them — ONE BEAT, ONE ROW, with the wrong notes attached
+      // to the beat they belong to. (Part 1 wrote a companion `extra` row here;
+      // that made one fumble two rows, which a per-measure count could double.)
+      //
+      // If the player corrects it in time, the beat is consumed as a hit or a
+      // partial and the held notes are dropped unused, which is right: nothing
+      // was missed.
+      const held = attemptedNotesRef.current.get(beat) || [];
+      attemptedNotesRef.current.set(beat, [...held, ...played]);
       return;
     }
 
@@ -638,7 +652,12 @@ export default function SamPlayer({ onBack }) {
   const handleBeatMiss = useCallback((evt) => {
     missCountRef.current++;
     setMissCount(missCountRef.current);
-    recordEvent({ beatEvent: evt, played: [], timingDeltaMs: null, result: "miss" });
+    // Any all-wrong attempt at this beat rides along as `attempted`, so the row
+    // says which keys were struck. It stays a miss, and `attempted` is kept out
+    // of `played` so no counter moves — see recordEvent.
+    const attempted = attemptedNotesRef.current.get(evt);
+    if (attempted) attemptedNotesRef.current.delete(evt);
+    recordEvent({ beatEvent: evt, played: [], attempted, timingDeltaMs: null, result: "miss" });
   }, [recordEvent]);
 
   async function handleSaveLyrics() {
@@ -774,6 +793,7 @@ export default function SamPlayer({ onBack }) {
   }
 
   function resetCounters() {
+    attemptedNotesRef.current = new Map();
     hitCountRef.current = 0;
     missCountRef.current = 0;
     setHitCount(0);

@@ -11,15 +11,22 @@ export const SAM_SCORING_RULES =
   "NEITHER, sits outside the ratio and is reported separately; an `extra` counts as nothing at all. " +
   "Accuracy is NULL, never 0, when nothing was measured — null means unmeasurable, 0 means measured and " +
   "every note wrong, and null must never be averaged as 0. " +
-  "(2) RESULT VALUES: `hit` (every expected note played in time), `miss` (the beat passed unplayed — " +
-  "raised on elapsed time without consulting MIDI, so a session with no keyboard records a full count of " +
-  "misses), `partial`, and `extra` (a keystroke matching no beat: a wrong key, or one too far from its " +
-  "beat — SCORELESS, and the answer to \"what am I hitting instead\"). `wrong` is permitted by the " +
-  "constraint but has never been written. " +
+  "(2) RESULT VALUES: `hit` (every expected note played in time), `miss` (the beat was not played correctly — " +
+  "either nothing was struck at it, raised on elapsed time without consulting MIDI so a session with no " +
+  "keyboard records a full count of misses, or what was struck was wrong, in which case played_notes carries " +
+  "those keys), `partial`, and `extra` (a keystroke that was NOT AN ATTEMPT AT ANY BEAT — it matched nothing " +
+  "within the window: SCORELESS, and the answer to \"what am I hitting instead\"). `wrong` is permitted by " +
+  "the constraint but has never been written. " +
+  "(2b) ONE FUMBLE IS ONE ROW: a wrong attempt AT a beat lives on that beat's miss row (its pitches are not " +
+  "counted toward notesPlayed); only an unattached keystroke is an extra. A count of wrong notes should read " +
+  "extra rows AND the played_notes of miss rows, and will not double-count one attempt. " +
   "(3) A WRONG KEY STRUCK AND CORRECTED WITHIN THE WINDOW STILL SCORES AS A HIT. That is deliberate — the " +
-  "score measures whether the passage was played, and punishing a recovered slip makes it less useful. The " +
-  "stray key is kept as its own `extra` row and changes no score. " +
-  "(4) TIMING: POSITIVE = EARLY (rushing), NEGATIVE = LATE (dragging). The magnitude is truncated by the " +
+  "score measures whether the passage was played, and punishing a recovered slip makes it less useful. What " +
+  "was struck is still recorded, and changes no score. " +
+  "(4) TIMING: POSITIVE = EARLY (rushing), NEGATIVE = LATE (dragging). On an EXTRA row it is the offset to " +
+  "the nearest pending beat and is NULL when that beat is further than twice the window — an unattached " +
+  "keystroke is neither early nor late (extras from before 2026-09-18 stored it regardless: noise). The " +
+  "magnitude is truncated by the " +
   "session's matching window (settings.windowMs, default 300 ms) — anything further out matched no beat and " +
   "was never recorded, so extremes are invisible and the mean is pulled toward zero — and any fixed MIDI or " +
   "audio latency rides along as a constant offset. Comparisons WITHIN one session are far more reliable " +

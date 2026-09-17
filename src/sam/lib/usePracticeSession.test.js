@@ -345,3 +345,24 @@ async function playAndEndNoExtraPlay(session) {
   await act(async () => { await session.current.endSession(); });
   await waitFor(() => expect(eventRows().length).toBeGreaterThan(0));
 }
+
+test("wrong keys carried on a miss reach the row but no counter", async () => {
+  const session = await openSession();
+  hit(session);
+  act(() => session.current.recordEvent({
+    beatEvent: BEAT, played: [], attempted: [61, 63], timingDeltaMs: null, result: "miss",
+  }));
+
+  // Counted as an ordinary miss: one hit, one miss, and the two wrong keys are
+  // NOT notes played, so accuracy stays the measured 50% rather than moving.
+  const { stats } = session.current;
+  expect(stats).toMatchObject({ hits: 1, misses: 1 });
+  expect(session.current.getCurrentPlaythrough()).toEqual({ hits: 1, misses: 1, notesPlayed: 1 });
+  expect(stats.accuracyPercent).toBe(50);
+
+  const summary = await endAndGetSummary(session);
+  expect(summary).toMatchObject({ hits: 1, misses: 1, notesPlayed: 1, accuracyPercent: 50 });
+  const rows = storedRows();
+  expect(rows.map((r) => r.result)).toEqual(["hit", "miss"]);
+  expect(rows[1]).toMatchObject({ result: "miss", played_notes: [61, 63], timing_delta_ms: null });
+});
