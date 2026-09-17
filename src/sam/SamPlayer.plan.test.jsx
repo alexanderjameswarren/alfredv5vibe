@@ -259,10 +259,16 @@ test("an archived snippet opens the song without it", async () => {
   expect(sessionInserts()[0].row.plan_item_id).toBe("item-whole");
 });
 
-test("the library has a SAM header", async () => {
+test("the library has a SAM header in the library's centered column", async () => {
   renderHome();
-  expect(await screen.findByRole("heading", { name: "SAM" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Back to Alfred" })).toBeInTheDocument();
+  const heading = await screen.findByRole("heading", { name: "SAM" });
+  const back = screen.getByRole("button", { name: "Back to Alfred" });
+  // Back arrow and title share one row, inside the same max-w-lg column as the
+  // library, with the title in its own centered cell.
+  const row = back.parentElement; // eslint-disable-line testing-library/no-node-access
+  expect(row).toHaveClass("max-w-lg", "mx-auto", "grid");
+  expect(row).toContainElement(heading);
+  expect(heading.parentElement).toHaveClass("justify-center"); // eslint-disable-line testing-library/no-node-access
 });
 
 test("archiving the planned snippet in the player shows on the strip when you return home", async () => {

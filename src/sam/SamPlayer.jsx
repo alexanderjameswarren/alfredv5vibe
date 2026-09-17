@@ -1180,13 +1180,20 @@ export default function SamPlayer({ onBack }) {
         )}
         {!song ? (
           <>
-            <div className="flex items-center gap-2">
+            {/* Same centered column as the library below it (SongLoader's
+                max-w-lg). Three columns — back arrow, title, an empty spacer as
+                wide as the arrow — keep the title centered in the column and
+                make it impossible for it to slide under the arrow when narrow. */}
+            <div className="max-w-lg mx-auto grid grid-cols-[44px_1fr_44px] items-center">
               {/* The only level above the song library is Alfred itself, and
                   this is the only route out of SAM — see BackButton. */}
               <BackButton onBack={onBack} title="Back to Alfred" />
-              {/* Same icon Alfred's navigation uses for SAM. */}
-              <Music className="w-5 h-5 text-primary" aria-hidden="true" />
-              <h2 className="text-lg sm:text-xl font-medium text-foreground">SAM</h2>
+              <div className="flex items-center justify-center gap-2 min-w-0">
+                {/* Same icon Alfred's navigation uses for SAM. */}
+                <Music className="w-5 h-5 text-primary shrink-0" aria-hidden="true" />
+                <h2 className="text-lg sm:text-xl font-medium text-foreground truncate">SAM</h2>
+              </div>
+              <span aria-hidden="true" />
             </div>
             <SongLoader
               onSongLoaded={handleSongLoaded}

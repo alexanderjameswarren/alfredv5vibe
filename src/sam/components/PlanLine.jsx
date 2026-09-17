@@ -36,7 +36,7 @@ export default function PlanLine({ item, state, songNote, heardTempo, onSetTempo
               type="button"
               onClick={onSetTempo}
               title={`Set the tempo box to ${item.target_effective_bpm} BPM for this session`}
-              className="px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px]"
+              className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px]"
             >
               Set tempo
             </button>

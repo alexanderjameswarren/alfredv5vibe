@@ -63,23 +63,38 @@ function mountSettings(song, { bpm = 70, speed = 100 } = {}) {
 
 beforeEach(() => { mockWrites.length = 0; });
 
-const goal = () => screen.queryByRole("button", { name: /^Goal \d+$/ });
+const goal = () => screen.queryByRole("button", { name: "Set tempo to goal (this session only)" });
 
 test("hidden while the goal is a placeholder (goal_set_at null)", () => {
   mountSettings({ ...NO_AUDIO, goalSetAt: null });
   expect(goal()).not.toBeInTheDocument();
 });
 
-test("no audio: amber below the goal, muted at or above it", () => {
+test("a real button styled like Save: label, tooltip, border and height", () => {
   mountSettings(NO_AUDIO, { bpm: 70 });
-  expect(goal()).toHaveTextContent("Goal 75");
-  expect(goal()).toHaveClass("text-amber-700");
+  expect(goal()).toHaveTextContent(/^Goal 75$/);
+  expect(goal()).toHaveAttribute("title", "Set tempo to goal (this session only)");
+  expect(goal()).toHaveClass("border", "rounded", "text-sm", "px-3", "py-1.5", "min-h-[44px]");
 });
 
-test("no audio: at the goal it is muted", () => {
-  mountSettings(NO_AUDIO, { bpm: 80 });
-  expect(goal()).toHaveClass("text-muted-foreground");
+test("no audio: below the goal it is amber (text and border) and enabled", () => {
+  mountSettings(NO_AUDIO, { bpm: 70 });
+  expect(goal()).toHaveClass("text-amber-700", "border-amber-600");
+  expect(goal()).toBeEnabled();
+});
+
+test("no audio: at the goal it is muted and disabled; above it muted and enabled", () => {
+  mountSettings(NO_AUDIO, { bpm: 75 });
+  expect(goal()).toBeDisabled();
+  expect(goal()).toHaveClass("text-muted-foreground", "border-border");
   expect(goal()).not.toHaveClass("text-amber-700");
+});
+
+test("no audio: above the goal it is muted and enabled", () => {
+  mountSettings(NO_AUDIO, { bpm: 80 });
+  expect(goal()).toBeEnabled();
+  expect(goal()).toHaveClass("text-muted-foreground");
+  expect(goal()).not.toHaveClass("border-amber-600");
 });
 
 test("no audio: tapping sets the BPM to goal_bpm, leaves speed, writes nothing", () => {
@@ -101,9 +116,17 @@ test("audio: the heard tempo uses the speed; tapping sets the speed and leaves t
   expect(mockWrites).toEqual([]);
 });
 
-test("audio at 100%: at or above the goal, muted", () => {
+test("audio at 100%: above the goal, muted and enabled; at the goal speed, disabled", () => {
   mountSettings(AUDIO, { bpm: 67, speed: 100 });
   expect(goal()).toHaveClass("text-muted-foreground");
+  expect(goal()).toBeEnabled();
+});
+
+test("audio at the goal speed: 67 at 90% is 60, so disabled", () => {
+  const hooks = mountSettings(AUDIO, { bpm: 67, speed: 90 });
+  expect(goal()).toBeDisabled();
+  fireEvent.click(goal());
+  expect(hooks.playbackSpeed.set).not.toHaveBeenCalled();
 });
 
 test("the song mapping and the edit dialog's columns carry the goal fields", () => {

@@ -2,7 +2,7 @@
 
 Spec: `docs/technical-spec-sam-practice-plans.md`
 
-## Status: Milestone 5 built — awaiting verification (with the Milestone 4 follow-up)
+## Status: Milestone 5 verified — Milestones 6 and 7 are chat work
 
 Work is committed directly to main. No branches.
 
@@ -44,7 +44,7 @@ SQL docs/migrations/2026-09-16-sam-practice-plans.sql applied 2026-09-16; CONFOR
 - [x] Compact plan count while playing
 - [x] Snippet row tag
 - [x] Goal label by the tempo box
-- [ ] Verified at the piano — tests pass (55 suites, 1107 tests); manual checks awaiting Alex
+- [x] Verified — Alex, 2026-09-16: desktop checks pass (with the Milestone 4 follow-up). Piano checks not reported separately.
 
 ### Milestone 6 — Practice skill (chat)
 - [ ] sam-practice skill drafted and uploaded (§8)
@@ -534,3 +534,18 @@ checklist strip and the 7-day strip now use `mt-2` (was `mt-4`).
 - Mutations caught: Set tempo always shown (3 failures); the goal label
   ignoring `goal_set_at` (1); the badge not passed to the playing bar (1).
 - Lint is clean on every new and changed file.
+
+#### Milestone 5 follow-up (2026-09-16): two UI fixes
+- **SAM home header.** It now sits in the library's centered `max-w-lg`
+  column, as a three-column grid: back arrow, the centered icon and "SAM",
+  and an empty spacer as wide as the arrow. The title stays centered and
+  can't overlap the arrow on narrow screens. Spacing is unchanged; the player
+  is untouched.
+- **The goal label is now a real button,** with the same height, border,
+  radius, padding and font size as Save and Tuning.
+  - Below the goal: amber text and an amber border.
+  - At the goal: muted and disabled.
+  - Tooltip and aria-label: "Set tempo to goal (this session only)".
+  - Behaviour is unchanged.
+  - The plan line's "Set tempo" button already used the Save style; it now
+    matches it exactly (`flex items-center gap-1` added).

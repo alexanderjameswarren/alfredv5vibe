@@ -65,14 +65,17 @@ function writeAdvancedOpen(open) {
 }
 
 // "Goal 75" beside the tempo box (practice plans spec §7.4). Shown only for a
-// confirmed goal (goalSetAt set). Amber while the heard tempo is below it.
-// Tapping it puts the goal in the tempo box for this sitting — the BPM for a
-// song without audio, the speed for a song with audio (its BPM is the
-// scroll-sync calibration and stays put). Nothing is saved.
+// confirmed goal (goalSetAt set). A button styled like its Save and Tuning
+// neighbours: amber while the heard tempo is below the goal, disabled when it
+// already equals the goal. Tapping it puts the goal in the tempo box for this
+// sitting — the BPM for a song without audio, the speed for a song with audio
+// (its BPM is the scroll-sync calibration and stays put). Nothing is saved.
 function GoalLabel({ song, hasAudio, bpm, playbackSpeed }) {
   if (!song?.goalSetAt || song.goalEffectiveBpm == null) return null;
   const heard = heardTempo(bpm.value, playbackSpeed.value);
   const below = heard != null && heard < song.goalEffectiveBpm;
+  const atGoal = heard === song.goalEffectiveBpm;
+  const label = "Set tempo to goal (this session only)";
 
   function applyGoal() {
     if (hasAudio) {
@@ -86,10 +89,14 @@ function GoalLabel({ song, hasAudio, bpm, playbackSpeed }) {
     <button
       type="button"
       onClick={applyGoal}
-      title={`Use the goal tempo (${song.goalEffectiveBpm} BPM heard) for this session`}
+      disabled={atGoal}
+      title={label}
+      aria-label={label}
       data-below={below ? "true" : "false"}
-      className={`shrink-0 whitespace-nowrap px-2 py-1 rounded text-sm min-h-[44px] hover:bg-secondary/60 transition-colors ${
-        below ? "text-amber-700" : "text-muted-foreground"
+      className={`shrink-0 whitespace-nowrap flex items-center gap-1 px-3 py-1.5 border rounded text-sm min-h-[44px] transition-colors disabled:opacity-50 disabled:cursor-default ${
+        below
+          ? "border-amber-600 text-amber-700 hover:text-amber-800"
+          : "border-border text-muted-foreground hover:text-dark disabled:hover:text-muted-foreground"
       }`}
     >
       Goal {song.goalEffectiveBpm}
