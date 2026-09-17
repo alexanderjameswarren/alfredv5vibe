@@ -110,7 +110,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
   const onSessionEndedRef = useRef(onSessionEnded);
   onSessionEndedRef.current = onSessionEnded;
 
-  const startSession = useCallback(async ({ songId, snippetId, settings }) => {
+  const startSession = useCallback(async ({ songId, snippetId, settings, planLink }) => {
     const startBpm = Number.isFinite(settings?.bpm) ? settings.bpm : null;
     tempoRef.current = { start: startBpm, end: startBpm, min: startBpm, max: startBpm };
     midiRef.current = {
@@ -140,6 +140,10 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
       song_id: songId,
       settings: settings || {},
       started_at: new Date().toISOString(),
+      // Practice plans (§7.2): same link as the passes. Null when there is no
+      // active plan or it has not loaded yet.
+      plan_id: planLink?.plan_id ?? null,
+      plan_item_id: planLink?.plan_item_id ?? null,
     };
     if (snippetId) row.snippet_id = snippetId;
 

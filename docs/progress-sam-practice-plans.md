@@ -2,7 +2,7 @@
 
 Spec: `docs/technical-spec-sam-practice-plans.md`
 
-## Status: Milestone 4 in progress (Milestone 3 verified)
+## Status: Milestone 4 built — awaiting verification against a test plan
 
 Work is committed directly to main. No branches.
 
@@ -33,10 +33,10 @@ SQL docs/migrations/2026-09-16-sam-practice-plans.sql applied 2026-09-16; CONFOR
 - [x] Deployed; verified from a fresh thread — Alex, 2026-09-16: all nine new tools, both validation rejections, progress counting, the review-note guard, the goal tool, and a tier-3 regression check on create_sam_song. Test data deleted.
 
 ### Milestone 4 — Links and checklist strip (Claude Code)
-- [ ] recordPass and session creation write plan_id and plan_item_id (§7.2)
-- [ ] Checklist strip on the SAM home page (§7.3)
-- [ ] Tapping an item opens the song and snippet at target tempo
-- [ ] Verified against a test plan
+- [x] recordPass and session creation write plan_id and plan_item_id (§7.2)
+- [x] Checklist strip on the SAM home page (§7.3)
+- [x] Tapping an item opens the song and snippet at target tempo
+- [ ] Verified against a test plan — tests pass (53 suites, 1072 tests); manual checks awaiting Alex
 
 ### Milestone 5 — Player display (Claude Code)
 - [ ] Plan line with Set tempo button (§7.4)
@@ -303,3 +303,104 @@ progress read.
 - `deno check`: `sam-plans.ts`, `platform.ts` and `tool-handlers.ts` are
   clean. `mcp/index.ts` gains only the nine implicit-`any` `args` warnings
   every registration already has.
+
+#### Milestone 4 — links and checklist strip (2026-09-16)
+
+**Code**
+- `src/sam/lib/activePlan.js` (pure):
+  - `loadActivePlan`: the plan row, its songs (title, `audio_file_path`,
+    `default_bpm`), and its items with snippet title, measure range, hand mode,
+    rest measures and archived flag;
+  - `loadTodayProgress`: `sam_plan_item_progress` with `p_from` = `p_to` =
+    today, the Pacific date from `ptDateKey`;
+  - `matchPlanItem` and `planLinkFor`: the §7.2 link rule;
+  - `itemState`, `planSummary` and `itemTargetText`: the §7.3 display rules.
+- `src/sam/lib/useActivePlan.js` is the one shared hook.
+  - It is called once in SamPlayer and handed to SongLoader.
+  - It loads when SAM opens, and reloads plan and progress on the home page
+    mount and whenever the window regains focus or becomes visible.
+  - Concurrent reloads collapse into one. A failed reload keeps the last good
+    plan.
+  - `refreshProgress` re-runs only the progress function. SamPlayer calls it
+    after every recorded pass.
+  - `getLink(songId, snippetId)` reads a ref, so it is stable inside
+    ScrollEngine's frame loop. It returns nulls until a plan loads.
+- `useSamPasses.recordPass` takes a `getPlanLink` and writes `plan_id` and
+  `plan_item_id`. A missing or throwing link writes nulls and the pass is still
+  recorded.
+- `usePracticeSession.startSession` takes a `planLink` and writes both columns
+  on every session insert. `beginSession` supplies it for Play, Restart and
+  Resume alike.
+- `src/sam/components/PlanChecklist.jsx` is the strip. It sits in SongLoader
+  directly above PracticeWeekSnapshot and uses the same card treatment:
+  `bg-card border border-border rounded-lg`, `text-sm font-medium` headline,
+  `text-xs text-muted-foreground` detail, 52–56 px touch rows.
+- `SamPlayer.openPlanItem(item)`:
+  - loads the song;
+  - loads the snippet unless it is archived or missing;
+  - sets the tempo box to `target_bpm` and `target_playback_speed`.
+  - Nothing is written to the song: tempo only saves through the tempo box's
+    own Save button, which appears as usual because the value differs from the
+    song's saved tempo.
+
+**Decisions**
+- **What "done" and "amber" mean.**
+  - Done means qualifying ≥ target_passes.
+  - Amber means attempts > 0 and qualifying < target, and not done.
+  - Progress is shown as min(qualifying, target)/target.
+  - Amber colours the title and the count `text-amber-700`, the same amber
+    family as the player's partial-chord colour. The theme's `warning` token
+    is brown, not amber.
+- **Done rows** strike through the title, target and instruction lines, and
+  show a check (`role="img"`, label "Done").
+- **Archived or missing snippets.** An item whose snippet is archived, or no
+  longer returned, shows " · <title> (snippet archived)" in muted text; the
+  title is left out when the snippet is not returned at all. It opens the song
+  without a snippet. Passes then match the plan's whole-song item for that
+  song, if there is one.
+- **The linking rule,** used for both passes and sessions:
+  - the plan is linked even when no item matches, e.g. a snippet made on the
+    fly (§2.11);
+  - the item is linked when the song matches and the snippet id is equal, with
+    a null snippet meaning the whole song.
+- **The expanded state** is stored in localStorage under
+  `sam.planChecklist.expanded`. Every read and write is wrapped in
+  try/catch.
+- **The home-page reload** runs from SongLoader's landing view, not on
+  /sam/stats.
+
+**Tests**
+- `activePlan.test.js`: the link rule (whole song, snippet, no match, no plan,
+  a throwing plan), done/amber/cap, the summary with and without free play,
+  target text, and the loader. The loader test flags archived and missing
+  snippets, sends a progress request for today only, and uses the Pacific
+  date for today.
+- `useSamPasses.test.js`: the pass row carries the link; a whole-song pass
+  looks it up with a null snippet; no plan, no link function or a throwing
+  link all give nulls and the pass is still written.
+- `usePracticeSession.test.js` (+2): the session insert carries the link, and
+  nulls without one.
+- `PlanChecklist.test.jsx`:
+  - hidden without a plan;
+  - the collapsed summary and truncated note, and the free-play suffix only
+    when free play exists;
+  - expanded order with the Optional Free Play label;
+  - each row's title, target, instruction and capped progress;
+  - done, amber and open states;
+  - the archived snippet text;
+  - tap opens the item;
+  - the remembered state, and storage that throws.
+- `SamPlayer.plan.test.jsx` runs end to end:
+  - the home page shows the plan, with progress only from the function (for
+    today) and no pass reads;
+  - no plan means no strip;
+  - focus reloads the plan;
+  - tapping a snippet item opens it at 60 BPM, with no song write, and the
+    session row and the pass row after one loop both carry the plan and item;
+  - a recorded pass triggers exactly one progress refetch and no plan reload;
+  - a whole-song item links to the whole-song item;
+  - an archived snippet opens the whole song.
+- Mutations caught: loading archived snippets anyway (1 failure); dropping the
+  session link (3 failures).
+- `npm test`: 53 suites, 1072 tests pass. Lint is clean on every new and
+  changed file.

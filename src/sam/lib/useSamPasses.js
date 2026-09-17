@@ -17,6 +17,21 @@ import { supabase } from "../../supabaseClient";
 // fire-and-forget and fully guarded — it is invoked from ScrollEngine's
 // requestAnimationFrame loop, where a throw would stop the scroll mid-song.
 // A failed pass write costs a row; it must never cost the playthrough.
+const NO_PLAN_LINK = { plan_id: null, plan_item_id: null };
+
+function safePlanLink(getPlanLink, songId, snippetId) {
+  try {
+    const link = getPlanLink?.(songId, snippetId);
+    return {
+      plan_id: link?.plan_id ?? null,
+      plan_item_id: link?.plan_item_id ?? null,
+    };
+  } catch (e) {
+    console.error("[Sam] Plan link lookup failed (pass still recorded):", e);
+    return NO_PLAN_LINK;
+  }
+}
+
 export default function useSamPasses({ onPassRecorded } = {}) {
   const armedRef = useRef(false);
 
@@ -48,7 +63,7 @@ export default function useSamPasses({ onPassRecorded } = {}) {
   // eligible or could not be attributed — so callers can log the distinction
   // without reaching into the ref.
   const recordPass = useCallback(({
-    songId, snippet, sessionId, bpm, playbackSpeed, handMode, playthrough,
+    songId, snippet, sessionId, bpm, playbackSpeed, handMode, playthrough, getPlanLink,
   }) => {
     if (!armedRef.current) return false;
 
@@ -109,6 +124,11 @@ export default function useSamPasses({ onPassRecorded } = {}) {
       misses: playthrough?.misses ?? 0,
       notes_played: playthrough?.notesPlayed ?? 0,
       completed_at: new Date().toISOString(),
+      // Practice plans (§7.2): the active plan, and the item matching this
+      // song and snippet. History only — progress matches on song and snippet.
+      // Nulls when there is no plan or it has not loaded; a failure here must
+      // never cost the pass.
+      ...safePlanLink(getPlanLink, songId, snippet?.dbId || null),
     };
 
     try {

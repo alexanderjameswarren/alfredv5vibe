@@ -1,0 +1,138 @@
+import React, { useState } from "react";
+import { Check, ChevronDown } from "lucide-react";
+import { itemState, itemTargetText, planSummary } from "../lib/activePlan";
+
+// Today's practice plan, on the SAM home page directly above the 7-day
+// snapshot (practice plans spec §7.3). Renders nothing without an active plan.
+//
+// Collapsed (the default): one summary line and the day note, truncated.
+// Expanded: the full day note, the plan's items in order, then the optional
+// Free Play items under their own label. Tapping an item opens its song and
+// snippet at the item's target tempo (SamPlayer's openPlanItem).
+//
+// Every count comes from `progress` — sam_plan_item_progress for today — and
+// is never worked out from passes here.
+
+const STORAGE_KEY = "sam.planChecklist.expanded";
+
+function readExpanded() {
+  try {
+    return window.localStorage.getItem(STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeExpanded(value) {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, value ? "1" : "0");
+  } catch {
+    /* Storage unavailable: the choice just isn't remembered. */
+  }
+}
+
+function ItemRow({ item, progress, onOpen }) {
+  const st = itemState(item, progress);
+  const unavailable = item.snippet_unavailable;
+  const snippetTitle = item.snippet?.title;
+  const tone = st.done ? "text-muted-foreground" : st.amber ? "text-amber-700" : "text-dark";
+  const strike = st.done ? "line-through" : "";
+
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onOpen?.(item)}
+        className="w-full flex items-start gap-3 px-2 py-2 rounded-lg text-left hover:bg-secondary/60 transition-colors min-h-[52px]"
+        data-state={st.done ? "done" : st.amber ? "amber" : "open"}
+      >
+        <span className="w-5 h-5 mt-0.5 flex-shrink-0 flex items-center justify-center">
+          {st.done && <Check className="w-4 h-4 text-success" role="img" aria-label="Done" />}
+        </span>
+        <span className="flex-1 min-w-0">
+          <span className={`block text-sm font-medium truncate ${tone} ${strike}`}>
+            {item.song_title}
+            {snippetTitle && !unavailable && ` · ${snippetTitle}`}
+            {unavailable && (
+              <span className="font-normal text-muted-foreground">
+                {snippetTitle ? ` · ${snippetTitle}` : ""} (snippet archived)
+              </span>
+            )}
+          </span>
+          <span className={`block text-xs text-muted-foreground ${strike}`}>{itemTargetText(item)}</span>
+          {item.instruction && (
+            <span className={`block text-xs text-muted-foreground ${strike}`}>{item.instruction}</span>
+          )}
+        </span>
+        <span
+          className={`text-sm font-mono tabular-nums flex-shrink-0 ${tone}`}
+          aria-label={`${st.shown} of ${st.target} passes${st.done ? ", done" : ""}`}
+        >
+          {st.shown}/{st.target}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+export default function PlanChecklist({ plan, progress, onOpenItem }) {
+  const [expanded, setExpanded] = useState(readExpanded);
+  if (!plan) return null;
+
+  const items = plan.items || [];
+  const main = items.filter((i) => !i.is_free_play);
+  const free = items.filter((i) => i.is_free_play);
+
+  function toggle() {
+    const next = !expanded;
+    setExpanded(next);
+    writeExpanded(next);
+  }
+
+  return (
+    <section className="mt-4 w-full bg-card border border-border rounded-lg" aria-label="Today's practice plan">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={expanded}
+        className="w-full flex items-center gap-3 p-3 text-left rounded-lg hover:bg-secondary/40 transition-colors min-h-[56px]"
+      >
+        <span className="flex-1 min-w-0">
+          <span className="block text-sm font-medium text-dark">{planSummary(plan, progress)}</span>
+          {!expanded && plan.day_note && (
+            <span className="block text-xs text-muted-foreground truncate">{plan.day_note}</span>
+          )}
+        </span>
+        <ChevronDown
+          className={`w-4 h-4 text-muted-foreground flex-shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
+          aria-hidden="true"
+        />
+      </button>
+
+      {expanded && (
+        <div className="px-1 pb-2">
+          {plan.day_note && (
+            <p className="px-2 pb-2 text-sm text-dark whitespace-pre-wrap">{plan.day_note}</p>
+          )}
+          <ul>
+            {main.map((item) => (
+              <ItemRow key={item.id} item={item} progress={progress} onOpen={onOpenItem} />
+            ))}
+          </ul>
+          {free.length > 0 && (
+            <>
+              <div className="px-2 pt-3 pb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                Optional Free Play
+              </div>
+              <ul>
+                {free.map((item) => (
+                  <ItemRow key={item.id} item={item} progress={progress} onOpen={onOpenItem} />
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}

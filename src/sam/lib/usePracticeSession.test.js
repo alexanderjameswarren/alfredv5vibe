@@ -4,11 +4,12 @@
 import { renderHook, act, waitFor } from "@testing-library/react";
 
 const mockUpdates = [];
+const mockInserts = [];
 jest.mock("../../supabaseClient", () => {
   function query(table) {
     let update = null;
     const api = {
-      insert: () => api,
+      insert: (payload) => { mockInserts.push({ table, payload }); return api; },
       select: () => api,
       eq: () => api,
       update: (payload) => { update = payload; return api; },
@@ -39,6 +40,7 @@ const BEAT = { meas: 1, beat: 1, allMidi: [60] };
 
 beforeEach(() => {
   mockUpdates.length = 0;
+  mockInserts.length = 0;
   jest.spyOn(console, "log").mockImplementation(() => {});
 });
 afterEach(() => jest.restoreAllMocks());
@@ -170,4 +172,29 @@ test("the live playthrough readout shows the idle pass as null after a measured 
   miss(session);
   // The idle pass now has a scored beat, so it is the one described: unmeasured.
   expect(session.current.stats.playthroughAccuracyPercent).toBeNull();
+});
+
+// Practice plans (§7.2): every session row carries the plan link.
+test("a session row carries the plan link it was started with", async () => {
+  const { result } = renderHook(() => usePracticeSession());
+  await act(async () => {
+    await result.current.startSession({
+      songId: "song-1", snippetId: "snip-1", settings: { bpm: 60 },
+      planLink: { plan_id: "plan-1", plan_item_id: "item-7" },
+    });
+  });
+  expect(mockInserts).toHaveLength(1);
+  expect(mockInserts[0].table).toBe("sam_sessions");
+  expect(mockInserts[0].payload).toMatchObject({
+    song_id: "song-1", snippet_id: "snip-1", plan_id: "plan-1", plan_item_id: "item-7",
+  });
+});
+
+test("without a plan link (no plan, or not loaded) both columns are null", async () => {
+  const { result } = renderHook(() => usePracticeSession());
+  await act(async () => {
+    await result.current.startSession({ songId: "song-1", settings: { bpm: 60 } });
+  });
+  expect(mockInserts[0].payload).toMatchObject({ plan_id: null, plan_item_id: null });
+  expect(mockInserts[0].payload).not.toHaveProperty("snippet_id");
 });

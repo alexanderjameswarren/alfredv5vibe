@@ -14,7 +14,8 @@ import useMIDI from "./lib/useMIDI";
 import usePracticeSession from "./lib/usePracticeSession";
 import useSamPasses from "./lib/useSamPasses";
 import usePassCounts from "./lib/usePassCounts";
-import { ensureSnippetSaved, sameLoadedRange } from "./lib/snippetsApi";
+import { ensureSnippetSaved, sameLoadedRange, snippetFromRow } from "./lib/snippetsApi";
+import useActivePlan from "./lib/useActivePlan";
 import usePracticeStats from "./lib/usePracticeStats";
 import useLyricEditor from "./lib/useLyricEditor";
 import useFingeringEditor from "./lib/useFingeringEditor";
@@ -152,8 +153,18 @@ export default function SamPlayer({ onBack }) {
     songTotalCount: songPassesTotal,
     countPass,
   } = usePassCounts({ songId: songDbId, snippet });
+  // The active practice plan (§7.2/§7.3). One copy for the whole of SAM: the
+  // home page's checklist reads it, and every pass and session row is linked
+  // through `getPlanLink`.
+  const activePlan = useActivePlan();
+  const { getLink: getPlanLink, refreshProgress: refreshPlanProgress } = activePlan;
+
   const { armPass, disarmPass, recordPass } = useSamPasses({
-    onPassRecorded: countPass,
+    onPassRecorded: (info) => {
+      countPass(info);
+      // Today's plan progress, from the database — never counted here.
+      refreshPlanProgress();
+    },
   });
 
   // Hoisted from StatsBar so the playback-row LiveSessionCounter and the
@@ -526,8 +537,9 @@ export default function SamPlayer({ onBack }) {
       // Read at credit time, which is why this must run before
       // `setLoopIteration` rotates the counters — see `handleLoopCount`.
       playthrough: getCurrentPlaythrough(),
+      getPlanLink,
     });
-  }, [recordPass, getSessionId, getCurrentPlaythrough]);
+  }, [recordPass, getSessionId, getCurrentPlaythrough, getPlanLink]);
 
   // ScrollEngine's loop signal is the end-of-range event for looped playback:
   // `n` is 0 when a run arms and increments by exactly one at each teleport,
@@ -726,6 +738,8 @@ export default function SamPlayer({ onBack }) {
     startSession({
       songId: songDbId,
       snippetId: activeSnippet?.dbId || null,
+      // Resume opens a new session too, and links it by the same rule.
+      planLink: getPlanLink(songDbId, activeSnippet?.dbId || null),
       settings: {
         bpm: bpm.value,
         windowMs: timingWindowMs.value,
@@ -927,6 +941,27 @@ export default function SamPlayer({ onBack }) {
     else if (playbackState === "paused") handleResume();
   }
 
+  // Open a practice plan item from the home page checklist (§7.3): its song,
+  // its snippet when that is still loadable, and the item's target tempo in
+  // the tempo box for this sitting. Nothing is saved to the song — the tempo
+  // box only saves through its own Save button.
+  async function openPlanItem(item) {
+    let loaded;
+    try {
+      loaded = await fetchSongById(item.song_id, supabase);
+    } catch (e) {
+      console.error("[Sam] Failed to open plan item:", e);
+      setImportError("That song could not be loaded.");
+      return;
+    }
+    handleSongLoaded(loaded.song);
+    setSongDbId(loaded.row.id);
+    const sn = item.snippet;
+    if (sn && !item.snippet_unavailable) setSnippet(snippetFromRow(sn));
+    if (Number.isFinite(item.target_bpm)) bpm.set(item.target_bpm);
+    if (Number.isFinite(item.target_playback_speed)) playbackSpeed.set(item.target_playback_speed);
+  }
+
   // Back to the song library. Closing a song is a route change: the URL drops
   // back to /sam and the effect below does the teardown, so every way out of a
   // song shares one code path. This used to back the "Change song" link as
@@ -1119,6 +1154,8 @@ export default function SamPlayer({ onBack }) {
               onSongLoaded={handleSongLoaded}
               onSongSaved={setSongDbId}
               onImportError={setImportError}
+              activePlan={activePlan}
+              onOpenPlanItem={openPlanItem}
             />
           </>
         ) : (

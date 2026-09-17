@@ -14,6 +14,7 @@ import usePracticeStats from "../lib/usePracticeStats";
 import useSongLibrary from "../lib/useSongLibrary";
 import JSZip from "jszip";
 import PracticeWeekSnapshot from "./PracticeWeekSnapshot";
+import PlanChecklist from "./PlanChecklist";
 import ContinueSection from "./ContinueSection";
 import FamilySheet from "./FamilySheet";
 import BrowseTabs from "./BrowseTabs";
@@ -201,7 +202,9 @@ function composeBlockSentence(w) {
   return `${w.tag} ×${w.count}${at}`;
 }
 
-export default function SongLoader({ onSongLoaded, onSongSaved, onImportError }) {
+export default function SongLoader({
+  onSongLoaded, onSongSaved, onImportError, activePlan = null, onOpenPlanItem,
+}) {
   const [error, setError] = useState(null);
   // The song whose Edit Song dialog is open: { id, song, hasImportedFingerings }.
   const [editTarget, setEditTarget] = useState(null);
@@ -228,6 +231,13 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
   function openStats() {
     navigate(SAM_STATS_PATH);
   }
+
+  // The home page is where the plan is read, so coming back here reloads it
+  // (practice plans §7.2): a plan created in chat shows up on the next visit.
+  const refreshPlan = activePlan?.refresh;
+  useEffect(() => {
+    if (samView === "landing") refreshPlan?.();
+  }, [samView, refreshPlan]);
 
   function closeStats() {
     // An explicit navigation, not history.back(). Back would have walked off
@@ -672,6 +682,13 @@ export default function SongLoader({ onSongLoaded, onSongSaved, onImportError })
 
   return (
     <div className="max-w-lg mx-auto">
+      {/* Today's practice plan (§7.3). Renders nothing without an active plan. */}
+      <PlanChecklist
+        plan={activePlan?.plan ?? null}
+        progress={activePlan?.progress}
+        onOpenItem={onOpenPlanItem}
+      />
+
       {/* 7-day practice snapshot — compact bar strip at the top of the
           landing view (Milestone 6). Tapping opens /stats. Driven by the
           shared usePracticeStats call above so landing stays at one
