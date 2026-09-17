@@ -31,6 +31,10 @@ export function mapSongRow(row, measures) {
     // tempo is saved. Carried so the exporter can round-trip it.
     goalBpm: row.goal_bpm ?? null,
     goalPlaybackSpeed: row.goal_playback_speed ?? null,
+    // The heard goal (generated column) and when it was confirmed. A null
+    // goalSetAt means the goal is a placeholder: the player shows no goal label.
+    goalEffectiveBpm: row.goal_effective_bpm ?? null,
+    goalSetAt: row.goal_set_at ?? null,
     defaultTimingWindowMs: row.default_timing_window_ms ?? null,
     defaultChordMs: row.default_chord_ms ?? null,
     defaultMeasureWidth: row.default_measure_width ?? null,
@@ -93,6 +97,7 @@ export async function fetchSongById(id, supabase) {
 // mapSongRow tolerates the columns it is not given (they map to null).
 export const SONG_EDIT_COLUMNS =
   "id, title, artist, default_bpm, playback_speed, goal_bpm, goal_playback_speed, " +
+  "goal_effective_bpm, goal_set_at, " +
   "default_timing_window_ms, default_chord_ms, default_measure_width, " +
   "audio_file_path, show_imported_fingerings";
 

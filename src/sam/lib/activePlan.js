@@ -198,3 +198,49 @@ export function itemTargetText(item) {
     ? `${item.target_effective_bpm} BPM · ${passes}`
     : `${item.target_effective_bpm} BPM · ${item.accuracy_target}% · ${passes}`;
 }
+
+// --- Player display (practice plans spec §7.4) -------------------------------
+
+/** The tempo actually heard: round(bpm × speed / 100). */
+export function heardTempo(bpm, playbackSpeed) {
+  if (!Number.isFinite(bpm) || !Number.isFinite(playbackSpeed)) return null;
+  return Math.round((bpm * playbackSpeed) / 100);
+}
+
+/**
+ * The item for what is loaded in the player. A range typed but never saved has
+ * no snippet id and matches nothing — it is not the whole song.
+ */
+export function itemForLoadedRange(plan, songId, snippet) {
+  if (snippet && !snippet.dbId) return null;
+  return matchPlanItem(plan, songId, snippet?.dbId ?? null);
+}
+
+/** The plan's row for a song (its song_note), or null. */
+export function planSongFor(plan, songId) {
+  if (!plan || !songId) return null;
+  return (plan.songs || []).find((s) => s.song_id === songId) || null;
+}
+
+/**
+ * "Plan · 60 BPM · 90% · 2/4 today · Count out loud"
+ * "Free play · 78 BPM · 0/1 today"
+ * Done reads "Done 4/4 today" in place of the count.
+ */
+export function planLineText(item, state) {
+  const parts = [item.is_free_play ? "Free play" : "Plan", `${item.target_effective_bpm} BPM`];
+  if (!item.is_free_play) parts.push(`${item.accuracy_target}%`);
+  parts.push(`${state.done ? "Done " : ""}${state.shown}/${state.target} today`);
+  if (item.instruction) parts.push(item.instruction);
+  return parts.join(" · ");
+}
+
+/** The compact playing badge: "Plan 2/4", or "Plan ✓" when done. */
+export function planBadgeText(state) {
+  return state.done ? "Plan ✓" : `Plan ${state.shown}/${state.target}`;
+}
+
+/** The snippet-row tag: "Plan · 60 BPM · 2/4", or "Plan ✓" when done. */
+export function snippetTagText(item, state) {
+  return state.done ? "Plan ✓" : `Plan · ${item.target_effective_bpm} BPM · ${state.shown}/${state.target}`;
+}

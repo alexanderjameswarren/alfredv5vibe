@@ -17,6 +17,10 @@ import useSamPasses from "./lib/useSamPasses";
 import usePassCounts from "./lib/usePassCounts";
 import { ensureSnippetSaved, sameLoadedRange, snippetFromRow } from "./lib/snippetsApi";
 import useActivePlan from "./lib/useActivePlan";
+import {
+  heardTempo, itemForLoadedRange, itemState, matchPlanItem, planBadgeText, planSongFor, snippetTagText,
+} from "./lib/activePlan";
+import PlanLine from "./components/PlanLine";
 import usePracticeStats from "./lib/usePracticeStats";
 import useLyricEditor from "./lib/useLyricEditor";
 import useFingeringEditor from "./lib/useFingeringEditor";
@@ -159,6 +163,23 @@ export default function SamPlayer({ onBack }) {
   // through `getPlanLink`.
   const activePlan = useActivePlan();
   const { getLink: getPlanLink, refreshProgress: refreshPlanProgress } = activePlan;
+
+  // What the plan says about what is loaded (§7.4). All counts come from
+  // `activePlan.progress` — the database function — never from passes.
+  const planItem = itemForLoadedRange(activePlan.plan, songDbId, snippet);
+  const planItemState = planItem ? itemState(planItem, activePlan.progress) : null;
+  const planSongNote = planSongFor(activePlan.plan, songDbId)?.song_note || null;
+  const planTone = (st) => (st.done ? "done" : st.amber ? "amber" : "open");
+  const planBadge = planItem
+    ? { text: planBadgeText(planItemState), state: planTone(planItemState) }
+    : null;
+  // Snippet rows in the panel: a planned snippet of this song gets a tag.
+  const planTagFor = (snippetId) => {
+    const it = matchPlanItem(activePlan.plan, songDbId, snippetId);
+    if (!it || !snippetId) return null;
+    const st = itemState(it, activePlan.progress);
+    return { text: snippetTagText(it, st), state: planTone(st) };
+  };
 
   const { armPass, disarmPass, recordPass } = useSamPasses({
     onPassRecorded: (info) => {
@@ -739,8 +760,12 @@ export default function SamPlayer({ onBack }) {
     startSession({
       songId: songDbId,
       snippetId: activeSnippet?.dbId || null,
-      // Resume opens a new session too, and links it by the same rule.
-      planLink: getPlanLink(songDbId, activeSnippet?.dbId || null),
+      // Resume opens a new session too, and links it by the same rule. A range
+      // that could not be saved has no id and is not the whole song, so it
+      // links to the plan but to no item.
+      planLink: activeSnippet && !activeSnippet.dbId
+        ? { ...getPlanLink(songDbId, null), plan_item_id: null }
+        : getPlanLink(songDbId, activeSnippet?.dbId || null),
       settings: {
         bpm: bpm.value,
         windowMs: timingWindowMs.value,
@@ -963,6 +988,13 @@ export default function SamPlayer({ onBack }) {
     if (Number.isFinite(item.target_playback_speed)) playbackSpeed.set(item.target_playback_speed);
   }
 
+  // "Set tempo" on the plan line: the item's tempo, for this sitting only.
+  function applyPlanTempo() {
+    if (!planItem) return;
+    if (Number.isFinite(planItem.target_bpm)) bpm.set(planItem.target_bpm);
+    if (Number.isFinite(planItem.target_playback_speed)) playbackSpeed.set(planItem.target_playback_speed);
+  }
+
   // Back to the song library. Closing a song is a route change: the URL drops
   // back to /sam and the effect below does the teardown, so every way out of a
   // song shares one code path. This used to back the "Change song" link as
@@ -1177,6 +1209,7 @@ export default function SamPlayer({ onBack }) {
                 accuracyPercent={sessionStats.accuracyPercent}
                 playthroughPercent={sessionStats.playthroughAccuracyPercent}
                 hasPlaythrough={sessionStats.hasPlaythrough}
+                planBadge={planBadge}
               />
             ) : (
               <>
@@ -1241,12 +1274,21 @@ export default function SamPlayer({ onBack }) {
                   songPassesTotal={songPassesTotal}
                 />
 
+                <PlanLine
+                  item={planItem}
+                  state={planItemState}
+                  songNote={planSongNote}
+                  heardTempo={heardTempo(bpm.value, playbackSpeed.value)}
+                  onSetTempo={applyPlanTempo}
+                />
+
                 <SnippetPanel
                   songDbId={songDbId}
                   totalMeasures={song.measures.length}
                   snippet={snippet}
                   onSnippetChange={handleSnippetChange}
                   scoreTools={scoreToolButtons}
+                  planTagFor={planTagFor}
                 />
               </>
             )}

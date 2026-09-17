@@ -30,7 +30,8 @@ import { formatMinutesUnits } from "../lib/practiceTimeFormat";
 // `children` render between the Session badge and Today, so a caller can sit
 // its own badge right next to the timer (the playthrough-accuracy readout)
 // and have it appear and disappear with the rest of the playing-only chrome.
-export default function LiveSessionCounter({ playbackState, todayMinutes, passesToday = 0, children }) {
+// `afterPasses` renders immediately right of Completed Passes (the plan badge).
+export default function LiveSessionCounter({ playbackState, todayMinutes, passesToday = 0, children, afterPasses = null }) {
   const [startMs, setStartMs] = useState(null);
   const [, setTick] = useState(0);
 
@@ -69,6 +70,7 @@ export default function LiveSessionCounter({ playbackState, todayMinutes, passes
       <span className="text-sm text-muted-foreground">
         Completed Passes: <strong className="text-dark">{passesToday}</strong>
       </span>
+      {afterPasses}
       <span className="text-sm text-muted-foreground">
         Practiced today <strong className="text-dark">{formatMinutesUnits(liveTodayMin)}</strong>
       </span>

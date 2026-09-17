@@ -1,6 +1,7 @@
 import {
   loadActivePlan, loadTodayProgress, matchPlanItem, planLinkFor,
   itemState, planSummary, itemTargetText, itemRangeText, todayKey,
+  heardTempo, itemForLoadedRange, planSongFor, planLineText, planBadgeText, snippetTagText,
 } from "./activePlan";
 
 const PLAN = {
@@ -183,5 +184,49 @@ describe("itemRangeText", () => {
     expect(itemRangeText({ snippet_id: "s", snippet: sn({ archived: true }), snippet_unavailable: true }))
       .toBe("m.1–2 · (snippet archived)");
     expect(itemRangeText({ snippet_id: "s", snippet: null, snippet_unavailable: true })).toBe("(snippet archived)");
+  });
+});
+
+describe("player display helpers (§7.4)", () => {
+  const item = { id: "i", target_effective_bpm: 60, accuracy_target: 90, target_passes: 4, instruction: "Count out loud" };
+  const free = { id: "f", is_free_play: true, target_effective_bpm: 78, accuracy_target: null, target_passes: 1, instruction: null };
+  const st = (attempts, qualifying, target = 4) =>
+    itemState({ id: "x", target_passes: target }, new Map([["x", { attempts, qualifying }]]));
+
+  test("heard tempo is round(bpm × speed / 100)", () => {
+    expect(heardTempo(67, 90)).toBe(60);
+    expect(heardTempo(60, 100)).toBe(60);
+    expect(heardTempo(65, 85)).toBe(55); // 55.25
+    expect(heardTempo(null, 100)).toBeNull();
+  });
+
+  test("plan line: item, free play, done, and amber (same text, colour elsewhere)", () => {
+    expect(planLineText(item, st(3, 2))).toBe("Plan · 60 BPM · 90% · 2/4 today · Count out loud");
+    expect(planLineText(free, st(0, 0, 1))).toBe("Free play · 78 BPM · 0/1 today");
+    expect(planLineText(item, st(6, 5))).toBe("Plan · 60 BPM · 90% · Done 4/4 today · Count out loud");
+    expect(planLineText({ ...item, instruction: null }, st(1, 0))).toBe("Plan · 60 BPM · 90% · 0/4 today");
+    expect(st(1, 0).amber).toBe(true);
+  });
+
+  test("playing badge and snippet tag", () => {
+    expect(planBadgeText(st(3, 2))).toBe("Plan 2/4");
+    expect(planBadgeText(st(4, 4))).toBe("Plan ✓");
+    expect(snippetTagText(item, st(3, 2))).toBe("Plan · 60 BPM · 2/4");
+    expect(snippetTagText(item, st(9, 9))).toBe("Plan ✓");
+  });
+
+  test("the loaded range: a saved snippet, the whole song, and an unsaved range", () => {
+    expect(itemForLoadedRange(PLAN, "song-a", null).id).toBe("i-whole");
+    expect(itemForLoadedRange(PLAN, "song-a", { dbId: "snip-1" }).id).toBe("i-snip");
+    // Typed but never saved: not the whole song, and no item.
+    expect(itemForLoadedRange(PLAN, "song-a", { startMeasure: 1, endMeasure: 2 })).toBeNull();
+    expect(itemForLoadedRange(null, "song-a", null)).toBeNull();
+  });
+
+  test("the plan's row for a song", () => {
+    const plan = { songs: [{ song_id: "a", song_note: "Master m.5." }] };
+    expect(planSongFor(plan, "a").song_note).toBe("Master m.5.");
+    expect(planSongFor(plan, "b")).toBeNull();
+    expect(planSongFor(null, "a")).toBeNull();
   });
 });

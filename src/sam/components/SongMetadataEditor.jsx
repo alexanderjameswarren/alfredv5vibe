@@ -168,6 +168,19 @@ export function SongEditDialog({
       showImportedFingerings: editShowImported,
       goalBpm: goalToSave.goal_bpm,
       goalPlaybackSpeed: goalToSave.goal_playback_speed,
+      // Mirror what the database now holds, so the player's goal label is
+      // right without a reload: the generated heard goal, and goal_set_at by
+      // the trigger's rule — a speed change, or a BPM change on a song
+      // without audio, confirms the goal; anything else leaves it as it was.
+      goalEffectiveBpm: heardGoalTempo(goalToSave.goal_bpm, goalToSave.goal_playback_speed),
+      // A song imported this session has no goal in memory to compare with
+      // (the database filled it), so it is left unconfirmed until reloaded.
+      goalSetAt:
+        song.goalBpm != null &&
+        (goalToSave.goal_playback_speed !== song.goalPlaybackSpeed ||
+          (!hasAudio && goalToSave.goal_bpm !== song.goalBpm))
+          ? new Date().toISOString()
+          : song.goalSetAt ?? null,
     };
 
     if (onSongUpdate) {

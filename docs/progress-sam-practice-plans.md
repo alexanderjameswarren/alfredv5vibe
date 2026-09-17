@@ -2,7 +2,7 @@
 
 Spec: `docs/technical-spec-sam-practice-plans.md`
 
-## Status: Milestone 5 in progress (Milestone 4 verified)
+## Status: Milestone 5 built — awaiting verification (with the Milestone 4 follow-up)
 
 Work is committed directly to main. No branches.
 
@@ -39,12 +39,12 @@ SQL docs/migrations/2026-09-16-sam-practice-plans.sql applied 2026-09-16; CONFOR
 - [x] Verified against a test plan — Alex, 2026-09-16: strip counts, expand/collapse persistence, tap-to-open (snippet, whole song, audio), plan tempo not surviving a reload or a normal open, zero-note passes not counting, plan links on passes and sessions. One bug (archived label cut off), fixed in the follow-up below. Test plan deleted.
 
 ### Milestone 5 — Player display (Claude Code)
-- [ ] Plan line with Set tempo button (§7.4)
-- [ ] Song note line
-- [ ] Compact plan count while playing
-- [ ] Snippet row tag
-- [ ] Goal label by the tempo box
-- [ ] Verified at the piano
+- [x] Plan line with Set tempo button (§7.4)
+- [x] Song note line
+- [x] Compact plan count while playing
+- [x] Snippet row tag
+- [x] Goal label by the tempo box
+- [ ] Verified at the piano — tests pass (55 suites, 1107 tests); manual checks awaiting Alex
 
 ### Milestone 6 — Practice skill (chat)
 - [ ] sam-practice skill drafted and uploaded (§8)
@@ -452,3 +452,85 @@ checklist strip and the 7-day strip now use `mt-2` (was `mt-4`).
 - **"Linking doesn't block a pass when the plan hasn't loaded"** was covered
   only at the hook level. It now also has an end-to-end test: the plan request
   never answers, and the session and pass are still written, with null links.
+#### Milestone 5 — player display (2026-09-16)
+
+**Code**
+- `activePlan.js` gains:
+  - `heardTempo`: round(bpm × speed / 100), from the live tempo box.
+  - `itemForLoadedRange`: the loaded song and snippet. A range that was typed
+    but never saved matches no item: it is not the whole song.
+  - `planSongFor`.
+  - `planLineText`, `planBadgeText` and `snippetTagText`.
+- `components/PlanLine.jsx` sits directly under the stats row when not
+  playing.
+  - **The item line:** "Plan · 60 BPM · 90% · 2/4 today · Count out loud",
+    or "Free play · 78 BPM · 0/1 today".
+    - Done: a check and "Done 4/4 today", muted.
+    - Amber: attempts today, not done.
+    - "Set tempo" appears only when the heard tempo differs from
+      `target_effective_bpm`, and sets the tempo box's BPM and speed.
+  - **The song note:** "Song goal: …", muted, one line, tap to expand. It
+    appears under the item line, or alone when the loaded range has no item.
+  - Nothing renders for a song outside the plan.
+- **Playing bar:** `FocusedPlaybackBar` takes `planBadge`, shown as "Plan 2/4"
+  or "Plan ✓". `LiveSessionCounter` gained an `afterPasses` slot so the badge
+  sits right after Completed Passes.
+- **Snippet panel:** `SnippetPanel` takes `planTagFor(snippetId)`. A planned
+  snippet's row gets "Plan · 60 BPM · 2/4" or "Plan ✓" after its figures.
+- **The goal label** (`GoalLabel` in `NumericSettings`):
+  - It sits right after the BPM box (songs without audio) or the Speed box
+    (audio), inside the tempo row, which already wraps.
+  - It shows "Goal N" only when `goalSetAt` is set.
+  - It is amber when the heard tempo is below the goal, muted otherwise.
+  - Tapping it sets `goal_bpm` (no audio) or `goal_playback_speed` (audio,
+    BPM untouched). Nothing is saved.
+- **Song fields:** `mapSongRow` carries `goalEffectiveBpm` and `goalSetAt`,
+  and the edit dialog's columns (`SONG_EDIT_COLUMNS`) include both.
+- **Edit dialog save** (`SongMetadataEditor`): it now updates `goalEffectiveBpm`
+  and `goalSetAt` in memory, using the trigger's rule, so the label is right
+  without a reload.
+- **Session link fix:** a range whose save failed (no snippet id) is linked
+  to the plan with no item. Before, it could have matched the whole-song item.
+- Every count still comes from `sam_plan_item_progress`. After a pass, the
+  existing progress refetch updates the line, the badge and the tags.
+
+**Decisions**
+- **Colours:** amber is `text-amber-700` everywhere (line, badge, tag, goal
+  label); done is muted.
+- **Snippet tag in the default state:** the tag always sits on the muted
+  `bg-secondary` chip, so an item with no attempts today reads "open", not
+  amber.
+- **Goal label on audio songs:** it applies `goal_playback_speed` only. The
+  song's BPM is its scroll-sync calibration, which equals `goal_bpm` for these
+  songs.
+
+**Tests** (`npm test`: 55 suites, 1107 tests)
+- `activePlan.test.js` (+5 groups): heard tempo; plan line text for an item,
+  free play, done, and no instruction; the badge and tag; the loaded-range
+  rule, including an unsaved range; the plan song lookup.
+- `PlanLine.test.jsx` (8):
+  - item, free play, done (check, muted) and amber, plus a plain state with no
+    attempts;
+  - Set tempo only when the tempo differs (below, above, equal), and its
+    callback;
+  - the song note with an item (truncated, tap expands) and alone;
+  - nothing rendered when nothing applies.
+- `NumericSettings.goal.test.jsx` (7):
+  - hidden while `goal_set_at` is null;
+  - amber below the goal, muted at or above it, for songs with and without
+    audio;
+  - tap-to-apply: `bpm.set(goal_bpm)` with no audio, `playbackSpeed.set(goal
+    speed)` with audio, and no write to `sam_songs`;
+  - the mapping and edit columns carry the goal fields.
+- `SamPlayer.plan.test.jsx` (+7, end to end):
+  - the whole-song plan line, with Set tempo changing 65 → 55 and no
+    `sam_songs` update;
+  - a song outside the plan shows nothing;
+  - the song note with an item, and alone;
+  - the playing badge next to Completed Passes: amber "Plan 3/4", then
+    "Plan ✓" after the pass that finishes it (through the progress refetch);
+  - no badge outside the plan;
+  - the snippet row tag "Plan · 60 BPM · 0/4", and "Plan ✓".
+- Mutations caught: Set tempo always shown (3 failures); the goal label
+  ignoring `goal_set_at` (1); the badge not passed to the playing bar (1).
+- Lint is clean on every new and changed file.

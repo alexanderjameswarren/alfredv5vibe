@@ -34,8 +34,25 @@ function SnippetRowFigures({ stats }) {
   );
 }
 
+// Practice plan tag on a snippet row: "Plan · 60 BPM · 2/4", or "Plan ✓".
+function PlanTag({ tag }) {
+  if (!tag) return null;
+  const tone = tag.state === "amber" ? "text-amber-700" : "text-muted-foreground";
+  return (
+    <span
+      className={`text-xs px-1.5 py-0.5 rounded bg-secondary font-normal pointer-events-none ${tone}`}
+      data-state={tag.state}
+    >
+      {tag.text}
+    </span>
+  );
+}
+
 export default function SnippetPanel({
   songDbId, totalMeasures, snippet, onSnippetChange, scoreTools = null,
+  // (snippetId) => { text, state } | null — the practice plan's tag for a
+  // planned snippet (§7.4). Archived snippets aren't listed, so never tagged.
+  planTagFor = null,
 }) {
   const [open, setOpen] = useState(false);
   const [startMeas, setStartMeas] = useState(snippet?.startMeasure || 1);
@@ -434,6 +451,7 @@ export default function SnippetPanel({
                         })}
                       </span>
                       <SnippetRowFigures stats={practiceById[s.id]} />
+                      <PlanTag tag={planTagFor?.(s.id)} />
                     </button>
                     <button
                       onClick={(e) => handleArchiveSnippet(e, s)}

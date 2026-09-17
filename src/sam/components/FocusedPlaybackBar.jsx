@@ -24,6 +24,9 @@ export default function FocusedPlaybackBar({
   accuracyPercent,
   playthroughPercent,
   hasPlaythrough,
+  // { text: "Plan 2/4" | "Plan ✓", state: "open" | "amber" | "done" } when the
+  // loaded range is a plan item (practice plans §7.4); null otherwise.
+  planBadge = null,
 }) {
   // Null accuracy means nothing was measured; formatAccuracy shows "—".
   const playthroughPct = hasPlaythrough ? playthroughPercent : null;
@@ -44,6 +47,18 @@ export default function FocusedPlaybackBar({
           playbackState="playing"
           todayMinutes={todayMinutes}
           passesToday={passesToday}
+          afterPasses={planBadge && (
+            <span
+              className={`text-sm font-medium ${
+                planBadge.state === "amber" ? "text-amber-700"
+                  : planBadge.state === "done" ? "text-muted-foreground"
+                  : "text-dark"
+              }`}
+              data-state={planBadge.state}
+            >
+              {planBadge.text}
+            </span>
+          )}
         >
           <div className="flex items-center gap-2 px-3 py-1 rounded-md bg-secondary/40 border border-border">
             <span className="text-xs uppercase tracking-wide text-muted-foreground">

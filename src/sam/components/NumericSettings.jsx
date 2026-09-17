@@ -5,6 +5,7 @@ import SegmentedControl from "./SegmentedControl";
 import { formatMinutesUnits } from "../lib/practiceTimeFormat";
 import { supabase } from "../../supabaseClient";
 import { DEFAULTS } from "../lib/samConstants";
+import { heardTempo } from "../lib/activePlan";
 
 // Settings row hidden during playback. Visibility rules for BPM vs Speed %:
 //   no audio          → BPM only
@@ -61,6 +62,39 @@ function writeAdvancedOpen(open) {
   } catch {
     /* ignore — the group just won't be remembered */
   }
+}
+
+// "Goal 75" beside the tempo box (practice plans spec §7.4). Shown only for a
+// confirmed goal (goalSetAt set). Amber while the heard tempo is below it.
+// Tapping it puts the goal in the tempo box for this sitting — the BPM for a
+// song without audio, the speed for a song with audio (its BPM is the
+// scroll-sync calibration and stays put). Nothing is saved.
+function GoalLabel({ song, hasAudio, bpm, playbackSpeed }) {
+  if (!song?.goalSetAt || song.goalEffectiveBpm == null) return null;
+  const heard = heardTempo(bpm.value, playbackSpeed.value);
+  const below = heard != null && heard < song.goalEffectiveBpm;
+
+  function applyGoal() {
+    if (hasAudio) {
+      if (song.goalPlaybackSpeed != null) playbackSpeed.set(song.goalPlaybackSpeed);
+    } else if (song.goalBpm != null) {
+      bpm.set(song.goalBpm);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={applyGoal}
+      title={`Use the goal tempo (${song.goalEffectiveBpm} BPM heard) for this session`}
+      data-below={below ? "true" : "false"}
+      className={`shrink-0 whitespace-nowrap px-2 py-1 rounded text-sm min-h-[44px] hover:bg-secondary/60 transition-colors ${
+        below ? "text-amber-700" : "text-muted-foreground"
+      }`}
+    >
+      Goal {song.goalEffectiveBpm}
+    </button>
+  );
 }
 
 export default function NumericSettings({
@@ -187,6 +221,7 @@ export default function NumericSettings({
           />
         </label>
       )}
+      {!hasAudio && <GoalLabel song={song} hasAudio={false} bpm={bpm} playbackSpeed={playbackSpeed} />}
       {!advancedOpen && !hasAudio && saveButton}
       <button
         type="button"
@@ -284,6 +319,7 @@ export default function NumericSettings({
               min={10} max={200}
             />
           </label>
+          <GoalLabel song={song} hasAudio bpm={bpm} playbackSpeed={playbackSpeed} />
           {showBpmEdit ? (
             <label className="text-sm text-foreground">
               BPM:{" "}

@@ -157,7 +157,7 @@ function renderHome() {
 const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 async function expandPlan() {
-  fireEvent.click(await screen.findByRole("button", { name: /Today's plan · 1 of 2 done/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Today's plan · / }));
 }
 
 async function openItem(rowText) {
@@ -287,4 +287,92 @@ test("a pass completed before the plan has loaded is still written, with null li
   await act(async () => { mockScrollProps.onLoopCount(1); });
   await waitFor(() => expect(passInserts()).toHaveLength(1));
   expect(passInserts()[0].row).toMatchObject({ song_id: SONG_ID, plan_id: null, plan_item_id: null });
+});
+
+// --- Milestone 5: the player display (§7.4) ---------------------------------
+
+function renderSong() {
+  return render(
+    <MemoryRouter initialEntries={[`/sam/songs/${SONG_ID}`]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <SamPlayer onBack={() => {}} />
+    </MemoryRouter>
+  );
+}
+
+test("plan line for the whole-song item; Set tempo applies the item tempo without saving", async () => {
+  renderSong();
+  // Song default 65; the whole-song item is done today (2 of 2 qualifying).
+  const line = await screen.findByText("Plan · 55 BPM · 80% · Done 2/2 today");
+  expect(line).toHaveClass("text-muted-foreground");
+  expect(screen.getByLabelText(/BPM:/)).toHaveValue(65);
+  fireEvent.click(screen.getByRole("button", { name: "Set tempo" }));
+  expect(screen.getByLabelText(/BPM:/)).toHaveValue(55);
+  expect(screen.queryByRole("button", { name: "Set tempo" })).not.toBeInTheDocument();
+  expect(mockDb.updates.filter((u) => u.table === "sam_songs")).toEqual([]);
+});
+
+test("a song outside the plan shows nothing new", async () => {
+  mockDb.tables.sam_practice_plan_songs = [];
+  mockDb.tables.sam_practice_plan_items = [];
+  renderSong();
+  await screen.findByLabelText(/BPM:/);
+  await waitFor(() => expect(mockDb.froms).toContain("sam_practice_plan_items"));
+  expect(screen.queryByText(/^Plan ·/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/^Song goal:/)).not.toBeInTheDocument();
+});
+
+test("song note under the plan line, and alone when the loaded range has no item", async () => {
+  mockDb.tables.sam_practice_plan_songs[0].song_note = "Keep it steady.";
+  const { unmount } = renderSong();
+  expect(await screen.findByRole("button", { name: "Song goal: Keep it steady." })).toBeInTheDocument();
+  expect(screen.getByText(/^Plan · 55 BPM/)).toBeInTheDocument();
+  unmount();
+
+  seed();
+  mockDb.tables.sam_practice_plan_songs[0].song_note = "Keep it steady.";
+  mockDb.tables.sam_practice_plan_items = mockDb.tables.sam_practice_plan_items.filter((i) => i.snippet_id);
+  renderSong();
+  expect(await screen.findByRole("button", { name: "Song goal: Keep it steady." })).toBeInTheDocument();
+  expect(screen.queryByText(/^Plan ·/)).not.toBeInTheDocument();
+});
+
+test("while playing: a compact plan count next to Completed Passes, amber, then ✓ after the pass that finishes it", async () => {
+  mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 2, qualifying: 3 }];
+  await openItem("m.1–1 · RH · Opening bar");
+  expect(screen.getByText("Plan · 60 BPM · 90% · 3/4 today · Count out loud.")).toHaveClass("text-amber-700");
+  await pressPlay();
+  const badge = await screen.findByText("Plan 3/4");
+  expect(badge).toHaveAttribute("data-state", "amber");
+  expect(screen.getByText(/Completed Passes:/)).toBeInTheDocument();
+
+  // The pass that makes it four: the progress refetch turns the badge into ✓.
+  mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 3, qualifying: 4 }];
+  await act(async () => { mockScrollProps.onLoopCount(1); });
+  const done = await screen.findByText("Plan ✓");
+  expect(done).toHaveAttribute("data-state", "done");
+});
+
+test("no plan badge while playing a range outside the plan", async () => {
+  mockDb.tables.sam_practice_plan_items = [];
+  renderSong();
+  await screen.findByLabelText(/BPM:/);
+  await pressPlay();
+  expect(screen.getByText(/Completed Passes:/)).toBeInTheDocument();
+  expect(screen.queryByText(/^Plan /)).not.toBeInTheDocument();
+});
+
+test("the planned snippet's row in the Snippet panel carries a plan tag", async () => {
+  renderSong();
+  await screen.findByLabelText(/BPM:/);
+  fireEvent.click(screen.getByRole("button", { name: /Snippet/ }));
+  const tag = await screen.findByText("Plan · 60 BPM · 0/4");
+  expect(tag).toHaveAttribute("data-state", "open");
+});
+
+test("a finished snippet's tag reads Plan ✓", async () => {
+  mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 5, qualifying: 5 }];
+  renderSong();
+  await screen.findByLabelText(/BPM:/);
+  fireEvent.click(screen.getByRole("button", { name: /Snippet/ }));
+  expect(await screen.findByText("Plan ✓")).toHaveAttribute("data-state", "done");
 });
