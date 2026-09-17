@@ -45,6 +45,7 @@ import {
 } from "../_shared/tools/sam-plans.ts";
 import { createSamSnippetTool } from "../_shared/tools/sam-snippets.ts";
 import { SAM_SCORING_RULES } from "../_shared/samScoringRules.ts";
+import { getSamMeasureStatsTool } from "../_shared/tools/sam-measure-stats.ts";
 import {
   getDjConcertsTool,
   updateDjConcertTool,
@@ -1217,6 +1218,30 @@ export function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(createSamSnippetTool, args, token),
+  );
+
+  server.registerTool(
+    "get_sam_measure_stats",
+    {
+      title: "Get SAM Measure Stats",
+      description:
+        "Per-measure practice telemetry for one song: which measures are missed, whether they are played early or late, and what is being hit instead. Reads sam_session_events (one row per beat per attempt). " +
+        "PER MEASURE: attempts (scored beats), hit rate, counts of hit/miss/partial/extra, mean and median timing offset, how many sessions, Pacific days and LOOP ITERATIONS contributed (so heavy drilling on one bar is visible rather than silently dominating), and recurring wrong notes. Measure numbers are PLAYED numbers with the printed number (sam_song_measures.source_measure) alongside, since repeats make them differ. " +
+        "WRONG NOTES come from `extra` rows (a keystroke that matched no beat) and from the pitches carried on `miss` rows (a wrong attempt AT a beat). Each pitch is counted ONCE PER PASS per measure, so hammering one wrong key is one occurrence, and one fumble can never be counted twice. A pitch is listed only when it recurs in at least 3 distinct passes — below that it is noise. " +
+        "⚠️ TIMING: MEAN OFFSET IS CALIBRATION PLUS ERROR — MIDI and audio latency, where the eye aims against the scrolling line, and genuine rushing, all added together. A constant offset shifts every note equally, so a large mean offset is NOT evidence of bad playing on its own. What isolates the error is `interval_ratio` (the gaps between struck notes against the gaps the score asks for: below 1 = genuinely faster than the tempo, above 1 = slower, and a constant offset cancels out) and `drift` (offset last third minus first third of a pass, which a constant offset cannot produce). Intervals are taken only between beats that were both struck, adjacent in the sequence — a miss breaks the chain — and inside one measure and one loop iteration, so no barline, repeat or time signature enters the arithmetic; sessions whose tempo moved mid-sitting are excluded and counted under `timing.skipped`. " +
+        "SCOPE: sessions with no MIDI and zero-note sessions are excluded; `extra` rows never count toward attempts or hit rate; a snippet filter also drops rows outside that snippet's own measure range, because the rest measures a loop appends can take numbers belonging to real measures. The most recent 30 eligible sessions are read. " +
+        "The session windows are reported, and the result says plainly when they differ — accuracy is not comparable across different matching windows. Tier 1, read-only. " + SAM_SCORING_RULES,
+      inputSchema: {
+        song_id: z.string().describe("UUID of the song"),
+        start_measure: z.number().optional().describe("First measure (played number) to include"),
+        end_measure: z.number().optional().describe("Last measure (played number) to include"),
+        snippet_id: z.string().optional().describe("Only sessions practising this snippet, and only rows inside its measure range"),
+        date_from: z.string().optional().describe("Pacific date YYYY-MM-DD, inclusive"),
+        date_to: z.string().optional().describe("Pacific date YYYY-MM-DD, inclusive"),
+        limit: z.number().optional().describe("Max measures returned (default 20, cap 50)"),
+      },
+    },
+    async (args) => runToolForMcp(getSamMeasureStatsTool, args, token),
   );
 
   server.registerTool(

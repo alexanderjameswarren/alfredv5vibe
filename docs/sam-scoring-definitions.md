@@ -97,6 +97,37 @@ Three limits on any average:
 So comparisons **within** one session — this bar against that bar — are far more
 reliable than the absolute number.
 
+## Calibration versus error
+
+A consistently negative mean offset does **not** on its own mean dragging.
+`mean offset = calibration + error`, where calibration is MIDI and audio
+latency plus where the eye aims against the scrolling line. A constant offset
+shifts every note equally.
+
+What isolates the error is the **gaps between struck notes**, which a constant
+offset cancels out of:
+
+- **Interval ratio** — the gap actually played divided by the gap the score
+  asks for. Below 1 is genuinely faster than the tempo, above 1 slower, and
+  1.00 is in time however large the mean offset. Derived as
+  `actual = expected − (offset_now − offset_before)`.
+- **Interval spread** — the standard deviation of those ratios: steadiness.
+- **Drift within a pass** — the offset in the last third minus the first third.
+  A constant offset cannot produce drift, so this is error.
+
+Only gaps between two beats that were both struck, adjacent in the sequence (a
+miss breaks the chain), inside **one measure** and one loop iteration are used.
+Staying within a measure is what keeps this safe: `beat` is a quarter-note
+position within its measure, so no barline, repeat or time-signature change
+enters the arithmetic, and tuplets are already fractional quarter positions.
+
+The gap length in milliseconds comes from the session tempo —
+`60000 / (bpm × playbackSpeed / 100)`. A sitting whose tempo moved is excluded
+from these figures (its `summary.tempo.min` and `max` differ), as is any
+session with no recorded tempo. `get_sam_measure_stats` reports both the mean
+(labelled calibration) and the interval figures, and says how many sessions it
+skipped and why.
+
 ## The matching window changes the score
 
 `sam_sessions.settings.windowMs` (default 300 ms) is how far from its beat a

@@ -231,7 +231,7 @@ test("dry_run_dj_playlist is deliberately NOT an MCP tool either", () => {
     "dry_run_dj_playlist is now registered as an MCP tool - was that deliberate?");
 });
 
-test("the tool count is 67 after create_sam_snippet", () => {
+test("the tool count is 68 after get_sam_measure_stats", () => {
   // The number quoted at every reconnect. 36 through step 0 and step 1, which
   // added an endpoint and a non-registered tool on purpose. Step 2 adds three:
   // get_dj_concerts, update_dj_concert, record_dj_feedback - batched into ONE
@@ -267,8 +267,10 @@ test("the tool count is 67 after create_sam_snippet", () => {
   //
   // 2026-09-17, +1: create_sam_snippet, so a plan can use snippets the app has
   // not made yet.
-  assert.equal(registered.length, 67,
-    `expected 67 registered tools, found ${registered.length}: ` +
+  //
+  // 2026-09-18, +1: get_sam_measure_stats — per-measure telemetry.
+  assert.equal(registered.length, 68,
+    `expected 68 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -353,6 +355,17 @@ test("create_sam_snippet registers and advertises exactly the args its handler r
   const read = [...new Set([...block.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]))].sort();
   assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), read);
   assert.deepEqual(read, ["end_measure", "hand_mode", "rest_measures", "song_id", "start_measure"]);
+});
+
+test("get_sam_measure_stats registers with the params its handler reads", () => {
+  const t = registered.find((r) => r.name === "get_sam_measure_stats");
+  assert.ok(t, "get_sam_measure_stats not registered");
+  assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(),
+    ["date_from", "date_to", "end_measure", "limit", "snippet_id", "song_id", "start_measure"]);
+  // The description must carry the calibration-vs-error warning: a future
+  // reader must not take a large mean offset as bad playing.
+  assert.match(t.cfg.description, /CALIBRATION PLUS ERROR/);
+  assert.match(t.cfg.description, /interval_ratio/);
 });
 
 test("no duplicate tool names", () => {
