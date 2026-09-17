@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/verify-analyzer-port-m3.sql
+-- Originally written 2026-09-16. Content unchanged below this header.
+-- Purpose: Analyzer port M3 verification: sam_song_scores shape, RLS and cascade.
+-- Kind: read-only verification
+-- Applied: n/a — read-only; run by Alex after migration 026
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Analyzer port M3 — verify sam_song_scores. Run AFTER
 -- supabase/migrations/026_sam_song_scores.sql, in the Supabase SQL editor.
 --

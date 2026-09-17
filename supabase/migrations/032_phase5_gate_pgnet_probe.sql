@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/phase5-gate-pgnet-probe.sql
+-- Originally written 2026-09-04. Content unchanged below this header.
+-- Purpose: Phase 5 optional gate: can pg_net reach an Edge Function? A separate failure mode from cron not firing.
+-- Kind: gate probe (one outbound HTTP call)
+-- Applied: unknown
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- OPTIONAL second gate — does pg_net actually reach an edge function?
 --
 -- The cron probe proves the scheduler runs. It does NOT prove pg_net can make

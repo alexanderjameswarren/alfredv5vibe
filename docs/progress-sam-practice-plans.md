@@ -18,7 +18,7 @@ Work is committed directly to main. No branches.
 - [x] register_table for every new table
 - [x] check_platform_conformance returns CONFORMANT
 
-SQL docs/migrations/2026-09-16-sam-practice-plans.sql applied 2026-09-16; CONFORMANT (42 tables); goal_set_at backfilled for 12 songs.
+SQL supabase/migrations/054_sam_practice_plans.sql applied 2026-09-16; CONFORMANT (42 tables); goal_set_at backfilled for 12 songs.
 
 ### Milestone 2 — Data cleanup (Claude Code)
 - [x] On-screen Hits excludes partial chords (§7.1)
@@ -64,7 +64,7 @@ SQL docs/migrations/2026-09-16-sam-practice-plans.sql applied 2026-09-16; CONFOR
 
 #### Milestone 1
 
-- The migration file `docs/migrations/2026-09-16-sam-practice-plans.sql` named
+- The migration file `supabase/migrations/054_sam_practice_plans.sql` named
   in the note above is not in the repository as of Milestone 2. It may still be
   on another machine; commit it there.
 
@@ -113,7 +113,7 @@ SQL docs/migrations/2026-09-16-sam-practice-plans.sql applied 2026-09-16; CONFOR
 **Readers of accuracyPercent, bestPlaythroughAccuracyPercent and accuracyOf**
 
 The search covered `src`, `supabase/functions`, `supabase/migrations`,
-`tools/sam-tools`, `scripts` and `docs/sql`. Only the files below compute or
+`tools/sam-tools`, `scripts` and `supabase/migrations`. Only the files below compute or
 display these values.
 
 | Reader | Handling of null |
@@ -125,7 +125,7 @@ display these values.
 | `SamPlayer.jsx`: passes both values to FocusedPlaybackBar | Pass-through only |
 | `get_sam_sessions` (`tool-handlers.ts` `getSamSessions`) | Returns `summary` jsonb untouched, so a null arrives as JSON null. No arithmetic. Not changed (MCP out of scope). |
 | `supabase/migrations/001_sam_tables.sql` | A comment listing the summary keys; not code |
-| `docs/migrations/2026-09-16-sam-passes-accuracy.sql` and `2026-09-16b` | Column comments that mention `accuracyOf`; not code |
+| `supabase/migrations/047_sam_passes_accuracy_columns.sql` and `049_sam_passes_comment_wording.sql` | Column comments that mention `accuracyOf`; not code |
 
 Nothing else reads these values: no SQL function or view reads
 `summary->'accuracyPercent'`, and no stats page, script or sam-tools file uses

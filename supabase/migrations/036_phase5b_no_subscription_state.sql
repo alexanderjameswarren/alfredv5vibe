@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/phase5b-no-subscription-state.sql
+-- Originally written 2026-09-04. Content unchanged below this header.
+-- Purpose: Phase 5b: add the no_subscription step state, so a user with no push subscription stops being retried forever.
+-- Kind: schema change (new step state)
+-- Applied: unknown
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Phase 5b — add the `no_subscription` step state.
 --
 -- A due step whose user has no push_subscriptions row was staying `scheduled`

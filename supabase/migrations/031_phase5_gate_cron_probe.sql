@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/phase5-gate-cron-probe.sql
+-- Originally written 2026-09-04. Content unchanged below this header.
+-- Purpose: Phase 5 gate: does pg_cron actually fire? Distinguishes 'cron never ran' from 'the dispatcher logic is wrong'.
+-- Kind: gate probe (creates and drops a temp cron job)
+-- Applied: unknown
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Phase 5 GATE — does pg_cron actually fire?
 --
 -- Run in the Supabase SQL editor. Nothing here touches notification_steps and

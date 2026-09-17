@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/analyzer-port-stamp-functions.sql
+-- Originally written 2026-09-16. Content unchanged below this header.
+-- Purpose: Analyzer port: what bump_parent_edited_at and stamp_song_edited actually do, and what they are attached to.
+-- Kind: read-only diagnostic
+-- Applied: n/a — read-only; run by Alex
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Analyzer port — what are bump_parent_edited_at and stamp_song_edited?
 -- Read-only. One query, one JSON result.
 --

@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/verify-analyzer-port-m6.sql
+-- Originally written 2026-09-16. Content unchanged below this header.
+-- Purpose: Analyzer port M6 verification: the statement-level stamping triggers, including a cascade delete, all undone on completion.
+-- Kind: verification (writes inside a subtransaction that is rolled back)
+-- Applied: n/a — run by Alex after migration 028
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Analyzer port M6 — verification of migration 028. Supabase SQL editor.
 --
 -- Paste the whole file and Run once. It returns ONE JSON cell (`result`).

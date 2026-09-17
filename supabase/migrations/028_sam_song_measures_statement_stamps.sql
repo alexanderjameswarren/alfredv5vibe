@@ -2,7 +2,7 @@
 --
 -- Analyzer port, M6. Spec: docs/technical-spec-analyzer-port.md §4 M6.
 -- Run in the Supabase SQL editor as one block. Verify with
--- docs/sql/verify-analyzer-port-m6.sql.
+-- supabase/migrations/055_verify_analyzer_port_m6.sql.
 --
 -- ============================================================================
 -- WHY

@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/verify-pass-counter-m1.sql
+-- Originally written 2026-09-15. Content unchanged below this header.
+-- Purpose: Pass counter M1 verification (round 2, after the snippet fix).
+-- Kind: read-only verification
+-- Applied: n/a — read-only; run by Alex during M1
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Pass counter, M1 verification (round 2 — after the snippet fix).
 --
 -- Paste the whole file into the Supabase SQL editor. Query M1-A is the one to

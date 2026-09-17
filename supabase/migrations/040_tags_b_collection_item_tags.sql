@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/migrations/migration-b-collection-tags.sql
+-- Originally written 2026-09-14. Content unchanged below this header.
+-- Purpose: Tags migration B: add a text[] tags column to collection_items and collection_item_removals. Nothing dropped or converted.
+-- Kind: schema change (additive)
+-- Applied: YES — collection_items.tags is text[]
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- ===========================================================================
 -- MIGRATION B — tags on collection items
 --

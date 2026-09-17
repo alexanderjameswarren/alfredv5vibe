@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/phase5c-remove-stale-subscription.sql
+-- Originally written 2026-09-05. Content unchanged below this header.
+-- Purpose: Phase 5c: delete the stale push_subscriptions row left by a rotation that predates the endpoint ledger. Needed once.
+-- Kind: one-off data repair
+-- Applied: unknown
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Remove the stale push_subscriptions row left by a rotation that predates the
 -- repair code.
 --

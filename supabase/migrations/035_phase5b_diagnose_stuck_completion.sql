@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/phase5b-diagnose-stuck-completion.sql
+-- Originally written 2026-09-04. Content unchanged below this header.
+-- Purpose: Phase 5b diagnostic: why ticking 'Marinate' changed nothing — which kind of write failure it was.
+-- Kind: read-only diagnostic
+-- Applied: n/a — read-only
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Diagnostic — why did ticking "Marinate" change nothing?
 --
 -- The state machine has been ruled out by test: planCompletion handles a `sent`

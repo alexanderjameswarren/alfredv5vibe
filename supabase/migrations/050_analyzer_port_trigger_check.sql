@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/analyzer-port-trigger-check.sql
+-- Originally written 2026-09-16. Content unchanged below this header.
+-- Purpose: Analyzer port: does anything already stamp measures_edited_at? The answer decided how M6 was built.
+-- Kind: read-only diagnostic
+-- Applied: n/a — read-only; run by Alex before migration 026
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Analyzer port — does anything already stamp measures_edited_at?
 -- Read-only. Run BEFORE supabase/migrations/026_sam_song_scores.sql; the answer
 -- decides how M6 (keeping scores fresh) is built. Spec §4 M6.

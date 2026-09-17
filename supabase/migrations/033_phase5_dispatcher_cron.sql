@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/phase5-dispatcher-cron.sql
+-- Originally written 2026-09-04. Content unchanged below this header.
+-- Purpose: Phase 5: schedule the notify-dispatch Edge Function with pg_cron.
+-- Kind: schema/scheduling change
+-- Applied: unknown — the notification dispatcher does run, so almost certainly yes
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Phase 5 — schedule the dispatcher.
 --
 -- Run in the Supabase SQL editor AFTER `notify-dispatch` is deployed and the

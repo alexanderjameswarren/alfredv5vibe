@@ -1,5 +1,15 @@
+-- MOVED 2026-09-18 from docs/migrations/2026-09-16-sam-passes-accuracy.sql
+-- Originally written 2026-09-16. Content unchanged below this header.
+-- Purpose: Pass counter M5: add hits, misses, notes_played, hand_mode and the generated accuracy_percent to sam_passes.
+-- Kind: schema change (generated column)
+-- Applied: YES — hits/misses/notes_played/accuracy_percent exist
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- NOTE (2026-09-16b): the column comments below were superseded by
--- docs/migrations/2026-09-16b-sam-passes-comment-wording.sql. They said NULL
+-- supabase/migrations/049_sam_passes_comment_wording.sql. They said NULL
 -- meant "every row written before 2026-09-16", which reads as a midnight
 -- boundary; the columns actually began recording when they were deployed,
 -- part-way through that day. The SQL below is left exactly as it was run.

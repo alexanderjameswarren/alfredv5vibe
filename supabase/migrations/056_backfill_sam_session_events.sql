@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/backfill-sam-session-events-2026-09-18.sql
+-- Originally written 2026-09-18. Content unchanged below this header.
+-- Purpose: Backfill sam_session_events from the sam_sessions.events jsonb copy, with a pre-flight analysis and a completeness check.
+-- Kind: data backfill (idempotent)
+-- Applied: YES — Alex ran it; 218,711 rows across 1,923 sessions
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Backfill sam_session_events from sam_sessions.events — Supabase SQL editor.
 --
 -- Context: the result check constraint accepted only 'hit' and 'miss', so any

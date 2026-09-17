@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/verify-pass-counter-m15.sql
+-- Originally written 2026-09-15. Content unchanged below this header.
+-- Purpose: Pass counter M1.5 verification: auto-save on Play, Apply removed.
+-- Kind: read-only verification
+-- Applied: n/a — read-only; run by Alex during M1.5
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Pass counter, M1.5 verification — auto-save on Play, Apply removed.
 --
 -- Paste into the Supabase SQL editor. Most of M1.5 is visible in the app; these

@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/2026-09-14-sam-passes.sql
+-- Originally written 2026-09-14. Content unchanged below this header.
+-- Purpose: Pass counter: create sam_passes, one row per completed playthrough, and register it with the platform.
+-- Kind: schema change (new table)
+-- Applied: YES — sam_passes exists and is registered
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- SAM pass counter
 -- One row per completed playthrough of a song or a snippet.
 -- Run this in the Supabase SQL editor BEFORE any CLI work on the app code.

@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/migrations/2026-09-16b-sam-passes-comment-wording.sql
+-- Originally written 2026-09-16. Content unchanged below this header.
+-- Purpose: Correct the sam_passes column comments: NULL means 'recording began when the column was deployed', not a midnight boundary.
+-- Kind: comment-only change
+-- Applied: YES — the live comments carry the 'deployed part-way through the day' wording
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- SAM passes: correct the column comments. COMMENTS ONLY — no schema change.
 --
 -- WHY: the comments describe NULL as meaning "every row written before

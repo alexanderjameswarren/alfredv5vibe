@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/orphaned-sessions-2026-09-16.sql
+-- Originally written 2026-09-15. Content unchanged below this header.
+-- Purpose: Diagnostic: practice sessions with a null ended_at — whether anything in the row bounds how long the sitting was.
+-- Kind: read-only diagnostic
+-- Applied: n/a — read-only
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Orphaned practice sessions: rows with a null ended_at.
 --
 -- READ-ONLY. Nothing here changes data. Claude has run none of it.

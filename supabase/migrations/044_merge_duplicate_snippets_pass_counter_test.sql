@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/merge-duplicate-snippets-2026-09-15.sql
+-- Originally written 2026-09-15. Content unchanged below this header.
+-- Purpose: One-off: merge the duplicate 'Measures 1-2 Both No Rest' snippets on the Pass Counter Test song, preserving practice history.
+-- Kind: one-off data repair
+-- Applied: unknown
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- One-off cleanup: merge the duplicate "Measures 1-2 Both No Rest" snippets on
 -- song "Pass Counter Test" (3ff7d3bd-e07a-4025-b38a-5f11d1527a0e).
 --

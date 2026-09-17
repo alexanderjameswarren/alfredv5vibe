@@ -1,6 +1,16 @@
+-- MOVED 2026-09-18 from docs/migrations/2026-09-16-sam-practice-plans.sql
+-- Originally written 2026-09-16. Content unchanged below this header.
+-- Purpose: Practice plans Milestone 1: plans, plan songs, plan items, goals, the plan links on passes and sessions, goal_set_at, and the three plan functions.
+-- Kind: schema change (four tables, triggers, functions)
+-- Applied: YES — the tables exist and Alex verified CONFORMANT (42 tables)
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- ============================================================================
 -- SAM Practice Plans — Milestone 1
--- docs/migrations/2026-09-16-sam-practice-plans.sql
+-- supabase/migrations/054_sam_practice_plans.sql
 -- Spec: docs/technical-spec-sam-practice-plans.md §5
 --
 -- Run in the Supabase SQL editor ONE PART AT A TIME, in order.

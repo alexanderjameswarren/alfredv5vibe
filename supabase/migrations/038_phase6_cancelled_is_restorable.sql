@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/phase6-cancelled-is-restorable.sql
+-- Originally written 2026-09-06. Content unchanged below this header.
+-- Purpose: Phase 6: correct the column comment saying 'cancelled' is terminal. No schema change.
+-- Kind: comment-only change
+-- Applied: unknown
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Phase 6 — `cancelled` is restorable, not permanent.
 --
 -- No schema change. The state set is unchanged and the CHECK constraint already

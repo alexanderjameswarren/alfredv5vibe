@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/verify-analyzer-port-m4.sql
+-- Originally written 2026-09-16. Content unchanged below this header.
+-- Purpose: Analyzer port M4 verification: coverage, CLI parity, the no-op recompute and the mutation test.
+-- Kind: verification (query 4 writes a throwaway song and deletes it)
+-- Applied: n/a — run by Alex after migration 027
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Analyzer port M4 — verification queries. Supabase SQL editor.
 --
 -- Each numbered query is ONE statement returning ONE JSON cell (`result`).

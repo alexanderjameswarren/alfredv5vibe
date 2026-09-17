@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/migrations/migration-a-tags.sql
+-- Originally written 2026-09-14. Content unchanged below this header.
+-- Purpose: Tags migration A: tags become text[], hyphens and underscores fold to spaces, contexts.tags dropped, platform_search_items uses &&.
+-- Kind: schema change + data conversion
+-- Applied: YES — items.tags is text[] with a gin index
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- ===========================================================================
 -- MIGRATION A — tags become text[], hyphens and underscores fold to spaces,
 --               contexts.tags is dropped, platform_search_items uses &&

@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/phase5-platform-schedules.sql
+-- Originally written 2026-09-04. Content unchanged below this header.
+-- Purpose: Phase 5: register the dispatcher in platform_schedules so a silent failure becomes visible. Staleness detection only; it runs nothing.
+-- Kind: data insert
+-- Applied: unknown
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- Phase 5 — register the dispatcher in platform_schedules.
 --
 -- ⚠️ platform_schedules is STALENESS DETECTION ONLY. It describes what SHOULD

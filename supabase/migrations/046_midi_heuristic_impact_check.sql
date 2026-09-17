@@ -1,3 +1,13 @@
+-- MOVED 2026-09-18 from docs/sql/midi-heuristic-impact-2026-09-16.sql
+-- Originally written 2026-09-16. Content unchanged below this header.
+-- Purpose: Diagnostic: what a 'no MIDI' heuristic would reclassify if applied to history.
+-- Kind: read-only diagnostic
+-- Applied: n/a — read-only
+--
+-- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
+-- the order files were ADDED here, not the order they were run; the original
+-- date above is the historical record. Alex runs every file himself.
+
 -- What a "no MIDI" heuristic WOULD reclassify, if applied to history.
 --
 -- READ-ONLY. Changes nothing. Claude has run none of it.

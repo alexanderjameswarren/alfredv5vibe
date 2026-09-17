@@ -3,7 +3,7 @@
 // Compare stored sam_song_scores rows with the CLI analyzer, or with each other.
 // Analyzer port M4. Reads files only; touches no database.
 //
-// Dumps come from docs/sql/verify-analyzer-port-m4.sql: a JSON object keyed by
+// Dumps come from supabase/migrations/053_verify_analyzer_port_m4.sql: a JSON object keyed by
 // song title, each value { song_id, measures_edited_at, rows: [...] }. Copy the
 // `result` cell from the SQL editor into a file.
 //

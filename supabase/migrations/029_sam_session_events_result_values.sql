@@ -3,7 +3,7 @@
 --
 -- Run in the Supabase SQL editor as one block. Run this BEFORE deploying the
 -- matching app change, and before the backfill
--- (docs/sql/backfill-sam-session-events-2026-09-18.sql).
+-- (supabase/migrations/056_backfill_sam_session_events.sql).
 --
 -- ============================================================================
 -- WHY
