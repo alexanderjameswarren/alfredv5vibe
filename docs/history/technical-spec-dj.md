@@ -4530,3 +4530,51 @@ reads half is the by-artist rollup, which the concert flow does not use.**
 under one spelling is untagged under the other, so every tag-filtered read silently omits half.
 ⚠️ **Fixing the rollup does not fix that** — the tag join is a separate read and needs the same
 fold.
+
+
+### 14.56a DECIDED — fold the tag join, leave the rollup alone (migration 060)
+
+**Alex's call, 2026-09-19, and the reasoning is the durable part.**
+
+**FIXED: every comparison against `dj_artist_tags.artist`.** Ten sites across four functions,
+behind one named `dj_fold_artist()` so the call sites are greppable.
+
+⚠️ **THE MEASURED COST WAS TINY AND WOULD NOT HAVE JUSTIFIED IT ALONE** — two stranded tags, one
+track each (QOTSA's *My God Is the Sun* untagged rock, the Chordettes' one track untagged jazz).
+
+🛑 **THE REASON IS THE SECOND-ORDER LEAK, WHICH 059 DID NOT MEASURE.** `dj_tag_candidates`
+excludes already-**decided** artists by exact string, so a case-split spelling is never excluded
+and is **proposed for tagging every week, forever** — §11.7 exactly, and the same failure §14.24
+added `status='rejected'` to prevent. The tag isn't merely missing on one spelling; the system
+keeps *asking about an artist it has already decided*.
+
+🛑 **FOLD THE JOIN, DO NOT INSERT ROWS.** The obvious repair — writing a second `dj_artist_tags`
+row per spelling — would add one to `tagged_single_track` per split **with no junk present**.
+That counter is documented as *"where the junk is"*; it is what finds `Dec 29, 2023` tagged as
+jazz. Every case-split spelling holds exactly one track, so the obvious fix degrades the only
+metric that finds real junk, in the act of fixing something else.
+
+**NOT FIXED, deliberately: the rollup.** `mode=artists` still groups on the raw display string.
+Folding case there would fix six acts and leave every **semantic** split unchanged — Eddie Higgins,
+Oscar Peterson, Hank Mobley. ⚠️ **A rollup that handles case but not those reads as "artist splits
+are handled", which is worse than one that plainly doesn't and says so in its `gaps`. The honesty
+of that caveat depends on the grouping being visibly crude.**
+
+The data supports it further than the argument did: the splits are **lopsided** — each minor
+spelling holds a single track, so the main rollup row is already nearly right. **Every consumer
+where the split changed a DECISION rather than a number is fixed here**; what remains is cosmetic.
+`in_any_playlist` is left unfolded for the same reason.
+
+**Not a backfill.** `match_key` already case-folds, so no stored row, `match_key` or
+`canonical_track_id` changes — which is what made this cheap enough to be worth doing.
+
+⚠️ **TWO SELF-INFLICTED BUGS IN THE BUILD, BOTH CAUGHT BY INSPECTING OUTPUT RATHER THAN TRUSTING
+THE PATCH**, and both are the same shape as the fix:
+
+1. **A half-applied fold** — raw left side against a folded list, which never matches, so the
+   exclusion would have excluded **nothing**. Worse than no fold.
+2. **A second `categorised` site missed** by a `replace(…, 1)`. The half-fold assertion could not
+   see it, because *an unfolded comparison is not a half-folded one*.
+
+Both now have assertions in the generator. **060's verify block refuses to pass vacuously**: if no
+case split exists it raises, because every other assertion would then prove nothing (§11.16).
