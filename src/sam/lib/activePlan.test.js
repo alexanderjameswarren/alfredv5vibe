@@ -2,6 +2,8 @@ import {
   loadActivePlan, loadTodayProgress, matchPlanItem, planLinkFor,
   itemState, planSummary, itemTargetText, itemRangeText, todayKey,
   heardTempo, itemForLoadedRange, planSongFor, planLineText, planBadgeText, snippetTagText,
+  planItemsInOrder, firstIncompleteItem, nextIncompleteItem, planIsComplete, itemShortRange,
+  nextItemLabel,
 } from "./activePlan";
 
 const PLAN = {
@@ -228,5 +230,78 @@ describe("player display helpers (§7.4)", () => {
     expect(planSongFor(plan, "a").song_note).toBe("Master m.5.");
     expect(planSongFor(plan, "b")).toBeNull();
     expect(planSongFor(null, "a")).toBeNull();
+  });
+});
+
+// --- Working order: what to do next (2026-09-19) -----------------------------
+
+describe("working order, first incomplete, and what comes next", () => {
+  // Free Play sits SECOND by position but last in working order, which is the
+  // whole point: it must never be offered while main work is left.
+  const P = {
+    id: "p",
+    items: [
+      { id: "m1", position: 1, is_free_play: false, target_passes: 2, song_title: "Pastorale", snippet_id: null },
+      { id: "fp", position: 2, is_free_play: true, target_passes: 2, song_title: "Someone Like You", snippet_id: null },
+      { id: "m2", position: 3, is_free_play: false, target_passes: 2, song_title: "Autumn Leaves",
+        snippet_id: "s1", snippet: { start_measure: 1, end_measure: 16, hand_mode: "both" } },
+      { id: "m3", position: 4, is_free_play: false, target_passes: 2, song_title: "Gymnopedie", snippet_id: null },
+    ],
+  };
+  const byId = (p) => Object.fromEntries(P.items.map((i) => [i.id, i]));
+  const item = byId();
+  const done = (...ids) => new Map(ids.map((id) => [id, { attempts: 2, qualifying: 2 }]));
+
+  test("working order is main work in plan order, then Free Play", () => {
+    expect(planItemsInOrder(P).map((i) => i.id)).toEqual(["m1", "m2", "m3", "fp"]);
+    expect(planItemsInOrder(null)).toEqual([]);
+  });
+
+  test("the first incomplete item is main work, even when Free Play comes earlier in the plan", () => {
+    expect(firstIncompleteItem(P, new Map()).id).toBe("m1");
+    expect(firstIncompleteItem(P, done("m1")).id).toBe("m2");
+    expect(firstIncompleteItem(P, done("m1", "m2")).id).toBe("m3");
+  });
+
+  test("Free Play is the scroll target only once all main work is done", () => {
+    expect(firstIncompleteItem(P, done("m1", "m2", "m3")).id).toBe("fp");
+    // ...and nothing at all when even that is finished.
+    expect(firstIncompleteItem(P, done("m1", "m2", "m3", "fp"))).toBeNull();
+  });
+
+  test("Next is the next incomplete item after this one", () => {
+    expect(nextIncompleteItem(P, done("m1"), item.m1).id).toBe("m2");
+    // m2 already done, so Next from m1 skips it.
+    expect(nextIncompleteItem(P, done("m1", "m2"), item.m1).id).toBe("m3");
+    // Main work exhausted: Free Play is next, and labelled like any other item.
+    expect(nextIncompleteItem(P, done("m1", "m2", "m3"), item.m3).id).toBe("fp");
+  });
+
+  test("Next falls back to the first incomplete item when everything later is done", () => {
+    // He finished the last item but skipped m2 earlier: Next points back up.
+    expect(nextIncompleteItem(P, done("m1", "m3", "fp"), item.m3).id).toBe("m2");
+    expect(nextIncompleteItem(P, done("m1", "m2", "m3"), item.fp)).toBeNull(); // fp itself is the only one left
+  });
+
+  test("no Next when the plan is complete, and never itself", () => {
+    expect(nextIncompleteItem(P, done("m1", "m2", "m3", "fp"), item.m1)).toBeNull();
+    // Only this item is incomplete: a row must not offer itself.
+    expect(nextIncompleteItem(P, done("m2", "m3", "fp"), item.m1)).toBeNull();
+  });
+
+  test("planIsComplete needs every item, Free Play included", () => {
+    expect(planIsComplete(P, done("m1", "m2", "m3"))).toBe(false);
+    expect(planIsComplete(P, done("m1", "m2", "m3", "fp"))).toBe(true);
+    expect(planIsComplete({ id: "empty", items: [] }, new Map())).toBe(false);
+    expect(planIsComplete(null, new Map())).toBe(false);
+  });
+
+  test("the Next label: song title then range, never the other way round", () => {
+    expect(nextItemLabel(item.m2)).toBe("Next: Autumn Leaves m.1–16");
+    expect(nextItemLabel(item.m1)).toBe("Next: Pastorale Whole song");
+    expect(itemShortRange({ snippet_id: "s", snippet: { start_measure: 5, end_measure: 12, hand_mode: "rh" } }))
+      .toBe("m.5–12 · RH");
+    // A snippet that can no longer be read still names its song.
+    expect(nextItemLabel({ song_title: "Prelude", snippet_id: "gone", snippet: null })).toBe("Next: Prelude");
   });
 });

@@ -686,6 +686,9 @@ export default function SongLoader({
       <PlanChecklist
         plan={activePlan?.plan ?? null}
         progress={activePlan?.progress}
+        // The checklist's on-load scroll waits for this: an empty progress map
+        // before the fetch lands is indistinguishable from "nothing done yet".
+        progressReady={!!activePlan?.loaded}
         onOpenItem={onOpenPlanItem}
       />
 

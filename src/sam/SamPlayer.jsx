@@ -18,7 +18,8 @@ import usePassCounts from "./lib/usePassCounts";
 import { ensureSnippetSaved, sameLoadedRange, snippetFromRow } from "./lib/snippetsApi";
 import useActivePlan from "./lib/useActivePlan";
 import {
-  heardTempo, itemForLoadedRange, itemState, matchPlanItem, planBadgeText, planSongFor, snippetTagText,
+  heardTempo, itemForLoadedRange, itemState, matchPlanItem, nextIncompleteItem, planBadgeText,
+  planSongFor, snippetTagText,
 } from "./lib/activePlan";
 import PlanLine from "./components/PlanLine";
 import usePracticeStats from "./lib/usePracticeStats";
@@ -178,6 +179,9 @@ export default function SamPlayer({ onBack }) {
   const planItem = itemForLoadedRange(activePlan.plan, songDbId, snippet);
   const planItemState = planItem ? itemState(planItem, activePlan.progress) : null;
   const planSongNote = planSongFor(activePlan.plan, songDbId)?.song_note || null;
+  // Where to go after this item, for the plan line's Next button. Null while
+  // nothing is left to do, which is what hides the button.
+  const nextPlanItem = planItem ? nextIncompleteItem(activePlan.plan, activePlan.progress, planItem) : null;
   const planTone = (st) => (st.done ? "done" : st.amber ? "amber" : "open");
   const planBadge = planItem
     ? { text: planBadgeText(planItemState), state: planTone(planItemState) }
@@ -1020,6 +1024,10 @@ export default function SamPlayer({ onBack }) {
   // the tempo box for this sitting. Nothing is saved to the song — the tempo
   // box only saves through its own Save button.
   async function openPlanItem(item) {
+    // Reached from the player too, via the plan line's Next button: end any
+    // sitting in flight first so its events are flushed, exactly as closing
+    // the song would. From the home page there is nothing to end.
+    if (playbackState === "playing") endSession();
     let loaded;
     try {
       loaded = await fetchSongById(item.song_id, supabase);
@@ -1335,6 +1343,9 @@ export default function SamPlayer({ onBack }) {
                   songNote={planSongNote}
                   heardTempo={heardTempo(bpm.value, playbackSpeed.value)}
                   onSetTempo={applyPlanTempo}
+                  nextItem={nextPlanItem}
+                  // The same path the home page checklist uses — one way in.
+                  onOpenNext={openPlanItem}
                 />
 
                 <SnippetPanel

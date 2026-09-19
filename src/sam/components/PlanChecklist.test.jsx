@@ -228,3 +228,173 @@ test("storage that throws is ignored", () => {
   fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
   expect(screen.getByText("Optional Free Play")).toBeInTheDocument();
 });
+
+// --- On load: scroll to what's left, or collapse a finished plan (2026-09-19)
+
+describe("on load", () => {
+  let scrolled;
+  beforeEach(() => {
+    scrolled = [];
+    // jsdom has no scrollIntoView; record the calls instead.
+    Element.prototype.scrollIntoView = function (opts) {
+      scrolled.push({ el: this, opts });
+    };
+    window.matchMedia = jest.fn().mockReturnValue({ matches: false });
+  });
+
+  // Free play sits between two pieces of main work, so "the first incomplete
+  // item" and "the first incomplete MAIN item" are different rows.
+  const P = {
+    id: "p",
+    day_note: null,
+    items: [
+      item({ id: "m1", position: 1, song_title: "Pastorale", target_passes: 2 }),
+      item({ id: "fp", position: 2, song_title: "Someone Like You", is_free_play: true, target_passes: 2 }),
+      item({ id: "m2", position: 3, song_title: "Autumn Leaves", target_passes: 2 }),
+    ],
+  };
+  const done = (...ids) => new Map(ids.map((id) => [id, { attempts: 2, qualifying: 2 }]));
+  const expanded = () => { store.data["sam.planChecklist.expanded"] = "1"; };
+  const scrolledRow = () => scrolled[0] && scrolled[0].el.textContent;
+
+  test("scrolls the first incomplete item into view, near the top", () => {
+    expanded();
+    render(<PlanChecklist plan={P} progress={done("m1")} progressReady />);
+    expect(scrolled).toHaveLength(1);
+    expect(scrolledRow()).toMatch(/Autumn Leaves/);
+    // Near the top of the viewport, not hard against the bottom edge.
+    expect(scrolled[0].opts).toMatchObject({ block: "start", behavior: "smooth" });
+  });
+
+  test("main work comes before Free Play, even when Free Play is earlier in the plan", () => {
+    expanded();
+    // Free play untouched, but m2 is main work: m2 wins.
+    render(<PlanChecklist plan={P} progress={done("m1")} progressReady />);
+    expect(scrolledRow()).toMatch(/Autumn Leaves/);
+    expect(scrolledRow()).not.toMatch(/Someone Like You/);
+  });
+
+  test("Free Play is the target once all main work is done", () => {
+    expanded();
+    render(<PlanChecklist plan={P} progress={done("m1", "m2")} progressReady />);
+    expect(scrolledRow()).toMatch(/Someone Like You/);
+  });
+
+  test("everything done: collapsed, showing just the summary, preference untouched", () => {
+    expanded();
+    render(<PlanChecklist plan={P} progress={done("m1", "m2", "fp")} progressReady />);
+    expect(screen.getByRole("button", { name: /Today's plan/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Optional Free Play")).not.toBeInTheDocument();
+    expect(scrolled).toHaveLength(0);
+    // The stored preference is his, not ours: tomorrow's plan opens expanded.
+    expect(store.data["sam.planChecklist.expanded"]).toBe("1");
+  });
+
+  test("a finished plan still opens when he taps it, and that does not rewrite the preference", () => {
+    expanded();
+    render(<PlanChecklist plan={P} progress={done("m1", "m2", "fp")} progressReady />);
+    fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
+    expect(screen.getByText("Optional Free Play")).toBeInTheDocument();
+    expect(store.data["sam.planChecklist.expanded"]).toBe("1");
+  });
+
+  test("nothing happens before progress has been fetched, and only once after", () => {
+    expanded();
+    const { rerender } = render(<PlanChecklist plan={P} progress={new Map()} progressReady={false} />);
+    expect(scrolled).toHaveLength(0);
+    rerender(<PlanChecklist plan={P} progress={done("m1")} progressReady />);
+    expect(scrolled).toHaveLength(1);
+    // A later refresh must never yank the page while he is reading it.
+    rerender(<PlanChecklist plan={P} progress={done("m1", "m2")} progressReady />);
+    expect(scrolled).toHaveLength(1);
+  });
+
+  test("never scrolls a collapsed strip", () => {
+    render(<PlanChecklist plan={P} progress={done("m1")} progressReady />);
+    expect(scrolled).toHaveLength(0);
+  });
+
+  test("reduced motion jumps instead of gliding", () => {
+    expanded();
+    window.matchMedia = jest.fn().mockReturnValue({ matches: true });
+    render(<PlanChecklist plan={P} progress={done("m1")} progressReady />);
+    expect(scrolled[0].opts).toMatchObject({ behavior: "auto" });
+  });
+
+  test("no plan and no items: nothing happens", () => {
+    expanded();
+    const { rerender } = render(<PlanChecklist plan={null} progress={new Map()} progressReady />);
+    expect(scrolled).toHaveLength(0);
+    rerender(<PlanChecklist plan={{ id: "e", day_note: null, items: [] }} progress={new Map()} progressReady />);
+    expect(scrolled).toHaveLength(0);
+    expect(screen.getByRole("button", { name: /Today's plan/ })).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+// --- The Next control on a completed row -------------------------------------
+
+describe("Next on a completed item", () => {
+  const P = {
+    id: "p",
+    day_note: null,
+    items: [
+      item({ id: "m1", position: 1, song_title: "Pastorale", target_passes: 2 }),
+      item({ id: "fp", position: 2, song_title: "Someone Like You", is_free_play: true, target_passes: 2 }),
+      item({ id: "m2", position: 3, song_title: "Autumn Leaves", target_passes: 2, snippet_id: "s1",
+        snippet: { id: "s1", title: "Measures 1-16 Both No Rest", start_measure: 1, end_measure: 16, hand_mode: "both" } }),
+    ],
+  };
+  const done = (...ids) => new Map(ids.map((id) => [id, { attempts: 2, qualifying: 2 }]));
+
+  function open(progress) {
+    const onOpenItem = jest.fn();
+    render(<PlanChecklist plan={P} progress={progress} onOpenItem={onOpenItem} />);
+    fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
+    return onOpenItem;
+  }
+
+  test("a completed item offers the next incomplete one, by song and range", () => {
+    open(done("m1"));
+    expect(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" })).toBeInTheDocument();
+    // Only the completed row carries one.
+    expect(screen.getAllByRole("button", { name: /^Next:/ })).toHaveLength(1);
+  });
+
+  test("tapping Next opens that item through the same handler a row tap uses", () => {
+    const onOpenItem = open(done("m1"));
+    fireEvent.click(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" }));
+    expect(onOpenItem).toHaveBeenCalledWith(P.items[2]);
+  });
+
+  test("Free Play is offered as next once main work is done, labelled the same way", () => {
+    open(done("m1", "m2"));
+    // Both completed rows point at the only thing left.
+    expect(screen.getAllByRole("button", { name: "Next: Someone Like You Whole song" })).toHaveLength(2);
+  });
+
+  test("Next falls back to the first incomplete item when everything later is done", () => {
+    // m2 (last in working order) and Free Play are done, m1 is not: with
+    // nothing after them, both point back up at the one bar he skipped.
+    open(done("m2", "fp"));
+    expect(screen.getAllByRole("button", { name: "Next: Pastorale Whole song" })).toHaveLength(2);
+  });
+
+  test("no Next anywhere when the plan is complete", () => {
+    const onOpenItem = jest.fn();
+    // progressReady is not set, so the auto-collapse is out of the way here.
+    render(<PlanChecklist plan={P} progress={done("m1", "m2", "fp")} onOpenItem={onOpenItem} />);
+    fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
+    expect(screen.getByText("Optional Free Play")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Next:/ })).not.toBeInTheDocument();
+  });
+
+  test("the button is a real button: full contrast, body size, 44px, title truncated not the range", () => {
+    open(done("m1"));
+    const btn = screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" });
+    expect(btn).toHaveClass("bg-primary", "text-primary-foreground", "text-sm", "min-h-[44px]");
+    expect(btn).not.toHaveClass("text-xs");
+    // The song title gives way first; the range always survives.
+    expect(within(btn).getByText("Autumn Leaves")).toHaveClass("truncate");
+    expect(within(btn).getByText("m.1–16")).toHaveClass("shrink-0");
+  });
+});

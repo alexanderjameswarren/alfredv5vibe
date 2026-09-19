@@ -83,3 +83,52 @@ test("song note alone when the loaded range has no item", () => {
   expect(screen.queryByText(/^Plan ·/)).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Set tempo" })).not.toBeInTheDocument();
 });
+
+// --- Next, at the keyboard (2026-09-19) --------------------------------------
+//
+// The important one: finishing an item at the piano should not mean walking
+// back to the home page to start the next.
+
+describe("Next on the plan line", () => {
+  const NEXT = {
+    id: "n", song_title: "Autumn Leaves", snippet_id: "s1",
+    snippet: { start_measure: 1, end_measure: 16, hand_mode: "both" },
+  };
+
+  test("a done item offers the next one, by song and range", () => {
+    render(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />);
+    const btn = screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" });
+    // A real button, not a link: full contrast, body size, 44px tall.
+    expect(btn).toHaveClass("bg-primary", "text-primary-foreground", "text-sm", "min-h-[44px]");
+  });
+
+  test("tapping it opens that item through the caller's own handler", () => {
+    const onOpenNext = jest.fn();
+    render(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} nextItem={NEXT} onOpenNext={onOpenNext} />);
+    fireEvent.click(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" }));
+    expect(onOpenNext).toHaveBeenCalledWith(NEXT);
+  });
+
+  test("nothing until the item is done, and nothing when the plan is complete", () => {
+    const { rerender } = render(
+      <PlanLine item={ITEM} state={stateOf(ITEM, 3, 2)} heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />
+    );
+    expect(screen.queryByRole("button", { name: /^Next:/ })).not.toBeInTheDocument();
+    // Done, but nothing left anywhere in the plan.
+    rerender(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} nextItem={null} onOpenNext={() => {}} />);
+    expect(screen.queryByRole("button", { name: /^Next:/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Done" })).toBeInTheDocument();
+  });
+
+  test("Free Play is offered like any other item", () => {
+    const free = { id: "f2", song_title: "Someone Like You", snippet_id: null, is_free_play: true };
+    render(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} nextItem={free} onOpenNext={() => {}} />);
+    expect(screen.getByRole("button", { name: "Next: Someone Like You Whole song" })).toBeInTheDocument();
+  });
+
+  test("Next sits beside Set tempo, not in place of it", () => {
+    render(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={55} nextItem={NEXT} onSetTempo={() => {}} onOpenNext={() => {}} />);
+    expect(screen.getByRole("button", { name: "Set tempo" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" })).toBeInTheDocument();
+  });
+});

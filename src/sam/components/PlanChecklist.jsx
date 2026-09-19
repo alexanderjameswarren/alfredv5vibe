@@ -1,6 +1,10 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight } from "lucide-react";
-import { itemRangeText, itemState, itemTargetText, planSummary } from "../lib/activePlan";
+import {
+  firstIncompleteItem, itemRangeText, itemState, itemTargetText, nextIncompleteItem,
+  planIsComplete, planSummary,
+} from "../lib/activePlan";
+import PlanNextButton from "./PlanNextButton";
 
 // Today's practice plan, on the SAM home page directly above the 7-day
 // snapshot (practice plans spec §7.3). Renders nothing without an active plan.
@@ -12,6 +16,15 @@ import { itemRangeText, itemState, itemTargetText, planSummary } from "../lib/ac
 //
 // Every count comes from `progress` — sam_plan_item_progress for today — and
 // is never worked out from passes here.
+//
+// ON LOAD (2026-09-19), once and only once `progressReady` says the counts are
+// real: an expanded strip scrolls the first item still to do into view near the
+// top, main work before Free Play; a plan with nothing left to do renders
+// collapsed instead. Both are decisions for that load alone — the stored
+// expanded/collapsed preference is never overwritten by them — and neither
+// happens again, so the page cannot move while he is reading it. A completed
+// row carries a Next button to the item after it, so finishing one item does
+// not mean coming back here to start the next.
 //
 // READABILITY (2026-09-17): this is read from across the room, without
 // glasses. Nothing here is smaller than text-sm, the body size used across
@@ -41,6 +54,15 @@ function writeExpanded(value) {
   }
 }
 
+// A jump rather than a glide when the system asks for less motion.
+function scrollBehavior() {
+  try {
+    return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth";
+  } catch {
+    return "auto";
+  }
+}
+
 // Four lines, so two items on one song never look alike even when a long song
 // title is cut short:
 //   1. song title (truncated), progress kept visible on the right
@@ -52,14 +74,15 @@ function writeExpanded(value) {
 // tempo, so it has to LOOK like one on a tablet, where there is no hover to
 // discover it with: its own outlined surface, a chevron at the trailing edge,
 // and a pressed state.
-function ItemRow({ item, progress, onOpen }) {
+function ItemRow({ item, progress, onOpen, nextItem, rowRef }) {
   const st = itemState(item, progress);
   // Done is struck through, never dimmed; amber stays full-contrast too.
   const tone = st.amber ? "text-amber-800" : "text-foreground";
   const strike = st.done ? "line-through" : "";
 
   return (
-    <li>
+    // `scroll-mt-4` keeps the auto-scrolled row off the very top edge.
+    <li ref={rowRef} className="scroll-mt-4">
       <button
         type="button"
         onClick={() => onOpen?.(item)}
@@ -91,22 +114,76 @@ function ItemRow({ item, progress, onOpen }) {
           )}
         </span>
       </button>
+      {/* Once an item is done, the way on to the next one is right here,
+          rather than back at the top of the plan. Indented to the row's text
+          so it reads as belonging to the item just finished. */}
+      {st.done && nextItem && (
+        <div className="pt-1.5 pl-8">
+          <PlanNextButton item={nextItem} onOpen={onOpen} />
+        </div>
+      )}
     </li>
   );
 }
 
-export default function PlanChecklist({ plan, progress, onOpenItem }) {
+export default function PlanChecklist({ plan, progress, progressReady = false, onOpenItem }) {
   const [expanded, setExpanded] = useState(readExpanded);
+  // A display decision for THIS load only, never written to storage: a plan
+  // that is already finished opens collapsed, so tomorrow's unfinished plan
+  // still opens expanded exactly as he left it.
+  const [autoCollapsed, setAutoCollapsed] = useState(false);
+  const rowRefs = useRef(new Map());
+  const didAuto = useRef(false);
+
+  // On load, once, and only once progress has actually arrived — an empty
+  // progress map looks identical to "nothing done yet", which would scroll to
+  // the top item and then be wrong a moment later. After this has run the page
+  // is his: it must never move under him while he is reading or scrolling.
+  useEffect(() => {
+    if (didAuto.current || !plan || !progressReady) return;
+    if (!(plan.items || []).length) return;
+    didAuto.current = true;
+
+    if (planIsComplete(plan, progress)) {
+      setAutoCollapsed(true);
+      return;
+    }
+    if (!readExpanded()) return; // collapsed: there is nothing on screen to scroll to
+    const target = firstIncompleteItem(plan, progress);
+    const el = target && rowRefs.current.get(target.id);
+    // `block: "start"` puts the row near the top of the viewport; the browser
+    // default would leave it hard against the bottom edge when scrolling down.
+    el?.scrollIntoView?.({ block: "start", behavior: scrollBehavior() });
+  }, [plan, progress, progressReady]);
+
   if (!plan) return null;
 
   const items = plan.items || [];
   const main = items.filter((i) => !i.is_free_play);
   const free = items.filter((i) => i.is_free_play);
+  const showExpanded = expanded && !autoCollapsed;
 
   function toggle() {
-    const next = !expanded;
+    const next = !showExpanded;
+    setAutoCollapsed(false); // his tap wins over the auto-collapse for this load
     setExpanded(next);
     writeExpanded(next);
+  }
+
+  function rowFor(item) {
+    return (
+      <ItemRow
+        key={item.id}
+        item={item}
+        progress={progress}
+        onOpen={onOpenItem}
+        nextItem={nextIncompleteItem(plan, progress, item)}
+        rowRef={(el) => {
+          if (el) rowRefs.current.set(item.id, el);
+          else rowRefs.current.delete(item.id);
+        }}
+      />
+    );
   }
 
   return (
@@ -114,41 +191,33 @@ export default function PlanChecklist({ plan, progress, onOpenItem }) {
       <button
         type="button"
         onClick={toggle}
-        aria-expanded={expanded}
+        aria-expanded={showExpanded}
         className="w-full flex items-center gap-3 p-3 text-left rounded-lg hover:bg-secondary/40 transition-colors min-h-[56px]"
       >
         <span className="flex-1 min-w-0">
           <span className="block text-sm font-medium text-foreground">{planSummary(plan, progress)}</span>
-          {!expanded && plan.day_note && (
+          {!showExpanded && plan.day_note && (
             <span className="block text-sm text-muted-foreground truncate">{plan.day_note}</span>
           )}
         </span>
         <ChevronDown
-          className={`w-4 h-4 text-muted-foreground flex-shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
+          className={`w-4 h-4 text-muted-foreground flex-shrink-0 transition-transform ${showExpanded ? "rotate-180" : ""}`}
           aria-hidden="true"
         />
       </button>
 
-      {expanded && (
+      {showExpanded && (
         <div className="px-2 pb-3">
           {plan.day_note && (
             <p className="pb-3 text-sm text-foreground whitespace-pre-wrap">{plan.day_note}</p>
           )}
-          <ul className="flex flex-col gap-2">
-            {main.map((item) => (
-              <ItemRow key={item.id} item={item} progress={progress} onOpen={onOpenItem} />
-            ))}
-          </ul>
+          <ul className="flex flex-col gap-2">{main.map(rowFor)}</ul>
           {free.length > 0 && (
             <>
               <div className="pt-3 pb-2 text-sm uppercase tracking-wide text-muted-foreground">
                 Optional Free Play
               </div>
-              <ul className="flex flex-col gap-2">
-                {free.map((item) => (
-                  <ItemRow key={item.id} item={item} progress={progress} onOpen={onOpenItem} />
-                ))}
-              </ul>
+              <ul className="flex flex-col gap-2">{free.map(rowFor)}</ul>
             </>
           )}
         </div>

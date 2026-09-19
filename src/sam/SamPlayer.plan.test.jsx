@@ -386,3 +386,34 @@ test("a finished snippet's tag reads Plan ✓", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Snippet/ }));
   expect(await screen.findByText("Plan ✓")).toHaveAttribute("data-state", "done");
 });
+
+// --- Next, from the player (2026-09-19) --------------------------------------
+
+test("Next on the plan line opens the next item at its target tempo, writing nothing to the song", async () => {
+  // The snippet item is finished today; the whole-song item is not.
+  mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 5, qualifying: 4 }];
+  await openItem("m.1–1 · RH · Opening bar");
+  expect(screen.getByLabelText(/BPM:/)).toHaveValue(60);
+
+  // Done, so the way on to the next item is right here at the keyboard.
+  const next = await screen.findByRole("button", { name: "Next: Throwaway Whole song" });
+  const fetches = mockFetchSongById.mock.calls.length;
+  await act(async () => { fireEvent.click(next); });
+
+  // It went through the same open-plan-item path a checklist tap uses...
+  expect(mockFetchSongById.mock.calls.length).toBe(fetches + 1);
+  // ...and applied THAT item's tempo (55), not the one just finished (60).
+  await waitFor(() => expect(screen.getByLabelText(/BPM:/)).toHaveValue(55));
+  // The snippet is gone: the next item is the whole song.
+  expect(screen.queryByText("m.1–1 · RH · Opening bar")).not.toBeInTheDocument();
+  // For this sitting only — the song row is untouched.
+  expect(mockDb.inserts.filter((i) => i.table === "sam_songs")).toEqual([]);
+  expect(mockDb.updates.filter((u) => u.table === "sam_songs")).toEqual([]);
+});
+
+test("no Next on the plan line while the item is unfinished", async () => {
+  mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 2, qualifying: 1 }];
+  await openItem("m.1–1 · RH · Opening bar");
+  expect(screen.getByText(/Plan · 60 BPM · 90% · 1\/4 today/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Next:/ })).not.toBeInTheDocument();
+});

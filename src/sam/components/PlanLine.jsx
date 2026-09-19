@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Check } from "lucide-react";
 import { planLineText } from "../lib/activePlan";
+import PlanNextButton from "./PlanNextButton";
 
 // The practice plan, as it applies to what is loaded in the player (practice
 // plans spec §7.4). One compact line directly under the stats row, shown only
@@ -16,12 +17,18 @@ import { planLineText } from "../lib/activePlan";
 // "Set tempo" appears only when the heard tempo differs from the item's target.
 // It changes the tempo box for this sitting; nothing is saved to the song.
 //
+// Once the item is done, a "Next: <song> <range>" button appears beside it
+// (2026-09-19) — the same PlanNextButton the home page checklist uses, calling
+// the same open-plan-item handler. This is the important one: after finishing
+// an item at the keyboard he can go straight to the next without leaving the
+// song view.
+//
 // READABILITY (2026-09-17): read from the keyboard, further away than normal
 // use. Everything here is body size (text-sm) at full `foreground` contrast —
 // a done item keeps its check mark rather than being dimmed — and amber is
 // `amber-800` (7.1:1 on the card). The song note stays a step down in weight
 // only, not in contrast.
-export default function PlanLine({ item, state, songNote, heardTempo, onSetTempo }) {
+export default function PlanLine({ item, state, songNote, heardTempo, onSetTempo, nextItem, onOpenNext }) {
   const [noteOpen, setNoteOpen] = useState(false);
   if (!item && !songNote) return null;
 
@@ -47,6 +54,7 @@ export default function PlanLine({ item, state, songNote, heardTempo, onSetTempo
               Set tempo
             </button>
           )}
+          {state.done && <PlanNextButton item={nextItem} onOpen={onOpenNext} />}
         </div>
       )}
       {songNote && (

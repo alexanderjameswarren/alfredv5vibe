@@ -153,6 +153,67 @@ export function itemState(item, progress) {
   };
 }
 
+// --- Working order: what to do next (2026-09-19) -----------------------------
+//
+// The checklist shows the main work first and Free Play under its own label,
+// and that display order IS the working order: Free Play is optional, so
+// nothing should send him there while main work is left. Both the home page's
+// auto-scroll and the "Next" control read the plan through these three
+// helpers, so they can never disagree about which item is next.
+
+/** The plan's items in working order: main work in plan order, then Free Play. */
+export function planItemsInOrder(plan) {
+  const items = plan?.items || [];
+  return [...items.filter((i) => !i.is_free_play), ...items.filter((i) => i.is_free_play)];
+}
+
+/**
+ * The first item still short of its target passes, main work before Free Play.
+ * Null when every item is done, or the plan has no items.
+ */
+export function firstIncompleteItem(plan, progress) {
+  return planItemsInOrder(plan).find((i) => !itemState(i, progress).done) || null;
+}
+
+/**
+ * What to practise after `item`: the next incomplete item after it in working
+ * order, or — when everything later is done — the first incomplete item
+ * anywhere in the plan, so a finished item at the bottom still points back up
+ * at the one bar he skipped. Null when there is nothing left to do.
+ *
+ * Never returns `item` itself: a row must not offer itself as its own Next.
+ */
+export function nextIncompleteItem(plan, progress, item) {
+  const order = planItemsInOrder(plan);
+  const open = (i) => !itemState(i, progress).done && i.id !== item?.id;
+  const at = item ? order.findIndex((i) => i.id === item.id) : -1;
+  return order.slice(at + 1).find(open) || order.find(open) || null;
+}
+
+/** True when every item, Free Play included, has reached its target today. */
+export function planIsComplete(plan, progress) {
+  const order = planItemsInOrder(plan);
+  return order.length > 0 && order.every((i) => itemState(i, progress).done);
+}
+
+/**
+ * The compact range for a "Next" label: "m.1–16", "m.1–16 · RH" or
+ * "Whole song". Shorter than `itemRangeText` on purpose — the Next button
+ * truncates the song title and must never truncate this.
+ */
+export function itemShortRange(item) {
+  if (!item?.snippet_id) return "Whole song";
+  const sn = item.snippet;
+  if (!sn) return "";
+  const hand = sn.hand_mode && sn.hand_mode !== "both" ? ` · ${sn.hand_mode.toUpperCase()}` : "";
+  return `m.${sn.start_measure}–${sn.end_measure}${hand}`;
+}
+
+/** "Next: Autumn Leaves m.1–16" — the Next button's label and accessible name. */
+export function nextItemLabel(item) {
+  return `Next: ${[item?.song_title || "Untitled", itemShortRange(item)].filter(Boolean).join(" ")}`;
+}
+
 /** "Today's plan · 3 of 6 done" plus " · Free play 1 of 2" when there is free play. */
 export function planSummary(plan, progress) {
   const items = plan?.items || [];
