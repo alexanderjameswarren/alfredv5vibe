@@ -161,34 +161,33 @@ export function isVariantCut(title: string | null | undefined): boolean {
 // boundary, which is why the map needs so few entries.
 //
 // ---------------------------------------------------------------------------
-// 🛑 AMENDED 2026-09-19 — A SOURCE CAN CHANGE ITS OWN VOCABULARY, AND THE RULE
-// ABOVE ASSUMED IT COULD NOT.
+// ⚠️ 2026-09-19 — THE DAVE BRUBECK ENTRY IS AN EXCEPTION, NOT AN APPLICATION
 // ---------------------------------------------------------------------------
 //
-// The DIRECTION rule reads "canonicalise toward the poll, because the poll keeps
-// writing". Its premise is TWO STATIC VOCABULARIES meeting at one boundary, and
-// the 2026-08-30 measurement above is a statement about ONE MOMENT, not a
-// guarantee about the future.
+// An earlier version of this note claimed the poll had CHANGED its vocabulary
+// for this act. That was wrong and is retracted (spec §4.1.4). Migration 058
+// returned all 26 Brubeck rows written on ONE DAY, 2026-08-31, by the Takeout
+// import — THE POLL HAS NEVER WRITTEN A BRUBECK ROW. The 2025-05-05 date that
+// suggested otherwise is an earliest PLAY, back-dated by the import, not a write
+// date.
 //
-// On 2026-09-19 the poll began sending "The Dave Brubeck Quartet" for an act it
-// had been reporting as "Dave Brubeck Quartet" — 86 play rows across 24 distinct
-// groups already stored under the bare form. One source, two eras.
+// So this is the designed case: Takeout wrote one form, the poll sends another.
+// 🛑 APPLIED UNAMENDED, THE RULE ABOVE WOULD GIVE THE OPPOSITE ENTRY —
+// "Dave Brubeck Quartet" -> "The Dave Brubeck Quartet".
 //
-// ⚠️ APPLIED LITERALLY THE RULE GIVES THE WRONG ANSWER HERE, for the rule's own
-// stated reason. Its justification is that translating toward the poll "leaves
-// the already-stored rows ALREADY CORRECT — no UPDATE needed, so the insert-only
-// guarantee is never bent". Toward the poll, every one of those 86 rows becomes
-// non-canonical and match_key is FROZEN AT WRITE.
+// WHY THE EXCEPTION STANDS ANYWAY: the rule's justification is that translating
+// toward the poll "applies the map once at import and never again". FOR THIS ACT
+// THAT BENEFIT IS ALREADY SPENT — the import ran without the entry, so 26 rows
+// are stored untranslated against a frozen match_key (§4.1.2). Following the rule
+// now means a BACKFILL of those rows plus every artist-string dependent
+// (dj_artist_tags, playlist membership), which is precisely what the rule exists
+// to avoid.
 //
-// THE AMENDED RULE, and the tie-break is not aesthetic:
-//
-//     Between two vocabularies, canonicalise toward the one that KEEPS WRITING.
-//     Between two ERAS OF ONE vocabulary, canonicalise toward WHAT IS ALREADY
-//     WRITTEN — because stored rows are frozen and future polls are free.
-//
-// The cost is a permanent per-poll translation instead of a one-time import
-// translation. That is a Map lookup on the primary artist, and it is the cheaper
-// side of the trade by a wide margin.
+// ⚠️ THE COST OF THE EXCEPTION IS REAL AND IS NOT HIDDEN: this map is no longer
+// uniformly Takeout->poll, which is why two invariants below had to be falsified.
+// Reversing it is a live option if uniformity is worth the backfill. Nothing
+// downstream is wrong either way today — both spellings converge on one
+// match_key, because normalisePart lowercases.
 
 interface ArtistAlias {
   /** The spelling to REPLACE. ⚠️ NO LONGER ALWAYS A TAKEOUT CHANNEL NAME — see

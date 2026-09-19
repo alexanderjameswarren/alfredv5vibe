@@ -249,26 +249,53 @@ so the insert-only guarantee is never bent.
 
 ---
 
-#### 🛑 AMENDED 2026-09-19 — A SOURCE CAN CHANGE ITS OWN VOCABULARY
+#### ⚠️ WITHDRAWN 2026-09-19 — "a source changed its own vocabulary" WAS NOT SUPPORTED
 
-The DIRECTION rule above assumes **two static vocabularies** meeting at one boundary, and the
-2026-08-30 "0 split pairs within each" measurement is a statement about **one moment**, not a
-guarantee about the future.
+🛑 **THIS AMENDMENT WAS WRITTEN ON A MISREADING AND IS RETRACTED. The rule below it stands
+unamended.** It is kept rather than deleted because the reasoning is the thing to avoid repeating.
 
-On 2026-09-19 the poll began sending `The Dave Brubeck Quartet` for an act it had reported as
-`Dave Brubeck Quartet` since 2025-05-05. One source, **two eras** — a case the rule is silent on.
+**What I inferred:** the artist rollup showed `Dave Brubeck Quartet` first played 2025-05-05, and
+the live feed sends `The Dave Brubeck Quartet`, so the poll must have changed its vocabulary.
+
+**What migration 058 actually returned:** all 26 Brubeck rows were written on **one day,
+2026-08-31, by the Takeout import.** ⚠️ **THE POLL HAS NEVER WRITTEN A BRUBECK ROW AT ALL.** The
+`first_played_on` I reasoned from is the date of the earliest PLAY, back-dated by the import — not
+the date anything was written, and not evidence about the poll.
+
+**So there are no "two eras".** Takeout wrote the bare form; the poll sends the The-form. **That
+is the designed case, exactly as §4.1.4 describes it** — two vocabularies meeting at one boundary.
+There is no evidence the poll ever sent anything else.
+
+🛑 **AND THAT MEANS THE RULE, UNAMENDED, FAVOURS THE OPPOSITE DIRECTION FROM THE ENTRY THAT SHIPPED.**
+Canonicalise toward the poll would give `Dave Brubeck Quartet → The Dave Brubeck Quartet`. The
+entry in `dj-normalise.ts` maps the other way. **That is now a deliberate exception needing its own
+justification, not an application of the rule** — see the OPEN DECISION below.
+
+⚠️ **THE ONE THING THAT GENUINELY CHANGED, AND IT SURVIVES THE RETRACTION:** the rule's
+justification is that translating toward the poll *"applies the map once at import and never
+again"*. **For Brubeck that benefit is already spent** — the import ran on 2026-08-31 without the
+entry, so 26 rows are stored untranslated against a frozen `match_key`. Following the rule now
+means a **backfill**, which is what the rule was designed to avoid. The choice is therefore real:
+
+| | cost |
+|---|---|
+| follow the rule (`bare → The`) | backfill 26 rows' `artist` **and** `match_key`, plus every artist-string dependent (`dj_artist_tags`, playlist membership) |
+| the shipped entry (`The → bare`) | a permanent per-poll `Map` lookup, **and a map that is no longer uniformly Takeout→poll** |
+
+**OPEN DECISION for Alex.** The shipped entry is the cheaper one and needs no backfill, but it
+makes the map bidirectionally inconsistent — which is why two invariants in `dj-normalise.ts` had
+to be falsified to accommodate it. If uniformity matters more than the backfill, reverse it.
+**Nothing downstream is wrong either way today**; both spellings converge on one `match_key`.
 
 ⚠️ **APPLIED LITERALLY THE RULE GIVES THE WRONG ANSWER HERE, for its own stated reason.** Its
 justification is that translating toward the poll *"leaves the already-stored rows already
 correct — no UPDATE needed, so the insert-only guarantee is never bent"*. Toward the poll, **86
 play rows across 24 groups become non-canonical**, and `match_key` is frozen at write.
 
-> **Between two vocabularies, canonicalise toward the one that KEEPS WRITING.**
-> **Between two ERAS of one vocabulary, canonicalise toward WHAT IS ALREADY WRITTEN** — because
-> stored rows are frozen and future polls are free.
-
-The cost is a permanent per-poll translation rather than a one-time import translation: a `Map`
-lookup on the primary artist, and the cheaper side of the trade by a wide margin.
+⚠️ **THE LESSON THAT IS NOT RETRACTED: `first_played_on` IS NOT A WRITE DATE.** Plays are
+back-dated by the Takeout import, so the earliest play of an act says nothing about when — or by
+which source — its row was inserted. I built a rule amendment on that confusion. **Any claim about
+what a source "used to send" needs `created_at` on `dj_tracks`, not a play date.**
 
 ⚠️ **TWO INVARIANTS IN `dj-normalise.ts` ARE NOW FALSE AND WERE CORRECTED IN THE SAME COMMIT.**
 The `from` field was documented as *"the Takeout `- Topic` channel name"*, and `canonicalArtist`
@@ -4439,3 +4466,67 @@ artist-identity collisions. **The same call would close both.** Worth doing when
 appears, and not before.
 
 **A verdict that says what it cannot rule out is better than one that looks settled.**
+
+
+---
+
+### 14.56 ARTIST CASE SPLITS — the mechanically-closeable subset of §14.1
+
+**Found 2026-09-19** by migration 058's last block, which was looking for leading-article splits
+and returned **case** splits instead:
+
+```
+Fleetwood Mac / FLEETWOOD MAC          9 tracks
+Queens of the Stone Age / Of The       9
+Cake / CAKE                            7
+Alice in Chains / Alice In Chains      3
+fun. / Fun.                            3
+the Chordettes / The Chordettes        2
+```
+
+🛑 **`match_key` IS ALREADY CASE-INSENSITIVE.** `normalisePart()` opens with
+`raw.toLowerCase().trim()` and `buildMatchKey()` runs the primary artist through it. Verified by
+running it over all six real pairs — every one produces an identical key.
+
+⚠️ **THE INFERENCE "separate match_keys, therefore the normaliser is not case-insensitive" DOES
+NOT HOLD.** These are different video ids with different **titles**, and `dj_tracks` is one row
+per video id — so two different songs never share a `match_key` whatever their byline says.
+Nothing was supposed to collapse at write time and nothing failed to.
+
+**THE CLASS: neither §14.7 nor a defect.**
+
+* **Not §14.7.** That warns against a derived rule whose direction *reverses* between acts. A case
+  fold has no direction to reverse — it passes §14.53's test cleanly: one expansion, deterministic,
+  and incapable of distinguishing two real acts. **And it is moot, because `match_key` already
+  does it.**
+* **Not a defect.** `get_dj_plays mode=artists` groups on the raw display string and **says so in
+  its own `gaps`**: *"SPLITS ARE REAL AND PRESENT"*. This is §14.1 behaving as documented.
+
+🛑 **WHAT IS GENUINELY NEW IS THE SUBSET.** §14.1's documented examples are **semantic** splits —
+`Oscar Peterson Trio` vs `Oscar Peterson` — which need a human to decide whether they are one act.
+**A case split needs no judgement at all.** It is the part of §14.1 that can be closed
+mechanically, and it has been sitting inside a gap labelled "needs curation".
+
+⚠️ **AND THE FIX IS READ-TIME, NOT A BACKFILL.** Because `match_key` already agrees, grouping the
+rollup on `lower(artist)` changes no stored row, no `match_key` and no `canonical_track_id`. Far
+cheaper than the split appears to imply.
+
+**WHAT IS AND IS NOT AFFECTED — checked, not assumed:**
+
+| | |
+|---|---|
+| **affected** | `get_dj_plays mode=artists`; `dj_artist_tags` joins; weekly review Sections 3 & 4 |
+| **not** | familiarity / cram — groups on `canonical_track_id`, which case-folds |
+| **not** | concert playlists and the diff — keyed on `video_id`; artist compares go through `_artist_matches`, which lowercases |
+| **not** | `get_dj_setlists` — keyed on mbid, refuses names |
+
+⚠️ **QUEENS OF THE STONE AGE, THE SHOW ON THE 26th: the concert playlist is NOT affected.**
+Verified — all six playlist tracks resolve to six distinct canonical groups with correct per-track
+familiarity, despite `My God Is the Sun` being stored as `Queens of the Stone Age` and the other
+five as `Queens Of The Stone Age`. The diff, `set_shape` and cram order all read whole. **What
+reads half is the by-artist rollup, which the concert flow does not use.**
+
+**The stranded-tag consequence is the one with a real cost**, and `059` measures it: an act tagged
+under one spelling is untagged under the other, so every tag-filtered read silently omits half.
+⚠️ **Fixing the rollup does not fix that** — the tag join is a separate read and needs the same
+fold.
