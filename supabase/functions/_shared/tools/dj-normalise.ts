@@ -159,11 +159,46 @@ export function isVariantCut(title: string | null | undefined): boolean {
 // 0 split pairs among the export's 1,206 artists, and 0 among the poll's — so
 // this is not a naming mess. It is two consistent systems meeting at one
 // boundary, which is why the map needs so few entries.
+//
+// ---------------------------------------------------------------------------
+// 🛑 AMENDED 2026-09-19 — A SOURCE CAN CHANGE ITS OWN VOCABULARY, AND THE RULE
+// ABOVE ASSUMED IT COULD NOT.
+// ---------------------------------------------------------------------------
+//
+// The DIRECTION rule reads "canonicalise toward the poll, because the poll keeps
+// writing". Its premise is TWO STATIC VOCABULARIES meeting at one boundary, and
+// the 2026-08-30 measurement above is a statement about ONE MOMENT, not a
+// guarantee about the future.
+//
+// On 2026-09-19 the poll began sending "The Dave Brubeck Quartet" for an act it
+// had been reporting as "Dave Brubeck Quartet" — 86 play rows across 24 distinct
+// groups already stored under the bare form. One source, two eras.
+//
+// ⚠️ APPLIED LITERALLY THE RULE GIVES THE WRONG ANSWER HERE, for the rule's own
+// stated reason. Its justification is that translating toward the poll "leaves
+// the already-stored rows ALREADY CORRECT — no UPDATE needed, so the insert-only
+// guarantee is never bent". Toward the poll, every one of those 86 rows becomes
+// non-canonical and match_key is FROZEN AT WRITE.
+//
+// THE AMENDED RULE, and the tie-break is not aesthetic:
+//
+//     Between two vocabularies, canonicalise toward the one that KEEPS WRITING.
+//     Between two ERAS OF ONE vocabulary, canonicalise toward WHAT IS ALREADY
+//     WRITTEN — because stored rows are frozen and future polls are free.
+//
+// The cost is a permanent per-poll translation instead of a one-time import
+// translation. That is a Map lookup on the primary artist, and it is the cheaper
+// side of the trade by a wide margin.
 
 interface ArtistAlias {
-  /** The spelling to REPLACE — the Takeout `- Topic` channel name. */
+  /** The spelling to REPLACE. ⚠️ NO LONGER ALWAYS A TAKEOUT CHANNEL NAME — see
+   *  the Dave Brubeck entry, where the POLL is the source sending this form.
+   *  The invariant "the poll never submits an alias key" was true for the first
+   *  two entries and is false from the third. */
   from: string;
-  /** The spelling to KEEP — what YouTube Music's artist metadata says. */
+  /** The spelling to KEEP. Canonically what YouTube Music's metadata says —
+   *  EXCEPT where the poll changed its own vocabulary after rows were written,
+   *  in which case it is what is already stored and cannot be re-keyed. */
   to: string;
   /** Why these are the same act. Recorded because the next entry will be added
    *  by someone without today's context, and hand-curation is only better than
@@ -182,6 +217,29 @@ export const ARTIST_ALIASES: ArtistAlias[] = [
       "while YouTube Music's metadata carries the billed ensemble name. Same " +
       "act, same recordings — 5 tracks already stored under the ensemble name " +
       "against 25 further videos on the channel.",
+  },
+  {
+    from: "The Dave Brubeck Quartet",
+    to: "Dave Brubeck Quartet",
+    why:
+      "⚠️ THE FIRST ENTRY WHOSE `from` IS A POLL STRING, NOT A TAKEOUT CHANNEL " +
+      "NAME. The poll reported this act as 'Dave Brubeck Quartet' from " +
+      "2025-05-05 and began sending 'The Dave Brubeck Quartet' by 2026-09-19; " +
+      "one page of live history carried three tracks under the new form " +
+      "(Blue Rondo A La Turk, Three to Get Ready, Koto Song), all stored under " +
+      "the old one. This is not two vocabularies disagreeing — it is ONE " +
+      "vocabulary changing era, which the DIRECTION rule above did not " +
+      "anticipate and has been amended for. " +
+      "DIRECTION IS TOWARD WHAT IS ALREADY STORED because 86 play rows across " +
+      "24 groups carry the bare form and match_key is frozen at write (§4.1.2); " +
+      "mapping the other way would re-key every one of them. " +
+      "MusicBrainz is not an argument either way: get_dj_setlists is keyed on " +
+      "mbid and refuses names outright, so no display name ever reaches " +
+      "setlist.fm. " +
+      "⚠️ ONLY ONE TRACK WAS FLAGGED because artist_disagreements fires per " +
+      "SUBMITTED row and the sync submits only unheld plays — the other 23 " +
+      "groups will flag one at a time as each is next played, and are the same " +
+      "finding rather than new ones.",
   },
   {
     from: "The Red Garland Trio",
@@ -216,8 +274,14 @@ const ALIAS_BY_KEY = new Map(
  * PRIMARY artist only, since that is what match_key uses.
  *
  * Deliberately NOT conditional on source. A source-conditional rule could be
- * bypassed by a mislabelled import, and the poll never submits an alias key
- * anyway, so applying it universally is a no-op there.
+ * bypassed by a mislabelled import.
+ *
+ * ⚠️ IT IS NO LONGER A NO-OP ON THE POLL. That was true while every `from` was a
+ * Takeout channel name; the Dave Brubeck entry is a poll string, so this now
+ * translates on every poll for that act — by design, and the reason is in the
+ * DIRECTION note above. Source-conditional would have been ACTIVELY WRONG here,
+ * which is a second argument for the unconditional form rather than only the
+ * mislabelled-import one.
  */
 export function canonicalArtist(name: string): string {
   if (!name) return name;

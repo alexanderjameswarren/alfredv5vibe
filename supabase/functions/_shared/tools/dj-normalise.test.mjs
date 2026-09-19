@@ -260,6 +260,33 @@ test("matching is case- and whitespace-insensitive but not fuzzy", () => {
   assert.equal(canonicalArtist("Eddie Higgins Quartet"), "Eddie Higgins Quartet");
 });
 
+test("Dave Brubeck: the poll's own vocabulary changed, and the direction follows what is STORED", () => {
+  // 🛑 THE FIRST ENTRY WHOSE `from` IS A POLL STRING. The poll reported this act
+  // as "Dave Brubeck Quartet" from 2025-05-05 and sends "The Dave Brubeck
+  // Quartet" as of 2026-09-19. 86 play rows across 24 groups carry the bare
+  // form, and match_key is FROZEN AT WRITE — so canonical is what is already
+  // stored, not what the poll now says.
+  assert.equal(canonicalArtist("The Dave Brubeck Quartet"), "Dave Brubeck Quartet");
+  // ⚠️ AND IT MUST CONVERGE: a play arriving under either spelling has to land on
+  // ONE match_key, or the split this entry exists to prevent happens anyway.
+  assert.equal(
+    buildMatchKey(["The Dave Brubeck Quartet"], "Blue Rondo A La Turk"),
+    buildMatchKey(["Dave Brubeck Quartet"], "Blue Rondo A La Turk"),
+  );
+});
+
+test("the alias map does NOT strip leading articles as a rule", () => {
+  // ⚠️ §14.7's trap, and the Brubeck entry is exactly the shape that invites it.
+  // "Strip a leading The" would fix Brubeck and BREAK Red Garland, whose
+  // canonical form is the bare name while the key carries the article — the two
+  // entries point in opposite directions on the same token.
+  assert.equal(canonicalArtist("The Red Garland Trio"), "Red Garland");
+  assert.equal(canonicalArtist("The Dave Brubeck Quartet"), "Dave Brubeck Quartet");
+  // Both are hand-curated. An unrelated act keeps its article untouched.
+  assert.equal(canonicalArtist("The Beatles"), "The Beatles");
+  assert.equal(canonicalArtist("The Smashing Pumpkins"), "The Smashing Pumpkins");
+});
+
 test("unknown artists pass through untouched", () => {
   for (const a of ["Weezer", "Coldplay", "Miles Davis", "The Miles Davis Quintet"]) {
     assert.equal(canonicalArtist(a), a);

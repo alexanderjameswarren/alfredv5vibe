@@ -247,6 +247,46 @@ import, the poll runs forever. Translating toward the poll applies the map once 
 never again, and leaves the 17 already-stored rows **already correct — no UPDATE needed**,
 so the insert-only guarantee is never bent.
 
+---
+
+#### 🛑 AMENDED 2026-09-19 — A SOURCE CAN CHANGE ITS OWN VOCABULARY
+
+The DIRECTION rule above assumes **two static vocabularies** meeting at one boundary, and the
+2026-08-30 "0 split pairs within each" measurement is a statement about **one moment**, not a
+guarantee about the future.
+
+On 2026-09-19 the poll began sending `The Dave Brubeck Quartet` for an act it had reported as
+`Dave Brubeck Quartet` since 2025-05-05. One source, **two eras** — a case the rule is silent on.
+
+⚠️ **APPLIED LITERALLY THE RULE GIVES THE WRONG ANSWER HERE, for its own stated reason.** Its
+justification is that translating toward the poll *"leaves the already-stored rows already
+correct — no UPDATE needed, so the insert-only guarantee is never bent"*. Toward the poll, **86
+play rows across 24 groups become non-canonical**, and `match_key` is frozen at write.
+
+> **Between two vocabularies, canonicalise toward the one that KEEPS WRITING.**
+> **Between two ERAS of one vocabulary, canonicalise toward WHAT IS ALREADY WRITTEN** — because
+> stored rows are frozen and future polls are free.
+
+The cost is a permanent per-poll translation rather than a one-time import translation: a `Map`
+lookup on the primary artist, and the cheaper side of the trade by a wide margin.
+
+⚠️ **TWO INVARIANTS IN `dj-normalise.ts` ARE NOW FALSE AND WERE CORRECTED IN THE SAME COMMIT.**
+The `from` field was documented as *"the Takeout `- Topic` channel name"*, and `canonicalArtist`
+claimed *"the poll never submits an alias key anyway, so applying it universally is a no-op
+there"*. Both were true of the first two entries and are false from the third. **Source-conditional
+translation would have been actively wrong here** — a second argument for the unconditional form.
+
+⚠️ **THIS IS NOT A LICENCE FOR A LEADING-ARTICLE RULE.** `The Red Garland Trio → Red Garland` and
+`The Dave Brubeck Quartet → Dave Brubeck Quartet` point **opposite ways on the same token** —
+one strips an article the canonical form lacks, the other strips one the poll added. §14.7 again:
+a rule fixing both would have to know which era each string came from. A test pins it.
+
+**MusicBrainz does not bear on any of this.** `get_dj_setlists` is keyed on mbid and **refuses
+names outright**, so no display name ever reaches setlist.fm and no alias direction can affect a
+setlist read.
+
+---
+
 **Every entry records WHY it is correct**, not just the mapping. Hand-curation is only better
 than a derived rule if the reasoning survives for whoever adds the third entry.
 
