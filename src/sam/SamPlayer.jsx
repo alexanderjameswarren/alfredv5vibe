@@ -29,7 +29,7 @@ import FingeringBar from "./components/FingeringBar";
 import useAudioSync from "./lib/useAudioSync";
 import useNumericInput from "./lib/useNumericInput";
 import { DEFAULTS } from "./lib/samConstants";
-import { matchChord, findClosestBeat, nearestBeat } from "./lib/noteMatching";
+import { matchChord, findClosestBeat, nearestBeat, elapsedAt } from "./lib/noteMatching";
 import { onScreenTally } from "./lib/practiceScoring";
 import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
 import { normalizeMeasure } from "./lib/measureUtils";
@@ -440,13 +440,15 @@ export default function SamPlayer({ onBack }) {
     measureWidth: measureWidth.value,
   });
 
-  const handleChord = useCallback((played) => {
+  // `pressedAtMs` is a performance.now() reading from when the chord's FIRST
+  // key arrived, carried through useMIDI's chord buffer. Every timing decision
+  // below uses it, so nothing is measured at flush time any more.
+  const handleChord = useCallback((played, pressedAtMs) => {
     if (playbackState !== "playing") return;
     const scrollState = scrollStateExtRef.current;
     if (!scrollState) return;
 
-    const now = performance.now();
-    const elapsed = now - scrollState.scrollStartT;
+    const elapsed = elapsedAt(scrollState, pressedAtMs);
     console.log(
       `[PLAY] midi=[${played}] at elapsed=${Math.round(elapsed)}ms`
     );
@@ -454,7 +456,7 @@ export default function SamPlayer({ onBack }) {
     // Hand mode filtering: only match notes from the active hand
     const hm = snippet?.handMode || "both";
 
-    const match = findClosestBeat(beatEventsRef.current, scrollState, timingWindowMs.value, hm);
+    const match = findClosestBeat(beatEventsRef.current, scrollState, timingWindowMs.value, hm, pressedAtMs);
     if (!match) {
       console.log(`[PLAY] No pending beat found within ±${timingWindowMs.value}ms`);
       const names = played.map((m) => midiDisplayName(m)).join(", ");
@@ -469,7 +471,7 @@ export default function SamPlayer({ onBack }) {
       // definition of "close enough to be an attempt at this beat", so twice it
       // is a near miss, and the rule scales with how strict the session was
       // rather than with the tempo.
-      const near = nearestBeat(beatEventsRef.current, scrollState, hm);
+      const near = nearestBeat(beatEventsRef.current, scrollState, hm, pressedAtMs);
       if (near) {
         const withinReach = Math.abs(near.timingDeltaMs) <= timingWindowMs.value * EXTRA_TIMING_REACH;
         recordExtra({
@@ -593,7 +595,11 @@ export default function SamPlayer({ onBack }) {
   //
   // Called from ScrollEngine's rAF frame, so it must not throw and must not
   // block — `recordPass` owns both guarantees.
-  const creditPass = useCallback(() => {
+  // `playthrough` may be passed in by a caller that had to read the counters
+  // at a particular instant — `handleLoopCount` does, because it defers the
+  // write off the teleport frame but must capture the counters BEFORE
+  // `setLoopIteration` rotates them. Omitted, they are read here as before.
+  const creditPass = useCallback((playthrough) => {
     const ctx = passContextRef.current;
     recordPass({
       songId: ctx.songId,
@@ -602,9 +608,7 @@ export default function SamPlayer({ onBack }) {
       bpm: ctx.bpm,
       playbackSpeed: ctx.playbackSpeed,
       handMode: ctx.snippet?.handMode || "both",
-      // Read at credit time, which is why this must run before
-      // `setLoopIteration` rotates the counters — see `handleLoopCount`.
-      playthrough: getCurrentPlaythrough(),
+      playthrough: playthrough ?? getCurrentPlaythrough(),
       getPlanLink,
     });
   }, [recordPass, getSessionId, getCurrentPlaythrough, getPlanLink]);
@@ -632,11 +636,22 @@ export default function SamPlayer({ onBack }) {
     //
     // Detection is unchanged: the same signal credits the same passes, at the
     // same instant.
-    if (n > 0 && n !== lastLoopCountRef.current) creditPass();
+    //
+    // OFF THE TELEPORT FRAME (2026-09-19). `creditPass` reaches Supabase, and
+    // this runs inside ScrollEngine's rAF frame at the loop restart — the
+    // busiest frame in the run, whose cost shows up as lateness on the first
+    // notes of the new pass. The COUNTERS are still read synchronously here,
+    // before `setLoopIteration` rotates them, so the pass row carries the hits
+    // and misses of the playthrough that just finished; only the write itself
+    // is deferred to a macrotask.
+    if (n > 0 && n !== lastLoopCountRef.current) {
+      const playthrough = getCurrentPlaythrough();
+      setTimeout(() => creditPass(playthrough), 0);
+    }
     setLoopIteration(n);
     if (n > 0) setPausedMeasure(null);
     lastLoopCountRef.current = n;
-  }, [setLoopIteration, creditPass]);
+  }, [setLoopIteration, creditPass, getCurrentPlaythrough]);
 
   // `handleStop` is a plain function declared further down the component, so it
   // is re-created every render. Reaching it through a ref keeps

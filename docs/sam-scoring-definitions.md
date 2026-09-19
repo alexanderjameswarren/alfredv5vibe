@@ -76,13 +76,57 @@ its top mistakes until this was fixed — all three are in that chord.
 On an `extra` row `expected_notes` is empty by definition, so every pitch on
 one is wrong.
 
-⚠️ **Tied-over notes are a known hole.** A note tied into a bar is sounding but
-never struck, so it is absent from that beat's `expected_notes`. Playing a
-snippet that starts mid-phrase, he strikes those notes to place his hand and
-they are logged as recurring wrong notes although they are not errors — Autumn
-Leaves m15 lists D3 and F#3 in ~50 passes each for exactly this reason. Treat
-recurring wrong notes **in the first bar of a snippet**, or in any bar entered
-from a rest, with suspicion until this is fixed.
+### Tied-over notes are not mistakes
+
+A note **tied into** a bar is sounding but never struck, so the score never
+asks him to play it and it is absent from that beat's `expected_notes`.
+Playing a snippet that begins mid-phrase he strikes those notes to place his
+hand — Autumn Leaves m15 listed D3 (50) and F#3 (54) in about 50 passes each
+for exactly this reason.
+
+Since 2026-09-19 `get_sam_measure_stats` reads the bar's own notation and
+treats pitches tied into it as expected. They are neither wrong notes nor
+extras, and are reported separately as `tied_in_strikes`. A note carries
+`tie: "start" | "end" | "both"`; **`"end"` and `"both"` are both
+continuations** — already sounding.
+
+⚠️ **`scoreRender.js` has a related defect, and it affects every row already
+written.** The app decides `expected_notes` with
+`notes.every(n => n.tie === "end")` per EVENT
+([scoreRender.js:539](../src/sam/lib/scoreRender.js#L539) and
+[:551](../src/sam/lib/scoreRender.js#L551)), which
+
+- misses `tie: "both"` entirely, and
+- misses a **mixed chord** where one voice ties while another re-articulates —
+  the whole event is treated as struck, so the tied note lands in
+  `expected_notes` after all.
+
+So `expected_notes` is **inconsistent** about tied-over notes from beat to
+beat, depending on what shares the event.
+
+**Why this was fixed in the analysis and not in the app.** Correcting
+`scoreRender.js` would fix only rows written from that day on; the ~200,000
+rows already in `sam_session_events` would keep their inconsistent
+`expected_notes` for ever. The analysis-side fix reads the notation directly
+and judges **every note on its own**, so it is retroactive — it corrects the
+history that already exists — and it needs no change to live scoring, which is
+the riskier thing to touch. Fixing `scoreRender.js` as well remains worth
+doing, but it is a separate job and it buys nothing for existing data.
+
+### A skipped beat can steal the next keystroke
+
+The matcher takes the **first** pending beat inside the window, not the
+closest ([noteMatching.js](../src/sam/lib/noteMatching.js) — the doc comment
+says so deliberately, to stop a systematically late player cascading onto the
+following beat).
+
+The cost is that **a beat he skipped stays pending for the full `windowMs`**
+and can match the next keystroke, which is then recorded against the wrong
+beat with a large negative offset. So an isolated very-late note next to a
+missed beat is more likely an artefact than dragging. This was left as it is
+on purpose: the lateness that would trigger a bad match is being reduced
+first (see the calibration break above), and "prefer the closest beat" would
+reintroduce the cascade the current rule prevents.
 
 ## Loop cycles he sat out
 
@@ -98,15 +142,93 @@ playing.
 `get_sam_measure_stats` therefore reports **two hit rates, never
 interchangeable**:
 
-| field | over |
-|---|---|
-| `hit_rate_all` | every loop iteration |
-| `hit_rate_attempted` | only iterations he played in |
+| field | over | answers |
+|---|---|---|
+| `hit_rate_all` | every loop iteration | how did it go overall |
+| `hit_rate_attempted` | only iterations he played in | how did it go when he played |
+| `hit_rate_settled` | those, minus the first attempt of each sitting | **is this bar hard** |
 
-with `sat_out_iterations` alongside. Both are true. The second is the one that
-answers "which measures do I miss" — a measure can read 40% / 95% purely
-because the loop ran on without him. Difficulty is ranked on the attempted
-rate.
+with `sat_out_iterations` and `first_attempt_iterations` alongside. All three
+are true; they answer different questions.
+
+### Why the first attempt comes out
+
+Pastorale m26 read 78% attempted off passes that actually ran **29, 94, 94,
+100, 100, 100, 100** — one cold first run, not a hard bar. A pooled rate
+answers "how did it go", and on a short snippet a sitting holds few passes, so
+one fumbled first attempt dominates it.
+
+`hit_rate_settled` drops the **earliest attempted iteration of each session**
+per measure — one per sitting, never more. A cycle he sat out is not an
+attempt and so is never mistaken for the first one.
+
+Excluding the first attempt was chosen over a "last N attempts" rate because
+it uses every remaining pass rather than discarding data, needs no arbitrary
+N, and targets exactly the effect observed: cold reading, which happens once
+per sitting.
+
+`weakest_measures` ranks on `hit_rate_settled` where a measure has enough
+settled beats and on `hit_rate_attempted` otherwise; each row says which under
+`ranked_on`.
+
+## What a wrong-note count counts
+
+The unit is the **pass**: one session plus one loop iteration. Each pitch
+carries three numbers — `passes`, `sessions` and `days`.
+
+⚠️ **A pass is not an occasion.** Drilling a bar twenty times in one sitting
+produces twenty passes, and on a short snippet that is a couple of minutes.
+"Recurring in 7 passes" read like a habit when it was one afternoon.
+
+A pitch is therefore **headlined** in `recurring_wrong_notes` only when it
+appears in **at least 3 distinct passes AND at least 2 distinct sittings** — a
+pattern has to survive going away and coming back. Everything below that bar
+stays visible in `all_wrong_notes` with its raw counts, so the threshold hides
+nothing; it only decides what leads.
+
+⚠️ **The wrong-note list is only as good as these rules, and every pattern
+investigated so far has turned out to be a measurement artefact rather than a
+mistake.** It depends on three fixes, all dated 2026-09-19: only unexpected
+pitches are counted; pitches tied into a bar are treated as expected; the
+count is passes and sittings, not rows. Check any pattern against the score
+before reporting it.
+
+## ⚠️ THE CALIBRATION BREAK OF 2026-09-19
+
+**Timing offsets recorded before 2026-09-19 and after it are not comparable.**
+Nothing about the playing changed; the measurement did.
+
+Two defects were fixed on that date:
+
+1. **The press time was the flush time.** A chord is buffered and delivered on
+   a `setTimeout` of `chordGroupMs` (80 ms by default) after its last key, and
+   the offset was measured at that moment. Every event therefore carried about
+   80 ms of built-in lateness — more whenever the main thread was busy, which
+   is worst at a loop restart. `useMIDI.js` now captures `performance.now()` as
+   the MIDI event arrives and carries it through to the matcher.
+2. **The clock was read once per animation frame.** `findClosestBeat` read
+   `scrollState.elapsed`, written once per rAF, so offsets were quantised to
+   ~17 ms and stale by up to a frame. The matcher now adds the time elapsed
+   since that frame, from the press time.
+
+### What to expect the numbers to do
+
+| figure | across the boundary |
+|---|---|
+| `mean_offset_ms` | **about 80–100 ms less late.** A session that averaged −120 ms should now read roughly −20 to −40 ms |
+| entry lateness | the biggest change: the old 120–225 ms entries were mostly main-thread congestion at the teleport, so expect these to fall furthest, perhaps to −30 ms or better |
+| mid-phrase offsets | down by roughly the same ~80 ms constant |
+| `drift_ms_per_pass` | should **shrink toward zero** — much of the old drift was congestion decaying over a pass |
+| `interval_ratio` and its spread | **unchanged, and the only figures comparable across the date.** A constant offset cancels out of a gap, which is exactly why they exist |
+| hit rate, accuracy | **unchanged.** The window is ±300 ms and the shift is ~80 ms, so almost nothing changes which beat a keystroke matched. A keystroke previously 290 ms "late" and only just inside the window will now land comfortably inside it, so a handful of borderline beats may move from miss to hit |
+
+**Do not read the jump as improvement.** Never average or compare mean
+offsets, entry lateness or drift across 2026-09-19. Compare interval ratios
+instead, or compare only within one side of the date.
+
+There is a residual constant left — whatever latency the keyboard, the USB
+stack and the audio path add — so the mean offset is still calibration plus
+error, just with the largest software term removed.
 
 ## Timing
 

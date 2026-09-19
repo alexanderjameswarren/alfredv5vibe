@@ -39,8 +39,22 @@ const PAGE = 1000;
 
 /** A measure needs this many scored beats before it is ranked as weak. */
 export const MIN_ATTEMPTS_FOR_RANKING = 8;
-/** A wrong note is a pattern, not noise, at this many distinct passes. */
+/**
+ * A wrong note is listed only when it clears BOTH of these.
+ *
+ * THE UNIT MATTERS AND USED TO BE WRONG-HEADED (2026-09-19). A "pass" here is
+ * one session plus one loop iteration, so drilling a bar twenty times in a
+ * single sitting produced twenty passes — "recurring in 7 passes" could be one
+ * afternoon, or on a short snippet one minute. That is not a pattern, it is a
+ * bad run. A pattern has to survive going away and coming back, so a pitch now
+ * also has to appear in at least two separate SITTINGS.
+ *
+ * Both raw numbers ride on every entry (`passes`, `sessions`, `days`), and
+ * `all_wrong_notes` carries everything below the bar, so nothing is hidden by
+ * the threshold — only kept out of the headline.
+ */
 export const WRONG_NOTE_MIN_PASSES = 3;
+export const WRONG_NOTE_MIN_SESSIONS = 2;
 /** A session needs this many usable gaps before its interval stats are shown. */
 export const MIN_INTERVALS_PER_SESSION = 12;
 /** A pass needs this many timed beats before drift is measured across it. */
@@ -254,11 +268,46 @@ const EVENT_COLS =
  * `extra` rows have no expected notes by definition (they attached to no
  * beat), so every pitch on one is wrong.
  */
-export function wrongPitches(row: Row): number[] {
+export function wrongPitches(row: Row, alsoExpected?: Set<number>): number[] {
   const played = (row.played_notes ?? []) as number[];
   if (!played.length) return [];
   const expected = new Set<number>((row.expected_notes ?? []) as number[]);
-  return expected.size ? played.filter((p) => !expected.has(p)) : played;
+  const sounding = alsoExpected;
+  if (!expected.size && !sounding?.size) return played;
+  return played.filter((p) => !expected.has(p) && !sounding?.has(p));
+}
+
+/**
+ * The pitches SOUNDING BUT NOT STRUCK at the start of a measure — notes tied
+ * in from the bar before.
+ *
+ * Why this matters (2026-09-19): playing a snippet that begins mid-phrase, he
+ * strikes those notes to place his hand. The score never asks him to, so they
+ * are absent from the beat's `expected_notes`, and every strike was logged as
+ * a recurring wrong note. Autumn Leaves m15 listed D3 (50) and F#3 (54) in
+ * ~50 passes each on exactly this. They are not mistakes.
+ *
+ * A note carries `tie: "start" | "end" | "both"`. "end" is the tail of a
+ * chain and "both" a middle link — BOTH are continuations, sounding already.
+ *
+ * ⚠️ This deliberately does NOT reuse scoreRender.js's rule. That one asks
+ * `notes.every(n => n.tie === "end")` per EVENT, which misses `"both"`
+ * entirely and misses a mixed chord where one voice ties while another
+ * re-articulates. Here every note is judged on its own, so a chord holding a
+ * tied D3 under a freshly struck G3 contributes D3 and not G3.
+ */
+export function tiedInPitches(measureRow: Row | null | undefined): Set<number> {
+  const out = new Set<number>();
+  if (!measureRow) return out;
+  for (const hand of ["rh", "lh"] as const) {
+    for (const evt of (measureRow[hand] ?? []) as Row[]) {
+      for (const n of (evt?.notes ?? []) as Row[]) {
+        if (typeof n?.midi !== "number") continue;
+        if (n.tie === "end" || n.tie === "both") out.add(n.midi);
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -410,6 +459,28 @@ export const getSamMeasureStatsTool = defineTool({
       if (typeof count === "number") rowsOutsideRange = Math.max(0, count - rows.length);
     }
 
+    // The notation of every measure we have rows for: its printed number, and
+    // the pitches TIED INTO it from the bar before. Fetched before anything is
+    // counted, because the tied-in set decides what counts as a wrong note.
+    const numbers = [...new Set(rows.map((r) => r.measure_number))];
+    const printed = new Map<number, string | null>();
+    const tiedIn = new Map<number, Set<number>>();
+    if (numbers.length) {
+      const { data, error } = await ctx.db
+        .from("sam_song_measures").select("number, source_measure, rh, lh")
+        .eq("song_id", songId).in("number", numbers);
+      if (error) throw dbFail("measures lookup", error);
+      for (const m of (data ?? []) as Row[]) {
+        printed.set(m.number, m.source_measure ?? null);
+        // Applied to EVERY measure, not only the first of a range: a note tied
+        // into any bar is sounding rather than asked for, so striking it is
+        // never a mistake. The first bar of a snippet is simply where it bites,
+        // because that is where he re-strikes to place his hand.
+        const tied = tiedInPitches(m);
+        if (tied.size) tiedIn.set(m.number, tied);
+      }
+    }
+
     // Entries are decided per session, over that session's rows in playing
     // order, and stamped on the rows before anything is counted.
     const rowsBySession = new Map<string, Row[]>();
@@ -437,36 +508,75 @@ export const getSamMeasureStatsTool = defineTool({
       hit: number; miss: number; partial: number; extra: number;
       // The same three again, over the passes he actually played in.
       attemptedHit: number; attemptedMiss: number;
-      satOut: number;
+      satOut: number; tiedInStrikes: number;
+      // Beats of the FIRST attempted iteration of each session, kept apart.
+      settledHit: number; settledMiss: number; firstAttempts: number;
       timings: number[];
       entryTimings: number[]; midTimings: number[];
       sessions: Set<string>; days: Set<string>; passes: Set<string>;
-      wrong: Map<number, Set<string>>;   // pitch -> distinct passes it appeared in
+      // pitch -> the distinct passes, sessions and DAYS it was struck in. Three
+      // units, because "3 passes" inside one sitting is one bad afternoon and
+      // "3 days" is a habit — see WRONG_NOTE rules below.
+      wrong: Map<number, { passes: Set<string>; sessions: Set<string>; days: Set<string> }>;
     }
     const acc = new Map<number, Acc>();
 
     for (const [measureNumber, passes] of byMeasurePass) {
       const a: Acc = {
         measure: measureNumber, hit: 0, miss: 0, partial: 0, extra: 0,
-        attemptedHit: 0, attemptedMiss: 0, satOut: 0, timings: [],
+        attemptedHit: 0, attemptedMiss: 0, satOut: 0, tiedInStrikes: 0,
+        settledHit: 0, settledMiss: 0, firstAttempts: 0, timings: [],
         entryTimings: [], midTimings: [],
         sessions: new Set(), days: new Set(), passes: new Set(), wrong: new Map(),
       };
       acc.set(measureNumber, a);
 
+      // Pitches already sounding in this bar, tied in from the one before:
+      // never wrong notes, and never extras.
+      const sounding = tiedIn.get(measureNumber);
+
+      // THE FIRST ATTEMPT OF EACH SESSION (2026-09-19). Pastorale m26 read 78%
+      // while his passes that day ran 29, 94, 94, 100, 100, 100, 100 — one cold
+      // first run, not a hard bar. On a short snippet a session holds few
+      // passes, so that one attempt dominates the pooled average. Identified
+      // here, per session, as the earliest loop iteration he actually played.
+      const firstAttemptOf = new Map<string, string>();   // session_id -> pass key
+      for (const [pass, passRows] of passes) {
+        if (isSatOut(passRows)) continue;                  // a cycle sat out is not an attempt
+        const sid = passRows[0].session_id as string;
+        const loop = Number(passRows[0].loop_iteration ?? 0);
+        const held = firstAttemptOf.get(sid);
+        if (held === undefined || loop < Number(held.slice(held.indexOf(":") + 1))) {
+          firstAttemptOf.set(sid, pass);
+        }
+      }
+
       for (const [pass, passRows] of passes) {
         const satOut = isSatOut(passRows);
         if (satOut) a.satOut++;
+        const isFirstAttempt = !satOut && firstAttemptOf.get(passRows[0].session_id as string) === pass;
+        if (isFirstAttempt) a.firstAttempts++;
 
         for (const r of passRows) {
           const s = byId.get(r.session_id)!;
           if (r.result === "extra") {
-            a.extra++;
+            // An extra that struck ONLY pitches already sounding in this bar is
+            // him placing his hand on a tie, not a stray note. Counted apart so
+            // it neither inflates `extra` nor disappears silently.
+            if (sounding?.size && ((r.played_notes ?? []) as number[]).length > 0 &&
+                wrongPitches(r, sounding).length === 0) {
+              a.tiedInStrikes++;
+            } else {
+              a.extra++;
+            }
           } else {
             a[r.result as "hit" | "miss" | "partial"]++;
             // The attempted rate sees only cycles he took part in.
             if (!satOut && r.result === "hit") a.attemptedHit++;
             if (!satOut && r.result === "miss") a.attemptedMiss++;
+            // The settled rate drops the cold first run of each sitting.
+            if (!satOut && !isFirstAttempt && r.result === "hit") a.settledHit++;
+            if (!satOut && !isFirstAttempt && r.result === "miss") a.settledMiss++;
             a.sessions.add(r.session_id);
             a.days.add(s.pt_day);
             a.passes.add(pass);
@@ -480,24 +590,16 @@ export const getSamMeasureStatsTool = defineTool({
           // beat that the beat did not ask for. Counted once per pitch per
           // pass, so hammering one wrong key is one.
           if (r.result === "extra" || r.result === "miss") {
-            for (const pitch of wrongPitches(r)) {
-              if (!a.wrong.has(pitch)) a.wrong.set(pitch, new Set());
-              a.wrong.get(pitch)!.add(pass);
+            for (const pitch of wrongPitches(r, sounding)) {
+              let w = a.wrong.get(pitch);
+              if (!w) { w = { passes: new Set(), sessions: new Set(), days: new Set() }; a.wrong.set(pitch, w); }
+              w.passes.add(pass);
+              w.sessions.add(r.session_id);
+              w.days.add(s.pt_day);
             }
           }
         }
       }
-    }
-
-    // Printed numbers, for the measures we actually have.
-    const numbers = [...acc.keys()];
-    const printed = new Map<number, string | null>();
-    if (numbers.length) {
-      const { data, error } = await ctx.db
-        .from("sam_song_measures").select("number, source_measure")
-        .eq("song_id", songId).in("number", numbers);
-      if (error) throw dbFail("measures lookup", error);
-      for (const m of (data ?? []) as Row[]) printed.set(m.number, m.source_measure ?? null);
     }
 
     const measures = [...acc.values()]
@@ -505,10 +607,18 @@ export const getSamMeasureStatsTool = defineTool({
       .map((a) => {
         const scored = a.hit + a.miss;
         const attemptedScored = a.attemptedHit + a.attemptedMiss;
-        const wrongNotes = [...a.wrong.entries()]
-          .map(([pitch, passes]) => ({ midi: pitch, passes: passes.size }))
-          .filter((w) => w.passes >= WRONG_NOTE_MIN_PASSES)
-          .sort((x, y) => y.passes - x.passes);
+        const settledScored = a.settledHit + a.settledMiss;
+        const allWrong = [...a.wrong.entries()]
+          .map(([pitch, w]) => ({
+            midi: pitch,
+            passes: w.passes.size,      // distinct session + loop iteration
+            sessions: w.sessions.size,  // distinct sittings
+            days: w.days.size,          // distinct Pacific days
+          }))
+          .sort((x, y) => y.sessions - x.sessions || y.passes - x.passes);
+        const wrongNotes = allWrong.filter(
+          (w) => w.passes >= WRONG_NOTE_MIN_PASSES && w.sessions >= WRONG_NOTE_MIN_SESSIONS
+        );
         return {
           measure: a.measure,
           printed_measure: printed.get(a.measure) ?? null,
@@ -519,10 +629,19 @@ export const getSamMeasureStatsTool = defineTool({
           // the second is the one that answers "which measures do I miss".
           hit_rate_all: scored ? Math.round((a.hit * 100) / scored) : null,
           hit_rate_attempted: attemptedScored ? Math.round((a.attemptedHit * 100) / attemptedScored) : null,
+          // ...and the cold first run of each sitting dropped as well. This is
+          // the one that answers "is this bar hard", and what weakness ranks on.
+          hit_rate_settled: settledScored ? Math.round((a.settledHit * 100) / settledScored) : null,
           sat_out_iterations: a.satOut,
           attempted_iterations: a.passes.size - a.satOut,
           attempted_scored_beats: attemptedScored,
+          first_attempt_iterations: a.firstAttempts,
+          settled_scored_beats: settledScored,
           results: { hit: a.hit, miss: a.miss, partial: a.partial, extra: a.extra },
+          // Strikes on a pitch already sounding in this bar, tied over from the
+          // one before. Not extras and not mistakes: placing a hand on a tie.
+          tied_in_strikes: a.tiedInStrikes,
+          all_wrong_notes: allWrong,
           timing: {
             ...offsetStats(a.timings),
             // Entries — coming in after a rest or a restart — run far later
@@ -593,6 +712,13 @@ export const getSamMeasureStatsTool = defineTool({
 
     // Weakness is ranked on the ATTEMPTED rate: a measure is not hard because
     // he stepped away while the loop ran on.
+    // Ranked on the SETTLED rate where there is enough of it — one cold first
+    // attempt should not name a bar as his weakest — falling back to the
+    // attempted rate for measures he has only ever played once per sitting.
+    const rankKey = (m: Row) =>
+      m.settled_scored_beats >= MIN_ATTEMPTS_FOR_RANKING && m.hit_rate_settled != null
+        ? m.hit_rate_settled as number
+        : m.hit_rate_attempted as number;
     const rankable = measures.filter(
       (m) => m.attempted_scored_beats >= MIN_ATTEMPTS_FOR_RANKING && m.hit_rate_attempted != null
     );
@@ -647,12 +773,19 @@ export const getSamMeasureStatsTool = defineTool({
       measures,
       rollup: {
         weakest_measures: [...rankable]
-          .sort((a, b) => a.hit_rate_attempted! - b.hit_rate_attempted!)
+          .sort((a, b) => rankKey(a) - rankKey(b))
           .slice(0, 5)
           .map((m) => ({
             measure: m.measure, printed_measure: m.printed_measure,
-            hit_rate_attempted: m.hit_rate_attempted, hit_rate_all: m.hit_rate_all,
-            attempted_scored_beats: m.attempted_scored_beats, sat_out_iterations: m.sat_out_iterations,
+            ranked_on: m.settled_scored_beats >= MIN_ATTEMPTS_FOR_RANKING && m.hit_rate_settled != null
+              ? "hit_rate_settled" : "hit_rate_attempted",
+            hit_rate_settled: m.hit_rate_settled,
+            hit_rate_attempted: m.hit_rate_attempted,
+            hit_rate_all: m.hit_rate_all,
+            attempted_scored_beats: m.attempted_scored_beats,
+            settled_scored_beats: m.settled_scored_beats,
+            first_attempt_iterations: m.first_attempt_iterations,
+            sat_out_iterations: m.sat_out_iterations,
           })),
         most_late: [...timed]
           .sort((a, b) => a.timing.mid_phrase.mean_offset_ms! - b.timing.mid_phrase.mean_offset_ms!)
@@ -671,7 +804,9 @@ export const getSamMeasureStatsTool = defineTool({
           .sort((a, b) => b.recurring_wrong_notes[0].passes - a.recurring_wrong_notes[0].passes)
           .slice(0, 5)
           .map((m) => ({ measure: m.measure, printed_measure: m.printed_measure, wrong_notes: m.recurring_wrong_notes })),
-        ranking_note: `Ranked over measures with at least ${MIN_ATTEMPTS_FOR_RANKING} scored beats. A wrong note is listed when it recurs in at least ${WRONG_NOTE_MIN_PASSES} distinct passes, counted once per pitch per pass.`,
+        ranking_note: `Ranked over measures with at least ${MIN_ATTEMPTS_FOR_RANKING} attempted scored beats, on hit_rate_settled where there are at least that many settled beats and on hit_rate_attempted otherwise (each row says which under ranked_on). THREE RATES, THREE QUESTIONS: hit_rate_all = "how did it go overall", including loop cycles he sat out; hit_rate_attempted = "how did it go when he played", excluding those; hit_rate_settled = "is this bar hard", excluding the first attempt of each sitting as well.`,
+        wrong_note_note: `A wrong note is listed when it appears in at least ${WRONG_NOTE_MIN_PASSES} distinct passes AND at least ${WRONG_NOTE_MIN_SESSIONS} distinct SITTINGS, counted once per pitch per pass. A pass is one session plus one loop iteration, so several passes can be one minute of drilling — requiring separate sittings is what makes it a pattern rather than a bad run. Every pitch, including those below the bar, is in each measure's all_wrong_notes with its passes, sessions and days.`,
+        wrong_note_reliability: "⚠️ THE WRONG-NOTE LIST IS ONLY AS GOOD AS THE RULES BEHIND IT, and every pattern investigated so far has turned out to be a measurement artefact rather than a mistake. It now depends on three fixes: (1) only pitches the beat did not expect are counted, so a failed chord no longer lists the notes he got right; (2) pitches tied into a bar are treated as expected, so placing a hand on a note that is sounding but not struck is not a mistake — see tied_in_strikes; (3) the count is distinct passes and sittings, not rows. Check any pattern against the score before reporting it.",
       },
       timing: {
         how_to_read:

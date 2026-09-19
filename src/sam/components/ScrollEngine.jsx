@@ -6,6 +6,28 @@ import { buildNoteTimeline } from "../lib/noteTimeline";
 import { playNote, midiToFreq, getMasterBus } from "../lib/synthVoice";
 import { drawFingeringOverlay } from "../lib/fingeringOverlay";
 import { SCROLL_GEOMETRY, METRONOME_GAIN, SCORE_SCALE } from "../lib/samConstants";
+import { sweepUnplayedTail } from "../lib/passTail";
+
+// The teleport log, off the teleport frame (2026-09-19).
+//
+// The loop restart is the busiest frame in the run — the schedule is rebuilt,
+// every copy recoloured, a pass banked — and the work lands as lateness on the
+// first notes of the new pass. Formatting a log inside it was pure waste, so
+// the numbers are copied out cheaply here and printed once the frame is done.
+// A macrotask, not a microtask: a promise would still run before paint.
+function logTeleportLater(elapsed, audioSyncOffset, anchor0, beatEvents) {
+  const first4 = beatEvents.slice(0, 4).map((e) => ({
+    meas: e.meas, beat: e.beat, state: e.state,
+    musicalBeat: e.musicalBeat, targetTimeMs: Math.round(e.targetTimeMs),
+  }));
+  const anchor = anchor0 ? { beatPos: anchor0.beatPos, audioMs: anchor0.audioMs } : null;
+  setTimeout(() => {
+    console.log("[Teleport] elapsed:", Math.round(elapsed),
+      "anchor0:", anchor,
+      "audioSyncOffset:", Math.round(audioSyncOffset ?? NaN),
+      "first 4 reset events:", first4);
+  }, 0);
+}
 
 
 export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioAnchors = [], audioEndMs = null, handMode = "both", onScrollStart = null, fingerings = {}, scorePlayback = "off" }) {
@@ -514,6 +536,10 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       }
 
       state.elapsed = elapsed;
+      // The wall-clock instant this frame's `elapsed` was computed. The matcher
+      // adds the time since, so a keystroke is timed to when it ARRIVED rather
+      // than to the last frame boundary — see elapsedAt() in noteMatching.js.
+      state.elapsedAtMs = now;
 
       // Check for seamless loop teleport BEFORE computing final offset.
       // Copy 1 starts at world x = 10 + copyWidth.
@@ -536,6 +562,25 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         state.originPx -= copyWidth;
         loopCount++;
         hasLoopedRef.current = true;
+
+        // THE TAIL OF THE OUTGOING PASS, BEFORE ANYTHING ELSE (2026-09-19).
+        //
+        // The reset further down puts every beat back to "pending" with a
+        // fresh targetTimeMs. A beat of the pass that just ended which was
+        // never played, and whose grace window had not yet expired, was
+        // therefore recycled WITHOUT ever being recorded — the last note of a
+        // pass could escape the miss count entirely. The scanner runs later in
+        // this same frame, by which time the evidence is gone.
+        //
+        // So sweep copy 0 — the pass that just finished — first. Anything
+        // still pending there will never be played: the pass is over.
+        //
+        // This runs BEFORE onLoopCount for the same reason creditPass does:
+        // onLoopCount banks the pass row and rotates the per-playthrough
+        // counters, so a miss raised after it would be credited to the pass
+        // that has not started yet.
+        sweepUnplayedTail(beatEventsRef.current, beatEventsRef.current.length / 3, handMode, onBeatMiss);
+
         if (onLoopCount) onLoopCount(loopCount);
 
         // Audio loop: seek back to snippet start, preserve elapsed continuity.
@@ -570,18 +615,12 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
             }
           }
         }
-        console.log('[Teleport] elapsed:', Math.round(elapsed),
-          'anchor0:', audioAnchors[0]
-            ? { beatPos: audioAnchors[0].beatPos, audioMs: audioAnchors[0].audioMs }
-            : null,
-          'audioSyncOffset:', Math.round(state.audioSyncOffset ?? NaN),
-          'first 4 reset events:',
-          beatEventsRef.current.slice(0, 4).map(e => ({
-            meas: e.meas, beat: e.beat,
-            state: e.state,
-            musicalBeat: e.musicalBeat,
-            targetTimeMs: Math.round(e.targetTimeMs)
-          })));
+        // The teleport log used to live here, mapping over every event object
+        // inside the frame. It is deferred to a macrotask now (2026-09-19):
+        // this frame is the busiest in the run, and the work it does shows up
+        // as lateness on the first notes of the new pass. Values are captured
+        // cheaply; the formatting happens after the frame is over.
+        logTeleportLater(elapsed, state.audioSyncOffset, audioAnchors[0], beatEventsRef.current);
         // Copy 0 is back at the target line after teleport — scan from its start
         nextCheckRef.current = 0;
 

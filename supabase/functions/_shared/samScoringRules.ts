@@ -23,14 +23,24 @@ export const SAM_SCORING_RULES =
   "(3) A WRONG KEY STRUCK AND CORRECTED WITHIN THE WINDOW STILL SCORES AS A HIT. That is deliberate — the " +
   "score measures whether the passage was played, and punishing a recovered slip makes it less useful. What " +
   "was struck is still recorded, and changes no score. " +
+  "(4a) ⚠️⚠️ TIMING CALIBRATION CHANGED ON 2026-09-19 AND OFFSETS ACROSS THAT DATE ARE NOT COMPARABLE. " +
+  "Until then a chord's offset was measured when the chord-grouping timer FLUSHED, ~80 ms after the last key " +
+  "of the chord (more when the main thread was busy, worst at a loop restart), and the elapsed clock was read " +
+  "once per animation frame rather than at the keystroke. Both are fixed: the press time is now captured when " +
+  "the MIDI event arrives. EXPECT EVERY OFFSET FROM 2026-09-19 ONWARD TO SIT ROUGHLY 80-100 ms LESS LATE THAN " +
+  "BEFORE, on identical playing. THAT JUMP IS THE MEASUREMENT CHANGING, NOT THE PLAYING IMPROVING — do not " +
+  "report it as progress, and never average or compare mean offsets, entry lateness or drift across the " +
+  "boundary. Interval ratio and spread are unaffected (a constant offset cancels out of a gap), so they are " +
+  "the figures that remain comparable across it. " +
   "(4) TIMING: POSITIVE = EARLY (rushing), NEGATIVE = LATE (dragging). On an EXTRA row it is the offset to " +
   "the nearest pending beat and is NULL when that beat is further than twice the window — an unattached " +
   "keystroke is neither early nor late (extras from before 2026-09-18 stored it regardless: noise). The " +
   "magnitude is truncated by the " +
   "session's matching window (settings.windowMs, default 300 ms) — anything further out matched no beat and " +
   "was never recorded, so extremes are invisible and the mean is pulled toward zero — and any fixed MIDI or " +
-  "audio latency rides along as a constant offset. Comparisons WITHIN one session are far more reliable " +
-  "than absolute values. " +
+  "audio latency rides along as a constant offset. There is also a MEASUREMENT FLOOR of about 17 ms (one " +
+  "animation frame at 60 Hz), so a spread or a difference under roughly 20 ms is noise, not a finding. " +
+  "Comparisons WITHIN one session are far more reliable than absolute values. " +
   "(5) ⚠️ THE WINDOW DECIDES HOW FORGIVING SCORING IS, and the same passage practised at different window " +
   "settings is NOT COMPARABLE: tightening the window lowers accuracy on identical playing, and reading that " +
   "as getting worse is a mistake. Always state the window behind a figure. " +

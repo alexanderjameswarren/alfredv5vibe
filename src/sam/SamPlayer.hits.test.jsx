@@ -33,6 +33,9 @@ let mockNearestDelta = -412;
 const THE_BEAT = { meas: 1, beat: 1, allMidi: [60, 64], rhMidi: [60, 64], lhMidi: [], svgEls: [], state: "pending" };
 // "none" = the matcher finds no beat in the window (a stray keystroke).
 jest.mock("./lib/noteMatching", () => ({
+  // The press-time clock (2026-09-19). Scoring is mocked here, so all this
+  // needs to do is stand in for the real reading.
+  elapsedAt: (state, atMs) => (atMs ?? 0) - (state.scrollStartT ?? 0),
   findClosestBeat: () =>
     mockNextResult === "none" ? null : { beat: THE_BEAT, timingDeltaMs: 0 },
   // Used only to name the measure an unmatched keystroke happened in.

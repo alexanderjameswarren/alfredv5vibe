@@ -294,8 +294,11 @@ test("recurring wrong notes surface; one-offs and repeats within a pass do not",
   ];
   const out = await call({ song_id: SONG }, makeDb(tables));
   const wrong = measure(out, 15).recurring_wrong_notes;
-  assert.deepEqual(wrong, [{ midi: 61, passes: 3 }]);
-  assert.deepEqual(out.rollup.most_wrong_notes[0].wrong_notes, [{ midi: 61, passes: 3 }]);
+  // Three passes across three separate sittings (two of them on one day).
+  assert.deepEqual(wrong, [{ midi: 61, passes: 3, sessions: 3, days: 2 }]);
+  assert.deepEqual(out.rollup.most_wrong_notes[0].wrong_notes, [{ midi: 61, passes: 3, sessions: 3, days: 2 }]);
+  // 70 is below the bar but still visible in the full list.
+  assert.deepEqual(measure(out, 15).all_wrong_notes.find((w) => w.midi === 70), { midi: 70, passes: 1, sessions: 1, days: 1 });
 });
 
 // --- timing: calibration vs error ------------------------------------------------
@@ -394,7 +397,7 @@ test("the rollup names the weakest measures and the latest ones", async () => {
   assert.equal(out.rollup.weakest_measures[0].hit_rate_attempted, 63);   // 10 of 16
   assert.equal(out.rollup.most_late[0].measure, 16);
   assert.ok(!out.rollup.weakest_measures.some((m) => m.measure === 20));
-  assert.match(out.rollup.ranking_note, /at least 8 scored beats/);
+  assert.match(out.rollup.ranking_note, /at least 8 attempted scored beats/);
 });
 
 test("bad arguments are refused before any read", async () => {
@@ -423,24 +426,31 @@ test("a failed chord lists only the pitches the beat did not expect", async () =
   const tables = baseTables();
   // Pastorale m34: the chord is 55/60/62/67. He struck 55, 62, 60 and 71 —
   // three of them correct. Only 71 is a wrong note.
-  tables.sam_session_events = Array.from({ length: 4 }, (_, i) =>
-    ev(S1, 15, 1, "miss", {
-      loop_iteration: i,
+  // Two sittings, two passes each: clears both thresholds.
+  tables.sam_session_events = [S1, S1, S2, S2].map((sid, i) =>
+    ev(sid, 15, 1, "miss", {
+      loop_iteration: i % 2,
       expected_notes: [55, 60, 62, 67],
       played_notes: [55, 62, 60, 71],
     })
   );
   const out = await call({ song_id: SONG }, makeDb(tables));
   const wrong = measure(out, 15).recurring_wrong_notes;
+  // 55, 62 and 60 are IN the chord: the part he got right, not mistakes.
   assert.deepEqual(wrong.map((w) => w.midi), [71]);
   assert.equal(wrong[0].passes, 4);
+  assert.equal(wrong[0].sessions, 2);
+  // Nothing correct leaks into the full list either.
+  assert.deepEqual(measure(out, 15).all_wrong_notes.map((w) => w.midi), [71]);
 });
 
 test("every pitch of an extra is wrong: it belonged to no beat", async () => {
   const tables = baseTables();
-  tables.sam_session_events = Array.from({ length: 3 }, (_, i) =>
-    ev(S1, 15, 1, "extra", { loop_iteration: i, expected_notes: [], played_notes: [61] })
-  );
+  tables.sam_session_events = [
+    ev(S1, 15, 1, "extra", { loop_iteration: 0, expected_notes: [], played_notes: [61] }),
+    ev(S1, 15, 1, "extra", { loop_iteration: 1, expected_notes: [], played_notes: [61] }),
+    ev(S2, 15, 1, "extra", { loop_iteration: 0, expected_notes: [], played_notes: [61] }),
+  ];
   const out = await call({ song_id: SONG }, makeDb(tables));
   assert.deepEqual(measure(out, 15).recurring_wrong_notes.map((w) => w.midi), [61]);
 });
@@ -665,4 +675,204 @@ test("no range, no exclusion count to report", async () => {
   const out = await call({ song_id: SONG }, makeDb(tables));
   assert.equal(out.range.rows_outside_range, null);
   assert.equal(out.range.rows_outside_range_note, undefined);
+});
+
+// --- notes tied into a bar are not mistakes (2026-09-19) -----------------------
+
+// A measure whose first RH event holds a tied-in D3 (50) under a freshly
+// struck G3 (55), and whose LH holds a middle-of-chain F#3 (54). Exactly the
+// mixed chord scoreRender.js's per-event rule gets wrong.
+const tiedMeasure = {
+  song_id: SONG, number: 15, source_measure: "15",
+  rh: [{ duration: "q", notes: [{ midi: 50, tie: "end" }, { midi: 55 }] }],
+  lh: [{ duration: "q", notes: [{ midi: 54, tie: "both" }] }],
+};
+
+test("a pitch tied into the bar is not a wrong note, however often it is struck", async () => {
+  const tables = baseTables();
+  tables.sam_song_measures = [tiedMeasure, { song_id: SONG, number: 16, source_measure: "16" }];
+  // Autumn Leaves m15: he strikes 50 and 54 every pass to place his hand.
+  tables.sam_session_events = [S1, S1, S2, S2].map((sid, i) =>
+    ev(sid, 15, 1, "extra", { loop_iteration: i % 2, expected_notes: [], played_notes: [50, 54] })
+  );
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  const m = measure(out, 15);
+  assert.deepEqual(m.all_wrong_notes, []);
+  assert.deepEqual(m.recurring_wrong_notes, []);
+  // ...and they are not extras either: they are him placing his hand.
+  assert.equal(m.results.extra, 0);
+  assert.equal(m.tied_in_strikes, 4);
+});
+
+test("tie 'both' counts as sounding, and a genuinely wrong note beside it still shows", async () => {
+  const tables = baseTables();
+  tables.sam_song_measures = [tiedMeasure, { song_id: SONG, number: 16, source_measure: "16" }];
+  tables.sam_session_events = [S1, S1, S2, S2].map((sid, i) =>
+    // 54 is tied in ("both"); 71 is not in the bar at all.
+    ev(sid, 15, 1, "extra", { loop_iteration: i % 2, expected_notes: [], played_notes: [54, 71] })
+  );
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  const m = measure(out, 15);
+  assert.deepEqual(m.recurring_wrong_notes.map((w) => w.midi), [71]);
+  // The row held a real wrong note, so it IS an extra, not a hand placement.
+  assert.equal(m.results.extra, 4);
+  assert.equal(m.tied_in_strikes, 0);
+});
+
+test("a freshly struck note sharing a chord with a tied one is still expected", async () => {
+  const tables = baseTables();
+  tables.sam_song_measures = [tiedMeasure, { song_id: SONG, number: 16, source_measure: "16" }];
+  // 55 re-articulates in the same event as the tied 50 — scoreRender's
+  // per-event `every(tie === "end")` would treat the whole chord as struck.
+  // Here each note is judged on its own, so 55 is expected and 50 is sounding;
+  // neither is a wrong note.
+  tables.sam_session_events = [S1, S2].map((sid) =>
+    ev(sid, 15, 1, "miss", { expected_notes: [55], played_notes: [50, 55] })
+  );
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  assert.deepEqual(measure(out, 15).all_wrong_notes, []);
+});
+
+test("without tie data nothing changes: every unexpected pitch is still wrong", async () => {
+  const tables = baseTables();   // measures carry no rh/lh at all
+  tables.sam_session_events = [S1, S2].map((sid) =>
+    ev(sid, 15, 1, "extra", { expected_notes: [], played_notes: [50] })
+  );
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  assert.deepEqual(measure(out, 15).all_wrong_notes.map((w) => w.midi), [50]);
+  assert.equal(measure(out, 15).tied_in_strikes, 0);
+});
+
+// --- what a wrong-note count actually counts -----------------------------------
+
+test("hammering one key through one sitting is not a pattern", async () => {
+  const tables = baseTables();
+  // Pastorale m25: 74 struck in seven loop iterations, all in ONE session.
+  tables.sam_session_events = Array.from({ length: 7 }, (_, i) =>
+    ev(S1, 15, 1, "extra", { loop_iteration: i, expected_notes: [], played_notes: [74] })
+  );
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  const m = measure(out, 15);
+  // Seven passes — but one sitting, so it stays out of the headline list.
+  assert.deepEqual(m.recurring_wrong_notes, []);
+  // Nothing is hidden: the raw counts say exactly what the unit was.
+  assert.deepEqual(m.all_wrong_notes, [{ midi: 74, passes: 7, sessions: 1, days: 1 }]);
+});
+
+test("the same key on two separate sittings is a pattern", async () => {
+  const tables = baseTables();
+  tables.sam_session_events = [
+    ev(S1, 15, 1, "extra", { loop_iteration: 0, expected_notes: [], played_notes: [74] }),
+    ev(S1, 15, 1, "extra", { loop_iteration: 1, expected_notes: [], played_notes: [74] }),
+    ev(S2, 15, 1, "extra", { loop_iteration: 0, expected_notes: [], played_notes: [74] }),
+  ];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  assert.deepEqual(measure(out, 15).recurring_wrong_notes,
+    [{ midi: 74, passes: 3, sessions: 2, days: 2 }]);
+});
+
+test("many rows in one pass are one occurrence of that pass", async () => {
+  const tables = baseTables();
+  tables.sam_session_events = [
+    // Five rows, same session and loop: one pass, one session.
+    ...Array.from({ length: 5 }, (_, i) =>
+      ev(S1, 15, i + 1, "extra", { loop_iteration: 0, expected_notes: [], played_notes: [74] })),
+    ev(S2, 15, 1, "extra", { loop_iteration: 0, expected_notes: [], played_notes: [74] }),
+  ];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  // Two passes, two sittings — six rows, and it says two.
+  assert.deepEqual(measure(out, 15).all_wrong_notes, [{ midi: 74, passes: 2, sessions: 2, days: 2 }]);
+  // Two passes is below the three-pass bar, so it is not headlined.
+  assert.deepEqual(measure(out, 15).recurring_wrong_notes, []);
+});
+
+// --- the first attempt of a sitting --------------------------------------------
+
+test("a fumbled first attempt does not make a bar hard", async () => {
+  const tables = baseTables();
+  // Pastorale m26: one cold run then six clean ones, in one sitting.
+  const pass = (loop, hits, misses) => [
+    ...Array.from({ length: hits }, (_, i) =>
+      ev(S1, 15, i + 1, "hit", { loop_iteration: loop, timing_delta_ms: -10 })),
+    ...Array.from({ length: misses }, (_, i) =>
+      ev(S1, 15, hits + i + 1, "miss", { loop_iteration: loop, played_notes: [61] })),
+  ];
+  tables.sam_session_events = [
+    ...pass(0, 1, 3),                                    // the cold first run
+    ...[1, 2, 3, 4, 5, 6].flatMap((l) => pass(l, 4, 0)), // then clean
+  ];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  const m = measure(out, 15);
+  assert.equal(m.first_attempt_iterations, 1);
+  assert.equal(m.settled_scored_beats, 24);
+  // Pooled over everything: 25 of 28.
+  assert.equal(m.hit_rate_attempted, 89);
+  // With the cold run dropped, the bar is clean.
+  assert.equal(m.hit_rate_settled, 100);
+});
+
+test("each sitting loses only its own first attempt", async () => {
+  const tables = baseTables();
+  // The misses carry a struck key: a fumbled attempt, not a cycle sat out.
+  const pass = (sid, loop, result) =>
+    Array.from({ length: 4 }, (_, i) =>
+      ev(sid, 15, i + 1, result, {
+        loop_iteration: loop,
+        timing_delta_ms: result === "hit" ? -10 : null,
+        played_notes: result === "hit" ? [] : [61],
+      }));
+  tables.sam_session_events = [
+    ...pass(S1, 0, "miss"), ...pass(S1, 1, "hit"), ...pass(S1, 2, "hit"),
+    ...pass(S2, 0, "miss"), ...pass(S2, 1, "hit"), ...pass(S2, 2, "hit"),
+  ];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  const m = measure(out, 15);
+  assert.equal(m.first_attempt_iterations, 2);       // one per sitting
+  assert.equal(m.hit_rate_attempted, 67);            // 16 of 24
+  assert.equal(m.hit_rate_settled, 100);             // 16 of 16
+});
+
+test("a cycle sat out is never mistaken for the first attempt", async () => {
+  const tables = baseTables();
+  const beats = (loop, result, over = {}) =>
+    Array.from({ length: 4 }, (_, i) => ev(S1, 15, i + 1, result, { loop_iteration: loop, ...over }));
+  tables.sam_session_events = [
+    ...beats(0, "miss"),                                   // sat out: loop ran on
+    ...beats(1, "miss", { played_notes: [61] }),           // the real first attempt
+    ...beats(2, "hit", { timing_delta_ms: -10 }),
+    ...beats(3, "hit", { timing_delta_ms: -10 }),
+  ];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  const m = measure(out, 15);
+  assert.equal(m.sat_out_iterations, 1);
+  assert.equal(m.first_attempt_iterations, 1);
+  assert.equal(m.hit_rate_all, 50);          // 8 of 16
+  assert.equal(m.hit_rate_attempted, 67);    // 8 of 12
+  assert.equal(m.hit_rate_settled, 100);     // 8 of 8
+});
+
+test("weakest_measures ranks on the settled rate and says so", async () => {
+  const tables = baseTables();
+  tables.sam_song_measures.push({ song_id: SONG, number: 20, source_measure: null });
+  const pass = (meas, loop, hits, misses) => [
+    ...Array.from({ length: hits }, (_, i) =>
+      ev(S1, meas, i + 1, "hit", { loop_iteration: loop, timing_delta_ms: -10 })),
+    ...Array.from({ length: misses }, (_, i) =>
+      ev(S1, meas, hits + i + 1, "miss", { loop_iteration: loop, played_notes: [61] })),
+  ];
+  tables.sam_session_events = [
+    // m15: one bad first run, clean after — not a hard bar.
+    ...pass(15, 0, 0, 4), ...[1, 2, 3].flatMap((l) => pass(15, l, 4, 0)),
+    // m20: steadily half wrong every time — genuinely hard.
+    ...[0, 1, 2, 3].flatMap((l) => pass(20, l, 2, 2)),
+  ];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  // Pooled, m15 (75%) looks worse than m20 (50%)? No — check both are ranked
+  // on settled, where m15 is perfect and m20 is unchanged.
+  assert.equal(measure(out, 15).hit_rate_settled, 100);
+  assert.equal(measure(out, 20).hit_rate_settled, 50);
+  assert.equal(out.rollup.weakest_measures[0].measure, 20);
+  assert.equal(out.rollup.weakest_measures[0].ranked_on, "hit_rate_settled");
+  assert.match(out.rollup.ranking_note, /is this bar hard/);
+  assert.match(out.rollup.wrong_note_reliability, /measurement artefact/);
 });

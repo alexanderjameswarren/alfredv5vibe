@@ -36,6 +36,37 @@ export function matchChord(played, expected) {
  * windowMs: how far ahead/behind (in ms) to search
  */
 /**
+ * Elapsed score time at the instant a key was actually pressed.
+ *
+ * WHY THIS IS NOT JUST `scrollState.elapsed` (2026-09-19). ScrollEngine writes
+ * `state.elapsed` ONCE PER ANIMATION FRAME. Reading it at keystroke time
+ * therefore quantised every offset to the frame interval — about 17 ms at
+ * 60 Hz — and made it stale by up to a whole frame, which biased offsets
+ * POSITIVE (early), since a stale `elapsed` is too small. Worse, the frame is
+ * exactly what stalls under load, so the error grew precisely when the main
+ * thread was busy.
+ *
+ * `atMs` is a `performance.now()` reading taken when the MIDI event ARRIVED,
+ * carried through the chord buffer. The frame-published `elapsed` is still the
+ * anchor — it is the only thing that knows about audio sync, playback rate and
+ * the rest pause — and we simply add the time that has passed since the frame
+ * that wrote it. `state.elapsedAtMs` is the `performance.now()` of that frame.
+ *
+ * Falls back cleanly: to the raw wall clock before the first frame, and to the
+ * published `elapsed` when no press time was given or the engine is not
+ * recording frame times.
+ */
+export function elapsedAt(scrollState, atMs) {
+  const published = scrollState.elapsed;
+  if (published == null) return performance.now() - scrollState.scrollStartT;
+  const frameAt = scrollState.elapsedAtMs;
+  if (atMs == null || frameAt == null) return published;
+  // Never run the clock backwards: a press recorded before the current frame
+  // belongs to that frame as far as the score is concerned.
+  return published + Math.max(0, atMs - frameAt);
+}
+
+/**
  * The pending beat nearest to now, IGNORING the matching window, with its
  * signed offset (same sign rule as findClosestBeat: positive = early).
  *
@@ -43,9 +74,9 @@ export function matchChord(played, expected) {
  * keystroke that matched nothing can still be recorded against the measure
  * that was playing, as an `extra` event. Returns null when nothing is pending.
  */
-export function nearestBeat(beatEvents, scrollState, handMode = "both") {
+export function nearestBeat(beatEvents, scrollState, handMode = "both", atMs) {
   if (!scrollState || !beatEvents.length) return null;
-  const elapsed = scrollState.elapsed ?? (performance.now() - scrollState.scrollStartT);
+  const elapsed = elapsedAt(scrollState, atMs);
 
   let best = null;
   for (const evt of beatEvents) {
@@ -60,12 +91,10 @@ export function nearestBeat(beatEvents, scrollState, handMode = "both") {
   return best;
 }
 
-export function findClosestBeat(beatEvents, scrollState, windowMs = 300, handMode = "both") {
+export function findClosestBeat(beatEvents, scrollState, windowMs = 300, handMode = "both", atMs) {
   if (!scrollState || !beatEvents.length) return null;
 
-  // Use ScrollEngine's audio-synced elapsed (updated every frame) when available,
-  // falling back to raw wall clock for the first frame before elapsed is set.
-  const elapsed = scrollState.elapsed ?? (performance.now() - scrollState.scrollStartT);
+  const elapsed = elapsedAt(scrollState, atMs);
 
   for (let i = 0; i < beatEvents.length; i++) {
     const evt = beatEvents[i];
