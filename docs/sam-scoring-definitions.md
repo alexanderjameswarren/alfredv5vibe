@@ -66,6 +66,48 @@ Wrong notes are recorded against the beat they belong to:
 So a count of wrong notes should read both `extra` rows and the `played_notes`
 of `miss` rows, and can trust that one attempt appears once.
 
+### Only the notes that were actually wrong
+
+A failing chord records **every key struck, the correct ones included**. A
+pitch is a wrong note only when it is **not in that beat's `expected_notes`**;
+the overlap is the part he got right. Pastorale m34 reported 55, 62 and 60 as
+its top mistakes until this was fixed — all three are in that chord.
+
+On an `extra` row `expected_notes` is empty by definition, so every pitch on
+one is wrong.
+
+⚠️ **Tied-over notes are a known hole.** A note tied into a bar is sounding but
+never struck, so it is absent from that beat's `expected_notes`. Playing a
+snippet that starts mid-phrase, he strikes those notes to place his hand and
+they are logged as recurring wrong notes although they are not errors — Autumn
+Leaves m15 lists D3 and F#3 in ~50 passes each for exactly this reason. Treat
+recurring wrong notes **in the first bar of a snippet**, or in any bar entered
+from a rest, with suspicion until this is fixed.
+
+## Loop cycles he sat out
+
+Misses are raised on elapsed time **without consulting MIDI**, so a loop left
+running while he resets his hands records a full measure of misses per cycle.
+AL m15–16 shows 202 loop iterations against 23–29 real passes.
+
+A cycle is **sat out** when every beat of that measure in that iteration is a
+miss with nothing struck at all. One key anywhere makes it an attempt, however
+badly it went — this only removes cycles with no playing in them, never bad
+playing.
+
+`get_sam_measure_stats` therefore reports **two hit rates, never
+interchangeable**:
+
+| field | over |
+|---|---|
+| `hit_rate_all` | every loop iteration |
+| `hit_rate_attempted` | only iterations he played in |
+
+with `sat_out_iterations` alongside. Both are true. The second is the one that
+answers "which measures do I miss" — a measure can read 40% / 95% purely
+because the loop ran on without him. Difficulty is ranked on the attempted
+rate.
+
 ## Timing
 
 `timing_delta_ms` and `summary.avgTimingDeltaMs`:
@@ -93,6 +135,53 @@ Three limits on any average:
 2. **Latency rides along.** Any fixed MIDI or audio latency appears as a
    constant offset on every row.
 3. **Different windows aren't comparable** (below).
+4. **There is a measurement floor of about 17 ms** (next section).
+
+## The measurement floor
+
+`ScrollEngine.jsx` writes `state.elapsed` **once per animation frame** from
+`performance.now()`, and `findClosestBeat` in `noteMatching.js` reads that
+published value rather than sampling the clock when the key arrives. So every
+offset is quantised to the frame interval — **about 17 ms at 60 Hz** — and is
+stale by up to one frame.
+
+**A spread, or a difference between measures, under roughly 20 ms is
+measurement noise and must not be reported as a finding.**
+
+Two consequences worth knowing:
+
+- Frame staleness makes `elapsed` too small, so it biases offsets **positive
+  (early)**. A render stall cannot manufacture apparent lateness.
+- A much larger floor sits in the input path: `useMIDI.js` discards the MIDI
+  event's own `timeStamp` and flushes a chord on a `setTimeout` of
+  `chordGroupMs` (default **80 ms**) after its last key, measuring the offset
+  at flush time. That is ~80 ms of built-in lateness on every event, and more
+  when the main thread is busy. It is a constant, so it lands in calibration
+  rather than error — but it is why the absolute mean offset should never be
+  read as playing.
+
+## Entries versus mid-phrase
+
+Coming in after a rest or a loop restart is a **different skill** from playing
+inside a phrase, and the two run at very different offsets: live evidence has
+him 120–225 ms late on entries and near zero mid-phrase. Mixing them corrupts
+both numbers.
+
+A struck beat is an **entry** when it is the first struck beat of a pass, or
+when the beat struck before it sat **two or more measures back** — a rest of at
+least a full bar, whatever the time signature. This is deliberately
+conservative: a short rest inside a bar is not called an entry, so mid-phrase
+may carry a few soft entries, but nothing mid-phrase is wrongly thrown out.
+
+Because a measure-range or snippet filter hides earlier bars, the first beat
+inside the range counts as an entry — correct for a snippet, which is what he
+actually practises.
+
+`get_sam_measure_stats` ranks `most_late` and `most_early` on **mid-phrase
+beats alone**. Ranked on everything, those lists simply find the bars he enters
+on: Pastorale's "worst" measures were m37 (the last bar) and m1 — exit and
+entry effects, not difficulty. `most_early` is **empty** when no measure had a
+positive mean offset, rather than showing the least late one.
 
 So comparisons **within** one session — this bar against that bar — are far more
 reliable than the absolute number.

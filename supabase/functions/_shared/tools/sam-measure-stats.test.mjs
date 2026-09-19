@@ -93,7 +93,10 @@ function makeDb(tables = baseTables()) {
       calls.push(st);
       const rows = () => tables[table] || [];
       const api = {
-        select() { return api; },
+        // `select(cols, { count, head })` marks the query as a COUNT: it
+        // resolves to a row count and no data. Filters still chain AFTER it,
+        // exactly as in PostgREST, so the count cannot be taken here.
+        select(_cols, opts) { if (opts?.head) st.head = true; return api; },
         eq(c, v) { st.filters.push((r) => r[c] === v); return api; },
         in(c, vs) { st.filters.push((r) => vs.includes(r[c])); return api; },
         gte(c, v) { st.filters.push((r) => r[c] >= v); return api; },
@@ -103,7 +106,11 @@ function makeDb(tables = baseTables()) {
         limit(n) { st.limit = n; return api; },
         range(a, b) { st.range = [a, b]; return run().then((r) => ({ ...r, data: r.data.slice(a, b + 1) })); },
         maybeSingle() { return run().then((r) => ({ ...r, data: r.data[0] ?? null })); },
-        then(res, rej) { return run().then(res, rej); },
+        then(res, rej) {
+          return run()
+            .then((r) => (st.head ? { data: null, count: r.data.length, error: null } : r))
+            .then(res, rej);
+        },
       };
       function run() {
         let matched = rows().filter((r) => st.filters.every((f) => f(r)));
@@ -143,7 +150,8 @@ test("a measure practised across several sessions: counts, hit rate, sessions an
   const m = measure(out, 15);
   assert.equal(m.attempts, 6);                       // hits + misses + partials
   assert.deepEqual(m.results, { hit: 4, miss: 1, partial: 1, extra: 0 });
-  assert.equal(m.hit_rate_percent, 80);              // 4 / (4+1); the partial is outside
+  assert.equal(m.hit_rate_all, 80);                  // 4 / (4+1); the partial is outside
+  assert.equal(m.hit_rate_attempted, 80);            // nothing was sat out
   assert.equal(m.sessions, 2);
   assert.equal(m.days, 2);
   assert.equal(m.timing.timed_beats, 5);
@@ -264,7 +272,7 @@ test("extras never count toward attempts or hit rate", async () => {
   const out = await call({ song_id: SONG }, makeDb(tables));
   const m = measure(out, 15);
   assert.equal(m.attempts, 1);
-  assert.equal(m.hit_rate_percent, 100);
+  assert.equal(m.hit_rate_all, 100);
   assert.equal(m.results.extra, 2);
   assert.equal(m.timing.timed_beats, 1);             // the extra's offset is not a beat timing
   assert.equal(m.timing.mean_offset_ms, -10);
@@ -383,7 +391,7 @@ test("the rollup names the weakest measures and the latest ones", async () => {
   ];
   const out = await call({ song_id: SONG }, makeDb(tables));
   assert.deepEqual(out.rollup.weakest_measures.map((m) => m.measure), [16, 15]);
-  assert.equal(out.rollup.weakest_measures[0].hit_rate_percent, 63);   // 10 of 16
+  assert.equal(out.rollup.weakest_measures[0].hit_rate_attempted, 63);   // 10 of 16
   assert.equal(out.rollup.most_late[0].measure, 16);
   assert.ok(!out.rollup.weakest_measures.some((m) => m.measure === 20));
   assert.match(out.rollup.ranking_note, /at least 8 scored beats/);
@@ -407,4 +415,254 @@ test("bad arguments are refused before any read", async () => {
     assert.deepEqual(db.calls.filter((c) => c.kind === "from"), []);
   }
   await assert.rejects(call({ song_id: U(99) }, makeDb()), /song .* not found/);
+});
+
+// --- wrong notes are only the notes that were WRONG (2026-09-19) ---------------
+
+test("a failed chord lists only the pitches the beat did not expect", async () => {
+  const tables = baseTables();
+  // Pastorale m34: the chord is 55/60/62/67. He struck 55, 62, 60 and 71 —
+  // three of them correct. Only 71 is a wrong note.
+  tables.sam_session_events = Array.from({ length: 4 }, (_, i) =>
+    ev(S1, 15, 1, "miss", {
+      loop_iteration: i,
+      expected_notes: [55, 60, 62, 67],
+      played_notes: [55, 62, 60, 71],
+    })
+  );
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  const wrong = measure(out, 15).recurring_wrong_notes;
+  assert.deepEqual(wrong.map((w) => w.midi), [71]);
+  assert.equal(wrong[0].passes, 4);
+});
+
+test("every pitch of an extra is wrong: it belonged to no beat", async () => {
+  const tables = baseTables();
+  tables.sam_session_events = Array.from({ length: 3 }, (_, i) =>
+    ev(S1, 15, 1, "extra", { loop_iteration: i, expected_notes: [], played_notes: [61] })
+  );
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  assert.deepEqual(measure(out, 15).recurring_wrong_notes.map((w) => w.midi), [61]);
+});
+
+test("a miss with nothing struck contributes no wrong notes", async () => {
+  const tables = baseTables();
+  tables.sam_session_events = Array.from({ length: 5 }, (_, i) =>
+    ev(S1, 15, 1, "miss", { loop_iteration: i, expected_notes: [60], played_notes: [] })
+  );
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  assert.deepEqual(measure(out, 15).recurring_wrong_notes, []);
+});
+
+// --- loop cycles he sat out ----------------------------------------------------
+
+const satOutPass = (loop) => [
+  ev(S1, 15, 1, "miss", { loop_iteration: loop }),
+  ev(S1, 15, 2, "miss", { loop_iteration: loop }),
+];
+const playedPass = (loop, second = "hit") => [
+  ev(S1, 15, 1, "hit", { loop_iteration: loop, timing_delta_ms: -10 }),
+  ev(S1, 15, 2, second, { loop_iteration: loop, timing_delta_ms: second === "hit" ? -12 : null }),
+];
+
+test("two hit rates: cycles he sat out sink one and not the other", async () => {
+  const tables = baseTables();
+  tables.sam_session_events = [
+    ...playedPass(0), ...playedPass(1), ...playedPass(2, "miss"),
+    // Six cycles of the loop running on with nothing struck at all.
+    ...[3, 4, 5, 6, 7, 8].flatMap(satOutPass),
+  ];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  const m = measure(out, 15);
+  assert.equal(m.sat_out_iterations, 6);
+  assert.equal(m.attempted_iterations, 3);
+  assert.equal(m.loop_iterations, 9);
+  // All cycles: 5 hits of 18 scored beats = 28%.
+  assert.equal(m.hit_rate_all, 28);
+  // The cycles he played in: 5 hits of 6 = 83%.
+  assert.equal(m.hit_rate_attempted, 83);
+  assert.equal(m.attempted_scored_beats, 6);
+});
+
+test("one key struck anywhere makes the cycle an attempt, however badly it went", async () => {
+  const tables = baseTables();
+  tables.sam_session_events = [
+    // Every beat a miss, but he DID strike something at the first.
+    ev(S1, 15, 1, "miss", { loop_iteration: 0, played_notes: [61] }),
+    ev(S1, 15, 2, "miss", { loop_iteration: 0 }),
+    // ...and a cycle with a stray key and nothing else.
+    ev(S1, 15, 1, "miss", { loop_iteration: 1 }),
+    ev(S1, 15, 2, "extra", { loop_iteration: 1, expected_notes: [], played_notes: [61] }),
+    // ...against one genuinely sat out.
+    ...satOutPass(2),
+  ];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  const m = measure(out, 15);
+  assert.equal(m.sat_out_iterations, 1);
+  assert.equal(m.attempted_iterations, 2);
+  assert.equal(m.hit_rate_attempted, 0);   // bad playing is still playing
+});
+
+test("weakest_measures ranks on the attempted rate, and shows both", async () => {
+  const tables = baseTables();
+  tables.sam_song_measures.push({ song_id: SONG, number: 20, source_measure: null });
+  // m15: played every time, genuinely weak — 4 of 12 beats hit.
+  const m15 = Array.from({ length: 6 }, (_, p) => [
+    ev(S1, 15, 1, p < 2 ? "hit" : "miss", { loop_iteration: p, timing_delta_ms: p < 2 ? -10 : null, played_notes: p < 2 ? [] : [61] }),
+    ev(S1, 15, 2, p < 2 ? "hit" : "miss", { loop_iteration: p, timing_delta_ms: p < 2 ? -10 : null, played_notes: p < 2 ? [] : [61] }),
+  ]).flat();
+  // m20: played perfectly 5 times, then the loop ran on 20 times without him.
+  const m20 = [
+    ...Array.from({ length: 5 }, (_, p) => [
+      ev(S1, 20, 1, "hit", { loop_iteration: p, timing_delta_ms: -10 }),
+      ev(S1, 20, 2, "hit", { loop_iteration: p, timing_delta_ms: -10 }),
+    ]).flat(),
+    ...Array.from({ length: 20 }, (_, i) => [
+      ev(S1, 20, 1, "miss", { loop_iteration: 5 + i }),
+      ev(S1, 20, 2, "miss", { loop_iteration: 5 + i }),
+    ]).flat(),
+  ];
+  tables.sam_session_events = [...m15, ...m20];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+
+  // m20 reads far worse on every cycle, but he never actually missed it.
+  assert.equal(measure(out, 20).hit_rate_all, 20);
+  assert.equal(measure(out, 20).hit_rate_attempted, 100);
+  // So the weakest measure is m15, which he really did miss.
+  assert.equal(out.rollup.weakest_measures[0].measure, 15);
+  assert.equal(out.rollup.weakest_measures[0].hit_rate_attempted, 33);
+  assert.equal(out.rollup.weakest_measures[0].hit_rate_all, 33);
+  assert.equal(out.rollup.weakest_measures[0].sat_out_iterations, 0);
+  // m20 is still listed — it has enough attempted beats to rank — but BELOW
+  // m15, which is the whole point. On the all-cycles rate it would have led.
+  assert.deepEqual(out.rollup.weakest_measures.map((m) => m.measure), [15, 20]);
+  assert.equal(out.rollup.weakest_measures[1].sat_out_iterations, 20);
+});
+
+// --- most_early only lists measures that were early ----------------------------
+
+test("when every measure dragged, the early list is empty and says so", async () => {
+  const tables = baseTables();
+  tables.sam_song_measures.push({ song_id: SONG, number: 20, source_measure: null });
+  // Both measures late; m20 merely LESS late. Mid-phrase beats only, so
+  // nothing here is an entry beyond the first of each pass.
+  tables.sam_session_events = [
+    ...Array.from({ length: 10 }, (_, i) => ev(S1, 15, i + 1, "hit", { timing_delta_ms: -200 })),
+    ...Array.from({ length: 10 }, (_, i) => ev(S1, 20, i + 1, "hit", { timing_delta_ms: -20 })),
+  ];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  assert.deepEqual(out.rollup.most_early, []);
+  assert.match(out.rollup.most_early_note, /No measure was early/);
+  // Late still ranks, and m15 is the worst of them.
+  assert.equal(out.rollup.most_late[0].measure, 15);
+});
+
+test("a genuinely early measure is listed, a late one is not", async () => {
+  const tables = baseTables();
+  tables.sam_song_measures.push({ song_id: SONG, number: 20, source_measure: null });
+  tables.sam_session_events = [
+    ...Array.from({ length: 10 }, (_, i) => ev(S1, 15, i + 1, "hit", { timing_delta_ms: -200 })),
+    ...Array.from({ length: 10 }, (_, i) => ev(S1, 20, i + 1, "hit", { timing_delta_ms: +45 })),
+  ];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  assert.deepEqual(out.rollup.most_early.map((m) => m.measure), [20]);
+  assert.equal(out.rollup.most_early_note, undefined);
+});
+
+// --- entries versus mid-phrase -------------------------------------------------
+
+test("entries are kept apart from notes inside a phrase", async () => {
+  const tables = baseTables();
+  tables.sam_song_measures.push({ song_id: SONG, number: 20, source_measure: null });
+  // Two passes of m15 and m16, contiguous, so only beat 1 of each pass is an
+  // entry. He is 200 ms late coming in and 10 ms late thereafter.
+  tables.sam_session_events = [0, 1].flatMap((loop) => [
+    ev(S1, 15, 1, "hit", { loop_iteration: loop, timing_delta_ms: -200 }),
+    ev(S1, 15, 2, "hit", { loop_iteration: loop, timing_delta_ms: -10 }),
+    ev(S1, 16, 1, "hit", { loop_iteration: loop, timing_delta_ms: -12 }),
+    ev(S1, 16, 2, "hit", { loop_iteration: loop, timing_delta_ms: -8 }),
+  ]);
+  const out = await call({ song_id: SONG }, makeDb(tables));
+
+  const e = out.timing.entries;
+  assert.equal(e.entry.timed_beats, 2);          // one per pass
+  assert.equal(e.entry.mean_offset_ms, -200);
+  assert.equal(e.mid_phrase.timed_beats, 6);
+  assert.equal(e.mid_phrase.mean_offset_ms, -10);
+  assert.equal(e.difference_ms, -190);
+
+  // Per measure, too: m15's overall mean is dragged down by its entry.
+  const m15 = measure(out, 15);
+  assert.equal(m15.timing.entry.timed_beats, 2);
+  assert.equal(m15.timing.entry.mean_offset_ms, -200);
+  assert.equal(m15.timing.mid_phrase.mean_offset_ms, -10);
+  assert.equal(m15.timing.mean_offset_ms, -105);   // the two mixed together
+  // m16 is never entered on: every beat of it is mid-phrase.
+  assert.equal(measure(out, 16).timing.entry.timed_beats, 0);
+});
+
+test("a note after a bar or more of rest counts as an entry", async () => {
+  const tables = baseTables();
+  for (const n of [16, 18, 19]) tables.sam_song_measures.push({ song_id: SONG, number: n, source_measure: null });
+  tables.sam_session_events = [
+    ev(S1, 15, 1, "hit", { timing_delta_ms: -180 }),   // start of the pass
+    ev(S1, 16, 1, "hit", { timing_delta_ms: -10 }),    // next bar: mid-phrase
+    // m17 is silent entirely, so m18 is entered from a full bar of rest.
+    ev(S1, 18, 1, "hit", { timing_delta_ms: -170 }),
+    ev(S1, 19, 1, "hit", { timing_delta_ms: -12 }),
+  ];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  assert.equal(measure(out, 15).timing.entry.timed_beats, 1);
+  assert.equal(measure(out, 16).timing.entry.timed_beats, 0);
+  assert.equal(measure(out, 18).timing.entry.timed_beats, 1);   // the rest
+  assert.equal(measure(out, 19).timing.entry.timed_beats, 0);
+  assert.equal(out.timing.entries.entry.mean_offset_ms, -175);
+});
+
+test("late and early rank on mid-phrase beats, not on the bars he enters on", async () => {
+  const tables = baseTables();
+  tables.sam_song_measures.push({ song_id: SONG, number: 20, source_measure: null });
+  // m15 is only ever entered on and looks terrible; m20 is played inside the
+  // phrase and is the genuinely late one.
+  tables.sam_session_events = [
+    ...Array.from({ length: 10 }, (_, p) => [
+      ev(S1, 15, 1, "hit", { loop_iteration: p, timing_delta_ms: -300 }),
+      ...Array.from({ length: 9 }, (_, i) => ev(S1, 20, i + 1, "hit", { loop_iteration: p, timing_delta_ms: -50 })),
+    ]).flat(),
+  ];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  // m15 has no mid-phrase beats at all, so it cannot be ranked.
+  assert.equal(measure(out, 15).timing.mid_phrase.timed_beats, 0);
+  assert.deepEqual(out.rollup.most_late.map((m) => m.measure), [20]);
+  assert.equal(out.rollup.most_late[0].mean_offset_ms, -50);
+  assert.match(out.rollup.timing_ranking_note, /MID-PHRASE/);
+});
+
+// --- how much a range threw away -----------------------------------------------
+
+test("a snippet says how many rows its range excluded", async () => {
+  const tables = baseTables();
+  tables.sam_sessions = [session(S1, { snippet_id: SNIP })];
+  tables.sam_session_events = [
+    ev(S1, 15, 1, "hit", { timing_delta_ms: -10 }),
+    ev(S1, 16, 1, "hit", { timing_delta_ms: -10 }),
+    // The rest measures a snippet's loop appends, outside m.15-16.
+    ev(S1, 17, 1, "miss"),
+    ev(S1, 18, 1, "miss"),
+    ev(S1, 19, 1, "miss"),
+  ];
+  const out = await call({ song_id: SONG, snippet_id: SNIP }, makeDb(tables));
+  assert.equal(out.range.rows_read, 2);
+  assert.equal(out.range.rows_outside_range, 3);
+  assert.match(out.range.rows_outside_range_note, /3 rows/);
+  assert.match(out.range.rows_outside_range_note, /Bars 15-16/);
+  assert.equal(measure(out, 17), undefined);
+});
+
+test("no range, no exclusion count to report", async () => {
+  const tables = baseTables();
+  tables.sam_session_events = [ev(S1, 15, 1, "hit", { timing_delta_ms: -10 })];
+  const out = await call({ song_id: SONG }, makeDb(tables));
+  assert.equal(out.range.rows_outside_range, null);
+  assert.equal(out.range.rows_outside_range_note, undefined);
 });

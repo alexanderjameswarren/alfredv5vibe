@@ -703,6 +703,46 @@ export async function updateInboxItem(
   }
 }
 
+/**
+ * Which of these songs have a bar that is PLAYED more than once.
+ *
+ * Measures are stored written-out — a repeated bar becomes several rows with
+ * the same `source_measure`, the printed number — so a repeat shows up as
+ * source numbers that are not all distinct. A song whose measures carry no
+ * source_measure at all cannot be judged and maps to null rather than false.
+ *
+ * Returns a map of song_id -> boolean | null. Never throws: an unreadable
+ * answer is worth less than the rest of the row, so on error every song maps
+ * to null and the listing still returns.
+ */
+async function songsWithRepeats(
+  client: SupabaseClient,
+  songIds: string[]
+): Promise<Map<string, boolean | null>> {
+  const out = new Map<string, boolean | null>();
+  if (!songIds.length) return out;
+  try {
+    const { data, error } = await client
+      .from("sam_song_measures")
+      .select("song_id, source_measure")
+      .in("song_id", songIds);
+    if (error || !data) return out;
+    const seen = new Map<string, { total: number; sources: Set<string>; withSource: number }>();
+    for (const row of data as { song_id: string; source_measure: string | null }[]) {
+      let e = seen.get(row.song_id);
+      if (!e) { e = { total: 0, sources: new Set(), withSource: 0 }; seen.set(row.song_id, e); }
+      e.total++;
+      if (row.source_measure != null) { e.withSource++; e.sources.add(String(row.source_measure)); }
+    }
+    for (const [id, e] of seen) {
+      out.set(id, e.withSource === 0 ? null : e.sources.size < e.withSource);
+    }
+    return out;
+  } catch {
+    return out;
+  }
+}
+
 export async function getSamSongs(
   client: SupabaseClient,
   params: { search_text?: string }
@@ -715,7 +755,11 @@ export async function getSamSongs(
       // or MusicXML imports whose Storage upload failed. Exposed here
       // so Alex can verify post-re-import coverage over MCP instead of
       // eyeballing the dashboard.
-      .select("id, title, artist, source, key_signature, time_signature, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, goal_set_at, source_xml_path, created_at, updated_at")
+      // song_type / parent_song_id say what a row IS — an original, a
+      // simplified arrangement of another song, or a drill — and which song it
+      // belongs under. Without them a reader treats a drill's numbers as if
+      // they were the real piece's.
+      .select("id, title, artist, source, song_type, parent_song_id, audio_file_path, key_signature, time_signature, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, goal_set_at, source_xml_path, created_at, updated_at")
       .eq("archived", false)
       .order("title");
 
@@ -727,7 +771,19 @@ export async function getSamSongs(
 
     const { data, error } = await query;
     if (error) return { error: error.message };
-    return { data };
+
+    const songs = (data ?? []) as Record<string, unknown>[];
+    const repeats = await songsWithRepeats(client, songs.map((s) => s.id as string));
+    return {
+      data: songs.map((s) => ({
+        ...s,
+        has_audio: s.audio_file_path != null,
+        // Whether any bar is played more than once. A whole-song rollup over a
+        // song with repeats counts those bars twice, which is right for "how
+        // much did I play" and wrong for "how well do I know this bar".
+        has_repeats: repeats.get(s.id as string) ?? null,
+      })),
+    };
   } catch (e) {
     return { error: String(e) };
   }
@@ -1028,7 +1084,7 @@ export async function getSamSongMeasures(
     // 1. Fetch song metadata
     const { data: song, error: songError } = await client
       .from("sam_songs")
-      .select("id, title, artist, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, goal_set_at, time_signature, key_signature")
+      .select("id, title, artist, song_type, parent_song_id, audio_file_path, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, goal_set_at, time_signature, key_signature")
       .eq("id", params.song_id)
       .single();
 
@@ -1128,11 +1184,25 @@ export async function getSamSongMeasures(
       };
     });
 
+    // Asked over the WHOLE song, not the requested range: a range that happens
+    // to hold no repeated bar says nothing about the piece.
+    const repeatMap = await songsWithRepeats(client, [params.song_id]);
+
     return {
       data: {
         song: {
           title: song.title,
           artist: song.artist,
+          // What this row IS, and what it hangs under: an original, a
+          // simplified arrangement, or a drill. A drill's numbers are not the
+          // real piece's.
+          song_type: song.song_type ?? null,
+          parent_song_id: song.parent_song_id ?? null,
+          has_audio: song.audio_file_path != null,
+          // Any bar played more than once. A whole-song rollup over a song
+          // with repeats counts those bars twice — right for "how much did I
+          // play", wrong for "how well do I know this bar".
+          has_repeats: repeatMap.get(params.song_id) ?? null,
           bpm: song.default_bpm,
           goal_bpm: song.goal_bpm,
           goal_playback_speed: song.goal_playback_speed,

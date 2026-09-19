@@ -24,7 +24,7 @@ test("nothing when neither an item nor a song note applies", () => {
 
 test("an item: the plan line, no Set tempo while the heard tempo matches", () => {
   render(<PlanLine item={ITEM} state={stateOf(ITEM, 3, 2)} heardTempo={60} onSetTempo={() => {}} />);
-  const line = screen.getByText("Plan · 60 BPM · 90% · 2/4 today · Count out loud");
+  const line = screen.getByText("Plan · Whole song · 60 BPM · 90% · 2/4 today · Count out loud");
   // 3 attempts, 2 qualifying, target 4: in progress today, so amber.
   expect(line).toHaveClass("text-amber-800");
   expect(screen.queryByRole("button", { name: "Set tempo" })).not.toBeInTheDocument();
@@ -33,14 +33,14 @@ test("an item: the plan line, no Set tempo while the heard tempo matches", () =>
 
 test("a free play item", () => {
   render(<PlanLine item={FREE} state={stateOf(FREE, 0, 0)} heardTempo={60} />);
-  expect(screen.getByText("Free play · 60 BPM · 0/1 today")).toBeInTheDocument();
+  expect(screen.getByText("Free play · Whole song · 60 BPM · 0/1 today")).toBeInTheDocument();
 });
 
 test("done: a check mark and 'Done 4/4 today', at full contrast and body size", () => {
   render(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} />);
   expect(screen.getByRole("img", { name: "Done" })).toBeInTheDocument();
   // Done keeps its check mark and full contrast — it is read from the keyboard.
-  const doneLine = screen.getByText("Plan · 60 BPM · 90% · Done 4/4 today · Count out loud");
+  const doneLine = screen.getByText("Plan · Whole song · 60 BPM · 90% · Done 4/4 today · Count out loud");
   expect(doneLine).toHaveClass("text-foreground");
   expect(doneLine).not.toHaveClass("text-muted-foreground");
   // Body size comes from the block, which nothing inside reduces.
@@ -74,7 +74,7 @@ test("song note under the plan line, truncated until tapped", () => {
   fireEvent.click(btn);
   expect(btn).not.toHaveClass("truncate");
   expect(btn).toHaveAttribute("aria-expanded", "true");
-  expect(screen.getByText(/Plan · 60 BPM/)).toBeInTheDocument();
+  expect(screen.getByText(/Plan · Whole song · 60 BPM/)).toBeInTheDocument();
 });
 
 test("song note alone when the loaded range has no item", () => {

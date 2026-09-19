@@ -308,7 +308,7 @@ function renderSong() {
 test("plan line for the whole-song item; Set tempo applies the item tempo without saving", async () => {
   renderSong();
   // Song default 65; the whole-song item is done today (2 of 2 qualifying).
-  const line = await screen.findByText("Plan · 55 BPM · 80% · Done 2/2 today");
+  const line = await screen.findByText("Plan · Whole song · 55 BPM · 80% · Done 2/2 today");
   expect(line).toHaveClass("text-foreground");
   expect(screen.getByLabelText(/BPM:/)).toHaveValue(65);
   fireEvent.click(screen.getByRole("button", { name: "Set tempo" }));
@@ -331,7 +331,7 @@ test("song note under the plan line, and alone when the loaded range has no item
   mockDb.tables.sam_practice_plan_songs[0].song_note = "Keep it steady.";
   const { unmount } = renderSong();
   expect(await screen.findByRole("button", { name: "Song goal: Keep it steady." })).toBeInTheDocument();
-  expect(screen.getByText(/^Plan · 55 BPM/)).toBeInTheDocument();
+  expect(screen.getByText(/^Plan · Whole song · 55 BPM/)).toBeInTheDocument();
   unmount();
 
   seed();
@@ -345,7 +345,7 @@ test("song note under the plan line, and alone when the loaded range has no item
 test("while playing: a compact plan count next to Completed Passes, amber, then ✓ after the pass that finishes it", async () => {
   mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 2, qualifying: 3 }];
   await openItem("m.1–1 · RH · Opening bar");
-  expect(screen.getByText("Plan · 60 BPM · 90% · 3/4 today · Count out loud.")).toHaveClass("text-amber-800");
+  expect(screen.getByText("Plan · m.1–1 · RH · 60 BPM · 90% · 3/4 today · Count out loud.")).toHaveClass("text-amber-800");
   await pressPlay();
   const badge = await screen.findByText("Plan 3/4");
   expect(badge).toHaveAttribute("data-state", "amber");
@@ -414,6 +414,7 @@ test("Next on the plan line opens the next item at its target tempo, writing not
 test("no Next on the plan line while the item is unfinished", async () => {
   mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 2, qualifying: 1 }];
   await openItem("m.1–1 · RH · Opening bar");
-  expect(screen.getByText(/Plan · 60 BPM · 90% · 1\/4 today/)).toBeInTheDocument();
+  // The range is named on the line, so two items on one song are told apart.
+  expect(screen.getByText(/Plan · m\.1–1 · RH · 60 BPM · 90% · 1\/4 today/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /^Next:/ })).not.toBeInTheDocument();
 });

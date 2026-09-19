@@ -203,10 +203,10 @@ describe("player display helpers (§7.4)", () => {
   });
 
   test("plan line: item, free play, done, and amber (same text, colour elsewhere)", () => {
-    expect(planLineText(item, st(3, 2))).toBe("Plan · 60 BPM · 90% · 2/4 today · Count out loud");
-    expect(planLineText(free, st(0, 0, 1))).toBe("Free play · 78 BPM · 0/1 today");
-    expect(planLineText(item, st(6, 5))).toBe("Plan · 60 BPM · 90% · Done 4/4 today · Count out loud");
-    expect(planLineText({ ...item, instruction: null }, st(1, 0))).toBe("Plan · 60 BPM · 90% · 0/4 today");
+    expect(planLineText(item, st(3, 2))).toBe("Plan · Whole song · 60 BPM · 90% · 2/4 today · Count out loud");
+    expect(planLineText(free, st(0, 0, 1))).toBe("Free play · Whole song · 78 BPM · 0/1 today");
+    expect(planLineText(item, st(6, 5))).toBe("Plan · Whole song · 60 BPM · 90% · Done 4/4 today · Count out loud");
+    expect(planLineText({ ...item, instruction: null }, st(1, 0))).toBe("Plan · Whole song · 60 BPM · 90% · 0/4 today");
     expect(st(1, 0).amber).toBe(true);
   });
 

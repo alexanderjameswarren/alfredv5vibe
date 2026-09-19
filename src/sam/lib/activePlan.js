@@ -284,12 +284,19 @@ export function planSongFor(plan, songId) {
 }
 
 /**
- * "Plan · 60 BPM · 90% · 2/4 today · Count out loud"
- * "Free play · 78 BPM · 0/1 today"
+ * "Plan · m.15–16 · 60 BPM · 90% · 2/4 today · Count out loud"
+ * "Free play · Whole song · 78 BPM · 0/1 today"
  * Done reads "Done 4/4 today" in place of the count.
+ *
+ * The range sits second, right after the label: two items on one song differ
+ * only by their bars, and at the keyboard that is the first thing he needs to
+ * know he has the right one loaded.
  */
 export function planLineText(item, state) {
-  const parts = [item.is_free_play ? "Free play" : "Plan", `${item.target_effective_bpm} BPM`];
+  const parts = [item.is_free_play ? "Free play" : "Plan"];
+  const range = itemShortRange(item);
+  if (range) parts.push(range);
+  parts.push(`${item.target_effective_bpm} BPM`);
   if (!item.is_free_play) parts.push(`${item.accuracy_target}%`);
   parts.push(`${state.done ? "Done " : ""}${state.shown}/${state.target} today`);
   if (item.instruction) parts.push(item.instruction);

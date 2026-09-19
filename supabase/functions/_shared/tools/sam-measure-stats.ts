@@ -175,6 +175,55 @@ export function intervalsFor(rows: Row[], msPerBeat: number): Interval[] {
 }
 
 /**
+ * Entries: the notes he comes IN on, as opposed to notes played mid-phrase.
+ *
+ * Live evidence says these are different skills and mixing them corrupts both
+ * numbers: he is 120–225 ms late on entries and near zero mid-phrase, and
+ * Pastorale's "worst" measures by hit rate are m37 (the last bar) and m1 —
+ * exit and entry effects, not difficulty.
+ *
+ * A struck beat is an ENTRY when it is the first struck beat of a pass, or
+ * when the beat struck before it sat a bar or more earlier. Measure distance
+ * stands in for the rest: two or more measures back cannot be less than a full
+ * bar of silence whatever the time signature, and needs no beats-per-bar. That
+ * makes this deliberately CONSERVATIVE — a short rest inside a bar is not
+ * called an entry — so mid-phrase figures may still carry a few soft entries,
+ * but nothing mid-phrase is wrongly thrown out.
+ *
+ * Marks `rows` in place with `__entry`. Rows must be ONE session's, in playing
+ * order. A measure range filter makes earlier measures invisible, so the first
+ * beat inside the range reads as an entry: correct for a snippet, which is
+ * what he practises, and stated in the tool description.
+ */
+export function markEntries(rows: Row[]): void {
+  let prevLoop: unknown = Symbol("none");
+  let prevMeasure = 0;
+  for (const r of rows) {
+    if (r.result === "extra") continue;
+    const struck = r.timing_delta_ms != null;
+    const loop = r.loop_iteration ?? 0;
+    if (loop !== prevLoop) {          // first beat of a pass
+      if (struck) { r.__entry = true; prevLoop = loop; prevMeasure = Number(r.measure_number); continue; }
+      // Nothing struck yet in this pass: the entry is still ahead.
+      prevLoop = loop; prevMeasure = 0;
+      continue;
+    }
+    if (!struck) continue;            // a miss does not reset the phrase, it breaks it
+    r.__entry = prevMeasure === 0 || Number(r.measure_number) - prevMeasure >= 2;
+    prevMeasure = Number(r.measure_number);
+  }
+}
+
+/** Mean, median and count for a set of offsets, or nulls when there are none. */
+function offsetStats(xs: number[]) {
+  return {
+    mean_offset_ms: xs.length ? round(mean(xs)!) : null,
+    median_offset_ms: xs.length ? round(median(xs)!) : null,
+    timed_beats: xs.length,
+  };
+}
+
+/**
  * Does the offset grow across a pass? A constant offset cannot: it is the same
  * at the end as at the start. Returned in milliseconds, last third minus first
  * third, so NEGATIVE means the playing fell further behind as the pass went on.
@@ -190,7 +239,49 @@ export function driftFor(rows: Row[]): number | null {
 
 // --- the tool -----------------------------------------------------------------
 
-const EVENT_COLS = "session_id, measure_number, beat, result, played_notes, timing_delta_ms, loop_iteration";
+const EVENT_COLS =
+  "session_id, measure_number, beat, result, played_notes, expected_notes, timing_delta_ms, loop_iteration";
+
+/**
+ * The pitches on this row that were NOT asked for at this beat.
+ *
+ * A failing chord records every key struck, the right ones included. Listing
+ * those as "wrong notes" is how Pastorale m34 came to report 55, 62 and 60 —
+ * three pitches that are IN that beat's chord — as its top mistakes. A pitch
+ * is wrong only when the beat did not expect it; the overlap is the part he
+ * got right, and it is silently dropped here.
+ *
+ * `extra` rows have no expected notes by definition (they attached to no
+ * beat), so every pitch on one is wrong.
+ */
+export function wrongPitches(row: Row): number[] {
+  const played = (row.played_notes ?? []) as number[];
+  if (!played.length) return [];
+  const expected = new Set<number>((row.expected_notes ?? []) as number[]);
+  return expected.size ? played.filter((p) => !expected.has(p)) : played;
+}
+
+/**
+ * A loop iteration he sat out: every beat of the measure a miss with nothing
+ * struck at all. Misses are raised on elapsed time without consulting MIDI, so
+ * a loop left running while he resets his hands records a full measure of them
+ * and sinks the hit rate. AL m15–16 read 202 loop iterations against 23–29
+ * real passes for exactly this reason.
+ *
+ * Deliberately strict: ONE key struck anywhere in the measure makes it an
+ * attempt, however badly it went. This only removes cycles with no playing in
+ * them at all, never bad playing.
+ */
+export function isSatOut(rows: Row[]): boolean {
+  let scored = 0;
+  for (const r of rows) {
+    if (r.result === "extra") return false; // a stray key is still playing
+    scored++;
+    if (r.result !== "miss") return false;
+    if (((r.played_notes ?? []) as number[]).length) return false;
+  }
+  return scored > 0;
+}
 
 export const getSamMeasureStatsTool = defineTool({
   name: "get_sam_measure_stats",
@@ -304,45 +395,96 @@ export const getSamMeasureStatsTool = defineTool({
       if (offset + PAGE >= ROW_CAP) { rowsTruncated = true; break; }
     }
 
+    // How much a measure range threw away. The range is applied in SQL, so the
+    // discarded rows never arrive and have to be counted separately — without
+    // a number here, a snippet's figures look like the whole song's. Null when
+    // the row cap bit, because then the two counts are not comparable.
+    let rowsOutsideRange: number | null = null;
+    if ((start !== undefined || end !== undefined) && !rowsTruncated) {
+      const { count, error } = await ctx.db
+        .from("sam_session_events")
+        .select("session_id", { count: "exact", head: true })
+        .eq("song_id", songId)
+        .in("session_id", [...byId.keys()]);
+      if (error) throw dbFail("row count", error);
+      if (typeof count === "number") rowsOutsideRange = Math.max(0, count - rows.length);
+    }
+
+    // Entries are decided per session, over that session's rows in playing
+    // order, and stamped on the rows before anything is counted.
+    const rowsBySession = new Map<string, Row[]>();
+    for (const r of rows) {
+      const list = rowsBySession.get(r.session_id);
+      if (list) list.push(r); else rowsBySession.set(r.session_id, [r]);
+    }
+    for (const sRows of rowsBySession.values()) markEntries(sRows);
+
     // --- per measure ---------------------------------------------------------
+    // Rows grouped by measure AND pass, so a loop cycle he sat out can be
+    // recognised as a whole before any of it is counted.
+    const byMeasurePass = new Map<number, Map<string, Row[]>>();
+    for (const r of rows) {
+      if (!byId.has(r.session_id)) continue;
+      const pass = `${r.session_id}:${r.loop_iteration ?? 0}`;
+      let m = byMeasurePass.get(r.measure_number);
+      if (!m) { m = new Map(); byMeasurePass.set(r.measure_number, m); }
+      const list = m.get(pass);
+      if (list) list.push(r); else m.set(pass, [r]);
+    }
+
     interface Acc {
       measure: number;
       hit: number; miss: number; partial: number; extra: number;
+      // The same three again, over the passes he actually played in.
+      attemptedHit: number; attemptedMiss: number;
+      satOut: number;
       timings: number[];
+      entryTimings: number[]; midTimings: number[];
       sessions: Set<string>; days: Set<string>; passes: Set<string>;
       wrong: Map<number, Set<string>>;   // pitch -> distinct passes it appeared in
     }
     const acc = new Map<number, Acc>();
-    const get = (m: number): Acc => {
-      let a = acc.get(m);
-      if (!a) {
-        a = { measure: m, hit: 0, miss: 0, partial: 0, extra: 0, timings: [],
-              sessions: new Set(), days: new Set(), passes: new Set(), wrong: new Map() };
-        acc.set(m, a);
-      }
-      return a;
-    };
 
-    for (const r of rows) {
-      const s = byId.get(r.session_id);
-      if (!s) continue;
-      const a = get(r.measure_number);
-      const pass = `${r.session_id}:${r.loop_iteration ?? 0}`;
-      if (r.result === "extra") {
-        a.extra++;
-      } else {
-        a[r.result as "hit" | "miss" | "partial"]++;
-        a.sessions.add(r.session_id);
-        a.days.add(s.pt_day);
-        a.passes.add(pass);
-        if (r.timing_delta_ms != null) a.timings.push(Number(r.timing_delta_ms));
-      }
-      // Wrong notes: an extra's stray key, or the keys struck at a missed beat.
-      // Counted once per pitch per pass, so hammering one wrong key is one.
-      if (r.result === "extra" || r.result === "miss") {
-        for (const pitch of (r.played_notes ?? []) as number[]) {
-          if (!a.wrong.has(pitch)) a.wrong.set(pitch, new Set());
-          a.wrong.get(pitch)!.add(pass);
+    for (const [measureNumber, passes] of byMeasurePass) {
+      const a: Acc = {
+        measure: measureNumber, hit: 0, miss: 0, partial: 0, extra: 0,
+        attemptedHit: 0, attemptedMiss: 0, satOut: 0, timings: [],
+        entryTimings: [], midTimings: [],
+        sessions: new Set(), days: new Set(), passes: new Set(), wrong: new Map(),
+      };
+      acc.set(measureNumber, a);
+
+      for (const [pass, passRows] of passes) {
+        const satOut = isSatOut(passRows);
+        if (satOut) a.satOut++;
+
+        for (const r of passRows) {
+          const s = byId.get(r.session_id)!;
+          if (r.result === "extra") {
+            a.extra++;
+          } else {
+            a[r.result as "hit" | "miss" | "partial"]++;
+            // The attempted rate sees only cycles he took part in.
+            if (!satOut && r.result === "hit") a.attemptedHit++;
+            if (!satOut && r.result === "miss") a.attemptedMiss++;
+            a.sessions.add(r.session_id);
+            a.days.add(s.pt_day);
+            a.passes.add(pass);
+            if (r.timing_delta_ms != null) {
+              const t = Number(r.timing_delta_ms);
+              a.timings.push(t);
+              (r.__entry ? a.entryTimings : a.midTimings).push(t);
+            }
+          }
+          // Wrong notes: an extra's stray key, or the keys struck at a missed
+          // beat that the beat did not ask for. Counted once per pitch per
+          // pass, so hammering one wrong key is one.
+          if (r.result === "extra" || r.result === "miss") {
+            for (const pitch of wrongPitches(r)) {
+              if (!a.wrong.has(pitch)) a.wrong.set(pitch, new Set());
+              a.wrong.get(pitch)!.add(pass);
+            }
+          }
         }
       }
     }
@@ -362,6 +504,7 @@ export const getSamMeasureStatsTool = defineTool({
       .sort((a, b) => a.measure - b.measure)
       .map((a) => {
         const scored = a.hit + a.miss;
+        const attemptedScored = a.attemptedHit + a.attemptedMiss;
         const wrongNotes = [...a.wrong.entries()]
           .map(([pitch, passes]) => ({ midi: pitch, passes: passes.size }))
           .filter((w) => w.passes >= WRONG_NOTE_MIN_PASSES)
@@ -370,12 +513,23 @@ export const getSamMeasureStatsTool = defineTool({
           measure: a.measure,
           printed_measure: printed.get(a.measure) ?? null,
           attempts: a.hit + a.miss + a.partial,
-          hit_rate_percent: scored ? Math.round((a.hit * 100) / scored) : null,
+          // Two rates, deliberately named apart. hit_rate_all counts every
+          // loop cycle, including ones he sat out while the loop ran on;
+          // hit_rate_attempted counts only cycles he played in. Both are true;
+          // the second is the one that answers "which measures do I miss".
+          hit_rate_all: scored ? Math.round((a.hit * 100) / scored) : null,
+          hit_rate_attempted: attemptedScored ? Math.round((a.attemptedHit * 100) / attemptedScored) : null,
+          sat_out_iterations: a.satOut,
+          attempted_iterations: a.passes.size - a.satOut,
+          attempted_scored_beats: attemptedScored,
           results: { hit: a.hit, miss: a.miss, partial: a.partial, extra: a.extra },
           timing: {
-            mean_offset_ms: a.timings.length ? round(mean(a.timings)!) : null,
-            median_offset_ms: a.timings.length ? round(median(a.timings)!) : null,
-            timed_beats: a.timings.length,
+            ...offsetStats(a.timings),
+            // Entries — coming in after a rest or a restart — run far later
+            // than notes inside a phrase. Kept apart so neither number is
+            // spoiled by the other.
+            entry: offsetStats(a.entryTimings),
+            mid_phrase: offsetStats(a.midTimings),
           },
           sessions: a.sessions.size,
           days: a.days.size,
@@ -388,10 +542,17 @@ export const getSamMeasureStatsTool = defineTool({
     // --- timing: calibration vs error ---------------------------------------
     const perSession: Row[] = [];
     const skipped = { tempo_unknown_or_varied: 0, too_few_intervals: 0 };
+    const allEntry: number[] = [];
+    const allMid: number[] = [];
     for (const s of sessions) {
-      const sRows = rows.filter((r) => r.session_id === s.id && r.result !== "extra");
+      const sRows = (rowsBySession.get(s.id) ?? []).filter((r) => r.result !== "extra");
       if (!sRows.length) continue;
-      const timings = sRows.filter((r) => r.timing_delta_ms != null).map((r) => Number(r.timing_delta_ms));
+      const struck = sRows.filter((r) => r.timing_delta_ms != null);
+      const timings = struck.map((r) => Number(r.timing_delta_ms));
+      const entryT = struck.filter((r) => r.__entry).map((r) => Number(r.timing_delta_ms));
+      const midT = struck.filter((r) => !r.__entry).map((r) => Number(r.timing_delta_ms));
+      allEntry.push(...entryT);
+      allMid.push(...midT);
       const msBeat = msPerQuarter(s);
       const intervals = msBeat ? intervalsFor(sRows, msBeat) : [];
       const ratios = intervals.map((i) => i.ratio);
@@ -413,6 +574,10 @@ export const getSamMeasureStatsTool = defineTool({
         playback_speed: s.settings?.playbackSpeed ?? null,
         timed_beats: timings.length,
         mean_offset_ms: timings.length ? round(mean(timings)!) : null,
+        entry_mean_offset_ms: entryT.length ? round(mean(entryT)!) : null,
+        entry_beats: entryT.length,
+        mid_phrase_mean_offset_ms: midT.length ? round(mean(midT)!) : null,
+        mid_phrase_beats: midT.length,
         interval_ratio_median: enough ? round(median(ratios)!, 3) : null,
         interval_ratio_spread: enough ? round(stdev(ratios) ?? 0, 3) : null,
         usable_intervals: ratios.length,
@@ -426,8 +591,28 @@ export const getSamMeasureStatsTool = defineTool({
     const driftAll = perSession.map((p) => p.drift_ms_per_pass).filter((x): x is number => x != null);
     const windows = [...new Set(sessions.map((s) => s.settings?.windowMs ?? null))];
 
-    const rankable = measures.filter((m) => m.attempts >= MIN_ATTEMPTS_FOR_RANKING && m.hit_rate_percent != null);
-    const timed = measures.filter((m) => m.timing.timed_beats >= MIN_ATTEMPTS_FOR_RANKING);
+    // Weakness is ranked on the ATTEMPTED rate: a measure is not hard because
+    // he stepped away while the loop ran on.
+    const rankable = measures.filter(
+      (m) => m.attempted_scored_beats >= MIN_ATTEMPTS_FOR_RANKING && m.hit_rate_attempted != null
+    );
+    // Early/late are ranked on MID-PHRASE offsets only. Ranked on all beats,
+    // the list just finds the bars he enters on — the first bar of a snippet,
+    // the bar after a rest — which says nothing about how hard they are.
+    const timed = measures.filter((m) => m.timing.mid_phrase.timed_beats >= MIN_ATTEMPTS_FOR_RANKING);
+    // A measure belongs in the early list only when it was genuinely EARLY.
+    // Sorting every measure by offset and taking the top three makes the least
+    // late one look early when the whole sitting dragged.
+    const early = timed.filter((m) => (m.timing.mid_phrase.mean_offset_ms ?? 0) > 0);
+    // deno-lint-ignore no-explicit-any
+    const lateEarlyRow = (m: any) => ({
+      measure: m.measure,
+      mean_offset_ms: m.timing.mid_phrase.mean_offset_ms,
+      timed_beats: m.timing.mid_phrase.timed_beats,
+      // Shown alongside so the gap between the two is visible at a glance.
+      entry_mean_offset_ms: m.timing.entry.mean_offset_ms,
+      entry_beats: m.timing.entry.timed_beats,
+    });
 
     return {
       song: { id: song.id, title: song.title },
@@ -440,6 +625,10 @@ export const getSamMeasureStatsTool = defineTool({
         measures_returned: measures.length,
         limit_applied: LIMIT,
         rows_read: rows.length,
+        rows_outside_range: rowsOutsideRange,
+        ...(rowsOutsideRange != null && rowsOutsideRange > 0
+          ? { rows_outside_range_note: `${rowsOutsideRange} rows in these sessions fall outside m.${start ?? 1}–${end ?? "end"} and were excluded${snippet ? ` by snippet "${snippet.title}"` : ""}. A snippet's loop also appends rest measures whose numbers can collide with real ones, which is why the range is applied rather than trusted.` }
+          : {}),
         rows_truncated: rowsTruncated,
         ...(rowsTruncated ? { rows_note: `Only the first ${ROW_CAP} rows were read; narrow the measure range or the dates.` } : {}),
       },
@@ -458,17 +647,25 @@ export const getSamMeasureStatsTool = defineTool({
       measures,
       rollup: {
         weakest_measures: [...rankable]
-          .sort((a, b) => a.hit_rate_percent! - b.hit_rate_percent!)
+          .sort((a, b) => a.hit_rate_attempted! - b.hit_rate_attempted!)
           .slice(0, 5)
-          .map((m) => ({ measure: m.measure, printed_measure: m.printed_measure, hit_rate_percent: m.hit_rate_percent, attempts: m.attempts })),
+          .map((m) => ({
+            measure: m.measure, printed_measure: m.printed_measure,
+            hit_rate_attempted: m.hit_rate_attempted, hit_rate_all: m.hit_rate_all,
+            attempted_scored_beats: m.attempted_scored_beats, sat_out_iterations: m.sat_out_iterations,
+          })),
         most_late: [...timed]
-          .sort((a, b) => a.timing.mean_offset_ms! - b.timing.mean_offset_ms!)
+          .sort((a, b) => a.timing.mid_phrase.mean_offset_ms! - b.timing.mid_phrase.mean_offset_ms!)
           .slice(0, 3)
-          .map((m) => ({ measure: m.measure, mean_offset_ms: m.timing.mean_offset_ms, timed_beats: m.timing.timed_beats })),
-        most_early: [...timed]
-          .sort((a, b) => b.timing.mean_offset_ms! - a.timing.mean_offset_ms!)
+          .map(lateEarlyRow),
+        most_early: early
+          .sort((a, b) => b.timing.mid_phrase.mean_offset_ms! - a.timing.mid_phrase.mean_offset_ms!)
           .slice(0, 3)
-          .map((m) => ({ measure: m.measure, mean_offset_ms: m.timing.mean_offset_ms, timed_beats: m.timing.timed_beats })),
+          .map(lateEarlyRow),
+        ...(early.length === 0 && timed.length > 0
+          ? { most_early_note: "No measure was early: every measure with enough mid-phrase beats has a negative mean offset, so this list is EMPTY rather than showing the least late one. Remember that a constant negative offset is calibration (latency and aim) as much as dragging — read interval_ratio before concluding he plays late." }
+          : {}),
+        timing_ranking_note: `Early and late are ranked on MID-PHRASE offsets only, over measures with at least ${MIN_ATTEMPTS_FOR_RANKING} such beats. Ranked on all beats these lists just find the bars he ENTERS on, which is a different skill from playing them.`,
         most_wrong_notes: measures
           .filter((m) => m.recurring_wrong_notes.length > 0)
           .sort((a, b) => b.recurring_wrong_notes[0].passes - a.recurring_wrong_notes[0].passes)
@@ -496,6 +693,25 @@ export const getSamMeasureStatsTool = defineTool({
           interval_ratio_median: ratioMedians.length ? round(median(ratioMedians)!, 3) : null,
           drift_ms_per_pass: driftAll.length ? round(median(driftAll)!) : null,
           sessions_with_intervals: ratioMedians.length,
+        },
+        entries: {
+          entry: offsetStats(allEntry),
+          mid_phrase: offsetStats(allMid),
+          difference_ms: allEntry.length && allMid.length
+            ? round(mean(allEntry)! - mean(allMid)!)
+            : null,
+          what_counts_as_an_entry:
+            "The first struck beat of a pass, or one whose previous struck beat sat two or more measures " +
+            "back — a rest of at least a full bar, whatever the time signature. Deliberately conservative: a " +
+            "short rest inside a bar is not called an entry, so mid_phrase may carry a few soft entries, but " +
+            "nothing mid-phrase is wrongly excluded. A measure-range or snippet filter hides earlier bars, so " +
+            "the first beat inside the range counts as an entry — correct for a snippet, which is what he " +
+            "actually practises.",
+          why_it_matters:
+            "Coming in after a rest or a restart is a different skill from playing inside a phrase, and the " +
+            "two run at very different offsets — mixing them corrupts both numbers. A measure that looks weak " +
+            "or late may simply be one he enters on, which is why most_late and most_early rank on mid-phrase " +
+            "beats alone.",
         },
         skipped,
         per_session: perSession,
