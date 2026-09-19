@@ -1,7 +1,7 @@
 // The player's plan line and song note (practice plans spec §7.4).
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import PlanLine from "./PlanLine";
 import { itemState } from "../lib/activePlan";
@@ -90,6 +90,10 @@ test("song note alone when the loaded range has no item", () => {
 // back to the home page to start the next.
 
 describe("Next on the plan line", () => {
+  // The visible box inside the 44px hit area.
+  // eslint-disable-next-line testing-library/no-node-access
+  const nextBox = (btn) => btn.querySelector("[data-next-box]");
+
   const NEXT = {
     id: "n", song_title: "Autumn Leaves", snippet_id: "s1",
     snippet: { start_measure: 1, end_measure: 16, hand_mode: "both" },
@@ -97,9 +101,31 @@ describe("Next on the plan line", () => {
 
   test("a done item offers the next one, by song and range", () => {
     render(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />);
+    expect(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" })).toBeInTheDocument();
+  });
+
+  test("quieter than the plan line: the outline of Save and Tuning, a size down", () => {
+    render(
+      <PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={55} nextItem={NEXT}
+        onSetTempo={() => {}} onOpenNext={() => {}} />
+    );
     const btn = screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" });
-    // A real button, not a link: full contrast, body size, 44px tall.
-    expect(btn).toHaveClass("bg-primary", "text-primary-foreground", "text-sm", "min-h-[44px]");
+    const box = nextBox(btn);
+    // Same outline as its neighbour Save: border, radius, background, muted
+    // text, body size. Nothing filled, nothing shouting.
+    const save = screen.getByRole("button", { name: "Set tempo" });
+    for (const c of ["border", "border-border", "rounded", "text-sm", "text-muted-foreground"]) {
+      expect(save).toHaveClass(c);
+      expect(box).toHaveClass(c);
+    }
+    expect(box).not.toHaveClass("bg-primary", "text-primary-foreground", "font-medium");
+    // ...but a size down from them: shorter box, tighter sides.
+    expect(box).toHaveClass("min-h-[33px]", "px-2.5");
+    expect(box).not.toHaveClass("min-h-[44px]", "px-3");
+    // The SHRINKING IS VISUAL ONLY — the thing a finger lands on is still full
+    // size, padding the smaller box inside itself.
+    expect(btn).toHaveClass("min-h-[44px]", "py-1.5");
+    expect(btn).not.toHaveClass("border", "bg-primary");
   });
 
   test("tapping it opens that item through the caller's own handler", () => {
@@ -124,6 +150,16 @@ describe("Next on the plan line", () => {
     const free = { id: "f2", song_title: "Someone Like You", snippet_id: null, is_free_play: true };
     render(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} nextItem={free} onOpenNext={() => {}} />);
     expect(screen.getByRole("button", { name: "Next: Someone Like You Whole song" })).toBeInTheDocument();
+  });
+
+  test("the song title gives way first; the range and the arrow always survive", () => {
+    const long = { ...NEXT, song_title: "Autumn Leaves (Les Feuilles Mortes), arr. for solo piano" };
+    render(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} nextItem={long} onOpenNext={() => {}} />);
+    const btn = screen.getByRole("button", { name: `Next: ${long.song_title} m.1–16` });
+    expect(within(btn).getByText(long.song_title)).toHaveClass("truncate", "min-w-0");
+    expect(within(btn).getByText("m.1–16")).toHaveClass("shrink-0");
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(btn.querySelector("svg[aria-hidden='true']")).toBeInTheDocument();
   });
 
   test("Next sits beside Set tempo, not in place of it", () => {

@@ -1,10 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight } from "lucide-react";
 import {
-  firstIncompleteItem, itemRangeText, itemState, itemTargetText, nextIncompleteItem,
-  planIsComplete, planSummary,
+  firstIncompleteItem, itemRangeText, itemState, itemTargetText, planIsComplete, planSummary,
 } from "../lib/activePlan";
-import PlanNextButton from "./PlanNextButton";
 
 // Today's practice plan, on the SAM home page directly above the 7-day
 // snapshot (practice plans spec §7.3). Renders nothing without an active plan.
@@ -22,9 +20,11 @@ import PlanNextButton from "./PlanNextButton";
 // top, main work before Free Play; a plan with nothing left to do renders
 // collapsed instead. Both are decisions for that load alone — the stored
 // expanded/collapsed preference is never overwritten by them — and neither
-// happens again, so the page cannot move while he is reading it. A completed
-// row carries a Next button to the item after it, so finishing one item does
-// not mean coming back here to start the next.
+// happens again, so the page cannot move while he is reading it.
+//
+// There is deliberately no "Next" button here. This page already lists every
+// item, and tapping a row already opens it; Next exists only to save a trip
+// BACK to this page, so it lives on the player's plan line alone.
 //
 // READABILITY (2026-09-17): this is read from across the room, without
 // glasses. Nothing here is smaller than text-sm, the body size used across
@@ -74,7 +74,7 @@ function scrollBehavior() {
 // tempo, so it has to LOOK like one on a tablet, where there is no hover to
 // discover it with: its own outlined surface, a chevron at the trailing edge,
 // and a pressed state.
-function ItemRow({ item, progress, onOpen, nextItem, rowRef }) {
+function ItemRow({ item, progress, onOpen, rowRef }) {
   const st = itemState(item, progress);
   // Done is struck through, never dimmed; amber stays full-contrast too.
   const tone = st.amber ? "text-amber-800" : "text-foreground";
@@ -114,14 +114,6 @@ function ItemRow({ item, progress, onOpen, nextItem, rowRef }) {
           )}
         </span>
       </button>
-      {/* Once an item is done, the way on to the next one is right here,
-          rather than back at the top of the plan. Indented to the row's text
-          so it reads as belonging to the item just finished. */}
-      {st.done && nextItem && (
-        <div className="pt-1.5 pl-8">
-          <PlanNextButton item={nextItem} onOpen={onOpen} />
-        </div>
-      )}
     </li>
   );
 }
@@ -177,7 +169,6 @@ export default function PlanChecklist({ plan, progress, progressReady = false, o
         item={item}
         progress={progress}
         onOpen={onOpenItem}
-        nextItem={nextIncompleteItem(plan, progress, item)}
         rowRef={(el) => {
           if (el) rowRefs.current.set(item.id, el);
           else rowRefs.current.delete(item.id);

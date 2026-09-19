@@ -331,70 +331,19 @@ describe("on load", () => {
   });
 });
 
-// --- The Next control on a completed row -------------------------------------
+// --- No Next here (2026-09-19) -----------------------------------------------
 
-describe("Next on a completed item", () => {
-  const P = {
-    id: "p",
-    day_note: null,
-    items: [
-      item({ id: "m1", position: 1, song_title: "Pastorale", target_passes: 2 }),
-      item({ id: "fp", position: 2, song_title: "Someone Like You", is_free_play: true, target_passes: 2 }),
-      item({ id: "m2", position: 3, song_title: "Autumn Leaves", target_passes: 2, snippet_id: "s1",
-        snippet: { id: "s1", title: "Measures 1-16 Both No Rest", start_measure: 1, end_measure: 16, hand_mode: "both" } }),
-    ],
-  };
-  const done = (...ids) => new Map(ids.map((id) => [id, { attempts: 2, qualifying: 2 }]));
-
-  function open(progress) {
-    const onOpenItem = jest.fn();
-    render(<PlanChecklist plan={P} progress={progress} onOpenItem={onOpenItem} />);
-    fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
-    return onOpenItem;
-  }
-
-  test("a completed item offers the next incomplete one, by song and range", () => {
-    open(done("m1"));
-    expect(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" })).toBeInTheDocument();
-    // Only the completed row carries one.
-    expect(screen.getAllByRole("button", { name: /^Next:/ })).toHaveLength(1);
-  });
-
-  test("tapping Next opens that item through the same handler a row tap uses", () => {
-    const onOpenItem = open(done("m1"));
-    fireEvent.click(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" }));
-    expect(onOpenItem).toHaveBeenCalledWith(P.items[2]);
-  });
-
-  test("Free Play is offered as next once main work is done, labelled the same way", () => {
-    open(done("m1", "m2"));
-    // Both completed rows point at the only thing left.
-    expect(screen.getAllByRole("button", { name: "Next: Someone Like You Whole song" })).toHaveLength(2);
-  });
-
-  test("Next falls back to the first incomplete item when everything later is done", () => {
-    // m2 (last in working order) and Free Play are done, m1 is not: with
-    // nothing after them, both point back up at the one bar he skipped.
-    open(done("m2", "fp"));
-    expect(screen.getAllByRole("button", { name: "Next: Pastorale Whole song" })).toHaveLength(2);
-  });
-
-  test("no Next anywhere when the plan is complete", () => {
-    const onOpenItem = jest.fn();
-    // progressReady is not set, so the auto-collapse is out of the way here.
-    render(<PlanChecklist plan={P} progress={done("m1", "m2", "fp")} onOpenItem={onOpenItem} />);
-    fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
-    expect(screen.getByText("Optional Free Play")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Next:/ })).not.toBeInTheDocument();
-  });
-
-  test("the button is a real button: full contrast, body size, 44px, title truncated not the range", () => {
-    open(done("m1"));
-    const btn = screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" });
-    expect(btn).toHaveClass("bg-primary", "text-primary-foreground", "text-sm", "min-h-[44px]");
-    expect(btn).not.toHaveClass("text-xs");
-    // The song title gives way first; the range always survives.
-    expect(within(btn).getByText("Autumn Leaves")).toHaveClass("truncate");
-    expect(within(btn).getByText("m.1–16")).toHaveClass("shrink-0");
-  });
+test("a completed row carries no Next button: this page already lists everything", () => {
+  // Every item done but one, so any Next control would have somewhere to point.
+  const progress = new Map([
+    ["a", { attempts: 7, qualifying: 6 }],
+    ["b", { attempts: 2, qualifying: 2 }],
+    ["c", { attempts: 1, qualifying: 1 }],
+  ]);
+  render(<PlanChecklist plan={PLAN} progress={progress} onOpenItem={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: /Today's plan/ }));
+  expect(rowFor("Bars 5-12")).toHaveAttribute("data-state", "done");
+  // Next exists only to save a trip back to THIS page, so it lives on the
+  // player's plan line alone. The row itself is already the way in.
+  expect(screen.queryByRole("button", { name: /^Next:/ })).not.toBeInTheDocument();
 });
