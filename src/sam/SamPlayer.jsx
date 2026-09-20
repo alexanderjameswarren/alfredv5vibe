@@ -270,6 +270,18 @@ export default function SamPlayer({ onBack }) {
     return () => { cancelled = true; };
   }, [song?.parentSongId]);
 
+  // How many empty bars are appended after the music. A snippet's own rest
+  // count wins; whole-song repeat only contributes rests when no snippet is
+  // selected, so the two never stack.
+  //
+  // Its own memo because ScrollEngine needs it as well as `activeMeasures`:
+  // it is what tells the engine where the music ends and the resting begins,
+  // which is where a pass is credited (2026-09-20).
+  const appendedRestCount = useMemo(() => {
+    if (!song) return 0;
+    return snippet ? (snippet.restMeasures || 0) : (songRepeat ? songRestMeasures : 0);
+  }, [song, snippet, songRepeat, songRestMeasures]);
+
   // Derive active measures from snippet range, appending rest measures.
   // normalizeMeasure ensures both voice format (lh[]/rh[]) and legacy beats[]
   // are converted to beats[] for the renderers.
@@ -282,13 +294,7 @@ export default function SamPlayer({ onBack }) {
       : song.measures.slice(snippet.startMeasure - 1, snippet.endMeasure);
 
     // Append empty rest measures (voice format — whole-note rests).
-    // A snippet's own rest count wins; whole-song repeat only contributes
-    // rests when no snippet is selected, so the two never stack.
-    const restCount = snippet
-      ? snippet.restMeasures || 0
-      : songRepeat
-        ? songRestMeasures
-        : 0;
+    const restCount = appendedRestCount;
     const restMeasures = [];
     const endNum =
       snippet?.endMeasure ??
@@ -342,7 +348,7 @@ export default function SamPlayer({ onBack }) {
     // (`setSvgReady(false)` on cleanup) at the exact instant playback starts —
     // restarting the scroll after the audio start had already been scheduled.
     // Only these three properties change what is drawn, so they are the key.
-  }, [song, snippet?.startMeasure, snippet?.endMeasure, snippet?.restMeasures, songRepeat, songRestMeasures, lyricPlacements]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [song, snippet?.startMeasure, snippet?.endMeasure, appendedRestCount, songRepeat, songRestMeasures, lyricPlacements]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Parent measures for the ghost overlay, sliced IDENTICALLY to the child.
   //
@@ -625,6 +631,9 @@ export default function SamPlayer({ onBack }) {
   // counts that trailing 1 as the new cycle it is, instead of ignoring it as a
   // repeat of the earlier one.
   const lastLoopCountRef = useRef(0);
+  // The last playthrough number banked, so one pass is credited exactly once
+  // however many times the signal is re-emitted.
+  const lastCreditedPassRef = useRef(0);
 
   const handleLoopCount = useCallback((n) => {
     setLoopCount(n);
@@ -636,22 +645,35 @@ export default function SamPlayer({ onBack }) {
     //
     // Detection is unchanged: the same signal credits the same passes, at the
     // same instant.
-    //
-    // OFF THE TELEPORT FRAME (2026-09-19). `creditPass` reaches Supabase, and
-    // this runs inside ScrollEngine's rAF frame at the loop restart — the
-    // busiest frame in the run, whose cost shows up as lateness on the first
-    // notes of the new pass. The COUNTERS are still read synchronously here,
-    // before `setLoopIteration` rotates them, so the pass row carries the hits
-    // and misses of the playthrough that just finished; only the write itself
-    // is deferred to a macrotask.
-    if (n > 0 && n !== lastLoopCountRef.current) {
-      const playthrough = getCurrentPlaythrough();
-      setTimeout(() => creditPass(playthrough), 0);
-    }
     setLoopIteration(n);
     if (n > 0) setPausedMeasure(null);
+    // A fresh run (n === 0) restarts the pass numbering, so the credit guard
+    // has to restart with it — otherwise the first pass of the new run would
+    // look like a repeat of one already banked. This is the same reason
+    // lastLoopCountRef compares rather than counts: a mid-play setting change
+    // re-runs the scroll effect, and the sequence can read 1, 2, 3, 0, 1.
+    if (n === 0) lastCreditedPassRef.current = 0;
     lastLoopCountRef.current = n;
-  }, [setLoopIteration, creditPass, getCurrentPlaythrough]);
+  }, [setLoopIteration]);
+
+  // The music of one playthrough has finished — the moment the pass is banked.
+  //
+  // For a snippet with rest bars this arrives when the scroll reaches the
+  // first rest bar, so the pass counter and the plan line move while he is
+  // still resting rather than a bar later (2026-09-20). With no rest bars
+  // ScrollEngine fires it at the teleport instead, which is the same instant
+  // the music ends, so nothing about that case changes.
+  //
+  // OFF THE FRAME (2026-09-19). `creditPass` reaches Supabase and this runs
+  // inside ScrollEngine's rAF frame, so only the write is deferred to a
+  // macrotask; the COUNTERS are read synchronously here, before anything can
+  // rotate them, so the row carries the playthrough that just finished.
+  const handleContentEnd = useCallback((n) => {
+    if (!(n > 0) || n === lastCreditedPassRef.current) return;
+    lastCreditedPassRef.current = n;
+    const playthrough = getCurrentPlaythrough();
+    setTimeout(() => creditPass(playthrough), 0);
+  }, [creditPass, getCurrentPlaythrough]);
 
   // `handleStop` is a plain function declared further down the component, so it
   // is re-created every render. Reaching it through a ref keeps
@@ -1494,6 +1516,8 @@ export default function SamPlayer({ onBack }) {
                 fingerings={fingerings}
                 onBeatEvents={handleBeatEvents}
                 onLoopCount={handleLoopCount}
+                onContentEnd={handleContentEnd}
+                restMeasureCount={appendedRestCount}
                 onBeatMiss={handleBeatMiss}
                 scrollStateExtRef={scrollStateExtRef}
                 onTap={handleScoreTap}

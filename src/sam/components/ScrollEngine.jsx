@@ -7,6 +7,7 @@ import { playNote, midiToFreq, getMasterBus } from "../lib/synthVoice";
 import { drawFingeringOverlay } from "../lib/fingeringOverlay";
 import { SCROLL_GEOMETRY, METRONOME_GAIN, SCORE_SCALE } from "../lib/samConstants";
 import { sweepUnplayedTail } from "../lib/passTail";
+import { restStartIndex, contentEndTime } from "../lib/contentEnd";
 
 // The teleport log, off the teleport frame (2026-09-19).
 //
@@ -30,7 +31,7 @@ function logTeleportLater(elapsed, audioSyncOffset, anchor0, beatEvents) {
 }
 
 
-export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioAnchors = [], audioEndMs = null, handMode = "both", onScrollStart = null, fingerings = {}, scorePlayback = "off" }) {
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, onContentEnd, restMeasureCount = 0, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioAnchors = [], audioEndMs = null, handMode = "both", onScrollStart = null, fingerings = {}, scorePlayback = "off" }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -39,6 +40,8 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
   const copyWidthRef = useRef(0);
   const nextCheckRef = useRef(0);
   const hasLoopedRef = useRef(false);
+  // One "the music is over" signal per pass — see restStartIdx below.
+  const contentEndFiredRef = useRef(false);
   const geometryRef = useRef([]);
   const labelElsRef = useRef([]);
   const [svgReady, setSvgReady] = useState(false);
@@ -215,6 +218,20 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     }
 
     hasLoopedRef.current = false;
+    contentEndFiredRef.current = false;
+
+    // WHERE THE MUSIC ENDS AND THE RESTING BEGINS (2026-09-20).
+    //
+    // A looped snippet with rest measures used to bank its pass only at the
+    // teleport, a whole bar after the last note — so the pass counter and the
+    // plan line sat still while he was already resting. `restStartIdx` is the
+    // index, within one copy, of the first beat of the first appended rest
+    // bar; crossing it is the moment the playthrough is musically over.
+    //
+    // Null when nothing was appended, and the credit stays at the teleport.
+    const restStartIdx = loop
+      ? restStartIndex(events, measures, restMeasureCount, events.length / numCopies)
+      : null;
 
     // Find the first beat at the firstPassStart measure (for resume-from-measure)
     let startEvtIdx = 0;
@@ -581,6 +598,16 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         // that has not started yet.
         sweepUnplayedTail(beatEventsRef.current, beatEventsRef.current.length / 3, handMode, onBeatMiss);
 
+        // With no rest bars the teleport IS the end of the music, so the pass
+        // is banked here exactly as it always was. With rest bars it was
+        // already banked when the music stopped, a bar ago.
+        //
+        // Before onLoopCount either way: that rotates the per-playthrough
+        // counters, and the pass row needs the ones belonging to the
+        // playthrough that just finished.
+        if (restStartIdx == null && onContentEnd) onContentEnd(loopCount);
+        contentEndFiredRef.current = false;
+
         if (onLoopCount) onLoopCount(loopCount);
 
         // Audio loop: seek back to snippet start, preserve elapsed continuity.
@@ -758,6 +785,26 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       }
       nextCheckRef.current = nc;
 
+      // --- The music is over: bank the pass now, not a bar later -------------
+      //
+      // AFTER miss detection on purpose. The scanner has just resolved
+      // everything due this frame, so by the time this fires the outgoing
+      // pass's counters are final and the row written here is identical to
+      // the one the teleport used to write.
+      //
+      // The trigger is the LATER of two instants: the first rest beat's own
+      // target, and the last musical beat's target plus the matching window.
+      // The second matters when the final note is short — at a fast tempo its
+      // grace can outlast the barline, and crediting before it expired could
+      // miss a hit that was still allowed to arrive.
+      if (restStartIdx != null && !contentEndFiredRef.current) {
+        const creditAt = contentEndTime(evts, restStartIdx, timingWindowMs);
+        if (creditAt != null && elapsed >= creditAt) {
+          contentEndFiredRef.current = true;
+          if (onContentEnd) onContentEnd(loopCount + 1);
+        }
+      }
+
       rafRef.current = requestAnimationFrame(frame);
     }
 
@@ -774,7 +821,9 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       // teardown because a 40ms click cannot outlive the gesture that made it.
       stopPendingNotes();
     };
-  }, [playbackState, svgReady, bpm, timingWindowMs, audioElement, firstPassStart]); // eslint-disable-line react-hooks/exhaustive-deps
+    // restMeasureCount is here because it decides where the music ends, and
+    // so where a pass is credited; it changes only when the loaded range does.
+  }, [playbackState, svgReady, bpm, timingWindowMs, audioElement, firstPassStart, restMeasureCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="relative">

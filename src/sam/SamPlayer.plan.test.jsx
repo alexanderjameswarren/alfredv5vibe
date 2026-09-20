@@ -172,6 +172,15 @@ async function pressPlay() {
   await waitFor(() => expect(sessionInserts()).toHaveLength(1));
 }
 
+// One finished playthrough, as ScrollEngine actually signals it: the music
+// ends (onContentEnd, which banks the pass) and then the loop restarts
+// (onLoopCount, which rotates the counters). With no rest bars the engine
+// fires both at the teleport; with rest bars onContentEnd comes a bar earlier.
+async function completePass(n) {
+  mockScrollProps.onContentEnd(n);
+  mockScrollProps.onLoopCount(n);
+}
+
 const sessionInserts = () => mockDb.inserts.filter((i) => i.table === "sam_sessions");
 const passInserts = () => mockDb.inserts.filter((i) => i.table === "sam_passes");
 
@@ -226,7 +235,7 @@ test("tapping a snippet item opens its song and snippet at the target tempo; the
   // One completed loop: a pass, linked the same way, then a progress-only refetch.
   const plansBefore = mockDb.froms.filter((t) => t === "sam_practice_plans").length;
   const progressBefore = mockDb.rpcs.filter((r) => r.fn === "sam_plan_item_progress").length;
-  await act(async () => { mockScrollProps.onLoopCount(1); });
+  await act(async () => { completePass(1); });
   await waitFor(() => expect(passInserts()).toHaveLength(1));
   expect(passInserts()[0].row).toMatchObject({
     snippet_id: "snip-1", bpm: 60, plan_id: "plan-1", plan_item_id: "item-snip",
@@ -290,7 +299,7 @@ test("a pass completed before the plan has loaded is still written, with null li
   await screen.findByLabelText(/BPM:/);
   await pressPlay();
   expect(sessionInserts()[0].row).toMatchObject({ plan_id: null, plan_item_id: null });
-  await act(async () => { mockScrollProps.onLoopCount(1); });
+  await act(async () => { completePass(1); });
   await waitFor(() => expect(passInserts()).toHaveLength(1));
   expect(passInserts()[0].row).toMatchObject({ song_id: SONG_ID, plan_id: null, plan_item_id: null });
 });
@@ -353,7 +362,7 @@ test("while playing: a compact plan count next to Completed Passes, amber, then 
 
   // The pass that makes it four: the progress refetch turns the badge into ✓.
   mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 3, qualifying: 4 }];
-  await act(async () => { mockScrollProps.onLoopCount(1); });
+  await act(async () => { completePass(1); });
   const done = await screen.findByText("Plan ✓");
   expect(done).toHaveAttribute("data-state", "done");
 });
@@ -417,4 +426,121 @@ test("no Next on the plan line while the item is unfinished", async () => {
   // The range is named on the line, so two items on one song are told apart.
   expect(screen.getByText(/Plan · m\.1–1 · RH · 60 BPM · 90% · 1\/4 today/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /^Next:/ })).not.toBeInTheDocument();
+});
+
+// --- Crediting a pass when the music ends, not a bar later (2026-09-20) ------
+//
+// A snippet with rest bars used to bank its pass only at the loop restart, so
+// the pass counter and the plan line sat still while Alex was already resting.
+
+// A second snippet, identical but with one appended rest bar.
+function withRestSnippet() {
+  mockDb.tables.sam_snippets = [{
+    id: "snip-1", song_id: SONG_ID, title: "Opening bar", start_measure: 1, end_measure: 1,
+    rest_measures: 1, settings: { handMode: "rh" }, archived: false,
+  }];
+}
+
+test("the engine is told how many rest bars follow the music", async () => {
+  withRestSnippet();
+  await openItem("m.1–1 · RH · Opening bar");
+  await pressPlay();
+  expect(mockScrollProps.restMeasureCount).toBe(1);
+});
+
+test("no rest bars: the engine is told so, and the pass still lands", async () => {
+  await openItem("m.1–1 · RH · Opening bar");
+  await pressPlay();
+  expect(mockScrollProps.restMeasureCount).toBe(0);
+  // The engine fires both signals at the teleport in this case.
+  await act(async () => { completePass(1); });
+  await waitFor(() => expect(passInserts()).toHaveLength(1));
+});
+
+test("the pass is banked when the music ends, before the loop restarts", async () => {
+  withRestSnippet();
+  await openItem("m.1–1 · RH · Opening bar");
+  await pressPlay();
+  const progressBefore = mockDb.rpcs.filter((r) => r.fn === "sam_plan_item_progress").length;
+
+  // The scroll reaches the rest bar: the music is over.
+  await act(async () => { mockScrollProps.onContentEnd(1); });
+  await waitFor(() => expect(passInserts()).toHaveLength(1));
+  // ...and the plan progress is refetched now, not a bar later — this is what
+  // makes the count and the plan line move while he is still resting.
+  await waitFor(() =>
+    expect(mockDb.rpcs.filter((r) => r.fn === "sam_plan_item_progress").length).toBe(progressBefore + 1));
+
+  // The restart that follows adds nothing.
+  await act(async () => { mockScrollProps.onLoopCount(1); });
+  expect(passInserts()).toHaveLength(1);
+});
+
+test("the row is identical to the one the restart used to write", async () => {
+  withRestSnippet();
+  await openItem("m.1–1 · RH · Opening bar");
+  await pressPlay();
+  await act(async () => { mockScrollProps.onContentEnd(1); });
+  await waitFor(() => expect(passInserts()).toHaveLength(1));
+  const early = passInserts()[0].row;
+
+  // Rest bars carry whole-note rests, so nothing in them is scoreable and the
+  // counters cannot move between the two instants. Crediting at the restart
+  // instead must therefore produce the same row.
+  await act(async () => { mockScrollProps.onLoopCount(1); });
+  expect(passInserts()).toHaveLength(1);
+  expect(early).toMatchObject({
+    song_id: SONG_ID, snippet_id: "snip-1", bpm: 60,
+    plan_id: "plan-1", plan_item_id: "item-snip",
+  });
+  expect(early.hits).toBe(0);
+  expect(early.misses).toBe(0);
+  expect(early.notes_played).toBe(0);
+});
+
+test("one pass per playthrough across several restarts", async () => {
+  withRestSnippet();
+  await openItem("m.1–1 · RH · Opening bar");
+  await pressPlay();
+
+  for (const n of [1, 2, 3]) {
+    await act(async () => { mockScrollProps.onContentEnd(n); });
+    await waitFor(() => expect(passInserts()).toHaveLength(n));
+    // A repeat of the same signal, and the restart, must both be ignored.
+    await act(async () => { mockScrollProps.onContentEnd(n); });
+    await act(async () => { mockScrollProps.onLoopCount(n); });
+    expect(passInserts()).toHaveLength(n);
+  }
+  expect(passInserts()).toHaveLength(3);
+});
+
+test("stopping during the rest KEEPS the pass: he played the music", async () => {
+  withRestSnippet();
+  await openItem("m.1–1 · RH · Opening bar");
+  await pressPlay();
+
+  // The music finishes and the pass is banked...
+  await act(async () => { mockScrollProps.onContentEnd(1); });
+  await waitFor(() => expect(passInserts()).toHaveLength(1));
+
+  // ...then he stops partway through the rest bar, before any restart. The
+  // pass stays: it was earned. Before this change it was lost.
+  fireEvent.click(await screen.findByRole("button", { name: /^Pause$/ }));
+  await act(async () => { await Promise.resolve(); });
+  expect(passInserts()).toHaveLength(1);
+});
+
+test("a fresh run after a mid-play setting change can bank its first pass again", async () => {
+  withRestSnippet();
+  await openItem("m.1–1 · RH · Opening bar");
+  await pressPlay();
+  await act(async () => { mockScrollProps.onContentEnd(1); });
+  await waitFor(() => expect(passInserts()).toHaveLength(1));
+  await act(async () => { mockScrollProps.onLoopCount(1); });
+
+  // A setting change re-runs the scroll effect: it re-emits 0 and the pass
+  // numbering restarts. The next playthrough is a real one, not a repeat.
+  await act(async () => { mockScrollProps.onLoopCount(0); });
+  await act(async () => { mockScrollProps.onContentEnd(1); });
+  await waitFor(() => expect(passInserts()).toHaveLength(2));
 });
