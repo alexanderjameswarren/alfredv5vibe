@@ -10,7 +10,7 @@ import {
   getMeasureWidth,
   getFormatWidth,
 } from "./vexflowHelpers";
-import { getEventBeats } from "./measureUtils";
+import { getEventBeats, struckMidi } from "./measureUtils";
 import { getMasterBus } from "./synthVoice";
 
 // The exported DURATION_BEATS table was removed 2026-08-06 (spec §M9).
@@ -535,9 +535,12 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
         if (!tickMap.has(rt)) tickMap.set(rt, { allMidi: [], rhMidi: [], lhMidi: [], trebleIdx: null, bassIdx: null });
         const entry = tickMap.get(rt);
         entry.trebleIdx = i;
-        const notes = evt.notes || [];
-        const allTieEnd = notes.length > 0 && notes.every((n) => n.tie === "end");
-        if (!allTieEnd) notes.forEach((n) => { entry.allMidi.push(n.midi); entry.rhMidi.push(n.midi); });
+        // Only notes the player must actually STRIKE. A note tied over from
+        // before is already sounding, so asking for it would score a miss for
+        // playing the passage correctly. Judged per note (measureUtils.
+        // isContinuation), so a chord holding one voice while another
+        // re-articulates asks for the re-articulated note alone.
+        struckMidi(evt).forEach((midi) => { entry.allMidi.push(midi); entry.rhMidi.push(midi); });
         tick += getEventBeats(evt) || 1;
       });
 
@@ -547,9 +550,8 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
         if (!tickMap.has(rt)) tickMap.set(rt, { allMidi: [], rhMidi: [], lhMidi: [], trebleIdx: null, bassIdx: null });
         const entry = tickMap.get(rt);
         entry.bassIdx = i;
-        const notes = evt.notes || [];
-        const allTieEnd = notes.length > 0 && notes.every((n) => n.tie === "end");
-        if (!allTieEnd) notes.forEach((n) => { entry.allMidi.push(n.midi); entry.lhMidi.push(n.midi); });
+        // Same rule as the right hand, one line above.
+        struckMidi(evt).forEach((midi) => { entry.allMidi.push(midi); entry.lhMidi.push(midi); });
         tick += getEventBeats(evt) || 1;
       });
 

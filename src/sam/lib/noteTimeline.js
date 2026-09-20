@@ -13,14 +13,16 @@
 // 0.3333 beats, not 0.5. Triplets are live in the corpus (Bach Invention,
 // Moonlight), so the raw token function would stretch every one by 50%.
 //
-// Tie handling here is deliberately NOT the renderer's. drawStaveTies
-// (scoreRender.js:151-170) does pairwise adjacency matching to draw arcs and
-// never models total sounding duration; the `every(n => n.tie === "end")`
-// predicate at scoreRender.js:541-545 collapses a chord in which one voice
-// ties and another re-articulates. This module decides per NOTE, not per
-// event, which is what makes that chord come out right.
+// Tie handling here is still not the renderer's arc-drawing: drawStaveTies
+// does pairwise adjacency matching to place arcs and never models total
+// sounding duration. But what COUNTS as a continuation is now one shared
+// predicate, measureUtils.isContinuation (2026-09-20). Until then scoreRender
+// asked `notes.every(n => n.tie === "end")` per EVENT — missing "both", and
+// collapsing a chord in which one voice ties while another re-articulates —
+// so the synth and the scorer disagreed about which notes were already
+// sounding, and the player was asked to strike notes the score was holding.
 
-import { getEventBeats, getMeasDurationQ } from "./measureUtils";
+import { getEventBeats, getMeasDurationQ, isContinuation } from "./measureUtils";
 
 // Articulation gap in quarter-note beats, shaved off every sounding duration
 // so a repeated pitch re-attacks instead of fusing into one continuous tone.
@@ -35,14 +37,6 @@ export const ARTICULATION_GAP_BEATS = 0.05;
 const OVERFLOW_EPS = 1e-3;
 
 const HANDS = ["rh", "lh"];
-
-/**
- * A note is a continuation link — already sounded by the head of its tie
- * chain — when it is the tail ("end") or a middle link ("both").
- */
-function isContinuation(note) {
-  return note?.tie === "end" || note?.tie === "both";
-}
 
 /** Shave the articulation gap, never taking more than half the note. */
 function applyArticulationGap(durationBeats) {

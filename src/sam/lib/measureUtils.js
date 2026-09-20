@@ -56,6 +56,35 @@ export function getEventBeats(evt) {
 }
 
 /**
+ * THE ONE TIE PREDICATE (2026-09-20). A note is a CONTINUATION — already
+ * sounding, carried over from the note before — when it is the tail of a tie
+ * chain ("end") or a middle link ("both"). Anything else is freshly struck:
+ * no tie at all, or the head of a chain ("start").
+ *
+ * It lives here because both paths that need it already import from this
+ * module, and they MUST agree: `noteTimeline` decides what the synth sounds,
+ * `scoreRender` decides what the player is asked to play. They disagreed until
+ * today — scoreRender asked `notes.every(n => n.tie === "end")` per EVENT,
+ * which called a middle link struck, and which collapsed a chord where one
+ * voice ties and another re-articulates into "all struck". The app then
+ * demanded a key for a note the score was holding, and scored its absence as a
+ * miss. Judged PER NOTE, that cannot happen.
+ */
+export function isContinuation(note) {
+  return note?.tie === "end" || note?.tie === "both";
+}
+
+/**
+ * The MIDI numbers an event actually asks the player to strike: its notes
+ * minus the ones already sounding. Empty for a rest, and empty for an event
+ * that is nothing but continuations — which is what makes such a beat
+ * unscoreable rather than a miss waiting to happen.
+ */
+export function struckMidi(evt) {
+  return (evt?.notes || []).filter((n) => !isContinuation(n)).map((n) => n.midi);
+}
+
+/**
  * Convert a voice-format measure ({ lh[], rh[] }) to beats format ({ beats[] }).
  * Each voice event: { duration, notes: [{ midi, name }] }
  * Output beat: { beat, duration, rh: [{ midi, name, duration }], lh: [{ midi, name, duration }] }

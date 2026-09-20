@@ -90,28 +90,77 @@ extras, and are reported separately as `tied_in_strikes`. A note carries
 `tie: "start" | "end" | "both"`; **`"end"` and `"both"` are both
 continuations** — already sounding.
 
-⚠️ **`scoreRender.js` has a related defect, and it affects every row already
-written.** The app decides `expected_notes` with
-`notes.every(n => n.tie === "end")` per EVENT
-([scoreRender.js:539](../src/sam/lib/scoreRender.js#L539) and
-[:551](../src/sam/lib/scoreRender.js#L551)), which
+### The app asked for notes it was already holding — fixed 2026-09-20
 
-- misses `tie: "both"` entirely, and
-- misses a **mixed chord** where one voice ties while another re-articulates —
-  the whole event is treated as struck, so the tied note lands in
-  `expected_notes` after all.
+Until 2026-09-20 the app decided `expected_notes` with
+`notes.every(n => n.tie === "end")`, per EVENT. Two shapes defeated that:
 
-So `expected_notes` is **inconsistent** about tied-over notes from beat to
-beat, depending on what shares the event.
+| shape | what the app demanded |
+|---|---|
+| every note `tie: "end"` | nothing — **correct** |
+| every note `tie: "both"` (middle links of a longer chain) | **a key for a note already sounding** |
+| a mixed chord: one voice tied over, another re-articulated | **both notes**, the tied one included |
 
-**Why this was fixed in the analysis and not in the app.** Correcting
-`scoreRender.js` would fix only rows written from that day on; the ~200,000
-rows already in `sam_session_events` would keep their inconsistent
-`expected_notes` for ever. The analysis-side fix reads the notation directly
-and judges **every note on its own**, so it is retroactive — it corrects the
-history that already exists — and it needs no change to live scoring, which is
-the riskier thing to touch. Fixing `scoreRender.js` as well remains worth
-doing, but it is a separate job and it buys nothing for existing data.
+So in the second and third cases **he was scored as missing notes he was
+correct not to play.** An all-held beat he rightly left alone scored a full
+miss; a mixed chord where he played only the re-articulated note scored a
+`partial`, because the held note read as missing.
+
+The score itself was never wrong about this — tie arcs are drawn from
+`tieEndpoints`, which has always handled `"both"`. The staff drew a tie and
+the scorer punished him for obeying it.
+
+**The fix.** One shared predicate, `measureUtils.isContinuation`, judging
+**per note**: a note is already sounding when its tie is `"end"` or
+`"both"`, and is asked for otherwise. `scoreRender` (what the player is
+asked to play) and `noteTimeline` (what the synth sounds) now import the same
+function instead of keeping two rules that disagreed.
+
+## ⚠️ THE ACCURACY BREAK OF 2026-09-20
+
+**On any piece containing ties, accuracy before and after 2026-09-20 is not
+comparable.** Nothing about the playing changed; the app stopped asking for
+notes it was already holding.
+
+What moves, and which way:
+
+- **Misses fall.** A beat of nothing but held notes used to raise a miss on
+  elapsed time when he correctly played nothing. Those beats are now
+  unscoreable — they ask for no key at all — so they leave the ratio entirely.
+- **Partials become hits.** A mixed chord played correctly (only the
+  re-articulated note) scored `partial`; it now scores `hit`. Since a partial
+  sits outside `hits / (hits + misses)` and a hit is inside it, this raises
+  accuracy.
+- **Nothing regresses.** `matchChord` tolerates extra notes, so if he keeps
+  the habit the old rule taught him and strikes the held note anyway, the beat
+  still scores a hit.
+- **Attempts fall** on affected pieces, because beats that ask for nothing are
+  no longer counted.
+
+So **accuracy rises** on pieces with ties, by an amount set by how many of
+their beats are affected. Do not read the rise as playing better. Run
+`supabase/migrations/061_scope_tie_both_and_mixed_chords.sql` to size it per
+song: it counts the affected measures and the already-recorded misses and
+partials sitting on them.
+
+Existing rows keep their old `expected_notes`; only sessions from the deploy
+onward carry the corrected set. The analysis-side fix below is what covers the
+history.
+
+### How the two tie fixes compose
+
+They do not overlap, and nothing falls between them.
+
+- The **app fix** decides what is EXPECTED, so it changes hits and misses from
+  the deploy onward.
+- The **analysis fix** (`get_sam_measure_stats`) decides what counts as a
+  WRONG NOTE, and reads the notation directly, so it corrects history too.
+
+A note tied into a bar that he strikes anyway now matches no beat, so it
+becomes an `extra` row — and the analysis fix already recognises those and
+reports them as `tied_in_strikes` rather than mistakes. The app fix produces
+more of exactly the rows the analysis fix knows how to classify. Neither
+corrects the same number twice.
 
 ### A skipped beat can steal the next keystroke
 

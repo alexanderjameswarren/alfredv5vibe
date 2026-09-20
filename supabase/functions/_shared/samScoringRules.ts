@@ -11,6 +11,16 @@ export const SAM_SCORING_RULES =
   "NEITHER, sits outside the ratio and is reported separately; an `extra` counts as nothing at all. " +
   "Accuracy is NULL, never 0, when nothing was measured — null means unmeasurable, 0 means measured and " +
   "every note wrong, and null must never be averaged as 0. " +
+  "(1a) ⚠️⚠️ ACCURACY CHANGED ON 2026-09-20 AND IS NOT COMPARABLE ACROSS THAT DATE ON ANY PIECE CONTAINING " +
+  "TIES. Until then the app asked the player to STRIKE notes that were already sounding: it decided a beat's " +
+  "expected notes with `notes.every(n => n.tie === \"end\")` per EVENT, which treated a middle link of a tie " +
+  "chain (tie \"both\") as freshly struck, and treated a mixed chord — one voice tied over, another " +
+  "re-articulated — as entirely struck. Correctly playing nothing at a held beat scored a MISS; correctly " +
+  "playing only the re-articulated note of a mixed chord scored a PARTIAL. Both are fixed: a note is expected " +
+  "only when freshly struck, judged per note. EXPECT ACCURACY TO RISE ON PIECES WITH TIES FROM 2026-09-20, AND " +
+  "ATTEMPTS TO FALL, because beats that ask for no key at all leave the ratio. THAT RISE IS THE SCORING BEING " +
+  "CORRECTED, NOT THE PLAYING IMPROVING — do not report it as progress, and do not compare or average accuracy " +
+  "across the boundary on a piece with ties. Rows written before that date keep the old expected_notes. " +
   "(2) RESULT VALUES: `hit` (every expected note played in time), `miss` (the beat was not played correctly — " +
   "either nothing was struck at it, raised on elapsed time without consulting MIDI so a session with no " +
   "keyboard records a full count of misses, or what was struck was wrong, in which case played_notes carries " +
