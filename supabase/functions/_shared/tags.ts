@@ -29,6 +29,13 @@
  * so the model was the one write path that could put a NON-CANONICAL tag into
  * the database, with nothing validating it.
  *
+ * All three columns are native `text[]`: items and intents since migration 039,
+ * inbox since 062. Nothing in this file or its callers depends on that — a JS
+ * array of strings is what goes over the wire either way, and PostgREST coerces
+ * it to the destination column's type. It is recorded because the triage path
+ * carries a tag from `inbox.suggested_tags` to `items.tags` untouched, and it
+ * is worth knowing that both ends are now the same shape.
+ *
  * That matters because four "you have unsaved changes" checks in Alfred.jsx
  * compare tags exactly as stored, with `JSON.stringify`. They are correct only
  * while every stored tag is already canonical. A record holding "Whole Foods"

@@ -1,6 +1,7 @@
 # Progress: Tag UX and Inbox Tag Storage
 
-## Status: Steps 0-4b complete. Next up: Step 5 (inbox cutover).
+## Status: Steps 0-4b complete. Step 5 CODE READY, not deployed —
+waiting on migration 062 + CONFORMANT before deploy.
 
 Reference: `docs/technical-spec-tag-ux.md`
 
@@ -554,9 +555,141 @@ said to cost.
 
 ---
 
-## Step 5 — Inbox column cutover (code side)
+## Step 5 — CODE COMPLETE, NOT DEPLOYED (2026-09-21). Inbox column cutover.
 
-SQL migration is run by hand before this step. See "Manual prerequisites".
+Sequencing, agreed with Alex: code ready and committed first, then he runs
+migration 062 and `check_platform_conformance`, then and only then does the
+deploy happen. Nothing is deployed as of this entry.
+
+### The window is cosmetic. Nothing breaks.
+
+The spec's B1 warned that dropping the column would break the deployed `mcp`
+function's hand-typed column list at request time. **That is wrong, and it was
+worth checking rather than believing.** Every access to `inbox.suggested_tags`
+in the codebase is a plain column read or a plain JS-array write — grepped, no
+jsonb operator (`?|`, `@>`, `->`, `jsonb_array_elements`) touches it anywhere
+outside the migration itself.
+
+| Path | During the window | Why |
+|---|---|---|
+| `get_inbox` read | **fine** | The column keeps its NAME; only the type changes. PostgREST serialises `text[]` and a jsonb array to the same JSON array of strings. |
+| `ai-enrich` re-enrich echo | **fine** | `buildPreviousSuggestions` JSON.stringifies whatever it read. Same array, same JSON. |
+| Triage `JSON.stringify` dirty-checks | **fine** | `toCamelCase` recurses into arrays but returns non-objects untouched, so an array of strings passes through unchanged. Both sides of the comparison are the same JS array they always were. |
+| Writes (all six sites) | **fine** | Every one sends a JS array. PostgREST coerces a JSON array into `text[]` — which is exactly how `items.tags` has worked since 039. |
+| `suggested_tags: null` | **n/a** | Nothing writes null. `normaliseTags` returns `[]` for undefined, `updateInboxItem` only sets the key when defined, and both unnormalised writers send `[]`. The new `NOT NULL` is safe. |
+
+Two genuine, minor risks rather than breakages:
+
+- **PostgREST schema-cache staleness.** Supabase reloads the cache on DDL via an
+  event trigger, but if it lags, the first request or two after the migration
+  could see the old type. Self-healing; retry.
+- **Normalised values look different.** A row holding `["Whole Foods"]` reads
+  back `["whole foods"]`. That is the migration doing its job, and it makes the
+  dirty-check MORE correct, not less: a non-canonical stored tag used to make a
+  triage card permanently dirty.
+
+**So the "do not capture anything in the window" instruction in 062's header is
+over-cautious.** Capturing during the window is safe. Left to Alex whether to
+soften it.
+
+### 🛑 A REAL PROBLEM, and it is in the migration, not the code
+
+Migration 062's `UPDATE` has no trigger guard, and **migration 039 — its direct
+precedent — has one, with a long note explaining why.**
+
+`inbox` carries both a `set_updated_at` BEFORE UPDATE trigger (039: "on all six
+Alfred tables", confirmed by pg_trigger) and the generic `audit_row` trigger
+(registry says `audited: true`). 040's note confirms `ALTER TABLE` is DDL and
+fires neither — so the ADD/DROP/RENAME are safe. **The `UPDATE` is not.**
+
+Worse, 062's `WHERE` is broader than 039's. It matches
+`suggested_tags IS NOT NULL AND jsonb_typeof(...) = 'array'` — and the column
+default is `'[]'::jsonb`, which IS an array. So it touches **nearly every inbox
+row**, including every row that has no tags at all. 039 deliberately touched
+only rows that actually had tags.
+
+Consequences of running it as written:
+
+- Every inbox row gets `updated_at = now()`. The inbox has a **"Last modified"**
+  sort option (`INBOX_SORT_OPTIONS`), and `InboxCard` renders that timestamp. The
+  whole inbox would read as modified today — exactly the outcome 039 called
+  "visible and irreversible" and guarded against.
+- One audit row per inbox row, for a change that touched nothing in most of them.
+
+Recommended fix, matching 039 — narrow the WHERE *and* guard the trigger:
+
+```sql
+alter table public.inbox disable trigger user;   -- TRIGGER GUARD
+UPDATE ... WHERE i.suggested_tags IS NOT NULL
+             AND jsonb_typeof(i.suggested_tags) = 'array'
+             AND jsonb_array_length(i.suggested_tags) > 0;   -- ADDED
+alter table public.inbox enable trigger user;    -- TRIGGER GUARD
+```
+
+Rows holding `[]` need no update at all: the new column already defaults to
+`'{}'`. **Flagged, not edited — 062 is Alex's file and his to run.**
+
+Two smaller things in 062, same category:
+
+- Its header still says `040_inbox_suggested_tags_text_array.sql`, and the
+  `COMMENT ON COLUMN` it writes says "as of migration 040". The file is `062`.
+  That comment becomes permanent in the database.
+- Its "will fail at request time" warning is the claim disproved above.
+
+### What the code side actually needed: nothing functional
+
+Stated plainly because it is the surprise of this step. **No functional code
+change was required, at any of the sixteen touchpoints.** Not the six write
+sites, not the two reads, not the ten triage-UI locations, not the
+triage-to-item boundary. Every one already spoke plain JS arrays, and the spec
+was right that PostgREST coerces at the boundary.
+
+What was changed is accuracy, so the next reader does not re-derive all of the
+above:
+
+- `mcp/index.ts`, `getInboxTool` — a note on the hand-typed `.select(...)`
+  recording that a RENAME or DROP would still break it but a RETYPE did not.
+- `mcp/index.ts`, `getItemsTool` — stale comment claiming the tag filter uses
+  the jsonb `?|` operator. Wrong since 039; it is `tags && p_tags`.
+- `src/Alfred.jsx`, `storage.set` — its comment named `'[]'::jsonb` as a column
+  default it relies on the database to assign.
+- `supabase/functions/_shared/tags.ts` — records that all three tag columns are
+  now `text[]`, and that nothing in the tag path depends on it.
+- `email-capture/index.ts`, the `inboxRecord` literal — visited as asked;
+  nothing jsonb-specific surrounds it. Comment sharpened.
+- `Alfred` -> `handleCapture` — visited as asked; `suggestedTags: []`, nothing
+  jsonb-specific around it, unchanged.
+
+### Testing: what is and is not covered
+
+Honestly, and without working around it:
+
+- **Nothing here is unit-testable, and nothing new was made testable.** Edge
+  functions need Deno and a live PostgREST; `Alfred.jsx` cannot be rendered.
+  Deno is not installed locally, so the edge functions were not even
+  type-checked — though every edit to them was comment-only, so there is no
+  type risk to check.
+- **The 1259-test suite passing proves only that the browser build is
+  unaffected**, which given the changes is exactly what it should prove.
+- **The device verification IS the test for this step.** Capture, enrich,
+  re-enrich and triage end to end, including a mixed-case and an underscored tag
+  so normalisation is visible.
+
+This is the same class of gap as `tagPoolFrom` in Step 4, and the same answer:
+said out loud rather than papered over. Unlike Step 4 there is no cheap
+extraction that would fix it — the rule under test is PostgREST's coercion, not
+ours.
+
+### Not done
+
+Nothing deployed. Migration not run. Step 6 (the enrichment skill) untouched.
+
+---
+
+## Step 5 checklist — the touchpoints
+
+SQL migration is run by hand before the DEPLOY, not before the code. See
+"Manual prerequisites".
 
 Every location below is anchored by its enclosing function plus a string to
 search for. The `(~n)` is last-known line, approximate and not to be trusted —
@@ -564,59 +697,60 @@ search for the string.
 
 **Edge functions**
 
-- [ ] `mcp/index.ts`, `getInboxTool` — the hand-typed `.select(...)` string of
+- [x] `mcp/index.ts`, `getInboxTool` — the hand-typed `.select(...)` string of
       21 columns still names `suggested_tags` correctly (~334)
-- [ ] `ai-enrich/index.ts`, `buildPreviousSuggestions` — the `fields` array
+- [x] `ai-enrich/index.ts`, `buildPreviousSuggestions` — the `fields` array
       handles a text array (~379)
-- [ ] `ai-enrich/index.ts`, the `submit_suggestions` update —
+- [x] `ai-enrich/index.ts`, the `submit_suggestions` update —
       `suggested_tags: normaliseTags(suggestions.suggested_tags)` (~582)
-- [ ] `mcp/index.ts`, `createInboxItemTool` —
+- [x] `mcp/index.ts`, `createInboxItemTool` —
       `suggested_tags: normaliseTags(args.suggested_tags)` (~197)
-- [ ] `tool-handlers.ts`, `createInboxItem` —
+- [x] `tool-handlers.ts`, `createInboxItem` —
       `suggested_tags: normaliseTags(params.suggested_tags)` (~627)
-- [ ] `tool-handlers.ts`, `updateInboxItem` —
+- [x] `tool-handlers.ts`, `updateInboxItem` —
       `updates.suggested_tags = normaliseTags(params.suggested_tags)` (~710)
-- [ ] `email-capture/index.ts`, the `inboxRecord` literal —
+- [x] `email-capture/index.ts`, the `inboxRecord` literal —
       `suggested_tags: []` (~207)
 
 **Browser — the ten triage-UI locations, one per line**
 
-- [ ] `Alfred` -> `handleCapture` — `suggestedTags: []` in the new-capture
+- [x] `Alfred` -> `handleCapture` — `suggestedTags: []` in the new-capture
       record (~2802)
-- [ ] `CLEARED_ENRICHMENT` (module constant above `InboxCard`) —
+- [x] `CLEARED_ENRICHMENT` (module constant above `InboxCard`) —
       `suggestedTags: []` (~7299)
-- [ ] `InboxCard` —
+- [x] `InboxCard` —
       `const [intentTags, setIntentTags] = useState(inboxItem.suggestedTags || [])`
       (~7359)
-- [ ] `InboxCard` —
+- [x] `InboxCard` —
       `const [itemTags, setItemTags] = useState(inboxItem.suggestedTags || [])`
       (~7400)
-- [ ] `InboxCard`, the re-seed effect, under `if (inboxItem.suggestIntent)` —
+- [x] `InboxCard`, the re-seed effect, under `if (inboxItem.suggestIntent)` —
       `setIntentTags(inboxItem.suggestedTags || [])` (~7436)
-- [ ] `InboxCard`, the same effect, under `if (inboxItem.suggestItem)` —
+- [x] `InboxCard`, the same effect, under `if (inboxItem.suggestItem)` —
       `setItemTags(inboxItem.suggestedTags || [])` (~7453)
-- [ ] `InboxCard`, the `isDirty` effect —
+- [x] `InboxCard`, the `isDirty` effect —
       `JSON.stringify(intentTags) !== JSON.stringify(inboxItem.suggestedTags || [])`
       (~7480)
-- [ ] `InboxCard`, the `isDirty` effect —
+- [x] `InboxCard`, the `isDirty` effect —
       `JSON.stringify(itemTags) !== JSON.stringify(inboxItem.suggestedTags || [])`
       (~7485)
-- [ ] `InboxCard` -> `handleReEnrich` —
+- [x] `InboxCard` -> `handleReEnrich` —
       `suggestedTags: intentTags.length > 0 ? intentTags : []` (~7736)
-- [ ] `InboxCard` -> `handleCancel` —
+- [x] `InboxCard` -> `handleCancel` —
       `setIntentTags(inboxItem.suggestedTags || [])` (~7843)
-- [ ] `InboxCard` -> `handleCancel` —
+- [x] `InboxCard` -> `handleCancel` —
       `setItemTags(inboxItem.suggestedTags || [])` (~7860)
 
 (That is eleven checkboxes for ten `suggestedTags` triage locations plus
 `handleCapture`, which lives outside `InboxCard`.)
 
-- [ ] The two `JSON.stringify` dirty-checks above still behave correctly and
+- [x] The two `JSON.stringify` dirty-checks above still behave correctly and
       produce no phantom unsaved-changes prompt
-- [ ] The triage write-through in `Alfred` -> `handleInboxSave` still needs no
+- [x] The triage write-through in `Alfred` -> `handleInboxSave` still needs no
       change: `tags: triageData.itemData.tags || []` (~2962) and
       `tags: triageData.intentionData.tags || []` (~3009)
-- [ ] Deploy `mcp`, `ai-enrich` and `email-capture`
+- [ ] Deploy `mcp`, `ai-enrich` and `email-capture` — **BLOCKED until Alex
+      runs 062 and confirms CONFORMANT**
 
 ---
 

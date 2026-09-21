@@ -221,12 +221,12 @@ const getItemsTool = defineTool({
   name: "get_items",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    // All filtering (including jsonb `?|` any-of-tags) runs in Postgres
-    // via public.platform_search_items — the RPC returns
-    // { rows, total } from a single snapshot, so the truncation NOTE
-    // math is atomic. `elements` is intentionally excluded from the
-    // list shape (heavy jsonb; loaded on demand through a single-item
-    // path). See supabase migration adding platform_search_items.
+    // All filtering (including any-of-tags, `tags && p_tags` since
+    // items.tags became text[] in migration 039) runs in Postgres via
+    // public.platform_search_items — the RPC returns { rows, total }
+    // from a single snapshot, so the truncation NOTE math is atomic.
+    // `elements` is intentionally excluded from the list shape (heavy
+    // jsonb; loaded on demand through a single-item path).
     const contextId  = args.context_id  as string   | undefined;
     const searchText = args.search_text as string   | undefined;
     const tags       = args.tags        as string[] | undefined;
@@ -329,6 +329,14 @@ const getInboxTool = defineTool({
     const aiStatus = args.ai_status as string | undefined;
     const LIMIT = clampLimit(args.limit as number | undefined);
 
+    // A hand-typed column list: nothing type-checks it, so a renamed or dropped
+    // column fails here at REQUEST time rather than at build time.
+    //
+    // `suggested_tags` went jsonb -> text[] in migration 062 and this line did
+    // not change, because it never had to: the column kept its name, and
+    // PostgREST serialises a text[] to the same JSON array of strings a jsonb
+    // array produced. A rename or a drop would still break it. A retype did
+    // not.
     let q = ctx.db.from("inbox")
       .select(
         "id, captured_text, source_type, source_metadata, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id, ai_status, ai_confidence, ai_reasoning, created_at"

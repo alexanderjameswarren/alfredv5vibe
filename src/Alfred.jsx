@@ -275,9 +275,14 @@ const storage = {
         // `.select()` and not `.select("id")` as of Step 12.3. The database
         // assigns columns we do not send — `updated_at` via the
         // `set_updated_at` BEFORE UPDATE trigger, and on insert the `now()`,
-        // `'[]'::jsonb` and `false` column defaults. Asking only for the id
-        // threw all of that away, so state kept whatever the caller happened to
-        // build and disagreed with the row it had just written.
+        // array and `false` column defaults. Asking only for the id threw all
+        // of that away, so state kept whatever the caller happened to build and
+        // disagreed with the row it had just written.
+        //
+        // The tag array defaults used to be `'[]'::jsonb` and are `'{}'::text[]`
+        // now — items and intents since migration 039, inbox since 062. This
+        // path never cared which: supabase-js sends a JS array either way and
+        // PostgREST coerces it to whatever the destination column is.
         const { data: updated, error: updateError } = await supabase
           .from(table)
           .update(dbValue)

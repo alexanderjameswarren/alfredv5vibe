@@ -200,7 +200,14 @@ Deno.serve(async (req) => {
     source_type: "email",
     source_metadata: sourceMetadata,
     ai_status: "not_started",
-    // All suggested_* fields left as defaults (null/false/[])
+    // All suggested_* fields left as defaults (null/false/empty). Nothing here
+    // has been enriched yet — ai_status says so, and ai-enrich fills them in.
+    //
+    // `suggested_tags` is sent explicitly rather than left to the column
+    // default, so the shape of a fresh capture is readable here rather than in
+    // the schema. It needs no normalising because there is nothing to
+    // normalise, and it survived the jsonb -> text[] cutover (062) untouched:
+    // an empty JS array is what PostgREST wants for either type.
     suggest_item: false,
     suggest_intent: false,
     suggest_event: false,
