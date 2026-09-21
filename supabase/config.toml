@@ -40,6 +40,37 @@ verify_jwt = true
 import_map = "./functions/sam-song-scores/deno.json"
 entrypoint = "./functions/sam-song-scores/index.ts"
 
+[functions.email-capture]
+enabled = true
+# 🛑 JWT verification OFF. Called by Postmark's inbound webhook, which has no
+# user token and cannot present one — same situation as notify-dispatch below.
+#
+# ⚠️ BUT NOT THE SAME PROTECTION. notify-dispatch is guarded by a shared secret
+# in the x-dispatch-secret header, checked before any work. THIS FUNCTION HAS NO
+# SECRET. The only gate is that the To address must match one of the two
+# hard-coded patterns in USER_MAPPINGS; anything else is refused. So the
+# endpoint is effectively public, and anyone who learns the URL and the address
+# shape can put a row in the inbox.
+#
+# That is survivable rather than fine, and worth knowing rather than
+# discovering: the inbox is the human-approval gate, so the blast radius is junk
+# to triage, not data written anywhere that matters. If this ever needs
+# hardening, a shared secret in the Postmark webhook URL is the cheap fix.
+#
+# ⚠️ ADDED 2026-09-21, and the reason matters. There was NO entry here at all,
+# while production ran with verify_jwt = false. The CLI defaults the flag to
+# TRUE when nothing declares it, so a bare `supabase functions deploy
+# email-capture` would have flipped it and silently 401'd every Postmark
+# webhook — email capture would have stopped, with no error anywhere visible.
+# It survived only because that deploy passed --no-verify-jwt by hand. This
+# entry is what makes the next deploy safe without anyone remembering.
+#
+# See also the reset warning on notify-dispatch: the flag has gone back to true
+# on its own in this project before. Re-check after every deploy.
+verify_jwt = false
+import_map = "./functions/email-capture/deno.json"
+entrypoint = "./functions/email-capture/index.ts"
+
 [functions.notify-dispatch]
 enabled = true
 # 🛑 JWT verification OFF. Called by pg_cron via pg_net, which has no user token

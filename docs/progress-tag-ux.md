@@ -626,7 +626,7 @@ it would not be caught by anything — there is no database constraint enforcing
 canonical form, only discipline at the call sites. **If that discipline ever
 needs defending, this is the evidence that it has been holding.**
 
-### A landmine found while deploying, NOT fixed
+### A landmine found while deploying — FIXED 2026-09-21
 
 `email-capture` has **no `[functions.email-capture]` section in
 `supabase/config.toml`**, but runs in production with `verify_jwt = false`. The
@@ -649,10 +649,64 @@ enabled = true
 verify_jwt = false
 ```
 
-**Not applied** — deployment configuration was not in this step's scope and
-changing it is Alex's call. Every other deployed function (`mcp`, `ai-enrich`,
-`push-send`, `sam-song-scores`, `notify-dispatch`) already has its entry, so
-`email-capture` is the only one exposed.
+~~**Not applied** — deployment configuration was not in this step's scope and
+changing it is Alex's call.~~
+
+→ **APPLIED 2026-09-21**, as its own change, at Alex's instruction. Both facts
+re-confirmed first rather than trusted from memory:
+
+- `supabase/config.toml` had exactly five `[functions.*]` sections, and the
+  string `email` appeared **nowhere** in the file.
+- `email-capture` was deployed at **v8 with `verify_jwt = false`**.
+
+So the problem was real and the fix applies to it.
+
+**Audited every deployed function rather than the five I remembered.** Six are
+deployed; five were declared. `email-capture` was the only gap — and the only
+one where a gap is dangerous:
+
+| Function | verify_jwt | Was declared? | Exposure |
+|---|---|---|---|
+| `mcp` | false | yes | — |
+| `ai-enrich` | true | yes | — |
+| `push-send` | true | yes | — |
+| `sam-song-scores` | true | yes | — |
+| `notify-dispatch` | false | yes | — |
+| `email-capture` | **false** | **NO** | bare deploy would flip it to true |
+
+A missing entry only bites when production runs `false`, because the CLI default
+is `true` — an undeclared `true` function would have been deployed correctly by
+accident. `email-capture` was the only undeclared function running `false`.
+
+After the change: six declared, six agreeing with production, **zero gaps or
+mismatches**, and the TOML parses.
+
+**NO DEPLOY, and none is needed.** `config.toml` is read by the CLI at deploy
+time; it does not reach production on its own. Production already runs
+`verify_jwt = false`. The entry changes nothing that is running — it changes
+what the NEXT deploy will do, which until now depended on someone remembering
+to type `--no-verify-jwt`. Writing it down is the whole fix.
+
+### What the comment says, and why it is not a copy of notify-dispatch's
+
+Writing the entry meant reading `email-capture`'s actual auth, and it is weaker
+than the obvious comparison suggests. `notify-dispatch` is guarded by a shared
+secret in the `x-dispatch-secret` header, checked before any work.
+**`email-capture` has no secret at all.** Its only gate is that the `To` address
+must match one of two hard-coded patterns in `USER_MAPPINGS`; anything else is
+refused with a 200 so Postmark does not retry.
+
+So the endpoint is effectively public: anyone who learns the URL and the address
+shape can put a row in the inbox. Recorded in the config comment as survivable
+rather than fine — the inbox IS the human-approval gate, so the blast radius is
+junk to triage, not data written anywhere that matters. A shared secret in the
+Postmark webhook URL is the cheap hardening if it is ever wanted. **Not done;
+not asked for; flagged.**
+
+The entry also carries forward the reset warning from `notify-dispatch`: that
+flag has gone back to `true` on its own in this project before, *despite* having
+a declared entry. So the config makes the next deploy correct by default, but it
+is not a guarantee — re-check after every deploy.
 
 ### The window is cosmetic. Nothing breaks.
 
