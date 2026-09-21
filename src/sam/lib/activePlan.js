@@ -170,24 +170,54 @@ export function planItemsInOrder(plan) {
 /**
  * The first item still short of its target passes, main work before Free Play.
  * Null when every item is done, or the plan has no items.
+ *
+ * The precedence is load-bearing, not incidental: because `planItemsInOrder`
+ * puts every main item ahead of every Free Play one, a plain forward scan
+ * cannot reach Free Play while main work is outstanding. Anything that
+ * reorders this — searching raw plan order, say — silently reintroduces the
+ * bug `nextIncompleteItem` documents below.
  */
 export function firstIncompleteItem(plan, progress) {
   return planItemsInOrder(plan).find((i) => !itemState(i, progress).done) || null;
 }
 
 /**
- * What to practise after `item`: the next incomplete item after it in working
- * order, or — when everything later is done — the first incomplete item
- * anywhere in the plan, so a finished item at the bottom still points back up
- * at the one bar he skipped. Null when there is nothing left to do.
+ * What to practise after `item`.
+ *
+ * ⚠️ FREE PLAY IS NEVER OFFERED WHILE ANY MAIN-WORK ITEM IS INCOMPLETE. That
+ * is the whole point of the rule, and scanning forward through working order
+ * broke it (2026-09-22): from a completed main item near the bottom of the
+ * plan, the first incomplete thing AFTER it can be a Free Play item, and the
+ * scan stopped there — sending him to Free Play with real work outstanding.
+ * Live case: Pastorale m24–26 (position 7, main) incomplete, its whole song
+ * (position 8, main) complete and loaded, Arabesque m53–55 (position 9, Free
+ * Play) incomplete — and Next offered the Arabesque.
+ *
+ * So the search is confined to ONE TIER: main work while any of it is left,
+ * Free Play only once all main work is done. Inside that tier it looks
+ * forward from the current position first, then wraps to the tier's first
+ * incomplete item — so a finished item at the bottom still points back up at
+ * the one bar he skipped, which is how a plan saved mid-practice behaves
+ * (later items already complete from earlier passes, an earlier one not).
+ *
+ * The tier comes from `planItemsInOrder`, the same definition the home page's
+ * auto-scroll and `firstIncompleteItem` use, so the three cannot disagree.
  *
  * Never returns `item` itself: a row must not offer itself as its own Next.
+ * Null when the tier has nothing else to offer.
  */
 export function nextIncompleteItem(plan, progress, item) {
   const order = planItemsInOrder(plan);
   const open = (i) => !itemState(i, progress).done && i.id !== item?.id;
-  const at = item ? order.findIndex((i) => i.id === item.id) : -1;
-  return order.slice(at + 1).find(open) || order.find(open) || null;
+  // Counts `item` itself: loaded on the last incomplete main item, main work
+  // is still unfinished, so Free Play stays off the table.
+  const mainWorkLeft = order.some((i) => !i.is_free_play && !itemState(i, progress).done);
+  const tier = order.filter((i) => !!i.is_free_play === !mainWorkLeft);
+  // -1 when `item` is in the other tier — a completed Free Play item while
+  // main work is outstanding — which correctly scans the main tier from its
+  // start rather than from nowhere.
+  const at = item ? tier.findIndex((i) => i.id === item.id) : -1;
+  return tier.slice(at + 1).find(open) || tier.find(open) || null;
 }
 
 /** True when every item, Free Play included, has reached its target today. */

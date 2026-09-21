@@ -305,3 +305,113 @@ describe("working order, first incomplete, and what comes next", () => {
     expect(nextItemLabel({ song_title: "Prelude", snippet_id: "gone", snippet: null })).toBe("Next: Prelude");
   });
 });
+
+// --- Free Play is never offered while main work is left (2026-09-22) ---------
+//
+// nextIncompleteItem scanned forward through working order, so from a
+// completed main item near the bottom of the plan the first incomplete thing
+// after it could be a Free Play item — and the scan stopped there, with real
+// work outstanding.
+
+describe("Free Play never jumps the queue", () => {
+  // The plan as it stood on screen. Positions are the plan's own; working
+  // order puts p9 (Free Play) last regardless.
+  const LIVE = {
+    id: "p",
+    items: [
+      { id: "p7", position: 7, is_free_play: false, target_passes: 4,
+        song_title: "Pastorale", snippet_id: "s7",
+        snippet: { start_measure: 24, end_measure: 26, hand_mode: "both" } },
+      { id: "p8", position: 8, is_free_play: false, target_passes: 2,
+        song_title: "Pastorale", snippet_id: null },
+      { id: "p9", position: 9, is_free_play: true, target_passes: 2,
+        song_title: "Arabesque No. 2", snippet_id: "s9",
+        snippet: { start_measure: 53, end_measure: 55, hand_mode: "both" } },
+    ],
+  };
+  const byId = Object.fromEntries(LIVE.items.map((i) => [i.id, i]));
+  const done = (...ids) => new Map(ids.map((id) => [id, { attempts: 9, qualifying: 9 }]));
+
+  test("THE LIVE CASE: loaded on a completed later main item, Next points BACK at the earlier one", () => {
+    // p7 incomplete (main), p8 complete (main, loaded), p9 incomplete (Free Play).
+    const progress = done("p8");
+    expect(nextIncompleteItem(LIVE, progress, byId.p8).id).toBe("p7");
+    // ...and emphatically not the Arabesque, which is what it used to offer.
+    expect(nextIncompleteItem(LIVE, progress, byId.p8).song_title).toBe("Pastorale");
+    expect(nextItemLabel(nextIncompleteItem(LIVE, progress, byId.p8))).toBe("Next: Pastorale m.24–26");
+  });
+
+  test("main work incomplete EARLIER in the plan beats Free Play sitting later", () => {
+    // Nothing after p8 is main work, so the wrap has to reach backwards.
+    const progress = done("p8");
+    const next = nextIncompleteItem(LIVE, progress, byId.p8);
+    expect(next.is_free_play).toBe(false);
+  });
+
+  test("only once every main item is done does Free Play come up", () => {
+    const progress = done("p7", "p8");
+    expect(nextIncompleteItem(LIVE, progress, byId.p8).id).toBe("p9");
+    expect(nextIncompleteItem(LIVE, progress, byId.p7).id).toBe("p9");
+  });
+
+  test("everything complete: nothing to offer", () => {
+    const progress = done("p7", "p8", "p9");
+    expect(nextIncompleteItem(LIVE, progress, byId.p8)).toBeNull();
+    expect(firstIncompleteItem(LIVE, progress)).toBeNull();
+  });
+
+  test("off plan follows the same precedence", () => {
+    // The off-plan button reads firstIncompleteItem: main work first...
+    expect(firstIncompleteItem(LIVE, done("p8")).id).toBe("p7");
+    // ...and Free Play only when there is nothing else left.
+    expect(firstIncompleteItem(LIVE, done("p7", "p8")).id).toBe("p9");
+    // nextIncompleteItem with no current item must agree with it.
+    expect(nextIncompleteItem(LIVE, done("p8"), null).id).toBe("p7");
+    expect(nextIncompleteItem(LIVE, done("p7", "p8"), null).id).toBe("p9");
+  });
+
+  test("loaded on a FINISHED Free Play item, main work still outstanding: back to main work", () => {
+    // He drifted into Free Play early and finished it. The plan should pull
+    // him back rather than leave him there.
+    const progress = done("p8", "p9");
+    expect(nextIncompleteItem(LIVE, progress, byId.p9).id).toBe("p7");
+  });
+
+  test("loaded on the only incomplete main item: no suggestion, never Free Play", () => {
+    // He is mid-main-work. A row must not offer itself, and offering Free Play
+    // here would be exactly the bug. (PlanLine draws no button on an
+    // unfinished item anyway, so this never reaches the screen.)
+    const progress = done("p8");
+    expect(nextIncompleteItem(LIVE, progress, byId.p7)).toBeNull();
+  });
+
+  test("several Free Play items, all main work done: forward first, then wrap", () => {
+    const plan = {
+      id: "p2",
+      items: [
+        { id: "m1", position: 1, is_free_play: false, target_passes: 2, song_title: "A", snippet_id: null },
+        { id: "f1", position: 2, is_free_play: true, target_passes: 2, song_title: "F1", snippet_id: null },
+        { id: "f2", position: 3, is_free_play: true, target_passes: 2, song_title: "F2", snippet_id: null },
+      ],
+    };
+    const at = (id) => plan.items.find((i) => i.id === id);
+    // Main done, f1 done: forward from f1 finds f2.
+    expect(nextIncompleteItem(plan, done("m1", "f1"), at("f1")).id).toBe("f2");
+    // Main done, f2 done: nothing after f2, so it wraps back to f1.
+    expect(nextIncompleteItem(plan, done("m1", "f2"), at("f2")).id).toBe("f1");
+  });
+
+  test("a plan of Free Play only still works", () => {
+    const plan = {
+      id: "p3",
+      items: [
+        { id: "f1", position: 1, is_free_play: true, target_passes: 2, song_title: "F1", snippet_id: null },
+        { id: "f2", position: 2, is_free_play: true, target_passes: 2, song_title: "F2", snippet_id: null },
+      ],
+    };
+    const at = (id) => plan.items.find((i) => i.id === id);
+    // No main work exists, so there is none outstanding: Free Play is the tier.
+    expect(nextIncompleteItem(plan, done("f1"), at("f1")).id).toBe("f2");
+    expect(firstIncompleteItem(plan, new Map()).id).toBe("f1");
+  });
+});
