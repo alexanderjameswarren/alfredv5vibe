@@ -1,7 +1,7 @@
 # Progress: Tag UX and Inbox Tag Storage
 
-## Status: Steps 0-4b complete. Step 5 CODE READY, not deployed —
-waiting on migration 062 + CONFORMANT before deploy.
+## Status: Steps 0-5 COMPLETE — migrated, deployed, verified. Next up: Step 6
+(the enrichment skill). Change A and Change B are both finished.
 
 Reference: `docs/technical-spec-tag-ux.md`
 
@@ -555,11 +555,104 @@ said to cost.
 
 ---
 
-## Step 5 — CODE COMPLETE, NOT DEPLOYED (2026-09-21). Inbox column cutover.
+## Step 5 — COMPLETE (2026-09-21). Inbox column cutover, migrated and deployed.
 
-Sequencing, agreed with Alex: code ready and committed first, then he runs
-migration 062 and `check_platform_conformance`, then and only then does the
-deploy happen. Nothing is deployed as of this entry.
+Sequencing, agreed with Alex and followed: code ready and committed first, then
+he ran migration 062 and `check_platform_conformance`, then the deploy.
+
+### Ran, and what it showed
+
+`check_platform_conformance` returned **CONFORMANT — 42 tables, no drift**, both
+after the migration and again through the freshly deployed `mcp`.
+
+| | Before | After |
+|---|---|---|
+| Type | `jsonb`, nullable, default `'[]'::jsonb` | `ARRAY`, **NOT NULL**, default `'{}'::text[]` |
+| Rows with tags | 3 | 3 |
+| Distinct values | `ai`, `bug` (x3), `dj`, `mcp`, `ui` | identical |
+
+Deployed 2026-09-21 19:48 UTC, all three ACTIVE, every `verify_jwt` flag
+unchanged from its pre-deploy value:
+
+| Function | Version | verify_jwt |
+|---|---|---|
+| `mcp` | 102 → **103** | false |
+| `ai-enrich` | 10 → **11** | true |
+| `email-capture` | 7 → **8** | false |
+
+### 1. The window analysis was TESTED, not just reasoned
+
+Recorded deliberately, because **the spec asserted the opposite** and a future
+reader will find that assertion. B1 said the deployed `mcp` function's hand-typed
+column list would fail at request time, and that nothing should be captured in
+the window between migration and deploy.
+
+Both were wrong, and this is no longer an argument — it is a measurement. On
+device, against the **OLD deployed code and the NEW column**:
+
+- the inbox listed normally;
+- captures with AI suggestions still showed their tag chips;
+- a fresh capture saved and landed.
+
+The reasoning held: the column keeps its NAME, only its type changes, and
+PostgREST serialises `text[]` and a jsonb array to the same JSON array of
+strings. 062's header now carries the corrected analysis; the spec's B1 still
+carries the original claim and should be read with this entry beside it.
+
+**The lesson is not "the spec was wrong".** It is that a claim of the form "this
+will break at request time" is cheap to test and expensive to believe. The cost
+of believing it was a scarier-than-necessary deploy plan; the cost of testing it
+was one grep and one device check.
+
+### 2. Nothing needed normalising — and that is a RESULT, not a waste
+
+Every stored tag was already canonical. The normalisation half of the migration —
+the `pg_temp.normalise_tag` function, the dedupe, the order-preserving
+re-aggregation, the 20-cap — changed nothing, because there was nothing to
+change.
+
+🛑 **Read that as evidence the write-path discipline works, not as evidence the
+normalisation was pointless.** Every write path into `inbox.suggested_tags`
+already runs `normaliseTags`: `ai-enrich`'s `submit_suggestions`, both MCP inbox
+tools, `createInboxItem`, `updateInboxItem`. The two that do not — `email-capture`
+and `handleCapture` — write a literal empty array, so there is nothing to
+normalise. That is four normalised writers and two that cannot produce dirty
+data, which is exactly why the migration found nothing to clean.
+
+The normaliser was a safety net under a floor that turned out to be solid. The
+correct conclusion is that the floor is solid, and the way to keep it solid is to
+keep every new writer going through `normaliseTags`. A future writer that skips
+it would not be caught by anything — there is no database constraint enforcing
+canonical form, only discipline at the call sites. **If that discipline ever
+needs defending, this is the evidence that it has been holding.**
+
+### A landmine found while deploying, NOT fixed
+
+`email-capture` has **no `[functions.email-capture]` section in
+`supabase/config.toml`**, but runs in production with `verify_jwt = false`. The
+CLI defaults that flag to **true** when nothing declares otherwise, so a bare
+`npx supabase functions deploy email-capture` would flip it and **silently 401
+every Postmark webhook** — email capture would stop working with no error
+anywhere Alex would see.
+
+This deploy passed `--no-verify-jwt` explicitly, so production is unchanged. But
+the next person to deploy that function without knowing is one command away from
+breaking it.
+
+The fix is four lines in `config.toml`, codifying what production already does:
+
+```toml
+[functions.email-capture]
+enabled = true
+# 🛑 JWT verification OFF. Called by Postmark's webhook, which has no user token
+# and cannot present one. Same shape as notify-dispatch.
+verify_jwt = false
+```
+
+**Not applied** — deployment configuration was not in this step's scope and
+changing it is Alex's call. Every other deployed function (`mcp`, `ai-enrich`,
+`push-send`, `sam-song-scores`, `notify-dispatch`) already has its entry, so
+`email-capture` is the only one exposed.
 
 ### The window is cosmetic. Nothing breaks.
 
@@ -767,8 +860,8 @@ search for the string.
 - [x] The triage write-through in `Alfred` -> `handleInboxSave` still needs no
       change: `tags: triageData.itemData.tags || []` (~2962) and
       `tags: triageData.intentionData.tags || []` (~3009)
-- [ ] Deploy `mcp`, `ai-enrich` and `email-capture` — **BLOCKED until Alex
-      runs 062 and confirms CONFORMANT**
+- [x] Deploy `mcp`, `ai-enrich` and `email-capture` — done 2026-09-21 19:48
+      UTC (v103 / v11 / v8), all ACTIVE, `verify_jwt` flags unchanged
 
 ---
 

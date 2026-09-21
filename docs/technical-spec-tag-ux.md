@@ -332,6 +332,15 @@ was. Open decision, recorded in the Step 4 progress entry.
 Single-user app. Migrate the column, update every touchpoint, deploy together.
 No dual-write period, no compatibility shim.
 
+> ⚠️ **The sequencing-risk paragraph below is WRONG, and was left in place
+> rather than deleted so the correction has something to attach to.** The column
+> keeps its name through the migration; only its type changes. PostgREST
+> serialises `text[]` and a jsonb array identically, so the hand-typed column
+> list never breaks. **Tested on device 2026-09-21** against the old deployed
+> code and the new column: the inbox listed, tag chips rendered, a fresh capture
+> saved. Capturing during the window is safe. See the Step 5 entry in
+> `docs/progress-tag-ux.md`.
+
 **Sequencing risk, accepted deliberately:** the migration drops the `jsonb`
 column while the deployed function still names `suggested_tags` in a hand-typed
 string. There is a window between running the migration and deploying the
