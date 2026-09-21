@@ -28,7 +28,7 @@ import UndoMessage, { useUndo } from "./UndoMessage";
 import { useSortPreference } from "./SortControl";
 import ListToolbar, { NoMatches } from "./ListToolbar";
 import ItemPicker, { PickedItem } from "./ItemPicker";
-import TagFilter from "./TagFilter";
+import TagFilter, { collapseOnSearch } from "./TagFilter";
 import TagPicker from "./TagPicker";
 import RemovalMeta from "./RemovalMeta";
 import { startOfPacificDay } from "./utils/localDay";
@@ -1697,8 +1697,32 @@ export default function Alfred() {
   // clears it.
   const [listSearch, setListSearch] = useState({});
   const searchFor = (page) => listSearch[page] || "";
-  const setSearchFor = (page) => (value) =>
+  const setSearchFor = (page) => (value) => {
     setListSearch((prev) => ({ ...prev, [page]: value }));
+    // Typing collapses that page's tag bar, so the results are visible while
+    // you type — the whole point of the change. The rule itself lives in
+    // TagFilter.jsx so the tests can import it rather than reproduce it; it is
+    // the one that knows an empty value must change nothing.
+    setListTagsCollapsed((prev) => collapseOnSearch(prev, page, value));
+  };
+
+  // Which pages have their tag bar collapsed. A sibling of `listSearch` in every
+  // respect — same keys, same top-level owner, same lifetime: it survives
+  // opening a record and pressing Back, and a reload clears it. Absent means
+  // EXPANDED, so `{}` is the state a fresh load starts in.
+  //
+  // Matches search rather than sort on purpose. A collapsed tag bar is a fact
+  // about the sitting you are in, like the text in the box above it — not a
+  // preference about how you like Alfred to look, which is what the localStorage
+  // sort keys are for. `/contexts/detail` also carries no context id in its URL,
+  // so a reload does not land you back on the page anyway.
+  //
+  // `collection-detail` is a key here but NOT in `listSearch`: that view has no
+  // search box, so its bar only ever collapses by hand.
+  const [listTagsCollapsed, setListTagsCollapsed] = useState({});
+  const tagsCollapsedFor = (page) => !!listTagsCollapsed[page];
+  const toggleTagsFor = (page) => () =>
+    setListTagsCollapsed((prev) => ({ ...prev, [page]: !prev[page] }));
 
   // --- Undo (Step 2, docs/technical-spec-ui-standardization.md) -------------
   //
@@ -5777,6 +5801,8 @@ export default function Alfred() {
             onArchiveIntention={archiveIntention}
             filterTag={filterTag}
             onFilterTag={setFilterTag}
+            tagsCollapsed={tagsCollapsedFor("context-detail")}
+            onToggleTags={toggleTagsFor("context-detail")}
             allItems={items}
             collections={activeCollections}
             collectionMembers={collectionMembers}
@@ -6046,7 +6072,13 @@ export default function Alfred() {
               </button>
             </div>
 
-            <TagFilter entities={intentionsWithoutActiveEvent} activeTag={filterTag} onFilter={setFilterTag} />
+            <TagFilter
+              entities={intentionsWithoutActiveEvent}
+              activeTag={filterTag}
+              onFilter={setFilterTag}
+              collapsed={tagsCollapsedFor("intentions")}
+              onToggleCollapsed={toggleTagsFor("intentions")}
+            />
 
             {/* Step 12.8. This page was missed by Step 9b, so until now it had no
                 sort control AND no ordering — a bare `.filter()` over a query with
@@ -6106,7 +6138,13 @@ export default function Alfred() {
         {view === "memories" && (
           <div>
             <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Memories</h2>
-            <TagFilter entities={memoriesWithoutContext} activeTag={filterTag} onFilter={setFilterTag} />
+            <TagFilter
+              entities={memoriesWithoutContext}
+              activeTag={filterTag}
+              onFilter={setFilterTag}
+              collapsed={tagsCollapsedFor("memories")}
+              onToggleCollapsed={toggleTagsFor("memories")}
+            />
 
             {/* Step 12.8. Missed by Step 9b in exactly the same way as Intentions,
                 and with the same consequence: no control and no order. */}
@@ -6389,10 +6427,17 @@ export default function Alfred() {
                       tags — but wired to `collectionFilterTag`, which is NOT
                       the `filterTag` those lists share. See the state
                       declaration for why they must stay apart. */}
+                  {/* This view has no search box, so nothing ever collapses
+                      this bar for you — the toggle is the only way, and it is
+                      here so the control exists on every bar rather than on
+                      three of the four. Its own collapse key for the same
+                      reason `collectionFilterTag` is its own filter. */}
                   <TagFilter
                     entities={members}
                     activeTag={collectionFilterTag}
                     onFilter={setCollectionFilterTag}
+                    collapsed={tagsCollapsedFor("collection-detail")}
+                    onToggleCollapsed={toggleTagsFor("collection-detail")}
                   />
 
                   {members.length === 0 ? (
@@ -9001,6 +9046,10 @@ function ContextDetailView({
   onArchiveIntention,
   filterTag,
   onFilterTag,
+  // Owned by Alfred alongside `search`, for the same reason: both must survive
+  // opening a record here and pressing Back.
+  tagsCollapsed = false,
+  onToggleTags,
   allItems = [],
   collections = [],
   collectionMembers = {},
@@ -9159,7 +9208,13 @@ function ContextDetailView({
 
           {itemsExpanded && (
             <>
-              <TagFilter entities={items} activeTag={filterTag} onFilter={onFilterTag} />
+              <TagFilter
+                entities={items}
+                activeTag={filterTag}
+                onFilter={onFilterTag}
+                collapsed={tagsCollapsed}
+                onToggleCollapsed={onToggleTags}
+              />
               {items.length === 0 ? (
                 <p className="text-muted-foreground text-sm">No items in this context</p>
               ) : searching && visibleItems.length === 0 ? (

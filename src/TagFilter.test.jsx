@@ -1,11 +1,15 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
-import TagFilter from "./TagFilter";
+import TagFilter, { collapseOnSearch } from "./TagFilter";
 
-// The safety net for the collapse work (Step 2b). Everything here is written
-// against behaviour as it stands AFTER the pure move out of Alfred.jsx and
-// BEFORE anything collapses, so a failure during 2b means 2b changed something
-// it was not meant to.
+// The safety net for the collapse work (Step 2b). Everything above the "Step 2b"
+// divider was written BEFORE collapsing existed, against behaviour as it stood
+// after the pure move out of Alfred.jsx — and all of it still passes unchanged,
+// which is the evidence that 2b added rather than altered.
+//
+// None of those tests pass `onToggleCollapsed`, so none of them render the
+// toggle. That is the component's own rule, not a test convenience: no handler
+// means no toggle, and no toggle means `collapsed` is ignored.
 
 /** Rows as the four call sites hand them over: anything with a `tags` array. */
 const rows = (...tagLists) => tagLists.map((tags) => ({ tags }));
@@ -164,5 +168,170 @@ describe("TagFilter — Clear", () => {
     // way back from a list filtered to nothing. See the progress file.
     render(<TagFilter entities={rows(["soup"])} activeTag="beans" onFilter={() => {}} />);
     expect(pills()).toEqual(["soup (1)", "Clear"]);
+  });
+});
+
+// ─── Step 2b: collapsing, so the results are visible while typing ────────────
+//
+// The complaint this answers: on the Recipes page the bar is 22 pills, and
+// typing in the search box under it pushes every match off screen.
+
+describe("TagFilter — collapsed", () => {
+  const THREE = rows(["aioli"], ["beans"], ["soup"]);
+  const noop = () => {};
+
+  test("collapsed with no filter shows the toggle and nothing else", () => {
+    render(
+      <TagFilter entities={THREE} activeTag={null} onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(pills()).toEqual(["Tags (3)"]);
+  });
+
+  test("the toggle counts what is hidden, so you know what you are opening", () => {
+    render(
+      <TagFilter entities={rows(["a"], ["b"], ["c"], ["d"], ["e"])} activeTag={null}
+        onFilter={noop} collapsed onToggleCollapsed={noop} />
+    );
+    expect(screen.getByRole("button", { name: "Show tags" }).textContent.trim()).toBe("Tags (5)");
+  });
+
+  test("collapsed WITH a filter keeps the active tag and Clear visible", () => {
+    // A filter you cannot see is a list silently emptied with no visible cause.
+    render(
+      <TagFilter entities={THREE} activeTag="beans" onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(pills()).toEqual(["Tags (3)", "beans (1)", "Clear"]);
+  });
+
+  test("the surviving pill still looks active, and still clears on tap", () => {
+    const onFilter = jest.fn();
+    render(
+      <TagFilter entities={THREE} activeTag="beans" onFilter={onFilter}
+        collapsed onToggleCollapsed={noop} />
+    );
+    const pill = screen.getByRole("button", { name: "beans (1)" });
+    expect(pill.className).toContain("bg-primary");
+    fireEvent.click(pill);
+    expect(onFilter).toHaveBeenCalledWith(null);
+  });
+
+  test("the active pill survives even when no visible row carries that tag", () => {
+    // Alex, 2026-09-21. This is the case where the list is emptiest and the
+    // question "why" is loudest, so the pill matters most here. No count is
+    // printed, because it is answering what is filtering, not how many matched.
+    render(
+      <TagFilter entities={rows(["soup"])} activeTag="beans" onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(pills()).toEqual(["Tags (1)", "beans", "Clear"]);
+  });
+
+  test("expanding restores every pill, still in alphabetical order", () => {
+    const { rerender } = render(
+      <TagFilter entities={THREE} activeTag={null} onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(pills()).toEqual(["Tags (3)"]);
+    rerender(
+      <TagFilter entities={THREE} activeTag={null} onFilter={noop}
+        collapsed={false} onToggleCollapsed={noop} />
+    );
+    expect(pills()).toEqual(["Tags (3)", "aioli (1)", "beans (1)", "soup (1)"]);
+  });
+
+  test("the toggle fires, and says which way it goes", () => {
+    const onToggleCollapsed = jest.fn();
+    const { rerender } = render(
+      <TagFilter entities={THREE} activeTag={null} onFilter={noop}
+        collapsed={false} onToggleCollapsed={onToggleCollapsed} />
+    );
+    const open = screen.getByRole("button", { name: "Hide tags" });
+    expect(open.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(open);
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <TagFilter entities={THREE} activeTag={null} onFilter={noop}
+        collapsed onToggleCollapsed={onToggleCollapsed} />
+    );
+    const shut = screen.getByRole("button", { name: "Show tags" });
+    expect(shut.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(shut);
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(2);
+  });
+
+  test("the toggle sits first, so it is in the same place open or shut", () => {
+    const { rerender } = render(
+      <TagFilter entities={THREE} activeTag="beans" onFilter={noop}
+        collapsed={false} onToggleCollapsed={noop} />
+    );
+    expect(pills()[0]).toBe("Tags (3)");
+    rerender(
+      <TagFilter entities={THREE} activeTag="beans" onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(pills()[0]).toBe("Tags (3)");
+  });
+
+  test("no toggle handler means no toggle, and `collapsed` is ignored", () => {
+    // A bar that cannot be reopened must never be closed.
+    render(<TagFilter entities={THREE} activeTag={null} onFilter={noop} collapsed />);
+    expect(pills()).toEqual(["aioli (1)", "beans (1)", "soup (1)"]);
+  });
+
+  test("still nothing at all when no tag is in use, collapsed or not", () => {
+    const { container, rerender } = render(
+      <TagFilter entities={[]} activeTag={null} onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(container.innerHTML).toBe("");
+    rerender(
+      <TagFilter entities={[]} activeTag={null} onFilter={noop}
+        collapsed={false} onToggleCollapsed={noop} />
+    );
+    expect(container.innerHTML).toBe("");
+  });
+});
+
+// ─── The collapse-on-typing rule ─────────────────────────────────────────────
+//
+// `Alfred` cannot be rendered in a test (see executionColdLoad.test.jsx), and a
+// harness that REPRODUCES a rule stays green while the shipping code drifts
+// away from it. So the rule is exported and `Alfred` calls this exact function
+// from `setSearchFor` — what is tested below is what ships.
+
+describe("collapseOnSearch", () => {
+  test("typing a character collapses that page's bar", () => {
+    expect(collapseOnSearch({}, "memories", "t")).toEqual({ memories: true });
+  });
+
+  test("clearing the box does NOT expand it again", () => {
+    // The deliberate asymmetry. A backspace is not a request to see the tags,
+    // and springing back would shove the list down just as you finished reading.
+    expect(collapseOnSearch({ memories: true }, "memories", "")).toEqual({ memories: true });
+  });
+
+  test("an empty value never collapses either — a programmatic clear is not typing", () => {
+    // `viewContextDetail` blanks this box when a different context is opened.
+    expect(collapseOnSearch({}, "context-detail", "")).toEqual({});
+  });
+
+  test("only the page that was typed in is touched", () => {
+    expect(collapseOnSearch({ memories: true }, "intentions", "x")).toEqual({
+      memories: true,
+      intentions: true,
+    });
+  });
+
+  test("a bar the user reopened collapses again on the next keystroke", () => {
+    expect(collapseOnSearch({ memories: false }, "memories", "to")).toEqual({ memories: true });
+  });
+
+  test("returns the same object when nothing changes, so React skips the render", () => {
+    const already = { memories: true };
+    expect(collapseOnSearch(already, "memories", "soup")).toBe(already);
+    expect(collapseOnSearch(already, "memories", "")).toBe(already);
   });
 });

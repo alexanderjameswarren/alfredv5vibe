@@ -1,6 +1,6 @@
 # Progress: Tag UX and Inbox Tag Storage
 
-## Status: Steps 0, 1 and 2a complete. Next up: Step 2b.
+## Status: Steps 0, 1, 2a and 2b complete. Next up: Step 3.
 
 Reference: `docs/technical-spec-tag-ux.md`
 
@@ -22,8 +22,9 @@ Prerequisite. Closed without deploying, because there was nothing to fix.
       the `mcp` function anyway.
 - [x] Fix the stale comment in `getIntents` that still says
       `intents.tags is jsonb` — done in the repo, **not deployed**
-- [x] Fix the second stale jsonb comment in `getItems` (`tool-handlers.ts:54`),
-      approved by Alex 2026-09-21. **Comment only** — `getItems` behaviour is
+- [x] Fix the second stale jsonb comment in `getItems` — `tool-handlers.ts`,
+      the comment above `const { data, error } = await query` inside
+      `getItems` (~54). Approved by Alex 2026-09-21. **Comment only** — behaviour is
       untouched, because `ai-enrich` depends on it and it is out of scope here.
 - [x] Verify `get_intents` with `tags: ["ai"]` returns the three tagged
       intentions — **it already does**, against the currently deployed function
@@ -53,8 +54,8 @@ deployed function:
 | `tags:["ai"]`, `include_archived:true`, `limit:50` | `[]` |
 
 The difference is the **post-limit filtering bug** already filed as out of scope
-in the spec (`getIntents`, now `tool-handlers.ts:267`). `.limit()` is applied by
-Postgres *before* the client-side tag filter, and `clampLimit` hard-caps it at 50
+in the spec (`tool-handlers.ts`, `getIntents`, the `params.tags` filter, ~267).
+`.limit()` is applied by Postgres *before* the client-side tag filter, and `clampLimit` hard-caps it at 50
 whatever the caller asks. Adding archived rows to the pool pushes the three `ai`
 rows past row 50, so they never reach the filter.
 
@@ -193,39 +194,100 @@ its own rather than tangled up with the collapse rewrite.
   spent real effort re-deriving them, and Step 2b will shift them a fourth
   time. Not proposing anything now, but if it bites again the answer is
   probably to cite a stable anchor (a function name, a distinctive string)
-  instead of a line number.
+  instead of a line number. → **ADOPTED. Both documents were converted to
+  stable anchors before Step 2b (2026-09-21): enclosing function, plus a string
+  to search for, with the line number kept only as an approximate `(~n)` hint.**
 
 ---
 
-## Step 2b — Collapse the tag bar on typing
+## Step 2b — COMPLETE (2026-09-21). Collapse the tag bar on typing.
 
-- [ ] Add `listTagsCollapsed` state object as a sibling of `listSearch`
-      (`src/Alfred.jsx:1698-1701`), keyed by the same page names
-- [ ] `TagFilter` accepts collapsed state and a toggle
-- [ ] Typing a character into a screen's search box collapses that screen's bar
-- [ ] Clearing the search box does NOT auto-expand
-- [ ] When collapsed with a filter active, the active filter pill stays visible
-- [ ] When collapsed with no filter, only the expand control shows
-- [ ] Applied at all four call sites
-- [ ] Decide what the active-filter pill does when the active tag is no longer
-      in the list — see the `Clear` note under Step 2a
-- [ ] The 16 existing `src/TagFilter.test.jsx` tests still pass unchanged, or
-      any change to them is deliberate and explained
+- [x] `listTagsCollapsed` state object added as a sibling of `listSearch`
+      (`Alfred`, `const [listTagsCollapsed, setListTagsCollapsed] = useState({})`,
+      ~1722), keyed by the same page names plus `collection-detail`
+- [x] `TagFilter` accepts `collapsed` and `onToggleCollapsed`
+- [x] Typing a character into a screen's search box collapses that screen's bar
+- [x] Clearing the search box does NOT auto-expand
+- [x] When collapsed with a filter active, the active filter pill stays visible,
+      with `Clear` beside it
+- [x] When collapsed with no filter, only the toggle shows
+- [x] Applied at all four call sites
+- [x] Active-filter pill when the tag is no longer in the list — **decided by
+      Alex 2026-09-21: show it.** The pill exists to answer "why is this list
+      empty", so hiding it in the one case where the list IS empty defeats it.
+- [x] All 16 existing `src/TagFilter.test.jsx` tests pass **unchanged** — not
+      one needed editing. 16 new tests added on top.
+
+Suite: **61 suites, 1241 tests** (was 61 / 1225). Build clean under `CI=true`.
+
+### What it looks like
+
+Expanded, the bar gains one control at the front:
+
+    [▾ Tags (22)] [beans (9)] [beef (2)] [chicken (4)] … [vegetarian (26)]
+
+Collapsed with a filter on, that is the whole bar:
+
+    [▸ Tags (22)] [beans (9)] [Clear]
+
+Collapsed with no filter:
+
+    [▸ Tags (22)]
+
+### Step 2b decisions and surprises
+
+- **The toggle sits FIRST, not last.** It is then in the same place whether the
+  bar is open or shut, so it can be reached without reading the row — which
+  matters most on the phone, which is the whole point of the step. Collapsed,
+  the row also reads in the right order: what this control is, why the list is
+  filtered, how to stop.
+- **The toggle shows the count of hidden tags** — `Tags (22)` — so you know the
+  size of what you are opening before you open it.
+- **No handler means no toggle, and `collapsed` is then ignored.** A bar that
+  cannot be reopened must never be closed, so `collapsed` only takes effect when
+  `onToggleCollapsed` is supplied. This is also why the 16 original tests pass
+  untouched: none of them pass a handler, so none of them render a toggle. That
+  is the component's rule, not a test convenience.
+- **The collapsed active pill drops its count when the tag is absent.** It reads
+  `beans`, not `beans (0)`. The pill is answering "what is filtering this", not
+  "how many matched", and `(0)` invites the reading that the count is a result.
+- **Surprise: collection detail has no search box at all.** Nothing can ever
+  collapse that bar by typing; the toggle is its only control. It also has no
+  `listSearch` key, so `collection-detail` is a collapse-only key — the one
+  place `listTagsCollapsed` and `listSearch` do not share a keyspace. Given it
+  is a separate vocabulary with its own `collectionFilterTag`, that seemed
+  right rather than worth forcing into line.
+- **The collapse rule is exported as `collapseOnSearch`, not inlined.**
+  `executionColdLoad.test.jsx` opens by explaining that `Alfred` cannot be
+  rendered in a test, and that a harness reproducing a rule instead of importing
+  it "can stay green while the shipping code drifts away from it". Inlining the
+  rule in `setSearchFor` would have left "typing collapses / clearing does not"
+  either untested or tested against a copy. `Alfred` now calls the exported
+  function, and the tests import that same function.
+- **Still nothing rendered when no tag is in use** — collapsed or not, filter or
+  not. So a stale `activeTag` inherited from another screen still shows no
+  `Clear` on a screen whose rows carry no tags. Unchanged from 2a, out of scope
+  here, and **Step 3 removes the inheritance that causes it.**
+- **Not done, deliberately:** no filter reset on navigation, no suggestion-pool
+  change, nothing inbox-related.
 
 ---
 
 ## Step 3 — Reset the tag filter on navigation
 
 - [ ] `filterTag` clears when navigating between the three screens that share it
-- [ ] Follows the existing pattern at `src/Alfred.jsx:4443`
+- [ ] Follows the existing pattern in `Alfred` -> `viewContextDetail`, the
+      `setSearchFor("context-detail")("")` line (~4443)
 - [ ] `collectionFilterTag` remains separate and untouched
 
 ---
 
 ## Step 4 — Exclude archived rows from the tag suggestion pool
 
-- [ ] `tagPool` (`src/Alfred.jsx:1380`) filters archived out of `items` and
-      `intents` before calling `tagPoolFrom`
+- [ ] `tagPool` (`Alfred`,
+      `const tagPool = useMemo(() => tagPoolFrom(items, intents)`, ~1380)
+      filters archived out of `items` and `intents` before calling
+      `tagPoolFrom`
 - [ ] `tagPoolFrom` itself unchanged — keeps frequency-then-alphabetical ordering
 - [ ] Verified: the picker no longer offers `urgent`, `test tag`, `another tag`,
       `due`, `late`, `overdue`, `past`, `outdoor maintenance`, `cleaning`
@@ -236,18 +298,64 @@ its own rather than tangled up with the collapse rewrite.
 
 SQL migration is run by hand before this step. See "Manual prerequisites".
 
-- [ ] `supabase/functions/mcp/index.ts:334` — the hand-typed column list still
-      names `suggested_tags` correctly
-- [ ] `supabase/functions/ai-enrich/index.ts:379` — `buildPreviousSuggestions`
-      handles a text array
-- [ ] `supabase/functions/ai-enrich/index.ts:582` — write path
-- [ ] `supabase/functions/mcp/index.ts:197` — write path
-- [ ] `tool-handlers.ts:627` and `:710` — write paths
-- [ ] `supabase/functions/email-capture/index.ts:207` — empty array write
-- [ ] `src/Alfred.jsx:2802` — empty array write
-- [ ] Triage UI: lines 7299, 7359, 7400, 7436, 7453, 7736, 7843, 7860
-- [ ] The two `JSON.stringify` dirty-checks at 7480 and 7485 still behave
-      correctly and produce no phantom unsaved-changes prompt
+Every location below is anchored by its enclosing function plus a string to
+search for. The `(~n)` is last-known line, approximate and not to be trusted —
+search for the string.
+
+**Edge functions**
+
+- [ ] `mcp/index.ts`, `getInboxTool` — the hand-typed `.select(...)` string of
+      21 columns still names `suggested_tags` correctly (~334)
+- [ ] `ai-enrich/index.ts`, `buildPreviousSuggestions` — the `fields` array
+      handles a text array (~379)
+- [ ] `ai-enrich/index.ts`, the `submit_suggestions` update —
+      `suggested_tags: normaliseTags(suggestions.suggested_tags)` (~582)
+- [ ] `mcp/index.ts`, `createInboxItemTool` —
+      `suggested_tags: normaliseTags(args.suggested_tags)` (~197)
+- [ ] `tool-handlers.ts`, `createInboxItem` —
+      `suggested_tags: normaliseTags(params.suggested_tags)` (~627)
+- [ ] `tool-handlers.ts`, `updateInboxItem` —
+      `updates.suggested_tags = normaliseTags(params.suggested_tags)` (~710)
+- [ ] `email-capture/index.ts`, the `inboxRecord` literal —
+      `suggested_tags: []` (~207)
+
+**Browser — the ten triage-UI locations, one per line**
+
+- [ ] `Alfred` -> `handleCapture` — `suggestedTags: []` in the new-capture
+      record (~2802)
+- [ ] `CLEARED_ENRICHMENT` (module constant above `InboxCard`) —
+      `suggestedTags: []` (~7299)
+- [ ] `InboxCard` —
+      `const [intentTags, setIntentTags] = useState(inboxItem.suggestedTags || [])`
+      (~7359)
+- [ ] `InboxCard` —
+      `const [itemTags, setItemTags] = useState(inboxItem.suggestedTags || [])`
+      (~7400)
+- [ ] `InboxCard`, the re-seed effect, under `if (inboxItem.suggestIntent)` —
+      `setIntentTags(inboxItem.suggestedTags || [])` (~7436)
+- [ ] `InboxCard`, the same effect, under `if (inboxItem.suggestItem)` —
+      `setItemTags(inboxItem.suggestedTags || [])` (~7453)
+- [ ] `InboxCard`, the `isDirty` effect —
+      `JSON.stringify(intentTags) !== JSON.stringify(inboxItem.suggestedTags || [])`
+      (~7480)
+- [ ] `InboxCard`, the `isDirty` effect —
+      `JSON.stringify(itemTags) !== JSON.stringify(inboxItem.suggestedTags || [])`
+      (~7485)
+- [ ] `InboxCard` -> `handleReEnrich` —
+      `suggestedTags: intentTags.length > 0 ? intentTags : []` (~7736)
+- [ ] `InboxCard` -> `handleCancel` —
+      `setIntentTags(inboxItem.suggestedTags || [])` (~7843)
+- [ ] `InboxCard` -> `handleCancel` —
+      `setItemTags(inboxItem.suggestedTags || [])` (~7860)
+
+(That is eleven checkboxes for ten `suggestedTags` triage locations plus
+`handleCapture`, which lives outside `InboxCard`.)
+
+- [ ] The two `JSON.stringify` dirty-checks above still behave correctly and
+      produce no phantom unsaved-changes prompt
+- [ ] The triage write-through in `Alfred` -> `handleInboxSave` still needs no
+      change: `tags: triageData.itemData.tags || []` (~2962) and
+      `tags: triageData.intentionData.tags || []` (~3009)
 - [ ] Deploy `mcp`, `ai-enrich` and `email-capture`
 
 ---
@@ -291,16 +399,18 @@ standalone statement. Verified clean afterwards.
   deploy theory first. The theory is disproven and the bug it was meant to fix
   does not exist, so deploying would have been a no-op over a byte-identical
   bundle. Held for Alex rather than burning a production deploy on a comment.
-- **The comment fix is in the repo but not live.** `tool-handlers.ts:245` now
+- **The comment fix is in the repo but not live.** The comment above
+  `getIntents`' tag filter now
   states the column is `text[]`, that it no longer matches `get_items` (which
   filters in Postgres via `platform_search_items`), and carries a warning about
   the page-not-table limit trap — because that trap is what caused the
   misdiagnosis, and the next person to read those lines is the person about to
   repeat it.
-- **A second stale jsonb comment exists** at `tool-handlers.ts:54`, inside the
+- **A second stale jsonb comment exists** in `tool-handlers.ts`, inside the
   legacy `getItems`: *"items.tags is a jsonb array"*. Equally false since 039.
   Left untouched — outside the scope Alex specified. One line, zero risk, his
-  call. Note `getItems` is still live: `ai-enrich/index.ts:166` calls it. Unlike
+  call. Note `getItems` is still live: `ai-enrich/index.ts` calls it from its
+  tool dispatch, `case "get_items"` (~166). Unlike
   `getIntents` it has no `.limit()`, so it does **not** have the page-not-table
   bug.
 - **Spec correction needed.** The Overview's "Prerequisite — redeploy the MCP
