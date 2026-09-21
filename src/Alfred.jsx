@@ -687,6 +687,40 @@ function LoadingOverlay({ message }) {
   );
 }
 
+/**
+ * The tag filter bar: one pill per tag in use, with its count, on the four
+ * screens that carry it — the Intentions list, the Memories list, collection
+ * detail, and the Items accordion on context detail.
+ *
+ * The tags are counted here from the rows the caller hands over. There is no
+ * query and no RPC, so the bar is already scoped to whatever that screen is
+ * showing, and archived rows never reach it because each caller filters them
+ * out first.
+ *
+ * ─── Ordering: alphabetical, not by frequency (2026-09-21) ──────────────────
+ *
+ * This used to sort by count descending with NO tie-break, which meant every
+ * tag sharing a count landed in row order — an order that is not stable
+ * between renders and means nothing to the person reading it. On the Recipes
+ * page that is most of the bar: the counts bunch up in ones and twos, so the
+ * pills effectively shuffled.
+ *
+ * Alphabetical is the one order you can search with your eyes. Knowing that
+ * "italian" sits between "indian" and "lentils" is worth more than knowing it
+ * is the fourth most used, because you arrive at this bar already knowing
+ * which tag you want — you are looking for it, not browsing.
+ *
+ * `localeCompare` rather than `<`, so accented tags sort where a reader
+ * expects rather than after "z" (normaliseTag preserves accents — "café" is a
+ * legal tag).
+ *
+ * NOT the same decision as `tagPoolFrom`, which orders the tag PICKER's
+ * suggestions and stays frequency-first on purpose. That list is for choosing
+ * a tag you have not named yet, where the ones you reach for most belong under
+ * your thumb; this one is for finding a tag you have already named.
+ *
+ * The count still rides inside each pill. Only the order changed.
+ */
 function TagFilter({ entities, activeTag, onFilter }) {
   const tagCounts = {};
   for (const entity of entities) {
@@ -697,7 +731,7 @@ function TagFilter({ entities, activeTag, onFilter }) {
     }
   }
 
-  const sortedTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]);
+  const sortedTags = Object.entries(tagCounts).sort((a, b) => a[0].localeCompare(b[0]));
 
   if (sortedTags.length === 0) return null;
 
@@ -745,8 +779,14 @@ const TAG_TOGGLE_ATTR = "data-tag-toggle";
  * that are already sitting in state.
  *
  * Frequency order, ties broken alphabetically. The tags you reach for most are
- * the ones worth putting under your thumb, and it matches the order `TagFilter`
- * already shows its pills in.
+ * the ones worth putting under your thumb.
+ *
+ * DELIBERATELY DIFFERENT from `TagFilter` above, which went alphabetical on
+ * 2026-09-21. The two lists answer different questions: this one offers a tag
+ * you have not named yet, where the common ones should come first; that one
+ * helps you find a tag you already have in mind, where only alphabetical lets
+ * you aim. If you are here to make them agree, read the note on `TagFilter`
+ * first — the difference is the point.
  *
  * Items and intentions share one pool. Collections get their own in Phase 6 —
  * per-trip tags like "tjs" have no business being suggested on a recipe.

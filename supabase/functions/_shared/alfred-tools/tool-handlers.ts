@@ -51,7 +51,15 @@ export async function getItems(
       );
     }
 
-    // Tag filtering: items.tags is a jsonb array. We filter client-side for simplicity.
+    // Tag filtering, client-side. `items.tags` has been text[] since migration
+    // 039 — this comment used to say jsonb, which stopped being true then — so
+    // the array `.includes` below is correct rather than accidentally correct.
+    //
+    // This is the LEGACY reader, still live: ai-enrich calls it. The MCP
+    // get_items tool does not — it goes through platform_search_items, which
+    // filters in Postgres with `tags && p_tags`. Unlike getIntents below, this
+    // query has no `.limit()`, so filtering after the fetch sees every row and
+    // the page-not-table trap documented there does not apply here.
     const { data, error } = await query;
     if (error) return { error: error.message };
 

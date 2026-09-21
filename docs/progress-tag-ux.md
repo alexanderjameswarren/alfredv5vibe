@@ -1,6 +1,6 @@
 # Progress: Tag UX and Inbox Tag Storage
 
-## Status: Step 0 investigated — premise disproven, redeploy NOT run, awaiting Alex
+## Status: Steps 0 and 1 complete. Next up: Step 2.
 
 Reference: `docs/technical-spec-tag-ux.md`
 
@@ -9,17 +9,22 @@ starting the next.
 
 ---
 
-## Step 0 — Redeploy and verify the MCP function
+## Step 0 — COMPLETE (2026-09-21). Redeploy cancelled.
 
-Prerequisite. Nothing else starts until this is green.
+Prerequisite. Closed without deploying, because there was nothing to fix.
 
 - [x] Confirm whether the deployed `mcp` Edge Function predates migration 039
       — **DISPROVEN.** It is current. See "Step 0 findings" below.
-- [ ] ~~Redeploy `supabase/functions/mcp`~~ — **NOT RUN.** Deliberately held.
-      The redeploy's only stated purpose was to fix a bug that does not exist.
-      Awaiting Alex's call on whether to deploy the comment fix anyway.
-- [x] Fix the stale comment at `tool-handlers.ts:245` that still says
+- [x] ~~Redeploy `supabase/functions/mcp`~~ — **CANCELLED** (Alex, 2026-09-21).
+      The deployed bundle is byte-identical to repo HEAD, and the bug the
+      redeploy targeted does not exist, so it would have been a no-op over
+      identical code. The comment fixes below ship with Step 5, which deploys
+      the `mcp` function anyway.
+- [x] Fix the stale comment in `getIntents` that still says
       `intents.tags is jsonb` — done in the repo, **not deployed**
+- [x] Fix the second stale jsonb comment in `getItems` (`tool-handlers.ts:54`),
+      approved by Alex 2026-09-21. **Comment only** — `getItems` behaviour is
+      untouched, because `ai-enrich` depends on it and it is out of scope here.
 - [x] Verify `get_intents` with `tags: ["ai"]` returns the three tagged
       intentions — **it already does**, against the currently deployed function
 
@@ -48,10 +53,10 @@ deployed function:
 | `tags:["ai"]`, `include_archived:true`, `limit:50` | `[]` |
 
 The difference is the **post-limit filtering bug** already filed as out of scope
-in the spec (`tool-handlers.ts:245-251`). `.limit()` is applied by Postgres
-*before* the client-side tag filter, and `clampLimit` hard-caps it at 50 whatever
-the caller asks. Adding archived rows to the pool pushes the three `ai` rows past
-row 50, so they never reach the filter.
+in the spec (`getIntents`, now `tool-handlers.ts:267`). `.limit()` is applied by
+Postgres *before* the client-side tag filter, and `clampLimit` hard-caps it at 50
+whatever the caller asks. Adding archived rows to the pool pushes the three `ai`
+rows past row 50, so they never reach the filter.
 
 **Cause of the original report:** the investigation that produced this spec only
 ever probed `get_intents` with `include_archived: true`, and read the resulting
@@ -59,21 +64,69 @@ empty array as a broken filter. That was my error in the prior investigation, an
 the spec inherited it. The prerequisite in the spec's Overview is therefore void.
 
 Success criterion 9 ("`get_intents` with a `tags` filter returns matching
-intentions") is **already met** and needs no deploy.
-
-Note: verification needs a **new chat thread**. A session's tool manifest is
-frozen at session start, so neither the CLI session nor the current web chat can
-see a freshly deployed tool. Moot while nothing has been deployed.
+intentions") was **already met** and needed no deploy. Deleted from the spec
+2026-09-21, along with the Overview's prerequisite paragraph.
 
 ---
 
-## Step 1 — Alphabetical ordering in the tag filter bar
+## Step 1 — COMPLETE (2026-09-21). Alphabetical ordering in the tag filter bar.
 
-- [ ] `TagFilter` (`src/Alfred.jsx:690-727`) sorts by tag name ascending using
-      `localeCompare`, replacing the current frequency-descending sort
-- [ ] Counts still render inside each pill
-- [ ] Verified on all four call sites: intentions list, memories list, collection
-      detail, context detail
+- [x] `TagFilter` sorts by tag name ascending using `localeCompare`, replacing
+      the frequency-descending sort. It now sits at `src/Alfred.jsx:724-763`,
+      with its new docblock at `:690-723` — the old `:690-727` reference in the
+      spec pointed at the function itself and is now the docblock.
+- [x] Counts still render inside each pill — the pill body is untouched
+- [x] All four call sites covered. They needed no edits: the sort lives inside
+      `TagFilter`, and every caller reaches it. Call sites are
+      `src/Alfred.jsx:6123` (intentions), `:6183` (memories), `:6466`
+      (collection detail) and `:9236` (context detail, Items accordion).
+
+The whole behavioural change is one expression:
+
+```js
+// was: .sort((a, b) => b[1] - a[1])
+const sortedTags = Object.entries(tagCounts).sort((a, b) => a[0].localeCompare(b[0]));
+```
+
+Full suite green (60 suites, 1209 tests). Production build compiles clean under
+`CI=true`, warnings as errors.
+
+### Step 1 decisions and surprises
+
+- **`localeCompare`, not `<`.** `normaliseTag` preserves accents, so "café" is a
+  legal tag; a plain comparison sorts it after "z". No locale argument passed —
+  the browser default is right for a single-user app, and pinning one would be a
+  guess with no evidence behind it.
+- **`tagPoolFrom` stays frequency-first, deliberately.** Its docblock used to
+  justify its ordering partly by saying it "matches the order `TagFilter`
+  already shows its pills in" — which this change made false, so that clause is
+  now a note explaining why the two deliberately differ. The picker offers a tag
+  you have not named yet (common ones first); the bar helps you find one you
+  already have in mind (alphabetical). A later reader will want to make them
+  agree; the comment tells them not to.
+- **Surprise: no test coverage exists for `TagFilter`, and I did not add any.**
+  It is an unexported local function inside a 539 KB monolith, so it cannot be
+  rendered in isolation without restructuring. Adding an export or extracting a
+  helper purely to test a one-line sort is not worth the blast radius in that
+  file. **Recommendation for Step 2:** that step adds collapse state, an
+  active-filter pill and an expand control to this same component — real UI
+  logic that does deserve tests. Extracting `TagFilter` into its own file
+  (alongside `src/TagPicker.jsx`, which is tested) is the natural moment, and
+  Step 2 is when to decide it. Flagging, not doing — Step 2 was explicitly out
+  of scope here.
+- **No behaviour changed beyond order.** Counting, the archived exclusion, the
+  Clear pill, the active-pill styling and the click handler are all untouched.
+- **Every `src/Alfred.jsx` line reference in the spec was refreshed.** The new
+  `TagFilter` docblock pushed everything below it down by 40 lines, which
+  invalidated ~20 pointers the spec presents as verified findings — including
+  all of Step 5's triage-UI line list. Each new number was checked against the
+  code it claims to point at. Steps 2–5 can trust the spec's pointers again.
+- **A fourth spec error, not on Alex's list.** The out-of-scope bullet blamed
+  the post-limit bug on `searchItems` as well as `getIntents`, citing
+  `tool-handlers.ts:60`. Both wrong, both mine: line 60 was inside `getItems`,
+  which has no `.limit()` and so is unaffected, and `searchItems` has no tag
+  filter at all. `getIntents` is the only affected function. Corrected in the
+  spec — **the filed Alfred item probably wants narrowing to match.**
 
 ---
 
