@@ -1,6 +1,7 @@
 import Vanish from "./variants/vanish";
 import Cascade from "./variants/cascade";
 import Drop from "./variants/drop";
+import SightReader from "./variants/sightReader";
 
 // The variant registry. The Games tab renders this list and nothing else knows
 // what variants exist — adding one means adding one entry here and one file
@@ -42,6 +43,17 @@ export const VARIANTS = [
     description: "Horizontal chains only, survivors fall into the gaps.",
     status: "current",
     component: Drop,
+  },
+  // Not a tile-merge variant — the tab is the registry, and the registry does
+  // not care. Sight Reader draws one note or chord on a stave and asks you to
+  // name it. It is here rather than behind its own route because the registry
+  // costs one entry and one file, and moving it out later is reversible.
+  {
+    id: "sight-reader",
+    name: "Sight Reader",
+    description: "Name the note or chord drawn on the stave.",
+    status: "current",
+    component: SightReader,
   },
 ];
 
