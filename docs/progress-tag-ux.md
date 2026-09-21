@@ -1,6 +1,6 @@
 # Progress: Tag UX and Inbox Tag Storage
 
-## Status: Steps 0, 1, 2a and 2b complete. Next up: Step 3.
+## Status: Steps 0, 1, 2a, 2b and 2c complete. Next up: Step 3.
 
 Reference: `docs/technical-spec-tag-ux.md`
 
@@ -270,6 +270,95 @@ Collapsed with no filter:
   here, and **Step 3 removes the inheritance that causes it.**
 - **Not done, deliberately:** no filter reset on navigation, no suggestion-pool
   change, nothing inbox-related.
+
+---
+
+## Step 2c — COMPLETE (2026-09-21). No collapse below four tags.
+
+Added after 2b shipped: on a bar with a couple of tags the toggle is pure
+chrome. `Tags (2)` hiding two pills saves nothing and adds a thing to look at,
+and on collection detail — which has no search box — nothing could ever fire it,
+so its only purpose would be to undo itself.
+
+- [x] `COLLAPSE_MIN_TAGS = 4`, exported from `src/TagFilter.jsx` so the tests
+      assert against the component's own number rather than a copy
+- [x] Below it: no toggle, and every pill always shows
+- [x] Below it, typing does not collapse the bar
+- [x] A collapsed bar whose count drops below the threshold shows its pills
+      again — the outcome that must be impossible is impossible
+- [x] Recipes (22 tags) behaves exactly as it did
+
+The whole change is one condition:
+
+```js
+const canToggle =
+  typeof onToggleCollapsed === "function" && sortedTags.length >= COLLAPSE_MIN_TAGS;
+const isCollapsed = collapsed && canToggle;
+```
+
+Suite: **61 suites, 1249 tests** (was 61 / 1241). Build clean under `CI=true`.
+
+### Why the threshold is 4
+
+Three pills fit on one row on a phone. Collapsing a one-row bar cannot save a
+row — the toggle would simply occupy the row it was meant to free, and you would
+tap to reveal what was already in front of you. At four the bar can wrap, so
+there is something to win. The grocery collection carries two tags, which is the
+case that prompted it.
+
+### The guard is in the RENDER, not in `collapseOnSearch`
+
+Asked for explicitly, and the reasoning matters because the two behave
+differently:
+
+- **`collapseOnSearch` cannot see the tag count.** It runs in `Alfred`, and the
+  count is computed from `entities` inside `TagFilter`. Enforcing there would
+  mean teaching `Alfred` to count tags — **a second copy of the counting rule**,
+  which is exactly the twin-drift failure `src/utils/tags.js` opens by warning
+  about, and which has already cost this project once.
+- **A render guard is continuous; a typing-time guard is a snapshot.** Decided
+  once at typing time, the answer goes stale the moment the data changes.
+  Recomputed every render, it cannot: a bar can never be left hidden by a `true`
+  recorded when it was bigger. That is what makes "a hidden bar with no way to
+  reopen it" impossible by construction rather than by a separate safety net.
+
+### The stale `collapsed: true` is deliberate, not a quirk
+
+Typing on a sub-threshold screen still records `true`. Nothing happens, because
+the render ignores it — but if that screen later grows past four tags, the bar
+opens collapsed.
+
+**Kept on purpose (Alex, 2026-09-21).** The user did perform the gesture that
+means collapse; discarding their intent based on a tag count they were not
+thinking about would be the more surprising behaviour. Recorded here so a later
+reader does not "fix" it.
+
+### Six existing tests were edited — with permission, and why
+
+2b's collapse tests were built on a **three-tag** fixture, and a threshold of
+four makes a three-tag bar non-collapsible by definition. They were not catching
+a regression; they were asserting the behaviour 2c removes. Flagged before
+touching them, and Alex approved the widening.
+
+The fixture in the `TagFilter — collapsed` block went from three tags to five,
+and test three's one-tag fixture went to five while keeping an `activeTag` none
+of the pills carry. **No assertion logic changed** — every test makes exactly
+the claim it made before, on a bar big enough for collapsing to mean something.
+
+The identical `THREE` fixture in the *filtering* and *Clear* blocks was left
+alone: neither passes `onToggleCollapsed`, so neither is affected, and the net
+over non-collapse behaviour is untouched.
+
+### Also
+
+- **Searching never changes the tag counts.** All four bars count the
+  *unsearched* list — `intentionsWithoutActiveEvent`, `memoriesWithoutContext`,
+  the context's `items`, the collection's `members` — while `visibleMemories` /
+  `visibleIntentions` are the searched ones. So the pills and the count are
+  fixed while you type, and a search can never cross the threshold. Only a data
+  change can: archiving a row, editing tags, or a background refresh.
+- The spec's call-site table was converted to anchors at the same time; it was
+  still carrying bare line numbers that 2b had shifted.
 
 ---
 

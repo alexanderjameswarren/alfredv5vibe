@@ -1,6 +1,6 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
-import TagFilter, { collapseOnSearch } from "./TagFilter";
+import TagFilter, { collapseOnSearch, COLLAPSE_MIN_TAGS } from "./TagFilter";
 
 // The safety net for the collapse work (Step 2b). Everything above the "Step 2b"
 // divider was written BEFORE collapsing existed, against behaviour as it stood
@@ -177,15 +177,18 @@ describe("TagFilter — Clear", () => {
 // typing in the search box under it pushes every match off screen.
 
 describe("TagFilter — collapsed", () => {
-  const THREE = rows(["aioli"], ["beans"], ["soup"]);
+  // Five tags, not three: at or above COLLAPSE_MIN_TAGS, which is what makes a
+  // bar collapsible at all. Widened from three in Step 2c — every assertion
+  // below is unchanged, it just needs a bar big enough to be worth collapsing.
+  const FIVE = rows(["aioli"], ["beans"], ["carrot"], ["dill"], ["soup"]);
   const noop = () => {};
 
   test("collapsed with no filter shows the toggle and nothing else", () => {
     render(
-      <TagFilter entities={THREE} activeTag={null} onFilter={noop}
+      <TagFilter entities={FIVE} activeTag={null} onFilter={noop}
         collapsed onToggleCollapsed={noop} />
     );
-    expect(pills()).toEqual(["Tags (3)"]);
+    expect(pills()).toEqual(["Tags (5)"]);
   });
 
   test("the toggle counts what is hidden, so you know what you are opening", () => {
@@ -199,16 +202,16 @@ describe("TagFilter — collapsed", () => {
   test("collapsed WITH a filter keeps the active tag and Clear visible", () => {
     // A filter you cannot see is a list silently emptied with no visible cause.
     render(
-      <TagFilter entities={THREE} activeTag="beans" onFilter={noop}
+      <TagFilter entities={FIVE} activeTag="beans" onFilter={noop}
         collapsed onToggleCollapsed={noop} />
     );
-    expect(pills()).toEqual(["Tags (3)", "beans (1)", "Clear"]);
+    expect(pills()).toEqual(["Tags (5)", "beans (1)", "Clear"]);
   });
 
   test("the surviving pill still looks active, and still clears on tap", () => {
     const onFilter = jest.fn();
     render(
-      <TagFilter entities={THREE} activeTag="beans" onFilter={onFilter}
+      <TagFilter entities={FIVE} activeTag="beans" onFilter={onFilter}
         collapsed onToggleCollapsed={noop} />
     );
     const pill = screen.getByRole("button", { name: "beans (1)" });
@@ -221,30 +224,34 @@ describe("TagFilter — collapsed", () => {
     // Alex, 2026-09-21. This is the case where the list is emptiest and the
     // question "why" is loudest, so the pill matters most here. No count is
     // printed, because it is answering what is filtering, not how many matched.
+    // The bar is five tags wide so it can collapse at all; "beans" is not one
+    // of them, which is the whole point — the filter outlived its tag.
     render(
-      <TagFilter entities={rows(["soup"])} activeTag="beans" onFilter={noop}
-        collapsed onToggleCollapsed={noop} />
+      <TagFilter entities={rows(["aioli"], ["carrot"], ["dill"], ["soup"], ["thyme"])}
+        activeTag="beans" onFilter={noop} collapsed onToggleCollapsed={noop} />
     );
-    expect(pills()).toEqual(["Tags (1)", "beans", "Clear"]);
+    expect(pills()).toEqual(["Tags (5)", "beans", "Clear"]);
   });
 
   test("expanding restores every pill, still in alphabetical order", () => {
     const { rerender } = render(
-      <TagFilter entities={THREE} activeTag={null} onFilter={noop}
+      <TagFilter entities={FIVE} activeTag={null} onFilter={noop}
         collapsed onToggleCollapsed={noop} />
     );
-    expect(pills()).toEqual(["Tags (3)"]);
+    expect(pills()).toEqual(["Tags (5)"]);
     rerender(
-      <TagFilter entities={THREE} activeTag={null} onFilter={noop}
+      <TagFilter entities={FIVE} activeTag={null} onFilter={noop}
         collapsed={false} onToggleCollapsed={noop} />
     );
-    expect(pills()).toEqual(["Tags (3)", "aioli (1)", "beans (1)", "soup (1)"]);
+    expect(pills()).toEqual([
+      "Tags (5)", "aioli (1)", "beans (1)", "carrot (1)", "dill (1)", "soup (1)",
+    ]);
   });
 
   test("the toggle fires, and says which way it goes", () => {
     const onToggleCollapsed = jest.fn();
     const { rerender } = render(
-      <TagFilter entities={THREE} activeTag={null} onFilter={noop}
+      <TagFilter entities={FIVE} activeTag={null} onFilter={noop}
         collapsed={false} onToggleCollapsed={onToggleCollapsed} />
     );
     const open = screen.getByRole("button", { name: "Hide tags" });
@@ -253,7 +260,7 @@ describe("TagFilter — collapsed", () => {
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
 
     rerender(
-      <TagFilter entities={THREE} activeTag={null} onFilter={noop}
+      <TagFilter entities={FIVE} activeTag={null} onFilter={noop}
         collapsed onToggleCollapsed={onToggleCollapsed} />
     );
     const shut = screen.getByRole("button", { name: "Show tags" });
@@ -264,21 +271,23 @@ describe("TagFilter — collapsed", () => {
 
   test("the toggle sits first, so it is in the same place open or shut", () => {
     const { rerender } = render(
-      <TagFilter entities={THREE} activeTag="beans" onFilter={noop}
+      <TagFilter entities={FIVE} activeTag="beans" onFilter={noop}
         collapsed={false} onToggleCollapsed={noop} />
     );
-    expect(pills()[0]).toBe("Tags (3)");
+    expect(pills()[0]).toBe("Tags (5)");
     rerender(
-      <TagFilter entities={THREE} activeTag="beans" onFilter={noop}
+      <TagFilter entities={FIVE} activeTag="beans" onFilter={noop}
         collapsed onToggleCollapsed={noop} />
     );
-    expect(pills()[0]).toBe("Tags (3)");
+    expect(pills()[0]).toBe("Tags (5)");
   });
 
   test("no toggle handler means no toggle, and `collapsed` is ignored", () => {
     // A bar that cannot be reopened must never be closed.
-    render(<TagFilter entities={THREE} activeTag={null} onFilter={noop} collapsed />);
-    expect(pills()).toEqual(["aioli (1)", "beans (1)", "soup (1)"]);
+    render(<TagFilter entities={FIVE} activeTag={null} onFilter={noop} collapsed />);
+    expect(pills()).toEqual([
+      "aioli (1)", "beans (1)", "carrot (1)", "dill (1)", "soup (1)",
+    ]);
   });
 
   test("still nothing at all when no tag is in use, collapsed or not", () => {
@@ -333,5 +342,102 @@ describe("collapseOnSearch", () => {
     const already = { memories: true };
     expect(collapseOnSearch(already, "memories", "soup")).toBe(already);
     expect(collapseOnSearch(already, "memories", "")).toBe(already);
+  });
+});
+
+// ─── Step 2c: a small bar does not collapse at all ───────────────────────────
+//
+// A `Tags (2)` control that hides two pills saves nothing and adds a thing to
+// look at — and on collection detail, which has no search box, nothing could
+// ever fire it, so its only possible purpose would be to undo itself.
+
+describe("TagFilter — below the collapse threshold", () => {
+  const noop = () => {};
+  /** A bar of exactly `n` distinct tags, one row each. */
+  const bar = (n) => rows(...Array.from({ length: n }, (_, i) => [`tag ${i}`]));
+
+  test("the threshold is four, and it is the component's own number", () => {
+    // Imported, not copied: a literal here could drift from the component.
+    expect(COLLAPSE_MIN_TAGS).toBe(4);
+  });
+
+  test("three tags: no toggle, ever", () => {
+    render(
+      <TagFilter entities={bar(3)} activeTag={null} onFilter={noop}
+        onToggleCollapsed={noop} />
+    );
+    expect(screen.queryByRole("button", { name: "Hide tags" })).toBe(null);
+    expect(screen.queryByRole("button", { name: "Show tags" })).toBe(null);
+    expect(pills()).toEqual(["tag 0 (1)", "tag 1 (1)", "tag 2 (1)"]);
+  });
+
+  test("four tags: the toggle appears — the boundary is >=, not >", () => {
+    render(
+      <TagFilter entities={bar(4)} activeTag={null} onFilter={noop}
+        onToggleCollapsed={noop} />
+    );
+    expect(screen.getByRole("button", { name: "Hide tags" }).textContent.trim()).toBe("Tags (4)");
+  });
+
+  test("at three tags, typing cannot collapse the bar", () => {
+    // The requirement is "below the threshold, typing must not collapse". The
+    // guard for it lives in the RENDER, not in collapseOnSearch — which runs in
+    // `Alfred` and cannot see the tag count. So collapseOnSearch still records
+    // `true`...
+    expect(collapseOnSearch({}, "memories", "x")).toEqual({ memories: true });
+    // ...and the render ignores it. Nothing is hidden, which is the behaviour
+    // that was actually asked for.
+    render(
+      <TagFilter entities={bar(3)} activeTag={null} onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(pills()).toEqual(["tag 0 (1)", "tag 1 (1)", "tag 2 (1)"]);
+  });
+
+  test("a bar collapsed at five tags that drops to three shows its pills again", () => {
+    // THE OUTCOME THAT MUST BE IMPOSSIBLE: a hidden bar with no way to reopen
+    // it. `collapsed` stays true across this rerender — the pills come back
+    // because the render recomputes, not because anything reset the state.
+    const { rerender } = render(
+      <TagFilter entities={bar(5)} activeTag={null} onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(pills()).toEqual(["Tags (5)"]);
+    rerender(
+      <TagFilter entities={bar(3)} activeTag={null} onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(pills()).toEqual(["tag 0 (1)", "tag 1 (1)", "tag 2 (1)"]);
+  });
+
+  test("and collapses again by itself if the bar grows back", () => {
+    // The stored `true` is left alone, so it starts mattering again. Deliberate
+    // (Alex, 2026-09-21): the user did type in that screen's search box.
+    const { rerender } = render(
+      <TagFilter entities={bar(3)} activeTag={null} onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(pills()).toEqual(["tag 0 (1)", "tag 1 (1)", "tag 2 (1)"]);
+    rerender(
+      <TagFilter entities={bar(5)} activeTag={null} onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(pills()).toEqual(["Tags (5)"]);
+  });
+
+  test("a small bar with a filter on still shows the pills and Clear", () => {
+    render(
+      <TagFilter entities={bar(2)} activeTag="tag 1" onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(pills()).toEqual(["tag 0 (1)", "tag 1 (1)", "Clear"]);
+  });
+
+  test("a Recipes-sized bar is untouched by any of this", () => {
+    render(
+      <TagFilter entities={bar(22)} activeTag={null} onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(pills()).toEqual(["Tags (22)"]);
   });
 });

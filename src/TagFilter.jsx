@@ -72,6 +72,12 @@ import { ChevronDown } from "lucide-react";
 // dropped rather than printed as "(0)", because the pill is answering "what is
 // filtering this", not "how many matched".
 //
+// ─── A small bar does not collapse at all (2026-09-21) ───────────────────────
+//
+// See COLLAPSE_MIN_TAGS. Below it there is no toggle and every pill always
+// shows. The check is HERE, in the render, not in `collapseOnSearch` — read the
+// note on that function for why, and for what the difference buys.
+//
 // ─── Props ───────────────────────────────────────────────────────────────────
 //
 // `entities`           rows to count tags from; each may carry a `tags` array.
@@ -91,6 +97,26 @@ import { ChevronDown } from "lucide-react";
 // which means a stale `activeTag` inherited from another screen shows no Clear.
 // Left as it was; Step 3 removes the inheritance that causes it.
 /**
+ * How many distinct tags a bar needs before it is allowed to collapse at all.
+ *
+ * Below this there is no toggle and every pill always shows. A `Tags (2)`
+ * control that hides two pills saves nothing and adds a thing to look at — and
+ * on collection detail, which has no search box, nothing could ever collapse
+ * that bar anyway, so the toggle's only possible purpose would be to undo
+ * itself.
+ *
+ * FOUR, because three pills fit on one row on a phone. Collapsing a one-row bar
+ * cannot save a row: the toggle would simply occupy the row it was meant to
+ * free, and you would end up tapping to reveal what was already in front of
+ * you. At four the bar can wrap, so there is something to win. Alex's grocery
+ * collection carries two tags, which is the case that prompted this.
+ *
+ * Exported so the tests assert against the same number the component uses,
+ * rather than a copy of it that can drift.
+ */
+export const COLLAPSE_MIN_TAGS = 4;
+
+/**
  * The collapse-on-typing rule, as a pure function over the whole
  * page-keyed map, so `Alfred` and its tests run the SAME code.
  *
@@ -108,6 +134,22 @@ import { ChevronDown } from "lucide-react";
  *      you open a different context — must not be mistaken for typing.
  *
  * Returns the SAME object when nothing changes, so React skips the re-render.
+ *
+ * IT DOES NOT KNOW THE TAG COUNT, and deliberately does not try to. Whether a
+ * bar is too small to collapse (COLLAPSE_MIN_TAGS) is settled in the render
+ * instead, for two reasons. The count is computed from `entities` inside the
+ * component, and `Alfred` — which calls this — does not have it; teaching
+ * `Alfred` to count tags would put a second copy of that rule in the codebase,
+ * which is the twin-drift failure src/utils/tags.js opens by warning about.
+ * And a decision taken once, at typing time, would go stale: the render's is
+ * continuous, so a bar can never be left hidden by a `true` recorded when it
+ * was bigger.
+ *
+ * The visible consequence: typing on a two-tag screen still records `true`
+ * here, and nothing happens, because the render ignores it. If that screen
+ * later grows past the threshold the bar will open collapsed. Accepted — the
+ * user did type in that screen's search box, which is the gesture that means
+ * collapse, and the alternative costs a duplicated counting rule.
  *
  * @param {Object} collapsedByPage current map of page name -> collapsed
  * @param {string} page           which page's search box was typed in
@@ -139,9 +181,18 @@ export default function TagFilter({
 
   if (sortedTags.length === 0) return null;
 
-  // No handler means no toggle, and a bar that cannot be reopened must never be
-  // closed — so `collapsed` only counts when there is a way back out of it.
-  const canToggle = typeof onToggleCollapsed === "function";
+  // Two conditions, and `isCollapsed` hangs off both — which is what makes a
+  // hidden bar with no way to reopen it impossible rather than merely unlikely.
+  //
+  //   No handler: nothing could reopen it, so it must never close.
+  //   Too few tags: collapsing would cost a row rather than save one.
+  //
+  // Because this is recomputed every render, a bar whose tag count DROPS below
+  // the threshold while it is collapsed simply opens again — `canToggle` goes
+  // false, `isCollapsed` follows, and every pill is back. The stored `true` is
+  // left alone and starts mattering again only if the bar grows.
+  const canToggle =
+    typeof onToggleCollapsed === "function" && sortedTags.length >= COLLAPSE_MIN_TAGS;
   const isCollapsed = collapsed && canToggle;
   const activeCount = activeTag ? tagCounts[activeTag] : undefined;
 

@@ -26,14 +26,18 @@ established tag shapes.
 tests in `src/TagFilter.test.jsx`. It was a local, unexported function inside
 `src/Alfred.jsx` until Step 2a (2026-09-21) moved it out unchanged.
 
-Four call sites:
+Four call sites, all `<TagFilter`, each identified by the `entities` prop it
+passes. Line numbers are approximate hints only.
 
-| Line | Screen | Route | Entities |
+| Screen | Route | Search for | ~Line |
 |---|---|---|---|
-| 6049 | Intentions list | `/intentions` | `intentionsWithoutActiveEvent` |
-| 6109 | Memories list | `/memories` | `memoriesWithoutContext` |
-| 6392 | Collection detail | `/collections/detail` | collection members |
-| 9162 | Context detail, Items accordion | `/contexts/detail` | that context's items |
+| Intentions list | `/intentions` | `entities={intentionsWithoutActiveEvent}` | 6076 |
+| Memories list | `/memories` | `entities={memoriesWithoutContext}` | 6142 |
+| Collection detail | `/collections/detail` | `entities={members}` | 6436 |
+| Context detail, Items accordion | `/contexts/detail` | `entities={items}` (inside `ContextDetailView`) | 9212 |
+
+Only the first two and the last sit under a search box. **Collection detail has
+no search box at all**, so nothing can ever collapse its bar by typing.
 
 The tag list is derived client-side inside `TagFilter` from whatever array it is
 handed. There is no query and no RPC. It is therefore already scoped to the
@@ -173,11 +177,35 @@ browser caller is `TagPicker`, `const candidate = normaliseTag(query)` (~181).
 
 ## Design decisions
 
-### A1 — Collapse behaviour — IMPLEMENTED, Step 2b, 2026-09-21
+### A1 — Collapse behaviour — IMPLEMENTED, Steps 2b and 2c, 2026-09-21
 
 Expanded by default. Collapses the moment the user types a character into that
 screen's search box. Does not auto-expand when the search box is cleared; the
 user re-expands by hand.
+
+**Threshold (Step 2c).** A bar collapses only when it holds **four or more
+distinct tags** — `COLLAPSE_MIN_TAGS`, exported from `src/TagFilter.jsx`. Below
+that there is no toggle, every pill always shows, and typing cannot collapse it.
+
+Four, because three pills fit on one row on a phone: collapsing a one-row bar
+cannot save a row, since the toggle would occupy the row it was meant to free.
+The case that prompted it is the grocery collection, which carries two tags —
+and collection detail has no search box, so nothing could ever fire its toggle
+anyway, leaving a control whose only purpose would be to undo itself.
+
+The check is in the RENDER, not in `collapseOnSearch`. Consequences, both
+deliberate:
+
+- A bar whose tag count drops below the threshold **while collapsed** shows its
+  pills again on the next render. A hidden bar with no way to reopen it is the
+  one outcome that must be impossible, and this makes it so by construction
+  rather than by a separate mechanism.
+- Typing on a sub-threshold screen still records `collapsed: true`. Nothing
+  happens, because the render ignores it — but if that screen later grows past
+  four tags the bar opens collapsed. Kept rather than scrubbed (Alex,
+  2026-09-21): the user did perform the gesture that means collapse, and
+  discarding their intent over a tag count they were not thinking about is the
+  more surprising behaviour.
 
 ### A2 — Collapse state storage — IMPLEMENTED, Step 2b, 2026-09-21
 
@@ -203,6 +231,8 @@ view with no context selected — so reload persistence is moot on the page wher
 the bar is worst.
 
 ### A3 — What stays visible when collapsed — IMPLEMENTED, Step 2b, 2026-09-21
+
+Applies only to a bar large enough to collapse — see the threshold in A1.
 
 The active filter pill, if a filter is applied, plus the expand control and
 `Clear`. An
