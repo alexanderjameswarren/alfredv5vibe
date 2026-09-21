@@ -627,14 +627,32 @@ alter table public.inbox enable trigger user;    -- TRIGGER GUARD
 ```
 
 Rows holding `[]` need no update at all: the new column already defaults to
-`'{}'`. **Flagged, not edited — 062 is Alex's file and his to run.**
+`'{}'`. ~~**Flagged, not edited — 062 is Alex's file and his to run.**~~
 
-Two smaller things in 062, same category:
+→ **APPLIED 2026-09-21, at Alex's instruction.** 062 now carries the
+`DISABLE/ENABLE TRIGGER USER` guard around the UPDATE and the
+`jsonb_array_length(...) > 0` clause, matching 039. Both sit inside the
+transaction, so a rollback restores the triggers automatically.
 
-- Its header still says `040_inbox_suggested_tags_text_array.sql`, and the
-  `COMMENT ON COLUMN` it writes says "as of migration 040". The file is `062`.
-  That comment becomes permanent in the database.
-- Its "will fail at request time" warning is the claim disproved above.
+**The conversion is therefore NOT AUDITED, deliberately, and 062 says so.**
+`DISABLE TRIGGER USER` takes `audit_row` down with `set_updated_at` — they
+cannot be separated at that granularity. That is the right trade: the audit log
+explains changes to DATA, and this statement changes a representation, not a
+meaning. What happened is recorded in a numbered migration, with before/after
+queries either side of it. One audit row per inbox row would bury a real signal
+under a rename. 039 has no equivalent note because 039 never discussed the audit
+trigger at all — 040 is where `audit_row` is named — so this is the first time
+that consequence has been written down.
+
+Two smaller things in 062, same category, **also corrected**:
+
+- ~~Its header still says `040_inbox_suggested_tags_text_array.sql`, and the
+  `COMMENT ON COLUMN` it writes says "as of migration 040".~~ Both now say
+  `062`, and the column comment credits 039 for items/intents.
+- ~~Its "will fail at request time" warning is the claim disproved above.~~
+  Replaced with the corrected analysis, including the two things to expect
+  (schema-cache lag, normalised values reading back differently) and an explicit
+  "capturing during the window is safe".
 
 ### What the code side actually needed: nothing functional
 
