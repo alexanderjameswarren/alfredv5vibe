@@ -168,3 +168,78 @@ describe("Next on the plan line", () => {
     expect(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" })).toBeInTheDocument();
   });
 });
+
+// --- Off the plan (2026-09-21) -----------------------------------------------
+//
+// He taps a plan item, finds he needs a different range, makes his own snippet
+// and practises that. The plan has not moved. The screen should still say so,
+// and still offer the way back.
+
+describe("Next when the loaded range is in no plan item", () => {
+  // eslint-disable-next-line testing-library/no-node-access
+  const nextBox = (btn) => btn.querySelector("[data-next-box]");
+
+  const NEXT = {
+    id: "n", song_title: "Autumn Leaves", snippet_id: "s1",
+    snippet: { start_measure: 1, end_measure: 16, hand_mode: "both" },
+  };
+
+  test("says where he is, then offers where to go", () => {
+    render(<PlanLine item={null} state={null} heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />);
+    expect(screen.getByText("Not in today's plan")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" })).toBeInTheDocument();
+    // There is no item, so there is no plan line and no tempo to set from one.
+    expect(screen.queryByText(/^Plan ·/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Set tempo" })).not.toBeInTheDocument();
+  });
+
+  test("full contrast on the label, and the same button as on a done item", () => {
+    render(<PlanLine item={null} state={null} heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />);
+    // Plan content, read from the keyboard: not dimmed.
+    expect(screen.getByText("Not in today's plan")).toHaveClass("text-foreground");
+    const box = nextBox(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" }));
+    // Identical size and outline to the done-item Next — it is the same
+    // component, and this locks that it stays that way.
+    expect(box).toHaveClass("border", "border-border", "rounded", "text-sm",
+      "text-muted-foreground", "min-h-[33px]", "px-2.5");
+    expect(box).not.toHaveClass("bg-primary", "min-h-[44px]", "px-3");
+  });
+
+  test("tapping it opens that item through the caller's own handler", () => {
+    const onOpenNext = jest.fn();
+    render(<PlanLine item={null} state={null} heardTempo={60} nextItem={NEXT} onOpenNext={onOpenNext} />);
+    fireEvent.click(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" }));
+    expect(onOpenNext).toHaveBeenCalledWith(NEXT);
+  });
+
+  test("nothing at all when the plan is complete or absent", () => {
+    // `nextItem` is null in both cases, and that is what keeps the row away.
+    const { container } = render(<PlanLine item={null} state={null} heardTempo={60} nextItem={null} onOpenNext={() => {}} />);
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText("Not in today's plan")).not.toBeInTheDocument();
+  });
+
+  test("the song note still sits underneath, and reads on its own when there is nothing to offer", () => {
+    const { rerender } = render(
+      <PlanLine item={null} state={null} songNote="Keep it steady." heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />
+    );
+    expect(screen.getByText("Not in today's plan")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Song goal: Keep it steady." })).toBeInTheDocument();
+    // Plan finished: the note is alone again, exactly as it was before this change.
+    rerender(<PlanLine item={null} state={null} songNote="Keep it steady." heardTempo={60} nextItem={null} onOpenNext={() => {}} />);
+    expect(screen.queryByText("Not in today's plan")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Song goal: Keep it steady." })).toBeInTheDocument();
+  });
+
+  test("never shown once the range IS an item — done or not", () => {
+    const { rerender } = render(
+      <PlanLine item={ITEM} state={stateOf(ITEM, 3, 2)} heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />
+    );
+    expect(screen.queryByText("Not in today's plan")).not.toBeInTheDocument();
+    // Unfinished: still no way on. He is where the plan wants him.
+    expect(screen.queryByRole("button", { name: /^Next:/ })).not.toBeInTheDocument();
+    rerender(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />);
+    expect(screen.queryByText("Not in today's plan")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" })).toBeInTheDocument();
+  });
+});

@@ -18,8 +18,8 @@ import usePassCounts from "./lib/usePassCounts";
 import { ensureSnippetSaved, sameLoadedRange, snippetFromRow } from "./lib/snippetsApi";
 import useActivePlan from "./lib/useActivePlan";
 import {
-  heardTempo, itemForLoadedRange, itemState, matchPlanItem, nextIncompleteItem, planBadgeText,
-  planSongFor, snippetTagText,
+  firstIncompleteItem, heardTempo, itemForLoadedRange, itemState, matchPlanItem,
+  nextIncompleteItem, planBadgeText, planSongFor, snippetTagText,
 } from "./lib/activePlan";
 import PlanLine from "./components/PlanLine";
 import usePracticeStats from "./lib/usePracticeStats";
@@ -179,9 +179,18 @@ export default function SamPlayer({ onBack }) {
   const planItem = itemForLoadedRange(activePlan.plan, songDbId, snippet);
   const planItemState = planItem ? itemState(planItem, activePlan.progress) : null;
   const planSongNote = planSongFor(activePlan.plan, songDbId)?.song_note || null;
-  // Where to go after this item, for the plan line's Next button. Null while
-  // nothing is left to do, which is what hides the button.
-  const nextPlanItem = planItem ? nextIncompleteItem(activePlan.plan, activePlan.progress, planItem) : null;
+  // Where to go next, for the plan line's Next button. Null while nothing is
+  // left to do — or while there is no plan at all — which is what hides the
+  // button in both cases.
+  //
+  // On a plan item it is the next one after it; OFF the plan it is the first
+  // incomplete item anywhere, because a range that is in no item has no
+  // position to count from and the honest answer is "start of what's left"
+  // (2026-09-21). PlanLine decides whether to draw it: on an item only once
+  // that item is done, off the plan always.
+  const nextPlanItem = planItem
+    ? nextIncompleteItem(activePlan.plan, activePlan.progress, planItem)
+    : firstIncompleteItem(activePlan.plan, activePlan.progress);
   const planTone = (st) => (st.done ? "done" : st.amber ? "amber" : "open");
   const planBadge = planItem
     ? { text: planBadgeText(planItemState), state: planTone(planItemState) }

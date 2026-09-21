@@ -428,6 +428,114 @@ test("no Next on the plan line while the item is unfinished", async () => {
   expect(screen.queryByRole("button", { name: /^Next:/ })).not.toBeInTheDocument();
 });
 
+// --- Off the plan, still pointed at it (2026-09-21) --------------------------
+//
+// He taps a plan item, finds he needs a different range, makes his own snippet
+// and practises that. The plan has not moved, but until now nothing on screen
+// said where it was, and the only route back was the home page.
+
+const OTHER_ID = "22222222-2222-2222-2222-222222222222";
+
+/** A second snippet of the planned song that no plan item points at. */
+function addUnplannedSnippet() {
+  mockDb.tables.sam_snippets = [
+    ...mockDb.tables.sam_snippets,
+    { id: "snip-2", song_id: SONG_ID, title: "My own bit", start_measure: 2, end_measure: 2,
+      rest_measures: 0, settings: { handMode: "both" }, archived: false },
+  ];
+}
+
+/** Load a snippet by its row in the Snippet panel. */
+async function loadSnippetFromPanel(rowText) {
+  fireEvent.click(screen.getByRole("button", { name: /Snippet/ }));
+  const row = await screen.findByRole("button", { name: new RegExp(esc(rowText)) });
+  await act(async () => { fireEvent.click(row); });
+}
+
+test("an unplanned snippet of a planned song: the line says so, and Next still points into the plan", async () => {
+  addUnplannedSnippet();
+  renderSong();
+  // Starts on the whole-song item, which is done today.
+  await screen.findByText("Plan · Whole song · 55 BPM · 80% · Done 2/2 today");
+
+  await loadSnippetFromPanel("Measures 2-2 Both No Rest");
+
+  // The loaded range is in no item now, and the line says which way is back.
+  expect(await screen.findByText("Not in today's plan")).toBeInTheDocument();
+  expect(screen.queryByText(/^Plan · Whole song/)).not.toBeInTheDocument();
+  // The first INCOMPLETE item in plan order — the snippet item, not the
+  // finished whole-song one above it.
+  expect(screen.getByRole("button", { name: "Next: Throwaway m.1–1 · RH" })).toBeInTheDocument();
+});
+
+test("tapping Next from an unplanned range opens that item at its target tempo", async () => {
+  addUnplannedSnippet();
+  renderSong();
+  await screen.findByText("Plan · Whole song · 55 BPM · 80% · Done 2/2 today");
+  await loadSnippetFromPanel("Measures 2-2 Both No Rest");
+  await screen.findByText("Not in today's plan");
+
+  const fetches = mockFetchSongById.mock.calls.length;
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Next: Throwaway m.1–1 · RH" }));
+  });
+
+  // Same open-plan-item path a checklist tap uses, and that item's tempo (60).
+  expect(mockFetchSongById.mock.calls.length).toBe(fetches + 1);
+  await waitFor(() => expect(screen.getByLabelText(/BPM:/)).toHaveValue(60));
+  // He is on the plan again, so the off-plan line goes away.
+  await waitFor(() =>
+    expect(screen.getByText(/Plan · m\.1–1 · RH · 60 BPM · 90% · 0\/4 today/)).toBeInTheDocument()
+  );
+  expect(screen.queryByText("Not in today's plan")).not.toBeInTheDocument();
+  // For this sitting only — the song row is untouched.
+  expect(mockDb.updates.filter((u) => u.table === "sam_songs")).toEqual([]);
+});
+
+test("a song the plan never mentions gets the same line and the same way in", async () => {
+  // The whole plan is about a different song; this one is a detour.
+  mockDb.tables.sam_practice_plan_songs = [
+    { id: "ps-2", plan_id: "plan-1", song_id: OTHER_ID, position: 1, song_note: null },
+  ];
+  mockDb.tables.sam_practice_plan_items = [
+    { id: "item-other", plan_id: "plan-1", song_id: OTHER_ID, snippet_id: null, position: 1,
+      is_free_play: false, target_bpm: 72, target_playback_speed: 100, target_effective_bpm: 72,
+      target_passes: 3, accuracy_target: 85, instruction: null },
+  ];
+  mockDb.tables.sam_songs = [
+    ...mockDb.tables.sam_songs,
+    { id: OTHER_ID, title: "Pastorale", audio_file_path: null, default_bpm: 70 },
+  ];
+  mockDb.progressRows = [];
+
+  renderSong();
+  expect(await screen.findByText("Not in today's plan")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Next: Pastorale Whole song" })).toBeInTheDocument();
+});
+
+test("nothing to offer: no off-plan line when the plan is finished, or absent", async () => {
+  // Every item done today.
+  mockDb.tables.sam_practice_plan_items = [
+    { id: "item-other", plan_id: "plan-1", song_id: OTHER_ID, snippet_id: null, position: 1,
+      is_free_play: false, target_bpm: 72, target_playback_speed: 100, target_effective_bpm: 72,
+      target_passes: 3, accuracy_target: 85, instruction: null },
+  ];
+  mockDb.progressRows = [{ plan_item_id: "item-other", day: "2026-09-16", attempts: 3, qualifying: 3 }];
+  const { unmount } = renderSong();
+  await screen.findByLabelText(/BPM:/);
+  expect(screen.queryByText("Not in today's plan")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Next:/ })).not.toBeInTheDocument();
+  unmount();
+
+  // No active plan at all.
+  mockDb.tables.sam_practice_plans = [];
+  renderSong();
+  await screen.findByLabelText(/BPM:/);
+  await waitFor(() => expect(mockDb.froms).toContain("sam_practice_plans"));
+  expect(screen.queryByText("Not in today's plan")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Next:/ })).not.toBeInTheDocument();
+});
+
 // --- Crediting a pass when the music ends, not a bar later (2026-09-20) ------
 //
 // A snippet with rest bars used to bank its pass only at the loop restart, so
