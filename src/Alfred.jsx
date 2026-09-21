@@ -28,6 +28,7 @@ import UndoMessage, { useUndo } from "./UndoMessage";
 import { useSortPreference } from "./SortControl";
 import ListToolbar, { NoMatches } from "./ListToolbar";
 import ItemPicker, { PickedItem } from "./ItemPicker";
+import TagFilter from "./TagFilter";
 import TagPicker from "./TagPicker";
 import RemovalMeta from "./RemovalMeta";
 import { startOfPacificDay } from "./utils/localDay";
@@ -688,81 +689,6 @@ function LoadingOverlay({ message }) {
 }
 
 /**
- * The tag filter bar: one pill per tag in use, with its count, on the four
- * screens that carry it — the Intentions list, the Memories list, collection
- * detail, and the Items accordion on context detail.
- *
- * The tags are counted here from the rows the caller hands over. There is no
- * query and no RPC, so the bar is already scoped to whatever that screen is
- * showing, and archived rows never reach it because each caller filters them
- * out first.
- *
- * ─── Ordering: alphabetical, not by frequency (2026-09-21) ──────────────────
- *
- * This used to sort by count descending with NO tie-break, which meant every
- * tag sharing a count landed in row order — an order that is not stable
- * between renders and means nothing to the person reading it. On the Recipes
- * page that is most of the bar: the counts bunch up in ones and twos, so the
- * pills effectively shuffled.
- *
- * Alphabetical is the one order you can search with your eyes. Knowing that
- * "italian" sits between "indian" and "lentils" is worth more than knowing it
- * is the fourth most used, because you arrive at this bar already knowing
- * which tag you want — you are looking for it, not browsing.
- *
- * `localeCompare` rather than `<`, so accented tags sort where a reader
- * expects rather than after "z" (normaliseTag preserves accents — "café" is a
- * legal tag).
- *
- * NOT the same decision as `tagPoolFrom`, which orders the tag PICKER's
- * suggestions and stays frequency-first on purpose. That list is for choosing
- * a tag you have not named yet, where the ones you reach for most belong under
- * your thumb; this one is for finding a tag you have already named.
- *
- * The count still rides inside each pill. Only the order changed.
- */
-function TagFilter({ entities, activeTag, onFilter }) {
-  const tagCounts = {};
-  for (const entity of entities) {
-    if (entity.tags) {
-      for (const tag of entity.tags) {
-        tagCounts[tag] = (tagCounts[tag] || 0) + 1;
-      }
-    }
-  }
-
-  const sortedTags = Object.entries(tagCounts).sort((a, b) => a[0].localeCompare(b[0]));
-
-  if (sortedTags.length === 0) return null;
-
-  return (
-    <div className="flex flex-wrap gap-1.5 mb-3">
-      {sortedTags.map(([tag, count]) => (
-        <button
-          key={tag}
-          onClick={() => onFilter(activeTag === tag ? null : tag)}
-          className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
-            activeTag === tag
-              ? "bg-primary text-white"
-              : "bg-warning-light text-accent-foreground hover:bg-accent/80"
-          }`}
-        >
-          {tag} ({count})
-        </button>
-      ))}
-      {activeTag && (
-        <button
-          onClick={() => onFilter(null)}
-          className="px-3 py-1.5 text-sm rounded-full bg-secondary text-muted-foreground hover:bg-secondary"
-        >
-          Clear
-        </button>
-      )}
-    </div>
-  );
-}
-
-/**
  * Marks a collection row's tag button.
  *
  * Two things read it: the button handles its own switch on the press, and the
@@ -774,19 +700,19 @@ const TAG_TOGGLE_ATTR = "data-tag-toggle";
  * Every tag currently in use across the records passed in, most-used first.
  *
  * This is the suggestion pool the tag picker offers. Derived client-side from
- * rows already loaded — the same thing `TagFilter` above does with its counts,
- * and for the same reason: there is no query worth adding for a dozen strings
- * that are already sitting in state.
+ * rows already loaded — the same thing `TagFilter` does with its counts (now
+ * in src/TagFilter.jsx), and for the same reason: there is no query worth
+ * adding for a dozen strings that are already sitting in state.
  *
  * Frequency order, ties broken alphabetically. The tags you reach for most are
  * the ones worth putting under your thumb.
  *
- * DELIBERATELY DIFFERENT from `TagFilter` above, which went alphabetical on
- * 2026-09-21. The two lists answer different questions: this one offers a tag
- * you have not named yet, where the common ones should come first; that one
- * helps you find a tag you already have in mind, where only alphabetical lets
- * you aim. If you are here to make them agree, read the note on `TagFilter`
- * first — the difference is the point.
+ * DELIBERATELY DIFFERENT from `TagFilter` (src/TagFilter.jsx), which went
+ * alphabetical on 2026-09-21. The two lists answer different questions: this
+ * one offers a tag you have not named yet, where the common ones should come
+ * first; that one helps you find a tag you already have in mind, where only
+ * alphabetical lets you aim. If you are here to make them agree, read the note
+ * in src/TagFilter.jsx first — the difference is the point.
  *
  * Items and intentions share one pool. Collections get their own in Phase 6 —
  * per-trip tags like "tjs" have no business being suggested on a recipe.

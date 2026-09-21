@@ -22,17 +22,18 @@ established tag shapes.
 
 ### The tag filter bar
 
-`TagFilter` is a local function declaration at `src/Alfred.jsx:724-763`. It is not
-exported and has no file of its own. `src/Alfred.jsx` is 539 KB.
+`TagFilter` lives in `src/TagFilter.jsx`, beside `src/TagPicker.jsx`, with unit
+tests in `src/TagFilter.test.jsx`. It was a local, unexported function inside
+`src/Alfred.jsx` until Step 2a (2026-09-21) moved it out unchanged.
 
 Four call sites:
 
 | Line | Screen | Route | Entities |
 |---|---|---|---|
-| 6123 | Intentions list | `/intentions` | `intentionsWithoutActiveEvent` |
-| 6183 | Memories list | `/memories` | `memoriesWithoutContext` |
-| 6466 | Collection detail | `/collections/detail` | collection members |
-| 9236 | Context detail, Items accordion | `/contexts/detail` | that context's items |
+| 6049 | Intentions list | `/intentions` | `intentionsWithoutActiveEvent` |
+| 6109 | Memories list | `/memories` | `memoriesWithoutContext` |
+| 6392 | Collection detail | `/collections/detail` | collection members |
+| 9162 | Context detail, Items accordion | `/contexts/detail` | that context's items |
 
 The tag list is derived client-side inside `TagFilter` from whatever array it is
 handed. There is no query and no RPC. It is therefore already scoped to the
@@ -44,16 +45,16 @@ by tag name via `localeCompare`. See A4.
 
 Three of the four call sites share one `filterTag` state value. Collection detail
 deliberately uses a separate `collectionFilterTag` — reasoning at
-`src/Alfred.jsx:1482-1488`: collection tags are store labels, a different
+`src/Alfred.jsx:1408-1414`: collection tags are store labels, a different
 vocabulary, and a leaked filter would silently empty a context page.
 
 Archived rows are excluded, but not inside `TagFilter`. Each array is filtered
-before it is handed over, at three separate places: `src/Alfred.jsx:5180`,
-`src/Alfred.jsx:5185`, `src/Alfred.jsx:5821`.
+before it is handed over, at three separate places: `src/Alfred.jsx:5106`,
+`src/Alfred.jsx:5111`, `src/Alfred.jsx:5747`.
 
 ### Search state — the pattern to copy
 
-`src/Alfred.jsx:1772-1775`. One plain React state object keyed by page name,
+`src/Alfred.jsx:1698-1701`. One plain React state object keyed by page name,
 living in the top-level component:
 
 ```js
@@ -67,7 +68,7 @@ Survives navigation because `Alfred` never unmounts; dies on reload. Keys in use
 `home`, `inbox`, `contexts`, `context-detail`, `schedule`, `intentions`,
 `memories`, `collections`.
 
-One extra rule at `src/Alfred.jsx:4517`: context-detail search clears when a
+One extra rule at `src/Alfred.jsx:4443`: context-detail search clears when a
 different context is opened.
 
 Sort preference uses the opposite pattern — `useSortPreference` persists to
@@ -77,17 +78,17 @@ Both patterns exist; search deliberately uses the in-memory one.
 ### Tag chips on cards
 
 Four render sites, none sorted, all displaying stored array order:
-`src/Alfred.jsx:11289` (ItemCard, capped at 3), `src/Alfred.jsx:12272`
-(IntentionCard, capped at 3), `src/Alfred.jsx:846` (DetailMeta, uncapped),
-`src/Alfred.jsx:6544` (collection member rows).
+`src/Alfred.jsx:11215` (ItemCard, capped at 3), `src/Alfred.jsx:12198`
+(IntentionCard, capped at 3), `src/Alfred.jsx:772` (DetailMeta, uncapped),
+`src/Alfred.jsx:6470` (collection member rows).
 
 The stored arrays are now alphabetically sorted at rest, so the capped cards
 already show the alphabetically-first three. **Decision: leave the cap at 3.**
 
 ### The tag suggestion pool
 
-`tagPoolFrom` at `src/Alfred.jsx:794-817`, called via `tagPool` at
-`src/Alfred.jsx:1454` over the **unfiltered** `items` and `intents` state arrays.
+`tagPoolFrom` at `src/Alfred.jsx:720-734`, called via `tagPool` at
+`src/Alfred.jsx:1380` over the **unfiltered** `items` and `intents` state arrays.
 So the picker offers tags from archived rows that the filter bar hides. Nine such
 tags exist today: `due`, `late`, `overdue`, `past`, `urgent`, `test tag`,
 `another tag`, `outdoor maintenance`, `cleaning`.
@@ -104,18 +105,18 @@ Writes, normalised:
 
 Writes that bypass normalisation, both writing a literal empty array:
 - `supabase/functions/email-capture/index.ts:207`
-- `src/Alfred.jsx:2876`
+- `src/Alfred.jsx:2802`
 
 Reads:
 - `supabase/functions/mcp/index.ts:334` — a hand-typed string listing 21 columns.
   This will not fail at compile time. It fails at request time, in production.
 - `supabase/functions/ai-enrich/index.ts:379` — echoed into the re-enrich prompt.
-- Triage UI in `src/Alfred.jsx` as camelCase `suggestedTags`: lines 7373, 7433,
-  7474, 7510, 7527, 7810, 7917, 7934, plus dirty-checks at 7554 and 7559 that
+- Triage UI in `src/Alfred.jsx` as camelCase `suggestedTags`: lines 7299, 7359,
+  7400, 7436, 7453, 7736, 7843, 7860, plus dirty-checks at 7480 and 7485 that
   compare with `JSON.stringify`.
 
 Triage writes tags through to `items.tags` / `intents.tags` at
-`src/Alfred.jsx:3036` and `src/Alfred.jsx:3083` as a plain JS array. Nothing
+`src/Alfred.jsx:2962` and `src/Alfred.jsx:3009` as a plain JS array. Nothing
 converts between shapes; PostgREST coerces to whatever the destination column is.
 **This boundary needs no code change.**
 
@@ -185,11 +186,11 @@ existing render sites display stored order.
 
 `filterTag` currently persists across the three screens that share it. Clear it
 when navigating between them, following the pattern already at
-`src/Alfred.jsx:4517`. `collectionFilterTag` stays separate and untouched.
+`src/Alfred.jsx:4443`. `collectionFilterTag` stays separate and untouched.
 
 ### A6 — Suggestion pool excludes archived
 
-`tagPool` at `src/Alfred.jsx:1454` filters archived rows out of `items` and
+`tagPool` at `src/Alfred.jsx:1380` filters archived rows out of `items` and
 `intents` before calling `tagPoolFrom`, matching what the filter bar already
 does. `tagPoolFrom` itself is unchanged — its frequency-plus-alphabetical
 ordering is correct for a suggestion list and should not become alphabetical-only.
@@ -224,7 +225,7 @@ removes a null check.
 
 ### B4 — The two unnormalised writers
 
-`supabase/functions/email-capture/index.ts:207` and `src/Alfred.jsx:2876` both
+`supabase/functions/email-capture/index.ts:207` and `src/Alfred.jsx:2802` both
 write a literal empty array. Harmless today, but both must change from `[]` to
 `[]` typed as a text array — in practice a no-op in JS, but both lines must be
 visited to confirm no jsonb-specific handling surrounds them.
