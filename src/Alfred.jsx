@@ -697,6 +697,23 @@ function LoadingOverlay({ message }) {
 const TAG_TOGGLE_ATTR = "data-tag-toggle";
 
 /**
+ * The three screens that share one `filterTag`, and therefore the three between
+ * which it must NOT travel (spec §A5).
+ *
+ * Filtering Memories to "beans" and then opening a context page used to arrive
+ * with "beans" still applied. On a context whose items happen to carry no tags
+ * at all that is worse than untidy: `TagFilter` renders nothing when no tag is
+ * in use — no pills, and no Clear — so the list came back filtered to empty
+ * with no visible cause and no way out. Clearing on arrival removes the
+ * inheritance, and with it the trap.
+ *
+ * `collections` is deliberately absent. Collection detail filters on
+ * `collectionFilterTag`, a separate value over a separate vocabulary — see the
+ * comment on its declaration.
+ */
+const TAG_FILTERED_VIEWS = ["intentions", "memories", "context-detail"];
+
+/**
  * Every tag currently in use across the records passed in, most-used first.
  *
  * This is the suggestion pool the tag picker offers. Derived client-side from
@@ -1350,12 +1367,29 @@ export default function Alfred() {
   const setView = useCallback(
     (nextView) => {
       const path = viewToPath(nextView);
+      // §A5. Arriving at one of the three tag-filtered screens from a DIFFERENT
+      // screen drops the filter, so it cannot follow you across. See
+      // TAG_FILTERED_VIEWS for what it was costing.
+      //
+      // Two conditions, and both earn their place:
+      //
+      //   `nextView !== view` — otherwise re-selecting the screen you are on
+      //   would clear a filter you just set on it.
+      //
+      //   the target is filtered — otherwise opening a record from a filtered
+      //   list would clear it, and browser Back would return you to a list that
+      //   had silently forgotten. Opening a record and coming back keeps the
+      //   filter, exactly as it keeps the search text: Back never comes through
+      //   here at all, because `view` is derived from the URL.
+      if (TAG_FILTERED_VIEWS.includes(nextView) && nextView !== view) {
+        setFilterTag(null);
+      }
       // Re-selecting the screen you are already on used to be an inert
       // re-render. Pushing an identical entry would make the next Back press
       // look broken, so same-path navigations replace instead of push.
       navigate(path, { replace: path === currentPath });
     },
-    [navigate, currentPath]
+    [navigate, currentPath, view]
   );
   // Opening an execution goes through here rather than setView, because
   // setView can only reach the id-less /schedule/execution — it is handed a
@@ -1377,7 +1411,24 @@ export default function Alfred() {
   // Suggestions for every tag picker on an item or an intention. Recomputed
   // when either list changes, so a tag invented on one record is offered on the
   // next one without a reload.
-  const tagPool = useMemo(() => tagPoolFrom(items, intents), [items, intents]);
+  //
+  // ARCHIVED ROWS ARE EXCLUDED (§A6, 2026-09-21). They always were from the
+  // filter BAR — each list filters them out before handing rows over — but this
+  // pool was built from the raw state arrays, which hold every row the query
+  // returned, archived included. So the picker kept offering tags that no
+  // living record carried and no bar would ever show: `due`, `late`, `overdue`,
+  // `past`, `urgent`, `test tag`, `another tag`, `outdoor maintenance`,
+  // `cleaning`.
+  //
+  // Filtered HERE rather than inside `tagPoolFrom`, which stays a pure "count
+  // the tags in these lists" helper with no opinion about what belongs in them.
+  // Its frequency-then-alphabetical ordering is also untouched: a suggestion
+  // list wants the tags you reach for most under your thumb, which is the
+  // opposite of what the filter bar wants. See its docblock, and TagFilter's.
+  const tagPool = useMemo(
+    () => tagPoolFrom(items.filter((i) => !i.archived), intents.filter((i) => !i.archived)),
+    [items, intents]
+  );
   const [events, setEvents] = useState([]);
   const [activeExecution, setActiveExecution] = useState(null); // currently viewed
   const [activeExecutions, setActiveExecutions] = useState([]);
@@ -4462,9 +4513,19 @@ export default function Alfred() {
   }
 
   function viewContextDetail(contextId) {
-    // A different context starts with an empty search. Coming back to the
-    // same one — Back from a record opened on it — does not come through here.
-    if (contextId !== selectedContextId) setSearchFor("context-detail")("");
+    // A different context starts with an empty search AND no tag filter. Coming
+    // back to the same one — Back from a record opened on it — does not come
+    // through here.
+    //
+    // The tag clear is belt and braces: reaching a context from anywhere but
+    // another context already passes the `nextView !== view` test in setView.
+    // This is the one route that does not — context to context, where the view
+    // name never changes but the vocabulary underneath it does, which is
+    // precisely the case the search clear beside it was added for.
+    if (contextId !== selectedContextId) {
+      setSearchFor("context-detail")("");
+      setFilterTag(null);
+    }
     setPreviousView(view);
     setSelectedContextId(contextId);
     setView("context-detail");

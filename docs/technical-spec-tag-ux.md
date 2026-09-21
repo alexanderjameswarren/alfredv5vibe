@@ -108,11 +108,14 @@ already show the alphabetically-first three. **Decision: leave the cap at 3.**
 ### The tag suggestion pool
 
 `src/Alfred.jsx`, `function tagPoolFrom(...recordLists)` (~720), called from
-`Alfred`, `const tagPool = useMemo(() => tagPoolFrom(items, intents)` (~1380),
-over the **unfiltered** `items` and `intents` state arrays.
-So the picker offers tags from archived rows that the filter bar hides. Nine such
-tags exist today: `due`, `late`, `overdue`, `past`, `urgent`, `test tag`,
-`another tag`, `outdoor maintenance`, `cleaning`.
+`Alfred`, `const tagPool = useMemo(() => tagPoolFrom(` (~1380).
+
+~~It runs over the **unfiltered** `items` and `intents` state arrays, so the
+picker offers tags from archived rows that the filter bar hides. Nine such tags
+exist today: `due`, `late`, `overdue`, `past`, `urgent`, `test tag`, `another
+tag`, `outdoor maintenance`, `cleaning`.~~ **DONE in Step 4, 2026-09-21** — both
+lists are filtered on `!archived` before the call, so those nine no longer
+appear. See A6.
 
 ### Inbox tag storage
 
@@ -260,20 +263,50 @@ bar helps find one already in mind. Both docblocks now say so.
 Card chips need no change — the stored arrays are already sorted, and the
 existing render sites display stored order.
 
-### A5 — Filter reset on navigation
+### A5 — Filter reset on navigation — IMPLEMENTED, Step 3, 2026-09-21
 
-`filterTag` currently persists across the three screens that share it. Clear it
-when navigating between them, following the pattern already at
-`Alfred` -> `viewContextDetail`, the `setSearchFor("context-detail")("")` line
-(~4443). `collectionFilterTag` stays separate and untouched.
+`filterTag` used to persist across the three screens that share it. It is now
+cleared on arrival at one of them from a different screen.
+`collectionFilterTag` stays separate and untouched.
 
-### A6 — Suggestion pool excludes archived
+Two clears, because there are two shapes of "a different screen":
 
-`tagPool` (`Alfred`, `const tagPool = useMemo(() => tagPoolFrom(items, intents)`,
-~1380) filters archived rows out of `items` and
-`intents` before calling `tagPoolFrom`, matching what the filter bar already
-does. `tagPoolFrom` itself is unchanged — its frequency-plus-alphabetical
-ordering is correct for a suggestion list and should not become alphabetical-only.
+- `Alfred` -> `setView` — `TAG_FILTERED_VIEWS.includes(nextView) && nextView !==
+  view`. Covers every nav item and in-app link.
+- `Alfred` -> `viewContextDetail`, beside the existing
+  `setSearchFor("context-detail")("")` line (~4443) — covers context to context,
+  where the view name never changes but the vocabulary under it does.
+
+`TAG_FILTERED_VIEWS` is a module constant beside `TAG_TOGGLE_ATTR`, naming the
+three screens in one greppable place.
+
+In `setView` rather than an effect: an effect would clear a render late, and
+`view` is derived from the URL so browser Back never passes through `setView` —
+which is the behaviour wanted. Opening a record from a filtered list and
+pressing Back keeps the filter, exactly as it keeps the search text.
+
+**This closes the inheritance trap** where a screen carrying no tags rendered no
+bar, and therefore no `Clear`, over an inherited filter. Every route into the
+three screens was enumerated to confirm it; see the Step 3 entry in
+`docs/progress-tag-ux.md`, including the one residual non-inheritance case that
+remains open by decision.
+
+### A6 — Suggestion pool excludes archived — IMPLEMENTED, Step 4, 2026-09-21
+
+`tagPool` (`Alfred`, `const tagPool = useMemo(() => tagPoolFrom(`, ~1380) now
+filters archived rows out of `items` and `intents` before calling
+`tagPoolFrom`, matching what the filter bar already does. `tagPoolFrom` itself
+is unchanged — its frequency-plus-alphabetical ordering is correct for a
+suggestion list and must not become alphabetical-only.
+
+Nine tags leave the picker. Two of them — `outdoor maintenance` and `cleaning` —
+are genuine household tags on real archived intentions, **not debris, and not
+lost**: the rows still hold them and would offer them again if unarchived.
+
+**Not covered by tests.** `tagPoolFrom` is local and unexported, and the filter
+sits in `Alfred`, which cannot be rendered in a test. Making it assertable would
+mean moving `tagPoolFrom` into an importable module, the way `collapseOnSearch`
+was. Open decision, recorded in the Step 4 progress entry.
 
 ### B1 — Hard cutover, no transition period
 

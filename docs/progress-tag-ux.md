@@ -1,6 +1,6 @@
 # Progress: Tag UX and Inbox Tag Storage
 
-## Status: Steps 0, 1, 2a, 2b and 2c complete. Next up: Step 3.
+## Status: Steps 0-4 complete. Next up: Step 5 (inbox cutover).
 
 Reference: `docs/technical-spec-tag-ux.md`
 
@@ -362,24 +362,130 @@ over non-collapse behaviour is untouched.
 
 ---
 
-## Step 3 — Reset the tag filter on navigation
+## Step 3 — COMPLETE (2026-09-21). Tag filter resets on navigation.
 
-- [ ] `filterTag` clears when navigating between the three screens that share it
-- [ ] Follows the existing pattern in `Alfred` -> `viewContextDetail`, the
-      `setSearchFor("context-detail")("")` line (~4443)
-- [ ] `collectionFilterTag` remains separate and untouched
+- [x] `filterTag` clears when arriving at one of the three screens that share it
+      from a different screen
+- [x] Follows the existing pattern in `Alfred` -> `viewContextDetail`, whose
+      `setSearchFor("context-detail")("")` line now clears the tag filter beside
+      the search text (~4443)
+- [x] `collectionFilterTag` remains separate and untouched
+- [x] TagFilter's 32 tests pass **unchanged** — none needed editing
+
+Two places, because there are two shapes of "a different screen":
+
+```js
+// Alfred -> setView. Arriving at a filtered screen from another screen.
+if (TAG_FILTERED_VIEWS.includes(nextView) && nextView !== view) setFilterTag(null);
+
+// Alfred -> viewContextDetail. Context to context: the view name never
+// changes, but the vocabulary under it does.
+if (contextId !== selectedContextId) { setSearchFor("context-detail")(""); setFilterTag(null); }
+```
+
+`TAG_FILTERED_VIEWS` is a module constant next to `TAG_TOGGLE_ATTR`, so the
+three screens that share the filter are named in one greppable place.
+
+### Why `setView` and not an effect
+
+An effect watching `view` would clear one render too late — the new screen would
+paint once with the old filter still applied. `setView` is also the whole story:
+`view` is derived from the URL, so browser Back never passes through it, which is
+exactly the behaviour wanted. Opening a record from a filtered list and pressing
+Back keeps the filter, the same way it keeps the search text.
+
+The `nextView !== view` guard is what stops re-selecting the screen you are
+already on from clearing a filter you just set on it.
+
+### The Step 2b hole: CONFIRMED closed, not assumed
+
+The trap was: a screen whose rows carry no tags renders no bar at all — no
+pills, no `Clear` — so an inherited filter left the list filtered to empty with
+no visible cause and no way out.
+
+Checked by enumerating every route into the three screens, not by assuming:
+
+- **`setView`** — clears. Every nav item, every in-app link.
+- **`viewContextDetail`** — clears on a context change, including context to
+  context where `setView` alone would not fire.
+- **`navigate(-1)`** (`leaveAddPage`, in-app) — returns to a screen you already
+  occupied, where the filter was already yours or already cleared on the way
+  out.
+- **`navigate(viewToPath("context-detail"), { replace: true })`**
+  (`leaveAddPage`) — **cold load only**, reached when `location.state?.fromApp`
+  is absent. On a cold load `filterTag` is `null`, so there is nothing to
+  inherit.
+- **`navigate(parentPath(...))`** — the stale-link redirect guard and the
+  cold-load add-page fallback. Cold load again; `filterTag` is `null`.
+
+**No warm route reaches a different filterable screen with a stale filter.**
+
+### What is left, and it is NOT inheritance
+
+One case survives, and it is worth stating precisely rather than claiming a
+clean sweep. You are on a filterable screen with a filter set, and that screen's
+tags all vanish underneath you — archive the last tagged row while filtered to
+its tag. `TagFilter` then renders nothing, so there is no `Clear` on that screen.
+
+It is no longer a dead end, which is the part Step 3 changed: leaving for either
+of the other two filtered screens now clears the filter, so you can always get
+out by navigating. Before Step 3 the filter followed you and you could not.
+
+Closing it entirely would mean rendering the bar whenever `activeTag` is set,
+even with no tags to show. **It would break none of the 32 tests** — no test
+covers an active filter over zero tags. Roughly three lines. Left undone because
+it is a behaviour change neither Step 3 nor Step 4 asked for; flagging it as a
+decision rather than taking it.
 
 ---
 
-## Step 4 — Exclude archived rows from the tag suggestion pool
+## Step 4 — COMPLETE (2026-09-21). Archived rows out of the suggestion pool.
 
-- [ ] `tagPool` (`Alfred`,
-      `const tagPool = useMemo(() => tagPoolFrom(items, intents)`, ~1380)
-      filters archived out of `items` and `intents` before calling
+- [x] `tagPool` filters archived out of `items` and `intents` before calling
       `tagPoolFrom`
-- [ ] `tagPoolFrom` itself unchanged — keeps frequency-then-alphabetical ordering
-- [ ] Verified: the picker no longer offers `urgent`, `test tag`, `another tag`,
-      `due`, `late`, `overdue`, `past`, `outdoor maintenance`, `cleaning`
+- [x] `tagPoolFrom` itself unchanged — still frequency-then-alphabetical
+- [ ] Verified on device: the picker no longer offers `urgent`, `test tag`,
+      `another tag`, `due`, `late`, `overdue`, `past`, `outdoor maintenance`,
+      `cleaning` *(awaiting Alex's device check)*
+
+```js
+const tagPool = useMemo(
+  () => tagPoolFrom(items.filter((i) => !i.archived), intents.filter((i) => !i.archived)),
+  [items, intents]
+);
+```
+
+Filtered at the call site rather than inside `tagPoolFrom`, which stays a pure
+"count the tags in these lists" helper with no opinion about what belongs in
+them. Its ordering is untouched and must stay that way: a suggestion list wants
+the tags you reach for most under your thumb, which is the opposite of what the
+filter bar wants.
+
+### Two of the nine are real tags, not debris
+
+`outdoor maintenance` and `cleaning` are genuine household tags on real
+intentions that happen to be archived. **Their disappearance from the picker is
+not data loss.** The rows still hold them, `get_tags` still counts them if those
+rows are ever unarchived, and nothing was written or deleted — the picker simply
+stopped suggesting vocabulary that no living record uses. The other seven
+(`due`, `late`, `overdue`, `past`, `urgent` on one test intention; `test tag`
+and `another tag` on two test items) are debris.
+
+### Surprise: this change is not testable where it landed
+
+Checked rather than assumed. `tagPoolFrom` is a local function declaration at
+`src/Alfred.jsx` (~720) and is **not exported** — `Alfred.jsx` exports only its
+default component — so no test can reach it, and the archived filtering sits in
+`Alfred`, which cannot be rendered in a test.
+
+So Step 4 ships with **no test coverage at all**, and the device check is the
+only verification. Saying so rather than working around it, as asked.
+
+If it is worth fixing, the precedent is `collapseOnSearch`: export the rule from
+a file that tests can import. Here that would mean moving `tagPoolFrom` into
+`src/TagFilter.jsx` (or its own module) and exporting it together with a small
+`activeRows` helper — maybe fifteen lines, and it would make both the ordering
+and the archived exclusion assertable. **Alex's call; not taken here.**
 
 ---
 
