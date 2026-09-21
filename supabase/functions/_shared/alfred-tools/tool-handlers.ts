@@ -242,7 +242,20 @@ export async function getIntents(
     if (error) return { error: error.message };
     if (!intents || intents.length === 0) return { data: [] };
 
-    // Tag filter is client-side to match get_items — intents.tags is jsonb.
+    // Tag filter is client-side. `intents.tags` has been text[] since migration
+    // 039 — this comment used to say jsonb, which stopped being true then — so
+    // the array `.includes` below is correct rather than accidentally correct.
+    // It no longer "matches get_items" either: the MCP get_items tool filters
+    // in Postgres via platform_search_items (`tags && p_tags`).
+    //
+    // ⚠️ THIS FILTERS THE PAGE, NOT THE TABLE. The `.limit()` above is applied
+    // by Postgres BEFORE this runs, so a matching row that sorts past the limit
+    // is invisible. The limit is hard-capped at 50 by clampLimit, whatever the
+    // caller asks for. With `include_archived: true` the archived rows crowd
+    // that window and a tag that plainly exists comes back as an empty array —
+    // which reads as "the tag filter is broken" and has already been
+    // misdiagnosed once as a stale deploy. It is not broken; it is narrow.
+    // Filed as its own item. The fix is to move the predicate into the query.
     let filtered = intents;
     if (params.tags && params.tags.length > 0) {
       filtered = intents.filter((row: { tags: string[] | null }) =>
