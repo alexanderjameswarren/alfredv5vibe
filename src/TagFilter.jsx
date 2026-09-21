@@ -92,10 +92,15 @@ import { ChevronDown } from "lucide-react";
 //                      opts out of collapsing — and why `collapsed` alone can
 //                      never strand you in a bar with no way to reopen it.
 //
-// Renders nothing at all when no tag is in use — an empty bar would be a gap
-// above the list with nothing to say. That holds even with a filter active,
-// which means a stale `activeTag` inherited from another screen shows no Clear.
-// Left as it was; Step 3 removes the inheritance that causes it.
+// Renders nothing at all when no tag is in use AND nothing is filtering — an
+// empty bar would be a gap above the list with nothing to say.
+//
+// An active filter is always something to say, though, so it keeps the bar
+// alive on its own (Step 4b, 2026-09-21). Archive the last tagged row while
+// filtered to its tag and every count disappears; the bar used to go with them,
+// taking `Clear` along, on the one screen where the list is emptiest. The rule
+// decided at Step 2b — a filter that is still filtering must stay visible — now
+// holds everywhere rather than almost everywhere.
 /**
  * How many distinct tags a bar needs before it is allowed to collapse at all.
  *
@@ -179,7 +184,14 @@ export default function TagFilter({
 
   const sortedTags = Object.entries(tagCounts).sort((a, b) => a[0].localeCompare(b[0]));
 
-  if (sortedTags.length === 0) return null;
+  // Nothing to say and nothing filtering: render nothing rather than a gap.
+  //
+  // A FILTER STILL FILTERING IS ALWAYS SOMETHING TO SAY (§A3, Step 4b). Archive
+  // the last tagged row on a screen while filtered to its tag and every count
+  // vanishes — which used to take the whole bar with it, `Clear` included, on
+  // the one screen where the list is emptiest and the question "why is there
+  // nothing here" is loudest. So an active tag alone keeps the bar alive.
+  if (sortedTags.length === 0 && !activeTag) return null;
 
   // Two conditions, and `isCollapsed` hangs off both — which is what makes a
   // hidden bar with no way to reopen it impossible rather than merely unlikely.
@@ -195,6 +207,16 @@ export default function TagFilter({
     typeof onToggleCollapsed === "function" && sortedTags.length >= COLLAPSE_MIN_TAGS;
   const isCollapsed = collapsed && canToggle;
   const activeCount = activeTag ? tagCounts[activeTag] : undefined;
+
+  // Two ways the active tag ends up standing on its own: the bar is collapsed,
+  // or there are no pills left to stand among. Both render the same thing.
+  //
+  // NOT the same as an active tag that is merely absent from a bar which still
+  // has pills — filter to "beans", archive the last beans row, and a screen
+  // with other tags keeps showing those plus `Clear`. That case was decided at
+  // Step 2b and is deliberately unchanged here; `Clear` is enough when there is
+  // still a bar to read. This is only about there being no bar at all.
+  const onlyActivePill = isCollapsed || sortedTags.length === 0;
 
   const pillClass = (isActive) =>
     `px-3 py-1.5 text-sm rounded-full transition-colors ${
@@ -222,7 +244,7 @@ export default function TagFilter({
           Tags ({sortedTags.length})
         </button>
       )}
-      {isCollapsed
+      {onlyActivePill
         ? activeTag && (
             <button
               type="button"

@@ -1,6 +1,6 @@
 # Progress: Tag UX and Inbox Tag Storage
 
-## Status: Steps 0-4 complete. Next up: Step 5 (inbox cutover).
+## Status: Steps 0-4b complete. Next up: Step 5 (inbox cutover).
 
 Reference: `docs/technical-spec-tag-ux.md`
 
@@ -437,6 +437,9 @@ covers an active filter over zero tags. Roughly three lines. Left undone because
 it is a behaviour change neither Step 3 nor Step 4 asked for; flagging it as a
 decision rather than taking it.
 
+→ **TAKEN. Alex called it in as Step 4b (2026-09-21); see below.** The estimate
+held: three lines, and all 32 passed unchanged.
+
 ---
 
 ## Step 4 — COMPLETE (2026-09-21). Archived rows out of the suggestion pool.
@@ -486,6 +489,68 @@ a file that tests can import. Here that would mean moving `tagPoolFrom` into
 `src/TagFilter.jsx` (or its own module) and exporting it together with a small
 `activeRows` helper — maybe fifteen lines, and it would make both the ordering
 and the archived exclusion assertable. **Alex's call; not taken here.**
+
+→ **DEFERRED ON PURPOSE, WITH A TICKET (Alex, 2026-09-21.)** Filed as its own
+Alfred item rather than folded into this project. Step 4 stays exactly as it
+shipped. This is a deliberate deferral, not an oversight — if you are reading
+this because you found an untested `tagPool`, the gap is known and tracked, and
+the device check in the Step 4 verification is what stands in for coverage
+today.
+
+---
+
+## Step 4b — COMPLETE (2026-09-21). The bar survives having no tags.
+
+Taken from the note left at the end of Step 3. The rule decided at Step 2b —
+**a filter that is still filtering must stay visible** — held everywhere except
+one place, and this closes it so it holds everywhere.
+
+- [x] `TagFilter` renders the bar whenever a filter is active, even with no tags
+- [x] The lone pill shows the tag name with the count dropped, not `(0)`
+- [x] `Clear` works from that state, and so does tapping the pill
+- [x] No entities and no active filter still renders nothing
+- [x] All 40 existing tests pass **unchanged** — none needed editing. 10 new.
+
+Suite: **61 suites, 1259 tests** (was 61 / 1249). Build clean under `CI=true`.
+
+The estimate from Step 3 held — three lines of logic:
+
+```js
+// was: if (sortedTags.length === 0) return null;
+if (sortedTags.length === 0 && !activeTag) return null;
+
+// and the lone-pill branch now has two reasons to fire, not one
+const onlyActivePill = isCollapsed || sortedTags.length === 0;
+```
+
+### The case, concretely
+
+Filter a screen to `beans`. Archive the last row carrying `beans`, and it was
+the only tagged row on that screen. Every count vanishes. The bar used to vanish
+with them — pills, `Clear`, all of it — leaving an empty list, no explanation,
+and no way to undo the filter on that screen. Step 3 had already downgraded it
+from a dead end to an inconvenience by clearing the filter when you navigate
+away; now there is nothing to escape from in the first place.
+
+### What was deliberately NOT changed
+
+An active tag that is merely **absent from a bar that still has pills**. Filter
+to `beans`, lose the last beans row, but the screen still carries `soup`: you
+see `soup (1)` and `Clear`, with no lone `beans` pill beside them.
+
+That asymmetry is on purpose and worth naming, because it looks like an
+oversight. Alex decided it at Step 2b for the expanded bar, and the reasoning
+still holds: `Clear` is enough when there is still a bar to read. 4b is about
+there being **no bar at all**. Changing it would also have meant editing the
+Step 2b test that pins it, which is the signal to stop and ask rather than
+quietly widen scope.
+
+### Surprise: none
+
+The three-line estimate and the "breaks none of the 32" prediction from Step 3
+both held exactly. Worth recording only because it is the first time in this
+project a flagged-and-deferred item came back and cost precisely what it was
+said to cost.
 
 ---
 

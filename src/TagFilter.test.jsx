@@ -441,3 +441,97 @@ describe("TagFilter — below the collapse threshold", () => {
     expect(pills()).toEqual(["Tags (22)"]);
   });
 });
+
+// ─── Step 4b: a filter still filtering keeps the bar alive ───────────────────
+//
+// The gap the earlier 32 tests left: none of them covered an active filter over
+// ZERO tags. Archive the last tagged row on a screen while filtered to its tag
+// and that is exactly where you land — the emptiest the list ever gets, and
+// until now the one place the bar disappeared and took Clear with it.
+
+describe("TagFilter — an active filter with nothing left to show", () => {
+  const noop = () => {};
+
+  test("an empty entity list with a filter on still renders the pill and Clear", () => {
+    render(
+      <TagFilter entities={[]} activeTag="beans" onFilter={noop} />
+    );
+    expect(pills()).toEqual(["beans", "Clear"]);
+  });
+
+  test("the tag name carries no count rather than reading (0)", () => {
+    // Step 2b's decision, now the normal case here rather than an edge one: the
+    // pill answers what is filtering, not how many matched.
+    render(<TagFilter entities={[]} activeTag="beans" onFilter={noop} />);
+    expect(screen.getByRole("button", { name: "beans" }).textContent.trim()).toBe("beans");
+    expect(pills().some((p) => p.includes("(0)"))).toBe(false);
+  });
+
+  test("rows that exist but carry no tags behave the same way", () => {
+    // The real shape of it: the rows are still there, their tags are not.
+    render(
+      <TagFilter entities={[{}, { tags: [] }, { tags: null }]} activeTag="beans"
+        onFilter={noop} />
+    );
+    expect(pills()).toEqual(["beans", "Clear"]);
+  });
+
+  test("the lone pill still looks active", () => {
+    render(<TagFilter entities={[]} activeTag="beans" onFilter={noop} />);
+    expect(screen.getByRole("button", { name: "beans" }).className).toContain("bg-primary");
+  });
+
+  test("Clear works from that state — the way out is real, not decorative", () => {
+    const onFilter = jest.fn();
+    render(<TagFilter entities={[]} activeTag="beans" onFilter={onFilter} />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(onFilter).toHaveBeenCalledWith(null);
+  });
+
+  test("and so does tapping the pill itself", () => {
+    const onFilter = jest.fn();
+    render(<TagFilter entities={[]} activeTag="beans" onFilter={onFilter} />);
+    fireEvent.click(screen.getByRole("button", { name: "beans" }));
+    expect(onFilter).toHaveBeenCalledWith(null);
+  });
+
+  test("no entities and NO active filter still renders nothing", () => {
+    // The other half of the rule. An empty bar with nothing filtering is a gap
+    // above the list with nothing to say, and that has not changed.
+    const { container } = render(
+      <TagFilter entities={[]} activeTag={null} onFilter={noop} />
+    );
+    expect(container.innerHTML).toBe("");
+  });
+
+  test("no toggle appears — there is nothing to collapse", () => {
+    render(
+      <TagFilter entities={[]} activeTag="beans" onFilter={noop}
+        collapsed onToggleCollapsed={noop} />
+    );
+    expect(screen.queryByRole("button", { name: "Show tags" })).toBe(null);
+    expect(screen.queryByRole("button", { name: "Hide tags" })).toBe(null);
+    expect(pills()).toEqual(["beans", "Clear"]);
+  });
+
+  test("a bar that still has pills is UNCHANGED — this is only about having none", () => {
+    // Step 2b decided this one and it stays decided: filter to "beans", lose the
+    // last beans row, but the screen still has other tags. Those plus Clear are
+    // enough, and no lone "beans" pill is added beside them.
+    render(
+      <TagFilter entities={rows(["soup"])} activeTag="beans" onFilter={noop} />
+    );
+    expect(pills()).toEqual(["soup (1)", "Clear"]);
+  });
+
+  test("losing the last tag mid-filter keeps the filter on screen", () => {
+    // The live sequence, as a rerender: filtered to beans, then the only beans
+    // row is archived and it was the only tagged row on the screen.
+    const { rerender } = render(
+      <TagFilter entities={rows(["beans"])} activeTag="beans" onFilter={noop} />
+    );
+    expect(pills()).toEqual(["beans (1)", "Clear"]);
+    rerender(<TagFilter entities={[]} activeTag="beans" onFilter={noop} />);
+    expect(pills()).toEqual(["beans", "Clear"]);
+  });
+});

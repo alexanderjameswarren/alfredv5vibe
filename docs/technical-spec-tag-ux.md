@@ -233,14 +233,15 @@ carries no id in its URL (`src/viewPaths.js`, `VIEW_TO_PATH`, the
 view with no context selected — so reload persistence is moot on the page where
 the bar is worst.
 
-### A3 — What stays visible when collapsed — IMPLEMENTED, Step 2b, 2026-09-21
+### A3 — A filter that is still filtering stays visible — IMPLEMENTED, Steps 2b and 4b, 2026-09-21
 
-Applies only to a bar large enough to collapse — see the threshold in A1.
+**The governing rule.** An active filter that is invisible while still filtering
+silently empties a list with no visible cause. There are two ways the bar can
+otherwise disappear out from under one, and both are handled.
 
-The active filter pill, if a filter is applied, plus the expand control and
-`Clear`. An
-active filter that is invisible while still filtering would silently empty a list
-with no visible cause.
+**Collapsed (Step 2b).** Applies only to a bar large enough to collapse — see
+the threshold in A1. The active filter pill, if a filter is applied, plus the
+toggle and `Clear`.
 
 When no filter is active, only the toggle shows. The toggle sits FIRST in the
 row so it is in the same place open or shut, and it carries the count of hidden
@@ -250,6 +251,24 @@ The active pill is shown **even when no visible row carries that tag** (Alex,
 2026-09-21): that is the case where the list is emptiest and "why" is loudest.
 Its count is dropped rather than printed as `(0)`, because the pill answers what
 is filtering, not how many matched.
+
+**No tags at all (Step 4b).** `TagFilter` renders nothing when no tag is in use —
+but only when nothing is filtering either. Archive the last tagged row on a
+screen while filtered to its tag and every count vanishes, which used to take
+the bar with it, `Clear` included, on the one screen where the list is emptiest.
+An active tag now keeps the bar alive on its own, rendered exactly as the
+collapsed pill is: the tag name, no count, `Clear` beside it.
+
+```js
+if (sortedTags.length === 0 && !activeTag) return null;
+const onlyActivePill = isCollapsed || sortedTags.length === 0;
+```
+
+**Deliberately NOT extended** to an active tag that is merely absent from a bar
+which still has pills. Filter to `beans`, lose the last beans row, and a screen
+with other tags keeps showing those plus `Clear` — no lone `beans` pill beside
+them. That was decided at Step 2b and stands: `Clear` is enough when there is
+still a bar to read. A3 is about there being no bar at all.
 
 ### A4 — Ordering — IMPLEMENTED, Step 1, 2026-09-21
 
