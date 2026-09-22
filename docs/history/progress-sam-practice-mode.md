@@ -1,13 +1,13 @@
 # Progress: SAM Practice Mode
 
-## Status: Step 4 complete — awaiting verification (step 5 is the piano run-through)
+## Status: COMPLETE — verified at the piano 2026-09-22
 
 ### Development Steps
 - [x] Step 1: Reconnaissance — map where Play starts the scroll, how the playback clock works, where notes are graded, every place that records data, and how backing audio starts. Report findings and a short plan. No code changes.
 - [x] Step 2: Practice button and mode — button next to Play, same scroll and range as Play, backing audio off, one practice-mode flag that blocks every recording path. No stopping yet.
 - [x] Step 3: Stop on incorrect — stop immediately on a wrong note; on a missed note, stop and move the score back so the missed beat is at the play line; highlight the required notes.
 - [x] Step 4: Resume on held chord — resume when every note starting on the stuck beat is held together; ignore wrong keys while stopped; reset the clock to the beat's scheduled time; do not re-grade the held keys.
-- [ ] Step 5: Piano verification on the Surface — full run-through of all success criteria with real input, plus a check that normal Play is unchanged.
+- [x] Step 5: Piano verification on the Surface — full run-through of all success criteria with real input, plus a check that normal Play is unchanged.
 
 ### Notes
 
@@ -274,3 +274,34 @@ all.
 
 **Still Surface-only:** the ScrollEngine frame (transform, teleport skip, scanner break, metronome
 re-anchor) has no unit test — it is mocked out of every suite and is VexFlow/DOM-bound.
+
+#### Step 5 — verified at the Surface, 2026-09-22
+
+Alex ran the whole feature at the piano. All five of the spec's success criteria hold.
+
+1. **Practice scrolls at the same speed as Play with backing audio off.** Confirmed, including an
+   audio-backed song at a reduced playback speed, where the percentage is folded into the bpm because
+   the MP3 is no longer there to carry it.
+2. **A wrong note stops the scroll immediately; a missed note stops it with the missed beat moved
+   back to the play line.** Confirmed, along with the partial and all-wrong cases, and the backwards
+   jump on a miss reads as deliberate rather than as a glitch.
+3. **Holding all of that beat's notes together resumes from that beat's scheduled time; wrong keys
+   while stopped are ignored.** Confirmed: chords held together, rolled chords, any order, extra keys
+   alongside, wrong keys held first and then corrected without releasing them, one-hand snippets
+   requiring only that hand, and tied notes requiring only the notes that genuinely start on the
+   beat. The sustain pedal does not satisfy a chord. The metronome comes back in time after a resume,
+   and a snippet still loops with its rest bars.
+4. **No new rows in `sam_sessions`, `sam_session_events` or `sam_passes`, and plan progress
+   unchanged.** The database check was empty after every practice run, at each of steps 2, 3 and 4.
+5. **Normal Play behaves exactly as before.** Never stopped, never waited, counters and colours
+   unchanged, and holding a chord down for several seconds during Play does nothing.
+
+Feature complete. Final state: 1379 tests pass across the project (569 in SAM), build clean with no
+lint warnings.
+
+**Where the risk now sits, for whoever reads this next.** The recording gate is one flag checked
+inside `usePracticeSession` and `useSamPasses`, not at SamPlayer's call sites, so a new write path
+added INSIDE those hooks is covered automatically but a new hook that writes on its own would not be.
+The ScrollEngine frame — the freeze, the transform, the teleport skip, the scanner break and the
+metronome re-anchor — has no unit test, because ScrollEngine is mocked out of every suite and is
+VexFlow/DOM-bound; that behaviour is only ever proved at the piano.
