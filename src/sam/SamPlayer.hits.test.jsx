@@ -22,7 +22,10 @@ jest.mock("./components/ScrollEngine", () => (props) => {
 let mockOnChord = null;
 jest.mock("./lib/useMIDI", () => ({ onChord }) => {
   mockOnChord = onChord;
-  return { connected: true, deviceName: "Test keyboard", lastNote: null };
+  return {
+    connected: true, deviceName: "Test keyboard", lastNote: null,
+    cancelPendingChord: () => {}, resetHeldKeys: () => {},
+  };
 });
 
 let mockNextResult = "hit";

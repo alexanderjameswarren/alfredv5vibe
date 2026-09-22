@@ -6,7 +6,16 @@ function isVirtualPort(name) {
   return lower.includes("midi through") || lower.includes("thru");
 }
 
-export default function useMIDI({ onChord, chordGroupMs = 80 } = {}) {
+// `onHeldKeys` is practice mode's resume signal, and the ONLY reason Note Off
+// is looked at anywhere in SAM. It is called with the live Set of keys
+// currently down, after every press and every release, but ONLY while a
+// listener is attached — which is only while a Practice run is in flight. With
+// no listener this file behaves exactly as it did: Play's path through the
+// handler is unchanged.
+//
+// The Set is the live one, not a copy: the consumer reads it and must not keep
+// it. Copying it on every key of a fast run would be pure garbage.
+export default function useMIDI({ onChord, chordGroupMs = 80, onHeldKeys } = {}) {
   const [connected, setConnected] = useState(false);
   const [deviceName, setDeviceName] = useState(null);
   const [lastNote, setLastNote] = useState(null);
@@ -16,6 +25,13 @@ export default function useMIDI({ onChord, chordGroupMs = 80 } = {}) {
 
   const chordGroupMsRef = useRef(chordGroupMs);
   chordGroupMsRef.current = chordGroupMs;
+
+  const onHeldKeysRef = useRef(onHeldKeys);
+  onHeldKeysRef.current = onHeldKeys;
+
+  // Which keys are down right now. Only ever written while a listener is
+  // attached, so it stays empty for the whole of a normal Play sitting.
+  const heldRef = useRef(new Set());
 
   const inputBufferRef = useRef([]);
   const flushTimerRef = useRef(null);
@@ -56,8 +72,27 @@ export default function useMIDI({ onChord, chordGroupMs = 80 } = {}) {
     // Ignore system messages
     if (status >= 0xF0) return;
 
-    // Only process Note On with velocity > 0
-    if ((status & 0xF0) !== 0x90 || velocity === 0) return;
+    const kind = status & 0xF0;
+    // A Note On with velocity 0 IS a Note Off — plenty of keyboards send
+    // nothing else — which is why the original scoring filter tested velocity
+    // as well as status, and why the release test has to do the same.
+    const isNoteOn = kind === 0x90 && velocity > 0;
+    const isNoteOff = kind === 0x80 || (kind === 0x90 && velocity === 0);
+    const notifyHeld = onHeldKeysRef.current;
+
+    // The held set. CC64 is deliberately absent: "held" means fingers, so the
+    // sustain pedal cannot satisfy a chord it is not holding down.
+    if (notifyHeld && (isNoteOn || isNoteOff)) {
+      if (isNoteOn) heldRef.current.add(note);
+      else heldRef.current.delete(note);
+    }
+
+    // Everything that is not a struck key scores nothing — the pre-existing
+    // filter, unchanged. A release only ever updates the held set.
+    if (!isNoteOn) {
+      if (notifyHeld && isNoteOff) notifyHeld(heldRef.current);
+      return;
+    }
 
     setLastNote(note);
 
@@ -66,7 +101,32 @@ export default function useMIDI({ onChord, chordGroupMs = 80 } = {}) {
     inputBufferRef.current.push(note);
     if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
     flushTimerRef.current = setTimeout(flushChord, chordGroupMsRef.current);
+
+    // NOTIFIED AFTER THE BUFFER, NOT BEFORE. The press that completes a stuck
+    // chord resumes the run from inside this call, and the resume drops the
+    // pending chord group — which is what stops the keys held to satisfy that
+    // beat being graded as a press at the beat the run has just moved on to.
+    // Notifying first would let this very note be re-buffered afterwards and
+    // land on the next beat anyway.
+    if (notifyHeld) notifyHeld(heldRef.current);
   }, [flushChord]);
+
+  // Drop the chord group waiting to flush. Used by the practice resume, above.
+  const cancelPendingChord = useCallback(() => {
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    inputBufferRef.current = [];
+    firstPressAtRef.current = null;
+  }, []);
+
+  // Start a practice run from a clean slate: a key whose Note Off was lost to a
+  // hot-plug would otherwise stay "held" for the rest of the sitting and make
+  // every chord containing it resume for free.
+  const resetHeldKeys = useCallback(() => {
+    heldRef.current.clear();
+  }, []);
 
   useEffect(() => {
     if (!navigator.requestMIDIAccess) {
@@ -77,6 +137,10 @@ export default function useMIDI({ onChord, chordGroupMs = 80 } = {}) {
     let midiAccess = null;
     let pollInterval = null;
     let cancelled = false;
+    // Captured, not read through the ref in the cleanup below: the Set is never
+    // reassigned — only mutated and cleared — so this is the same object, and
+    // the lint rule is right that reading `.current` at teardown is a trap.
+    const held = heldRef.current;
 
     function bindInputs(access) {
       if (cancelled) return;
@@ -123,8 +187,9 @@ export default function useMIDI({ onChord, chordGroupMs = 80 } = {}) {
         }
       }
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+      held.clear();
     };
   }, [handleMIDIMessage]);
 
-  return { connected, deviceName, lastNote };
+  return { connected, deviceName, lastNote, cancelPendingChord, resetHeldKeys };
 }

@@ -17,7 +17,10 @@ jest.mock("./components/ScrollEngine", () => (props) => {
   mockScrollProps = props;
   return null;
 });
-jest.mock("./lib/useMIDI", () => () => ({ connected: false, deviceName: null, lastNote: null }));
+jest.mock("./lib/useMIDI", () => () => ({
+  connected: false, deviceName: null, lastNote: null,
+  cancelPendingChord: () => {}, resetHeldKeys: () => {},
+}));
 jest.mock("./lib/audioPlayer", () => ({ uploadAudio: jest.fn(), loadAudio: jest.fn() }));
 
 const SONG_ID = "11111111-1111-1111-1111-111111111111";

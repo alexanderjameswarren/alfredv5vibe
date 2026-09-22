@@ -10,7 +10,10 @@ import { MemoryRouter } from "react-router-dom";
 // --- heavy children the test doesn't need ---------------------------------
 jest.mock("./components/ScoreRenderer", () => () => null);
 jest.mock("./components/ScrollEngine", () => () => null);
-jest.mock("./lib/useMIDI", () => () => ({ connected: false, deviceName: null, lastNote: null }));
+jest.mock("./lib/useMIDI", () => () => ({
+  connected: false, deviceName: null, lastNote: null,
+  cancelPendingChord: () => {}, resetHeldKeys: () => {},
+}));
 
 // --- audio storage --------------------------------------------------------
 const mockUploadAudio = jest.fn();

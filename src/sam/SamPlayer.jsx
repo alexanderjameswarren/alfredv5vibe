@@ -540,6 +540,79 @@ export default function SamPlayer({ onBack }) {
     if (scrollState) scrollState.frozenAtMs = null;
   }, []);
 
+  // Which hand is being scored, readable from callbacks that must stay stable.
+  const handModeRef = useRef("both");
+  handModeRef.current = snippet?.handMode || "both";
+
+  // `cancelPendingChord` comes back OUT of useMIDI, which is called further
+  // down and needs `handleHeldKeys` — which needs the resume, which needs the
+  // cancel. A ref is what breaks that circle.
+  const cancelPendingChordRef = useRef(null);
+
+  // The notes that must be held to resume: every note that STARTS on the stuck
+  // beat, in the hand being practised. Tied continuations are already absent —
+  // scoreRender builds these arrays from `struckMidi`, which excludes a note
+  // merely held over from an earlier beat. This is the same selection the
+  // grader itself uses, so the set required is exactly the set that was judged.
+  function requiredMidiFor(beat, hm) {
+    if (!beat) return [];
+    const req = hm === "lh" ? beat.lhMidi : hm === "rh" ? beat.rhMidi : beat.allMidi;
+    return req || beat.allMidi || [];
+  }
+
+  // Pick the run back up at the stuck beat, as if it had been played on time.
+  const practiceResume = useCallback(() => {
+    const beat = stuckBeatRef.current;
+    const scrollState = scrollStateExtRef.current;
+    if (!beat || !scrollState) return;
+
+    // SETTLED, AND NEVER GRADED AGAIN. "skipped" is the state the engine
+    // already uses for a beat it must not score: the miss scanner steps over
+    // anything not "pending", and so does `findClosestBeat`. So the keys still
+    // held cannot be read as a press AT this beat, and the beat cannot be
+    // missed a second time on the way past. (The loop teleport resets every
+    // beat to pending, which is right — the next pass grades it afresh.)
+    beat.state = "skipped";
+
+    // The clock, set as if the beat had been played on time. With backing audio
+    // off `elapsed` is exactly `now - scrollStartT`, so this puts the run at the
+    // beat's own scheduled time and it carries on from there at normal speed,
+    // with no count-in. Time spent stopped is not counted, and nothing is
+    // skipped over.
+    const now = performance.now();
+    scrollState.scrollStartT = now - beat.targetTimeMs;
+    scrollState.elapsed = beat.targetTimeMs;
+    scrollState.elapsedAtMs = now;
+    scrollState.frozenAtMs = null;
+
+    // The keys that satisfied the beat are sitting in the chord buffer waiting
+    // to flush. Dropping the group is what keeps them from being graded as a
+    // press at whatever beat comes next. Releasing them triggers nothing: a
+    // Note Off only ever updates the held set.
+    cancelPendingChordRef.current?.();
+
+    stuckBeatRef.current = null;
+    setStuckBeat(null);
+    console.log(`[Practice] resumed at m${beat.meas} beat=${beat.beat}`,
+      `| clock set to ${Math.round(beat.targetTimeMs)}ms`);
+  }, []);
+
+  // Every press and every release while a Practice run is in flight.
+  const handleHeldKeys = useCallback((held) => {
+    const beat = stuckBeatRef.current;
+    if (!beat) return;
+    const required = requiredMidiFor(beat, handModeRef.current);
+    // A beat requiring nothing would otherwise be unresumable. The miss scanner
+    // skips rest beats so this should be unreachable — but being stuck forever
+    // at the piano is the worst failure this feature could have.
+    for (const midi of required) {
+      if (!held.has(midi)) return;
+    }
+    // Every required note down at the same moment. Order never mattered, and
+    // extra keys held alongside are simply not consulted.
+    practiceResume();
+  }, [practiceResume]);
+
   // `pressedAtMs` is a performance.now() reading from when the chord's FIRST
   // key arrived, carried through useMIDI's chord buffer. Every timing decision
   // below uses it, so nothing is measured at flush time any more.
@@ -686,10 +759,17 @@ export default function SamPlayer({ onBack }) {
     });
   }, [playbackState, recordEvent, recordExtra, timingWindowMs.value, snippet?.handMode, practiceStopAt]);
 
-  const { connected: midiConnected, deviceName: midiDevice, lastNote } = useMIDI({
+  const {
+    connected: midiConnected, deviceName: midiDevice, lastNote,
+    cancelPendingChord, resetHeldKeys,
+  } = useMIDI({
     onChord: handleChord,
     chordGroupMs: chordMs.value,
+    // Attached only while practising, so Play's MIDI path never tracks a held
+    // key at all.
+    onHeldKeys: practiceMode ? handleHeldKeys : null,
   });
+  cancelPendingChordRef.current = cancelPendingChord;
 
   const handleBeatEvents = useCallback((events) => {
     beatEventsRef.current = events;
@@ -1060,6 +1140,7 @@ export default function SamPlayer({ onBack }) {
   function startFromTopOfRange(activeSnippet, { practice = false } = {}) {
     resetCounters();
     clearStuckBeat();
+    resetHeldKeys();
     setPausedMeasure(null);
     lastLoopCountRef.current = 0;
     if (!practice) {

@@ -450,6 +450,12 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     // First tick = approachMs % msPerBeat (so ticks land on quarter-note boundaries).
     let nextMetroBeatIdx = 0;
     const metroStartMs = approachMs % msPerBeat;
+    // Hoisted out of the frame: the practice resume re-anchors the tick index
+    // against it, and it is constant for the life of this effect anyway.
+    const metroSubdivisionMs =
+      metronome === "halfbeat" ? msPerBeat / 2
+      : metronome === "quarterbeat" ? msPerBeat / 4
+      : msPerBeat;
     // Convert audio file timestamp (ms) → musical beat position using anchors.
     // With 0 anchors: virtual anchor at beat 0, audioMs 0 (BPM-based rate).
     // With 1 anchor: BPM-based rate from the single anchor point.
@@ -523,6 +529,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       if (state.frozenAtMs != null) {
         state.elapsed = state.frozenAtMs;
         state.elapsedAtMs = now;
+        state.wasFrozen = true;
         applyFrozenTransform(state);
         rafRef.current = requestAnimationFrame(frame);
         return;
@@ -584,6 +591,17 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       } else {
         // No audio — use wall clock at full speed
         elapsed = now - state.scrollStartT;
+      }
+
+      // Just resumed from a practice stop. The clock has moved — usually
+      // BACKWARDS, by up to one timing window, since a missed beat is only
+      // known once its window has closed. `nextMetroBeatIdx` is a monotonic
+      // counter over `elapsed`, so without re-anchoring it here the click would
+      // fall silent until elapsed caught back up to where the counter had got
+      // to. Ceil, not floor: the next tick is the first one still in the future.
+      if (state.wasFrozen) {
+        state.wasFrozen = false;
+        nextMetroBeatIdx = Math.max(0, Math.ceil((elapsed - metroStartMs) / metroSubdivisionMs));
       }
 
       state.elapsed = elapsed;
@@ -713,13 +731,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       if (metronome !== "off" && audioCtx) {
         const LOOKAHEAD_MS = 100;
 
-        // Calculate subdivision interval based on metronome setting
-        let subdivisionMs = msPerBeat; // Default to beat (quarter note)
-        if (metronome === "halfbeat") {
-          subdivisionMs = msPerBeat / 2; // Eighth note
-        } else if (metronome === "quarterbeat") {
-          subdivisionMs = msPerBeat / 4; // Sixteenth note
-        }
+        const subdivisionMs = metroSubdivisionMs;
 
         while (true) {
           const tickElapsedMs = metroStartMs + nextMetroBeatIdx * subdivisionMs;

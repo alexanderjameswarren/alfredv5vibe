@@ -1,12 +1,12 @@
 # Progress: SAM Practice Mode
 
-## Status: Step 3 complete — awaiting verification
+## Status: Step 4 complete — awaiting verification (step 5 is the piano run-through)
 
 ### Development Steps
 - [x] Step 1: Reconnaissance — map where Play starts the scroll, how the playback clock works, where notes are graded, every place that records data, and how backing audio starts. Report findings and a short plan. No code changes.
 - [x] Step 2: Practice button and mode — button next to Play, same scroll and range as Play, backing audio off, one practice-mode flag that blocks every recording path. No stopping yet.
 - [x] Step 3: Stop on incorrect — stop immediately on a wrong note; on a missed note, stop and move the score back so the missed beat is at the play line; highlight the required notes.
-- [ ] Step 4: Resume on held chord — resume when every note starting on the stuck beat is held together; ignore wrong keys while stopped; reset the clock to the beat's scheduled time; do not re-grade the held keys.
+- [x] Step 4: Resume on held chord — resume when every note starting on the stuck beat is held together; ignore wrong keys while stopped; reset the clock to the beat's scheduled time; do not re-grade the held keys.
 - [ ] Step 5: Piano verification on the Surface — full run-through of all success criteria with real input, plus a check that normal Play is unchanged.
 
 ### Notes
@@ -211,3 +211,66 @@ outcomes, so every grading path is genuinely exercised rather than swallowed by 
 **Not covered by tests:** the ScrollEngine frame itself (transform, teleport skip, scanner break) has
 no unit test — ScrollEngine is mocked out of every suite and is VexFlow/DOM-bound. That behaviour is
 Surface-only verification.
+
+#### Step 4 built (2026-09-22)
+
+**Held keys — `useMIDI`.** A `Set`, updated on Note On and Note Off, reported through a new optional
+`onHeldKeys` listener. It is the ONLY reason Note Off is looked at anywhere in SAM. Tracked only
+while a listener is attached, and SamPlayer attaches one only while practising, so Play's path
+through the handler is unchanged — there is a test for exactly that. A Note On with velocity 0 is
+treated as a release, because plenty of keyboards send nothing else. **CC64 is deliberately absent:
+"held" means fingers, and the pedal can neither add a key nor keep one.** The live Set is passed, not
+a copy — copying on every key of a fast run would be pure garbage; the consumer reads it and does not
+keep it.
+
+Two small additions alongside: `cancelPendingChord()` (drop the chord group waiting to flush) and
+`resetHeldKeys()` (start each run clean, so a key whose Note Off was lost to a hot-plug cannot make
+every chord containing it resume for free).
+
+**ORDERING MATTERS, AND IT IS THE SUBTLE PART.** The listener fires AFTER the chord buffer has taken
+the press, not before. The key that completes a stuck chord resumes the run from inside that same
+call, and the resume cancels the pending group — which is what stops those keys being graded as a
+press at the beat the run has just moved on to. Notify first and that very note would be re-buffered
+afterwards and land on the next beat anyway. There is a test pinning the order.
+
+**The resume — `practiceResume`.** Required set is `requiredMidiFor(beat, handMode)` — `lhMidi`,
+`rhMidi` or `allMidi`, already free of tied continuations because scoreRender builds them from
+`struckMidi`. Same selection the grader itself uses, so the set required is exactly the set that was
+judged. Resume fires the moment every required note is in the held set; order is irrelevant and
+extras are simply not consulted. An empty required set resumes immediately rather than stranding the
+run (unreachable — the scanner skips rest beats — but being stuck forever at the piano is the worst
+failure this feature could have).
+
+On resume: `beat.state = "skipped"` (the state the miss scanner AND `findClosestBeat` both step over,
+so the beat can never be graded again and the keys still down cannot be read as a press at it);
+`scrollStartT = now - beat.targetTimeMs`, which with backing audio off puts `elapsed` exactly at the
+beat's scheduled time — no count-in, nothing skipped, time spent stopped not counted;
+`frozenAtMs = null`; `cancelPendingChord()`. Colours are left exactly as the grader set them.
+
+The loop teleport resets every beat to pending, which is right: the next pass grades it afresh.
+
+**Metronome re-anchor.** `nextMetroBeatIdx` is a monotonic counter over `elapsed`, and a resume moves
+the clock — usually BACKWARDS, by up to one timing window, since a missed beat is only known once its
+window has closed. Without re-anchoring, the click fell silent until elapsed caught back up. The
+frame after an unfreeze now recomputes the index from the new position. `subdivisionMs` was hoisted
+out of the frame to make that possible.
+
+**A circular dependency, broken with one ref.** `cancelPendingChord` comes out of `useMIDI`, which
+needs `handleHeldKeys`, which needs `practiceResume`, which needs `cancelPendingChord`.
+`cancelPendingChordRef` is what breaks the circle.
+
+**Existing `useMIDI` mocks updated** in SamPlayer.audio / .hits / .plan tests: the hook's return
+shape grew, and the doubles had to grow with it. Chose that over optional-chaining the hook's own
+return value in SamPlayer, which would hide real breakage.
+
+**Verification.** 1379 tests pass across the whole project (569 in SAM); build clean, no lint
+warnings. New: `useMIDI.held.test.js` (8 tests) against the REAL hook — accumulate and release,
+velocity-0 as release, pedal ignored, listener-after-buffer ordering, cancel, reset, and Play's path
+untouched; plus 14 SamPlayer tests — resume on full hold, no resume on partial hold, extras ignored,
+wrong keys neither resume nor block, beat settled to "skipped", chord group dropped, release after
+resume does nothing, stops again on the next mistake, held keys inert when not stopped, a resumed run
+still records nothing, Pause from stopped, clean held set per run, and Play attaching no listener at
+all.
+
+**Still Surface-only:** the ScrollEngine frame (transform, teleport skip, scanner break, metronome
+re-anchor) has no unit test — it is mocked out of every suite and is VexFlow/DOM-bound.

@@ -26,9 +26,19 @@ jest.mock("./components/ScrollEngine", () => (props) => {
 });
 
 let mockOnChord = null;
-jest.mock("./lib/useMIDI", () => ({ onChord }) => {
+// The held-keys listener SamPlayer attaches — null whenever it is not
+// practising, which is itself part of what these tests check.
+let mockOnHeldKeys = null;
+const mockCancelPendingChord = jest.fn();
+const mockResetHeldKeys = jest.fn();
+jest.mock("./lib/useMIDI", () => ({ onChord, onHeldKeys }) => {
   mockOnChord = onChord;
-  return { connected: true, deviceName: "Test keyboard", lastNote: null };
+  mockOnHeldKeys = onHeldKeys;
+  return {
+    connected: true, deviceName: "Test keyboard", lastNote: null,
+    cancelPendingChord: (...a) => mockCancelPendingChord(...a),
+    resetHeldKeys: (...a) => mockResetHeldKeys(...a),
+  };
 });
 
 let mockNextResult = "hit";
@@ -143,6 +153,9 @@ let songOverrides = {};
 beforeEach(() => {
   mockScrollProps = null;
   mockOnChord = null;
+  mockOnHeldKeys = null;
+  mockCancelPendingChord.mockClear();
+  mockResetHeldKeys.mockClear();
   mockWrites.length = 0;
   songOverrides = {};
   THE_BEAT.state = "pending";
@@ -186,6 +199,12 @@ async function start(which) {
 // What ScrollEngine's frame would read: null while scrolling, the stuck beat's
 // scheduled time once the run has stopped.
 const frozenAt = () => mockScrollProps.scrollStateExtRef.current.frozenAtMs ?? null;
+const scrollStartT = () => mockScrollProps.scrollStateExtRef.current.scrollStartT;
+
+// Press the given keys "at the same moment", the way the real hook reports it.
+async function hold(...midis) {
+  await act(async () => { mockOnHeldKeys(new Set(midis)); });
+}
 
 async function chord(result) {
   mockNextResult = result;
@@ -447,4 +466,166 @@ test("Play never freezes: wrong, partial, all-wrong and missed all scroll on", a
   // And it is still grading and counting as it always did.
   fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
   await waitFor(() => expect(writesTo("sam_session_events").length).toBeGreaterThan(0));
+});
+
+// =============================================================================
+// STEP 4 — resume on held chord
+// =============================================================================
+
+// THE_BEAT requires [60, 64] in "both" hand mode. Its targetTimeMs is 4200, so a
+// resume must leave the clock reading exactly that.
+
+test("holding every note of the stuck beat resumes the run", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+  expect(frozenAt()).toBe(4200);
+
+  await hold(60, 64);
+
+  expect(frozenAt()).toBeNull();
+  // The clock is set as if the beat had been played on time: elapsed is
+  // now - scrollStartT, so scrollStartT must be now minus the beat's own time.
+  expect(performance.now() - scrollStartT()).toBeCloseTo(4200, 0);
+  expect(screen.getByText("Nothing is recorded.")).toBeInTheDocument();
+});
+
+test("a partial hold does not resume", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+
+  await hold(60);            // one of the two
+  expect(frozenAt()).toBe(4200);
+  await hold(64);            // the other, but the first has been released
+  expect(frozenAt()).toBe(4200);
+  await hold();              // nothing at all
+  expect(frozenAt()).toBe(4200);
+
+  await hold(64, 60);        // both together — order irrelevant
+  expect(frozenAt()).toBeNull();
+});
+
+test("extra keys held alongside are ignored", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+  await hold(48, 60, 61, 64, 90);
+  expect(frozenAt()).toBeNull();
+});
+
+test("wrong keys held while stopped neither resume nor block the resume", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+
+  await hold(61, 62, 63);
+  expect(frozenAt()).toBe(4200);
+  // Still resumes when the right notes arrive, with the wrong ones still down.
+  await hold(61, 62, 63, 60, 64);
+  expect(frozenAt()).toBeNull();
+});
+
+test("the stuck beat is settled so it can never be graded again", async () => {
+  await start(/^Practice$/);
+  await act(async () => { mockScrollProps.onBeatMiss(THE_BEAT); });
+  await hold(60, 64);
+
+  // "skipped" is the state the miss scanner and findClosestBeat both step over,
+  // so the keys still held cannot be read as a press at this beat and it cannot
+  // be missed a second time on the way past.
+  expect(THE_BEAT.state).toBe("skipped");
+});
+
+test("the chord group waiting to flush is dropped on resume", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+  expect(mockCancelPendingChord).not.toHaveBeenCalled();
+
+  await hold(60, 64);
+  // Otherwise the keys that satisfied this beat would flush 80ms later and be
+  // graded as a press at whatever beat comes next.
+  expect(mockCancelPendingChord).toHaveBeenCalled();
+});
+
+test("releasing the held keys after a resume does nothing", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+  await hold(60, 64);
+  const t = scrollStartT();
+
+  await hold(60);   // lifting one
+  await hold();     // and the other
+  expect(frozenAt()).toBeNull();
+  expect(scrollStartT()).toBe(t);
+});
+
+test("after resuming, the run can stop again on the next mistake", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+  await hold(60, 64);
+  expect(frozenAt()).toBeNull();
+
+  const next = { ...THE_BEAT, meas: 4, state: "pending", targetTimeMs: 7400 };
+  await act(async () => { mockScrollProps.onBeatMiss(next); });
+  expect(frozenAt()).toBe(7400);
+  expect(await screen.findByText("m.4")).toBeInTheDocument();
+
+  await hold(60, 64);
+  expect(frozenAt()).toBeNull();
+});
+
+test("held keys do nothing when the run is not stopped", async () => {
+  await start(/^Practice$/);
+  await hold(60, 64);
+  expect(frozenAt()).toBeNull();
+  expect(mockCancelPendingChord).not.toHaveBeenCalled();
+});
+
+test("a resumed run still records nothing", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+  await hold(60, 64);
+  await chord("hit");
+  await act(async () => { mockScrollProps.onContentEnd(1); });
+  await act(async () => { mockScrollProps.onLoopCount(1); });
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  await act(async () => { await Promise.resolve(); });
+
+  expect(mockWrites).toEqual([]);
+});
+
+test("Pause while stopped still works, and does not resume", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+
+  // The run is paused, not resumed: the freeze is gone with the stuck beat.
+  expect(frozenAt()).toBeNull();
+  await screen.findByRole("button", { name: /Resume/ });
+  expect(mockWrites).toEqual([]);
+});
+
+test("each Practice run starts from a clean held set", async () => {
+  await start(/^Practice$/);
+  expect(mockResetHeldKeys).toHaveBeenCalled();
+});
+
+// --- Play never listens ------------------------------------------------------
+
+test("Play attaches no held-keys listener at all", async () => {
+  await open();
+  // Stopped, before any run.
+  expect(mockOnHeldKeys).toBeFalsy();
+
+  fireEvent.click(await screen.findByRole("button", { name: /^Play$/ }));
+  await screen.findByRole("button", { name: /Pause/ });
+  expect(mockOnHeldKeys).toBeFalsy();
+});
+
+test("Practice attaches one, and drops it again on Stop", async () => {
+  await start(/^Practice$/);
+  expect(mockOnHeldKeys).toEqual(expect.any(Function));
+
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  await act(async () => { await Promise.resolve(); });
+  expect(mockOnHeldKeys).toBeFalsy();
 });
