@@ -70,8 +70,30 @@ function playthroughStats(current, last) {
   };
 }
 
-export default function usePracticeSession({ onSessionEnded } = {}) {
+// PRACTICE MODE RECORDS NOTHING, AND THIS IS WHERE THAT IS ENFORCED (2026-09-22).
+//
+// `practiceModeRef` is the ONE flag for the whole feature, handed down from
+// SamPlayer. It is checked at the top of every function here that can reach the
+// database, rather than at the six call sites in SamPlayer, so a future caller
+// cannot reintroduce a write by forgetting to ask.
+//
+// Blocking `startSession` is what makes the rest free: with no `sessionIdRef`
+// there is no row for `endSession` to close, no fan-out to `sam_session_events`,
+// and nothing for the page-hide safety net to PATCH. The later guards are belt
+// and braces — they also keep `eventsRef` and the counters empty, so a practice
+// run cannot leave residue behind for a LATER real session to write out.
+//
+// A ref, not a prop: `recordEvent` is reached from ScrollEngine's rAF frame
+// through captured callbacks, where a React state value would be a stale
+// capture from whenever the scroll effect last ran.
+export default function usePracticeSession({ onSessionEnded, practiceModeRef } = {}) {
   const [stats, setStats] = useState(EMPTY_STATS);
+
+  // Read through a ref so every guard below stays out of the `useCallback` dep
+  // lists — these callbacks must keep stable identities (see `recordPass`).
+  const practicingRef = useRef(practiceModeRef);
+  practicingRef.current = practiceModeRef;
+  const isPracticing = () => !!practicingRef.current?.current;
 
   const sessionIdRef = useRef(null);
   const songIdRef = useRef(null);
@@ -118,6 +140,9 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
   onSessionEndedRef.current = onSessionEnded;
 
   const startSession = useCallback(async ({ songId, snippetId, settings, planLink }) => {
+    // The gate that makes Practice silent. No session row means no session, no
+    // events fan-out and nothing for the page-hide net to close.
+    if (isPracticing()) return;
     const startBpm = Number.isFinite(settings?.bpm) ? settings.bpm : null;
     tempoRef.current = { start: startBpm, end: startBpm, min: startBpm, max: startBpm };
     midiRef.current = {
@@ -193,6 +218,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
   // notes stay attached to the beat they belong to, and they are deliberately
   // absent from `played` so no counter — notesPlayed included — moves.
   const recordEvent = useCallback(({ beatEvent, played, attempted, timingDeltaMs, result, loopIteration }) => {
+    if (isPracticing()) return;
     const evt = {
       loopIteration: loopIteration ?? loopCountRef.current,
       measure: beatEvent.meas,
@@ -254,6 +280,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
   // could otherwise write hundreds of rows for one bar. Reaching the cap drops
   // further extras for that bar in that pass, and nothing else is affected.
   const recordExtra = useCallback(({ measure, beat, played, timingDeltaMs, loopIteration }) => {
+    if (isPracticing()) return false;
     if (!played?.length) return false;
     const loop = loopIteration ?? loopCountRef.current;
     const key = `${measure}:${loop}`;
@@ -389,6 +416,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
   }
 
   const endSession = useCallback(async () => {
+    if (isPracticing()) return;
     const sessionId = sessionIdRef.current;
     if (!sessionId) {
       console.warn("[Sam] No session to end");
@@ -532,6 +560,7 @@ export default function usePracticeSession({ onSessionEnded } = {}) {
   useEffect(() => {
     function closeOpenSessionOnHide() {
       if (document.visibilityState !== "hidden") return;
+      if (isPracticing()) return;
       const sessionId = sessionIdRef.current;
       const token = accessTokenRef.current;
       if (!sessionId || !token) return;

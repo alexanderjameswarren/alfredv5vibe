@@ -32,8 +32,18 @@ function safePlanLink(getPlanLink, songId, snippetId) {
   }
 }
 
-export default function useSamPasses({ onPassRecorded } = {}) {
+// `practiceModeRef` is the feature-wide practice flag (see usePracticeSession).
+// Guarded here rather than at SamPlayer's call sites so no future caller can
+// reintroduce a pass row. Blocking `armPass` is the real gate — `recordPass`
+// returns early on an unarmed run anyway — but both are guarded, because
+// arming and crediting are reached by different paths and a pass row is
+// exactly the thing Practice must never write.
+export default function useSamPasses({ onPassRecorded, practiceModeRef } = {}) {
   const armedRef = useRef(false);
+
+  const practicingRef = useRef(practiceModeRef);
+  practicingRef.current = practiceModeRef;
+  const isPracticing = () => !!practicingRef.current?.current;
 
   // Fires once a pass row has actually landed. Held in a ref so callers can
   // pass an inline arrow without destabilising `recordPass`, which must stay
@@ -44,6 +54,7 @@ export default function useSamPasses({ onPassRecorded } = {}) {
 
   // Playback began at the first measure of the loaded range.
   const armPass = useCallback(() => {
+    if (isPracticing()) return;
     armedRef.current = true;
   }, []);
 
@@ -65,6 +76,7 @@ export default function useSamPasses({ onPassRecorded } = {}) {
   const recordPass = useCallback(({
     songId, snippet, sessionId, bpm, playbackSpeed, handMode, playthrough, getPlanLink,
   }) => {
+    if (isPracticing()) return false;
     if (!armedRef.current) return false;
 
     // Re-arm first, before anything that can fail. The next loop cycle has

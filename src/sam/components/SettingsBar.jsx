@@ -14,7 +14,7 @@ export default function SettingsBar({
   song, snippet,
   bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed,
   playbackState, songDbId,
-  onPlay, onPause, onResume, onRestart, onStop,
+  onPlay, onPractice, onPause, onResume, onRestart, onStop,
   onExport,
   midiConnected, midiDevice,
   pausedMeasure,
@@ -69,6 +69,7 @@ export default function SettingsBar({
             songDbId={songDbId}
             snippet={snippet}
             onPlay={onPlay}
+            onPractice={onPractice}
             onPause={onPause}
             onResume={onResume}
             onRestart={onRestart}

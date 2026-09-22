@@ -11,6 +11,7 @@ import StatsBar from "./components/StatsBar";
 import SnippetPanel from "./components/SnippetPanel";
 import AudioControls from "./components/AudioControls";
 import FocusedPlaybackBar from "./components/FocusedPlaybackBar";
+import PracticeBar from "./components/PracticeBar";
 import useMIDI from "./lib/useMIDI";
 import usePracticeSession from "./lib/usePracticeSession";
 import useSamPasses from "./lib/useSamPasses";
@@ -43,6 +44,10 @@ import { supabase } from "../supabaseClient";
 // offset is stored as null: the pitch and the measure are still the answer to
 // "what am I hitting", but the number would mean nothing.
 const EXTRA_TIMING_REACH = 2;
+
+// Practice passes no audio to ScrollEngine, so it passes no anchors either.
+// Module-level so the identity is stable across renders.
+const EMPTY_ANCHORS = [];
 
 function AudioMsCounter({ audioElement }) {
   const [ms, setMs] = useState(0);
@@ -93,6 +98,25 @@ export default function SamPlayer({ onBack }) {
   const [importError, setImportError] = useState(null);
   const bpm = useNumericInput(DEFAULTS.bpm);
   const [playbackState, setPlaybackState] = useState("stopped"); // 'stopped' | 'playing' | 'paused'
+  // PRACTICE MODE — THE ONE FLAG (2026-09-22).
+  //
+  // Practice scrolls exactly like Play but records nothing, anywhere. Rather
+  // than check that at each of the six recording call sites below, the ref is
+  // handed to `usePracticeSession` and `useSamPasses`, which guard every
+  // function of theirs that can reach the database. Nothing a future call site
+  // does can write during a practice run.
+  //
+  // The ref and the state are two faces of one flag: the ref is the gate, and
+  // it must be set SYNCHRONOUSLY because it is read from ScrollEngine's rAF
+  // frame and from MIDI handlers that fire long before React re-renders; the
+  // state is only what the UI paints. `setPractice` moves both together, and
+  // is the only thing that should ever write either.
+  const [practiceMode, setPracticeMode] = useState(false);
+  const practiceModeRef = useRef(false);
+  const setPractice = useCallback((on) => {
+    practiceModeRef.current = on;
+    setPracticeMode(on);
+  }, []);
   const [pausedMeasure, setPausedMeasure] = useState(null);
   const [loopCount, setLoopCount] = useState(0);
   const [missCount, setMissCount] = useState(0);
@@ -130,6 +154,21 @@ export default function SamPlayer({ onBack }) {
   const audioFilePath = song?.audioFilePath ?? null;
   const [audioMuted, setAudioMuted] = useState(false);
   const playbackSpeed = useNumericInput(DEFAULTS.playbackSpeed);
+
+  // The tempo Practice actually scrolls at.
+  //
+  // `playbackSpeed` never reached the clock directly: it only ever set
+  // `audioElement.playbackRate`, and ScrollEngine then read the rate back off
+  // the element. With backing audio off that route is gone, so an audio-backed
+  // song set to 70% would practise at 100% — the one place Practice could
+  // silently disagree with Play about speed. Folding the percentage into the
+  // bpm restores it, because `pxPerMs` is derived from bpm alone.
+  const practiceBpm = useMemo(() => {
+    const speed = Number.isFinite(playbackSpeed.value) ? playbackSpeed.value : 100;
+    const scaled = bpm.value * (speed / 100);
+    return Number.isFinite(scaled) && scaled > 0 ? scaled : bpm.value;
+  }, [bpm.value, playbackSpeed.value]);
+
   const beatEventsRef = useRef([]);
   // Beat event -> the pitches struck at it in an all-wrong attempt, waiting for
   // the miss scanner to claim them. See handleChord's all-wrong branch.
@@ -151,6 +190,7 @@ export default function SamPlayer({ onBack }) {
     getCurrentPlaythrough, noteTempo, noteMidiConnected, recordExtra, stats: sessionStats,
   } = usePracticeSession({
     onSessionEnded: () => setPracticeStatsRefetchSignal((n) => n + 1),
+    practiceModeRef,
   });
 
   // Pass counting (spec: docs/technical-spec-pass-counter.md).
@@ -204,6 +244,7 @@ export default function SamPlayer({ onBack }) {
   };
 
   const { armPass, disarmPass, recordPass } = useSamPasses({
+    practiceModeRef,
     onPassRecorded: (info) => {
       countPass(info);
       // Today's plan progress, from the database — never counted here.
@@ -731,6 +772,7 @@ export default function SamPlayer({ onBack }) {
     playbackSpeed.reset(loadedSong.playbackSpeed ?? DEFAULTS.playbackSpeed);
     setPlaybackState("stopped");
     setPausedMeasure(null);
+    setPractice(false);
     disarmPass();
     setLoopCount(0);
     lastLoopCountRef.current = 0;
@@ -928,17 +970,34 @@ export default function SamPlayer({ onBack }) {
   // Shared tail of Play and Restart: both enter at the first measure of the
   // loaded range, so both arm a pass and both seek to the top.
   // `activeSnippet` is threaded through because Play may have just resolved it.
-  function startFromTopOfRange(activeSnippet) {
+  //
+  // `practice` is what separates the two transports, and it is deliberately
+  // the ONLY difference: the range, the tempo, the repeat and rest settings and
+  // the scroll are identical, so Practice cannot drift away from Play.
+  //
+  // Arming and the session are skipped rather than blocked here — the hooks
+  // would refuse them anyway — because calling them would be a lie about intent.
+  // The audio seek is skipped because backing audio is off in Practice: with no
+  // seek stowed, `scheduleAudioStartOnScroll` has nothing to fire.
+  function startFromTopOfRange(activeSnippet, { practice = false } = {}) {
     resetCounters();
     setPausedMeasure(null);
     lastLoopCountRef.current = 0;
-    armPass();
-    beginSession(activeSnippet);
+    if (!practice) {
+      armPass();
+      beginSession(activeSnippet);
+    }
     clearTimers();
 
-    const audioOffsetMs1 = activeMeasures[0]?.audioOffsetMs ?? 0;
-    const seekMs = activeSnippet ? getSeekForMeasure(activeSnippet.startMeasure) : audioOffsetMs1;
-    prepareAudioSeek(seekMs);
+    if (practice) {
+      // The element is never played in Practice, but it may be mid-preview from
+      // the stopped screen's scrubber.
+      if (audioElement) audioElement.pause();
+    } else {
+      const audioOffsetMs1 = activeMeasures[0]?.audioOffsetMs ?? 0;
+      const seekMs = activeSnippet ? getSeekForMeasure(activeSnippet.startMeasure) : audioOffsetMs1;
+      prepareAudioSeek(seekMs);
+    }
 
     setPlaybackState("playing");
   }
@@ -973,12 +1032,29 @@ export default function SamPlayer({ onBack }) {
     if (playStartingRef.current) return;
     playStartingRef.current = true;
     try {
+      setPractice(false);
       ensureAudioContext();
       const activeSnippet = await ensureRangeIsSaved(snippet);
       startFromTopOfRange(activeSnippet);
     } finally {
       playStartingRef.current = false;
     }
+  }
+
+  // Practice. Same range, same tempo, same scroll — no recording, no audio.
+  //
+  // `ensureRangeIsSaved` is deliberately NOT called: Practice attributes
+  // nothing to anything, so it has no use for a snippet id, and saving a row
+  // for a range the user only wanted to work through would be a write. An
+  // unsaved ad-hoc range therefore practises fine and leaves no trace.
+  //
+  // Synchronous, unlike Play, precisely because that await is gone — but it
+  // shares `playStartingRef` so it cannot interleave with a Play in flight.
+  function handlePractice() {
+    if (playStartingRef.current) return;
+    setPractice(true);
+    ensureAudioContext(); // the metronome still needs it
+    startFromTopOfRange(snippet, { practice: true });
   }
 
   // Deliberately leaves pass eligibility alone: pause and resume are one
@@ -995,10 +1071,10 @@ export default function SamPlayer({ onBack }) {
   function handleResume() {
     ensureAudioContext();
     resetCounters();
-    beginSession();
+    if (!practiceModeRef.current) beginSession();
     clearTimers();
 
-    if (audioElement) {
+    if (audioElement && !practiceModeRef.current) {
       // Seek to the beginning of the paused measure so audio aligns with scroll
       const seekMs = pausedMeasure ? getSeekForMeasure(pausedMeasure) : audioElement.currentTime * 1000;
       prepareAudioSeek(seekMs);
@@ -1013,6 +1089,13 @@ export default function SamPlayer({ onBack }) {
   // may have been edited since Play — so it ensures the range is saved too.
   async function handleRestart() {
     if (playStartingRef.current) return;
+    // Restart re-enters the mode it was already in, so a paused practice run
+    // restarts as practice — and still saves no snippet.
+    if (practiceModeRef.current) {
+      ensureAudioContext();
+      startFromTopOfRange(snippet, { practice: true });
+      return;
+    }
     playStartingRef.current = true;
     try {
       ensureAudioContext();
@@ -1027,7 +1110,11 @@ export default function SamPlayer({ onBack }) {
     clearTimers();
     disarmPass();
     setPlaybackState("stopped");
+    // Before the flag is cleared, so a practice run's `endSession` is still
+    // refused. Pause deliberately does NOT clear it: pause and resume are one
+    // practice run interrupted, exactly as they are one playthrough for Play.
     endSession();
+    setPractice(false);
     if (audioElement) {
       audioElement.pause();
       audioElement.currentTime = 0;
@@ -1041,7 +1128,8 @@ export default function SamPlayer({ onBack }) {
   function handleFullStop() {
     clearTimers();
     disarmPass();
-    endSession();
+    endSession(); // refused while the flag is still set — see handleStop
+    setPractice(false);
     resetCounters();
     setPausedMeasure(null);
     if (audioElement) {
@@ -1111,6 +1199,7 @@ export default function SamPlayer({ onBack }) {
     clearTimers();
     disarmPass();
     if (playbackState === "playing") endSession();
+    setPractice(false);
     if (audioElement) audioElement.pause();
     setAudioElement(null);
     setPlaybackState("stopped");
@@ -1308,6 +1397,9 @@ export default function SamPlayer({ onBack }) {
         ) : (
           <>
             {playbackState === "playing" ? (
+              practiceMode ? (
+                <PracticeBar onPause={handlePause} />
+              ) : (
               <FocusedPlaybackBar
                 onPause={handlePause}
                 todayMinutes={todayMinutes}
@@ -1320,6 +1412,7 @@ export default function SamPlayer({ onBack }) {
                 hasPlaythrough={sessionStats.hasPlaythrough}
                 planBadge={planBadge}
               />
+              )
             ) : (
               <>
                 <SettingsBar
@@ -1331,7 +1424,7 @@ export default function SamPlayer({ onBack }) {
                   measureWidth={measureWidth}
                   playbackSpeed={playbackSpeed}
                   playbackState={playbackState} songDbId={songDbId}
-                  onPlay={handlePlay} onPause={handlePause} onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
+                  onPlay={handlePlay} onPractice={handlePractice} onPause={handlePause} onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
                   onExport={handleExport}
                   midiConnected={midiConnected} midiDevice={midiDevice}
                   pausedMeasure={pausedMeasure}
@@ -1520,7 +1613,7 @@ export default function SamPlayer({ onBack }) {
             ) : (
               <ScrollEngine
                 measures={activeMeasures}
-                bpm={bpm.value}
+                bpm={practiceMode ? practiceBpm : bpm.value}
                 playbackState={playbackState}
                 fingerings={fingerings}
                 onBeatEvents={handleBeatEvents}
@@ -1532,7 +1625,7 @@ export default function SamPlayer({ onBack }) {
                 onTap={handleScoreTap}
                 measureWidth={measureWidth.value}
                 metronome={metronome}
-                scorePlayback={scorePlayback}
+                scorePlayback={practiceMode ? "off" : scorePlayback}
                 audioCtx={audioCtxRef.current}
                 firstPassStart={
                   pausedMeasure != null
@@ -1542,11 +1635,11 @@ export default function SamPlayer({ onBack }) {
                 loop={!!snippet || songRepeatActive}
                 onEnded={handleRangeEnded}
                 timingWindowMs={timingWindowMs.value}
-                audioElement={audioElement}
-                audioAnchors={audioAnchors}
-                audioEndMs={audioElement ? getLoopAudioEndMs() : null}
+                audioElement={practiceMode ? null : audioElement}
+                audioAnchors={practiceMode ? EMPTY_ANCHORS : audioAnchors}
+                audioEndMs={practiceMode ? null : (audioElement ? getLoopAudioEndMs() : null)}
                 handMode={snippet?.handMode || "both"}
-                onScrollStart={scheduleAudioStartOnScroll}
+                onScrollStart={practiceMode ? null : scheduleAudioStartOnScroll}
               />
             )}
           </>

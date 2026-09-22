@@ -1,10 +1,10 @@
 import React from "react";
-import { Play, Pause, RotateCcw, Square, Disc } from "lucide-react";
+import { Play, Pause, RotateCcw, Square, Disc, GraduationCap } from "lucide-react";
 import BackButton from "./BackButton";
 
 // Stateless cluster of playback transport buttons. Visibility per state:
 //   always         → Back to Alfred (far left)
-//   stopped        → Play
+//   stopped        → Play + Practice
 //   playing        → Pause
 //   paused         → Resume + Restart + Stop
 //   any + snippet  → Full Song (returns to full song view)
@@ -14,6 +14,7 @@ export default function TransportControls({
   songDbId,
   snippet,
   onPlay,
+  onPractice,
   onPause,
   onResume,
   onRestart,
@@ -42,6 +43,25 @@ export default function TransportControls({
         >
           <Play className="w-4 h-4" />
           {isStopped && !songDbId ? "Saving..." : isPaused ? "Resume" : "Play"}
+        </button>
+      )}
+
+      {/* Practice — immediately to the right of Play, same shape and size, a
+          different colour so the two can never be confused at arm's length.
+          Stopped-only: a run is either Play or Practice, never both, and the
+          paused row already has Resume for whichever one is in flight. */}
+      {isStopped && onPractice && (
+        <button
+          onClick={onPractice}
+          disabled={!songDbId}
+          className={`shrink-0 whitespace-nowrap flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors ${
+            !songDbId
+              ? "bg-secondary text-muted-foreground cursor-not-allowed"
+              : "bg-violet-600 hover:bg-violet-700 text-white"
+          }`}
+        >
+          <GraduationCap className="w-4 h-4" />
+          Practice
         </button>
       )}
 
