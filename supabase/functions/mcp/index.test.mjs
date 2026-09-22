@@ -231,7 +231,7 @@ test("dry_run_dj_playlist is deliberately NOT an MCP tool either", () => {
     "dry_run_dj_playlist is now registered as an MCP tool - was that deliberate?");
 });
 
-test("the tool count is 68 after get_sam_measure_stats", () => {
+test("the tool count is 72 after the job-search tools", () => {
   // The number quoted at every reconnect. 36 through step 0 and step 1, which
   // added an endpoint and a non-registered tool on purpose. Step 2 adds three:
   // get_dj_concerts, update_dj_concert, record_dj_feedback - batched into ONE
@@ -269,9 +269,51 @@ test("the tool count is 68 after get_sam_measure_stats", () => {
   // not made yet.
   //
   // 2026-09-18, +1: get_sam_measure_stats — per-measure telemetry.
-  assert.equal(registered.length, 68,
-    `expected 68 registered tools, found ${registered.length}: ` +
+  //
+  // 2026-09-22, +4 for job search, all additions, ONE deploy:
+  // get_job_applications, create_job_application, update_job_application,
+  // get_job_application_sources. Batched for the usual reason — each manifest
+  // change costs a connector reconnect, so four deploys would spend four to
+  // save none.
+  assert.equal(registered.length, 72,
+    `expected 72 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
+});
+
+test("the job-search surface is registered, and its schemas match its handlers", () => {
+  // Same check the Ken and SAM blocks run, for the same reason: a param a
+  // handler honors but the schema does not advertise is invisible to every
+  // future session, and one advertised but never read is a lie to the caller.
+  // The handler is the source of truth, so this reads job-applications.ts
+  // itself — one block per defineTool call, every `args.<key>` inside it.
+  const src = readFileSync(join(TOOLS, "job-applications.ts"), "utf-8");
+  const blocks = src.split("defineTool({").slice(1);
+  assert.equal(blocks.length, 4,
+    `expected 4 job tools in job-applications.ts, found ${blocks.length}`);
+  for (const b of blocks) {
+    const name = /name:\s*"([^"]+)"/.exec(b)[1];
+    const tier = Number(/tier:\s*(\d)/.exec(b)[1]);
+    const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+    if (tier === 3) read.add("confirmed");
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    const advertised = Object.keys(t.cfg.inputSchema ?? {}).sort();
+    assert.deepEqual(advertised, [...read].sort(),
+      `${name}: schema advertises [${advertised}] but the handler reads [${[...read].sort()}]`);
+  }
+});
+
+test("create_job_application stays UNGATED", () => {
+  // ⚠️ ASSERTS AN ABSENCE ON PURPOSE. Alex logs about three applications a day.
+  // Promoting this to tier 3 would add a `confirmed` param and turn every
+  // capture into two round trips to record a fact he just stated — and a
+  // capture step people confirm three times a day is one they stop using. The
+  // duplicate guard, not a prompt, is what catches the realistic mistake. If
+  // this ever becomes gated, that should be a decision, not a drive-by.
+  const t = registered.find((r) => r.name === "create_job_application");
+  assert.ok(t, "create_job_application not registered");
+  assert.ok(!Object.keys(t.cfg.inputSchema ?? {}).includes("confirmed"),
+    "create_job_application now advertises `confirmed` — was the tier change deliberate?");
 });
 
 test("Ken schemas advertise exactly the args their handlers read", () => {

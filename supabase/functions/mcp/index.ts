@@ -52,6 +52,16 @@ import {
   recordDjFeedbackTool,
 } from "../_shared/tools/dj-concerts.ts";
 import { getDjArtistsTool, upsertDjArtistTool, recordDjArtistTagTool, getDjArtistTagsTool } from "../_shared/tools/dj-artists.ts";
+import {
+  JOB_VOCAB,
+  VALID_JOB_EFFORT,
+  VALID_JOB_FIT,
+  VALID_JOB_STATUS,
+  getJobApplicationsTool,
+  createJobApplicationTool,
+  updateJobApplicationTool,
+  getJobApplicationSourcesTool,
+} from "../_shared/tools/job-applications.ts";
 import { recordDjAlbumTool, getDjAlbumsTool } from "../_shared/tools/dj-albums.ts";
 import {
   getKenQuizBatchTool,
@@ -655,6 +665,14 @@ async function runToolForMcp(
 // runs, which throws ReferenceError at first dispatch - a module that boots
 // cleanly and dies on the first request.
 const RUN_STATUS = z.enum(VALID_RUN_STATUS as [string, ...string[]]);
+
+// Same argument as RUN_STATUS: derived from the tool module's own exports, which
+// are themselves written to mirror the CHECK constraints, so the MCP layer can
+// never reject a value the database accepts. Declared here, above every use —
+// `const` is not hoisted.
+const JOB_STATUS = z.enum(VALID_JOB_STATUS as [string, ...string[]]);
+const JOB_FIT = z.enum(VALID_JOB_FIT as [string, ...string[]]);
+const JOB_EFFORT = z.enum(VALID_JOB_EFFORT as [string, ...string[]]);
 
 const app = new Hono().basePath("/mcp");
 
@@ -2062,6 +2080,118 @@ export function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(proposeKenFactUpdateTool, args, token),
+  );
+
+  // --- Job search -----------------------------------------------------------
+  // Every description here ends with JOB_VOCAB, the ONE copy of the status /
+  // fit / effort vocabulary and the source-is-lowercase rule. Four paraphrases
+  // would drift apart the first time a status is added.
+
+  server.registerTool(
+    "get_job_applications",
+    {
+      title: "Get Job Applications",
+      description:
+        "List Alex's job applications — one row per application, newest applied_on first (ties broken by when it was logged). Every filter is applied in the database before the limit, so the counts you get back are counts of everything that matched, not of the page. All parameters are optional; with none, this is the most recent 20 applications. Returns every column except user_id. " +
+        "`open_only` excludes rejected, closed_no_response and withdrawn — the three terminal statuses — leaving what is still live. `overdue` returns applications whose next_action_due is BEFORE today in America/Los_Angeles; something due today is due, not overdue, and a row with no next_action_due is never overdue. `org` is a case-insensitive PARTIAL match ('acme' finds 'Acme Corporation'); `source` and `fit` are exact. Passing `open_only` together with an explicit `status` intersects them. Results are capped (default 20, hard cap 50) — the response NOTE tells you when there is more. Tier 1. " +
+        JOB_VOCAB,
+      inputSchema: {
+        status: z
+          .union([JOB_STATUS, z.array(JOB_STATUS)])
+          .optional()
+          .describe("One status, or an array of them (matches ANY of the listed statuses)."),
+        source: z
+          .string()
+          .optional()
+          .describe("Exact match on where the role was found. Lowercased before matching, so 'LinkedIn' and 'linkedin' behave identically."),
+        org: z
+          .string()
+          .optional()
+          .describe("Case-insensitive PARTIAL match on the organisation name."),
+        fit: JOB_FIT.optional().describe("Exact match on how good a fit the role is."),
+        open_only: z
+          .boolean()
+          .optional()
+          .describe("true = only applications still live: excludes rejected, closed_no_response and withdrawn."),
+        overdue: z
+          .boolean()
+          .optional()
+          .describe("true = only applications whose next_action_due is before today (America/Los_Angeles). Rows with no due date are excluded."),
+        limit: z.number().optional().describe("Max rows (default 20, hard cap 50)."),
+      },
+    },
+    async (args) => runToolForMcp(getJobApplicationsTool, args, token),
+  );
+
+  server.registerTool(
+    "create_job_application",
+    {
+      title: "Create Job Application",
+      description:
+        "Log ONE job application Alex has submitted. org, role, source, fit and effort are required; everything else is optional. `applied_on` defaults to today in America/Los_Angeles — not the server's UTC date, so an application logged in the evening is still logged for today. `status` defaults to 'applied'. source, fit, effort and status are lowercased and trimmed before the write. " +
+        "DUPLICATE GUARD: if an application with the same org and role already exists (ignoring case) this writes NOTHING and returns an error naming that row's id, applied_on and status — use update_job_application on that id instead. Two rows for one application permanently distort that source's response rate. Returns the inserted row. Tier 1, no confirmation required. " +
+        JOB_VOCAB,
+      inputSchema: {
+        org: z.string().describe("The organisation applied to. Stored as written — casing is preserved."),
+        role: z.string().describe("The role title. Stored as written. If Alex applies to two roles at one org, the titles must differ or the duplicate guard will refuse the second."),
+        source: z.string().describe("Where the role was found. Stored lowercase — REUSE an existing spelling (see get_job_application_sources) rather than inventing a new one."),
+        fit: JOB_FIT.describe("How good a fit the role is: high | medium | low."),
+        effort: JOB_EFFORT.describe("How much work the application took: full (tailored CV and cover letter) | quick (light-touch submission)."),
+        applied_on: z.string().optional().describe("YYYY-MM-DD. Defaults to today in America/Los_Angeles. Pass it only to back-date an application logged late."),
+        status: JOB_STATUS.optional().describe("Defaults to 'applied'. Pass another value only when logging an application that has already moved on."),
+        deadline: z.string().optional().describe("YYYY-MM-DD — the EMPLOYER's posted application deadline, if there was one. Not Alex's own follow-up date; that is next_action_due."),
+        next_action: z.string().optional().describe("What Alex owes next. Omit when nothing is owed and he is just waiting — that is a real state, not an unknown one."),
+        next_action_due: z.string().optional().describe("YYYY-MM-DD — when next_action is due. Only allowed alongside a next_action; sending it without one is refused."),
+        notes: z.string().optional().describe("Free text about this application."),
+      },
+    },
+    async (args) => runToolForMcp(createJobApplicationTool, args, token),
+  );
+
+  server.registerTool(
+    "update_job_application",
+    {
+      title: "Update Job Application",
+      description:
+        "Change an existing job application — most often to move its status along as the pipeline progresses. `id` is required; pass at least one other field. An id matching no row is an error and nothing is written; this tool never creates a row. source, fit, effort and status are lowercased and trimmed, exactly as create does. " +
+        "CLEARING: send an empty string or null for deadline, next_action, next_action_due or notes to clear it. Clearing next_action also clears next_action_due in the same write, because a due date with nothing due violates the table's check constraint. " +
+        "NOTES: `notes` REPLACES the whole field. `append_note` instead adds a new line to whatever is already there, prefixed with today's date in America/Los_Angeles (e.g. \"2026-09-24: recruiter called\") — it never overwrites, and it is what you want for a running log. Sending both `notes` and `append_note` is an error. Returns the updated row. Tier 2 — audited and reversible. " +
+        JOB_VOCAB,
+      inputSchema: {
+        id: z.string().describe("uuid of the application, from get_job_applications."),
+        applied_on: z.string().optional().describe("YYYY-MM-DD. Cannot be cleared."),
+        org: z.string().optional().describe("Replacement organisation name. Cannot be cleared."),
+        role: z.string().optional().describe("Replacement role title. Cannot be cleared."),
+        source: z.string().optional().describe("Replacement source. Stored lowercase; reuse an existing spelling. Cannot be cleared."),
+        fit: JOB_FIT.optional().describe("high | medium | low."),
+        effort: JOB_EFFORT.optional().describe("full | quick."),
+        status: JOB_STATUS.optional().describe("The pipeline move. This is the field that drives the response-rate report, so get it right."),
+        deadline: z.string().optional().describe("YYYY-MM-DD, or \"\" / null to clear. The employer's deadline."),
+        next_action: z.string().optional().describe("What Alex owes next, or \"\" / null to clear. Clearing it also clears next_action_due."),
+        next_action_due: z.string().optional().describe("YYYY-MM-DD, or \"\" / null to clear. Refused if the row would end up with a due date and no next_action."),
+        notes: z.string().optional().describe("REPLACES the entire notes field. Use append_note to add to it instead. \"\" or null clears it."),
+        append_note: z.string().optional().describe("Adds one dated line to the existing notes, never overwriting. Cannot be combined with `notes`."),
+      },
+    },
+    async (args) => runToolForMcp(updateJobApplicationTool, args, token),
+  );
+
+  server.registerTool(
+    "get_job_application_sources",
+    {
+      title: "Get Job Application Sources",
+      description:
+        "The 'which source actually converts' report: one entry per source, sorted by total descending. Each carries total; responded (status is screening, interview, rejected or offer — a rejection IS a response, because it means the application was read); response_rate (responded / total, to 2 decimal places); reached_interview (interview or offer); offers; and waiting (status 'applied', nothing heard yet). closed_no_response and withdrawn count towards `total` and towards nothing else, so responded + waiting need not equal total. " +
+        "Use this before logging an application to see which source spellings already exist. `response_rate` means little at a small total — read it next to the count. Reads at most 2000 applications; if that cap is hit the response carries a truncation NOTE. Tier 1. " +
+        JOB_VOCAB,
+      inputSchema: {
+        since: z
+          .string()
+          .optional()
+          .describe("YYYY-MM-DD. Only count applications with applied_on on or after this date. Omit for all time."),
+      },
+    },
+    async (args) => runToolForMcp(getJobApplicationSourcesTool, args, token),
   );
 
   return server;
