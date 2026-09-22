@@ -489,10 +489,44 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     if (onScrollStart) onScrollStart(scrollStateRef.current.scrollStartT);
     if (onLoopCount) onLoopCount(0);
 
+    // Where the score sits when the run is frozen. `frozenAtMs` is a content
+    // time, so this is the ordinary scroll formula with `elapsed` pinned.
+    function applyFrozenTransform(state) {
+      scrollLayer.style.transform =
+        `translateX(${-(state.originPx + state.frozenAtMs * state.pxPerMs)}px)`;
+    }
+
     function frame() {
       const state = scrollStateRef.current;
       if (!state) return;
       const now = performance.now();
+
+      // --- PRACTICE FREEZE (2026-09-22) ---------------------------------
+      //
+      // Practice mode stops the scroll the moment the grader marks a note
+      // incorrect. SamPlayer sets `state.frozenAtMs` from inside the grader to
+      // the stuck beat's own `targetTimeMs`, and that one number does both
+      // jobs the spec asks for: it puts the beat EXACTLY on the play line —
+      // pulling the score back for a missed note, whose window only expired
+      // after the scroll had already gone past it — and it is the time the run
+      // will resume from, because with backing audio off `elapsed` is a pure
+      // function of `scrollStartT`.
+      //
+      // Everything that would advance the run is skipped: the loop teleport,
+      // the metronome, the synth, the miss scanner and the end-of-range
+      // credit. The transform is still written every frame so the score holds
+      // its position against anything else that might touch it, and the rAF
+      // keeps running so step 4's resume is seen on the very next frame.
+      //
+      // `elapsed` is still published, because Pause reads it to work out which
+      // measure to come back to.
+      if (state.frozenAtMs != null) {
+        state.elapsed = state.frozenAtMs;
+        state.elapsedAtMs = now;
+        applyFrozenTransform(state);
+        rafRef.current = requestAnimationFrame(frame);
+        return;
+      }
 
       // Audio sync: derive elapsed from audioElement.currentTime via anchor interpolation.
       // audioMsToBeatPos maps audio timestamps to beat positions, then
@@ -779,11 +813,26 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
           colorBeatEls({ svgEls: missEls }, "#dc2626");
           if (onBeatMiss) onBeatMiss(evt);
           nc++;
+          // A practice stop is raised from inside that callback, and it freezes
+          // the run at THIS beat. Anything further down the scan belongs to
+          // time the run is no longer at — at a fast tempo, or after a long
+          // frame, two windows can expire together and the second would
+          // otherwise be marked missed for a bar the player never reached.
+          if (state.frozenAtMs != null) break;
         } else {
           break;
         }
       }
       nextCheckRef.current = nc;
+
+      // Frozen during this frame's scan: snap to the stuck beat now rather
+      // than a frame later, and skip the end-of-range credit below — the run
+      // has stopped, and nothing about it is finished.
+      if (state.frozenAtMs != null) {
+        applyFrozenTransform(state);
+        rafRef.current = requestAnimationFrame(frame);
+        return;
+      }
 
       // --- The music is over: bank the pass now, not a bar later -------------
       //

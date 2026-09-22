@@ -32,7 +32,8 @@ jest.mock("./lib/useMIDI", () => ({ onChord }) => {
 });
 
 let mockNextResult = "hit";
-const THE_BEAT = { meas: 1, beat: 1, allMidi: [60, 64], rhMidi: [60, 64], lhMidi: [], svgEls: [], state: "pending" };
+const THE_BEAT = { meas: 1, beat: 1, allMidi: [60, 64], rhMidi: [60, 64], lhMidi: [],
+  svgEls: [], state: "pending", targetTimeMs: 4200 };
 jest.mock("./lib/noteMatching", () => ({
   elapsedAt: (state, atMs) => (atMs ?? 0) - (state.scrollStartT ?? 0),
   findClosestBeat: () =>
@@ -179,23 +180,38 @@ async function start(which) {
   await open();
   fireEvent.click(await screen.findByRole("button", { name: which }));
   await screen.findByRole("button", { name: /Pause/ });
-  mockScrollProps.scrollStateExtRef.current = { scrollStartT: 0 };
+  mockScrollProps.scrollStateExtRef.current = { scrollStartT: 0, originPx: 0, pxPerMs: 1 };
 }
+
+// What ScrollEngine's frame would read: null while scrolling, the stuck beat's
+// scheduled time once the run has stopped.
+const frozenAt = () => mockScrollProps.scrollStateExtRef.current.frozenAtMs ?? null;
 
 async function chord(result) {
   mockNextResult = result;
   await act(async () => { mockOnChord([60]); });
 }
 
+// Pause and Resume, the only way out of a stopped practice run before step 4.
+// Needed between outcomes below: from step 3 the FIRST failing chord freezes the
+// run, and every later keystroke is ignored — so without this the writes-nothing
+// test would stop exercising the paths it is there to prove are silent.
+async function unstick() {
+  if (frozenAt() == null) return;
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Resume/ }));
+  await screen.findByRole("button", { name: /Pause/ });
+}
+
 // Everything a real run does between starting and stopping: every grading
 // outcome, a timed-out miss, and a completed playthrough.
-async function playThrough() {
-  await chord("hit");
-  await chord("partial");
-  await chord("wrong");
-  await chord("allwrong");
-  await chord("none");
+async function playThrough({ unstickBetween = false } = {}) {
+  for (const result of ["hit", "partial", "wrong", "allwrong", "none"]) {
+    await chord(result);
+    if (unstickBetween) await unstick();
+  }
   await act(async () => { mockScrollProps.onBeatMiss(THE_BEAT); });
+  if (unstickBetween) await unstick();
   // A completed pass, by both routes ScrollEngine can credit one.
   await act(async () => { mockScrollProps.onContentEnd(1); });
   await act(async () => { mockScrollProps.onLoopCount(1); });
@@ -208,7 +224,7 @@ const writesTo = (table) => mockWrites.filter((w) => w.table === table);
 
 test("a whole Practice run writes nothing, anywhere", async () => {
   await start(/^Practice$/);
-  await playThrough();
+  await playThrough({ unstickBetween: true });
 
   // Pause, resume and stop are all separate write opportunities in Play.
   fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
@@ -230,7 +246,7 @@ test("a whole Practice run writes nothing, anywhere", async () => {
 test("the page-hide safety net stays quiet after a Practice run", async () => {
   const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue({ ok: true });
   await start(/^Practice$/);
-  await playThrough();
+  await playThrough({ unstickBetween: true });
 
   Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
   await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
@@ -302,4 +318,133 @@ test("Practice shows its own bar, not the session counters", async () => {
   expect(screen.getByText("PRACTICE")).toBeInTheDocument();
   expect(screen.queryByText(/Session Accuracy/)).not.toBeInTheDocument();
   expect(screen.queryByText(/Playthrough/)).not.toBeInTheDocument();
+});
+
+// =============================================================================
+// STEP 3 — stop on incorrect
+// =============================================================================
+
+// The freeze value is the stuck beat's own targetTimeMs, and that single number
+// is what puts the beat on the play line and what step 4 will resume from.
+
+test("a wrong note stops the run on that beat", async () => {
+  await start(/^Practice$/);
+  expect(frozenAt()).toBeNull();
+
+  await chord("wrong");
+
+  expect(frozenAt()).toBe(THE_BEAT.targetTimeMs);
+  expect(await screen.findByText("m.1")).toBeInTheDocument();
+});
+
+test("a partial chord stops the run too — anything that is not a full hit", async () => {
+  await start(/^Practice$/);
+  await chord("partial");
+  expect(frozenAt()).toBe(THE_BEAT.targetTimeMs);
+});
+
+test("a full hit does not stop the run", async () => {
+  await start(/^Practice$/);
+  await chord("hit");
+  expect(frozenAt()).toBeNull();
+  expect(screen.getByText("Nothing is recorded.")).toBeInTheDocument();
+});
+
+test("an all-wrong chord stops immediately, and leaves its beat pending to resume from", async () => {
+  await start(/^Practice$/);
+  await chord("allwrong");
+
+  // Not waiting out the timing window for the miss scanner.
+  expect(frozenAt()).toBe(THE_BEAT.targetTimeMs);
+  // Left pending exactly as under Play — step 4 resumes from an unconsumed beat.
+  expect(THE_BEAT.state).toBe("pending");
+});
+
+test("a missed note stops with the score moved BACK to the missed beat", async () => {
+  await start(/^Practice$/);
+  // The scanner only fires once the window has closed, so the scroll is already
+  // past the beat. Freezing at its targetTimeMs is what pulls the score back.
+  await act(async () => { mockScrollProps.onBeatMiss(THE_BEAT); });
+
+  expect(frozenAt()).toBe(THE_BEAT.targetTimeMs);
+  expect(await screen.findByText("m.1")).toBeInTheDocument();
+});
+
+test("the first stop wins: a later miss does not move the stuck beat", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+  const later = { ...THE_BEAT, meas: 9, targetTimeMs: 99999 };
+  await act(async () => { mockScrollProps.onBeatMiss(later); });
+
+  expect(frozenAt()).toBe(THE_BEAT.targetTimeMs);
+  expect(screen.getByText("m.1")).toBeInTheDocument();
+});
+
+test("keys pressed while stopped are ignored entirely", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+  const frozen = frozenAt();
+
+  await chord("hit");
+  await chord("allwrong");
+  await chord("none");     // would be an `extra` under Play
+  await chord("partial");
+
+  // Still stuck on the same beat, and still nothing written.
+  expect(frozenAt()).toBe(frozen);
+  expect(screen.getByText("m.1")).toBeInTheDocument();
+  expect(mockWrites).toEqual([]);
+});
+
+test("Pause and Stop both leave a stopped run, and still record nothing", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+  expect(frozenAt()).toBe(THE_BEAT.targetTimeMs);
+
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+  expect(frozenAt()).toBeNull();
+
+  fireEvent.click(await screen.findByRole("button", { name: /Resume/ }));
+  await screen.findByRole("button", { name: /Pause/ });
+  await chord("wrong");
+  expect(frozenAt()).toBe(THE_BEAT.targetTimeMs);
+
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  await act(async () => { await Promise.resolve(); });
+
+  expect(frozenAt()).toBeNull();
+  expect(mockWrites).toEqual([]);
+});
+
+test("a fresh Practice run starts unstuck", async () => {
+  await start(/^Practice$/);
+  await chord("wrong");
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+
+  fireEvent.click(await screen.findByRole("button", { name: /^Practice$/ }));
+  await screen.findByRole("button", { name: /Pause/ });
+  mockScrollProps.scrollStateExtRef.current = { scrollStartT: 0, originPx: 0, pxPerMs: 1 };
+  expect(frozenAt()).toBeNull();
+  expect(screen.getByText("Nothing is recorded.")).toBeInTheDocument();
+});
+
+// --- Play must not stop, ever ------------------------------------------------
+
+test("Play never freezes: wrong, partial, all-wrong and missed all scroll on", async () => {
+  await start(/^Play$/);
+
+  await chord("wrong");
+  expect(frozenAt()).toBeNull();
+  await chord("partial");
+  expect(frozenAt()).toBeNull();
+  await chord("allwrong");
+  expect(frozenAt()).toBeNull();
+  await act(async () => { mockScrollProps.onBeatMiss(THE_BEAT); });
+  expect(frozenAt()).toBeNull();
+
+  // And it is still grading and counting as it always did.
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+  await waitFor(() => expect(writesTo("sam_session_events").length).toBeGreaterThan(0));
 });

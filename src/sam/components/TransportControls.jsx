@@ -46,18 +46,21 @@ export default function TransportControls({
         </button>
       )}
 
-      {/* Practice — immediately to the right of Play, same shape and size, a
-          different colour so the two can never be confused at arm's length.
+      {/* Practice — immediately to the right of Play, at Play's size, but in
+          the OUTLINE treatment its neighbours Tuning, Next and Full Song share:
+          border, no fill, muted text darkening on hover. Play is the filled
+          button because Play is the primary action; a second filled button
+          beside it competed with that and read as harsh.
           Stopped-only: a run is either Play or Practice, never both, and the
           paused row already has Resume for whichever one is in flight. */}
       {isStopped && onPractice && (
         <button
           onClick={onPractice}
           disabled={!songDbId}
-          className={`shrink-0 whitespace-nowrap flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors ${
+          className={`shrink-0 whitespace-nowrap flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors border border-border ${
             !songDbId
-              ? "bg-secondary text-muted-foreground cursor-not-allowed"
-              : "bg-violet-600 hover:bg-violet-700 text-white"
+              ? "text-muted-foreground opacity-50 cursor-not-allowed"
+              : "text-muted-foreground hover:text-dark"
           }`}
         >
           <GraduationCap className="w-4 h-4" />

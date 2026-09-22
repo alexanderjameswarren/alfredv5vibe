@@ -117,6 +117,19 @@ export default function SamPlayer({ onBack }) {
     practiceModeRef.current = on;
     setPracticeMode(on);
   }, []);
+  // THE STUCK BEAT (practice mode, step 3).
+  //
+  // A ref because it is read from the MIDI handler and written from inside
+  // ScrollEngine's rAF frame, both of which run long before React re-renders;
+  // the state beside it is only what PracticeBar paints.
+  //
+  // It holds the BEAT EVENT OBJECT ITSELF, not an index or a copy. Step 4 has
+  // to resume from this exact beat — its `targetTimeMs` is the clock value and
+  // its `allMidi` / `rhMidi` / `lhMidi` are the notes that must be held — and
+  // the loop teleport rewrites both of those on every event in the array. The
+  // freeze skips the teleport, so holding the object keeps it intact.
+  const stuckBeatRef = useRef(null);
+  const [stuckBeat, setStuckBeat] = useState(null);
   const [pausedMeasure, setPausedMeasure] = useState(null);
   const [loopCount, setLoopCount] = useState(0);
   const [missCount, setMissCount] = useState(0);
@@ -496,11 +509,46 @@ export default function SamPlayer({ onBack }) {
     measureWidth: measureWidth.value,
   });
 
+  // Stop the practice run on `beat`, which the grader has just marked as
+  // anything other than a full hit.
+  //
+  // Idempotent by design: the first stop wins. A chord and the miss scanner can
+  // both reach a beat within the same frame, and the run must stop where the
+  // grader FIRST said so.
+  //
+  // Nothing is coloured here. The grader has already marked the beat in its own
+  // colours — amber for a partial, red for a wrong note or a miss — and that
+  // marking IS the highlight the spec asks for. The one exception is handled by
+  // the caller: an all-wrong chord leaves its beat pending and unpainted.
+  const practiceStopAt = useCallback((beat) => {
+    if (!practiceModeRef.current) return;
+    if (stuckBeatRef.current) return;
+    const scrollState = scrollStateExtRef.current;
+    if (!scrollState || !beat || beat.targetTimeMs == null) return;
+    stuckBeatRef.current = beat;
+    setStuckBeat({ meas: beat.meas, beat: beat.beat });
+    // The whole of "stop the scroll, and put this beat on the play line".
+    scrollState.frozenAtMs = beat.targetTimeMs;
+    console.log(`[Practice] stopped at m${beat.meas} beat=${beat.beat}`,
+      `| midi=[${beat.allMidi}] | targetTime=${Math.round(beat.targetTimeMs)}ms`);
+  }, []);
+
+  const clearStuckBeat = useCallback(() => {
+    stuckBeatRef.current = null;
+    setStuckBeat(null);
+    const scrollState = scrollStateExtRef.current;
+    if (scrollState) scrollState.frozenAtMs = null;
+  }, []);
+
   // `pressedAtMs` is a performance.now() reading from when the chord's FIRST
   // key arrived, carried through useMIDI's chord buffer. Every timing decision
   // below uses it, so nothing is measured at flush time any more.
   const handleChord = useCallback((played, pressedAtMs) => {
     if (playbackState !== "playing") return;
+    // Stopped on a beat: every key is ignored — not graded, not recorded, and
+    // no obstacle to resuming. Until step 4 lands there is no way back out of
+    // here except Pause or Stop, both of which clear the stuck beat.
+    if (stuckBeatRef.current) return;
     const scrollState = scrollStateExtRef.current;
     if (!scrollState) return;
 
@@ -575,6 +623,19 @@ export default function SamPlayer({ onBack }) {
       // was missed.
       const held = attemptedNotesRef.current.get(beat) || [];
       attemptedNotesRef.current.set(beat, [...held, ...played]);
+      // In PRACTICE this is a wrong note and the scroll stops on it now, rather
+      // than waiting the full timing window for the miss scanner to time the
+      // beat out. The beat is deliberately LEFT PENDING, exactly as it is under
+      // Play: step 4 resumes from it, and a beat that was never consumed is the
+      // cleanest thing to resume from. It is the one failing outcome the grader
+      // does not paint, so paint it here — red, the same red a miss gets.
+      if (practiceModeRef.current) {
+        const wrongEls = hm === "lh" ? [beat.bassSvgEl].filter(Boolean)
+                       : hm === "rh" ? [beat.trebleSvgEl].filter(Boolean)
+                       : beat.svgEls;
+        colorBeatEls({ svgEls: wrongEls }, "#dc2626");
+        practiceStopAt(beat);
+      }
       return;
     }
 
@@ -611,13 +672,19 @@ export default function SamPlayer({ onBack }) {
 
     recordEvent({ beatEvent: beat, played, timingDeltaMs, result });
 
+    // PRACTICE: stop on anything that is not a full hit — a partial counts,
+    // because an incomplete chord is precisely what this mode exists to drill.
+    // The beat keeps the colour the grader just gave it: amber for a partial,
+    // red for a wrong note.
+    if (result !== "hit") practiceStopAt(beat);
+
     const sign = timingDeltaMs >= 0 ? "+" : "";
     setLastResult({
       result,
       timingMs: Math.round(timingDeltaMs),
       noteName: `${sign}${Math.round(timingDeltaMs)}ms`,
     });
-  }, [playbackState, recordEvent, recordExtra, timingWindowMs.value, snippet?.handMode]);
+  }, [playbackState, recordEvent, recordExtra, timingWindowMs.value, snippet?.handMode, practiceStopAt]);
 
   const { connected: midiConnected, deviceName: midiDevice, lastNote } = useMIDI({
     onChord: handleChord,
@@ -741,6 +808,16 @@ export default function SamPlayer({ onBack }) {
   }, [creditPass]);
 
   const handleBeatMiss = useCallback((evt) => {
+    // PRACTICE: the missed-note stop. The scanner only knows a beat was missed
+    // once its window has closed, so the scroll is already `timingWindowMs`
+    // past it — which is why freezing at the beat's own `targetTimeMs` moves
+    // the score BACK. Nothing is counted and nothing is recorded; the beat has
+    // already been marked "missed" and painted red by the scanner, and it stays
+    // in that state, held by `stuckBeatRef`, for step 4 to resume from.
+    if (practiceModeRef.current) {
+      practiceStopAt(evt);
+      return;
+    }
     missCountRef.current++;
     setMissCount(missCountRef.current);
     // Any all-wrong attempt at this beat rides along as `attempted`, so the row
@@ -749,7 +826,7 @@ export default function SamPlayer({ onBack }) {
     const attempted = attemptedNotesRef.current.get(evt);
     if (attempted) attemptedNotesRef.current.delete(evt);
     recordEvent({ beatEvent: evt, played: [], attempted, timingDeltaMs: null, result: "miss" });
-  }, [recordEvent]);
+  }, [recordEvent, practiceStopAt]);
 
   async function handleSaveLyrics() {
     const newMeasures = await saveLyrics();
@@ -772,6 +849,7 @@ export default function SamPlayer({ onBack }) {
     playbackSpeed.reset(loadedSong.playbackSpeed ?? DEFAULTS.playbackSpeed);
     setPlaybackState("stopped");
     setPausedMeasure(null);
+    clearStuckBeat();
     setPractice(false);
     disarmPass();
     setLoopCount(0);
@@ -981,6 +1059,7 @@ export default function SamPlayer({ onBack }) {
   // seek stowed, `scheduleAudioStartOnScroll` has nothing to fire.
   function startFromTopOfRange(activeSnippet, { practice = false } = {}) {
     resetCounters();
+    clearStuckBeat();
     setPausedMeasure(null);
     lastLoopCountRef.current = 0;
     if (!practice) {
@@ -1061,6 +1140,10 @@ export default function SamPlayer({ onBack }) {
   // playthrough interrupted, not two (spec rule 4).
   function handlePause() {
     clearTimers();
+    // Until step 4 exists, Pause and Stop are the only ways out of a stopped
+    // practice run. Resume restarts the scroll with a fresh scroll state, so
+    // the freeze must not outlive the pause.
+    clearStuckBeat();
     const meas = getCurrentMeasure();
     setPausedMeasure(meas);
     endSession();
@@ -1071,6 +1154,7 @@ export default function SamPlayer({ onBack }) {
   function handleResume() {
     ensureAudioContext();
     resetCounters();
+    clearStuckBeat();
     if (!practiceModeRef.current) beginSession();
     clearTimers();
 
@@ -1108,6 +1192,7 @@ export default function SamPlayer({ onBack }) {
 
   function handleStop() {
     clearTimers();
+    clearStuckBeat();
     disarmPass();
     setPlaybackState("stopped");
     // Before the flag is cleared, so a practice run's `endSession` is still
@@ -1127,6 +1212,7 @@ export default function SamPlayer({ onBack }) {
 
   function handleFullStop() {
     clearTimers();
+    clearStuckBeat();
     disarmPass();
     endSession(); // refused while the flag is still set — see handleStop
     setPractice(false);
@@ -1197,6 +1283,7 @@ export default function SamPlayer({ onBack }) {
   // The actual teardown, shared by the Change-song button and browser Back.
   function closeOpenSong() {
     clearTimers();
+    clearStuckBeat();
     disarmPass();
     if (playbackState === "playing") endSession();
     setPractice(false);
@@ -1398,7 +1485,7 @@ export default function SamPlayer({ onBack }) {
           <>
             {playbackState === "playing" ? (
               practiceMode ? (
-                <PracticeBar onPause={handlePause} />
+                <PracticeBar onPause={handlePause} stuck={stuckBeat} />
               ) : (
               <FocusedPlaybackBar
                 onPause={handlePause}

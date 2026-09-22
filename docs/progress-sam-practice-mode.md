@@ -1,11 +1,11 @@
 # Progress: SAM Practice Mode
 
-## Status: Step 2 complete — awaiting verification
+## Status: Step 3 complete — awaiting verification
 
 ### Development Steps
 - [x] Step 1: Reconnaissance — map where Play starts the scroll, how the playback clock works, where notes are graded, every place that records data, and how backing audio starts. Report findings and a short plan. No code changes.
 - [x] Step 2: Practice button and mode — button next to Play, same scroll and range as Play, backing audio off, one practice-mode flag that blocks every recording path. No stopping yet.
-- [ ] Step 3: Stop on incorrect — stop immediately on a wrong note; on a missed note, stop and move the score back so the missed beat is at the play line; highlight the required notes.
+- [x] Step 3: Stop on incorrect — stop immediately on a wrong note; on a missed note, stop and move the score back so the missed beat is at the play line; highlight the required notes.
 - [ ] Step 4: Resume on held chord — resume when every note starting on the stuck beat is held together; ignore wrong keys while stopped; reset the clock to the beat's scheduled time; do not re-grade the held keys.
 - [ ] Step 5: Piano verification on the Surface — full run-through of all success criteria with real input, plus a check that normal Play is unchanged.
 
@@ -154,3 +154,60 @@ vacuously.
 
 **Noted for Step 5:** the Practice button matches Play's size exactly, as the spec asked. If it is
 not legible enough at the piano without glasses, bump both to `text-base` / `w-5 h-5` then.
+
+#### Step 3 built (2026-09-22)
+
+**Decisions governing steps 3 and 4, confirmed by Alex before this step**
+1. Stop on anything that is not a full `"hit"`: wrong, partial and missed.
+2. The all-wrong chord case (SamPlayer.jsx:522, beat left pending) stops IMMEDIATELY in Practice —
+   it must not wait out the timing window for the miss scanner.
+3. On the stuck beat keep the grader's EXISTING colours, no new highlight: amber/orange for a
+   partial, red for wrong or missed.
+4. (Step 4, not yet built) Held-key tracking stays minimal — a `Set` updated on note-on/note-off,
+   active only in Practice. Sustain pedal ignored.
+
+**Styling, same pass.** The violet Practice button was too harsh; it is now the outline treatment
+its neighbours Tuning, Next and Full Song share — `border border-border`, no fill,
+`text-muted-foreground hover:text-dark` — at Play's size and position, cap icon kept. Play stays the
+one filled button because Play is the primary action. The PRACTICE badge is likewise neutral now
+(`bg-secondary/40 border border-border`, the Playthrough badge's ground) with the text still
+`text-2xl font-bold text-dark`: legibility without glasses was carried by SIZE and CONTRAST, never
+by the colour.
+
+**ONE NUMBER DOES BOTH JOBS.** `scrollState.frozenAtMs`, set by SamPlayer from inside the grader to
+the stuck beat's own `targetTimeMs`. Because backing audio is off, `elapsed` is a pure function of
+`scrollStartT`, so pinning it to that value simultaneously (a) puts the beat EXACTLY on the play
+line — which is what moves the score BACK for a missed note, whose window only expires after the
+scroll has gone past — and (b) is the value step 4 will resume from. There is no separate
+"rewind" code path, and none is needed.
+
+**ScrollEngine** (`frame`): a freeze branch at the top skips the loop teleport, the metronome, the
+synth, the miss scanner and the end-of-range credit, writes the transform every frame so the score
+holds position, publishes `elapsed` (Pause reads it to pick its measure) and keeps the rAF alive so
+step 4's resume is seen on the next frame. The miss scanner also `break`s the instant a stop freezes
+the run: two windows can expire in one frame at a fast tempo, and the second belongs to time the run
+is no longer at.
+
+**SamPlayer**: `stuckBeatRef` holds THE BEAT EVENT OBJECT, not an index or a copy — step 4 needs its
+`targetTimeMs` and its `allMidi`/`rhMidi`/`lhMidi`, and the loop teleport rewrites both on every
+event in the array. The freeze skips the teleport, so the object stays intact. `practiceStopAt` is
+idempotent: the first stop wins, since a chord and the scanner can reach a beat in the same frame.
+Wired in at the three grading outcomes only — `handleChord`'s graded branch (`result !== "hit"`),
+`handleChord`'s all-wrong branch, and `handleBeatMiss` — so there is still exactly one grader.
+`handleChord` returns immediately while stuck, so keys pressed then are neither graded nor recorded.
+`clearStuckBeat` runs at every transport boundary.
+
+The all-wrong branch is the only place anything is painted (red): it is the one failing outcome the
+grader does not colour, because it deliberately leaves the beat PENDING so the player can correct
+it. Left pending here too — an unconsumed beat is the cleanest thing for step 4 to resume from.
+
+**Verification.** 548 SAM tests pass (538 before, 10 new); build clean. New tests cover: wrong,
+partial and all-wrong stop; a full hit does not; a miss stops at the beat's own target time; the
+first stop wins; keys while stuck are ignored and write nothing; Pause and Stop both leave a stopped
+run silently; a fresh run starts unstuck; and — the guard against this leaking into Play — Play never
+freezes on any of the four outcomes and still records. The writes-nothing test now unsticks between
+outcomes, so every grading path is genuinely exercised rather than swallowed by the first freeze.
+
+**Not covered by tests:** the ScrollEngine frame itself (transform, teleport skip, scanner break) has
+no unit test — ScrollEngine is mocked out of every suite and is VexFlow/DOM-bound. That behaviour is
+Surface-only verification.
