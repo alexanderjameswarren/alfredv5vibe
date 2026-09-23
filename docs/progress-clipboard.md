@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: Phase 1 in progress — Steps 1-7b done. Step 7c found no code fault (stale client manifest); awaiting Alex confirming after a connector reconnect.
+## Status: **Phase 1 complete.** Phase 2 started - Step 9 migration written, awaiting Alex's run + CONFORMANT.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -16,8 +16,10 @@ Spec: docs/technical-spec-clipboard.md
 - [x] Step 6c: Silent default capture (visible screen, no debugger banner); full-page capture moved to a right-click menu item and a second shortcut; abort cleanly on navigation or tab close. - **done 2026-09-23.** Verified: silent click showed no banner (1 slice, `capture_mode` visible, note opening "VISIBLE SCREEN ONLY, BY CHOICE", and a scrolled clip correctly reporting 952px down); "Clip full page" showed the banner and gave 7 slices, "FULL PAGE, complete", worst join 1.51; closing the tab mid-capture gave a red `!` with nothing saved; `visible_clips_not_flagged_truncated` empty; and from `get_clip_slices` ALONE a fresh thread described the visible clip as part of the page with nothing wrong. Clicking a link mid-capture was not tested — the page blurs and shifts during a full-page capture, which is accepted.
 - [x] Step 7: `scripts/clip.mjs` and the `CLAUDE.md` rule for pushing CLI reports. - **done 2026-09-23.** Pushed its own report as the first real CLI clip (`089ad3dd-...`), and a claude.ai thread read it with `get_recent_clips` source `cli` with nothing pasted, then archived its inbox item.
 - [x] Step 7b: Run tags, so "CLI responded" picks up the right report when several CLI sessions are running. `clip.mjs --tag`; `run_tag`, `repo` and `branch` in `source_metadata`; `get_recent_clips` returns all three and filters on `run_tag`; the `CLAUDE.md` rule passes the prompt's tag. - **done 2026-09-23.** Verified: `run_tag` "clip-7b-q4m2" returned exactly that report (repo alfred-v5, branch main); "no-such-tag" returned zero.
-- [ ] Step 7c: Investigate the report that a fresh thread's `get_recent_clips` definition lacked `run_tag`. - **2026-09-23: no code fault.** The deployed v117 bundle already contained the `run_tag` zod input and the disambiguation rule, proven by downloading it (see notes). Cause is a stale client-side tool manifest; spec §7 already requires disconnecting and reconnecting the connector, not just a fresh thread. Redeployed as v118 to bump the version. Awaiting Alex confirming after a reconnect.
-- [ ] Step 8: Alex adds the project instruction in claude.ai, rotates the notification dispatch secret, and runs the end-to-end test in a fresh thread.
+- [x] Step 7c: Investigate the report that a fresh thread's `get_recent_clips` definition lacked `run_tag`. - **2026-09-23: no code fault.** The deployed v117 bundle already contained the `run_tag` zod input and the disambiguation rule, proven by downloading it (see notes). Cause is a stale client-side tool manifest; spec §7 already requires disconnecting and reconnecting the connector, not just a fresh thread. Redeployed as v118 to bump the version. **Confirmed after a connector reconnect.**
+- [x] Step 8: Alex adds the project instruction in claude.ai, rotates the notification dispatch secret, and runs the end-to-end test in a fresh thread. - **done 2026-09-23.** Project instructions added; the notification dispatch secret rotated with `cron.alter_job` (`net._http_response` shows 200s after one expected 401 during the switch, which is the job and the function changing a moment apart - see 033's note that the two must change together or every call 401s); fresh-thread checks pass.
+
+**PHASE 1 COMPLETE.**
 
 ## Phase 2: jobs
 
