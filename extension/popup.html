@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Alfred's Clipboard</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      width: 22rem; margin: 0; padding: .9rem 1rem;
+    }
+    h1 { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em;
+         opacity: .6; margin: 0 0 .6rem; }
+    .verdict { font-weight: 600; margin-bottom: .5rem; }
+    .verdict.bad { color: #dc2626; }
+    .verdict.ok  { color: #16a34a; }
+    .msg {
+      white-space: pre-wrap; word-break: break-word;
+      background: rgba(128,128,128,.12); border-radius: 6px;
+      padding: .55rem .7rem; margin: 0 0 .7rem;
+    }
+    dl { display: grid; grid-template-columns: auto 1fr; gap: .15rem .6rem; margin: 0 0 .8rem; }
+    dt { opacity: .6; }
+    dd { margin: 0; word-break: break-word; }
+    .row { display: flex; gap: .5rem; }
+    button {
+      font: inherit; padding: .4rem .8rem; border-radius: 6px; cursor: pointer;
+      border: 1px solid rgba(128,128,128,.5); background: ButtonFace; color: ButtonText;
+    }
+    button.primary { background: #16a34a; border-color: #16a34a; color: #fff; font-weight: 600; }
+    .when { opacity: .55; margin-top: .7rem; font-size: .9em; }
+  </style>
+</head>
+<body>
+  <h1>Alfred's Clipboard</h1>
+  <div id="body">Loading…</div>
+  <div class="row" style="margin-top:.8rem">
+    <button id="retry" class="primary" type="button">Clip this page</button>
+    <button id="options" type="button">Settings</button>
+  </div>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

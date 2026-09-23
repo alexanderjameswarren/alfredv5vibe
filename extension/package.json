@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "//": "Scopes ESM to this folder for `node extension/lib/plan.test.mjs`. NOT an npm package and never installed - the root package.json is CRA and must stay CommonJS. Chrome ignores this file; the service worker gets its module type from manifest.json."
+}

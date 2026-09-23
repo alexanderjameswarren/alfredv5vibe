@@ -12,7 +12,7 @@ Spec: docs/technical-spec-clipboard.md
 - [ ] Step 4: MCP tools: `get_recent_clips`, `get_clip_slices`, `archive_inbox_item`, and the `get_inbox` `source_type` filter. Deploy, verify `verify_jwt`. Tested in a fresh thread. — **written and deployed 2026-09-23** (`mcp` v111, 75 registered tools, `deno check` delta zero). Awaiting Alex's fresh-thread test.
 - [x] Step 5: Frontend minimum: source icons for `clipboard` and `cli`; realtime handler drops archived rows. — **done 2026-09-23.** Both icons correct, an archived item vanished live and returned live on un-archive, ordinary capture unaffected, no console errors. (`npm start` first failed on "Environment key jest/globals is unknown"; `npm ci` fixed it — almost certainly node_modules drift from the `sharp` install/uninstall in Step 2. Worth remembering: `--no-save` keeps the manifests clean but not the tree.)
 - [ ] Step 5b: The inbox trash can archives instead of deleting, and records why. `inbox.archive_reason` ('discarded' | 'processed'); `archive_inbox_item` writes 'processed' and clears on un-archive; `get_recent_clips` treats a clip whose inbox row is MISSING as archived. Spec decision 14. — **066 run (CONFORMANT, 44 tables, both constraints present, all 10 existing rows null). App checks passed: "Capture discarded." with working undo, labels read "Discard", a discarded capture is archived with reason 'discarded' rather than deleted, save-through-the-form still commits. `mcp` deployed v112.** Awaiting Alex's fresh-thread `archive_reason` check.
-- [ ] Step 6: Chrome extension in `extension/`: options page, capture, slicing, upload, finish, badge. Alex loads it unpacked and clips three real pages (a long job posting, a short page, and a `chrome://` page to check the clean failure).
+- [ ] Step 6: Chrome extension in `extension/`: options page, capture, slicing, upload, finish, badge. Alex loads it unpacked and clips three real pages (a long job posting, a short page, and a `chrome://` page to check the clean failure). — **written 2026-09-23.** No build step, no edge function change (so no `deno check` delta), nothing deployed. Geometry unit-tested: 20/20 in `node extension/lib/plan.test.mjs`. Awaiting Alex's install and the three clips.
 - [ ] Step 7: `scripts/clip.mjs` and the `CLAUDE.md` rule for pushing CLI reports.
 - [ ] Step 8: Alex adds the project instruction in claude.ai, rotates the notification dispatch secret, and runs the end-to-end test in a fresh thread.
 
@@ -159,6 +159,35 @@ New module `supabase/functions/_shared/tools/clipboard.ts` holding `get_recent_c
 **⚠️ `supabase storage rm` does not work in CLI 2.117.0.** It resolves paths for `ls` but issues no DELETE call and always reports `{"deleted":[],"buckets_deleted":[]}`. Confirmed with `--debug`: the only HTTP call is a GET for api-keys. `ss:///bucket/prefix` is the correct URL form (the alternative errors with `LegacyStorageInvalidUrlError`), and `ls` on the exact object path resolves it — so it is `rm` that is broken, not the path.
 
 **That corrects an inference from Step 2.** I read `rm -r ss:///clipboard-test` returning `{"deleted":[]}` as evidence the bucket was empty. Given `rm` never deletes anything, that reasoning was unsound. The conclusion still held, but on the other two pieces of evidence: the root `ls` listing only `sam-audio/` and `sam-scores/`, and `064`'s SQL against `storage.buckets`. Deleting objects needs the dashboard or a service-role call; the `clipboard` bucket has no DELETE policy, so a user token cannot do it either.
+
+### Step 6 — the Chrome extension, 2026-09-23
+
+`extension/` at the repo root. Manifest V3, plain ES modules, **no build step**. No edge function changed, so no `deno check` delta and nothing deployed. Nine files plus a README written for someone who has never side-loaded an extension.
+
+**Nothing depends on the extension id**, which matters because it will be loaded unpacked on three machines and an unpacked extension gets a different id on each. No id appears in the code, the manifest, or on the server: `clip-capture` reflects whatever `chrome-extension://` origin arrives rather than matching a known one, and authentication is the per-machine shared secret. A fourth machine needs no server change. Asserted mechanically in the validation script — the manifest contains no `chrome-extension://` string at all.
+
+**The secret is nowhere in the repo.** `lib/config.js` holds `DEFAULT_BASE_URL` and nothing else; the secret has no default, is typed into the options page, and lives only in `chrome.storage.local`. `local` and not `sync` deliberately: `sync` would push a shared secret to every signed-in machine through the Google account, and pasting it once per machine should be a decision rather than a browser feature.
+
+**Geometry is pure and unit-tested — `node extension/lib/plan.test.mjs`, 20/20.** `lib/plan.js` has no Chrome APIs and no canvas, so the arithmetic that decides whether a page is fully captured can be checked without a browser. It includes the 4160px case the Step 2 local slicer had already proved, so the extension and that script agree by construction.
+
+**The tests found dead code, and the dead code was mine.** `planTiles` carried a "drop a trailing sliver shorter than the overlap" guard, copied from the Step 2 script. It can never fire: reaching iteration `top = k*step` at all requires the previous tile not to have finished the page, which rearranges to exactly the negation of the sliver condition. Measured to confirm — `totalHeight` 1751 yields a final tile of 51, and 1750 stops a tile earlier, so the smallest last tile possible is `overlap + 1`. The guard is gone and the proof is in the function's comment so nobody helpfully re-adds it. Two tests now pin the real property instead: the minimum last-tile height, and that every tile after the first adds new page beyond the overlap.
+
+**Chrome renders the downscale, we only crop.** `Page.captureScreenshot`'s clip takes a `scale`, so the capture comes back at ~1280 wide instead of full resolution. That saves memory and, more importantly, keeps a tall page under Chrome's maximum texture size — `planCapture` also clips the requested HEIGHT to what 24 slices can hold, so a 1920×60000 page asks for 30675 rows rather than 60000 and is marked `screenshot_truncated`. Asking for the full height and throwing most of it away would risk Chrome refusing the capture outright with an error that explains nothing.
+
+**Measuring and capturing are one debugger session**, not two, because each attach raises Chrome's "is debugging this browser" banner and two round trips would flash it twice per clip. Detach is in a `finally` so a throw cannot leave the banner up.
+
+**`cssContentSize`, not `contentSize`.** The clip is measured in CSS pixels; `contentSize` is the older field and can come back in device pixels on a high-DPI screen, which would ask for a region the wrong size and silently capture a fraction of the page.
+
+**The popup is switched on and off rather than declared.** Chrome fires `action.onClicked` only when there is no `default_popup` — declaring one would mean the icon could never clip. So the manifest declares none, a failure turns the popup on for exactly one click, and `popup.js` turns it off again as it opens, first thing, before any rendering, so an exception cannot leave the icon stuck showing a stale error. The keyboard shortcut is its own command rather than `_execute_action`, so it always clips even while the popup is switched on.
+
+**`/start` is called even for a text-only clip.** A clipboard clip needs a server-minted `clip_id` and `/start` is where ids come from; it writes nothing, so calling it with `slice_count: 0` costs nothing and keeps one code path.
+
+**Uploads are sequential, not parallel.** Twenty-four simultaneous multi-hundred-kilobyte PUTs from a service worker is a good way to have a few fail, and `/finish` would then refuse the whole clip.
+
+**Two small things worth knowing:**
+
+- **Text-only clips report as a red `!`** even though they saved. The clip is real and in Alfred with its text and links, but calling a missing screenshot a clean success would hide it. The popup explains.
+- **No icons.** Chrome draws a lettered placeholder, which is enough to find on a toolbar. Adding three PNGs and an `icons` block is all it would take; skipped rather than commit binary files I cannot see.
 
 ### Test fixtures: removed 2026-09-23
 

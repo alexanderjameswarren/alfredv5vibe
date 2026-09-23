@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Alfred's Clipboard",
+  "version": "1.0.0",
+  "description": "Save this page's text, links and a full-page screenshot into Alfred.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "debugger"
+  ],
+  "host_permissions": [
+    "https://zuqjyfqnvhddnchhpbcz.supabase.co/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Clip this page into Alfred"
+  },
+  "options_page": "options.html",
+  "commands": {
+    "clip-page": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Clip this page into Alfred"
+    }
+  }
+}

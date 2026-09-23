@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Alfred's Clipboard — settings</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      max-width: 40rem; margin: 2rem auto; padding: 0 1.25rem;
+    }
+    h1 { font-size: 1.25rem; margin: 0 0 .25rem; }
+    p.lede { margin: 0 0 1.5rem; opacity: .75; }
+    label { display: block; font-weight: 600; margin: 1.25rem 0 .25rem; }
+    .hint { font-weight: 400; opacity: .7; display: block; margin-top: .15rem; }
+    input[type=text], input[type=password] {
+      width: 100%; padding: .5rem .6rem; font: inherit; font-family: ui-monospace, monospace;
+      border: 1px solid rgba(128,128,128,.5); border-radius: 6px;
+      background: Field; color: FieldText; box-sizing: border-box;
+    }
+    .row { display: flex; gap: .5rem; align-items: center; margin-top: .4rem; }
+    button {
+      font: inherit; padding: .5rem .9rem; border-radius: 6px;
+      border: 1px solid rgba(128,128,128,.5); background: ButtonFace; color: ButtonText;
+      cursor: pointer;
+    }
+    button.primary { background: #16a34a; border-color: #16a34a; color: #fff; font-weight: 600; }
+    #status { margin-top: 1rem; padding: .6rem .8rem; border-radius: 6px; display: none; }
+    #status.ok  { display: block; background: rgba(22,163,74,.12);  border: 1px solid rgba(22,163,74,.4); }
+    #status.bad { display: block; background: rgba(220,38,38,.12); border: 1px solid rgba(220,38,38,.4); }
+    .note { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid rgba(128,128,128,.3); opacity: .8; }
+    code { font-family: ui-monospace, monospace; background: rgba(128,128,128,.15); padding: .1em .3em; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <h1>Alfred's Clipboard</h1>
+  <p class="lede">Two settings, once per machine. They are stored only on this computer.</p>
+
+  <label for="baseUrl">
+    Function address
+    <span class="hint">The <code>clip-capture</code> edge function. Already filled in — leave it alone unless the Supabase project changes.</span>
+  </label>
+  <input id="baseUrl" type="text" spellcheck="false" autocomplete="off">
+
+  <label for="secret">
+    Shared secret
+    <span class="hint">The value of <code>CLIPBOARD_SECRET</code>, as set with <code>supabase secrets set</code>. At least 32 characters.</span>
+  </label>
+  <input id="secret" type="password" spellcheck="false" autocomplete="off">
+  <div class="row">
+    <button id="reveal" type="button">Show</button>
+    <button id="save" class="primary" type="button">Save</button>
+  </div>
+
+  <div id="status"></div>
+
+  <div class="note">
+    <p><strong>How to clip:</strong> open a normal web page and click the toolbar icon, or press <code>Ctrl+Shift+Y</code>. A green tick means it saved. A red <code>!</code> means it failed — click the icon to read why.</p>
+    <p>Chrome will flash a <em>“Alfred's Clipboard is debugging this browser”</em> banner while it takes the screenshot. That is expected: it is the only way to photograph a whole page rather than just the visible part.</p>
+    <p>Chrome pages, other extensions, the Web Store and PDFs cannot be clipped — Chrome blocks extensions from reading them.</p>
+  </div>
+
+  <script src="options.js" type="module"></script>
+</body>
+</html>
