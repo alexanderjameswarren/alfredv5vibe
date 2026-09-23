@@ -64,6 +64,12 @@ import {
 } from "../_shared/tools/job-applications.ts";
 import { recordDjAlbumTool, getDjAlbumsTool } from "../_shared/tools/dj-albums.ts";
 import {
+  CLIP_VOCAB,
+  getRecentClipsTool,
+  getClipSlicesTool,
+  archiveInboxItemTool,
+} from "../_shared/tools/clipboard.ts";
+import {
   getKenQuizBatchTool,
   recordKenAttemptsTool,
   createKenAreaTool,
@@ -337,6 +343,7 @@ const getInboxTool = defineTool({
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const aiStatus = args.ai_status as string | undefined;
+    const sourceType = args.source_type as string | undefined;
     const LIMIT = clampLimit(args.limit as number | undefined);
 
     // A hand-typed column list: nothing type-checks it, so a renamed or dropped
@@ -355,6 +362,11 @@ const getInboxTool = defineTool({
       .is("triaged_at", null)
       .order("created_at", { ascending: false });
     if (aiStatus) q = q.eq("ai_status", aiStatus);
+    // ⚠️ EVERY FILTER HERE MUST ALSO GO ON THE COUNT QUERY BELOW. The two are
+    // hand-kept in step and nothing checks that they agree; a filter applied to
+    // only one of them makes the "N of M" truncation NOTE quietly lie, which is
+    // worse than no NOTE because the model believes it.
+    if (sourceType) q = q.eq("source_type", sourceType);
 
     const { data, error } = await q.limit(LIMIT);
     if (error) throw new Error(`get_inbox: ${error.message}`);
@@ -368,6 +380,7 @@ const getInboxTool = defineTool({
         .eq("archived", false)
         .is("triaged_at", null);
       if (aiStatus) cq = cq.eq("ai_status", aiStatus);
+      if (sourceType) cq = cq.eq("source_type", sourceType);
       const { count, error: countErr } = await cq;
       if (!countErr && typeof count === "number") {
         total = count;
@@ -871,12 +884,21 @@ export function createMcpServer(token: string) {
     {
       title: "Get Inbox",
       description:
-        "Get pending inbox items that haven't been triaged yet. The inbox is a universal capture bucket where thoughts, emails, and tasks land before being organized into contexts. Results are capped (default 20, max 50) — the response NOTE tells you when there's more.",
+        "Get pending inbox items that haven't been triaged yet. The inbox is a universal capture bucket where thoughts, emails, and tasks land before being organized into contexts. Results are capped (default 20, max 50) — the response NOTE tells you when there's more. " +
+        "Archived items are never returned; use get_recent_clips with include_archived to look at handled clips.",
       inputSchema: {
         ai_status: z
           .string()
           .optional()
-          .describe("Filter by AI enrichment status: 'not_started', 'in_progress', or 'enriched'"),
+          .describe(
+            "Filter by AI enrichment status: 'not_started' (nothing has enriched it), 'in_progress' (ai-enrich is running), 'enriched' (first pass, Sonnet), or 're_enriched' (second pass, Opus).",
+          ),
+        source_type: z
+          .string()
+          .optional()
+          .describe(
+            "Filter by how the capture arrived: 'manual' (typed into the Alfred app), 'email' (forwarded to the capture address), 'mcp' (created by Claude with create_inbox_item), 'clipboard' (a page clipped by the Chrome extension), or 'cli' (a report pushed by the Claude CLI). For clipboard and cli items, get_recent_clips is the better tool — it returns the actual page text and links, which the inbox row does not carry.",
+          ),
         limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
       },
     },
@@ -2256,6 +2278,76 @@ export function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(getJobApplicationSourcesTool, args, token),
+  );
+
+  // -------------------------------------------------------------------------
+  // Alfred Clipboard — docs/technical-spec-clipboard.md § 4.2
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "get_recent_clips",
+    {
+      title: "Get Recent Clips",
+      description:
+        "Recently clipped web pages and pushed CLI reports, as TEXT. Call this whenever Alex says he clipped, saved or grabbed something, or that the CLI responded / replied / finished — it is the tool that answers 'I just clipped this'. " +
+        "Returns per clip: id, source, url, title, captured_at, inbox_id, slice_count, page_text and links, plus flags saying whether the stored text or screenshot is incomplete. NO IMAGES — get_clip_slices does that. " +
+        "Newest first, default 5 (hard cap 50). Archived clips are excluded unless include_archived is true, so once you have handled a clip and archived its inbox item it stops coming back. " +
+        "Two response-only caps, each with its own flag: page_text is cut at 60,000 characters (page_text_truncated_in_response, with page_text_total_chars giving the real length) and links at 200 entries (links_truncated_in_response, with link_count). These are about the size of THIS reply; the separate text_truncated flag means the capture itself was cut short. Tier 1. " +
+        CLIP_VOCAB,
+      inputSchema: {
+        limit: z.number().optional().describe("How many clips (default 5, hard cap 50)."),
+        source: z
+          .enum(["clipboard", "cli"])
+          .optional()
+          .describe("'clipboard' = a page captured by the Chrome extension. 'cli' = a report pushed by the Claude CLI. Omit for both. Use 'cli' when Alex says the CLI responded."),
+        since_minutes: z
+          .number()
+          .optional()
+          .describe("Only clips saved in the last N minutes. Measured on server arrival time, not the client's clock. Good for 'I just clipped two jobs' — try 30."),
+        include_archived: z
+          .boolean()
+          .optional()
+          .describe("Default false. True also returns clips whose inbox item has been archived, i.e. ones already handled. Use it when Alex refers back to something from earlier."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getRecentClipsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_clip_slices",
+    {
+      title: "Get Clip Slices",
+      description:
+        "The screenshot of one clip, as actual images. The page was sliced top to bottom in the browser: 1280px wide, each slice at most 900px tall, overlapping by 50px so a line of text sitting on a cut is whole in one of the two neighbours — expect a little repetition between consecutive slices. " +
+        "Returns a text block naming the slices and their sizes, then the images in page order. At most 8 per call; if you ask for more the reply says so and tells you the `from` value to continue at. " +
+        "COSTS REAL CONTEXT — every image lands in the conversation whether or not you end up needing it. Read the clip's page_text from get_recent_clips first and come here only when the layout or the visuals matter, or when the text came out thin or garbled. A CLI report has no screenshot. Tier 1. " +
+        CLIP_VOCAB,
+      inputSchema: {
+        clip_id: z.string().describe("The clip's id, from get_recent_clips."),
+        from: z.number().optional().describe("First slice number, 1-based, matching the file names (slice-01.jpg is 1). Default 1."),
+        to: z.number().optional().describe("Last slice number, inclusive. Default: the final slice, subject to the 8-per-call cap."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getClipSlicesTool, args, token),
+  );
+
+  server.registerTool(
+    "archive_inbox_item",
+    {
+      title: "Archive Inbox Item",
+      description:
+        "Hide a handled inbox item. Call this once you have DEALT WITH a clip or a CLI report — read it, answered it, filed what it needed — so it leaves Alex's inbox screen instead of sitting there looking unread. It disappears from the app live. " +
+        "Reversible in one call: pass archived: false to put it back, untriaged. Nothing is deleted either way, and the change is audited. " +
+        "Takes the inbox_id, NOT the clip id — get_recent_clips returns both. Archiving does not touch the clip itself, which keeps its text and screenshot. Tier 2, no confirmation needed.",
+      inputSchema: {
+        inbox_id: z.string().describe("The inbox item's id, from get_recent_clips (field: inbox_id) or get_inbox (field: id). Not the clip id."),
+        archived: z
+          .boolean()
+          .optional()
+          .describe("Default true (hide it). Pass false to un-archive and return it to the inbox."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(archiveInboxItemTool, args, token),
   );
 
   return server;
