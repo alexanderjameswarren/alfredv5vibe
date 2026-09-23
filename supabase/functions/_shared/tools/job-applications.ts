@@ -37,14 +37,29 @@ export const VALID_JOB_STATUS = [
   "offer",
   "closed_no_response",
   "withdrawn",
+  "considering",
+  "passed",
 ];
 export const VALID_JOB_FIT = ["high", "medium", "low"];
 export const VALID_JOB_EFFORT = ["full", "quick"];
 
+// `considering` and `passed` are roles Alex SAW but never applied to. Counting
+// them would put every job he looked at into a source's denominator and make
+// its response rate a measure of how much that source posts, not of how well it
+// converts. They are therefore dropped from every count in the source report.
+const NOT_APPLIED_STATUS = ["considering", "passed"];
+
 // `open_only` — still live, nothing has closed the loop. The complement of the
-// three terminal statuses, written out positively so it goes into the query as
-// an IN rather than a NOT IN.
-const OPEN_STATUS = ["applied", "screening", "interview", "offer"];
+// four terminal statuses (rejected, closed_no_response, withdrawn, passed),
+// written out positively so it goes into the query as an IN rather than a NOT
+// IN. `considering` is OPEN: undecided is still live.
+const OPEN_STATUS = [
+  "applied",
+  "screening",
+  "interview",
+  "offer",
+  "considering",
+];
 
 // Per the status column comment: "A source counts as generating a RESPONSE
 // when status is screening, interview, rejected or offer — a rejection is
@@ -65,8 +80,16 @@ export const JOB_VOCAB =
   "VOCABULARY — status: applied (submitted, nothing heard) | screening " +
   "(recruiter or phone screen) | interview (past screening) | rejected (they " +
   "said no) | offer (offer in hand) | closed_no_response (gave up waiting) | " +
-  "withdrawn (Alex pulled out). fit: high | medium | low. effort: full | " +
-  "quick. SOURCE is free text but is STORED LOWERCASE and trimmed — reuse an " +
+  "withdrawn (Alex pulled out) | considering (seen the role, not yet decided " +
+  "whether to apply — still open) | passed (seen the role, chose not to " +
+  "apply — terminal). considering and passed are roles never applied to, so " +
+  "rows with either status are EXCLUDED FROM EVERY PER-SOURCE COUNT in " +
+  "get_job_application_sources — they are not in total, responded, " +
+  "response_rate, reached_interview, offers or waiting. `effort` is required " +
+  "for every other status and is optional (and normally omitted) for " +
+  "considering and passed, because no work was done. fit: high | medium | " +
+  "low. effort: full | quick. SOURCE is free text but is STORED LOWERCASE " +
+  "and trimmed — reuse an " +
   "existing spelling (nten, idealist, linkedin, 80000 hours, probably good, " +
   "upwork, warm intro) before inventing one, or the per-source counts split " +
   "in two and the response-rate report stops meaning anything. Call " +
@@ -214,8 +237,11 @@ export const getJobApplicationsTool = defineTool({
     }
 
     if (args.open_only === true) {
-      // The complement of rejected / closed_no_response / withdrawn, stated as
-      // an IN over the four live statuses. Combines with an explicit `status`
+      // The complement of rejected / closed_no_response / withdrawn / passed,
+      // stated as an IN over the five live statuses. `considering` is one of
+      // them: a role Alex has not decided about is still an open loop, whereas
+      // `passed` is the decision not to apply and is therefore terminal.
+      // Combines with an explicit `status`
       // filter by INTERSECTION — open_only together with status 'rejected'
       // correctly returns nothing, rather than one of the two being dropped.
       q = q.in("status", OPEN_STATUS);
@@ -264,10 +290,36 @@ export const createJobApplicationTool = defineTool({
     const role = requireText(T, "role", args.role);
     const source = normaliseSource(T, args.source);
     const fit = normaliseEnum(T, "fit", args.fit, VALID_JOB_FIT);
-    const effort = normaliseEnum(T, "effort", args.effort, VALID_JOB_EFFORT);
+
+    // Resolved BEFORE effort, because whether effort is required depends on it.
     const status = args.status === undefined || args.status === null
       ? "applied"
       : normaliseEnum(T, "status", args.status, VALID_JOB_STATUS);
+
+    // -----------------------------------------------------------------------
+    // effort IS CONDITIONALLY REQUIRED, AND THE CHECK IS HERE, NOT LEFT TO THE
+    // DATABASE
+    // -----------------------------------------------------------------------
+    // job_applications_effort_when_applied allows a NULL effort only for
+    // `considering` and `passed` — the two statuses where no application was
+    // written, so there is no amount of work to record. Its violation arrives
+    // as a constraint name, which tells the caller nothing about which of the
+    // two fields to change; this states the rule instead.
+    const effort = args.effort === undefined || args.effort === null
+      ? null
+      : normaliseEnum(T, "effort", args.effort, VALID_JOB_EFFORT);
+    if (effort === null && !NOT_APPLIED_STATUS.includes(status)) {
+      throw fail(
+        T,
+        `\`effort\` is required unless status is ${
+          NOT_APPLIED_STATUS.join(" or ")
+        }, and status here is "${status}". Nothing was written. Pass effort: ` +
+          `full (tailored CV and cover letter) or quick (light-touch ` +
+          `submission) — or, if Alex has not actually applied to this one, ` +
+          `pass status: considering (not yet decided) or passed (decided ` +
+          `against) and leave effort out.`,
+      );
+    }
 
     // ⚠️ ALWAYS SENT EXPLICITLY, NEVER LEFT TO THE COLUMN DEFAULT. That default
     // is CURRENT_DATE, which is the SERVER'S UTC date: an application logged at
@@ -367,7 +419,70 @@ export const createJobApplicationTool = defineTool({
       .single();
     if (error) throw dbError(T, "insert", error);
 
-    return data;
+    const inserted = data as Record<string, unknown>;
+
+    // -----------------------------------------------------------------------
+    // SAME-ORG FLAG — INFORMATION, NOT A REFUSAL
+    // -----------------------------------------------------------------------
+    // The duplicate guard above already refused an exact org + role repeat.
+    // This is the softer neighbour: OTHER roles at what looks like the same
+    // organisation. Alex wants to know he has history with them — two
+    // applications to one org is context for the cover letter, and a rejection
+    // there last month is worth knowing before he chases this one.
+    //
+    // ⚠️ CONTAINMENT IN BOTH DIRECTIONS, WHICH IS WHY THIS FILTERS IN THE
+    // HANDLER. "Acme" must match "Acme Corporation" and "Acme Corporation"
+    // must match "Acme"; a column filter can only express one of those, and
+    // ilike's % and _ would additionally make "Acme_Corp" match "AcmeXCorp".
+    // So the scan is bounded and the comparison is done here on trimmed
+    // lowercase text, which is the rule actually being claimed.
+    const SAME_ORG_SCAN = 2000;
+    const SAME_ORG_LIMIT = clampLimit(undefined);
+    let sameOrgRows: Array<Record<string, unknown>> = [];
+    let sameOrgError: string | null = null;
+
+    const { data: siblings, error: sibErr } = await ctx.db
+      .from("job_applications")
+      .select("id, org, role, status, applied_on, created_at")
+      .neq("id", inserted.id as string)
+      .order("applied_on", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(SAME_ORG_SCAN);
+
+    if (sibErr) {
+      // ⚠️ THE INSERT ALREADY SUCCEEDED, SO THIS IS NOT AN ERROR RESPONSE.
+      // Throwing here would report a failed create for a row that exists, and
+      // the retry it invites would come back as a duplicate refusal. The
+      // failure is reported in the payload instead, next to the row it could
+      // not annotate.
+      sameOrgError = sibErr.message ?? "(no message)";
+    } else {
+      const orgKey = org.trim().toLowerCase();
+      sameOrgRows = ((siblings ?? []) as Array<Record<string, unknown>>)
+        .filter((r) => {
+          const other = String(r.org ?? "").trim().toLowerCase();
+          if (other === "" || orgKey === "") return false;
+          return orgKey.includes(other) || other.includes(orgKey);
+        })
+        .slice(0, SAME_ORG_LIMIT)
+        .map((r) => ({
+          id: r.id,
+          org: r.org,
+          role: r.role,
+          status: r.status,
+          applied_on: r.applied_on,
+        }));
+    }
+
+    return sameOrgError === null
+      ? { ...inserted, same_org_rows: sameOrgRows }
+      : {
+        ...inserted,
+        same_org_rows: sameOrgRows,
+        same_org_rows_error:
+          `the application WAS created; only the same-org lookup failed, so ` +
+          `same_org_rows is empty rather than known-empty: ${sameOrgError}`,
+      };
   },
 });
 
@@ -441,6 +556,17 @@ export const updateJobApplicationTool = defineTool({
     if (args.status !== undefined) {
       patch.status = normaliseEnum(T, "status", args.status, VALID_JOB_STATUS);
     }
+
+    // ⚠️ THE effort RULE IS THE DATABASE'S TO ENFORCE HERE, UNLIKE IN create.
+    // job_applications_effort_when_applied requires an effort for every status
+    // except `considering` and `passed`. create knows the whole row it is
+    // writing and so can state the rule itself; this tool only knows a patch,
+    // and the row it lands on may already carry an effort from an earlier
+    // write. Re-deriving the rule from `prev` would put a second copy of the
+    // constraint in the handler that drifts the moment the constraint changes.
+    // So a `considering` row promoted to `applied` with no effort is refused by
+    // the CHECK, and dbError passes the database's own message through verbatim
+    // without do-not-retry wording — the caller should retry, with an effort.
 
     // --- clearable fields ---------------------------------------------------
     // ⚠️ ABSENT, EMPTY AND NULL ARE THREE DIFFERENT THINGS HERE. Absent means
@@ -575,7 +701,17 @@ export const getJobApplicationSourcesTool = defineTool({
       .limit(ROW_CAP);
     if (error) throw dbError(T, "read", error);
 
-    const rows = (data ?? []) as Array<{ source: string; status: string }>;
+    const fetched = (data ?? []) as Array<{ source: string; status: string }>;
+
+    // ⚠️ considering AND passed ARE DROPPED BEFORE ANY COUNTING, NOT AFTER.
+    // These are roles Alex looked at and never applied to. Leaving them in
+    // `total` would make every source's response rate a function of how many
+    // postings he browsed there, and a source he skimmed forty jobs on and
+    // applied to two would read as a 5% converter. They are excluded from
+    // total, and therefore from responded, response_rate, reached_interview,
+    // offers and waiting as well.
+    const rows = fetched.filter((r) => !NOT_APPLIED_STATUS.includes(r.status));
+    const notApplied = fetched.length - rows.length;
 
     // Aggregated HERE rather than in SQL: the counts are a handful of boolean
     // tests over at most 2000 two-column rows, and a view or RPC would put the
@@ -630,9 +766,14 @@ export const getJobApplicationSourcesTool = defineTool({
     return envelope({
       since: (args.since as string | undefined) ?? null,
       applications_counted: rows.length,
+      not_applied_excluded: notApplied,
       sources,
       reading:
-        "One entry per source. `responded` counts screening, interview, " +
+        "One entry per source, counting APPLICATIONS ONLY. Rows with status " +
+        "considering or passed are roles Alex never applied to and are " +
+        "excluded from every count here, including `total`; " +
+        "`not_applied_excluded` says how many were left out. `responded` " +
+        "counts screening, interview, " +
         "rejected and offer — a rejection IS a response, per the status " +
         "column comment, because it means the application was read. `waiting` " +
         "is status 'applied' only; closed_no_response and withdrawn are in " +
@@ -646,7 +787,10 @@ export const getJobApplicationSourcesTool = defineTool({
       // ONE. Every other truncation in this file returns fewer rows, which is
       // visible; here the clip changes the NUMBERS while the shape stays whole,
       // and nothing in the payload itself would give it away.
-      truncated: rows.length >= ROW_CAP,
+      // `fetched`, not `rows`: the cap applies to what the query read, before
+      // considering/passed were dropped. Testing the filtered count would hide
+      // a clip on a 2000-row read that happened to contain excluded rows.
+      truncated: fetched.length >= ROW_CAP,
     });
   },
 });

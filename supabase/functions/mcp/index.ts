@@ -2093,7 +2093,7 @@ export function createMcpServer(token: string) {
       title: "Get Job Applications",
       description:
         "List Alex's job applications — one row per application, newest applied_on first (ties broken by when it was logged). Every filter is applied in the database before the limit, so the counts you get back are counts of everything that matched, not of the page. All parameters are optional; with none, this is the most recent 20 applications. Returns every column except user_id. " +
-        "`open_only` excludes rejected, closed_no_response and withdrawn — the three terminal statuses — leaving what is still live. `overdue` returns applications whose next_action_due is BEFORE today in America/Los_Angeles; something due today is due, not overdue, and a row with no next_action_due is never overdue. `org` is a case-insensitive PARTIAL match ('acme' finds 'Acme Corporation'); `source` and `fit` are exact. Passing `open_only` together with an explicit `status` intersects them. Results are capped (default 20, hard cap 50) — the response NOTE tells you when there is more. Tier 1. " +
+        "`open_only` excludes rejected, closed_no_response, withdrawn and passed — the four terminal statuses — leaving what is still live, which INCLUDES `considering` (a role not yet decided about is still an open loop). `overdue` returns applications whose next_action_due is BEFORE today in America/Los_Angeles; something due today is due, not overdue, and a row with no next_action_due is never overdue. `org` is a case-insensitive PARTIAL match ('acme' finds 'Acme Corporation'); `source` and `fit` are exact. Passing `open_only` together with an explicit `status` intersects them. Results are capped (default 20, hard cap 50) — the response NOTE tells you when there is more. Tier 1. " +
         JOB_VOCAB,
       inputSchema: {
         status: z
@@ -2112,7 +2112,7 @@ export function createMcpServer(token: string) {
         open_only: z
           .boolean()
           .optional()
-          .describe("true = only applications still live: excludes rejected, closed_no_response and withdrawn."),
+          .describe("true = only applications still live: excludes rejected, closed_no_response, withdrawn and passed. `considering` counts as live."),
         overdue: z
           .boolean()
           .optional()
@@ -2128,17 +2128,19 @@ export function createMcpServer(token: string) {
     {
       title: "Create Job Application",
       description:
-        "Log ONE job application Alex has submitted. org, role, source, fit and effort are required; everything else is optional. `applied_on` defaults to today in America/Los_Angeles — not the server's UTC date, so an application logged in the evening is still logged for today. `status` defaults to 'applied'. source, fit, effort and status are lowercased and trimmed before the write. " +
-        "DUPLICATE GUARD: if an application with the same org and role already exists (ignoring case) this writes NOTHING and returns an error naming that row's id, applied_on and status — use update_job_application on that id instead. Two rows for one application permanently distort that source's response rate. Returns the inserted row. Tier 1, no confirmation required. " +
+        "Log ONE job application Alex has submitted — or, with status 'considering' or 'passed', ONE role he has seen but not applied to. org, role, source and fit are always required; everything else is optional. `applied_on` defaults to today in America/Los_Angeles — not the server's UTC date, so an application logged in the evening is still logged for today. `status` defaults to 'applied'. source, fit, effort and status are lowercased and trimmed before the write. " +
+        "EFFORT IS CONDITIONALLY REQUIRED: pass `effort` for every status EXCEPT 'considering' and 'passed', where no application was written and effort should be omitted. Omitting it on any other status is refused and nothing is written. " +
+        "DUPLICATE GUARD: if an application with the same org and role already exists (ignoring case) this writes NOTHING and returns an error naming that row's id, applied_on and status — use update_job_application on that id instead. Two rows for one application permanently distort that source's response rate. " +
+        "Returns the inserted row plus `same_org_rows`: OTHER rows at what looks like the same organisation, matched case-insensitively as a partial match in either direction ('Acme' matches 'Acme Corporation' and vice versa), newest first, each with id, org, role, status and applied_on. Empty array when there are none. REPORT these to Alex when the array is non-empty — it means he has history with this org, which is context for the application and worth knowing before he chases it. Tier 1, no confirmation required. " +
         JOB_VOCAB,
       inputSchema: {
         org: z.string().describe("The organisation applied to. Stored as written — casing is preserved."),
         role: z.string().describe("The role title. Stored as written. If Alex applies to two roles at one org, the titles must differ or the duplicate guard will refuse the second."),
         source: z.string().describe("Where the role was found. Stored lowercase — REUSE an existing spelling (see get_job_application_sources) rather than inventing a new one."),
         fit: JOB_FIT.describe("How good a fit the role is: high | medium | low."),
-        effort: JOB_EFFORT.describe("How much work the application took: full (tailored CV and cover letter) | quick (light-touch submission)."),
+        effort: JOB_EFFORT.optional().describe("How much work the application took: full (tailored CV and cover letter) | quick (light-touch submission). REQUIRED for every status except 'considering' and 'passed' — omit it for those two, where nothing was submitted."),
         applied_on: z.string().optional().describe("YYYY-MM-DD. Defaults to today in America/Los_Angeles. Pass it only to back-date an application logged late."),
-        status: JOB_STATUS.optional().describe("Defaults to 'applied'. Pass another value only when logging an application that has already moved on."),
+        status: JOB_STATUS.optional().describe("Defaults to 'applied'. Pass another value when logging an application that has already moved on, or 'considering' / 'passed' for a role Alex has only looked at."),
         deadline: z.string().optional().describe("YYYY-MM-DD — the EMPLOYER's posted application deadline, if there was one. Not Alex's own follow-up date; that is next_action_due."),
         next_action: z.string().optional().describe("What Alex owes next. Omit when nothing is owed and he is just waiting — that is a real state, not an unknown one."),
         next_action_due: z.string().optional().describe("YYYY-MM-DD — when next_action is due. Only allowed alongside a next_action; sending it without one is refused."),
@@ -2154,6 +2156,7 @@ export function createMcpServer(token: string) {
       title: "Update Job Application",
       description:
         "Change an existing job application — most often to move its status along as the pipeline progresses. `id` is required; pass at least one other field. An id matching no row is an error and nothing is written; this tool never creates a row. source, fit, effort and status are lowercased and trimmed, exactly as create does. " +
+        "EFFORT: the database requires an effort on every status except 'considering' and 'passed'. Promoting a 'considering' row to 'applied' therefore needs `effort` in the SAME call; without it the write is refused and the database's own message comes back. " +
         "CLEARING: send an empty string or null for deadline, next_action, next_action_due or notes to clear it. Clearing next_action also clears next_action_due in the same write, because a due date with nothing due violates the table's check constraint. " +
         "NOTES: `notes` REPLACES the whole field. `append_note` instead adds a new line to whatever is already there, prefixed with today's date in America/Los_Angeles (e.g. \"2026-09-24: recruiter called\") — it never overwrites, and it is what you want for a running log. Sending both `notes` and `append_note` is an error. Returns the updated row. Tier 2 — audited and reversible. " +
         JOB_VOCAB,
@@ -2165,7 +2168,7 @@ export function createMcpServer(token: string) {
         source: z.string().optional().describe("Replacement source. Stored lowercase; reuse an existing spelling. Cannot be cleared."),
         fit: JOB_FIT.optional().describe("high | medium | low."),
         effort: JOB_EFFORT.optional().describe("full | quick."),
-        status: JOB_STATUS.optional().describe("The pipeline move. This is the field that drives the response-rate report, so get it right."),
+        status: JOB_STATUS.optional().describe("The pipeline move. This is the field that drives the response-rate report, so get it right. Moving OFF 'considering' or 'passed' to any applied status requires `effort` in the same call."),
         deadline: z.string().optional().describe("YYYY-MM-DD, or \"\" / null to clear. The employer's deadline."),
         next_action: z.string().optional().describe("What Alex owes next, or \"\" / null to clear. Clearing it also clears next_action_due."),
         next_action_due: z.string().optional().describe("YYYY-MM-DD, or \"\" / null to clear. Refused if the row would end up with a due date and no next_action."),
@@ -2182,6 +2185,7 @@ export function createMcpServer(token: string) {
       title: "Get Job Application Sources",
       description:
         "The 'which source actually converts' report: one entry per source, sorted by total descending. Each carries total; responded (status is screening, interview, rejected or offer — a rejection IS a response, because it means the application was read); response_rate (responded / total, to 2 decimal places); reached_interview (interview or offer); offers; and waiting (status 'applied', nothing heard yet). closed_no_response and withdrawn count towards `total` and towards nothing else, so responded + waiting need not equal total. " +
+        "COUNTS APPLICATIONS ONLY: rows with status 'considering' or 'passed' are roles Alex never applied to and are excluded from EVERY count here, `total` included — `not_applied_excluded` reports how many were left out. " +
         "Use this before logging an application to see which source spellings already exist. `response_rate` means little at a small total — read it next to the count. Reads at most 2000 applications; if that cap is hit the response carries a truncation NOTE. Tier 1. " +
         JOB_VOCAB,
       inputSchema: {
