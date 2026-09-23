@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: Phase 1 in progress — Steps 1-6c done. Step 7 written and self-tested; awaiting Alex's "CLI responded" check.
+## Status: Phase 1 in progress — Steps 1-7 done. Step 7b (run tags) written and self-tested; awaiting Alex's check.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -14,7 +14,8 @@ Spec: docs/technical-spec-clipboard.md
 - [x] Step 5b: The inbox trash can archives instead of deleting, and records why. `inbox.archive_reason` ('discarded' | 'processed'); `archive_inbox_item` writes 'processed' and clears on un-archive; `get_recent_clips` treats a clip whose inbox row is MISSING as archived. Spec decision 14. — **066 run (CONFORMANT, 44 tables, both constraints present, all 10 existing rows null). App checks passed: "Capture discarded." with working undo, labels read "Discard", a discarded capture is archived with reason 'discarded' rather than deleted, save-through-the-form still commits. `mcp` deployed v112.** **Verified in a fresh thread:** archiving set `archive_reason` 'processed', un-archiving cleared all three fields.
 - [x] Step 6: Chrome extension in `extension/`: options page, capture, slicing, upload, finish, badge. Alex loads it unpacked and clips three real pages (a long job posting, a short page, and a `chrome://` page to check the clean failure). — **first version 2026-09-23: install, options, saving, pairing, text read-back and the `chrome://` refusal all verified.** Three faults found in real use and fixed in Step 6a below: screenshots wrapping to the top, double-click duplicates, and `get_recent_clips` missing `page_width`/`page_height`. Retest: the wrap is FIXED (Yahoo re-clipped as 7 slices, final slice showing the true page bottom). Two pages that scroll inside a container were correctly flagged incomplete — accepted as limitations, see spec §2.1. Step 6b then fixed the truncation REASON, which was being mis-reported by the server. Geometry tests 34/34. `clip-capture` v4, `mcp` v114. Awaiting Alex's final retest.
 - [x] Step 6c: Silent default capture (visible screen, no debugger banner); full-page capture moved to a right-click menu item and a second shortcut; abort cleanly on navigation or tab close. - **done 2026-09-23.** Verified: silent click showed no banner (1 slice, `capture_mode` visible, note opening "VISIBLE SCREEN ONLY, BY CHOICE", and a scrolled clip correctly reporting 952px down); "Clip full page" showed the banner and gave 7 slices, "FULL PAGE, complete", worst join 1.51; closing the tab mid-capture gave a red `!` with nothing saved; `visible_clips_not_flagged_truncated` empty; and from `get_clip_slices` ALONE a fresh thread described the visible clip as part of the page with nothing wrong. Clicking a link mid-capture was not tested — the page blurs and shifts during a full-page capture, which is accepted.
-- [ ] Step 7: `scripts/clip.mjs` and the `CLAUDE.md` rule for pushing CLI reports. - **written 2026-09-23 and pushed its own report as the first real CLI clip** (clip `089ad3dd-d301-422a-b45a-acce9602a471`, inbox `d43ae5ef-644d-4c99-8e29-5bc5bcec6742`). `mcp` v116. Awaiting Alex saying "CLI responded" in a fresh thread with nothing pasted.
+- [x] Step 7: `scripts/clip.mjs` and the `CLAUDE.md` rule for pushing CLI reports. - **done 2026-09-23.** Pushed its own report as the first real CLI clip (`089ad3dd-...`), and a claude.ai thread read it with `get_recent_clips` source `cli` with nothing pasted, then archived its inbox item.
+- [ ] Step 7b: Run tags, so "CLI responded" picks up the right report when several CLI sessions are running. `clip.mjs --tag`; `run_tag`, `repo` and `branch` in `source_metadata`; `get_recent_clips` returns all three and filters on `run_tag`; the `CLAUDE.md` rule passes the prompt's tag. - **written and deployed 2026-09-23.** `clip-capture` v6, `mcp` v117, `deno check` delta zero. Report pushed with tag `clip-7b-q4m2`. Awaiting Alex's check.
 - [ ] Step 8: Alex adds the project instruction in claude.ai, rotates the notification dispatch secret, and runs the end-to-end test in a fresh thread.
 
 ## Phase 2: jobs
@@ -290,6 +291,26 @@ A `cli` clip skips `/start` entirely — there are no slices, so there is nothin
 **The `CLAUDE.md` rule** says the clip is *as well as* the printed report, never instead of it, and that a failed push must be stated in one line at the end of the printed report rather than hidden. A failed push is not a failed task; silently skipping it would leave Alex waiting for something that never arrived.
 
 **`capture_mode` null now resolves to `"full"`** in `get_recent_clips`, per Alex's note. Clips saved before Step 6c recorded no mode and the visible mode did not exist then, so every one of them went through the full-page path — the absence is a known fact, not a guess. Resolved once in the tool rather than left to each reader, because a `null` reaching a model is a `null` it has to guess about, and the obvious guess ("mode unknown, so maybe partial") is the wrong one. `mcp` v116, `deno check` delta zero.
+
+### Step 7b — run tags, 2026-09-23
+
+Two or three CLI sessions run at once, so "CLI responded" cannot mean "the newest report". Every prompt now opens with `Run tag: <tag>` and the report carries it back.
+
+**`clip.mjs --tag`** validates strictly — lowercase letters, digits, hyphens, 1 to 40 — and **refuses a malformed tag rather than mangling it**. A tag only works by exact match, so a silently-normalised one would match nothing, which is worse than no tag at all: it looks like it is working. The failure message says to fix it or drop `--tag` and push untagged.
+
+The tag does two jobs and is stored twice for them: **prefixed to the title as `[tag] `** so Alex can tell concurrent runs apart at a glance in his inbox, and **stored as a field** so matching is exact. A prefix is for eyes; a field is for lookups.
+
+**`repo` and `branch` need no flags**, because the point is that they are automatic. `git rev-parse --show-toplevel` rather than `cwd` so the answer is the same whichever subdirectory the script ran from. Every git failure is swallowed to null: this is context, not payload, and no git, a detached HEAD or a plain folder must not stop a report reaching Alfred.
+
+**The tag is validated in `clip-capture` too, not only in the script.** `clip.mjs` is one caller of a public endpoint; anything arriving may have come from elsewhere. A malformed tag is dropped rather than stored, because a stored-but-unmatchable tag looks like a working one.
+
+**The `run_tag` filter has to start on the inbox row.** The tag lives in `inbox.source_metadata` and there is no foreign key from `clips` to `inbox` (063 explains why), so PostgREST cannot embed the join: matching inbox ids are looked up first, then the clips query is constrained to them. An empty match short-circuits to an empty result — asking for a tag that produced nothing must return nothing, not everything, and that is the sort of filter that fails open if you let it.
+
+**`readInboxState` now returns the whole `source_metadata` envelope** instead of one `Map` per field. It started with a `Map` for the note, gained one for `capture_mode`, and would have gained three more here. One map of objects plus a small `metaText()` reader does the same job and stops growing.
+
+**The description carries the disambiguation rule**, because the tool cannot enforce it: when Alex says the CLI responded, find the run tag of the prompt this conversation issued and pass it. With no tag and more than one unarchived CLI report, **do not guess and do not assume the most recent** — list them with titles, tags and times and ask. `repo` and `branch` help when two runs have similar titles.
+
+`clip-capture` v6, `mcp` v117, `verify_jwt` false on both, confirmed both ways. `deno check` delta zero.
 
 ### Test fixtures: removed 2026-09-23
 

@@ -47,10 +47,20 @@ At the end of EVERY task, before your closing message:
 
 1. Write the final report to `.clip/last-report.md` (gitignored; create the
    folder if needed).
-2. Push it: `node scripts/clip.mjs --title "<what this task was>" .clip/last-report.md`
+2. Push it, passing the prompt's run tag:
+   `node scripts/clip.mjs --tag <tag> --title "<what this task was>" .clip/last-report.md`
    The title should name the step or task — "Clipboard Step 7", "SAM plan
    review", "DJ weekly review fix" — because that is what Alex sees in his
    inbox.
+
+   **The run tag comes from the first line of the prompt**, `Run tag: <tag>`.
+   Alex often has two or three CLI sessions running at once, so the tag is how
+   the claude.ai thread that sent the prompt finds THIS report rather than
+   whichever run happened to finish last. Pass it exactly as given.
+
+   If a prompt carries **no** run tag, push without `--tag` — and say so in one
+   line at the end of the printed report, because an untagged report cannot be
+   matched to a conversation and Alex may need to identify it by hand.
 3. Print the report as usual. The clip is as well as the terminal output, never
    instead of it.
 

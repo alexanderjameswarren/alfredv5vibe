@@ -133,11 +133,10 @@ function requireText(tool: string, field: string, value: unknown): string {
 async function readInboxState(
   ctx: Context,
   inboxIds: string[],
-): Promise<{ live: Set<string>; notes: Map<string, string>; modes: Map<string, string> }> {
+): Promise<{ live: Set<string>; meta: Map<string, Record<string, unknown>> }> {
   const live = new Set<string>();
-  const notes = new Map<string, string>();
-  const modes = new Map<string, string>();
-  if (inboxIds.length === 0) return { live, notes, modes };
+  const meta = new Map<string, Record<string, unknown>>();
+  if (inboxIds.length === 0) return { live, meta };
 
   // `source_metadata` comes along for the ride rather than in a second query:
   // the screenshot note lives in it, and this row is already being read.
@@ -155,12 +154,23 @@ async function readInboxState(
     // `!== true` rather than `=== false`: archived is nullable, and a null there
     // means "never archived", same as false.
     if (r.archived !== true) live.add(r.id);
-    const note = r.source_metadata?.screenshot_note;
-    if (typeof note === "string" && note.length > 0) notes.set(r.id, note);
-    const mode = r.source_metadata?.capture_mode;
-    if (typeof mode === "string" && mode.length > 0) modes.set(r.id, mode);
+    // The whole envelope, kept as-is. Pulling named fields out one at a time was
+    // how this started, and every new field in source_metadata then needed a
+    // matching Map here — three of them by the second week.
+    meta.set(r.id, r.source_metadata ?? {});
   }
-  return { live, notes, modes };
+  return { live, meta };
+}
+
+/** A string field from a clip's inbox metadata, or null. */
+function metaText(
+  meta: Map<string, Record<string, unknown>>,
+  inboxId: string | null,
+  key: string,
+): string | null {
+  if (!inboxId) return null;
+  const value = meta.get(inboxId)?.[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 /** The screenshot note for one clip, or null. Used by get_clip_slices. */
@@ -205,9 +215,38 @@ export const getRecentClipsTool = defineTool({
 
     const includeArchived = args.include_archived === true;
 
+    const runTag = args.run_tag === undefined || args.run_tag === null
+      ? null
+      : String(args.run_tag).trim().toLowerCase();
+    if (runTag !== null && !/^[a-z0-9-]{1,40}$/.test(runTag)) {
+      throw new Error(
+        `${T}: run_tag must be lowercase letters, digits and hyphens, 1 to 40 characters ` +
+          `(got ${JSON.stringify(args.run_tag)}).`,
+      );
+    }
+
     // Over-fetch only when archived rows have to be filtered out here; when
     // they are included, `limit` is exact and the extra rows would be waste.
     const scan = includeArchived ? LIMIT : Math.min(ARCHIVE_SCAN_WINDOW, Math.max(LIMIT * 4, 20));
+
+    // ⚠️ THE TAG LIVES ON THE INBOX ROW, SO THE FILTER HAS TO START THERE. There
+    // is no foreign key from clips to inbox (063 explains why), so PostgREST
+    // cannot embed the join: find the matching inbox ids first, then constrain
+    // the clips query to them. An empty match short-circuits — asking for a tag
+    // that produced nothing should return nothing, not everything.
+    let inboxIdFilter: string[] | null = null;
+    if (runTag) {
+      const { data: tagged, error: tagError } = await ctx.db
+        .from("inbox")
+        .select("id")
+        .eq("source_metadata->>run_tag", runTag)
+        .limit(200);
+      if (tagError) throw new Error(`${T}: could not look up run_tag: ${tagError.message}`);
+      inboxIdFilter = ((tagged ?? []) as Array<{ id: string }>).map((r) => r.id);
+      if (inboxIdFilter.length === 0) {
+        return envelope([], { count: 0, limit_applied: LIMIT, truncated: false });
+      }
+    }
 
     let q = ctx.db
       .from("clips")
@@ -222,6 +261,7 @@ export const getRecentClipsTool = defineTool({
       .limit(scan);
 
     if (source) q = q.eq("source", source);
+    if (inboxIdFilter) q = q.in("inbox_id", inboxIdFilter);
     if (typeof sinceMinutes === "number") {
       q = q.gte("created_at", new Date(Date.now() - sinceMinutes * 60_000).toISOString());
     }
@@ -251,7 +291,7 @@ export const getRecentClipsTool = defineTool({
     // -- the column list above is hand-typed and nothing verifies it matches.
     let rows = (data ?? []) as unknown as Row[];
 
-    const { live, notes, modes } = await readInboxState(
+    const { live, meta } = await readInboxState(
       ctx,
       rows.map((r) => r.inbox_id).filter((v): v is string => typeof v === "string"),
     );
@@ -290,7 +330,12 @@ export const getRecentClipsTool = defineTool({
         // What the screenshot actually is, and when it is incomplete, WHY —
         // composed by the extension at capture time, where the facts are. Null
         // for clips saved before this was recorded.
-        screenshot_note: r.inbox_id ? notes.get(r.inbox_id) ?? null : null,
+        screenshot_note: metaText(meta, r.inbox_id, "screenshot_note"),
+        // Which CLI run produced this, and where it ran. Null on clipboard clips
+        // and on CLI clips pushed before run tags existed.
+        run_tag: metaText(meta, r.inbox_id, "run_tag"),
+        repo: metaText(meta, r.inbox_id, "repo"),
+        branch: metaText(meta, r.inbox_id, "branch"),
         // 'visible' = a photograph of the screen only, on purpose. 'full' = the
         // whole page.
         //
@@ -301,7 +346,7 @@ export const getRecentClipsTool = defineTool({
         // rather than left for each reader to interpret: a null reaching a model
         // is a null it has to guess about, and the obvious guess ("mode unknown,
         // so maybe partial") is the wrong one.
-        capture_mode: (r.inbox_id ? modes.get(r.inbox_id) : null) ?? "full",
+        capture_mode: metaText(meta, r.inbox_id, "capture_mode") ?? "full",
         page_text: textOverCap ? r.page_text.slice(0, RESPONSE_PAGE_TEXT_CHARS) : r.page_text,
         page_text_truncated_in_response: textOverCap,
         page_text_total_chars: r.page_text.length,

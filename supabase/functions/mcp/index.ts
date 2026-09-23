@@ -2290,7 +2290,9 @@ export function createMcpServer(token: string) {
       title: "Get Recent Clips",
       description:
         "Recently clipped web pages and pushed CLI reports, as TEXT. Call this whenever Alex says he clipped, saved or grabbed something, or that the CLI responded / replied / finished — it is the tool that answers 'I just clipped this'. " +
-        "Returns per clip: id, source, url, title, captured_at, inbox_id, slice_count, capture_mode, screenshot_note, page_width and page_height (the ORIGINAL page size in CSS pixels, before the extension scaled it to 1280 wide — so you never have to estimate how tall a page was), page_text and links, plus flags saying whether the stored text or screenshot is incomplete. NO IMAGES — get_clip_slices does that. " +
+        "⚠️ WHEN ALEX SAYS THE CLI RESPONDED, MATCH THE RUN TAG. He often has two or three CLI sessions going at once, so the newest report is frequently not the one he means. Every CLI prompt this conversation issued began with a line 'Run tag: <tag>' — find that tag in the conversation and pass it as run_tag, which matches exactly. " +
+        "If this conversation issued no tagged prompt, call with source 'cli' and look at what comes back: if there is exactly ONE unarchived report, use it; if there is more than one, DO NOT GUESS and do not assume the most recent — list them with their titles, run tags and times and ask which he means. Each report also carries repo and branch, which help when two runs have similar titles. " +
+        "Returns per clip: id, source, url, title, captured_at, inbox_id, slice_count, run_tag, repo, branch, capture_mode, screenshot_note, page_width and page_height (the ORIGINAL page size in CSS pixels, before the extension scaled it to 1280 wide — so you never have to estimate how tall a page was), page_text and links, plus flags saying whether the stored text or screenshot is incomplete. NO IMAGES — get_clip_slices does that. " +
         "Newest first, default 5 (hard cap 50). Archived clips are excluded unless include_archived is true, so once you have handled a clip and archived its inbox item it stops coming back. " +
         "TWO KINDS OF SCREENSHOT, and capture_mode says which. 'visible' is the everyday one: a single photograph of what was ON SCREEN when Alex clipped, roughly one viewport, DELIBERATELY not the whole page and NOT a failure — screenshot_truncated is false for it because nothing went wrong. Never describe a visible clip as the full page, and never describe it as truncated or incomplete; say it shows the visible screen. 'full' means the whole page was photographed, which Alex triggers separately. Clips made before the two modes existed report 'full', which is correct — the visible mode did not exist then. " + "screenshot_truncated true means a FULL capture did not get the whole page. DO NOT GUESS WHY — screenshot_note says, in words, what the screenshot is and what went wrong if anything. Quote it rather than inventing a cause. A common one is a page whose content scrolls inside its own box, which no amount of capturing fixes. THE TEXT IS COMPLETE IN EVERY MODE, so answer from page_text and describe the picture for what it is. " +
         "Two response-only caps, each with its own flag: page_text is cut at 60,000 characters (page_text_truncated_in_response, with page_text_total_chars giving the real length) and links at 200 entries (links_truncated_in_response, with link_count). These are about the size of THIS reply; the separate text_truncated flag means the capture itself was cut short. Tier 1. " +
@@ -2305,6 +2307,10 @@ export function createMcpServer(token: string) {
           .number()
           .optional()
           .describe("Only clips saved in the last N minutes. Measured on server arrival time, not the client's clock. Good for 'I just clipped two jobs' — try 30."),
+        run_tag: z
+          .string()
+          .optional()
+          .describe("Exact match on the run tag of a CLI report. Lowercase letters, digits and hyphens. Use the tag from the 'Run tag: <tag>' line of the prompt THIS conversation sent to the CLI — that is how you get the right report when several runs are in flight. Returns nothing if no report carries that tag, which means that run has not finished pushing yet."),
         include_archived: z
           .boolean()
           .optional()

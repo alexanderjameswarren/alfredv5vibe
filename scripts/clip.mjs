@@ -6,8 +6,8 @@
 // he can say "CLI responded" in any claude.ai conversation.
 //
 // Usage:
-//   node scripts/clip.mjs --title "Clipboard Step 7" .clip/last-report.md
-//   some-command | node scripts/clip.mjs --title "Test run"
+//   node scripts/clip.mjs --tag clip-7b-q4m2 --title "Clipboard Step 7b" .clip/last-report.md
+//   some-command | node scripts/clip.mjs --tag clip-7b-q4m2 --title "Test run"
 //
 // Exits 0 on success, non-zero on failure, and prints the new clip id and inbox
 // id so a caller can quote them.
@@ -27,6 +27,16 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 const MIN_SECRET_LENGTH = 32;
+
+/**
+ * Run tags: short, lowercase, letters, digits and hyphens, at most 40.
+ *
+ * ⚠️ WHY THIS EXISTS. Alex often has two or three CLI sessions going at once, and
+ * "CLI responded" in a claude.ai thread has to pick up the report from THIS
+ * conversation's prompt rather than whichever finished last. Every prompt carries
+ * a tag; the report carries it back.
+ */
+const TAG_PATTERN = /^[a-z0-9-]{1,40}$/;
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -125,6 +135,10 @@ Push a report into Alfred as a CLI clip.
   --title, -t   What to call it in the inbox. Optional but strongly preferred:
                 without it the first markdown heading, then the file name, then
                 "CLI report" are tried in that order.
+  --tag, -g     The run tag from the prompt ("Run tag: <tag>"). Lowercase
+                letters, digits and hyphens, at most 40. Prefixes the title as
+                "[tag] " and is stored so a thread can find its own report.
+                Omit it and the push still happens, untagged.
   --help, -h    This.
 
 Reads CLIPBOARD_URL and CLIPBOARD_SECRET from the environment, falling back to
@@ -132,12 +146,30 @@ the Windows user registry when a shell predates setx.
 `;
 
 function parseArgs(argv) {
-  const out = { title: null, file: null };
+  const out = { title: null, file: null, tag: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--title" || a === "-t") {
       out.title = argv[++i];
       if (out.title === undefined) fail("--title needs a value.");
+    } else if (a === "--tag" || a === "-g") {
+      const raw = argv[++i];
+      if (raw === undefined) fail("--tag needs a value.");
+      // Trimmed and lowercased, then checked strictly. A tag is only useful if it
+      // matches EXACTLY, so a malformed one is refused rather than mangled into
+      // something that would quietly match nothing.
+      const tag = String(raw).trim().toLowerCase();
+      if (!TAG_PATTERN.test(tag)) {
+        fail(
+          `--tag "${raw}" is not a usable run tag. Use lowercase letters, digits and ` +
+            `hyphens, 1 to 40 characters.
+
+` +
+            `A tag only works by exact match, so a mangled one would silently match ` +
+            `nothing — which is worse than no tag. Fix it, or drop --tag and push untagged.`,
+        );
+      }
+      out.tag = tag;
     } else if (a === "--help" || a === "-h") {
       console.log(USAGE);
       process.exit(0);
@@ -157,6 +189,36 @@ function readStdin() {
   } catch (e) {
     fail(`could not read standard input: ${e.message}`);
   }
+}
+
+/**
+ * Which checkout this ran in, and on what branch.
+ *
+ * Recorded with no flags because the point is to be automatic: with two or three
+ * CLI sessions open, "which one was this" is answered by the tag, and "where was
+ * it" by these. `--show-toplevel` rather than cwd so the answer is the same
+ * whichever subdirectory the script was run from.
+ *
+ * Every failure is swallowed to null. This is context, not payload: no git, a
+ * detached HEAD or a plain folder must not stop a report reaching Alfred.
+ */
+function gitContext() {
+  const run = (args) => {
+    try {
+      return execFileSync("git", args, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 10000,
+      }).trim() || null;
+    } catch {
+      return null;
+    }
+  };
+  const top = run(["rev-parse", "--show-toplevel"]);
+  return {
+    repo: top ? path.basename(top) : path.basename(process.cwd()),
+    branch: run(["rev-parse", "--abbrev-ref", "HEAD"]),
+  };
 }
 
 /** A title, from the flag, the first heading, the file name, or a last resort. */
@@ -185,7 +247,13 @@ async function main() {
     );
   }
 
-  const title = deriveTitle(args.title, text, args.file);
+  const { repo, branch } = gitContext();
+
+  // "[tag] Title" — visible in the Alfred inbox at a glance, so Alex can tell
+  // two concurrent runs apart without opening anything. The tag is also stored
+  // separately, because a prefix is for eyes and a field is for matching.
+  const baseTitle = deriveTitle(args.title, text, args.file);
+  const title = args.tag ? `[${args.tag}] ${baseTitle}` : baseTitle;
 
   // A cli clip skips /start entirely: there are no slices to upload, so there is
   // nothing for an upload link to be for. /finish mints the id itself.
@@ -199,6 +267,9 @@ async function main() {
         title,
         page_text: text,
         links: [],
+        run_tag: args.tag,
+        repo,
+        branch,
       }),
     });
   } catch (e) {
@@ -228,6 +299,8 @@ async function main() {
   const kb = (Buffer.byteLength(text, "utf8") / 1024).toFixed(1);
   console.log(`Pushed to Alfred as a CLI clip.`);
   console.log(`  title:    ${title}`);
+  console.log(`  run tag:  ${args.tag ?? "(none — this report cannot be matched to a prompt)"}`);
+  console.log(`  where:    ${repo}${branch ? ` on ${branch}` : ""}`);
   console.log(`  size:     ${kb} KB${json.text_truncated ? " (TRUNCATED at 1 MB)" : ""}`);
   console.log(`  clip id:  ${json.clip_id}`);
   console.log(`  inbox id: ${json.inbox_id}`);

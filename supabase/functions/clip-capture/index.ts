@@ -58,7 +58,8 @@ import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts"
 //   POST /clip-capture/finish  { clip_id, source, url, title, page_text, links,
 //                                slice_paths, page_width, page_height,
 //                                screenshot_truncated, screenshot_note,
-//                                capture_mode, captured_at }
+//                                capture_mode, run_tag, repo, branch,
+//                                captured_at }
 //     -> { clip_id, inbox_id, ... }
 //
 //     Verifies every listed slice is really in storage, then writes the clip
@@ -388,6 +389,27 @@ async function handleFinish(
   const captureMode = body.capture_mode === "full" || body.capture_mode === "visible"
     ? body.capture_mode
     : null;
+
+  // --- which CLI run this came from ---------------------------------------
+  //
+  // Alex often has two or three CLI sessions going at once. "CLI responded" in a
+  // claude.ai thread has to find the report from THAT conversation's prompt, not
+  // whichever run finished most recently, so every prompt carries a run tag and
+  // the report carries it back.
+  //
+  // ⚠️ VALIDATED HERE TOO, not just in clip.mjs. The script is one caller of a
+  // public endpoint; anything reaching this function may have come from
+  // somewhere else, and a tag is only useful if it matches exactly. A malformed
+  // one is dropped rather than stored, because a stored-but-unmatchable tag
+  // looks like a working one.
+  const runTag = typeof body.run_tag === "string" && /^[a-z0-9-]{1,40}$/.test(body.run_tag.trim())
+    ? body.run_tag.trim()
+    : null;
+
+  // Where it ran. Context rather than identity, so these are trimmed and capped
+  // and never validated beyond that — a branch name can hold almost anything.
+  const repo = typeof body.repo === "string" ? body.repo.trim().slice(0, 120) || null : null;
+  const branch = typeof body.branch === "string" ? body.branch.trim().slice(0, 200) || null : null;
   const pageWidth = asOptionalInt(body.page_width);
   const pageHeight = asOptionalInt(body.page_height);
   const capturedAt = asTimestamp(body.captured_at) ?? new Date().toISOString();
@@ -444,6 +466,9 @@ async function handleFinish(
       slice_count: slicePaths.length,
       ...(screenshotNote ? { screenshot_note: screenshotNote } : {}),
       ...(captureMode ? { capture_mode: captureMode } : {}),
+      ...(runTag ? { run_tag: runTag } : {}),
+      ...(repo ? { repo } : {}),
+      ...(branch ? { branch } : {}),
     },
     ai_status: "not_started",
     suggest_item: false,
@@ -496,6 +521,9 @@ async function handleFinish(
     links_dropped: linksDropped,
     screenshot_note: screenshotNote,
     capture_mode: captureMode,
+    run_tag: runTag,
+    repo,
+    branch,
     captured_at: capturedAt,
     ...(warning ? { warning } : {}),
   });
