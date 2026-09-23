@@ -57,7 +57,8 @@ import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts"
 //
 //   POST /clip-capture/finish  { clip_id, source, url, title, page_text, links,
 //                                slice_paths, page_width, page_height,
-//                                screenshot_truncated, captured_at }
+//                                screenshot_truncated, screenshot_note,
+//                                captured_at }
 //     -> { clip_id, inbox_id, ... }
 //
 //     Verifies every listed slice is really in storage, then writes the clip
@@ -368,6 +369,14 @@ async function handleFinish(
   const title = titleGiven ?? url ?? "(untitled)";
   const { links, dropped: linksDropped } = normaliseLinks(body.links);
   const screenshotTruncated = body.screenshot_truncated === true;
+  // One sentence from the extension saying what the screenshot actually is, and
+  // when it is incomplete, WHY. Stored on the inbox row rather than on `clips`
+  // because it needs no schema change and the inbox row is what a conversation
+  // reaches first. Capped: it is a sentence or three, and an unbounded string
+  // from a client has no business going into a jsonb column unchecked.
+  const screenshotNote = typeof body.screenshot_note === "string"
+    ? body.screenshot_note.trim().slice(0, 1000)
+    : null;
   const pageWidth = asOptionalInt(body.page_width);
   const pageHeight = asOptionalInt(body.page_height);
   const capturedAt = asTimestamp(body.captured_at) ?? new Date().toISOString();
@@ -418,7 +427,12 @@ async function handleFinish(
     triaged_at: null,
     captured_text: capturedTextLine,
     source_type: source,
-    source_metadata: { clip_id: clipId, url, slice_count: slicePaths.length },
+    source_metadata: {
+      clip_id: clipId,
+      url,
+      slice_count: slicePaths.length,
+      ...(screenshotNote ? { screenshot_note: screenshotNote } : {}),
+    },
     ai_status: "not_started",
     suggest_item: false,
     suggest_intent: false,
@@ -468,6 +482,7 @@ async function handleFinish(
     screenshot_truncated: screenshotTruncated,
     links_stored: links.length,
     links_dropped: linksDropped,
+    screenshot_note: screenshotNote,
     captured_at: capturedAt,
     ...(warning ? { warning } : {}),
   });

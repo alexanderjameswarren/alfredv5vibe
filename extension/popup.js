@@ -55,8 +55,8 @@ function rows(pairs) {
       (lastResult.screenshotError
         ? `<p class="msg">The text and links saved, but the screenshot failed:\n\n${esc(lastResult.screenshotError)}</p>`
         : "") +
-      (lastResult.screenshotTruncated && lastResult.cutShortWhy
-        ? `<p class="msg">Screenshot is incomplete: ${esc(lastResult.cutShortWhy)}.</p>`
+      (lastResult.screenshotNote
+        ? `<p class="msg">${esc(lastResult.screenshotNote)}</p>`
         : "") +
       rows([
         ["Page", lastResult.title],

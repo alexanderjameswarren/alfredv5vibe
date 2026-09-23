@@ -12,7 +12,7 @@ Spec: docs/technical-spec-clipboard.md
 - [x] Step 4: MCP tools: `get_recent_clips`, `get_clip_slices`, `archive_inbox_item`, and the `get_inbox` `source_type` filter. Deploy, verify `verify_jwt`. Tested in a fresh thread. — **written and deployed 2026-09-23** (`mcp` v111, 75 registered tools, `deno check` delta zero). **Verified in a fresh thread:** all ten checks passed, including the clean "no screenshot" error on a CLI clip and Claude understanding from the descriptions alone that a clip may hold several items.
 - [x] Step 5: Frontend minimum: source icons for `clipboard` and `cli`; realtime handler drops archived rows. — **done 2026-09-23.** Both icons correct, an archived item vanished live and returned live on un-archive, ordinary capture unaffected, no console errors. (`npm start` first failed on "Environment key jest/globals is unknown"; `npm ci` fixed it — almost certainly node_modules drift from the `sharp` install/uninstall in Step 2. Worth remembering: `--no-save` keeps the manifests clean but not the tree.)
 - [x] Step 5b: The inbox trash can archives instead of deleting, and records why. `inbox.archive_reason` ('discarded' | 'processed'); `archive_inbox_item` writes 'processed' and clears on un-archive; `get_recent_clips` treats a clip whose inbox row is MISSING as archived. Spec decision 14. — **066 run (CONFORMANT, 44 tables, both constraints present, all 10 existing rows null). App checks passed: "Capture discarded." with working undo, labels read "Discard", a discarded capture is archived with reason 'discarded' rather than deleted, save-through-the-form still commits. `mcp` deployed v112.** **Verified in a fresh thread:** archiving set `archive_reason` 'processed', un-archiving cleared all three fields.
-- [ ] Step 6: Chrome extension in `extension/`: options page, capture, slicing, upload, finish, badge. Alex loads it unpacked and clips three real pages (a long job posting, a short page, and a `chrome://` page to check the clean failure). — **first version 2026-09-23: install, options, saving, pairing, text read-back and the `chrome://` refusal all verified.** Three faults found in real use and fixed in Step 6a below: screenshots wrapping to the top, double-click duplicates, and `get_recent_clips` missing `page_width`/`page_height`. Geometry tests now 28/28. `mcp` v113. Awaiting Alex's retest.
+- [ ] Step 6: Chrome extension in `extension/`: options page, capture, slicing, upload, finish, badge. Alex loads it unpacked and clips three real pages (a long job posting, a short page, and a `chrome://` page to check the clean failure). — **first version 2026-09-23: install, options, saving, pairing, text read-back and the `chrome://` refusal all verified.** Three faults found in real use and fixed in Step 6a below: screenshots wrapping to the top, double-click duplicates, and `get_recent_clips` missing `page_width`/`page_height`. Retest: the wrap is FIXED (Yahoo re-clipped as 7 slices, final slice showing the true page bottom). Two pages that scroll inside a container were correctly flagged incomplete — accepted as limitations, see spec §2.1. Step 6b then fixed the truncation REASON, which was being mis-reported by the server. Geometry tests 34/34. `clip-capture` v4, `mcp` v114. Awaiting Alex's final retest.
 - [ ] Step 7: `scripts/clip.mjs` and the `CLAUDE.md` rule for pushing CLI reports.
 - [ ] Step 8: Alex adds the project instruction in claude.ai, rotates the notification dispatch secret, and runs the end-to-end test in a fresh thread.
 
@@ -221,6 +221,29 @@ Two identical rows 27 seconds apart. A clip takes several seconds and an impatie
 #### 3. `get_recent_clips` now returns `page_width` and `page_height`
 
 Claude had been estimating page height from the slice count — a guess built on a guess. Both columns were already stored; they were simply missing from the select list and the payload. `mcp` v113. `deno check` delta zero.
+
+### Step 6b — honest truncation reasons, 2026-09-23
+
+Retest outcome: **the wrap is fixed.** The Yahoo article re-clipped at 1905 x 7829 as 7 slices, `screenshot_truncated false`, final slice showing the true bottom. Per-tile capture worked. Two other pages came back incomplete and were **correctly flagged** — which is the coherence check doing its job.
+
+**Accepted limitations, not being chased** (also in spec §2.1): pages whose content scrolls inside a container capture only partially — 80,000 Hours (1905 x 6047, 2 usable slices of 5) and a NYT article (1905 x 6562, 1 of 6). Text capture is complete on every page tried, and that is what the clipboard is for.
+
+#### The wrong reason — and it was not the extension
+
+The 80k clip reported the page was "taller than the 24-slice cap". It is 6047px and plans **5** slices. `planCapture(1905, 6047).truncated` is **false**, so the extension's own message could not have said that — it said the join mismatch. The claim came from the server, in two places:
+
+1. **`get_clip_slices` asserted the cap unconditionally.** Any clip with `screenshot_truncated` got `"the page was taller than the 24-slice cap"` with no check whatsoever. Wrong three times out of three: 6047, 6562 and 7829px pages plan 5, 6 and 7 slices.
+2. **The `get_recent_clips` description offered the cap as the first of two possible causes**, so a conversation naturally picked it.
+
+The real reason existed only in the extension's popup and reached nothing downstream. Hence both fixes being one change.
+
+**`describeScreenshot()`** in `extension/lib/plan.js` now composes the reason ONCE, from facts, where the facts are. `capHit` comes from `planCapture().truncated` and nothing else may assert it. The service worker records facts (`firstBadTile`, `badJoin`, `capHit`, `slicesPlanned`) rather than assembling prose at each site. Six tests pin it, including one asserting the exact pages that were mis-blamed produce no cap claim.
+
+A test bug worth noting: the first version asserted `!/cap/i`, which fails on the word "capture" that the message legitimately contains. The assertion now targets the claim (`/slice cap/i`, `/taller than/i`), not the substring. The code was right; the test was too broad.
+
+**`screenshot_note`** travels: extension → `/finish` → `inbox.source_metadata.screenshot_note` (no schema change, capped at 1000 chars) → returned by `get_recent_clips`, and used by `get_clip_slices` in place of the cause it used to invent. Where no note exists (clips saved before this), both say only what is certain — the screenshot is incomplete, the reason was not recorded, the text is unaffected. **Never guess a cause.**
+
+`clip-capture` v4, `mcp` v114. `deno check` delta zero. Geometry tests 28 → 34.
 
 ### Test fixtures: removed 2026-09-23
 

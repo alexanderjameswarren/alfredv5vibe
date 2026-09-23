@@ -11,6 +11,7 @@ import {
   planTiles,
   cssClipForTile,
   firstIncoherentTile,
+  describeScreenshot,
   sliceName,
   TARGET_WIDTH,
   TILE_HEIGHT,
@@ -272,5 +273,67 @@ test("planCapture and planTiles agree on the cap", () => {
   assert.equal(t.length, MAX_TILES);
   assert.equal(p.truncated, true);
 });
+
+// --- describeScreenshot: the cap must never be blamed wrongly ---------------
+
+const REAL = {
+  pageWidth: 1905, pageHeight: 6047, slicesPlanned: 5, slicesKept: 2,
+  firstBadTile: 2, badJoin: 47.2, joins: [0.5, 0.6, 47.2], capHit: false, failure: null,
+};
+
+test("a join failure never mentions the 24-slice cap", () => {
+  const note = describeScreenshot(REAL);
+  // /cap/i would match "capture", which the message legitimately contains.
+  // The thing that must never appear is the CLAIM about the cap.
+  assert.ok(!/slice cap/i.test(note), "must not blame the cap: " + note);
+  assert.ok(!/24/.test(note), "must not mention 24 slices: " + note);
+  assert.ok(!/taller than/i.test(note), "must not claim the page was too tall: " + note);
+  assert.match(note, /slice 3 did not continue from slice 2/i);
+  assert.match(note, /47\.2/);
+  assert.match(note, /2 of 5/);
+  assert.match(note, /THE TEXT IS COMPLETE/);
+});
+
+test("the real pages that were mis-blamed are described without the cap", () => {
+  // 6047 and 6562 px plan 5 and 6 slices. Both were told they had overrun a
+  // 24-slice cap. Neither came close.
+  for (const [h, planned, kept, bad] of [[6047, 5, 2, 2], [6562, 6, 1, 1]]) {
+    const note = describeScreenshot({
+      ...REAL, pageHeight: h, slicesPlanned: planned, slicesKept: kept, firstBadTile: bad,
+    });
+    assert.ok(!/slice cap/i.test(note), h + "px must not blame the cap");
+    assert.ok(!/taller than/i.test(note), h + "px must not claim it was too tall");
+  }
+});
+
+test("the cap IS named when the cap was really hit", () => {
+  const note = describeScreenshot({
+    ...REAL, firstBadTile: -1, badJoin: null, pageHeight: 40000, capHit: true,
+  });
+  assert.match(note, /24-slice cap/);
+  assert.match(note, /40000px tall/);
+});
+
+test("both causes at once are both reported", () => {
+  const note = describeScreenshot({ ...REAL, pageHeight: 40000, capHit: true });
+  assert.match(note, /did not continue/);
+  assert.match(note, /24-slice cap/);
+});
+
+test("a complete screenshot says so and gives the worst join", () => {
+  const note = describeScreenshot({
+    ...REAL, slicesKept: 5, firstBadTile: -1, badJoin: null, joins: [0.4, 0.61, 0.5, 0.48],
+  });
+  assert.ok(note.startsWith("Complete: 5 slices"), note);
+  assert.match(note, /worst 0\.61/);
+  assert.ok(!/INCOMPLETE/.test(note));
+});
+
+test("no screenshot at all points at the text", () => {
+  const note = describeScreenshot({ ...REAL, failure: "Chrome returned an empty screenshot." });
+  assert.ok(note.startsWith("NO SCREENSHOT"), note);
+  assert.match(note, /answer from page_text/);
+});
+
 
 console.log(`\n${pass} passed${process.exitCode ? ", SOME FAILED" : ""}\n`);

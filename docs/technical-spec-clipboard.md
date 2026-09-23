@@ -27,6 +27,15 @@ The clipboard is temporary working space, not a permanent record.
 13. **Duplicates are linked, not removed.** A new `duplicate_of` column points each copy at the main row.
 14. **The inbox trash can archives instead of deleting** (added 2026-09-23, Step 5b). This reverses the hard-delete rule for the trash can as well as for Claude, going further than decision 9. Reason: a clip is two rows, and the inbox row is only a pointer at the `clips` row that holds the text and slices. Deleting the pointer left the clip behind, and because `get_recent_clips` judges "already handled" by reading the paired inbox row, a clip whose inbox row had been deleted read as live and returned to every new conversation for ever — binning a clip was the one action that could not make it go away. The row now stays, with `archived = true`, `triaged_at = now()` and a new `archive_reason` column saying which kind of archiving it was: `discarded` (Alex binned it) or `processed` (`archive_inbox_item` tidied it away). Both are reversible. `get_recent_clips` also now treats a clip whose inbox row is MISSING as archived rather than live, which covers rows deleted before this change. **One hard delete remains**: triage through the app's process/save flow (`handleInboxSave`) still deletes the row on success. Phase 3's one-tap process button is where that becomes an archive with `processed`.
 
+### 2.1 Known limitations, accepted (2026-09-23, after Step 6)
+
+Both were found clipping real pages. **Text capture is complete on every page tried, and that is what the clipboard is for** — so neither is being chased. Recorded so nobody rediscovers them as bugs.
+
+1. **Pages whose content scrolls inside a container capture only partially.** Where the page body does not scroll with the window — an inner pane with its own scrollbar — each tile capture photographs the same region, so the slices stop advancing. Observed on the 80,000 Hours job board (1905 × 6047: 2 usable slices of 5) and a New York Times article (1905 × 6562: 1 of 6). The coherence check catches it, discards the untrustworthy slices, and marks the clip incomplete with the reason, so a clip never claims a screenshot it does not have. Full-page capture for these pages is **out of scope**.
+2. **Some pages stop early for reasons not established.** The NYT article above stopped after one slice. It may be the same container-scrolling cause or something else; it was not investigated. Same handling: detected, truncated honestly, text unaffected.
+
+The consequence for Phase 2: a clipped job board may have a partial screenshot but complete text and links, which is enough to evaluate postings and point at the others on the page. Claude is told to read `screenshot_note` rather than guess why a screenshot is short.
+
 ## 3. Data model
 
 ### 3.1 New table: `public.clips`
@@ -65,7 +74,7 @@ One inbox row per clip, created by the capture function after the clip row:
 
 - `source_type`: `clipboard` or `cli`
 - `captured_text`: `Clip: {title} — {url}` (for CLI: `CLI report: {title}`)
-- `source_metadata`: `{ "clip_id": ..., "url": ..., "slice_count": ... }`
+- `source_metadata`: `{ "clip_id": ..., "url": ..., "slice_count": ..., "screenshot_note": ... }`. `screenshot_note` is one to three sentences composed by the extension at capture time saying what the screenshot is and, when it is incomplete, why — never a guess. Stored here rather than on `clips` because it needs no schema change. Returned by `get_recent_clips`; used by `get_clip_slices` in place of the cause it used to assume.
 - `ai_status`: `not_started`
 
 The clip row's `inbox_id` is then set to the new inbox id.

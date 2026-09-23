@@ -32,6 +32,7 @@ import {
   cssClipForTile,
   sliceName,
   firstIncoherentTile,
+  describeScreenshot,
   JPEG_QUALITY_PERCENT,
   TILE_OVERLAP,
   OVERLAP_MAX_DIFF,
@@ -144,8 +145,11 @@ async function clipActiveTab() {
     let screenshotError = null;
     /** Set when the tiles are sound but do not reach the bottom of the page. */
     let cutShort = false;
-    let cutShortWhy = null;
     let overlapDiffs = null;
+    let slicesPlanned = 0;
+    let firstBadTile = -1;
+    let badJoin = null;
+    let capHit = false;
 
     try {
       const shot = await captureTiles(
@@ -163,14 +167,13 @@ async function clipActiveTab() {
       contentSize = shot.contentSize;
       slices = shot.tiles;
 
-      // The page is simply taller than 24 slices can hold. Known before any
-      // checking; honest, not a fault.
-      if (shot.plan.truncated) {
-        cutShort = true;
-        cutShortWhy =
-          `the page is ${shot.contentSize.height}px tall, more than 24 slices cover, ` +
-          `so the bottom was not captured`;
-      }
+      slicesPlanned = shot.tiles.length;
+      // The page is simply taller than MAX_TILES can hold. Known before any
+      // checking; honest, not a fault. Recorded as a FACT, not as prose — the
+      // wording is composed once, in describeScreenshot, so nothing can assert
+      // the cap was hit when it was not. That is exactly what went wrong before.
+      capHit = shot.plan.truncated === true;
+      if (capHit) cutShort = true;
 
       // --- and now the part that stops a clip lying about itself -------------
       //
@@ -194,15 +197,12 @@ async function clipActiveTab() {
       if (bad !== -1) {
         // Tiles 0..bad-1 follow on from each other and are trustworthy. From
         // `bad` on, the sequence stopped being a faithful picture of the page.
-        const dropped = slices.length - bad;
+        firstBadTile = bad;
+        badJoin = overlapDiffs[bad - 1];
         slices = slices.slice(0, bad);
         cutShort = true;
-        cutShortWhy =
-          `slice ${bad + 1} did not follow on from slice ${bad} (overlap differed by ` +
-          `${overlapDiffs[bad - 1]}, anything over ${OVERLAP_MAX_DIFF} means the picture ` +
-          `jumped), so ${dropped} slice${dropped === 1 ? "" : "s"} were discarded rather ` +
-          `than saved as if they showed the page`;
-        console.warn("[Alfred Clipboard]", cutShortWhy, { overlapDiffs });
+        console.warn("[Alfred Clipboard] capture stopped following the page at slice",
+          bad + 1, { overlapDiffs });
       }
 
       // Renumber after any drop, so the paths stay slice-01..slice-NN with no
@@ -220,6 +220,23 @@ async function clipActiveTab() {
       slices = [];
       console.warn("[Alfred Clipboard] screenshot failed, saving text only:", e.message);
     }
+
+    // One sentence saying what this screenshot actually is, composed from the
+    // facts above rather than assembled ad hoc at each place that needs it. It
+    // travels to the server and ends up on the inbox row, so a conversation can
+    // say WHY a screenshot is incomplete instead of guessing — which is how a
+    // 6047px page came to be told it had overrun a 24-slice cap.
+    const screenshotNote = describeScreenshot({
+      pageWidth: contentSize?.width ?? 0,
+      pageHeight: contentSize?.height ?? 0,
+      slicesPlanned,
+      slicesKept: slices.length,
+      firstBadTile,
+      badJoin,
+      joins: overlapDiffs,
+      capHit,
+      failure: screenshotError,
+    });
 
     // --- /start. Called even with zero slices, because a clipboard clip needs a
     // server-minted clip_id and /start is where ids come from. It writes nothing.
@@ -255,6 +272,7 @@ async function clipActiveTab() {
       // stopped being coherent and the rest were thrown away. Both mean the same
       // thing to whoever reads the clip — you are not looking at the whole page.
       screenshot_truncated: cutShort,
+      screenshot_note: screenshotNote,
       captured_at: capturedAt,
     });
 
@@ -276,7 +294,7 @@ async function clipActiveTab() {
       linkCount: finished.links_stored,
       textTruncated: finished.text_truncated === true,
       screenshotTruncated: finished.screenshot_truncated === true,
-      cutShortWhy,
+      screenshotNote,
       screenshotError,
       pageSize: contentSize,
       // Kept so the next odd screenshot diagnoses itself from the popup instead

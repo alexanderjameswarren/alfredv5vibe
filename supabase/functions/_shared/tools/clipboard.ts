@@ -130,20 +130,49 @@ function requireText(tool: string, field: string, value: unknown): string {
  * vanish like this. Rows deleted BEFORE that change still can, and this is what
  * covers them.
  */
-async function liveInboxIds(ctx: Context, inboxIds: string[]): Promise<Set<string>> {
-  if (inboxIds.length === 0) return new Set();
+async function readInboxState(
+  ctx: Context,
+  inboxIds: string[],
+): Promise<{ live: Set<string>; notes: Map<string, string> }> {
+  const live = new Set<string>();
+  const notes = new Map<string, string>();
+  if (inboxIds.length === 0) return { live, notes };
+
+  // `source_metadata` comes along for the ride rather than in a second query:
+  // the screenshot note lives in it, and this row is already being read.
   const { data, error } = await ctx.db
     .from("inbox")
-    .select("id, archived")
+    .select("id, archived, source_metadata")
     .in("id", inboxIds);
   if (error) throw new Error(`get_recent_clips: could not read inbox state: ${error.message}`);
-  return new Set(
-    ((data ?? []) as Array<{ id: string; archived: boolean | null }>)
-      // `!== true` rather than `=== false`: archived is nullable, and a null
-      // there means "never archived", same as false.
-      .filter((r) => r.archived !== true)
-      .map((r) => r.id),
-  );
+
+  for (const r of (data ?? []) as Array<{
+    id: string;
+    archived: boolean | null;
+    source_metadata: Record<string, unknown> | null;
+  }>) {
+    // `!== true` rather than `=== false`: archived is nullable, and a null there
+    // means "never archived", same as false.
+    if (r.archived !== true) live.add(r.id);
+    const note = r.source_metadata?.screenshot_note;
+    if (typeof note === "string" && note.length > 0) notes.set(r.id, note);
+  }
+  return { live, notes };
+}
+
+/** The screenshot note for one clip, or null. Used by get_clip_slices. */
+async function screenshotNoteFor(ctx: Context, inboxId: string | null): Promise<string | null> {
+  if (!inboxId) return null;
+  const { data, error } = await ctx.db
+    .from("inbox")
+    .select("source_metadata")
+    .eq("id", inboxId)
+    .maybeSingle();
+  // A missing note is not worth failing a slice read over — the images are the
+  // point and the caller still gets told the screenshot is incomplete.
+  if (error || !data) return null;
+  const note = (data.source_metadata as Record<string, unknown> | null)?.screenshot_note;
+  return typeof note === "string" && note.length > 0 ? note : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,11 +248,12 @@ export const getRecentClipsTool = defineTool({
     // -- the column list above is hand-typed and nothing verifies it matches.
     let rows = (data ?? []) as unknown as Row[];
 
+    const { live, notes } = await readInboxState(
+      ctx,
+      rows.map((r) => r.inbox_id).filter((v): v is string => typeof v === "string"),
+    );
+
     if (!includeArchived) {
-      const live = await liveInboxIds(
-        ctx,
-        rows.map((r) => r.inbox_id).filter((v): v is string => typeof v === "string"),
-      );
       // A null inbox_id stays: it means the pairing update failed at capture
       // time (see clip-capture), so an inbox row DOES exist and is untriaged —
       // we just do not know which one. Treating that as handled would hide a
@@ -254,6 +284,10 @@ export const getRecentClipsTool = defineTool({
         // from the slice count, which is a guess built on a guess.
         page_width: r.page_width,
         page_height: r.page_height,
+        // What the screenshot actually is, and when it is incomplete, WHY —
+        // composed by the extension at capture time, where the facts are. Null
+        // for clips saved before this was recorded.
+        screenshot_note: r.inbox_id ? notes.get(r.inbox_id) ?? null : null,
         page_text: textOverCap ? r.page_text.slice(0, RESPONSE_PAGE_TEXT_CHARS) : r.page_text,
         page_text_truncated_in_response: textOverCap,
         page_text_total_chars: r.page_text.length,
@@ -284,7 +318,7 @@ export const getClipSlicesTool = defineTool({
 
     const { data: clip, error } = await ctx.db
       .from("clips")
-      .select("id, title, url, source, captured_at, slice_paths, slice_count, screenshot_truncated")
+      .select("id, title, url, source, captured_at, slice_paths, slice_count, screenshot_truncated, inbox_id")
       .eq("id", clipId)
       .maybeSingle();
 
@@ -336,9 +370,23 @@ export const getClipSlicesTool = defineTool({
       );
     }
     if (clip.screenshot_truncated) {
+      // ⚠️ THIS USED TO ASSERT THE 24-SLICE CAP, UNCONDITIONALLY, AND IT WAS
+      // WRONG THREE TIMES OUT OF THREE. Pages of 6047, 6562 and 7829 CSS pixels
+      // plan five to seven slices — nowhere near 24 — and every one of them was
+      // told it had overrun a cap it never approached. The real reason (slices
+      // that stopped following the page) was known by the extension and reached
+      // nothing downstream.
+      //
+      // The reason now travels with the clip, on the paired inbox row. If it is
+      // there, say it; if it is not, say only what is certain, which is that the
+      // screenshot is incomplete. NEVER GUESS A CAUSE HERE.
+      const stored = await screenshotNoteFor(ctx, clip.inbox_id as string | null);
       notes.push(
-        `⚠️ This screenshot is INCOMPLETE: the page was taller than the 24-slice ` +
-          `cap, so its bottom was never captured.`,
+        stored
+          ? `⚠️ SCREENSHOT INCOMPLETE. ${stored}`
+          : `⚠️ This screenshot is INCOMPLETE — it does not show the whole page. ` +
+            `The reason was not recorded for this clip (it predates the note being ` +
+            `stored). The page TEXT is unaffected: read page_text from get_recent_clips.`,
       );
     }
 

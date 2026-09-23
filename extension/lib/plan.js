@@ -168,3 +168,86 @@ export function firstIncoherentTile(diffs, threshold = OVERLAP_MAX_DIFF) {
 export function sliceName(index1Based) {
   return `slice-${String(index1Based).padStart(2, "0")}.jpg`;
 }
+
+/**
+ * One sentence or three saying what the screenshot actually is, in words meant
+ * for whoever reads the clip later — Alex in the popup, Claude in a conversation.
+ *
+ * ---------------------------------------------------------------------------
+ * 🛑 NEVER NAME THE 24-SLICE CAP UNLESS THE CAP WAS ACTUALLY HIT
+ * ---------------------------------------------------------------------------
+ *
+ * This function exists because that rule was broken. `get_clip_slices` used to
+ * print "the page was taller than the 24-slice cap" for ANY incomplete
+ * screenshot, unconditionally. Three real pages of 6047, 6562 and 7829 CSS
+ * pixels — all of which plan five to seven slices, nowhere near 24 — were
+ * therefore told they had overrun a cap they never came close to. The honest
+ * reason (some slices did not follow on from each other) existed only in the
+ * extension's own popup and reached nothing downstream.
+ *
+ * So the reason is composed HERE, once, where all the facts are, and travels
+ * with the clip. `capHit` comes from `planCapture().truncated` and nothing else
+ * may assert it.
+ *
+ * @param {object} s
+ * @param {number} s.pageWidth, s.pageHeight  original CSS pixels
+ * @param {number} s.slicesPlanned  how many tiles the page needed
+ * @param {number} s.slicesKept     how many survived the coherence check
+ * @param {number} s.firstBadTile   index of the first untrustworthy tile, or -1
+ * @param {number|null} s.badJoin   the overlap difference that failed
+ * @param {(number|null)[]|null} s.joins  every overlap measurement
+ * @param {boolean} s.capHit        planCapture said the page exceeds MAX_TILES
+ * @param {string|null} s.failure   set when there is no screenshot at all
+ */
+export function describeScreenshot(s) {
+  const size = `${s.pageWidth}x${s.pageHeight}px`;
+
+  if (s.failure) {
+    return (
+      `NO SCREENSHOT: ${s.failure} ` +
+      `The page text and links were saved in full, so answer from page_text.`
+    );
+  }
+
+  const parts = [];
+
+  if (s.firstBadTile > 0) {
+    const dropped = s.slicesPlanned - s.slicesKept;
+    parts.push(
+      `INCOMPLETE — the picture stopped following the page. Slice ${s.firstBadTile + 1} ` +
+        `did not continue from slice ${s.firstBadTile}: the ${TILE_OVERLAP} rows they ` +
+        `should share differed by ${s.badJoin}, where anything under ${OVERLAP_MAX_DIFF} ` +
+        `means the same pixels. ${dropped} slice${dropped === 1 ? "" : "s"} ` +
+        `${dropped === 1 ? "was" : "were"} discarded rather than saved as if ` +
+        `${dropped === 1 ? "it showed" : "they showed"} the page, so you have ` +
+        `${s.slicesKept} of ${s.slicesPlanned} for a ${size} page.`,
+    );
+    parts.push(
+      `The usual cause is a page whose content scrolls inside its own box rather ` +
+        `than with the window, so every capture photographs the same region. Known ` +
+        `limitation, not being chased.`,
+    );
+  }
+
+  // Only ever mentioned when planCapture actually said so.
+  if (s.capHit) {
+    parts.push(
+      `INCOMPLETE — the page is ${s.pageHeight}px tall, more than the ${MAX_TILES}-slice ` +
+        `cap covers, so the bottom of it was never captured.`,
+    );
+  }
+
+  if (parts.length === 0) {
+    const worst = Array.isArray(s.joins)
+      ? s.joins.filter((j) => typeof j === "number").reduce((a, b) => Math.max(a, b), 0)
+      : null;
+    return (
+      `Complete: ${s.slicesKept} slice${s.slicesKept === 1 ? "" : "s"} covering the ` +
+      `whole ${size} page` +
+      (worst === null ? "." : `, every join matching (worst ${worst}).`)
+    );
+  }
+
+  parts.push(`THE TEXT IS COMPLETE — page_text holds the whole page regardless.`);
+  return parts.join(" ");
+}
