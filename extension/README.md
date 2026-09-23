@@ -72,25 +72,36 @@ It is deliberately *not* in any file in the project, and it deliberately does
 Open a normal web page — a job posting is a good test — and click the toolbar
 icon.
 
-- A grey `...` appears while it works. A few seconds is normal; a long page takes
-  longer.
-- Chrome will flash a bar saying **“Alfred's Clipboard is debugging this
-  browser”**. That is expected and it goes away on its own. It is the only way
-  Chrome lets anything photograph a whole page rather than just the visible part.
-- A green **✓** means it saved.
+- A grey `...` appears while it works. A couple of seconds is normal.
+- A green **✓** means it saved. **No banner appears** — the ordinary click never
+  uses Chrome's debugger.
 - A red **!** means it failed. **Click the icon** to read what went wrong.
+
+Now try the other mode: **right-click the icon → Clip full page**. This time
+Chrome flashes a bar saying **“Alfred's Clipboard is debugging this browser”**,
+and the badge counts slices (`1/7`, `2/7`…). The bar is expected and goes away on
+its own — it is the only way Chrome lets anything photograph a whole page.
 
 ---
 
 ## Using it
 
-| | |
-|---|---|
-| **Click the toolbar icon** | Clip this page |
-| **Ctrl+Shift+Y** (Mac: ⌘+Shift+Y) | Clip this page |
-| **Click the icon after a red !** | Read the error |
+There are **two modes**, and the difference is whether Chrome puts a bar across
+the top of your window.
 
-To change the shortcut: `chrome://extensions/shortcuts`.
+| | | |
+|---|---|---|
+| **Click the toolbar icon** | **Ctrl+Shift+Y** | Clip the **visible screen**. Silent — no banner. This is the everyday one. |
+| **Right-click the icon → Clip full page** | **Ctrl+Shift+U** | Clip the **whole page**, top to bottom. Chrome shows its debugging bar while it works. |
+| **Click the icon after a red !** | | Read what went wrong |
+
+Both modes save **all** of the page's text and **every** link. The only
+difference is how much of it is photographed. Since Claude reads the text first
+and the picture only when layout matters, the silent mode is right almost all of
+the time — reach for **Clip full page** when you need to *see* something further
+down, like a chart or a layout.
+
+To change either shortcut: `chrome://extensions/shortcuts`.
 
 Then, in any claude.ai conversation: *“I just clipped a job posting”*. Claude
 reads the text first and only fetches the screenshot when the layout matters.
@@ -108,10 +119,15 @@ Alfred app — that archives it too, it does not destroy it.
   one. Claude is told to expect that.
 - **Every link**, as text plus its full address. This is how Claude can point you
   at other listings on a page without you clipping each one.
-- **A screenshot of the whole page**, at 1280 pixels wide, in slices at most 900
-  pixels tall that overlap slightly so no line of text is cut in half. Each slice
-  is photographed separately (see below). At most 24 — a taller page is saved
-  down to slice 24 and **marked as incomplete**.
+- **A screenshot.** On an ordinary click that is **one photograph of the visible
+  screen** — deliberately not the whole page, and not treated as a failure or as
+  incomplete. On **Clip full page** it is the whole page at 1280 pixels wide, in
+  slices at most 900 pixels tall that overlap slightly so no line of text is cut
+  in half, each photographed separately (see below). At most 24 — a taller page
+  is saved down to slice 24 and **marked as incomplete**.
+
+Every clip carries a plain-English note saying which kind of screenshot it is, so
+Claude can never mistake a screen for a page, or a deliberate choice for a fault.
 
 A clip will never claim a complete screenshot it does not have. Consecutive
 slices are supposed to share 50 rows, so after capturing them the extension
@@ -136,6 +152,10 @@ Some of these are Chrome's rules, not choices made here.
 | A PDF in Chrome's viewer | Refused. The text is not in the page, so a clip would save nothing. |
 | **DevTools open on that tab** | Refused, with a message telling you to close it. Chrome allows only one debugger per tab and the screenshot needs it. |
 | A page that is still loading | May fail, or lose its lower slices to the coherence check if it re-lays out mid-capture. Let it finish loading and clip again. |
+| **You navigate away mid-capture** | Aborted. Nothing is saved, and the popup says the page changed. A clip assembled from two different pages would be a convincing lie. |
+| **You close the tab mid-capture** | Aborted the same way, with its own message. |
+| Content that scrolls inside its own box | **Clip full page** captures only as far as the picture keeps advancing, then stops and says so. Known limitation, not being chased — the text is complete either way. |
+| Floating bars fixed to the screen | Appear partway down a full-page screenshot, where they happened to be. Cosmetic; known and accepted. |
 | **Clicking twice** | The second click is ignored with an "already clipping" message, so you cannot end up with two copies of the page. |
 | Screenshot fails but text works | **Saves anyway**, text-only, and shows a red `!` explaining why. The clip is in Alfred with its text and links. |
 
@@ -162,6 +182,17 @@ no row behind — only some unused upload links, which expire on their own.
   `action.onClicked` only when there is no `default_popup`, so the manifest
   declares none and clicking clips. A failure turns the popup on for exactly one
   click; `popup.js` turns it off again as it opens.
+- **The default is silent on purpose.** `chrome.tabs.captureVisibleTab` needs no
+  debugger, so no banner. The full-page path needs `chrome.debugger` and there is
+  no way to suppress the bar it raises — so it became an explicit, separate
+  action rather than something that happens several times a day.
+
+- **`screenshot_truncated` stays FALSE for a visible capture.** It is a fault
+  flag: it drives a "⚠️ INCOMPLETE" warning and tells Claude to distrust the
+  picture. A visible capture lost nothing it tried to get. What stops it being
+  mistaken for a whole page is `capture_mode` plus the note, both of which travel
+  with the clip and are surfaced by both tools.
+
 - **Each slice is a separate screenshot, and that is not an accident.** The first
   version asked Chrome for the whole page in one `Page.captureScreenshot` with
   `captureBeyondViewport`. On two ordinary pages (~1905 x 10400) the bottom of the
@@ -196,7 +227,8 @@ no row behind — only some unused upload links, which expire on their own.
 | `manifest.json` | permissions, the shortcut, the entry points |
 | `service-worker.js` | the whole clip, start to finish |
 | `lib/plan.js` | scale and slice arithmetic (pure, tested) |
-| `lib/page.js` | what can be clipped; reading text and links; the per-tile CDP screenshot |
+| `lib/page.js` | what can be clipped; reading text, links and page size; the per-tile CDP screenshot; the abort guard |
+| `lib/visible.js` | the silent visible-screen capture |
 | `lib/verify.js` | checking the tiles really follow on from each other |
 | `lib/api.js` | `/start`, the uploads, `/finish` |
 | `lib/config.js` | the two settings, and where they live |

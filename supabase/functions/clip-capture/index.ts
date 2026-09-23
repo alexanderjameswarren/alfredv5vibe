@@ -58,7 +58,7 @@ import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts"
 //   POST /clip-capture/finish  { clip_id, source, url, title, page_text, links,
 //                                slice_paths, page_width, page_height,
 //                                screenshot_truncated, screenshot_note,
-//                                captured_at }
+//                                capture_mode, captured_at }
 //     -> { clip_id, inbox_id, ... }
 //
 //     Verifies every listed slice is really in storage, then writes the clip
@@ -377,6 +377,17 @@ async function handleFinish(
   const screenshotNote = typeof body.screenshot_note === "string"
     ? body.screenshot_note.trim().slice(0, 1000)
     : null;
+
+  // 'visible' = one photograph of what was on screen, the silent everyday mode.
+  // 'full'    = the whole page, stitched from per-tile captures.
+  //
+  // Stored as its own field rather than left to be inferred from slice_count,
+  // because a one-slice visible capture and a one-slice short page are
+  // indistinguishable otherwise — and confusing them means telling Alex a clip
+  // shows a whole page when it shows the top of one.
+  const captureMode = body.capture_mode === "full" || body.capture_mode === "visible"
+    ? body.capture_mode
+    : null;
   const pageWidth = asOptionalInt(body.page_width);
   const pageHeight = asOptionalInt(body.page_height);
   const capturedAt = asTimestamp(body.captured_at) ?? new Date().toISOString();
@@ -432,6 +443,7 @@ async function handleFinish(
       url,
       slice_count: slicePaths.length,
       ...(screenshotNote ? { screenshot_note: screenshotNote } : {}),
+      ...(captureMode ? { capture_mode: captureMode } : {}),
     },
     ai_status: "not_started",
     suggest_item: false,
@@ -483,6 +495,7 @@ async function handleFinish(
     links_stored: links.length,
     links_dropped: linksDropped,
     screenshot_note: screenshotNote,
+    capture_mode: captureMode,
     captured_at: capturedAt,
     ...(warning ? { warning } : {}),
   });

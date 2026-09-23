@@ -133,10 +133,11 @@ function requireText(tool: string, field: string, value: unknown): string {
 async function readInboxState(
   ctx: Context,
   inboxIds: string[],
-): Promise<{ live: Set<string>; notes: Map<string, string> }> {
+): Promise<{ live: Set<string>; notes: Map<string, string>; modes: Map<string, string> }> {
   const live = new Set<string>();
   const notes = new Map<string, string>();
-  if (inboxIds.length === 0) return { live, notes };
+  const modes = new Map<string, string>();
+  if (inboxIds.length === 0) return { live, notes, modes };
 
   // `source_metadata` comes along for the ride rather than in a second query:
   // the screenshot note lives in it, and this row is already being read.
@@ -156,8 +157,10 @@ async function readInboxState(
     if (r.archived !== true) live.add(r.id);
     const note = r.source_metadata?.screenshot_note;
     if (typeof note === "string" && note.length > 0) notes.set(r.id, note);
+    const mode = r.source_metadata?.capture_mode;
+    if (typeof mode === "string" && mode.length > 0) modes.set(r.id, mode);
   }
-  return { live, notes };
+  return { live, notes, modes };
 }
 
 /** The screenshot note for one clip, or null. Used by get_clip_slices. */
@@ -248,7 +251,7 @@ export const getRecentClipsTool = defineTool({
     // -- the column list above is hand-typed and nothing verifies it matches.
     let rows = (data ?? []) as unknown as Row[];
 
-    const { live, notes } = await readInboxState(
+    const { live, notes, modes } = await readInboxState(
       ctx,
       rows.map((r) => r.inbox_id).filter((v): v is string => typeof v === "string"),
     );
@@ -288,6 +291,9 @@ export const getRecentClipsTool = defineTool({
         // composed by the extension at capture time, where the facts are. Null
         // for clips saved before this was recorded.
         screenshot_note: r.inbox_id ? notes.get(r.inbox_id) ?? null : null,
+        // 'visible' = a photograph of the screen only, on purpose. 'full' = the
+        // whole page. Null for clips saved before the distinction existed.
+        capture_mode: r.inbox_id ? modes.get(r.inbox_id) ?? null : null,
         page_text: textOverCap ? r.page_text.slice(0, RESPONSE_PAGE_TEXT_CHARS) : r.page_text,
         page_text_truncated_in_response: textOverCap,
         page_text_total_chars: r.page_text.length,
@@ -369,6 +375,15 @@ export const getClipSlicesTool = defineTool({
           `from: ${lastReturned + 1}.`,
       );
     }
+    // ⚠️ THE NOTE IS SURFACED WHATEVER THE FLAG SAYS. It used to appear only when
+    // screenshot_truncated was true, which left the everyday visible-screen
+    // capture — deliberately not the whole page, and deliberately NOT flagged as
+    // truncated — with nothing at all to say so. A model fetching slices without
+    // calling get_recent_clips first would have seen one image and taken it for
+    // the page. The note describes a sound capture as readily as a broken one.
+    const storedNote = await screenshotNoteFor(ctx, clip.inbox_id as string | null);
+    if (storedNote) notes.push(storedNote);
+
     if (clip.screenshot_truncated) {
       // ⚠️ THIS USED TO ASSERT THE 24-SLICE CAP, UNCONDITIONALLY, AND IT WAS
       // WRONG THREE TIMES OUT OF THREE. Pages of 6047, 6562 and 7829 CSS pixels
@@ -380,10 +395,9 @@ export const getClipSlicesTool = defineTool({
       // The reason now travels with the clip, on the paired inbox row. If it is
       // there, say it; if it is not, say only what is certain, which is that the
       // screenshot is incomplete. NEVER GUESS A CAUSE HERE.
-      const stored = await screenshotNoteFor(ctx, clip.inbox_id as string | null);
       notes.push(
-        stored
-          ? `⚠️ SCREENSHOT INCOMPLETE. ${stored}`
+        storedNote
+          ? `⚠️ SCREENSHOT INCOMPLETE — see the note above for why.`
           : `⚠️ This screenshot is INCOMPLETE — it does not show the whole page. ` +
             `The reason was not recorded for this clip (it predates the note being ` +
             `stored). The page TEXT is unaffected: read page_text from get_recent_clips.`,

@@ -324,7 +324,7 @@ test("a complete screenshot says so and gives the worst join", () => {
   const note = describeScreenshot({
     ...REAL, slicesKept: 5, firstBadTile: -1, badJoin: null, joins: [0.4, 0.61, 0.5, 0.48],
   });
-  assert.ok(note.startsWith("Complete: 5 slices"), note);
+  assert.ok(note.startsWith("FULL PAGE, complete: 5 slices"), note);
   assert.match(note, /worst 0\.61/);
   assert.ok(!/INCOMPLETE/.test(note));
 });
@@ -333,6 +333,55 @@ test("no screenshot at all points at the text", () => {
   const note = describeScreenshot({ ...REAL, failure: "Chrome returned an empty screenshot." });
   assert.ok(note.startsWith("NO SCREENSHOT"), note);
   assert.match(note, /answer from page_text/);
+});
+
+
+// --- visible mode: never a failure, never a full page ----------------------
+
+const VISIBLE = {
+  mode: "visible", pageWidth: 1905, pageHeight: 10404, viewportHeight: 950, scrollY: 0,
+  slicesPlanned: 1, slicesKept: 1, firstBadTile: -1, badJoin: null, joins: [],
+  capHit: false, failure: null,
+};
+
+test("a visible capture never reads as incomplete or truncated", () => {
+  const note = describeScreenshot(VISIBLE);
+  assert.ok(!/INCOMPLETE/i.test(note), "must not say incomplete: " + note);
+  assert.ok(!/truncat/i.test(note), "must not say truncated: " + note);
+  assert.ok(!/slice cap/i.test(note));
+  // NOT /went wrong/: the message deliberately says "nothing went wrong", which
+  // is the reassurance we want. Match the fault words that would actually mislead.
+  assert.ok(!/failed|discarded|error/i.test(note),
+    "must not read as a fault: " + note);
+});
+
+test("a visible capture says plainly it is not the whole page", () => {
+  const note = describeScreenshot(VISIBLE);
+  assert.ok(note.startsWith("VISIBLE SCREEN ONLY, BY CHOICE"), note);
+  assert.match(note, /not the whole page/);
+  assert.match(note, /nothing went wrong/i);
+  assert.match(note, /1905x10404px/);
+  assert.match(note, /about 950px of it/);
+  assert.match(note, /page_text holds the WHOLE page/);
+  assert.match(note, /Clip full page/);
+});
+
+test("a visible capture taken part way down says where it starts", () => {
+  const note = describeScreenshot({ ...VISIBLE, scrollY: 2400 });
+  assert.match(note, /starting 2400px down the page/);
+});
+
+test("a full-page capture says FULL PAGE so the two cannot be confused", () => {
+  const note = describeScreenshot({
+    ...VISIBLE, mode: "full", slicesPlanned: 7, slicesKept: 7, joins: [0.4, 0.5],
+  });
+  assert.ok(note.startsWith("FULL PAGE, complete:"), note);
+  assert.ok(!/VISIBLE SCREEN ONLY/.test(note));
+});
+
+test("a failed visible capture still points at the text", () => {
+  const note = describeScreenshot({ ...VISIBLE, failure: "Chrome refused the capture." });
+  assert.ok(note.startsWith("NO SCREENSHOT"), note);
 });
 
 

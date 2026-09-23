@@ -13,6 +13,7 @@ Spec: docs/technical-spec-clipboard.md
 - [x] Step 5: Frontend minimum: source icons for `clipboard` and `cli`; realtime handler drops archived rows. — **done 2026-09-23.** Both icons correct, an archived item vanished live and returned live on un-archive, ordinary capture unaffected, no console errors. (`npm start` first failed on "Environment key jest/globals is unknown"; `npm ci` fixed it — almost certainly node_modules drift from the `sharp` install/uninstall in Step 2. Worth remembering: `--no-save` keeps the manifests clean but not the tree.)
 - [x] Step 5b: The inbox trash can archives instead of deleting, and records why. `inbox.archive_reason` ('discarded' | 'processed'); `archive_inbox_item` writes 'processed' and clears on un-archive; `get_recent_clips` treats a clip whose inbox row is MISSING as archived. Spec decision 14. — **066 run (CONFORMANT, 44 tables, both constraints present, all 10 existing rows null). App checks passed: "Capture discarded." with working undo, labels read "Discard", a discarded capture is archived with reason 'discarded' rather than deleted, save-through-the-form still commits. `mcp` deployed v112.** **Verified in a fresh thread:** archiving set `archive_reason` 'processed', un-archiving cleared all three fields.
 - [ ] Step 6: Chrome extension in `extension/`: options page, capture, slicing, upload, finish, badge. Alex loads it unpacked and clips three real pages (a long job posting, a short page, and a `chrome://` page to check the clean failure). — **first version 2026-09-23: install, options, saving, pairing, text read-back and the `chrome://` refusal all verified.** Three faults found in real use and fixed in Step 6a below: screenshots wrapping to the top, double-click duplicates, and `get_recent_clips` missing `page_width`/`page_height`. Retest: the wrap is FIXED (Yahoo re-clipped as 7 slices, final slice showing the true page bottom). Two pages that scroll inside a container were correctly flagged incomplete — accepted as limitations, see spec §2.1. Step 6b then fixed the truncation REASON, which was being mis-reported by the server. Geometry tests 34/34. `clip-capture` v4, `mcp` v114. Awaiting Alex's final retest.
+- [ ] Step 6c: Silent default capture (visible screen, no debugger banner); full-page capture moved to a right-click menu item and a second shortcut; abort cleanly on navigation or tab close. - **written and deployed 2026-09-23.** `clip-capture` v5, `mcp` v115, `deno check` delta zero, geometry tests 39/39. Awaiting Alex's retest.
 - [ ] Step 7: `scripts/clip.mjs` and the `CLAUDE.md` rule for pushing CLI reports.
 - [ ] Step 8: Alex adds the project instruction in claude.ai, rotates the notification dispatch secret, and runs the end-to-end test in a fresh thread.
 
@@ -244,6 +245,37 @@ A test bug worth noting: the first version asserted `!/cap/i`, which fails on th
 **`screenshot_note`** travels: extension → `/finish` → `inbox.source_metadata.screenshot_note` (no schema change, capped at 1000 chars) → returned by `get_recent_clips`, and used by `get_clip_slices` in place of the cause it used to invent. Where no note exists (clips saved before this), both say only what is certain — the screenshot is incomplete, the reason was not recorded, the text is unaffected. **Never guess a cause.**
 
 `clip-capture` v4, `mcp` v114. `deno check` delta zero. Geometry tests 28 → 34.
+
+### Step 6c — two capture modes, 2026-09-23
+
+Step 6 verified: Yahoo control complete at 7 slices, worst join 1.51; the 80k board correctly incomplete with the right reason and no cap claim; both Alfred inbox screens (live 1905 x 1897, localhost 1905 x 1775) complete at 2 slices with joins under 1.0 and the list readable; older clips correctly reporting no recorded reason. A third accepted limitation added to spec 2.1: `position: fixed` elements appear partway down a full-page screenshot.
+
+**The default click is now silent.** `chrome.tabs.captureVisibleTab` needs no debugger, so no "is debugging this browser" bar. It takes one photograph of the visible screen, scaled to 1280 wide and put through the same `planTiles` rules (usually one slice, two on a tall window). Page size, viewport height and scroll position come from the injected reader, which already runs — so the silent path touches `chrome.debugger` not at all.
+
+**Full page is now a deliberate act**: right-click the toolbar icon then "Clip full page", or Ctrl+Shift+U. The debugger path is unchanged, banner and all.
+
+#### The decision asked for: `screenshot_truncated` is FALSE for a visible capture
+
+`screenshot_truncated` is a **fault flag**, not a coverage flag. It drives `get_clip_slices`'s "SCREENSHOT INCOMPLETE" warning and tells Claude to distrust the picture. A visible capture lost nothing it tried to get — a smaller thing was attempted and achieved — so marking it true would mean every everyday clip arriving pre-labelled as broken, and the word "incomplete" would stop carrying information at all.
+
+What stops it being mistaken for a whole page is two things that travel WITH the clip, not a boolean:
+
+- **`capture_mode`** — `visible` or `full`, in `inbox.source_metadata` (no schema change), returned by `get_recent_clips`. It exists because a one-slice visible capture and a one-slice short page are otherwise indistinguishable in SQL and in a tool payload.
+- **`screenshot_note`** — now opens `VISIBLE SCREEN ONLY, BY CHOICE ... not the whole page, and nothing went wrong. The page is WxHpx and you are seeing about Npx of it ...` and names "Clip full page" as the way to get more. Full-page notes open `FULL PAGE, complete:` so the two can never read alike.
+
+**And `get_clip_slices` now surfaces the note ALWAYS, not only when truncated.** That was the gap the decision created: with the flag false, a model fetching slices without calling `get_recent_clips` first would have seen one image and taken it for the page. Five tests pin the wording, including that a visible note contains neither "incomplete" nor "truncated" nor any fault word.
+
+Both tool descriptions now lead with the two-modes distinction and say explicitly: never describe a visible clip as the full page, and never as truncated.
+
+#### Interruptions abort, and nothing is written
+
+`assertTabUnchanged` runs before every tile, and once more immediately before `/finish` — uploads take time too, so the page can change after the last tile. It throws "The page changed during capture, so nothing was saved." (naming both addresses) or "The tab was closed during capture, so nothing was saved." `/finish` is never called, so no row exists. A clip assembled from two different pages would be a convincing lie rather than an obvious failure, which is why this aborts rather than salvages.
+
+**Slices already uploaded when an abort fires stay in storage, unreferenced — noted for the 2026-10-23 storage review.** They cannot be cleaned up from the command line either: `supabase storage rm` does nothing in CLI 2.117.0. Same for slices from a `/finish` that fails for any other reason.
+
+Progress remains **icon-only** — badge counts, green tick, red `!`, amber `..`. No page overlays, no Chrome notifications.
+
+**Two test bugs of my own, both the same shape:** an over-broad negative regex. `!/cap/i` failed on the word "capture"; `!/went wrong/` failed on the deliberate reassurance "nothing went wrong". Both now target the claim rather than the substring. Worth remembering: when asserting that text does NOT say something, match the phrase, not a fragment that innocent wording contains.
 
 ### Test fixtures: removed 2026-09-23
 

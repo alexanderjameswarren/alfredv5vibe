@@ -198,6 +198,9 @@ export function sliceName(index1Based) {
  * @param {(number|null)[]|null} s.joins  every overlap measurement
  * @param {boolean} s.capHit        planCapture said the page exceeds MAX_TILES
  * @param {string|null} s.failure   set when there is no screenshot at all
+ * @param {"visible"|"full"} s.mode which kind of capture this was
+ * @param {number} [s.viewportHeight] visible mode: how much of the page is shown
+ * @param {number} [s.scrollY]        visible mode: how far down it starts
  */
 export function describeScreenshot(s) {
   const size = `${s.pageWidth}x${s.pageHeight}px`;
@@ -207,6 +210,36 @@ export function describeScreenshot(s) {
       `NO SCREENSHOT: ${s.failure} ` +
       `The page text and links were saved in full, so answer from page_text.`
     );
+  }
+
+  // ---------------------------------------------------------------------
+  // The everyday mode: one photograph of what was on screen.
+  // ---------------------------------------------------------------------
+  //
+  // ⚠️ THIS IS NOT A TRUNCATED FULL-PAGE CAPTURE AND MUST NOT READ LIKE ONE.
+  // Nothing was attempted and lost; a smaller thing was attempted and got. The
+  // wording therefore avoids "incomplete" and "truncated" entirely, says what it
+  // IS, says the text is whole, and names the way to get more.
+  if (s.mode === "visible") {
+    const seen = s.viewportHeight
+      ? `about ${s.viewportHeight}px of it` +
+        (s.scrollY ? `, starting ${s.scrollY}px down the page` : `, from the top`)
+      : `part of it`;
+    const out = [
+      `VISIBLE SCREEN ONLY, BY CHOICE — this is a photograph of what was on ` +
+        `screen, not the whole page, and nothing went wrong. The page is ${size} ` +
+        `and you are seeing ${seen}.`,
+      `page_text holds the WHOLE page regardless, so answer from the text and ` +
+        `treat the image as a look at the layout. If you need to SEE further down, ` +
+        `Alex can re-clip with "Clip full page" (right-click the toolbar icon).`,
+    ];
+    if (s.firstBadTile > 0) {
+      out.push(
+        `One oddity: slice ${s.firstBadTile + 1} did not continue from slice ` +
+          `${s.firstBadTile} (overlap differed by ${s.badJoin}), so it was dropped.`,
+      );
+    }
+    return out.join(" ");
   }
 
   const parts = [];
@@ -242,8 +275,8 @@ export function describeScreenshot(s) {
       ? s.joins.filter((j) => typeof j === "number").reduce((a, b) => Math.max(a, b), 0)
       : null;
     return (
-      `Complete: ${s.slicesKept} slice${s.slicesKept === 1 ? "" : "s"} covering the ` +
-      `whole ${size} page` +
+      `FULL PAGE, complete: ${s.slicesKept} slice${s.slicesKept === 1 ? "" : "s"} ` +
+      `covering the whole ${size} page` +
       (worst === null ? "." : `, every join matching (worst ${worst}).`)
     );
   }

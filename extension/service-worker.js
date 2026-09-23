@@ -24,7 +24,8 @@
 // no change on either side.
 
 import { getConfig, configProblem } from "./lib/config.js";
-import { blockedReason, extractPage, captureTiles } from "./lib/page.js";
+import { blockedReason, extractPage, captureTiles, assertTabUnchanged } from "./lib/page.js";
+import { captureVisible } from "./lib/visible.js";
 import { measureTileSequence } from "./lib/verify.js";
 import {
   planCapture,
@@ -54,11 +55,15 @@ const SUCCESS_BADGE_MS = 8000;
 // — and a failure switches the popup on for the next click only. popup.js turns
 // it back off as it opens, so the click after that clips again.
 
-async function setWorking() {
+async function setWorking(mode) {
   await chrome.action.setPopup({ popup: "" });
   await chrome.action.setBadgeBackgroundColor({ color: "#6b7280" });
   await chrome.action.setBadgeText({ text: "..." });
-  await chrome.action.setTitle({ title: "Alfred's Clipboard: clipping..." });
+  await chrome.action.setTitle({
+    title: mode === "full"
+      ? "Alfred's Clipboard: clipping the full page..."
+      : "Alfred's Clipboard: clipping...",
+  });
 }
 
 async function setSuccess(summary) {
@@ -105,8 +110,8 @@ async function activeTab() {
   return tab;
 }
 
-async function clipActiveTab() {
-  await setWorking();
+async function clipActiveTab(mode) {
+  await setWorking(mode);
 
   const cfg = await getConfig();
   const problem = configProblem(cfg);
@@ -147,32 +152,55 @@ async function clipActiveTab() {
     let cutShort = false;
     let overlapDiffs = null;
     let slicesPlanned = 0;
+    let viewportHeight = null;
+    let scrollY = null;
     let firstBadTile = -1;
     let badJoin = null;
     let capHit = false;
 
-    try {
-      const shot = await captureTiles(
-        tab.id,
-        {
-          planCapture,
-          planTiles,
-          cssClipForTile,
-          sliceName,
-          jpegQualityPercent: JPEG_QUALITY_PERCENT,
-        },
-        (done, total) => { chrome.action.setBadgeText({ text: `${done}/${total}` }); },
-      );
-      shotPlan = shot.plan;
-      contentSize = shot.contentSize;
-      slices = shot.tiles;
+    // Where the page was when we started. Everything after this is checked
+    // against it, because a clip assembled from two different pages would be a
+    // plausible lie rather than an obvious failure.
+    const startUrl = page.url || tab.url;
+    const stillValid = () => assertTabUnchanged(tab.id, startUrl);
 
-      slicesPlanned = shot.tiles.length;
+    try {
+      if (mode === "visible") {
+        // No debugger, so no banner. The page's own measurements came back with
+        // the text, which is why this path needs nothing else.
+        const shot = await captureVisible(tab.windowId);
+        slices = shot.tiles;
+        slicesPlanned = shot.tiles.length;
+        contentSize = { width: page.pageWidth, height: page.pageHeight };
+        viewportHeight = page.viewportHeight;
+        scrollY = page.scrollY;
+        // planCapture is not consulted: nothing here is trying to cover the page,
+        // so the 24-slice cap is not in play and must not be reported as if it
+        // were. capHit stays false.
+      } else {
+        const shot = await captureTiles(
+          tab.id,
+          {
+            planCapture,
+            planTiles,
+            cssClipForTile,
+            sliceName,
+            jpegQualityPercent: JPEG_QUALITY_PERCENT,
+          },
+          (done, total) => { chrome.action.setBadgeText({ text: `${done}/${total}` }); },
+          stillValid,
+        );
+        shotPlan = shot.plan;
+        contentSize = shot.contentSize;
+        slices = shot.tiles;
+        slicesPlanned = shot.tiles.length;
+      }
+
       // The page is simply taller than MAX_TILES can hold. Known before any
       // checking; honest, not a fault. Recorded as a FACT, not as prose — the
       // wording is composed once, in describeScreenshot, so nothing can assert
       // the cap was hit when it was not. That is exactly what went wrong before.
-      capHit = shot.plan.truncated === true;
+      capHit = shotPlan?.truncated === true;
       if (capHit) cutShort = true;
 
       // --- and now the part that stops a clip lying about itself -------------
@@ -227,6 +255,9 @@ async function clipActiveTab() {
     // say WHY a screenshot is incomplete instead of guessing — which is how a
     // 6047px page came to be told it had overrun a 24-slice cap.
     const screenshotNote = describeScreenshot({
+      mode,
+      viewportHeight,
+      scrollY,
       pageWidth: contentSize?.width ?? 0,
       pageHeight: contentSize?.height ?? 0,
       slicesPlanned,
@@ -256,6 +287,10 @@ async function clipActiveTab() {
       await uploadSlice(uploads[i].signed_url, slices[i].blob);
     }
 
+    // The last gate before anything is written. Uploads take time too, so the
+    // page can change after the final tile and before this.
+    await stillValid();
+
     // --- /finish. Verifies every path is really in storage, then writes the
     // clip row, the inbox row, and the link between them.
     const finished = await finishClip(cfg.baseUrl, cfg.secret, {
@@ -273,10 +308,14 @@ async function clipActiveTab() {
       // thing to whoever reads the clip — you are not looking at the whole page.
       screenshot_truncated: cutShort,
       screenshot_note: screenshotNote,
+      capture_mode: mode,
       captured_at: capturedAt,
     });
 
-    const bits = [`${finished.slice_count} slice${finished.slice_count === 1 ? "" : "s"}`];
+    const bits = [
+      mode === "visible" ? "visible screen" : "full page",
+      `${finished.slice_count} slice${finished.slice_count === 1 ? "" : "s"}`,
+    ];
     if (finished.text_truncated) bits.push("text cut at 1 MB");
     if (finished.screenshot_truncated) bits.push("screenshot incomplete");
     if (screenshotError) bits.push("TEXT ONLY, screenshot failed");
@@ -294,6 +333,7 @@ async function clipActiveTab() {
       linkCount: finished.links_stored,
       textTruncated: finished.text_truncated === true,
       screenshotTruncated: finished.screenshot_truncated === true,
+      mode,
       screenshotNote,
       screenshotError,
       pageSize: contentSize,
@@ -334,7 +374,7 @@ async function clipActiveTab() {
 let clipping = false;
 let clippingSince = 0;
 
-async function clipOnce() {
+async function clipOnce(mode = "visible") {
   if (clipping) {
     const seconds = Math.max(1, Math.round((Date.now() - clippingSince) / 1000));
     const message =
@@ -357,18 +397,51 @@ async function clipOnce() {
   clippingSince = Date.now();
   try {
     await chrome.storage.local.remove("busyNotice");
-    await clipActiveTab();
+    await clipActiveTab(mode);
   } finally {
     clipping = false;
   }
 }
 
-chrome.action.onClicked.addListener(() => { clipOnce(); });
+// ---------------------------------------------------------------------------
+// Two ways in, and the difference is the banner
+// ---------------------------------------------------------------------------
+//
+// The ordinary click is SILENT: text, links, page size, and one photograph of
+// the visible screen via chrome.tabs.captureVisibleTab. No debugger, so Chrome
+// shows nothing. That is the default because attaching the debugger puts a
+// "…is debugging this browser" bar across the window, which is fine once and
+// wearing several times a day.
+//
+// The full page is a deliberate act — right-click the icon, or Ctrl+Shift+U —
+// and it brings the banner with it, unchanged.
+chrome.action.onClicked.addListener(() => { clipOnce("visible"); });
 
 chrome.commands.onCommand.addListener((command) => {
-  // Its own command rather than `_execute_action`, so the keyboard shortcut
+  // Their own commands rather than `_execute_action`, so a keyboard shortcut
   // always clips even when a previous failure has left the popup switched on.
-  if (command === "clip-page") clipOnce();
+  if (command === "clip-page") clipOnce("visible");
+  if (command === "clip-page-full") clipOnce("full");
+});
+
+// The right-click menu on the toolbar icon. Recreated on install and on every
+// service-worker start: MV3 workers are disposable and the menu is not, so
+// `removeAll` first keeps a restart from stacking duplicates.
+function installContextMenu() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "clip-full-page",
+      title: "Clip full page (shows Chrome's debugging bar)",
+      contexts: ["action"],
+    });
+  });
+}
+chrome.runtime.onInstalled.addListener(installContextMenu);
+chrome.runtime.onStartup.addListener(installContextMenu);
+installContextMenu();
+
+chrome.contextMenus.onClicked.addListener((info) => {
+  if (info.menuItemId === "clip-full-page") clipOnce("full");
 });
 
 // The popup's "Clip this page" button.
@@ -378,6 +451,6 @@ chrome.commands.onCommand.addListener((command) => {
 // runtime.lastError. Fire and forget, and `return false` so Chrome does not hold
 // the channel open waiting for an answer that is never coming.
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.type === "clip-now") clipOnce();
+  if (msg?.type === "clip-now") clipOnce(msg.mode === "full" ? "full" : "visible");
   return false;
 });

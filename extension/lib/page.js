@@ -2,6 +2,36 @@
 // screenshot.
 
 /**
+ * Throw if the tab has navigated elsewhere or gone away since the clip started.
+ *
+ * ⚠️ NOTHING IS SAVED WHEN THIS FIRES. A capture is several seconds of
+ * photographs and one text read; if the page changes in the middle, the pieces
+ * describe two different pages and a clip made from them would be a plausible
+ * lie. `/finish` is never called, so no row is written.
+ *
+ * Slices already uploaded stay in storage, unreferenced. That is the accepted
+ * cost — decision 10 defers all deletion — and it is recorded for the
+ * 2026-10-23 storage review.
+ */
+export async function assertTabUnchanged(tabId, expectedUrl) {
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    throw new Error("The tab was closed during capture, so nothing was saved.");
+  }
+  if (!tab) {
+    throw new Error("The tab was closed during capture, so nothing was saved.");
+  }
+  if (tab.url && expectedUrl && tab.url !== expectedUrl) {
+    throw new Error(
+      `The page changed during capture, so nothing was saved. ` +
+        `It was ${expectedUrl} and is now ${tab.url}.`,
+    );
+  }
+}
+
+/**
  * Why this tab cannot be clipped, as a sentence for the popup, or null.
  *
  * Checked BEFORE anything else happens, because the alternative is a confusing
@@ -58,6 +88,7 @@ function readPage() {
     if (href.toLowerCase().startsWith("javascript:")) continue;
     links.push({ text: (a.innerText || a.textContent || "").trim().slice(0, 300), href });
   }
+  const doc = document.documentElement;
   return {
     title: document.title || "",
     url: location.href,
@@ -66,6 +97,14 @@ function readPage() {
     // hand Claude a wall including hidden markup.
     text: document.body ? document.body.innerText || "" : "",
     links,
+    // Measured HERE so the silent capture needs no debugger at all. The
+    // full-page path gets the same numbers from Page.getLayoutMetrics instead,
+    // because it has the debugger attached anyway.
+    pageWidth: Math.max(doc ? doc.scrollWidth : 0, document.body ? document.body.scrollWidth : 0) || window.innerWidth,
+    pageHeight: Math.max(doc ? doc.scrollHeight : 0, document.body ? document.body.scrollHeight : 0) || window.innerHeight,
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight,
+    scrollY: Math.round(window.scrollY || 0),
   };
 }
 
@@ -134,8 +173,11 @@ export async function extractPage(tabId) {
  *   arithmetic and the arithmetic stays testable without Chrome:
  *   `{ planCapture, planTiles, cssClipForTile, sliceName, jpegQualityPercent }`
  * @param {(done:number,total:number)=>void} [onProgress]
+ * @param {() => Promise<void>} [checkStillValid] throws to abort mid-capture —
+ *   run between tiles so a page that navigates away is caught while it is
+ *   happening rather than after nine wasted captures
  */
-export async function captureTiles(tabId, geometry, onProgress) {
+export async function captureTiles(tabId, geometry, onProgress, checkStillValid) {
   const { planCapture, planTiles, cssClipForTile, sliceName, jpegQualityPercent } = geometry;
   const target = { tabId };
   let attached = false;
@@ -169,6 +211,10 @@ export async function captureTiles(tabId, geometry, onProgress) {
 
     const captured = [];
     for (let i = 0; i < tiles.length; i++) {
+      // Before each tile, not only at the end: a full-page capture takes
+      // seconds, and the tiles either side of a navigation would show two
+      // different pages stitched together as if they were one.
+      if (checkStillValid) await checkStillValid();
       const clip = cssClipForTile(tiles[i], plan);
       const shot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
         format: "jpeg",

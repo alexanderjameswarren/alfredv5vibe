@@ -32,7 +32,8 @@ The clipboard is temporary working space, not a permanent record.
 Both were found clipping real pages. **Text capture is complete on every page tried, and that is what the clipboard is for** — so neither is being chased. Recorded so nobody rediscovers them as bugs.
 
 1. **Pages whose content scrolls inside a container capture only partially.** Where the page body does not scroll with the window — an inner pane with its own scrollbar — each tile capture photographs the same region, so the slices stop advancing. Observed on the 80,000 Hours job board (1905 × 6047: 2 usable slices of 5) and a New York Times article (1905 × 6562: 1 of 6). The coherence check catches it, discards the untrustworthy slices, and marks the clip incomplete with the reason, so a clip never claims a screenshot it does not have. Full-page capture for these pages is **out of scope**.
-2. **Some pages stop early for reasons not established.** The NYT article above stopped after one slice. It may be the same container-scrolling cause or something else; it was not investigated. Same handling: detected, truncated honestly, text unaffected.
+2. **Elements fixed to the screen appear partway down a full-page screenshot.** Anything with `position: fixed` — Alfred's own floating capture bar, cookie banners, sticky headers — is painted where it sat relative to the capture rather than once at the top. Cosmetic only; the text is unaffected. Not being fixed.
+3. **Some pages stop early for reasons not established.** The NYT article above stopped after one slice. It may be the same container-scrolling cause or something else; it was not investigated. Same handling: detected, truncated honestly, text unaffected.
 
 The consequence for Phase 2: a clipped job board may have a partial screenshot but complete text and links, which is enough to evaluate postings and point at the others on the page. Claude is told to read `screenshot_note` rather than guess why a screenshot is short.
 

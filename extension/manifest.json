@@ -7,7 +7,8 @@
     "activeTab",
     "scripting",
     "storage",
-    "debugger"
+    "debugger",
+    "contextMenus"
   ],
   "host_permissions": [
     "https://zuqjyfqnvhddnchhpbcz.supabase.co/*"
@@ -17,7 +18,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Clip this page into Alfred"
+    "default_title": "Clip this page into Alfred (right-click for full page)"
   },
   "options_page": "options.html",
   "commands": {
@@ -26,7 +27,14 @@
         "default": "Ctrl+Shift+Y",
         "mac": "Command+Shift+Y"
       },
-      "description": "Clip this page into Alfred"
+      "description": "Clip this page (visible screen, silent)"
+    },
+    "clip-page-full": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+U",
+        "mac": "Command+Shift+U"
+      },
+      "description": "Clip the FULL page (uses Chrome's debugger, shows a banner)"
     }
   }
 }
