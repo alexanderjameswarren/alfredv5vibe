@@ -608,14 +608,65 @@ type PlatformResult = {
   };
 };
 
+// ---------------------------------------------------------------------------
+// MCP content blocks — text by default, images when a tool needs them
+// ---------------------------------------------------------------------------
+//
+// Almost every tool's payload is JSON text, and the platform contract says so:
+// the wrapper emits `envelope.data` and nothing else. That remains the default
+// and the right shape for anything a model reads as data.
+//
+// SOME PAYLOADS ARE NOT DATA. A screenshot is the case that forced this. Claude
+// in claude.ai cannot open a link that only appeared in a tool result, and a
+// signed Storage link is far past the fetch tool's 250-character limit, so a
+// picture has no way of reaching the model except as an MCP `image` content
+// block. That is a capability MCP has always had and this wrapper did not model:
+// the return type below pinned `type` to the literal `"text"`, so no tool COULD
+// return one. Established by the clipboard spike on 2026-09-23 and kept as a
+// permanent part of the wrapper (technical-spec-clipboard.md, decision 3).
+//
+// HOW A TOOL OPTS IN: return `{ __mcp_content: [...blocks] }` as the envelope
+// data, and the wrapper emits those blocks verbatim instead of serialising the
+// object. The envelope itself is unchanged — still `{ data, meta }` — so
+// `defineTool`, the tier gate, the budget guard and the audit trail all behave
+// identically. A tool doing this owns its own presentation and should put a
+// text block FIRST describing what the images are; see
+// `_shared/tools/clipboard.ts` for the house example.
+//
+// WHAT IT COSTS: exactly one property read. No other tool sets that key, so
+// every text tool produces the bytes it always produced — the truncation NOTE,
+// then `JSON.stringify(envelope.data, null, 2)`. The sentinel read is safely
+// `undefined` for arrays, primitives and null, so the ordinary path cannot be
+// entered by accident.
+//
+// WHY A SENTINEL RATHER THAN A SECOND WRAPPER: `runToolForMcp` is the single
+// choke point every registered tool passes through, and the value of that is
+// that there is only one of it. A parallel `runImageToolForMcp` would be a
+// second place for the truncation NOTE and the verbatim-error rule to drift
+// out of step.
+//
+// ⚠️ IMAGE BLOCKS ARE EXPENSIVE. base64 is 4/3 of the bytes and every block
+// lands in the model's context whether or not it is looked at. A tool returning
+// images must bound how many it sends and say what it left out — never return
+// "all of them" from an unbounded set.
+type McpBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
+/**
+ * Envelope-data key a tool sets to emit its own MCP content blocks instead of
+ * having its data serialised as JSON text. See the note above.
+ */
+const MCP_CONTENT_KEY = "__mcp_content";
+
 async function runToolForMcp(
   fn: (args: Record<string, unknown>, req: Request) => Promise<PlatformResult>,
   args: Record<string, unknown>,
   token: string,
-): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
+): Promise<{ content: McpBlock[]; isError?: boolean }> {
   try {
     const result = await fn(args, tokenAsRequest(token));
-    const blocks: Array<{ type: "text"; text: string }> = [];
+    const blocks: McpBlock[] = [];
     if (result.meta?.truncated) {
       const shown = Array.isArray(result.data)
         ? result.data.length
@@ -637,6 +688,15 @@ async function runToolForMcp(
           `Narrow the query or request a specific subset.\n\n`,
       });
     }
+    // Content-block passthrough, described above. Placed AFTER the truncation
+    // NOTE so such a tool still gets one if it sets meta.truncated, and BEFORE
+    // the JSON block so the sentinel object itself is never serialised.
+    const ownBlocks = (result.data as Record<string, unknown> | null | undefined)
+      ?.[MCP_CONTENT_KEY];
+    if (Array.isArray(ownBlocks)) {
+      return { content: [...blocks, ...(ownBlocks as McpBlock[])] };
+    }
+
     blocks.push({
       type: "text" as const,
       text: JSON.stringify(result.data, null, 2),
