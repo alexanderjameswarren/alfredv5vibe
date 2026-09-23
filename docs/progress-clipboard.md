@@ -10,7 +10,7 @@ Spec: docs/technical-spec-clipboard.md
 - [x] Step 2: Migration file for the `clips` table, the `clipboard` bucket, and its read policy, ending with `register_table`. Alex runs it; `check_platform_conformance` must return CONFORMANT. — **done 2026-09-23.** `063_clips_table_and_clipboard_bucket.sql` returned CONFORMANT across all 44 non-exempt tables; table, constraints, indexes, owner RLS policy and registry row all as expected; bucket private, 2 MB, `image/jpeg` only. `064_drop_clipboard_test_bucket.sql` confirmed the spike bucket and its objects gone.
 - [ ] Step 3: `clip-capture` edge function, its `config.toml` block (committed before first deploy), and the secrets `CLIPBOARD_SECRET` and `CLIPBOARD_USER_ID`. Test both endpoints with curl. — **function written, committed before the first deploy, deployed (v3), secrets set, endpoint tests A–F all pass.** Awaiting Alex's Test G (the database-side confirmation) before this is closed.
 - [ ] Step 4: MCP tools: `get_recent_clips`, `get_clip_slices`, `archive_inbox_item`, and the `get_inbox` `source_type` filter. Deploy, verify `verify_jwt`. Tested in a fresh thread. — **written and deployed 2026-09-23** (`mcp` v111, 75 registered tools, `deno check` delta zero). Awaiting Alex's fresh-thread test.
-- [ ] Step 5: Frontend minimum: source icons for `clipboard` and `cli`; realtime handler drops archived rows.
+- [ ] Step 5: Frontend minimum: source icons for `clipboard` and `cli`; realtime handler drops archived rows. — **written 2026-09-23**, `src/Alfred.jsx` only. Full suite green (64 suites, 1379 tests). Awaiting Alex's in-app verification. Nothing deployed: this is the Vercel frontend, so it reaches the phone only on a push, which is Alex's call.
 - [ ] Step 6: Chrome extension in `extension/`: options page, capture, slicing, upload, finish, badge. Alex loads it unpacked and clips three real pages (a long job posting, a short page, and a `chrome://` page to check the clean failure).
 - [ ] Step 7: `scripts/clip.mjs` and the `CLAUDE.md` rule for pushing CLI reports.
 - [ ] Step 8: Alex adds the project instruction in claude.ai, rotates the notification dispatch secret, and runs the end-to-end test in a fresh thread.
@@ -125,6 +125,26 @@ New module `supabase/functions/_shared/tools/clipboard.ts` holding `get_recent_c
 - three `TS7006` implicit-`any` on the new `registerTool` callbacks. Annotated `args: Record<string, unknown>`. **The same one-line annotation would clear the other 69 pre-existing TS7006s**, which remain the separate cleanup already noted below. New code is annotated; the backlog is untouched.
 
 **⚠️ Every function's version bumped, not just the one deployed.** Deploying `mcp` alone left the list reading `ai-enrich` v11→v12, `email-capture` v8→v9, `push-send` v4→v5, `notify-dispatch` v4→v5, `sam-song-scores` v1→v2. Combined with the unexplained v109→v110 on `mcp` last step, the likely explanation is that the platform re-versions every function on certain project-level changes rather than only on deploy. **All seven `verify_jwt` flags held their correct values through it**, and the two that matter were confirmed by unauthenticated request as well. Recorded because a project-wide version bump is precisely the event that could flip a flag silently, and now we know it does not.
+
+### Step 5 — frontend minimum, 2026-09-23
+
+`src/Alfred.jsx` only, two sites, per spec 4.3. No edge function touched, so no deploy and no `deno check`. Full suite green: 64 suites, 1379 tests. **The `InboxCard` normaliser copies and the dirty check were not touched**, as instructed.
+
+**1. `SourceIcon`** gains `clipboard` → `Paperclip` and `cli` → `Terminal` (both confirmed present in the installed lucide-react). A comment now records why this map is a maintenance hazard: its fallback is `manual`, so an unrecognised `source_type` renders as a pencil — quietly wrong rather than visibly wrong — and nothing in the database constrains `source_type` (no check, no enum), so a new writer that forgets this map produces no error anywhere. That is the argument for adding the icon in the same change as the writer.
+
+**2. `handleInboxChange`** now keeps the realtime list in step with what both loaders do. `loadData` and `refreshData` filter `archived` out, and until Step 4 nothing ever wrote that column — human triage hard-deletes, so the DELETE branch was the whole story. `archive_inbox_item` revives it, so a row can now leave the list without being deleted, and an open inbox screen would otherwise keep showing an item Claude had already handled until the next background refresh.
+
+**The UPDATE branch handles both directions, which is one step past the literal spec line** ("drop rows whose `archived` is true"). An un-archived row has to come back, and by then it is no longer in `prev`, so the existing `map` would silently do nothing and the item would reappear only on refresh. Half a handler reads as a bug to whoever finds it next, and the asymmetry would have shown up immediately in the archive/un-archive test. A small `upsertSorted` helper is shared by the INSERT and UPDATE paths so both keep the `createdAt`-ascending order the loaders use. INSERT now also ignores a row that arrives already archived.
+
+### Test fixtures: safe to delete after Step 5 verification
+
+`supabase/migrations/065_delete_step3_test_clips.sql` is written and ready but **must not be run until Step 5's verification passes** — the two Step 3 clips are the only rows in `clips` and every test from Step 3 to Step 5 uses them. Step 6 replaces them with real clipped pages.
+
+The migration deletes the two clip rows and their two inbox rows. It deliberately does **not** delete the slice objects, for the same reason 064 refuses to: `storage.objects` is an index, not the files. Claude runs the Storage API removal alongside it:
+
+```
+npx supabase storage rm -r ss:///clipboard/26f0707f-.../14746114-.../ --linked --experimental
+```
 
 ### deno check: baseline is 97 pre-existing errors
 

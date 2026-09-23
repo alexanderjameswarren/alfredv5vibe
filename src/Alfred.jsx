@@ -86,6 +86,8 @@ import {
   RefreshCw,
   ArchiveRestore,
   Gamepad2,
+  Paperclip,
+  Terminal,
 } from "lucide-react";
 import { supabase, supabaseUrl } from "./supabaseClient";
 import { calculateNextEventDate, getRecurrenceConfig } from "./utils/recurrence";
@@ -2713,22 +2715,48 @@ export default function Alfred() {
     };
   }
 
+  /**
+   * Keep `inboxItems` in step with the table, live.
+   *
+   * ARCHIVED ROWS ARE NOT IN THIS LIST. Both loaders filter them out
+   * (`loadData` / `refreshData`), so this handler has to as well or the two
+   * disagree and what you see depends on when you last refreshed.
+   *
+   * That only started mattering in Step 4. Until then nothing ever wrote
+   * `archived` — human triage hard-deletes, so the DELETE branch was the whole
+   * story — and the column sat unused. `archive_inbox_item` revives it (spec
+   * decisions 8 and 9), so a row can now leave this list without being deleted,
+   * and an open inbox screen would otherwise keep showing an item Claude had
+   * already dealt with until the next background refresh.
+   *
+   * The UPDATE branch handles BOTH directions, which is one step past the
+   * literal spec line ("drop rows whose archived is true"). An un-archived row
+   * has to be put back, and by then it is no longer in `prev`, so a plain `map`
+   * would silently do nothing and the item would reappear only on refresh. Half
+   * a handler reads as a bug to whoever finds it next.
+   */
   function handleInboxChange(payload, toCamelCase) {
     const { eventType, new: newRecord, old: oldRecord } = payload;
 
+    // Oldest first, matching both loaders. Do not "add to top" — the list order
+    // is `createdAt` ascending everywhere else and the sort is what enforces it.
+    const upsertSorted = (prev, record) =>
+      [...prev.filter(item => item.id !== record.id), record]
+        .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+
     if (eventType === 'INSERT') {
       const record = toCamelCase(newRecord);
-      setInboxItems(prev => {
-        // Don't add duplicates
-        if (prev.find(item => item.id === record.id)) return prev;
-        // Add to top, maintain sort by createdAt
-        return [record, ...prev].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
-      });
+      if (record.archived) return;
+      setInboxItems(prev => (
+        prev.find(item => item.id === record.id) ? prev : upsertSorted(prev, record)
+      ));
     } else if (eventType === 'UPDATE') {
       const record = toCamelCase(newRecord);
-      setInboxItems(prev =>
-        prev.map(item => item.id === record.id ? record : item)
-      );
+      setInboxItems(prev => (
+        record.archived
+          ? prev.filter(item => item.id !== record.id)
+          : upsertSorted(prev, record)
+      ));
     } else if (eventType === 'DELETE') {
       setInboxItems(prev =>
         prev.filter(item => item.id !== oldRecord.id)
@@ -7427,11 +7455,22 @@ function AiStatusBadge({ status }) {
   );
 }
 
+// How a capture arrived, as one small glyph.
+//
+// The fallback is `manual`, which means an UNRECOGNISED source_type renders as a
+// pencil rather than as nothing — quietly wrong instead of visibly wrong.
+// Nothing constrains source_type in the database (no check, no enum), so a new
+// writer that forgets to come here is not an error anywhere; it just looks
+// hand-typed. That is the reason to add the icon in the same change as the
+// writer, and the reason `clipboard` and `cli` are here now rather than later.
 function SourceIcon({ sourceType }) {
   const icons = {
     manual: <Pencil className="w-3.5 h-3.5" />,
     mcp: <Bot className="w-3.5 h-3.5" />,
     email: <Mail className="w-3.5 h-3.5" />,
+    // Alfred Clipboard — spec 4.3.
+    clipboard: <Paperclip className="w-3.5 h-3.5" />,
+    cli: <Terminal className="w-3.5 h-3.5" />,
   };
   return <span title={`Source: ${sourceType || 'manual'}`}>{icons[sourceType] || icons.manual}</span>;
 }
