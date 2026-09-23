@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: Phase 1 in progress — Steps 1-7 done. Step 7b (run tags) written and self-tested; awaiting Alex's check.
+## Status: Phase 1 in progress — Steps 1-7b done. Step 7c found no code fault (stale client manifest); awaiting Alex confirming after a connector reconnect.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -15,7 +15,8 @@ Spec: docs/technical-spec-clipboard.md
 - [x] Step 6: Chrome extension in `extension/`: options page, capture, slicing, upload, finish, badge. Alex loads it unpacked and clips three real pages (a long job posting, a short page, and a `chrome://` page to check the clean failure). — **first version 2026-09-23: install, options, saving, pairing, text read-back and the `chrome://` refusal all verified.** Three faults found in real use and fixed in Step 6a below: screenshots wrapping to the top, double-click duplicates, and `get_recent_clips` missing `page_width`/`page_height`. Retest: the wrap is FIXED (Yahoo re-clipped as 7 slices, final slice showing the true page bottom). Two pages that scroll inside a container were correctly flagged incomplete — accepted as limitations, see spec §2.1. Step 6b then fixed the truncation REASON, which was being mis-reported by the server. Geometry tests 34/34. `clip-capture` v4, `mcp` v114. Awaiting Alex's final retest.
 - [x] Step 6c: Silent default capture (visible screen, no debugger banner); full-page capture moved to a right-click menu item and a second shortcut; abort cleanly on navigation or tab close. - **done 2026-09-23.** Verified: silent click showed no banner (1 slice, `capture_mode` visible, note opening "VISIBLE SCREEN ONLY, BY CHOICE", and a scrolled clip correctly reporting 952px down); "Clip full page" showed the banner and gave 7 slices, "FULL PAGE, complete", worst join 1.51; closing the tab mid-capture gave a red `!` with nothing saved; `visible_clips_not_flagged_truncated` empty; and from `get_clip_slices` ALONE a fresh thread described the visible clip as part of the page with nothing wrong. Clicking a link mid-capture was not tested — the page blurs and shifts during a full-page capture, which is accepted.
 - [x] Step 7: `scripts/clip.mjs` and the `CLAUDE.md` rule for pushing CLI reports. - **done 2026-09-23.** Pushed its own report as the first real CLI clip (`089ad3dd-...`), and a claude.ai thread read it with `get_recent_clips` source `cli` with nothing pasted, then archived its inbox item.
-- [ ] Step 7b: Run tags, so "CLI responded" picks up the right report when several CLI sessions are running. `clip.mjs --tag`; `run_tag`, `repo` and `branch` in `source_metadata`; `get_recent_clips` returns all three and filters on `run_tag`; the `CLAUDE.md` rule passes the prompt's tag. - **written and deployed 2026-09-23.** `clip-capture` v6, `mcp` v117, `deno check` delta zero. Report pushed with tag `clip-7b-q4m2`. Awaiting Alex's check.
+- [x] Step 7b: Run tags, so "CLI responded" picks up the right report when several CLI sessions are running. `clip.mjs --tag`; `run_tag`, `repo` and `branch` in `source_metadata`; `get_recent_clips` returns all three and filters on `run_tag`; the `CLAUDE.md` rule passes the prompt's tag. - **done 2026-09-23.** Verified: `run_tag` "clip-7b-q4m2" returned exactly that report (repo alfred-v5, branch main); "no-such-tag" returned zero.
+- [ ] Step 7c: Investigate the report that a fresh thread's `get_recent_clips` definition lacked `run_tag`. - **2026-09-23: no code fault.** The deployed v117 bundle already contained the `run_tag` zod input and the disambiguation rule, proven by downloading it (see notes). Cause is a stale client-side tool manifest; spec §7 already requires disconnecting and reconnecting the connector, not just a fresh thread. Redeployed as v118 to bump the version. Awaiting Alex confirming after a reconnect.
 - [ ] Step 8: Alex adds the project instruction in claude.ai, rotates the notification dispatch secret, and runs the end-to-end test in a fresh thread.
 
 ## Phase 2: jobs
@@ -311,6 +312,28 @@ The tag does two jobs and is stored twice for them: **prefixed to the title as `
 **The description carries the disambiguation rule**, because the tool cannot enforce it: when Alex says the CLI responded, find the run tag of the prompt this conversation issued and pass it. With no tag and more than one unarchived CLI report, **do not guess and do not assume the most recent** — list them with titles, tags and times and ask. `repo` and `branch` help when two runs have similar titles.
 
 `clip-capture` v6, `mcp` v117, `verify_jwt` false on both, confirmed both ways. `deno check` delta zero.
+
+### Step 7c — the run_tag schema was already deployed, 2026-09-23
+
+Step 7b verified: `run_tag` "clip-7b-q4m2" with `include_archived` returned exactly that report (repo alfred-v5, branch main), and "no-such-tag" returned zero.
+
+**Reported problem:** a fresh claude.ai thread's tool definition for `get_recent_clips` showed no `run_tag` input and no disambiguation rule, suggesting the registration in `mcp/index.ts` had not been updated.
+
+**Finding: nothing was wrong with the code, and it was already deployed.** For the first time in this build the deployed bundle could be inspected directly, which settled it rather than leaving it to memory:
+
+```
+npx supabase functions download mcp --project-ref <ref> --use-api --workdir <temp dir>
+```
+
+`--workdir` is what makes that safe — without it the download writes into `supabase/functions/` and would clobber local source. It errors part way through (`UnsafeFunctionDownloadPathError` on `src/sam/lib/keySignature.js`, which lives outside the functions tree) but writes `mcp/index.ts` before failing, which is all that was needed. The deployed v117 bundle contained `run_tag: z` in the zod `inputSchema` at line 2310 and the "DO NOT GUESS and do not assume the most recent" rule in the description — same count of `run_tag` mentions as the local source.
+
+**Alex's own test proves it independently.** `no-such-tag` returned zero. The MCP SDK builds a zod object from `inputSchema` and parses incoming arguments through it, and a zod object strips unknown keys by default — so if `run_tag` had been missing from the deployed schema it would have been removed before reaching the handler, the filter would never have applied, and "no-such-tag" would have returned clips rather than nothing. The filter working IS evidence the schema has the field. (Reasoning about the SDK's behaviour, not something tested directly here — there is no bearer token available to call `tools/list`.)
+
+**So the cause is a stale tool manifest in the claude.ai client, and spec §7 already says so:** "A session started before a deploy cannot see new tools. Tool tests always run in a fresh claude.ai thread, **after disconnecting and reconnecting the Alfred connector**." A new thread alone is not enough — the connector caches the manifest, and only reconnecting re-fetches it.
+
+Redeployed anyway (v118) to bump the version, since a new deployment is the cheapest thing that might invalidate a client-side cache. No code changed; `deno check` delta zero.
+
+**The reusable part is the diagnostic.** "Is the deployed function actually what I think it is?" now has an answer that does not depend on anyone's memory of what they deployed. Worth reaching for before hunting a bug in source that turns out to be correct.
 
 ### Test fixtures: removed 2026-09-23
 
