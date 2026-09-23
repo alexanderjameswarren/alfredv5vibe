@@ -24,9 +24,18 @@
 // no change on either side.
 
 import { getConfig, configProblem } from "./lib/config.js";
-import { blockedReason, extractPage, captureWholePage } from "./lib/page.js";
-import { sliceScreenshot } from "./lib/slice.js";
-import { planCapture } from "./lib/plan.js";
+import { blockedReason, extractPage, captureTiles } from "./lib/page.js";
+import { measureTileSequence } from "./lib/verify.js";
+import {
+  planCapture,
+  planTiles,
+  cssClipForTile,
+  sliceName,
+  firstIncoherentTile,
+  JPEG_QUALITY_PERCENT,
+  TILE_OVERLAP,
+  OVERLAP_MAX_DIFF,
+} from "./lib/plan.js";
 import { startClip, finishClip, uploadSlice } from "./lib/api.js";
 
 const LAST_RESULT_KEY = "lastResult";
@@ -133,14 +142,82 @@ async function clipActiveTab() {
     let shotPlan = null;
     let contentSize = null;
     let screenshotError = null;
+    /** Set when the tiles are sound but do not reach the bottom of the page. */
+    let cutShort = false;
+    let cutShortWhy = null;
+    let overlapDiffs = null;
+
     try {
-      const shot = await captureWholePage(tab.id, planCapture);
+      const shot = await captureTiles(
+        tab.id,
+        {
+          planCapture,
+          planTiles,
+          cssClipForTile,
+          sliceName,
+          jpegQualityPercent: JPEG_QUALITY_PERCENT,
+        },
+        (done, total) => { chrome.action.setBadgeText({ text: `${done}/${total}` }); },
+      );
       shotPlan = shot.plan;
       contentSize = shot.contentSize;
-      const sliced = await sliceScreenshot(shot.base64);
-      slices = sliced.slices;
+      slices = shot.tiles;
+
+      // The page is simply taller than 24 slices can hold. Known before any
+      // checking; honest, not a fault.
+      if (shot.plan.truncated) {
+        cutShort = true;
+        cutShortWhy =
+          `the page is ${shot.contentSize.height}px tall, more than 24 slices cover, ` +
+          `so the bottom was not captured`;
+      }
+
+      // --- and now the part that stops a clip lying about itself -------------
+      //
+      // 🛑 A CLIP MUST NEVER CLAIM A COMPLETE SCREENSHOT IT DOES NOT HAVE. The
+      // first version of this step did exactly that: it reported
+      // screenshot_truncated false while its last slices showed the top of the
+      // page again. Per-tile capture should have removed the cause, but "should"
+      // is not "does", so the tiles are checked against each other before
+      // anything is uploaded, and anything unsound is DROPPED and declared.
+      const { diffs, allIdentical } = await measureTileSequence(slices.map((s) => s.blob), TILE_OVERLAP);
+      overlapDiffs = diffs.map((d) => (typeof d === "number" ? Math.round(d * 100) / 100 : null));
+
+      if (allIdentical) {
+        throw new Error(
+          "Every slice came back byte-identical, so Chrome ignored the region asked for " +
+            "and photographed the same part of the page every time. No screenshot saved.",
+        );
+      }
+
+      const bad = firstIncoherentTile(diffs, OVERLAP_MAX_DIFF);
+      if (bad !== -1) {
+        // Tiles 0..bad-1 follow on from each other and are trustworthy. From
+        // `bad` on, the sequence stopped being a faithful picture of the page.
+        const dropped = slices.length - bad;
+        slices = slices.slice(0, bad);
+        cutShort = true;
+        cutShortWhy =
+          `slice ${bad + 1} did not follow on from slice ${bad} (overlap differed by ` +
+          `${overlapDiffs[bad - 1]}, anything over ${OVERLAP_MAX_DIFF} means the picture ` +
+          `jumped), so ${dropped} slice${dropped === 1 ? "" : "s"} were discarded rather ` +
+          `than saved as if they showed the page`;
+        console.warn("[Alfred Clipboard]", cutShortWhy, { overlapDiffs });
+      }
+
+      // Renumber after any drop, so the paths stay slice-01..slice-NN with no
+      // gap. /finish verifies the exact paths it is given, so a hole here would
+      // be a 409 rather than a partial clip.
+      slices = slices.map((s, i) => ({ ...s, name: sliceName(i + 1) }));
+
+      if (slices.length === 0) {
+        throw new Error(
+          "No slice survived the coherence check, so there is no screenshot worth saving.",
+        );
+      }
     } catch (e) {
       screenshotError = e.message;
+      slices = [];
       console.warn("[Alfred Clipboard] screenshot failed, saving text only:", e.message);
     }
 
@@ -174,13 +251,16 @@ async function clipActiveTab() {
       slice_paths: uploads.map((u) => u.path),
       page_width: contentSize?.width ?? null,
       page_height: contentSize?.height ?? null,
-      screenshot_truncated: shotPlan?.truncated === true,
+      // Either reason counts: the page was taller than 24 slices, OR the tiles
+      // stopped being coherent and the rest were thrown away. Both mean the same
+      // thing to whoever reads the clip — you are not looking at the whole page.
+      screenshot_truncated: cutShort,
       captured_at: capturedAt,
     });
 
     const bits = [`${finished.slice_count} slice${finished.slice_count === 1 ? "" : "s"}`];
     if (finished.text_truncated) bits.push("text cut at 1 MB");
-    if (finished.screenshot_truncated) bits.push("page too tall, bottom not captured");
+    if (finished.screenshot_truncated) bits.push("screenshot incomplete");
     if (screenshotError) bits.push("TEXT ONLY, screenshot failed");
     const summary = bits.join(", ");
 
@@ -196,8 +276,13 @@ async function clipActiveTab() {
       linkCount: finished.links_stored,
       textTruncated: finished.text_truncated === true,
       screenshotTruncated: finished.screenshot_truncated === true,
+      cutShortWhy,
       screenshotError,
       pageSize: contentSize,
+      // Kept so the next odd screenshot diagnoses itself from the popup instead
+      // of needing the slices pulled out of storage — which, as of CLI 2.117.0,
+      // cannot be done from the command line at all.
+      overlapDiffs,
     });
 
     // A text-only clip saved successfully, but calling it a clean success would
@@ -221,18 +306,39 @@ async function clipActiveTab() {
 // Entry points
 // ---------------------------------------------------------------------------
 //
-// A guard rather than a queue: clipping twice at once would attach the debugger
-// to the same tab twice and the second attach would fail with a message about
-// DevTools that has nothing to do with what happened.
+// ⚠️ A GUARD, AND IT HAS TO SAY SOMETHING. Two clips at once produced two
+// identical rows 27 seconds apart, because a clip takes several seconds and an
+// impatient second click started a second one. A guard that only returned
+// silently would be almost as bad: the click would appear to do nothing.
+//
+// A queue would be worse than either. The second click is somebody wondering
+// whether the first worked, not a request for two copies of the page.
 let clipping = false;
+let clippingSince = 0;
 
 async function clipOnce() {
   if (clipping) {
-    console.warn("[Alfred Clipboard] already clipping; ignoring.");
+    const seconds = Math.max(1, Math.round((Date.now() - clippingSince) / 1000));
+    const message =
+      `A capture is already in progress (${seconds}s so far) — this click was ignored ` +
+      `so you do not end up with two copies of the page.\n\n` +
+      `A long page takes a few seconds: Chrome photographs it one slice at a time. ` +
+      `Wait for the green tick.`;
+    console.warn("[Alfred Clipboard]", message);
+    // Recorded but NOT written over the last result: if the clip in flight
+    // finishes or fails, that outcome is the one worth keeping. This only drives
+    // the badge and the popup while it is happening.
+    await chrome.storage.local.set({ busyNotice: { message, at: new Date().toISOString() } });
+    await chrome.action.setPopup({ popup: "popup.html" });
+    await chrome.action.setBadgeBackgroundColor({ color: "#d97706" });
+    await chrome.action.setBadgeText({ text: "••" });
+    await chrome.action.setTitle({ title: "Alfred's Clipboard: already clipping — click for details" });
     return;
   }
   clipping = true;
+  clippingSince = Date.now();
   try {
+    await chrome.storage.local.remove("busyNotice");
     await clipActiveTab();
   } finally {
     clipping = false;

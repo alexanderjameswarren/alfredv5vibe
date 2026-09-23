@@ -181,7 +181,7 @@ export const getRecentClipsTool = defineTool({
       .from("clips")
       .select(
         "id, source, url, title, captured_at, created_at, inbox_id, slice_count, " +
-          "screenshot_truncated, text_truncated, page_text, links",
+          "screenshot_truncated, text_truncated, page_width, page_height, page_text, links",
       )
       // created_at, not captured_at: created_at is server truth and never null,
       // while captured_at is whatever the client reported and may be skewed or
@@ -208,6 +208,8 @@ export const getRecentClipsTool = defineTool({
       slice_count: number;
       screenshot_truncated: boolean;
       text_truncated: boolean;
+      page_width: number | null;
+      page_height: number | null;
       page_text: string;
       links: Array<{ text: string; href: string }> | null;
     };
@@ -247,6 +249,11 @@ export const getRecentClipsTool = defineTool({
         slice_count: r.slice_count,
         screenshot_truncated: r.screenshot_truncated,
         text_truncated: r.text_truncated,
+        // The ORIGINAL page size in CSS pixels, before the extension scaled it to
+        // 1280 wide. Returned because Claude was otherwise estimating page height
+        // from the slice count, which is a guess built on a guess.
+        page_width: r.page_width,
+        page_height: r.page_height,
         page_text: textOverCap ? r.page_text.slice(0, RESPONSE_PAGE_TEXT_CHARS) : r.page_text,
         page_text_truncated_in_response: textOverCap,
         page_text_total_chars: r.page_text.length,

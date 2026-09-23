@@ -2290,8 +2290,9 @@ export function createMcpServer(token: string) {
       title: "Get Recent Clips",
       description:
         "Recently clipped web pages and pushed CLI reports, as TEXT. Call this whenever Alex says he clipped, saved or grabbed something, or that the CLI responded / replied / finished — it is the tool that answers 'I just clipped this'. " +
-        "Returns per clip: id, source, url, title, captured_at, inbox_id, slice_count, page_text and links, plus flags saying whether the stored text or screenshot is incomplete. NO IMAGES — get_clip_slices does that. " +
+        "Returns per clip: id, source, url, title, captured_at, inbox_id, slice_count, page_width and page_height (the ORIGINAL page size in CSS pixels, before the extension scaled it to 1280 wide — so you never have to estimate how tall a page was), page_text and links, plus flags saying whether the stored text or screenshot is incomplete. NO IMAGES — get_clip_slices does that. " +
         "Newest first, default 5 (hard cap 50). Archived clips are excluded unless include_archived is true, so once you have handled a clip and archived its inbox item it stops coming back. " +
+        "screenshot_truncated true means you are NOT looking at the whole page: either it was taller than 24 slices, or some slices failed a coherence check and were discarded rather than saved as if they showed the page. Say so if it matters to the answer. " +
         "Two response-only caps, each with its own flag: page_text is cut at 60,000 characters (page_text_truncated_in_response, with page_text_total_chars giving the real length) and links at 200 entries (links_truncated_in_response, with link_count). These are about the size of THIS reply; the separate text_truncated flag means the capture itself was cut short. Tier 1. " +
         CLIP_VOCAB,
       inputSchema: {

@@ -30,7 +30,17 @@ function rows(pairs) {
 }
 
 (async function render() {
-  const { lastResult } = await chrome.storage.local.get("lastResult");
+  const { lastResult, busyNotice } = await chrome.storage.local.get(["lastResult", "busyNotice"]);
+
+  // A capture in flight is the most useful thing to say, so it goes first and
+  // pushes the previous result down. Cleared by the service worker when the next
+  // clip starts, so it cannot linger and mislead.
+  if (busyNotice && Date.now() - new Date(busyNotice.at).getTime() < 5 * 60 * 1000) {
+    bodyEl.innerHTML =
+      `<div class="verdict" style="color:#d97706">Already clipping</div>` +
+      `<p class="msg">${esc(busyNotice.message)}</p>`;
+    return;
+  }
 
   if (!lastResult) {
     bodyEl.innerHTML =
@@ -45,6 +55,9 @@ function rows(pairs) {
       (lastResult.screenshotError
         ? `<p class="msg">The text and links saved, but the screenshot failed:\n\n${esc(lastResult.screenshotError)}</p>`
         : "") +
+      (lastResult.screenshotTruncated && lastResult.cutShortWhy
+        ? `<p class="msg">Screenshot is incomplete: ${esc(lastResult.cutShortWhy)}.</p>`
+        : "") +
       rows([
         ["Page", lastResult.title],
         ["Address", lastResult.url],
@@ -53,7 +66,12 @@ function rows(pairs) {
         ["Links", lastResult.linkCount],
         ["Page size", lastResult.pageSize ? `${lastResult.pageSize.width} x ${lastResult.pageSize.height} px` : ""],
         ["Text cut at 1 MB", lastResult.textTruncated ? "yes" : ""],
-        ["Bottom not captured", lastResult.screenshotTruncated ? "yes — page taller than 24 slices" : ""],
+        ["Screenshot complete", lastResult.screenshotTruncated ? "no" : "yes"],
+        // The overlap measurements, so an odd screenshot can be diagnosed from
+        // here rather than by pulling slices out of storage.
+        ["Slice joins", Array.isArray(lastResult.overlapDiffs) && lastResult.overlapDiffs.length
+          ? lastResult.overlapDiffs.join(", ")
+          : ""],
         ["Clip id", lastResult.clipId],
       ]) +
       `<div class="when">${esc(when(lastResult.at))}</div>`;

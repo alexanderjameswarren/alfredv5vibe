@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: Phase 1 in progress — Step 2 migrations written, awaiting Alex's run + CONFORMANT
+## Status: Phase 1 in progress — Steps 1-5b done. Step 6 fixed after real use (Step 6a); awaiting retest.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -8,11 +8,11 @@ Spec: docs/technical-spec-clipboard.md
 
 - [x] Step 1: Spike cleanup. Delete `supabase/functions/_shared/tools/clipboard-test.ts`, `scripts/clipboard-tile-screenshot.mjs`, and the two TEMPORARY fenced blocks in `supabase/functions/mcp/index.ts`. Keep the `McpBlock` / `__mcp_content` passthrough, rewrite its comment as a permanent feature, and commit. Give Alex the SQL to drop the temporary `clipboard-test` read policy, and tell him to delete the `clipboard-test` bucket and the "CLIPBOARD TEST" inbox item by hand. Deploy `mcp`, verify `verify_jwt`. — **done 2026-09-23**, `mcp` v109. Three manual items outstanding for Alex (storage policy, bucket, inbox item); see notes.
 - [x] Step 2: Migration file for the `clips` table, the `clipboard` bucket, and its read policy, ending with `register_table`. Alex runs it; `check_platform_conformance` must return CONFORMANT. — **done 2026-09-23.** `063_clips_table_and_clipboard_bucket.sql` returned CONFORMANT across all 44 non-exempt tables; table, constraints, indexes, owner RLS policy and registry row all as expected; bucket private, 2 MB, `image/jpeg` only. `064_drop_clipboard_test_bucket.sql` confirmed the spike bucket and its objects gone.
-- [ ] Step 3: `clip-capture` edge function, its `config.toml` block (committed before first deploy), and the secrets `CLIPBOARD_SECRET` and `CLIPBOARD_USER_ID`. Test both endpoints with curl. — **function written, committed before the first deploy, deployed (v3), secrets set, endpoint tests A–F all pass.** Awaiting Alex's Test G (the database-side confirmation) before this is closed.
-- [ ] Step 4: MCP tools: `get_recent_clips`, `get_clip_slices`, `archive_inbox_item`, and the `get_inbox` `source_type` filter. Deploy, verify `verify_jwt`. Tested in a fresh thread. — **written and deployed 2026-09-23** (`mcp` v111, 75 registered tools, `deno check` delta zero). Awaiting Alex's fresh-thread test.
+- [x] Step 3: `clip-capture` edge function, its `config.toml` block (committed before first deploy), and the secrets `CLIPBOARD_SECRET` and `CLIPBOARD_USER_ID`. Test both endpoints with curl. — **function written, committed before the first deploy, deployed (v3), secrets set, endpoint tests A–F all pass.** **Verified via Test G:** two clips, `test_e_must_be_absent` empty, both paired soundly, zero clips without an inbox pointer, both slice files present.
+- [x] Step 4: MCP tools: `get_recent_clips`, `get_clip_slices`, `archive_inbox_item`, and the `get_inbox` `source_type` filter. Deploy, verify `verify_jwt`. Tested in a fresh thread. — **written and deployed 2026-09-23** (`mcp` v111, 75 registered tools, `deno check` delta zero). **Verified in a fresh thread:** all ten checks passed, including the clean "no screenshot" error on a CLI clip and Claude understanding from the descriptions alone that a clip may hold several items.
 - [x] Step 5: Frontend minimum: source icons for `clipboard` and `cli`; realtime handler drops archived rows. — **done 2026-09-23.** Both icons correct, an archived item vanished live and returned live on un-archive, ordinary capture unaffected, no console errors. (`npm start` first failed on "Environment key jest/globals is unknown"; `npm ci` fixed it — almost certainly node_modules drift from the `sharp` install/uninstall in Step 2. Worth remembering: `--no-save` keeps the manifests clean but not the tree.)
-- [ ] Step 5b: The inbox trash can archives instead of deleting, and records why. `inbox.archive_reason` ('discarded' | 'processed'); `archive_inbox_item` writes 'processed' and clears on un-archive; `get_recent_clips` treats a clip whose inbox row is MISSING as archived. Spec decision 14. — **066 run (CONFORMANT, 44 tables, both constraints present, all 10 existing rows null). App checks passed: "Capture discarded." with working undo, labels read "Discard", a discarded capture is archived with reason 'discarded' rather than deleted, save-through-the-form still commits. `mcp` deployed v112.** Awaiting Alex's fresh-thread `archive_reason` check.
-- [ ] Step 6: Chrome extension in `extension/`: options page, capture, slicing, upload, finish, badge. Alex loads it unpacked and clips three real pages (a long job posting, a short page, and a `chrome://` page to check the clean failure). — **written 2026-09-23.** No build step, no edge function change (so no `deno check` delta), nothing deployed. Geometry unit-tested: 20/20 in `node extension/lib/plan.test.mjs`. Awaiting Alex's install and the three clips.
+- [x] Step 5b: The inbox trash can archives instead of deleting, and records why. `inbox.archive_reason` ('discarded' | 'processed'); `archive_inbox_item` writes 'processed' and clears on un-archive; `get_recent_clips` treats a clip whose inbox row is MISSING as archived. Spec decision 14. — **066 run (CONFORMANT, 44 tables, both constraints present, all 10 existing rows null). App checks passed: "Capture discarded." with working undo, labels read "Discard", a discarded capture is archived with reason 'discarded' rather than deleted, save-through-the-form still commits. `mcp` deployed v112.** **Verified in a fresh thread:** archiving set `archive_reason` 'processed', un-archiving cleared all three fields.
+- [ ] Step 6: Chrome extension in `extension/`: options page, capture, slicing, upload, finish, badge. Alex loads it unpacked and clips three real pages (a long job posting, a short page, and a `chrome://` page to check the clean failure). — **first version 2026-09-23: install, options, saving, pairing, text read-back and the `chrome://` refusal all verified.** Three faults found in real use and fixed in Step 6a below: screenshots wrapping to the top, double-click duplicates, and `get_recent_clips` missing `page_width`/`page_height`. Geometry tests now 28/28. `mcp` v113. Awaiting Alex's retest.
 - [ ] Step 7: `scripts/clip.mjs` and the `CLAUDE.md` rule for pushing CLI reports.
 - [ ] Step 8: Alex adds the project instruction in claude.ai, rotates the notification dispatch secret, and runs the end-to-end test in a fresh thread.
 
@@ -188,6 +188,39 @@ New module `supabase/functions/_shared/tools/clipboard.ts` holding `get_recent_c
 
 - **Text-only clips report as a red `!`** even though they saved. The clip is real and in Alfred with its text and links, but calling a missing screenshot a clean success would hide it. The popup explains.
 - **No icons.** Chrome draws a lettered placeholder, which is enough to find on a toolbar. Adding three PNGs and an `icons` block is all it would take; skipped rather than commit binary files I cannot see.
+
+### Step 6a — three fixes after the first real use, 2026-09-23
+
+Step 6's first version installed, saved, paired and read back correctly, and `chrome://settings` failed cleanly. Three faults found in real use.
+
+#### 1. Screenshots wrapped back to the top — the important one
+
+**Symptom.** On a 1905 x 10404 Yahoo article and a 1905 x 10294 job board, the last slices showed the TOP of the page again — the opening photo and its caption, the site header and first card — instead of the article's end and the footer. Both clips said `screenshot_truncated: false`, so they claimed a complete screenshot they did not have. A 1920 x 5994 page had been fine.
+
+**What it was not.** The slicer. `planCapture`/`planTiles` on 1905 x 10404 give scale 0.6719, a scaled height of 6991, 9 tiles, and a final tile of **191px** — exactly the "~190 px strip" observed. The 80k board gives 9 tiles with a 117px last tile. The geometry was right to the pixel, and neither page is anywhere near the 24-slice cap. So the corruption was **inside the single bitmap Chrome returned**. There is now a test pinning those two cases so this cannot be re-litigated.
+
+**The cause.** Inferred, not measured: fine at ~6000 rows, wrapped at ~10300, with the tail repeating the head, is what exceeding an internal surface or texture limit looks like. `clip.scale` does not protect against it, because the limit applies to what Chrome COMPOSITES, not to what it hands back — which is why passing scale did not help.
+
+⚠️ **I could not measure it directly, and said so.** Alex asked for the exact slice and pixel row where repetition starts. `supabase storage` in CLI 2.117.0 **cannot download**: remote→local `cp` refuses with `LegacyStorageUnsupportedOperationError` (with or without `-r`), and `rm` silently does nothing. Only `ls` works. So the causal story rests on the numbers above rather than on the pixels, and the fix is built so that being wrong about the cause still cannot produce a lying clip.
+
+**The fix, two halves that only work together:**
+
+- **One capture per tile.** Each `Page.captureScreenshot` now asks for one tile's clip — about 1350 CSS pixels tall, never the whole page. Nothing goes near any limit. Chrome also encodes the JPEG, so no bitmap is decoded, resized or re-encoded in the service worker at all: `lib/slice.js` is deleted.
+- **A coherence check that can actually see a failure.** Consecutive tiles share 50 rows; on a sound capture those are the same pixels twice and differ only by JPEG noise (measured at 0.46 and 0.54 in Step 2). `lib/verify.js` measures every join, and anything over `OVERLAP_MAX_DIFF` (12) means the picture jumped: the tiles from there on are **discarded**, the remainder renumbered, and `screenshot_truncated` set true with the reason recorded.
+
+  **This is why the two halves are one change.** Slicing a single bitmap made the check worthless — two slices cut from the same bitmap share its corruption and have identical overlaps by construction, so the old design could not have detected its own failure. Separate captures are what make the joins meaningful.
+
+  Also checked: if every tile comes back byte-identical, Chrome ignored the clip's y offset entirely, and no overlap comparison could see that either. It is caught separately and refuses to save a screenshot at all.
+
+`screenshot_truncated` now means "you are not looking at the whole page" for either reason — too tall for 24 slices, or tiles thrown away — and the popup says which. The per-join numbers are stored on the result so the next odd screenshot diagnoses itself from the popup, which matters given the slices cannot be pulled out of storage from the command line.
+
+#### 2. Double-click made duplicate clips
+
+Two identical rows 27 seconds apart. A clip takes several seconds and an impatient second click started a second one. Now guarded — but the guard **says something**, because silently dropping the click would look like the button doing nothing: an amber `..` badge, a popup explaining a capture is already running and how long it has been going, and an explicit note that the click was ignored so there would not be two copies. Not a queue: a second click is somebody wondering whether the first worked, not a request for two.
+
+#### 3. `get_recent_clips` now returns `page_width` and `page_height`
+
+Claude had been estimating page height from the slice count — a guess built on a guess. Both columns were already stored; they were simply missing from the select list and the payload. `mcp` v113. `deno check` delta zero.
 
 ### Test fixtures: removed 2026-09-23
 

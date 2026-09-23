@@ -89,24 +89,54 @@ export async function extractPage(tabId) {
 }
 
 /**
- * Measure the page and screenshot it, in ONE debugger session.
+ * Measure the page, then photograph it ONE TILE AT A TIME.
  *
  * `chrome.tabs.captureVisibleTab` can only ever give the visible viewport, which
  * is the one thing this must not do — the point is the whole page. CDP's
  * `Page.captureScreenshot` with `captureBeyondViewport` is the only route, and it
  * needs the `debugger` permission.
  *
- * ⚠️ MEASURING AND CAPTURING ARE DELIBERATELY NOT TWO FUNCTIONS. Each attach puts
- * Chrome's "…is debugging this browser" banner up, and two round trips would
- * flash it twice for one clip. One attach, both commands, one detach — in a
+ * ---------------------------------------------------------------------------
+ * 🛑 WHY ONE CALL PER TILE AND NOT ONE CALL FOR THE PAGE
+ * ---------------------------------------------------------------------------
+ *
+ * Asking for the whole page in one capture is the obvious thing and it was the
+ * first version. It produced WRONG PICTURES on ordinary pages: on a 1905 x 10404
+ * article and a 1905 x 10294 job board, the tail of the returned bitmap was a
+ * repeat of the TOP of the page — the last slices showed the opening photo and
+ * the site header again instead of the end of the article and the footer. A
+ * 1920 x 5994 page had been fine.
+ *
+ * The slicing was not at fault: tile counts and the 191px final tile matched the
+ * planner exactly, so the bitmap Chrome returned was wrong inside it. The
+ * pattern — fine at ~6000 rows, wrapped at ~10300 — is what exceeding an internal
+ * surface or texture limit looks like, and `clip.scale` does not save you from it
+ * because the limit applies to what Chrome COMPOSITES, not to what it hands back.
+ *
+ * Each tile here is about 900 output rows, so no single capture comes anywhere
+ * near any such limit. It costs one CDP round trip per tile instead of one per
+ * page, which is a few hundred milliseconds nobody will notice.
+ *
+ * Two things fall out of it for free:
+ *   - Chrome encodes the JPEG, so no bitmap is ever decoded, resized or
+ *     re-encoded in the service worker. The canvas slicer is gone.
+ *   - Separate captures can be CHECKED AGAINST EACH OTHER at their overlap,
+ *     which is the only reason the failure above is now detectable at all.
+ *     See verify.js.
+ *
+ * ⚠️ MEASURING AND CAPTURING SHARE ONE DEBUGGER SESSION. Each attach puts
+ * Chrome's "…is debugging this browser" banner up, so a second round trip would
+ * flash it twice for one clip. One attach, every command, one detach — in a
  * `finally`, so a throw cannot leave the banner up.
  *
  * @param {number} tabId
- * @param {(w:number,h:number)=>object} planCapture injected, so this module keeps
- *   no opinion about geometry and the geometry stays unit-testable without Chrome.
- * @returns {Promise<{base64:string, plan:object, contentSize:{width:number,height:number}}>}
+ * @param {object} geometry injected so this module holds no opinion about
+ *   arithmetic and the arithmetic stays testable without Chrome:
+ *   `{ planCapture, planTiles, cssClipForTile, sliceName, jpegQualityPercent }`
+ * @param {(done:number,total:number)=>void} [onProgress]
  */
-export async function captureWholePage(tabId, planCapture) {
+export async function captureTiles(tabId, geometry, onProgress) {
+  const { planCapture, planTiles, cssClipForTile, sliceName, jpegQualityPercent } = geometry;
   const target = { tabId };
   let attached = false;
   try {
@@ -135,29 +165,35 @@ export async function captureWholePage(tabId, planCapture) {
     const contentSize = { width: Math.ceil(raw.width), height: Math.ceil(raw.height) };
 
     const plan = planCapture(contentSize.width, contentSize.height);
+    const tiles = planTiles(plan.scaledHeight);
 
-    const shot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
-      format: "png",
-      captureBeyondViewport: true,
-      // `scale` makes Chrome render straight to the size we want, so a
-      // full-resolution bitmap of a very tall page is never built — which is
-      // both a memory saving and how we stay under Chrome's texture limit.
-      clip: {
-        x: 0,
-        y: 0,
-        width: plan.captureWidth,
-        height: plan.captureHeight,
-        scale: plan.scale,
-      },
-    });
-    if (!shot?.data) throw new Error("Chrome returned an empty screenshot.");
+    const captured = [];
+    for (let i = 0; i < tiles.length; i++) {
+      const clip = cssClipForTile(tiles[i], plan);
+      const shot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
+        format: "jpeg",
+        quality: jpegQualityPercent,
+        captureBeyondViewport: true,
+        clip,
+      });
+      if (!shot?.data) {
+        throw new Error(`Chrome returned an empty screenshot for slice ${i + 1}.`);
+      }
+      const bytes = Uint8Array.from(atob(shot.data), (c) => c.charCodeAt(0));
+      captured.push({
+        name: sliceName(i + 1),
+        blob: new Blob([bytes], { type: "image/jpeg" }),
+        expected: tiles[i],
+        clip,
+      });
+      if (onProgress) onProgress(i + 1, tiles.length);
+    }
 
-    return { base64: shot.data, plan, contentSize };
+    return { tiles: captured, plan, contentSize };
   } finally {
     if (attached) {
-      // Swallowed on purpose: if detaching fails the screenshot may still have
-      // worked, and throwing here would replace a good result with a banner
-      // complaint.
+      // Swallowed on purpose: if detaching fails the tiles may still be good, and
+      // throwing here would replace a usable result with a banner complaint.
       try {
         await chrome.debugger.detach(target);
       } catch (e) {

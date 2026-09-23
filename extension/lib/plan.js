@@ -1,7 +1,7 @@
-// Pure geometry for capture and slicing. No DOM, no Chrome APIs, no canvas —
-// so it can be unit-tested in plain Node (lib/plan.test.mjs), which matters
-// because these are the off-by-one calculations that decide whether a page is
-// fully captured or quietly clipped short.
+// Pure geometry and pure decisions. No DOM, no Chrome APIs, no canvas — so all of
+// it is unit-tested in plain Node (lib/plan.test.mjs), which matters because
+// these are the calculations that decide whether a page is fully captured or
+// quietly clipped short.
 //
 // Spec: docs/technical-spec-clipboard.md decision 2 and section 4.4.
 
@@ -14,13 +14,18 @@ export const TILE_HEIGHT = 900;
 /**
  * Rows shared between consecutive slices, so a line of text sitting exactly on
  * a cut appears whole in at least one of the two.
+ *
+ * It does a second job now: because each tile is captured separately, this band
+ * is the only place two captures can be compared, and comparing them is how a
+ * broken capture is caught. See verify.js.
  */
 export const TILE_OVERLAP = 50;
 
 /** Spec 3.2 / 4.1: two-digit numbering, at most 24 slices. */
 export const MAX_TILES = 24;
 
-export const JPEG_QUALITY = 0.8;
+/** CDP's Page.captureScreenshot takes quality as 0-100, not 0-1. */
+export const JPEG_QUALITY_PERCENT = 80;
 
 /**
  * The tallest scaled image MAX_TILES can cover.
@@ -32,17 +37,22 @@ export const JPEG_QUALITY = 0.8;
 export const MAX_SCALED_HEIGHT = MAX_TILES * (TILE_HEIGHT - TILE_OVERLAP) + TILE_OVERLAP;
 
 /**
- * What to ask Chrome for.
+ * How different two overlap bands may be and still count as the same pixels.
  *
- * Two jobs, and the second is the one that stops Chrome refusing outright:
+ * Mean absolute difference per channel byte, 0-255. Measured on real q80 slices
+ * cut from ONE bitmap: 0.46 and 0.54. Two SEPARATE captures of the same region
+ * will differ by a little more, so this is set well clear of that while staying
+ * far below a genuine content jump, which runs into the tens.
+ */
+export const OVERLAP_MAX_DIFF = 12;
+
+/**
+ * How the page maps onto output pixels.
  *
- * 1. `scale` hands the downscale to the capture itself, so Chrome renders
- *    straight to ~1280 wide instead of producing a full-resolution bitmap we
- *    then shrink. The slicer afterwards only has to crop.
- * 2. `captureHeight` asks for no more page than 24 slices can hold. A tall page
- *    at full width can exceed Chrome's maximum texture size and fail with
- *    nothing useful in the error, and every pixel past the cap would be thrown
- *    away regardless.
+ * ⚠️ NOTE WHAT THIS NO LONGER DOES. It used to clip the requested HEIGHT so one
+ * giant capture stayed within Chrome's limits. Captures are now per tile, so
+ * nothing asks Chrome for a tall region and the clipping here is only about how
+ * many tiles we are willing to keep.
  *
  * @param {number} contentWidth  CSS pixels, from Page.getLayoutMetrics
  * @param {number} contentHeight CSS pixels
@@ -57,25 +67,22 @@ export function planCapture(contentWidth, contentHeight) {
   const fullScaledHeight = contentHeight * scale;
   const truncated = fullScaledHeight > MAX_SCALED_HEIGHT;
 
-  // Back into unscaled page pixels, because that is what the clip is expressed
-  // in. floor, so rounding can never ask for a row past the bottom.
-  const captureHeight = truncated
-    ? Math.floor(MAX_SCALED_HEIGHT / scale)
-    : contentHeight;
-
   return {
     scale,
-    captureWidth: contentWidth,
-    captureHeight,
-    /** What the returned image should be, give or take Chrome's own rounding. */
+    contentWidth,
+    contentHeight,
+    /** What the whole page would be, scaled. */
+    fullScaledHeight: Math.round(fullScaledHeight),
+    /** What we will actually cover, scaled. */
+    scaledHeight: Math.round(Math.min(fullScaledHeight, MAX_SCALED_HEIGHT)),
     expectedWidth: Math.round(contentWidth * scale),
-    expectedHeight: Math.round(captureHeight * scale),
+    /** True when the page is taller than MAX_TILES can hold. */
     truncated,
   };
 }
 
 /**
- * Where to cut a scaled image, top to bottom.
+ * Where to cut, top to bottom, in OUTPUT pixels.
  *
  * The last tile is whatever is left rather than a full-height one clamped to the
  * bottom, which keeps duplicated pixels down to the overlap.
@@ -108,6 +115,53 @@ export function planTiles(totalHeight, tileHeight = TILE_HEIGHT, overlap = TILE_
     if (tiles.length >= maxTiles) break;
   }
   return tiles;
+}
+
+/**
+ * The CDP clip for one tile, in CSS pixels.
+ *
+ * Tiles are planned in OUTPUT space and Chrome wants CSS space, so each edge is
+ * divided back through the scale. The height is clamped against `contentHeight`
+ * because that division is floating point and a rounding error at the bottom of
+ * a long page would ask Chrome for a row that does not exist.
+ *
+ * @param {{top:number,height:number}} tile output-space tile from planTiles
+ * @param {object} plan from planCapture
+ */
+export function cssClipForTile(tile, plan) {
+  const y = tile.top / plan.scale;
+  const rawHeight = tile.height / plan.scale;
+  const height = Math.min(rawHeight, plan.contentHeight - y);
+  if (!(height > 0)) {
+    throw new Error(`cssClipForTile: tile at ${tile.top} is past the bottom of the page`);
+  }
+  return {
+    x: 0,
+    y,
+    width: plan.contentWidth,
+    height,
+    scale: plan.scale,
+  };
+}
+
+/**
+ * The first tile that does not follow on from the one before it.
+ *
+ * `diffs[i]` is how different tile i's bottom overlap band is from tile i+1's top
+ * overlap band. On a sound capture those are the same pixels twice and the
+ * difference is JPEG noise. A big difference means the page moved, or Chrome
+ * returned something other than the region asked for — either way the sequence
+ * stops being a faithful picture of the page from that point on.
+ *
+ * @returns {number} index of the first untrustworthy tile, or -1 if all are sound
+ */
+export function firstIncoherentTile(diffs, threshold = OVERLAP_MAX_DIFF) {
+  for (let i = 0; i < diffs.length; i++) {
+    // null means the comparison could not be made; treat that as sound rather
+    // than throwing away a tile on a measurement we failed to take.
+    if (typeof diffs[i] === "number" && diffs[i] > threshold) return i + 1;
+  }
+  return -1;
 }
 
 /** `slice-01.jpg` … matching what the server and the tools expect. */

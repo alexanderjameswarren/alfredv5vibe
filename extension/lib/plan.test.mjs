@@ -9,12 +9,15 @@ import assert from "node:assert/strict";
 import {
   planCapture,
   planTiles,
+  cssClipForTile,
+  firstIncoherentTile,
   sliceName,
   TARGET_WIDTH,
   TILE_HEIGHT,
   TILE_OVERLAP,
   MAX_TILES,
   MAX_SCALED_HEIGHT,
+  OVERLAP_MAX_DIFF,
 } from "./plan.js";
 
 let pass = 0;
@@ -42,43 +45,109 @@ test("a 1920-wide page scales to 1280", () => {
   const p = planCapture(1920, 5994);
   assert.equal(p.scale, 1280 / 1920);
   assert.equal(p.expectedWidth, 1280);
-  assert.equal(p.expectedHeight, Math.round(5994 * (1280 / 1920)));
+  assert.equal(p.scaledHeight, Math.round(5994 * (1280 / 1920)));
+  assert.equal(p.fullScaledHeight, p.scaledHeight, "nothing dropped");
   assert.equal(p.truncated, false);
-  assert.equal(p.captureHeight, 5994, "short enough: capture the whole page");
 });
 
 test("a narrow page is never upscaled", () => {
   const p = planCapture(800, 2000);
   assert.equal(p.scale, 1, "scale is capped at 1");
   assert.equal(p.expectedWidth, 800);
-  assert.equal(p.expectedHeight, 2000);
+  assert.equal(p.scaledHeight, 2000);
   assert.equal(p.truncated, false);
 });
 
 test("exactly at the cap is not truncated", () => {
-  // Pick a height whose scaled value lands exactly on MAX_SCALED_HEIGHT.
-  const width = 1280;
-  const p = planCapture(width, MAX_SCALED_HEIGHT);
+  const p = planCapture(1280, MAX_SCALED_HEIGHT);
   assert.equal(p.truncated, false);
-  assert.equal(p.captureHeight, MAX_SCALED_HEIGHT);
+  assert.equal(p.scaledHeight, MAX_SCALED_HEIGHT);
 });
 
-test("one pixel past the cap truncates, and clips the request", () => {
+test("one pixel past the cap truncates and covers only what 24 tiles hold", () => {
   const p = planCapture(1280, MAX_SCALED_HEIGHT + 1);
   assert.equal(p.truncated, true);
-  assert.equal(p.captureHeight, MAX_SCALED_HEIGHT, "asks for no more than it can keep");
-  assert.equal(p.expectedHeight, MAX_SCALED_HEIGHT);
+  assert.equal(p.scaledHeight, MAX_SCALED_HEIGHT);
+  assert.equal(p.fullScaledHeight, MAX_SCALED_HEIGHT + 1, "and says how tall it really was");
 });
 
-test("a very tall wide page asks for far less than its full height", () => {
-  // 1920 x 60000 would be a ~40000px-tall texture after scaling; Chrome would
-  // likely refuse. The plan must cut the REQUEST, not just the result.
+test("a very tall page covers the cap and reports the real height", () => {
   const p = planCapture(1920, 60000);
   assert.equal(p.truncated, true);
-  assert.equal(p.expectedHeight, MAX_SCALED_HEIGHT);
-  assert.ok(p.captureHeight < 60000);
-  // Unscaled height needed for 20450 scaled rows at 2/3 scale = 30675.
-  assert.equal(p.captureHeight, Math.floor(MAX_SCALED_HEIGHT / (1280 / 1920)));
+  assert.equal(p.scaledHeight, MAX_SCALED_HEIGHT);
+  assert.equal(p.fullScaledHeight, Math.round(60000 * (1280 / 1920)));
+});
+
+// --- the pages that actually failed ----------------------------------------
+
+test("the two pages that wrapped are not themselves over any cap", () => {
+  // Recorded because it rules out the first theory. Neither page is anywhere
+  // near the 24-slice cap, so the wrap had nothing to do with OUR limits — it
+  // was inside the single bitmap Chrome returned. Hence per-tile capture.
+  for (const [w, h, tiles] of [[1905, 10404, 9], [1905, 10294, 9]]) {
+    const p = planCapture(w, h);
+    assert.equal(p.truncated, false, `${w}x${h} is within the cap`);
+    assert.equal(planTiles(p.scaledHeight).length, tiles, `${w}x${h} plans ${tiles} tiles`);
+  }
+  // And the one that worked, for contrast.
+  assert.equal(planTiles(planCapture(1920, 5994).scaledHeight).length, 5);
+});
+
+// --- cssClipForTile --------------------------------------------------------
+
+test("a tile's CSS clip maps back through the scale", () => {
+  const p = planCapture(1905, 10404);
+  const tiles = planTiles(p.scaledHeight);
+  const clip = cssClipForTile(tiles[1], p);
+  assert.equal(clip.x, 0);
+  assert.equal(clip.width, 1905, "full page width; the scale shrinks the output");
+  assert.equal(clip.scale, p.scale);
+  assert.ok(Math.abs(clip.y - 850 / p.scale) < 1e-9, "second tile starts one step down");
+  assert.ok(Math.abs(clip.height - 900 / p.scale) < 1e-9);
+});
+
+test("no clip ever asks for a row past the bottom of the page", () => {
+  for (const [w, h] of [[1905, 10404], [1905, 10294], [1920, 5994], [800, 2000], [1280, 901]]) {
+    const p = planCapture(w, h);
+    for (const t of planTiles(p.scaledHeight)) {
+      const c = cssClipForTile(t, p);
+      assert.ok(c.height > 0, `${w}x${h}: positive height`);
+      assert.ok(c.y + c.height <= h + 1e-6, `${w}x${h}: clip ends at or before ${h}, got ${c.y + c.height}`);
+    }
+  }
+});
+
+test("every tile's clip is small enough that no single capture is tall", () => {
+  // The whole point of per-tile capture: the tallest thing Chrome is ever asked
+  // for. At 2/3 scale a 900-row tile is 1350 CSS px — nowhere near the ~10,000
+  // that wrapped.
+  const p = planCapture(1905, 10404);
+  const heights = planTiles(p.scaledHeight).map((t) => cssClipForTile(t, p).height);
+  assert.ok(Math.max(...heights) < 1400, `tallest clip was ${Math.max(...heights)} CSS px`);
+});
+
+// --- firstIncoherentTile ---------------------------------------------------
+
+test("a sound sequence has no incoherent tile", () => {
+  assert.equal(firstIncoherentTile([0.4, 0.6, 0.5, 0.48]), -1);
+});
+
+test("the first bad join names the tile AFTER it", () => {
+  // diffs[2] compares tile index 2 with tile index 3, so tile 3 is the first
+  // one that cannot be trusted.
+  assert.equal(firstIncoherentTile([0.4, 0.6, 99, 0.5]), 3);
+});
+
+test("a join exactly at the threshold is still sound", () => {
+  assert.equal(firstIncoherentTile([OVERLAP_MAX_DIFF]), -1);
+  assert.equal(firstIncoherentTile([OVERLAP_MAX_DIFF + 0.01]), 1);
+});
+
+test("an unmeasurable join is not treated as a failure", () => {
+  // Throwing a tile away over a measurement we failed to take would lose real
+  // content for no reason.
+  assert.equal(firstIncoherentTile([null, null]), -1);
+  assert.equal(firstIncoherentTile([null, 99]), 2);
 });
 
 test("planCapture refuses a zero or negative size", () => {
@@ -199,7 +268,7 @@ test("planCapture and planTiles agree on the cap", () => {
   // The whole point of MAX_SCALED_HEIGHT: a capture planned at the cap must
   // slice into exactly MAX_TILES, no more.
   const p = planCapture(TARGET_WIDTH, 999999);
-  const t = planTiles(p.expectedHeight);
+  const t = planTiles(p.scaledHeight);
   assert.equal(t.length, MAX_TILES);
   assert.equal(p.truncated, true);
 });

@@ -108,10 +108,17 @@ Alfred app — that archives it too, it does not destroy it.
   one. Claude is told to expect that.
 - **Every link**, as text plus its full address. This is how Claude can point you
   at other listings on a page without you clipping each one.
-- **A screenshot of the whole page**, scaled to 1280 pixels wide and cut into
-  slices at most 900 pixels tall, overlapping slightly so no line of text is
-  sliced in half. At most 24 slices — a page taller than that is saved down to
-  slice 24 and marked as cut short.
+- **A screenshot of the whole page**, at 1280 pixels wide, in slices at most 900
+  pixels tall that overlap slightly so no line of text is cut in half. Each slice
+  is photographed separately (see below). At most 24 — a taller page is saved
+  down to slice 24 and **marked as incomplete**.
+
+A clip will never claim a complete screenshot it does not have. Consecutive
+slices are supposed to share 50 rows, so after capturing them the extension
+checks that each one really does follow on from the one before. If a join does
+not match, the slices from that point are **thrown away** and the clip is marked
+incomplete, with the reason in the popup. Better a short screenshot that says so
+than a long one that quietly shows the wrong thing.
 
 Caps, so nothing runs away: text is trimmed at 1 MB and links at 1,000. Both are
 flagged on the saved clip when they bite.
@@ -128,7 +135,8 @@ Some of these are Chrome's rules, not choices made here.
 | Chrome Web Store | Refused. Specifically walled off by Chrome. |
 | A PDF in Chrome's viewer | Refused. The text is not in the page, so a clip would save nothing. |
 | **DevTools open on that tab** | Refused, with a message telling you to close it. Chrome allows only one debugger per tab and the screenshot needs it. |
-| A page that is still loading | May fail. Let it finish and clip again. |
+| A page that is still loading | May fail, or lose its lower slices to the coherence check if it re-lays out mid-capture. Let it finish loading and clip again. |
+| **Clicking twice** | The second click is ignored with an "already clipping" message, so you cannot end up with two copies of the page. |
 | Screenshot fails but text works | **Saves anyway**, text-only, and shows a red `!` explaining why. The clip is in Alfred with its text and links. |
 
 If a very large page fails part way through, clipping again is safe. Nothing is
@@ -154,8 +162,25 @@ no row behind — only some unused upload links, which expire on their own.
   `action.onClicked` only when there is no `default_popup`, so the manifest
   declares none and clicking clips. A failure turns the popup on for exactly one
   click; `popup.js` turns it off again as it opens.
+- **Each slice is a separate screenshot, and that is not an accident.** The first
+  version asked Chrome for the whole page in one `Page.captureScreenshot` with
+  `captureBeyondViewport`. On two ordinary pages (~1905 x 10400) the bottom of the
+  returned image was a repeat of the TOP of the page — the last slices showed the
+  opening photo and the site header again. A ~6000-tall page had been fine. The
+  slicing was provably right (tile counts and the 191px last tile matched the
+  planner exactly), so the bitmap Chrome handed back was wrong inside it, which is
+  what exceeding an internal surface limit looks like. `clip.scale` does not help,
+  because the limit is on what Chrome composites rather than what it returns.
+
+  Capturing one tile at a time means no single capture is ever more than ~1350 CSS
+  pixels tall. It also makes the failure *detectable*: separate captures can be
+  compared at their overlap, whereas two slices cut from one bitmap share the same
+  corruption by construction and could never have caught it. The per-tile capture
+  and `lib/verify.js` are one change, not two.
+
 - **Geometry is unit-tested.** `lib/plan.js` is pure arithmetic — no Chrome APIs,
-  no canvas — so the slice maths can be checked without a browser:
+  no canvas — so the slice maths and the coherence decision can be checked without
+  a browser:
 
   ```
   node extension/lib/plan.test.mjs
@@ -171,8 +196,8 @@ no row behind — only some unused upload links, which expire on their own.
 | `manifest.json` | permissions, the shortcut, the entry points |
 | `service-worker.js` | the whole clip, start to finish |
 | `lib/plan.js` | scale and slice arithmetic (pure, tested) |
-| `lib/page.js` | what can be clipped; reading text and links; the CDP screenshot |
-| `lib/slice.js` | cutting the screenshot into JPEGs |
+| `lib/page.js` | what can be clipped; reading text and links; the per-tile CDP screenshot |
+| `lib/verify.js` | checking the tiles really follow on from each other |
 | `lib/api.js` | `/start`, the uploads, `/finish` |
 | `lib/config.js` | the two settings, and where they live |
 | `options.html` / `options.js` | the settings page |
