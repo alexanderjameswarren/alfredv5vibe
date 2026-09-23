@@ -170,6 +170,10 @@ function truncateUtf8(text: string, maxBytes: number): { text: string; truncated
  * Clean the link list: keep only usable `{text, href}` pairs, de-duplicate on
  * href, cap the count.
  *
+ * `dropped` counts links lost to the CAP only — de-duplication is not loss, so
+ * three links with two distinct hrefs give links_stored 2 and links_dropped 0.
+ * This is the number a `links_truncated` column would be derived from.
+ *
  * ⚠️ LINK TRUNCATION IS SILENT IN THE DATA MODEL. There is no `links_truncated`
  * column (spec 3.1 defines flags for text and screenshots only), so the count
  * dropped is reported in this call's response and nowhere else. A page with
@@ -181,12 +185,10 @@ function normaliseLinks(raw: unknown): { links: Array<{ text: string; href: stri
   if (!Array.isArray(raw)) return { links: [], dropped: 0 };
   const seen = new Set<string>();
   const out: Array<{ text: string; href: string }> = [];
-  let considered = 0;
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
     const href = (entry as { href?: unknown }).href;
     if (typeof href !== "string" || href.length === 0) continue;
-    considered++;
     if (seen.has(href)) continue;
     seen.add(href);
     if (out.length >= MAX_LINKS) continue;

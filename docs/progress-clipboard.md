@@ -8,7 +8,7 @@ Spec: docs/technical-spec-clipboard.md
 
 - [x] Step 1: Spike cleanup. Delete `supabase/functions/_shared/tools/clipboard-test.ts`, `scripts/clipboard-tile-screenshot.mjs`, and the two TEMPORARY fenced blocks in `supabase/functions/mcp/index.ts`. Keep the `McpBlock` / `__mcp_content` passthrough, rewrite its comment as a permanent feature, and commit. Give Alex the SQL to drop the temporary `clipboard-test` read policy, and tell him to delete the `clipboard-test` bucket and the "CLIPBOARD TEST" inbox item by hand. Deploy `mcp`, verify `verify_jwt`. — **done 2026-09-23**, `mcp` v109. Three manual items outstanding for Alex (storage policy, bucket, inbox item); see notes.
 - [x] Step 2: Migration file for the `clips` table, the `clipboard` bucket, and its read policy, ending with `register_table`. Alex runs it; `check_platform_conformance` must return CONFORMANT. — **done 2026-09-23.** `063_clips_table_and_clipboard_bucket.sql` returned CONFORMANT across all 44 non-exempt tables; table, constraints, indexes, owner RLS policy and registry row all as expected; bucket private, 2 MB, `image/jpeg` only. `064_drop_clipboard_test_bucket.sql` confirmed the spike bucket and its objects gone.
-- [ ] Step 3: `clip-capture` edge function, its `config.toml` block (committed before first deploy), and the secrets `CLIPBOARD_SECRET` and `CLIPBOARD_USER_ID`. Test both endpoints with curl. — **function and config block written and committed 2026-09-23, before the first deploy.** Awaiting Alex: set the two secrets, then the curl tests.
+- [ ] Step 3: `clip-capture` edge function, its `config.toml` block (committed before first deploy), and the secrets `CLIPBOARD_SECRET` and `CLIPBOARD_USER_ID`. Test both endpoints with curl. — **function written, committed before the first deploy, deployed (v3), secrets set, endpoint tests A–F all pass.** Awaiting Alex's Test G (the database-side confirmation) before this is closed.
 - [ ] Step 4: MCP tools: `get_recent_clips`, `get_clip_slices`, `archive_inbox_item`, and the `get_inbox` `source_type` filter. Deploy, verify `verify_jwt`. Tested in a fresh thread.
 - [ ] Step 5: Frontend minimum: source icons for `clipboard` and `cli`; realtime handler drops archived rows.
 - [ ] Step 6: Chrome extension in `extension/`: options page, capture, slicing, upload, finish, badge. Alex loads it unpacked and clips three real pages (a long job posting, a short page, and a `chrome://` page to check the clean failure).
@@ -17,7 +17,7 @@ Spec: docs/technical-spec-clipboard.md
 
 ## Phase 2: jobs
 
-- [ ] Step 9: Migration adding `posting_url` and `duplicate_of` to `job_applications`. Alex runs it; CONFORMANT.
+- [ ] Step 9: Migration adding `posting_url` and `duplicate_of` to `job_applications`. Alex runs it; CONFORMANT. **Also add `clips.links_truncated` (boolean, not null, default false) in this same migration** — decided 2026-09-23, deferred here from Step 3 rather than changing the agreed data model mid-Phase-1. `clip-capture` must then set it from the `links_dropped` it already computes, and that change needs a `clip-capture` redeploy alongside the migration. See the Step 3 notes for why the gap exists.
 - [ ] Step 10: `create_job_application` and `update_job_application` accept both fields; the same-organization-and-role refusal is skipped when `duplicate_of` is given; `get_job_application_sources` excludes duplicates. Deploy, verify, test in a fresh thread.
 - [ ] Step 11: Update `.claude/skills/job-search/SKILL.md` and `.claude/skills/alfred-enrich/SKILL.md` per spec section 4.6. Commit; Alex re-uploads both to claude.ai.
 - [ ] Step 12: End-to-end jobs test: clip a job board page, open a jobs thread, confirm the evaluation, the "other listings" suggestions with links, the filed `considering` row, and the archived inbox item.
@@ -81,7 +81,27 @@ Useful discovery for later steps: **`supabase storage ls | cp | mv | rm` work ag
 - **OPTIONS is answered before the secret check**, because a browser preflight carries no custom headers and would otherwise be rejected before the extension could ever send one. The preflight response reveals nothing.
 - **A 401 says only `unauthorized`** — never whether the header was absent, the wrong length, or simply wrong.
 
-**⚠️ Gap in the data model worth remembering: link truncation is silent.** Spec 3.1 defines `text_truncated` and `screenshot_truncated` but no `links_truncated`, so a page with more than 1,000 links has the excess dropped with no record on the row. The `/finish` response reports `links_dropped`, and that is the only place it appears. No column was added, because that would be changing the agreed data model. If "Claude missed a listing on a huge job board" ever comes up, this is the first thing to check.
+**⚠️ Gap in the data model: link truncation is silent. RESOLVED — deferred to Step 9.** Spec 3.1 defines `text_truncated` and `screenshot_truncated` but no `links_truncated`, so a page with more than 1,000 links has the excess dropped with no record on the row. The `/finish` response reports `links_dropped` and that is currently the only place it appears. **Alex's call, 2026-09-23: add the column, but in the Phase 2 migration (Step 9), not now** — so Phase 1 does not change the agreed data model mid-flight. Until then, if "Claude missed a listing on a huge job board" comes up, this is the first thing to check.
+
+Note the semantics, because the column will be derived from them: **`links_dropped` counts links lost to the 1,000 cap only.** De-duplication is not loss — three links with two distinct hrefs give `links_stored: 2, links_dropped: 0`. (My own Test D prediction said `links_dropped: 1` for the duplicate; that prediction was wrong, the code was right, and the test now asserts the correct value.)
+
+**Endpoint tests A–F, run 2026-09-23 against clip-capture v3 — all pass:**
+
+| | Test | Result |
+|---|---|---|
+| A | wrong secret (long enough to pass a length check) → 401 `{ok:false,error:"unauthorized"}`, no detail | pass |
+| B | no secret header at all → same 401 | pass |
+| C | `/start` → clip id + 2 uploads at `{user_id}/{clip_id}/slice-0N.jpg` | pass |
+| D1 | both slices PUT to their signed links → 200 | pass |
+| D2 | `/finish` → ok, `slice_count 2`, `links_stored 2`, `links_dropped 0`, no warning | pass |
+| E | claimed-but-absent slices → 409, `missing` listed, nothing written | pass |
+| F | cli clip with no `/start` and no slices → ok, `slice_count 0` | pass |
+
+Test ids kept for Step 4: clipboard clip `14746114-3a4d-44a1-909f-11d7157c255a` / inbox `d680b849-2a88-4d52-89df-3f38ec732655`; cli clip `466a3631-de46-4de8-a0a0-edeb068ed24b` / inbox `4800354b-3525-4672-94eb-df4c43c1c30d`. Test E's clip `992aee1e-d695-432f-9238-73c8386e1edd` must NOT exist in the database.
+
+**One bug found and fixed before testing:** `normaliseLinks` incremented a `considered` counter it never used — dead code, no runtime effect, removed and redeployed before the tests ran rather than left to linger.
+
+**⚠️ `mcp` went from v109 to v110 without anyone deploying it.** Observed during this step's verification. The most likely cause is `supabase secrets set` re-versioning the project's functions so they pick up new environment values — the built-in `SUPABASE_*` secrets all show an `updated_at` from the same window. **`verify_jwt` survived as false on both functions**, confirmed by `functions list` and by an unauthenticated request that each function's own code answered. Recording it because an unexplained version bump is exactly the shape of the problem this project has been bitten by twice, and "we saw it and checked" is worth more than "we assume it was fine".
 
 ### deno check: baseline is 97 pre-existing errors
 
