@@ -80,14 +80,16 @@ export const JOB_VOCAB =
   "VOCABULARY — status: applied (submitted, nothing heard) | screening " +
   "(recruiter or phone screen) | interview (past screening) | rejected (they " +
   "said no) | offer (offer in hand) | closed_no_response (gave up waiting) | " +
-  "withdrawn (Alex pulled out) | considering (seen the role, not yet decided " +
-  "whether to apply — still open) | passed (seen the role, chose not to " +
-  "apply — terminal). considering and passed are roles never applied to, so " +
-  "rows with either status are EXCLUDED FROM EVERY PER-SOURCE COUNT in " +
-  "get_job_application_sources — they are not in total, responded, " +
-  "response_rate, reached_interview, offers or waiting. `effort` is required " +
-  "for every other status and is optional (and normally omitted) for " +
-  "considering and passed, because no work was done. fit: high | medium | " +
+  "withdrawn (Alex APPLIED and then pulled out — it requires that he " +
+  "applied first) | considering (seen the role, not yet decided whether to " +
+  "apply — still open) | passed (seen the role, chose not to apply — " +
+  "terminal). Nothing was submitted for a considering or passed row, so its " +
+  "`applied_on` is the date the ROLE WAS LOGGED, not a submission date, and " +
+  "both statuses are EXCLUDED FROM EVERY PER-SOURCE COUNT in " +
+  "get_job_application_sources, `total` included: counting roles that were " +
+  "never submitted would drag every source's response rate down. `effort` is " +
+  "required for every other status and is omitted for considering and " +
+  "passed, because no work was done. fit: high | medium | " +
   "low. effort: full | quick. SOURCE is free text but is STORED LOWERCASE " +
   "and trimmed — reuse an " +
   "existing spelling (nten, idealist, linkedin, 80000 hours, probably good, " +
@@ -557,16 +559,10 @@ export const updateJobApplicationTool = defineTool({
       patch.status = normaliseEnum(T, "status", args.status, VALID_JOB_STATUS);
     }
 
-    // ⚠️ THE effort RULE IS THE DATABASE'S TO ENFORCE HERE, UNLIKE IN create.
-    // job_applications_effort_when_applied requires an effort for every status
-    // except `considering` and `passed`. create knows the whole row it is
-    // writing and so can state the rule itself; this tool only knows a patch,
-    // and the row it lands on may already carry an effort from an earlier
-    // write. Re-deriving the rule from `prev` would put a second copy of the
-    // constraint in the handler that drifts the moment the constraint changes.
-    // So a `considering` row promoted to `applied` with no effort is refused by
-    // the CHECK, and dbError passes the database's own message through verbatim
-    // without do-not-retry wording — the caller should retry, with an effort.
+    // The effort rule is checked further down, on the row that WOULD RESULT —
+    // see the job_applications_effort_when_applied block after the patch is
+    // assembled. It cannot be decided here: whether effort is missing depends
+    // on both the patch and the row it lands on.
 
     // --- clearable fields ---------------------------------------------------
     // ⚠️ ABSENT, EMPTY AND NULL ARE THREE DIFFERENT THINGS HERE. Absent means
@@ -653,6 +649,42 @@ export const updateJobApplicationTool = defineTool({
     // calls, so the only question that means anything is what the row looks
     // like afterwards.
     const after = { ...prev, ...patch };
+
+    // -----------------------------------------------------------------------
+    // job_applications_effort_when_applied — CHECKED HERE, NOT LEFT TO THE DB
+    // -----------------------------------------------------------------------
+    // The constraint allows a NULL effort only for `considering` and `passed`.
+    // The move that trips it is the one that matters most: a role Alex was
+    // considering, which he has now actually applied to. That row has no
+    // effort, because there was nothing to record until now.
+    //
+    // ⚠️ THE RAW CONSTRAINT ERROR MUST NOT REACH THE CALLER. "violates check
+    // constraint \"job_applications_effort_when_applied\"" names no field the
+    // caller passed and no field it should pass instead, so the model's next
+    // move is a guess. Judged on the ROW THAT WOULD RESULT, so an effort
+    // already stored from an earlier write satisfies it and only a genuinely
+    // effortless applied row is refused.
+    if (
+      (after.effort === null || after.effort === undefined) &&
+      !NOT_APPLIED_STATUS.includes(after.status as string)
+    ) {
+      const fromStatus = prev.status as string;
+      throw fail(
+        T,
+        `this row would have status "${after.status}" and no \`effort\`, ` +
+          `which is not allowed — effort is required for every status except ${
+            NOT_APPLIED_STATUS.join(" and ")
+          }. Nothing was written. ${
+            NOT_APPLIED_STATUS.includes(fromStatus)
+              ? `This row is "${fromStatus}" now, so it has no effort stored ` +
+                `from before: send \`effort\` in the SAME call as the status ` +
+                `change — `
+              : "Send `effort` — "
+          }full (tailored CV and cover letter) or quick (light-touch ` +
+          `submission).`,
+      );
+    }
+
     if (after.next_action_due !== null && after.next_action === null) {
       throw fail(
         T,
@@ -770,10 +802,11 @@ export const getJobApplicationSourcesTool = defineTool({
       sources,
       reading:
         "One entry per source, counting APPLICATIONS ONLY. Rows with status " +
-        "considering or passed are roles Alex never applied to and are " +
-        "excluded from every count here, including `total`; " +
-        "`not_applied_excluded` says how many were left out. `responded` " +
-        "counts screening, interview, " +
+        "considering or passed were never submitted, so they are excluded " +
+        "from EVERY count here, `total` included — counting them would put " +
+        "roles Alex only looked at into the denominator and lower every " +
+        "source's response rate. `not_applied_excluded` says how many were " +
+        "left out. `responded` counts screening, interview, " +
         "rejected and offer — a rejection IS a response, per the status " +
         "column comment, because it means the application was read. `waiting` " +
         "is status 'applied' only; closed_no_response and withdrawn are in " +

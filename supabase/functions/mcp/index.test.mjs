@@ -415,3 +415,345 @@ test("no duplicate tool names", () => {
   for (const r of registered) { if (seen.has(r.name)) dupes.push(r.name); seen.add(r.name); }
   assert.deepEqual(dupes, [], `duplicate registrations: ${dupes.join(", ")}`);
 });
+
+// ===========================================================================
+// JOB-SEARCH HANDLER TESTS — considering and passed
+// ===========================================================================
+// The tests above this line assert REGISTRATION with zod stubbed, which cannot
+// reach a handler. These run the real handlers against a fake database, using
+// the harness from sam-snippets.test.mjs: platform.ts loaded REAL with only its
+// Deno/JSR imports stubbed, so calls go through defineTool and ctx.db is the
+// fake below.
+//
+// ⚠️ THE CONDITIONAL-EFFORT RULE LIVES IN TWO PLACES ON PURPOSE. The handlers
+// enforce it (so the caller gets a sentence naming the rule) AND
+// job_applications_effort_when_applied enforces it in the database, which is the
+// authority. A fake database cannot check a CHECK constraint, so what these
+// assert is that the HANDLER refuses FIRST — which is exactly the layer that
+// would rot silently, because the constraint would keep catching the write
+// either way and the caller would merely stop being told why.
+
+const JOB_DIR = mkdtempSync(join(tmpdir(), "job-apps-"));
+
+writeFileSync(join(JOB_DIR, "stub_supabase.ts"),
+  "export const createClient = () => globalThis.__fakeJobDb;\n");
+writeFileSync(join(JOB_DIR, "stub_crypto.ts"),
+  "export const crypto = { subtle: { digest: async () => new Uint8Array(16).buffer } };\n");
+
+let jobPlatformSrc = readFileSync(join(HERE, "..", "_shared", "platform.ts"), "utf-8");
+for (const [from, to] of [
+  ['import { createClient } from "jsr:@supabase/supabase-js@2";', 'import { createClient } from "./stub_supabase.ts";'],
+  ['import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";', "type SupabaseClient = any;"],
+  ['import { crypto as stdCrypto } from "jsr:@std/crypto";', 'import { crypto as stdCrypto } from "./stub_crypto.ts";'],
+]) {
+  if (!jobPlatformSrc.includes(from)) throw new Error(`platform.ts import changed — update this test: ${from}`);
+  jobPlatformSrc = jobPlatformSrc.replace(from, to);
+}
+writeFileSync(join(JOB_DIR, "platform.ts"), jobPlatformSrc);
+
+const JOB_IMPORT = 'import { clampLimit, defineTool, envelope } from "../platform.ts";';
+const jobSrc = readFileSync(join(TOOLS, "job-applications.ts"), "utf-8");
+if (!jobSrc.includes(JOB_IMPORT)) throw new Error("job-applications.ts import line changed — update this test.");
+writeFileSync(join(JOB_DIR, "job-applications.ts"),
+  jobSrc.replace(JOB_IMPORT, 'import { clampLimit, defineTool, envelope } from "./platform.ts";'));
+
+globalThis.Deno ??= { env: { get: () => "stub" } };
+const jobs = await import(pathToFileURL(join(JOB_DIR, "job-applications.ts")).href);
+
+const jb64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+const JOB_REQ = new Request("http://localhost/", {
+  headers: { Authorization: `Bearer ${jb64({ alg: "none" })}.${jb64({ sub: "user-1" })}.sig` },
+});
+
+// --- fake database ---------------------------------------------------------
+// Only the operators these four handlers actually use. ilike keeps the
+// database's own semantics — case-insensitive, with % and _ as wildcards —
+// because the duplicate guard and the same-org scan both NARROW with ilike and
+// then re-check in the handler, and a fake that treated the pattern literally
+// would make that re-check look unnecessary.
+function makeJobDb(rows = []) {
+  const table = rows.map((r) => ({ ...r }));
+  let seq = 0;
+  const ilikeRe = (pat) =>
+    new RegExp(
+      "^" + String(pat)
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        .replace(/%/g, ".*")
+        .replace(/_/g, ".") + "$",
+      "i",
+    );
+  return {
+    table,
+    rpc() { return Promise.resolve({ data: [{ allowed: true, message: "" }], error: null }); },
+    from() {
+      const st = { op: "select", payload: null, filters: [], orders: [], limit: null };
+      const api = {
+        select() { return api; },
+        eq(c, v) { st.filters.push((r) => r[c] === v); return api; },
+        neq(c, v) { st.filters.push((r) => r[c] !== v); return api; },
+        in(c, vs) { st.filters.push((r) => vs.includes(r[c])); return api; },
+        gte(c, v) { st.filters.push((r) => String(r[c]) >= String(v)); return api; },
+        lt(c, v) { st.filters.push((r) => r[c] != null && String(r[c]) < String(v)); return api; },
+        ilike(c, pat) { const re = ilikeRe(pat); st.filters.push((r) => re.test(String(r[c] ?? ""))); return api; },
+        order(c, o = {}) { st.orders.push([c, o.ascending !== false]); return api; },
+        limit(n) { st.limit = n; return api; },
+        insert(p) { st.op = "insert"; st.payload = p; return api; },
+        update(p) { st.op = "update"; st.payload = p; return api; },
+        maybeSingle() { return run().then((r) => ({ ...r, data: r.data[0] ?? null })); },
+        single() {
+          return run().then((r) => r.data.length === 1
+            ? { ...r, data: r.data[0] }
+            : { data: null, error: { message: "not one row" } });
+        },
+        then(res, rej) { return run().then(res, rej); },
+      };
+      function run() {
+        if (st.op === "insert") {
+          const rec = {
+            id: `00000000-0000-4000-8000-9${String(++seq).padStart(11, "0")}`,
+            user_id: "user-1", effort: null, deadline: null, next_action: null,
+            next_action_due: null, notes: null, created_at: "2026-09-23T10:00:00Z",
+            ...st.payload,
+          };
+          table.push(rec);
+          return Promise.resolve({ data: [rec], error: null });
+        }
+        let matched = table.filter((r) => st.filters.every((f) => f(r)));
+        if (st.op === "update") {
+          matched.forEach((r) => Object.assign(r, st.payload));
+          return Promise.resolve({ data: matched, error: null });
+        }
+        // Multi-key, string-safe and STABLE — the job reads order by applied_on
+        // then created_at, and a numeric subtraction on date strings is NaN,
+        // which silently leaves rows in insertion order instead of sorting.
+        for (const [c, asc] of [...st.orders].reverse()) {
+          matched = matched
+            .map((r, i) => [r, i])
+            .sort(([a, ai], [b, bi]) => {
+              const x = String(a[c] ?? ""), y = String(b[c] ?? "");
+              return ((x < y ? -1 : x > y ? 1 : 0) * (asc ? 1 : -1)) || (ai - bi);
+            })
+            .map(([r]) => r);
+        }
+        if (st.limit != null) matched = matched.slice(0, st.limit);
+        return Promise.resolve({ data: matched, error: null });
+      }
+      return api;
+    },
+  };
+}
+
+async function callJob(tool, args, db) {
+  globalThis.__fakeJobDb = db;
+  return (await tool(args, JOB_REQ)).data;
+}
+async function jobError(tool, args, db) {
+  try {
+    await callJob(tool, args, db);
+  } catch (e) {
+    return e.message;
+  }
+  throw new Error(`expected a rejection for ${JSON.stringify(args)}, got none`);
+}
+
+test("VALID_JOB_STATUS carries considering and passed, and every job status enum is the SAME list", () => {
+  // Enum parity. All three status-taking schemas build z.enum from this one
+  // array, so the failure guarded against is a status added to the database and
+  // to one description but not to the shared constant — which presents as the
+  // tool rejecting a value the table accepts.
+  for (const s of ["applied", "screening", "interview", "rejected", "offer",
+                   "closed_no_response", "withdrawn", "considering", "passed"]) {
+    assert.ok(jobs.VALID_JOB_STATUS.includes(s), `VALID_JOB_STATUS is missing ${s}`);
+  }
+  assert.equal(jobs.VALID_JOB_STATUS.length, 9,
+    `VALID_JOB_STATUS has ${jobs.VALID_JOB_STATUS.length} entries: ${jobs.VALID_JOB_STATUS.join(", ")}`);
+
+  // index.ts must DERIVE all three from that constant rather than re-listing.
+  const src = readFileSync(join(HERE, "index.ts"), "utf-8");
+  assert.match(src, /const JOB_STATUS = z\.enum\(VALID_JOB_STATUS/,
+    "index.ts no longer builds JOB_STATUS from VALID_JOB_STATUS — a second list of statuses has appeared");
+  for (const name of ["get_job_applications", "create_job_application", "update_job_application"]) {
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    assert.ok(Object.keys(t.cfg.inputSchema ?? {}).includes("status"), `${name} does not advertise status`);
+  }
+
+  // And the vocabulary every description repeats must define both new statuses,
+  // keep `withdrawn` meaning "applied, THEN pulled out", and say what
+  // applied_on means on a row where nothing was submitted.
+  assert.match(jobs.JOB_VOCAB, /considering \(seen the role, not yet decided/);
+  assert.match(jobs.JOB_VOCAB, /passed \(seen the role, chose not to apply/);
+  assert.match(jobs.JOB_VOCAB, /withdrawn \(Alex APPLIED and then pulled out/);
+  assert.match(jobs.JOB_VOCAB, /date the ROLE WAS LOGGED/);
+
+  // ⚠️ CHECKED IN index.ts's SOURCE, NOT IN cfg.description. The registration
+  // harness above stubs job-applications.ts, so JOB_VOCAB reaches the
+  // description as the chain stub's "stub" and the real sentence is not there to
+  // find. The rule worth pinning is structural anyway: all four descriptions
+  // APPEND the one constant, rather than paraphrasing it four times — which is
+  // the drift the constant exists to prevent.
+  for (const name of ["get_job_applications", "create_job_application",
+                      "update_job_application", "get_job_application_sources"]) {
+    const block = src.split(`"${name}",`)[1];
+    assert.ok(block, `${name} is not registered in index.ts`);
+    const description = block.split("inputSchema:")[0];
+    assert.match(description, /\+\s*JOB_VOCAB,/,
+      `${name}'s description does not end by appending the shared JOB_VOCAB constant`);
+  }
+});
+
+test("create_job_application: effort is optional for considering and passed, required for every other status", async () => {
+  // The point of the two new statuses is logging a role Alex has only LOOKED
+  // at, where there is no effort to record because nothing was written.
+  const base = { org: "Acme", role: "Engineer", source: "linkedin", fit: "high" };
+
+  for (const status of ["considering", "passed"]) {
+    const db = makeJobDb();
+    const row = await callJob(jobs.createJobApplicationTool, { ...base, status }, db);
+    assert.equal(row.status, status);
+    assert.equal(row.effort, null, `${status} must be insertable with no effort`);
+    assert.equal(db.table.length, 1, `${status} did not write a row`);
+  }
+
+  // Every other status still needs it, and the refusal must NAME the rule
+  // rather than leave the caller to interpret a constraint name.
+  for (const status of [undefined, "applied", "screening", "interview",
+                        "rejected", "offer", "closed_no_response", "withdrawn"]) {
+    const db = makeJobDb();
+    const msg = await jobError(jobs.createJobApplicationTool, { ...base, status }, db);
+    assert.match(msg, /`effort` is required unless status is considering or passed/,
+      `status ${status ?? "(default)"}: the refusal does not name the rule: ${msg}`);
+    assert.match(msg, /Nothing was written/);
+    assert.equal(db.table.length, 0,
+      `status ${status ?? "(default)"}: a row was written despite the missing effort`);
+  }
+
+  // With an effort, the ordinary path is unchanged.
+  const ok = makeJobDb();
+  const row = await callJob(jobs.createJobApplicationTool, { ...base, effort: "full" }, ok);
+  assert.equal(row.status, "applied");
+  assert.equal(row.effort, "full");
+
+  // And the duplicate guard is UNTOUCHED by the new statuses: a role already
+  // logged as `considering` is the row to UPDATE, not a second row to insert.
+  const dupDb = makeJobDb();
+  await callJob(jobs.createJobApplicationTool, { ...base, status: "considering" }, dupDb);
+  const dupMsg = await jobError(jobs.createJobApplicationTool, { ...base, effort: "full" }, dupDb);
+  assert.match(dupMsg, /already logged/);
+  assert.match(dupMsg, /update_job_application/);
+  assert.equal(dupDb.table.length, 1, "the duplicate guard let a second row through");
+});
+
+test("update_job_application: leaving considering or passed needs an effort, and the caller is TOLD so", async () => {
+  const ROW = "00000000-0000-4000-8000-000000000001";
+  const seed = (over) => makeJobDb([{
+    id: ROW, applied_on: "2026-09-20", org: "Acme", role: "Engineer",
+    source: "linkedin", fit: "high", effort: null, status: "considering",
+    deadline: null, next_action: null, next_action_due: null, notes: null,
+    created_at: "2026-09-20T10:00:00Z", ...over,
+  }]);
+
+  // ⚠️ THE RAW CONSTRAINT MESSAGE MUST NOT BE WHAT THE CALLER SEES. It names no
+  // field that was passed and none that should be, so the next move is a guess.
+  for (const status of ["applied", "screening", "interview", "rejected", "offer",
+                        "closed_no_response", "withdrawn"]) {
+    for (const from of ["considering", "passed"]) {
+      const db = seed({ status: from });
+      const msg = await jobError(jobs.updateJobApplicationTool, { id: ROW, status }, db);
+      assert.match(msg, /no `effort`/, `${from} -> ${status}: ${msg}`);
+      assert.match(msg, /send `effort` in the SAME call/, `${from} -> ${status}: ${msg}`);
+      assert.match(msg, /Nothing was written/, `${from} -> ${status}: ${msg}`);
+      assert.doesNotMatch(msg, /check constraint|job_applications_effort_when_applied/,
+        `${from} -> ${status}: the database's raw constraint error reached the caller: ${msg}`);
+      assert.equal(db.table[0].status, from, "the status changed despite the refusal");
+    }
+  }
+
+  // Sent in the same call: allowed, and both fields land.
+  const db = seed();
+  const moved = await callJob(jobs.updateJobApplicationTool,
+    { id: ROW, status: "applied", effort: "quick" }, db);
+  assert.equal(moved.status, "applied");
+  assert.equal(moved.effort, "quick");
+
+  // Already stored on the row: no new effort needed. This is why the check is
+  // made on the row that would RESULT and not on the patch alone.
+  const held = seed({ status: "passed", effort: "quick" });
+  assert.equal(
+    (await callJob(jobs.updateJobApplicationTool, { id: ROW, status: "offer" }, held)).status,
+    "offer",
+  );
+
+  // Moving INTO considering or passed needs nothing, effort stored or not.
+  for (const to of ["considering", "passed"]) {
+    const d = seed({ status: "applied", effort: "full" });
+    assert.equal(
+      (await callJob(jobs.updateJobApplicationTool, { id: ROW, status: to }, d)).status,
+      to,
+    );
+  }
+});
+
+test("get_job_applications open_only: passed is terminal, considering is still live", async () => {
+  const rows = ["applied", "screening", "interview", "offer", "considering",
+                "rejected", "closed_no_response", "withdrawn", "passed"]
+    .map((status, i) => ({
+      id: `00000000-0000-4000-8000-00000000000${i + 1}`, applied_on: "2026-09-20",
+      org: `Org ${i}`, role: "Engineer", source: "linkedin", fit: "high",
+      effort: status === "considering" || status === "passed" ? null : "full",
+      status, deadline: null, next_action: null, next_action_due: null,
+      notes: null, created_at: `2026-09-20T10:0${i}:00Z`,
+    }));
+  const open = await callJob(jobs.getJobApplicationsTool, { open_only: true }, makeJobDb(rows));
+  assert.deepEqual([...open.map((r) => r.status)].sort(),
+    ["applied", "considering", "interview", "offer", "screening"],
+    "open_only must drop rejected, closed_no_response, withdrawn AND passed, and keep considering");
+});
+
+test("get_job_application_sources excludes considering and passed from every count", async () => {
+  // Two sources with identical applications, but `browse` also carries four
+  // roles Alex only looked at. If those counted, browse would read 1/5 = 0.2
+  // against linkedin's 1/1 — the source he checks most often would look like
+  // the worst one, purely for having been checked.
+  const mk = (source, status, i) => ({
+    id: `00000000-0000-4000-8000-0000000000${String(i).padStart(2, "0")}`,
+    applied_on: "2026-09-20", org: `Org ${i}`, role: "Engineer", source,
+    fit: "high", effort: status === "considering" || status === "passed" ? null : "full",
+    status, deadline: null, next_action: null, next_action_due: null, notes: null,
+    created_at: "2026-09-20T10:00:00Z",
+  });
+  const rows = [
+    mk("linkedin", "interview", 1),
+    mk("browse", "interview", 2),
+    mk("browse", "considering", 3),
+    mk("browse", "considering", 4),
+    mk("browse", "passed", 5),
+    mk("browse", "passed", 6),
+  ];
+  const out = await callJob(jobs.getJobApplicationSourcesTool, {}, makeJobDb(rows));
+
+  assert.deepEqual(out.sources.map((s) => s.source).sort(), ["browse", "linkedin"]);
+  assert.deepEqual(out.sources.find((s) => s.source === "browse"), {
+    source: "browse", total: 1, responded: 1, response_rate: 1,
+    reached_interview: 1, offers: 0, waiting: 0,
+  }, "the four never-submitted rows leaked into browse's counts");
+  assert.equal(out.applications_counted, 2, "applications_counted must count submissions only");
+  assert.equal(out.not_applied_excluded, 4);
+
+  // A source with NOTHING but considering/passed rows must not appear at all —
+  // its total would be 0 and response_rate would be 0/0, i.e. NaN.
+  const onlyLooked = await callJob(jobs.getJobApplicationSourcesTool, {},
+    makeJobDb([mk("browse", "considering", 7), mk("browse", "passed", 8)]));
+  assert.deepEqual(onlyLooked.sources, []);
+  assert.equal(onlyLooked.applications_counted, 0);
+  assert.equal(onlyLooked.not_applied_excluded, 2);
+
+  // The reading text is the only place the caller learns WHY the numbers
+  // exclude them, so it has to say so — as does the tool description.
+  assert.match(onlyLooked.reading, /considering or passed were never submitted/);
+  assert.match(onlyLooked.reading, /lower every source's response rate/);
+  assert.match(
+    registered.find((r) => r.name === "get_job_application_sources").cfg.description,
+    /excluded from EVERY count here, `total` included/,
+  );
+});
