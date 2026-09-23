@@ -83,3 +83,29 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/notify-dispatch/deno.json"
 entrypoint = "./functions/notify-dispatch/index.ts"
+
+[functions.clip-capture]
+enabled = true
+# 🛑 JWT verification OFF. Called by the Chrome extension and by scripts/clip.mjs.
+# Neither holds a Supabase session, and neither can get one: spec decision 5
+# ruled out a pasted login token because those expire in about an hour.
+#
+# The shared secret in the x-clipboard-secret header is what stands in front of
+# this function instead — CLIPBOARD_SECRET, at least 32 bytes, compared with a
+# length check plus timingSafeEqual, checked before the body is even read. Same
+# protection as notify-dispatch, and deliberately NOT the email-capture pattern,
+# which has no secret at all.
+#
+# ⚠️ THIS ENTRY EXISTS BEFORE THE FIRST DEPLOY, ON PURPOSE. The CLI defaults
+# verify_jwt to TRUE when nothing declares it, and email-capture ran for months
+# with no entry here, surviving only because one deploy happened to pass
+# --no-verify-jwt by hand. This block is what makes every future
+# `supabase functions deploy clip-capture` safe without anyone remembering.
+#
+# ⚠️ THE FLAG HAS RESET SILENTLY ON REDEPLOY IN THIS PROJECT. Re-check after
+# every deploy: `supabase functions list` plus one unauthenticated curl, which
+# must come back 401 with this function's own JSON body (`{"ok":false,...}`)
+# rather than the gateway's. See docs/progress-clipboard.md.
+verify_jwt = false
+import_map = "./functions/clip-capture/deno.json"
+entrypoint = "./functions/clip-capture/index.ts"
