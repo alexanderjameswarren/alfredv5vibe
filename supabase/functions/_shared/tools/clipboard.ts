@@ -292,8 +292,16 @@ export const getRecentClipsTool = defineTool({
         // for clips saved before this was recorded.
         screenshot_note: r.inbox_id ? notes.get(r.inbox_id) ?? null : null,
         // 'visible' = a photograph of the screen only, on purpose. 'full' = the
-        // whole page. Null for clips saved before the distinction existed.
-        capture_mode: r.inbox_id ? modes.get(r.inbox_id) ?? null : null,
+        // whole page.
+        //
+        // ⚠️ A MISSING VALUE MEANS 'full', AND THAT IS A FACT RATHER THAN A
+        // GUESS. Clips saved before Step 6c recorded no mode, and the visible
+        // mode did not exist then — every one of them went through the
+        // debugger-based full-page path. So the absence is resolved HERE, once,
+        // rather than left for each reader to interpret: a null reaching a model
+        // is a null it has to guess about, and the obvious guess ("mode unknown,
+        // so maybe partial") is the wrong one.
+        capture_mode: (r.inbox_id ? modes.get(r.inbox_id) : null) ?? "full",
         page_text: textOverCap ? r.page_text.slice(0, RESPONSE_PAGE_TEXT_CHARS) : r.page_text,
         page_text_truncated_in_response: textOverCap,
         page_text_total_chars: r.page_text.length,

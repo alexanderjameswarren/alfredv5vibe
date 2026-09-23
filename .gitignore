@@ -30,3 +30,7 @@ yarn-error.log*
 # scripts/prebuild.js regenerates these on every build/start so they cannot drift.
 /src/sam/lib/sam-drill-format.schema.json
 /supabase/functions/_shared/sam-drill-format.schema.json
+
+# CLI report staging for scripts/clip.mjs. The report is pushed into Alfred,
+# not committed - it is a message, not source.
+/.clip

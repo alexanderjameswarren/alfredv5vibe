@@ -40,3 +40,28 @@ Rules:
 - Do not end inner queries with a semicolon.
 - This applies only to read-only SELECT checks. Migrations and anything that
   changes data stay as separate statements.
+
+## Push your final report into Alfred
+
+At the end of EVERY task, before your closing message:
+
+1. Write the final report to `.clip/last-report.md` (gitignored; create the
+   folder if needed).
+2. Push it: `node scripts/clip.mjs --title "<what this task was>" .clip/last-report.md`
+   The title should name the step or task — "Clipboard Step 7", "SAM plan
+   review", "DJ weekly review fix" — because that is what Alex sees in his
+   inbox.
+3. Print the report as usual. The clip is as well as the terminal output, never
+   instead of it.
+
+So Alex can say "CLI responded" in any claude.ai conversation and Claude reads
+the report with `get_recent_clips` (source `cli`) instead of him pasting it.
+
+**If the push fails, say so plainly at the end of the printed report — one line
+naming the error — and carry on.** A failed push is not a failed task, and it
+must never be hidden: silently skipping it would leave Alex waiting for
+something that never arrived.
+
+`clip.mjs` reads `CLIPBOARD_URL` and `CLIPBOARD_SECRET` from the environment,
+falling back to the Windows user registry when the shell predates `setx`. It
+never prints the secret, and neither should you.
