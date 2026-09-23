@@ -2337,7 +2337,8 @@ export function createMcpServer(token: string) {
       title: "Archive Inbox Item",
       description:
         "Hide a handled inbox item. Call this once you have DEALT WITH a clip or a CLI report — read it, answered it, filed what it needed — so it leaves Alex's inbox screen instead of sitting there looking unread. It disappears from the app live. " +
-        "Reversible in one call: pass archived: false to put it back, untriaged. Nothing is deleted either way, and the change is audited. " +
+        "Records archive_reason 'processed', which is what distinguishes it in Alex's archive from an item he binned himself with the trash can ('discarded'). " +
+        "Reversible in one call: pass archived: false to put it back, untriaged, with the reason cleared. Nothing is deleted either way, and the change is audited. " +
         "Takes the inbox_id, NOT the clip id — get_recent_clips returns both. Archiving does not touch the clip itself, which keeps its text and screenshot. Tier 2, no confirmation needed.",
       inputSchema: {
         inbox_id: z.string().describe("The inbox item's id, from get_recent_clips (field: inbox_id) or get_inbox (field: id). Not the clip id."),

@@ -2925,37 +2925,62 @@ export default function Alfred() {
     });
   }
 
-  // Discard. A capture that does not make it through the inbox never happened,
-  // so the row is deleted rather than flagged — see the spec's Part C. The
-  // `audit_row` AFTER DELETE trigger in platform.audit_log records it, so this
-  // is not the last copy.
-  //
-  // `archived` and `triaged_at` are deliberately NOT written on the way out and
-  // NOT dropped from the table: existing archived rows are the only record of
-  // past captures and are out of scope here.
-  async function deleteInboxItem(inboxItemId) {
+  /**
+   * Discard a capture from the inbox screen — Clipboard Step 5b.
+   *
+   * ⚠️ THIS ARCHIVES. IT USED TO HARD-DELETE, AND THE CHANGE FIXED A BUG RATHER
+   * THAN EXPRESSING A PREFERENCE.
+   *
+   * The old rule was "a capture that does not make it through the inbox never
+   * happened", so the row was deleted and `platform.audit_log` was the surviving
+   * copy. That worked while an inbox row was the whole capture.
+   *
+   * A clip is TWO rows. `public.clips` holds the page text and the screenshot
+   * slices; the inbox row is a lightweight pointer at it. Deleting the pointer
+   * left the clip, and `get_recent_clips` decides "already handled" by reading
+   * the paired inbox row — so a clip whose inbox row had been deleted looked
+   * LIVE and came back to every new conversation, permanently. Binning a clip
+   * was the one action that could not make it go away.
+   *
+   * So the row now stays, flagged: archived, stamped, and carrying WHY
+   * ('discarded' — as against 'processed', which is what archive_inbox_item
+   * writes when Claude has dealt with something). See spec decision 14 and
+   * migration 066.
+   *
+   * Human triage through the process/save flow (`handleInboxSave`) is NOT
+   * changed here and still deletes on success. Phase 3's one-tap process button
+   * is where that becomes an archive with 'processed'.
+   */
+  async function discardInboxItem(inboxItemId) {
     const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
     if (!inboxItem) return;
-    return withLoading('Deleting...', async () => {
-      const deleted = await storage.delete(`inbox:${inboxItem.id}`);
-      // storage.delete swallows its own errors and returns false. Dropping the
-      // row from the list after a failed delete would hide a capture that is
-      // still in the database, and it would come back on the next refresh.
-      if (!deleted) {
-        window.alert("Could not delete that capture. It is still in your inbox.");
+    return withLoading('Discarding...', async () => {
+      const discarded = {
+        ...inboxItem,
+        archived: true,
+        triagedAt: new Date().toISOString(),
+        archiveReason: 'discarded',
+      };
+      const saved = await storage.set(`inbox:${inboxItem.id}`, discarded);
+      // storage.set swallows its own errors and returns false. Dropping the row
+      // from the list after a failed write would hide a capture that is still
+      // sitting in the inbox, and it would come back on the next refresh.
+      if (!saved) {
+        window.alert("Could not discard that capture. It is still in your inbox.");
         return;
       }
       setInboxItems(inboxItems.filter((i) => i.id !== inboxItemId));
 
-      // Unchanged from Step 2, which is the point: `storage.set` UPDATEs by id
-      // and INSERTs only when that matched nothing, so re-inserting a deleted
-      // row keeps its original id for free. Swapping the archive for a delete
-      // above changed what this closure reverses, not how it does it.
+      // The undo writes the ORIGINAL row back, which restores archived,
+      // triagedAt and archiveReason to whatever they were — all three together,
+      // as inbox_archive_reason_needs_archived requires. `storage.set` UPDATEs
+      // by id, so this is a plain field reversal now rather than the
+      // re-insert-a-deleted-row trick it used to be.
       //
       // (Step 2 called the createdAt re-sort load-bearing. It no longer is —
       // Step 9b made display order a function of the sort preference rather
       // than of array order. Kept so `inboxItems` stays in a canonical order.)
-      offerUndoFor("Capture deleted.", async () => {
+      offerUndoFor("Capture discarded.", async () => {
         await storage.set(`inbox:${inboxItem.id}`, inboxItem);
         setInboxItems((prev) =>
           [...prev.filter((i) => i.id !== inboxItemId), inboxItem].sort((a, b) =>
@@ -5763,7 +5788,7 @@ export default function Alfred() {
                     items={items}
                     collections={activeCollections}
                     onSave={handleInboxSave}
-                    onDelete={deleteInboxItem}
+                    onDiscard={discardInboxItem}
                     onEnrich={handleInboxEnrich}
                     onDirtyChange={setUnsavedChanges}
                     onSaveCaptureText={updateInboxCaptureText}
@@ -7482,10 +7507,11 @@ function InboxCard({
   collections,
   tagPool = [],
   onSave,
-  // Renamed with the behaviour in Step 10: this hard-deletes the row now
-  // rather than flagging it, and a prop still called onArchive would be the
-  // last place anyone looked to find that out.
-  onDelete,
+  // Named for what it does, and renamed twice for that reason. Step 10 made it
+  // a hard delete and called it onDelete; Clipboard Step 5b made it an archive
+  // with reason 'discarded', so onDelete became the lie onArchive had been. A
+  // prop name is the last place anyone looks to find out behaviour changed.
+  onDiscard,
   onEnrich,
   onDirtyChange,
   onSaveCaptureText,
@@ -8045,18 +8071,19 @@ function InboxCard({
                 you can already read in full should not require opening the
                 triage form first.
 
-                Behaviour is deliberately untouched: this is the SAME archive
-                call the expanded footer makes. Step 10 turns both into a hard
-                delete and relabels them "Delete".
+                Behaviour is deliberately untouched: this is the SAME call the
+                expanded footer makes. Step 10 turned both into a hard delete
+                and relabelled them "Delete"; Clipboard Step 5b turned both back
+                into an archive, reason 'discarded', and relabelled them again.
 
                 stopPropagation because the whole card is the expand target. */}
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 if (onDirtyChange) onDirtyChange(false);
-                onDelete(inboxItem.id);
+                onDiscard(inboxItem.id);
               }}
-              title="Delete this capture"
+              title="Discard this capture (reversible)"
               // ml-1 on top of the row's gap-2 = 12px. The badges stay tightly
               // grouped as one informational cluster; the action separates from
               // them. Its neighbour is the source icon, which LOOKS static but
@@ -8729,14 +8756,16 @@ function InboxCard({
             Cancel
           </button>
         </div>
-        {/* "Delete", not "Archive". The two ran byte-identical code and were
-            indistinguishable in the data; now this removes the row and the
-            label says so. Same call as the collapsed row's icon. */}
+        {/* "Discard", not "Delete" — Clipboard Step 5b. It was "Delete" while
+            this really did remove the row. It now archives with reason
+            'discarded', which is reversible and leaves the paired clip
+            reachable, so the label says the softer, truer thing. Same call as
+            the collapsed row's icon. */}
         <button
-          onClick={() => { if (onDirtyChange) onDirtyChange(false); onDelete(inboxItem.id); }}
+          onClick={() => { if (onDirtyChange) onDirtyChange(false); onDiscard(inboxItem.id); }}
           className="min-h-[44px] text-muted-foreground hover:text-destructive transition-colors flex items-center gap-1"
         >
-          <Trash2 className="w-4 h-4" /> Delete
+          <Trash2 className="w-4 h-4" /> Discard
         </button>
       </div>
 

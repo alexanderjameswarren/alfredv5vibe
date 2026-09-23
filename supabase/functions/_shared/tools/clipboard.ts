@@ -111,13 +111,26 @@ function requireText(tool: string, field: string, value: unknown): string {
 }
 
 /**
- * Which of these clips' inbox items are archived?
+ * Which of these inbox ids are STILL LIVE — present in the table and not
+ * archived?
  *
- * One query for the whole page of clips rather than one per clip. A clip whose
- * `inbox_id` is null (the link update failed at capture time — see clip-capture)
- * counts as NOT archived, which is true: there is no inbox row hiding it.
+ * One query for the whole page of clips rather than one per clip.
+ *
+ * ⚠️ IT RETURNS THE LIVE SET, NOT THE ARCHIVED SET, AND THAT IS THE FIX FOR A
+ * REAL BUG. It used to return the ids it found with `archived = true`, and a
+ * clip whose inbox row had been DELETED was therefore absent from that set and
+ * counted as live. Since deletion was exactly what the inbox trash can did, the
+ * one action meant to make a clip go away made it permanent: it came back to
+ * every new conversation, for ever, and nothing could stop it.
+ *
+ * Asking "which are live" makes both ways of leaving the inbox — archived, or
+ * gone — fall on the same side of the test, because neither is in the answer.
+ *
+ * Step 5b makes the trash can archive rather than delete, so new rows will not
+ * vanish like this. Rows deleted BEFORE that change still can, and this is what
+ * covers them.
  */
-async function archivedInboxIds(ctx: Context, inboxIds: string[]): Promise<Set<string>> {
+async function liveInboxIds(ctx: Context, inboxIds: string[]): Promise<Set<string>> {
   if (inboxIds.length === 0) return new Set();
   const { data, error } = await ctx.db
     .from("inbox")
@@ -126,7 +139,9 @@ async function archivedInboxIds(ctx: Context, inboxIds: string[]): Promise<Set<s
   if (error) throw new Error(`get_recent_clips: could not read inbox state: ${error.message}`);
   return new Set(
     ((data ?? []) as Array<{ id: string; archived: boolean | null }>)
-      .filter((r) => r.archived === true)
+      // `!== true` rather than `=== false`: archived is nullable, and a null
+      // there means "never archived", same as false.
+      .filter((r) => r.archived !== true)
       .map((r) => r.id),
   );
 }
@@ -203,11 +218,15 @@ export const getRecentClipsTool = defineTool({
     let rows = (data ?? []) as unknown as Row[];
 
     if (!includeArchived) {
-      const archived = await archivedInboxIds(
+      const live = await liveInboxIds(
         ctx,
         rows.map((r) => r.inbox_id).filter((v): v is string => typeof v === "string"),
       );
-      rows = rows.filter((r) => !(r.inbox_id && archived.has(r.inbox_id)));
+      // A null inbox_id stays: it means the pairing update failed at capture
+      // time (see clip-capture), so an inbox row DOES exist and is untriaged —
+      // we just do not know which one. Treating that as handled would hide a
+      // clip nobody has looked at.
+      rows = rows.filter((r) => !r.inbox_id || live.has(r.inbox_id));
     }
 
     const matched = rows.length;
@@ -410,17 +429,22 @@ export const archiveInboxItemTool = defineTool({
       ? true
       : (args.archived as boolean);
 
-    // triaged_at moves with archived: stamped when hiding, cleared when putting
-    // back. Leaving a stale timestamp on an un-archived row would make it look
-    // dispositioned while it sat in the inbox.
+    // All three move together: stamped when hiding, cleared when putting back.
+    // Leaving a stale timestamp or reason on an un-archived row would make it
+    // look dispositioned while it sat in the inbox, and
+    // inbox_archive_reason_needs_archived refuses that pairing anyway.
+    //
+    // 'processed' and not 'discarded': this tool is Claude tidying up after
+    // dealing with something. The trash can in the app is what discards.
     const { data, error } = await ctx.db
       .from("inbox")
       .update({
         archived,
         triaged_at: archived ? new Date().toISOString() : null,
+        archive_reason: archived ? "processed" : null,
       })
       .eq("id", inboxId)
-      .select("id, source_type, captured_text, archived, triaged_at")
+      .select("id, source_type, captured_text, archived, triaged_at, archive_reason")
       .maybeSingle();
 
     if (error) throw new Error(`${T}: ${error.message}`);
@@ -436,8 +460,10 @@ export const archiveInboxItemTool = defineTool({
     return {
       ...data,
       result: archived
-        ? "Archived. It has left the Alfred inbox screen. Un-archive with archived: false."
-        : "Un-archived. It is back in the Alfred inbox, untriaged.",
+        ? "Archived with reason 'processed'. It has left the Alfred inbox screen " +
+          "immediately. Nothing was deleted — un-archive with archived: false."
+        : "Un-archived: archived false, triaged_at and archive_reason cleared. " +
+          "It is back in the Alfred inbox, untriaged.",
     };
   },
 });
