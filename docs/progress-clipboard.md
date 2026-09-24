@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 is code-complete.** Steps 16-19 done; 17g and 19 awaiting in-app verification.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 is code-complete.** Steps 16-19 done; 17h and 19 awaiting in-app verification. `docs/design-system.md` started.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -68,7 +68,8 @@ seven distinct designs, every name matching its title, README list accurate.
 - [x] Step 17e: Pinned footer spacing. The buttons sat 8px from the top and 12px from the bottom, and once a footer released the card's own bottom padding stacked under it. - **done 2026-09-24.** `py-3` on all six, and a `-mb-*` matching each card's padding. Offsets and content padding untouched, as instructed.
 - [x] Step 18: Retire the inline card expansion. Remove the old expanded form from `InboxCard`, including its four normaliser copies and the `eslint-disable`d dirty check — but only once nothing uses them. Run the frontend suite. - **done 2026-09-24.** 1,224 lines removed; `InboxCard` is 44 lines and takes three props. Suite green: 67 suites, 1492 tests; build clean. - **verified 2026-09-24.**
 - [x] Step 17f: The inbox detail page's released footer had ~13px above the buttons and ~40px below. - **done 2026-09-24.** A CSS specificity fight, not the padding value — see the notes. - **INCOMPLETE.** The same fight was live on three screens, not one; the claim that the other five were unaffected was wrong. Closed by 17g.
-- [x] Step 17g: One shared `PinnedFooter` for all six pinned footers, so the geometry cannot differ between screens. Plus the flaky SAM clock assertion. - **done 2026-09-24.** Suite green three runs in a row: 71 suites, 1569 tests; build clean.
+- [x] Step 17g: One shared `PinnedFooter` for all six pinned footers, so the geometry cannot differ between screens. Plus the flaky SAM clock assertion. - **done 2026-09-24.** Suite green three runs in a row: 71 suites, 1569 tests; build clean. - **verified 2026-09-24** for spacing.
+- [x] Step 17h: One shared `EditCard` for the four full-screen edit forms, which also fixes the footer painting over the card's rounded corner. Plus `docs/design-system.md`. - **done 2026-09-24.** Suite green: 71 suites, 1572 tests; build clean.
 - [x] Step 19: For clipboard items the detail page also shows the captured page text (collapsed, with Show all), the links, and the screenshot slices. Run the frontend suite. - **done 2026-09-24.** `src/ClipboardCapture.jsx` and `src/utils/capturedClip.js`, 50 new tests. Suite: 69 suites, 1548 tests, ONE pre-existing SAM flake (see the notes); build clean.
 
 ## Notes
@@ -104,6 +105,84 @@ invisible until something else wants that property.
 **Fix: `space-y-5` → `flex flex-col gap-5` on the card.** `gap` sets no margins, so
 there is nothing to lose to. One class, no `!important`, no restructuring, and the
 other five footers were never affected because none of them is a `space-y` child.
+
+### Step 17h — one edit card, and the squared-off corner, 2026-09-24
+
+#### The corner
+
+A released footer is stretched to its card's edges, and its SQUARE bottom corners
+painted over the card's ROUNDED ones. It showed on the item edit screen and not on the
+inbox detail page purely because that one footer carried a matching `rounded-b-xl` by
+hand — an accident, not a design.
+
+#### The cards had drifted, and nothing was holding them together
+
+| screen | before |
+|---|---|
+| item edit | `p-3 sm:p-4 bg-card border-2 border-primary rounded-lg shadow-md` |
+| intention edit | the same |
+| Context form | `p-4 sm:p-6 bg-white border-2 border-primary rounded-lg shadow-lg` |
+| inbox detail | `p-4 sm:p-7 bg-card border-2 border-primary rounded-xl` (no shadow) |
+
+Three radii, three shadows, three paddings, two spellings of white.
+
+#### `src/EditCard.jsx`
+
+Owns border, radius, shadow, surface and padding — and hands the two numbers its footer
+depends on DOWN THROUGH CONTEXT, so no screen states either:
+
+* `EDIT_CARD_INSET` — the padding the footer cancels to reach the card's edges.
+* `EDIT_CARD_FOOTER_RADIUS` — `rounded-b-lg`, derived from the card's `rounded-lg`.
+
+Context rather than props was the shape that let the JSX stay where it was: the footer
+reads the card it is inside, and a footer with no card (the two add-to-collection pages)
+correctly gets nothing to cancel. No call site names an inset any more — which is what
+`src/EditCard.test.jsx` enforces.
+
+**The look: `border-2 border-primary rounded-lg shadow-md` on `bg-card`.** Alex offered
+the inbox page's `rounded-xl` for all four; the counts said otherwise. `rounded-xl`
+appeared **0** times in Alfred.jsx against `rounded-lg`'s **92**, and `shadow-md` 53
+times against `shadow-lg`'s 4. Three of the four cards were already `rounded-lg
+shadow-md`. Taking `rounded-xl` would have made these four agree with each other and
+disagree with every other card in the app. The inbox mockup's 12px radius loses 4px to
+match the whole app.
+
+Padding unified on `p-4 sm:p-6`. Safe now in a way it would not have been earlier: every
+list site passes `onViewDetail`, so `ItemCard` and `IntentionCard` render their editing
+card ONLY full-screen. `ContextForm` is the one with two modes, and its panel mode keeps
+an unpinned footer.
+
+#### 🛑 Why the card does NOT clip its contents
+
+The instruction was to clip — `overflow: clip` rather than `hidden`, which is right about
+`sticky`: clip establishes no scroll container, so sticky keeps working. **It would have
+broken the intention edit screen.**
+
+`RecurrenceQuickSelect` opens an absolutely-positioned dropdown (`absolute z-50 mt-1
+w-full`) and sits near the bottom of that form; `ItemPicker` does the same a few fields
+above it. Overflow clipping applies to absolutely-positioned descendants whose containing
+block is inside the clipped box, so both dropdowns would be cut off at the card's edge,
+and `overflow-clip-margin` cannot help a list of unknown height.
+
+So the equivalent Alex allowed: the footer takes the card's own bottom radius, from the
+same constant the card builds its own radius from. The problem was never general overflow
+— it was one known element stretched to the card's edges — and this fixes exactly that
+while clipping nothing.
+
+#### Untouched, as instructed
+
+`EventCard` shares the old class list and is a card in a LIST, not a full-screen form, so
+it keeps it. The Context form's panel mode on the context detail page keeps its unpinned
+footer. Both are asserted by the guard test, so a later tidy-up cannot sweep them in by
+accident.
+
+#### `docs/design-system.md`
+
+Started, per Alex. `EditCard` and `PinnedFooter` as the first two shared components: what
+each owns, what a caller may pass, the rule that full-screen edit forms must use them,
+and the two reasoned exceptions. It also records the `!important` trap and the two
+constants that are not derived from anything, so the next person does not rediscover
+either the hard way.
 
 ### Step 17g — one footer component, after three rounds of fixing six copies, 2026-09-24
 

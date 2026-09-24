@@ -17,7 +17,7 @@ import { useExecutionRoute } from "./useExecutionRoute";
 import InboxDetailView from "./InboxDetailView";
 import ClipboardCapture from "./ClipboardCapture";
 import PinnedFooter from "./PinnedFooter";
-import { FOOTER_INSETS } from "./utils/pinnedFooterGeometry";
+import EditCard from "./EditCard";
 import { clipIdFor } from "./utils/capturedClip";
 import { friendlyDate, SourceIcon } from "./CaptureMeta";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
@@ -930,7 +930,7 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
           as a whole does not usually exceed the viewport. It is here for the
           cases that do — a very short window, or if that cap is ever lifted —
           rather than because it changes anything today. */}
-      <PinnedFooter inset={FOOTER_INSETS.onPageBackground} className="bg-background">
+      <PinnedFooter className="bg-background">
         <button
           onClick={() => onAdd(Object.values(selected))}
           disabled={Object.keys(selected).length === 0}
@@ -1282,7 +1282,7 @@ function ItemAddToCollection({ item, items, collections, contexts, onBack, onAdd
 
           {/* Same offsets as CollectionAddItems. Now that the list no longer
               scrolls internally this genuinely engages on a long recipe. */}
-          <PinnedFooter inset={FOOTER_INSETS.onPageBackground} className="bg-background">
+          <PinnedFooter className="bg-background">
             <button
               onClick={handleAdd}
               disabled={busy || selectedCount === 0 || !collection}
@@ -7665,7 +7665,7 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = 
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="mb-4 sm:mb-6 p-4 sm:p-6 bg-white border-2 border-primary rounded-lg shadow-lg">
+    <EditCard className="mb-4 sm:mb-6">
       <h3 className="font-medium text-lg mb-4">
         {editing ? "Edit Context" : "New Context"}
       </h3>
@@ -7765,12 +7765,7 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = 
             space above and below the buttons — belongs to PinnedFooter. All six of
             Alfred's pinned footers share it, which is the point: this took three
             rounds to get right and the third round fixed only one of the six. */}
-        <PinnedFooter
-          pinned={stickyFooter}
-          inset={FOOTER_INSETS.contextForm}
-          className="bg-white"
-          unpinnedClassName="pt-2"
-        >
+        <PinnedFooter pinned={stickyFooter} unpinnedClassName="pt-2">
           <button
             onClick={() => {
               if (name.trim()) {
@@ -7790,7 +7785,7 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = 
           </button>
         </PinnedFooter>
       </div>
-    </div>
+    </EditCard>
   );
 }
 
@@ -9855,7 +9850,7 @@ function ItemCard({
 
   if (isEditing) {
     return (
-      <div className="p-3 sm:p-4 bg-card border-2 border-primary rounded-lg shadow-md">
+      <EditCard>
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-foreground mb-1">
@@ -10175,12 +10170,7 @@ function ItemCard({
             </div>
           </div>
 
-          <PinnedFooter
-            pinned={stickyFooter}
-            inset={FOOTER_INSETS.itemCard}
-            className="bg-card"
-            unpinnedClassName="pt-2"
-          >
+          <PinnedFooter pinned={stickyFooter} unpinnedClassName="pt-2">
             <button
               onClick={handleSave}
               className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
@@ -10210,7 +10200,7 @@ function ItemCard({
             )}
           </PinnedFooter>
         </div>
-      </div>
+      </EditCard>
     );
   }
 
@@ -10998,7 +10988,7 @@ function IntentionCard({
 
   if (isEditing) {
     return (
-      <div className="p-3 sm:p-4 bg-card border-2 border-primary rounded-lg shadow-md">
+      <EditCard>
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-foreground mb-1">
@@ -11150,11 +11140,7 @@ function IntentionCard({
             </div>
           )}
 
-          <PinnedFooter
-            pinned={stickyFooter}
-            inset={FOOTER_INSETS.intentionCard}
-            className="bg-card"
-          >
+          <PinnedFooter pinned={stickyFooter}>
             {/* Both go through handleSave, so each still saves the form AND
                 schedules in one action — which is what the old Do Today did and
                 the old Schedule Later did not. The popover only supplies the
@@ -11207,7 +11193,7 @@ function IntentionCard({
             )}
           </PinnedFooter>
         </div>
-      </div>
+      </EditCard>
     );
   }
 

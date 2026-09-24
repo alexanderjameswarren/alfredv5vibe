@@ -63,38 +63,57 @@
  * padding would need cancelling too, and this would not know about it.
  */
 
-import { PINNED_FOOTER_PAD_Y } from "./utils/pinnedFooterGeometry";
+import { useContext } from "react";
+import { EditCardContext } from "./EditCard";
 
 /**
- * @param {[number, number]} inset
- *   The container's padding in px, `[phone, sm]`. `[0, 0]` for a footer that is not
- *   inside a padded card — it then has no margins to undo and no padding to replace.
+ * Space above and below the footer's buttons, in px.
+ *
+ * ONE constant, applied to both sides below, so "equal above and below" is a
+ * property of the code rather than of two numbers that currently match. It was
+ * `pt-2 pb-3` — 8px and 12px — until Step 17e.
+ */
+export const PINNED_FOOTER_PAD_Y = 12;
+
+/**
+ * The inset and the bottom radius are NOT props. They come from the `EditCard` this
+ * footer is inside, through context — see that file. A footer with no card around it
+ * has nothing to cancel and no corner to match.
+ *
  * @param {boolean} [pinned]
  *   False renders a plain, unpinned button row. Three of the six screens render in
  *   two places: one where the form owns the screen and a pinned footer is right, and
  *   one where it is a panel above other content and a pinned footer would hover over
  *   things it does not belong to.
- * @param {string} [className]  Surface only — background, and the inbox page's
- *   rounded bottom corners. The geometry is not overridable and is not meant to be.
+ * @param {string} [className]  The background, for a footer with no card around it.
+ *   Ignored inside an `EditCard`, which supplies its own surface.
  * @param {string} [unpinnedClassName]  Extra classes for the unpinned row, so each
  *   screen keeps exactly the spacing it had there.
  */
 export default function PinnedFooter({
-  inset = [0, 0],
   pinned = true,
   className = "",
   unpinnedClassName = "",
   children,
 }) {
+  // The card this footer belongs to, if any. Nothing here is passed in per screen:
+  // the card knows its own padding and its own corner radius, and those are exactly
+  // the two things the footer has to agree with it about.
+  const card = useContext(EditCardContext);
+
   if (!pinned) {
     return <div className={`flex flex-wrap items-center gap-2 ${unpinnedClassName}`}>{children}</div>;
   }
 
-  const [base, sm] = inset;
+  // No card means no padding to cancel and no corner to match — which is right for the
+  // two add-to-collection pages, whose footers sit on the page background.
+  const [base, sm] = card?.inset ?? [0, 0];
+  const bottomRadiusClassName = card?.bottomRadiusClassName ?? "";
+  const surface = card ? "bg-card" : className;
 
   return (
     <div
-      className={`pinned-footer flex flex-wrap items-center gap-2 border-t border-border ${className}`}
+      className={`pinned-footer flex flex-wrap items-center gap-2 border-t border-border ${bottomRadiusClassName} ${surface}`}
       style={{
         // Read by the media query in index.css, which picks one of them as
         // `--pf-now`. Plain px so there is no unit arithmetic to get wrong.

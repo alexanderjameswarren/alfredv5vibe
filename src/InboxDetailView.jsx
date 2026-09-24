@@ -67,7 +67,7 @@ import {
 import ItemPicker, { PickedItem } from "./ItemPicker";
 import TagPicker from "./TagPicker";
 import PinnedFooter, { FooterSpacer } from "./PinnedFooter";
-import { FOOTER_INSETS } from "./utils/pinnedFooterGeometry";
+import EditCard from "./EditCard";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
 import { normaliseSuggestedElements } from "./utils/suggestedElements";
 import { isFirstStep } from "./utils/elementOffsets";
@@ -618,11 +618,17 @@ export default function InboxDetailView({
         Back
       </button>
 
-      {/* One centred card with the brown outline, matching the item and
-          intention edit screens. max-w-[860px] is the mockup's card width; it
-          collapses to full width below that, which is the phone layout — one
-          column, same order. */}
-      <div className="max-w-[860px] mx-auto bg-card border-2 border-primary rounded-xl p-4 sm:p-7 flex flex-col gap-5">
+      {/* `EditCard` — the same card as the item, intention and Context forms, which
+          is now a shared component rather than four class lists that had drifted
+          apart. max-w-[860px] is the mockup's card width; it collapses to full width
+          below that, which is the phone layout — one column, same order.
+
+          `flex flex-col gap-5` and NOT `space-y-5`: the latter sets
+          `margin-bottom: 0` on every child but the first, at a specificity that beats
+          a utility class, and the footer needs a negative bottom margin. `gap` sets no
+          margins at all. PinnedFooter is immune either way now, but there is no reason
+          to put a fight in its path. */}
+      <EditCard className="max-w-[860px] mx-auto flex flex-col gap-5">
         {/* Source and time */}
         <div className="flex items-center gap-2.5">
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-muted text-muted-foreground text-xs">
@@ -1103,7 +1109,7 @@ export default function InboxDetailView({
             below the buttons — belongs to PinnedFooter, which all six of Alfred's
             pinned footers now share. See that file for why it took three rounds and
             what kept defeating it. */}
-        <PinnedFooter inset={FOOTER_INSETS.inboxDetail} className="bg-card rounded-b-xl">
+        <PinnedFooter>
           <button
             onClick={handleProcess}
             disabled={!canProcess}
@@ -1137,7 +1143,7 @@ export default function InboxDetailView({
             Discard
           </button>
         </PinnedFooter>
-      </div>
+      </EditCard>
     </div>
   );
 }
