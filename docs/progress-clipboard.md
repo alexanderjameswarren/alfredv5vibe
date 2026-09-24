@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 is code-complete.** Steps 16-19 done; 17h and 19 awaiting in-app verification. `docs/design-system.md` started.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 complete, verified and pushed.** Round 3: the inbox list, Steps 20-23. Step 20 done and deployed (mcp v121), awaiting verification.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -69,8 +69,21 @@ seven distinct designs, every name matching its title, README list accurate.
 - [x] Step 18: Retire the inline card expansion. Remove the old expanded form from `InboxCard`, including its four normaliser copies and the `eslint-disable`d dirty check — but only once nothing uses them. Run the frontend suite. - **done 2026-09-24.** 1,224 lines removed; `InboxCard` is 44 lines and takes three props. Suite green: 67 suites, 1492 tests; build clean. - **verified 2026-09-24.**
 - [x] Step 17f: The inbox detail page's released footer had ~13px above the buttons and ~40px below. - **done 2026-09-24.** A CSS specificity fight, not the padding value — see the notes. - **INCOMPLETE.** The same fight was live on three screens, not one; the claim that the other five were unaffected was wrong. Closed by 17g.
 - [x] Step 17g: One shared `PinnedFooter` for all six pinned footers, so the geometry cannot differ between screens. Plus the flaky SAM clock assertion. - **done 2026-09-24.** Suite green three runs in a row: 71 suites, 1569 tests; build clean. - **verified 2026-09-24** for spacing.
-- [x] Step 17h: One shared `EditCard` for the four full-screen edit forms, which also fixes the footer painting over the card's rounded corner. Plus `docs/design-system.md`. - **done 2026-09-24.** Suite green: 71 suites, 1572 tests; build clean.
+- [x] Step 17h: One shared `EditCard` for the four full-screen edit forms, which also fixes the footer painting over the card's rounded corner. Plus `docs/design-system.md`. - **done 2026-09-24.** Suite green: 71 suites, 1572 tests; build clean. - **verified 2026-09-24 and PUSHED.** Round 2 closed.
 - [x] Step 19: For clipboard items the detail page also shows the captured page text (collapsed, with Show all), the links, and the screenshot slices. Run the frontend suite. - **done 2026-09-24.** `src/ClipboardCapture.jsx` and `src/utils/capturedClip.js`, 50 new tests. Suite: 69 suites, 1548 tests, ONE pre-existing SAM flake (see the notes); build clean.
+
+## Phase 3, round 3: the inbox list
+
+The approved design is `docs/inbox-list-mockups/` — a README plus a desktop and a
+phone board, committed as `10a08ce`. Both were confirmed to be real, distinct mockups
+before committing, unlike round 2's folder. Read that README and
+`docs/design-system.md` before changing any frontend code.
+
+- [x] Step 20: `create_inbox_item` accepts an optional `source_type` ('mcp' default, or 'task') and `source_metadata` (for a task: task name, run date). Add a task icon to the source icon map. No UI beyond the icon. - **done 2026-09-24**, deployed as mcp v121, `verify_jwt` still false. `deno check` back at the baseline 97 errors — one new one found and fixed, see the notes.
+- [ ] Step 21: The list card and the filters. One shared `InboxListCard` per the mockup: title, meta line, preview line (context chip, New item / New intention, date chip, tags), one action button plus the trash icon. **Process** files an enriched item in one tap from its suggestions, through the SAME save path as the detail page (archive as 'processed', set `source_inbox_id`), and shows only for enriched items that suggest at least an item or an intention. **Copy**, for task items, copies the captured text plus a final line `Alfred inbox item: <id>`. Source filter pills REUSE the existing tag filter component, with no "All" pill. Phone layout per the mockup.
+- [ ] Step 22: "Recently archived (n)" — the last seven days, collapsible, with "Show all". Each row says what happened (processed; processed into an item / intention / event, via `source_inbox_id`; or discarded) and offers a working Undo that un-archives.
+- [ ] Step 23: Add every new shared piece to `docs/design-system.md` — list card, filter pills, context chip, preview line, archived row — with the rules for using them, and extend the guard tests so screens must use them.
+
 
 ## Notes
 
@@ -105,6 +118,108 @@ invisible until something else wants that property.
 **Fix: `space-y-5` → `flex flex-col gap-5` on the card.** `gap` sets no margins, so
 there is nothing to lose to. One class, no `!important`, no restructuring, and the
 other five footers were never affected because none of them is a `space-y` child.
+
+### The existing tag filter, before reusing it for the source pills, 2026-09-24
+
+Investigation only, at Alex's request, before Step 21 tries to reuse it.
+
+`src/TagFilter.jsx` — default export `TagFilter`, plus `collapseOnSearch` and
+`COLLAPSE_MIN_TAGS`. 50 tests in `src/TagFilter.test.jsx`. It moved out of Alfred.jsx
+on 2026-09-21 as a deliberate pure move, so it already has tests of its own.
+
+**Four call sites**, all in Alfred.jsx: the Intentions list, the Memories list, the
+Items accordion on context detail, and collection detail.
+
+**Props.** `entities` (rows to count from), `activeTag`, `onFilter`, `collapsed`,
+`onToggleCollapsed`.
+
+**Counting.** Done in the component from the rows it is handed — no query, no RPC. So
+the counts are of the list in front of you, not anything global, and archived rows
+never reach it because every caller filters them first. Pills are sorted
+ALPHABETICALLY, not by frequency, with `localeCompare`; that was changed on
+2026-09-21 because count-descending with no tie-break shuffled between renders.
+
+**When "Clear" appears.** Whenever `activeTag` is non-null, and nowhere else. It is
+rendered last, after the pills.
+
+**When the collapsing pill appears.** Both conditions must hold: `onToggleCollapsed`
+is a function AND there are at least `COLLAPSE_MIN_TAGS` (4) distinct tags. Its
+absence is how a caller opts out of collapsing, which is what makes "collapsed with no
+way to reopen" impossible rather than merely unlikely. It renders FIRST, so it is in
+the same place whether the bar is open or shut.
+
+**What it does.** Reads `Tags (n)`, with a chevron rotated -90 when collapsed. It only
+renders the state it is handed — the caller owns it (`listTagsCollapsed`, keyed by
+page). Collapsed, the bar shows the toggle plus, if something is filtering, the active
+pill and Clear; everything else is hidden. **Clearing the search box does not reopen
+it** — expanding is always a deliberate tap. The threshold is checked in the RENDER
+rather than in `collapseOnSearch`, so a bar whose tag count drops below four while
+collapsed simply opens again.
+
+**Renders nothing at all** when no tag is in use and nothing is filtering. An active
+filter alone keeps the bar alive, which was Step 4b: archive the last tagged row while
+filtered to its tag and the bar used to vanish, taking `Clear` with it, on the screen
+where the list was emptiest.
+
+#### 🛑 The one real obstacle: it is SINGLE-select
+
+`activeTag` is one string or null. `onFilter(tag)` applies, `onFilter(null)` clears,
+and tapping the active pill toggles it off. There is no notion of a set.
+
+The inbox list README asks for "selecting one or more narrows the list". So "reuse the
+existing component rather than rebuilding it" and multi-select cannot both be had as
+things stand. Three ways out, for Alex to choose at Step 21:
+
+1. **Reuse as-is, single-select.** No risk to the four existing screens; the README's
+   "one or more" becomes "one".
+2. **Add an opt-in multi-select mode** — `activeTags` as an array alongside the
+   existing `activeTag`, with the four current callers untouched. More work, and the
+   component grows a second shape, but nothing existing changes behaviour.
+3. Copy it — explicitly ruled out, and rightly: the collapse rules alone are four
+   interacting decisions with 74 tests behind them.
+
+**Recommendation: 2.** The filter is over six fixed source types rather than a growing
+tag vocabulary, so "Claude and Task" is a genuinely useful narrowing that "Claude"
+alone is not — and an opt-in array leaves the tag screens alone. Worth knowing before
+choosing: with six sources the collapsing pill would appear whenever more than four
+source types have items, which on a real inbox will be rare.
+
+### Step 20 — task items, 2026-09-24
+
+`create_inbox_item` now takes `source_type` and `source_metadata`. Deployed as mcp
+v121; `verify_jwt` still false on mcp and on clip-capture.
+
+**An allowlist, not a pass-through.** `inbox.source_type` has no check constraint and
+no enum, so an unrecognised value would be stored happily and then render as a pencil
+("typed by hand") everywhere downstream. The handler rejects anything but `mcp` and
+`task` with a message a model can act on, and the input schema is a `z.enum` as well —
+the schema stops the common case, the handler is what actually holds.
+
+**A task must name itself.** `source_metadata.task_name` is required for a task,
+because a task row with no name cannot answer "what ran", which is the only reason the
+row says "task" rather than "Claude". `run_date` is optional and checked against
+`YYYY-MM-DD` — it reaches the UI as a date, and an unparseable string would render as
+"Invalid Date".
+
+**⚠️ A TASK IS NOT ENRICHED, and that is the point of it.** An `mcp` capture is made
+by a model that has just researched contexts, items and tags, so claiming `enriched` is
+honest. A scheduled task has had no such conversation — it captured something for a
+Claude session to look at later. So `ai_status` is `not_started` for a task, which is
+what makes the mockup's "Needs a Claude session" status and its Copy-instead-of-Process
+button true rather than decorative.
+
+(The `mcp` branch keeps its long-standing quirk of claiming `enriched` even when no
+suggestions were passed. Untouched: it predates this and fixing it is not this step.)
+
+**The icon is `ListChecks`.** `Calendar` is already the schedule and `CalendarClock` an
+event; a task is not a moment in time but a named job that ran. Added to
+`src/CaptureMeta.jsx` alongside a "Task" label, and `get_inbox`'s `source` filter
+description now lists the new value, so a model can actually filter to it.
+
+**One new type error, found and fixed.** `z.record(z.unknown())` — zod v4 wants the key
+type too. `deno check` went 97 → 98 and back to 97. Worth knowing: the same one-argument
+call appears at five OLDER sites in that file and accounts for five of the 97 baseline
+errors. Left alone as out of scope, but they are a five-line fix if wanted.
 
 ### Step 17h — one edit card, and the squared-off corner, 2026-09-24
 

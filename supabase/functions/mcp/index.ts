@@ -181,6 +181,54 @@ const createInboxItemTool = defineTool({
   // confirmation.
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
+    // Clipboard Step 20. `source_type` used to be hard-coded "mcp" and was
+    // deliberately not in the input schema. It is now caller-provided, with
+    // exactly two legal values, because a SCHEDULED TASK needs to be
+    // distinguishable from a live conversation: the inbox list shows a different
+    // icon, a different status and a different action for each.
+    //
+    // ⚠️ AN ALLOWLIST, NOT A PASS-THROUGH. `inbox.source_type` has no check
+    // constraint and no enum, so an unrecognised value would be stored happily
+    // and then render as a pencil ("typed by hand") everywhere downstream. That
+    // is the quiet kind of wrong. The caller here is a model, so a rejection it
+    // can read beats a value nobody notices.
+    const sourceType = args.source_type === undefined ? "mcp" : args.source_type;
+    if (sourceType !== "mcp" && sourceType !== "task") {
+      throw new Error(
+        `create_inbox_item: source_type must be "mcp" (a capture from this ` +
+          `conversation, the default) or "task" (a scheduled run). Got ` +
+          `${JSON.stringify(args.source_type)}.`,
+      );
+    }
+    const isTask = sourceType === "task";
+
+    const rawMeta = args.source_metadata;
+    const metaGiven =
+      rawMeta !== undefined && rawMeta !== null && typeof rawMeta === "object" && !Array.isArray(rawMeta);
+    const sourceMetadata = metaGiven ? (rawMeta as Record<string, unknown>) : {};
+
+    if (isTask) {
+      // A task row with no task name cannot answer "what ran", which is the only
+      // reason the row says "task" rather than "Claude" — so it is required
+      // rather than defaulted to something invented.
+      const taskName = sourceMetadata.task_name;
+      if (typeof taskName !== "string" || taskName.trim() === "") {
+        throw new Error(
+          `create_inbox_item: a "task" capture needs source_metadata.task_name — ` +
+            `the name of the task that ran. Without it the inbox cannot say what produced this.`,
+        );
+      }
+      // Checked rather than trusted: this is rendered as a date, and an
+      // unparseable string would reach the UI as "Invalid Date".
+      const runDate = sourceMetadata.run_date;
+      if (runDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(runDate))) {
+        throw new Error(
+          `create_inbox_item: source_metadata.run_date must be YYYY-MM-DD. Got ` +
+            `${JSON.stringify(runDate)}.`,
+        );
+      }
+    }
+
     const record = {
       id: crypto.randomUUID(),
       archived: false,
@@ -190,12 +238,21 @@ const createInboxItemTool = defineTool({
       // the real gate. Same value the old handler round-tripped auth.getUser()
       // for; the DB also has DEFAULT auth.uid() on this column since 00b.
       user_id: ctx.userId,
-      // Server-set for every MCP capture. NOT caller-provided — not in the
-      // input schema. Matches historical behavior from every version of
-      // this tool: MCP-sourced, opaque metadata, AI-enriched-at-creation.
-      source_type: "mcp",
-      source_metadata: {},
-      ai_status: "enriched",
+      source_type: sourceType,
+      source_metadata: sourceMetadata,
+      // ⚠️ A TASK IS NOT ENRICHED, AND THAT IS THE POINT OF IT.
+      //
+      // An "mcp" capture is created by a model that has just researched the
+      // contexts, items and tags, so it arrives with suggestions and claiming
+      // "enriched" is honest. A scheduled task has had no such conversation: it
+      // captured something for a Claude session to look at LATER. The inbox list
+      // shows that as "Needs a Claude session" and offers Copy instead of
+      // Process, and both of those read this column.
+      //
+      // (The "mcp" branch keeps its long-standing quirk of claiming `enriched`
+      // even when the caller passed no suggestions at all. Untouched here: it
+      // predates this change and fixing it is not this step.)
+      ai_status: isTask ? "not_started" : "enriched",
       suggested_context_id: (args.suggested_context_id as string) || null,
       suggest_item: (args.suggest_item as boolean) || false,
       suggested_item_text: (args.suggested_item_text as string) || null,
@@ -897,7 +954,7 @@ export function createMcpServer(token: string) {
           .string()
           .optional()
           .describe(
-            "Filter by how the capture arrived: 'manual' (typed into the Alfred app), 'email' (forwarded to the capture address), 'mcp' (created by Claude with create_inbox_item), 'clipboard' (a page clipped by the Chrome extension), or 'cli' (a report pushed by the Claude CLI). For clipboard and cli items, get_recent_clips is the better tool — it returns the actual page text and links, which the inbox row does not carry.",
+            "Filter by how the capture arrived: 'manual' (typed into the Alfred app), 'email' (forwarded to the capture address), 'mcp' (created by Claude during a conversation), 'task' (created by a scheduled task run — these are NOT enriched and are waiting for a Claude session), 'clipboard' (a page clipped by the Chrome extension), or 'cli' (a report pushed by the Claude CLI). For clipboard and cli items, get_recent_clips is the better tool — it returns the actual page text and links, which the inbox row does not carry.",
           ),
         limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
       },
@@ -924,6 +981,21 @@ export function createMcpServer(token: string) {
         "Create a new item in Alfred's inbox with pre-filled AI suggestions. Use this when the user wants to capture something to Alfred — a task, recipe, reminder, grocery item, etc. The inbox item will appear in Alfred's UI for the user to review and approve. You should use the read tools (get_contexts, search_items, get_tags, get_collections) FIRST to look up the correct context_id, item_id, collection_id, and tags before creating the inbox item.",
       inputSchema: {
         captured_text: z.string().describe("The raw text being captured — what the user said or wants to remember"),
+        source_type: z
+          .enum(["mcp", "task"])
+          .optional()
+          .describe(
+            "Where this capture came from. Omit it — the default 'mcp' is right for anything you are capturing during a conversation with the user. Pass 'task' ONLY when you are a scheduled task run rather than a live conversation: the row is then marked as needing a Claude session, shown with a task icon, and offers Copy rather than Process, because nothing has researched its suggestions yet. Do not pass 'task' to mean 'this is a to-do' — that is suggest_intent.",
+          ),
+        source_metadata: z
+          // BOTH type arguments: zod v4's z.record requires the key type as well as
+          // the value type. Five older call sites in this file still pass one and are
+          // among its pre-existing type errors; this one does not join them.
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe(
+            "Extra facts about where the capture came from. REQUIRED for source_type 'task', which needs { task_name: string } — the name of the task that ran, because the inbox has nothing else to say what produced the row — and accepts { run_date: 'YYYY-MM-DD' }. Ignored shape-wise for 'mcp'.",
+          ),
         suggested_context_id: z.string().optional().describe("ID of an existing context to suggest (use get_contexts to find the right one)"),
         suggest_item: z.boolean().optional().describe("Should this become a reusable Item? (true for recipes, checklists, reference material)"),
         suggested_item_text: z.string().optional().describe("Suggested name for the new item"),

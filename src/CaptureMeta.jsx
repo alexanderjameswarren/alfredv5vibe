@@ -10,7 +10,7 @@
  * screen and correctly on the other.
  */
 
-import { Pencil, Bot, Mail, Paperclip, Terminal } from "lucide-react";
+import { Pencil, Bot, Mail, Paperclip, Terminal, ListChecks } from "lucide-react";
 
 /**
  * A capture's timestamp, in words.
@@ -55,6 +55,10 @@ export function friendlyDate(timestamp) {
 const SOURCE_LABELS = {
   manual: "Capture",
   mcp: "Claude",
+  // Clipboard Step 20. A SCHEDULED run, not a conversation — which is why it is a
+  // separate source rather than more `mcp`: a task row arrives unenriched and the
+  // inbox has to say so and offer something different to do about it.
+  task: "Task",
   email: "Email",
   clipboard: "Clipboard",
   cli: "CLI",
@@ -85,6 +89,12 @@ export function SourceIcon({ sourceType }) {
   const icons = {
     manual: <Pencil className="w-3.5 h-3.5" />,
     mcp: <Bot className="w-3.5 h-3.5" />,
+    // A checklist rather than a clock or a calendar: Calendar is already the
+    // schedule, CalendarClock is already an event, and this is not a moment in
+    // time — it is a named job that ran. Alfred's icon vocabulary is in
+    // Alfred.jsx's OBJECT_ICONS; these five are the SOURCE vocabulary, which is a
+    // different question ("how did this arrive") and deliberately separate.
+    task: <ListChecks className="w-3.5 h-3.5" />,
     email: <Mail className="w-3.5 h-3.5" />,
     // Alfred Clipboard — spec 4.3.
     clipboard: <Paperclip className="w-3.5 h-3.5" />,
