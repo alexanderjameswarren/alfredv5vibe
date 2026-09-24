@@ -1,7 +1,9 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import InboxDetailView from "./InboxDetailView";
+import { intentionRowFromTriage } from "./utils/triageRows";
+import { toSnakeCase } from "./utils/caseConvert";
 
 // The page is in its own module so these tests exercise IT, not a reproduction of
 // its shape — the twin-site failure `useExecutionRoute` documents. What is pinned
@@ -34,6 +36,7 @@ function setup(overrides = {}, props = {}) {
   const onDiscard = jest.fn();
   const onBack = jest.fn();
   const onDirtyChange = jest.fn();
+  const onSaveCaptureText = jest.fn().mockResolvedValue(true);
   const utils = render(
     <InboxDetailView
       inboxItem={capture(overrides)}
@@ -44,6 +47,7 @@ function setup(overrides = {}, props = {}) {
       onDiscard={onDiscard}
       onBack={onBack}
       onDirtyChange={onDirtyChange}
+      onSaveCaptureText={onSaveCaptureText}
       renderRecurrence={({ onChange }) => (
         <button onClick={() => onChange({ frequency: "daily", interval: 1 })}>
           stub: every day
@@ -52,7 +56,7 @@ function setup(overrides = {}, props = {}) {
       {...props}
     />,
   );
-  return { onProcess, onDiscard, onBack, onDirtyChange, ...utils };
+  return { onProcess, onDiscard, onBack, onDirtyChange, onSaveCaptureText, ...utils };
 }
 
 const processButton = () => screen.getByRole("button", { name: /Process/ });
@@ -214,6 +218,81 @@ describe("Process", () => {
     fireEvent.click(processButton());
     expect(onProcess).toHaveBeenCalled();
     expect(onBack).not.toHaveBeenCalled();
+  });
+});
+
+// ── Step 17b: Details, from the keystroke to the row Postgres is sent ─────────
+//
+// The two halves of the chain joined with NOTHING STUBBED between them. The page
+// produces the triage data; the real row builder consumes it; the real case
+// converter converts it. The only thing not exercised is the network call itself.
+//
+// This exists because "0 of 166 rows have a description" could not be told apart
+// from "nobody typed any Details" by reading the code.
+describe("Details reaches the database row", () => {
+  function processWithDetails(details) {
+    const { onProcess } = setup({ suggestIntent: true, suggestedIntentText: "Fix the guard" });
+    fireEvent.change(screen.getByLabelText("Details"), { target: { value: details } });
+    fireEvent.click(processButton());
+    const [, triageData] = onProcess.mock.calls[0];
+    const row = intentionRowFromTriage({
+      id: "intent-1",
+      userId: "user-1",
+      intentionData: triageData.intentionData,
+      createdItemId: null,
+      sourceInboxId: "inbox-1",
+      createdAt: "2026-09-24T10:00:00.000Z",
+    });
+    return { triageData, row, dbRow: toSnakeCase(row) };
+  }
+
+  it("carries typed Details all the way to `description`", () => {
+    const { dbRow } = processWithDetails("Check the back-stack in the routing thread.");
+    expect(dbRow.description).toBe("Check the back-stack in the routing thread.");
+  });
+
+  it("carries a multi-paragraph value intact", () => {
+    // Built by joining, so the newlines in the assertion cannot drift from the
+    // newlines in the input.
+    const typed = ["First thought.", "", "Second thought."].join("\n");
+    const { dbRow } = processWithDetails(typed);
+    expect(dbRow.description).toBe(typed);
+    expect(dbRow.description.split("\n")).toHaveLength(3);
+  });
+
+  it("writes null when Details was left alone, which is the correct result", () => {
+    // The state Alex's SQL check most likely caught: a capture processed without
+    // Details typed. Null here is right, and this test is what distinguishes that
+    // from a value being dropped.
+    const { onProcess } = setup({ suggestIntent: true, suggestedIntentText: "Fix the guard" });
+    fireEvent.click(processButton());
+    const [, triageData] = onProcess.mock.calls[0];
+    expect(triageData.intentionData.description).toBe("");
+    const row = intentionRowFromTriage({
+      id: "i",
+      userId: "u",
+      intentionData: triageData.intentionData,
+      sourceInboxId: "inbox-1",
+      createdAt: "2026-09-24T10:00:00.000Z",
+    });
+    expect(row.description).toBeNull();
+  });
+
+  it("keeps the Details typed against the intention it was typed for", () => {
+    // Both sections on: the item's Description and the intention's Details are
+    // different fields and must not cross.
+    const { onProcess } = setup({
+      suggestItem: true,
+      suggestedItemText: "The item",
+      suggestedItemDescription: "the item description",
+      suggestIntent: true,
+      suggestedIntentText: "The intention",
+    });
+    fireEvent.change(screen.getByLabelText("Details"), { target: { value: "the intention details" } });
+    fireEvent.click(processButton());
+    const [, triageData] = onProcess.mock.calls[0];
+    expect(triageData.itemData.description).toBe("the item description");
+    expect(triageData.intentionData.description).toBe("the intention details");
   });
 });
 
@@ -440,6 +519,204 @@ describe("the unsaved-changes guard", () => {
     onDirtyChange.mockClear();
     unmount();
     expect(onDirtyChange).toHaveBeenCalledWith(false);
+  });
+});
+
+// -- Step 17b: correcting the capture text -------------------------------------
+//
+// Alex ruled this back in. Without it, retiring the inbox card in Step 18 would
+// leave no way in the app to fix a typo in a capture.
+describe("correcting the captured text", () => {
+  const pencil = () => screen.getByRole("button", { name: "Edit capture text" });
+  const saveText = () => screen.getByRole("button", { name: /Save text/ });
+
+  it("shows the capture read-only until the pencil is pressed", () => {
+    setup();
+    expect(screen.queryByLabelText("Capture text")).not.toBeInTheDocument();
+    fireEvent.click(pencil());
+    expect(screen.getByLabelText("Capture text")).toBeInTheDocument();
+  });
+
+  it("hides the pencil when there is no handler for it", () => {
+    setup({}, { onSaveCaptureText: undefined });
+    expect(screen.queryByRole("button", { name: "Edit capture text" })).not.toBeInTheDocument();
+  });
+
+  it("seeds the editor with the text as it stands", () => {
+    setup();
+    fireEvent.click(pencil());
+    expect(screen.getByLabelText("Capture text")).toHaveValue(
+      "Bug: browser Back skips the unsaved-changes guard.",
+    );
+  });
+
+  it("saves the corrected text on its own, without filing anything", async () => {
+    const { onSaveCaptureText, onProcess } = setup();
+    fireEvent.click(pencil());
+    fireEvent.change(screen.getByLabelText("Capture text"), { target: { value: "Corrected." } });
+    fireEvent.click(saveText());
+    await waitFor(() => expect(onSaveCaptureText).toHaveBeenCalledWith("inbox-1", "Corrected."));
+    // A typo fix is not a triage.
+    expect(onProcess).not.toHaveBeenCalled();
+  });
+
+  it("refuses to save an empty capture", () => {
+    const { onSaveCaptureText } = setup();
+    fireEvent.click(pencil());
+    fireEvent.change(screen.getByLabelText("Capture text"), { target: { value: "   " } });
+    expect(saveText()).toBeDisabled();
+    fireEvent.click(saveText());
+    expect(onSaveCaptureText).not.toHaveBeenCalled();
+  });
+
+  it("stays open when the save fails, holding what was typed", async () => {
+    const failing = jest.fn().mockResolvedValue(false);
+    setup({}, { onSaveCaptureText: failing });
+    fireEvent.click(pencil());
+    fireEvent.change(screen.getByLabelText("Capture text"), { target: { value: "Corrected." } });
+    fireEvent.click(saveText());
+    await waitFor(() => expect(failing).toHaveBeenCalled());
+    expect(screen.getByLabelText("Capture text")).toHaveValue("Corrected.");
+  });
+
+  it("throws the edit away on its own Cancel", () => {
+    const { onSaveCaptureText } = setup();
+    fireEvent.click(pencil());
+    fireEvent.change(screen.getByLabelText("Capture text"), { target: { value: "Corrected." } });
+    fireEvent.click(screen.getAllByRole("button", { name: /Cancel/ })[0]);
+    expect(onSaveCaptureText).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Capture text")).not.toBeInTheDocument();
+  });
+
+  it("arms the unsaved-changes guard while the edit is unsaved", () => {
+    // The one field on the old card that could be lost by navigating away.
+    const { onDirtyChange } = setup();
+    fireEvent.click(pencil());
+    onDirtyChange.mockClear();
+    fireEvent.change(screen.getByLabelText("Capture text"), { target: { value: "Corrected." } });
+    expect(onDirtyChange).toHaveBeenCalledWith(true, "this capture");
+  });
+
+  it("warns that saving clears the suggestions, but only when there are some", () => {
+    setup({ aiStatus: "enriched" });
+    fireEvent.click(pencil());
+    fireEvent.change(screen.getByLabelText("Capture text"), { target: { value: "Corrected." } });
+    expect(screen.getByText(/clears/)).toBeInTheDocument();
+  });
+
+  it("says nothing about suggestions on a capture that was never enriched", () => {
+    setup();
+    fireEvent.click(pencil());
+    fireEvent.change(screen.getByLabelText("Capture text"), { target: { value: "Corrected." } });
+    expect(screen.queryByText(/clears/)).not.toBeInTheDocument();
+  });
+
+  it("writes the corrected text BEFORE filing, when both are pending", async () => {
+    // "A triage in the same press files the corrected text rather than the text
+    // being corrected."
+    const order = [];
+    const onSaveCaptureText = jest.fn(async () => {
+      order.push("text");
+      return true;
+    });
+    const { onProcess } = setup(
+      { suggestIntent: true, suggestedIntentText: "Fix it" },
+      { onSaveCaptureText },
+    );
+    onProcess.mockImplementation(() => order.push("process"));
+    fireEvent.click(pencil());
+    fireEvent.change(screen.getByLabelText("Capture text"), { target: { value: "Corrected." } });
+    fireEvent.click(processButton());
+    await waitFor(() => expect(onProcess).toHaveBeenCalled());
+    expect(order).toEqual(["text", "process"]);
+  });
+
+  it("files nothing when the text save fails", async () => {
+    const failing = jest.fn().mockResolvedValue(false);
+    const { onProcess } = setup(
+      { suggestIntent: true, suggestedIntentText: "Fix it" },
+      { onSaveCaptureText: failing },
+    );
+    fireEvent.click(pencil());
+    fireEvent.change(screen.getByLabelText("Capture text"), { target: { value: "Corrected." } });
+    fireEvent.click(processButton());
+    await waitFor(() => expect(failing).toHaveBeenCalled());
+    expect(onProcess).not.toHaveBeenCalled();
+  });
+
+  it("moves a name that was still showing the capture verbatim", async () => {
+    // A pre-filled name follows the correction; a name the user wrote is theirs.
+    const { onSaveCaptureText, onProcess } = setup({ suggestIntent: true });
+    expect(screen.getByLabelText("Name")).toHaveValue(
+      "Bug: browser Back skips the unsaved-changes guard.",
+    );
+    fireEvent.click(pencil());
+    fireEvent.change(screen.getByLabelText("Capture text"), { target: { value: "Corrected." } });
+    fireEvent.click(saveText());
+    // Waiting for the call is not enough: the state updates run in the promise
+    // continuation after it. Wait for what should actually be true.
+    await waitFor(() => expect(screen.getByLabelText("Name")).toHaveValue("Corrected."));
+    expect(onSaveCaptureText).toHaveBeenCalled();
+    fireEvent.click(processButton());
+    expect(onProcess.mock.calls[0][1].intentionData.text).toBe("Corrected.");
+  });
+
+  it("leaves a name the user wrote alone", async () => {
+    const { onSaveCaptureText } = setup({ suggestIntent: true });
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "My own wording" } });
+    fireEvent.click(pencil());
+    fireEvent.change(screen.getByLabelText("Capture text"), { target: { value: "Corrected." } });
+    fireEvent.click(saveText());
+    await waitFor(() => expect(onSaveCaptureText).toHaveBeenCalled());
+    // The editor closing is the observable end of the save, and it happens in the
+    // same continuation as the name decision — so once it has closed, the name has
+    // been left alone or moved, and this assertion is not racing it.
+    await waitFor(() => expect(screen.queryByLabelText("Capture text")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Name")).toHaveValue("My own wording");
+  });
+
+  it("does not report the rest of the form dirty after a text save", async () => {
+    // The save clears the enrichment in the database, so `inboxItem` arrives back
+    // with every suggestion nulled. A baseline that tracked the row would call a
+    // form nobody had touched different from itself in a dozen places.
+    const { onSaveCaptureText, onDirtyChange, rerender } = setup({
+      suggestItem: true,
+      suggestIntent: true,
+      suggestedItemText: "An item",
+      suggestedIntentText: "An intention",
+      suggestedTags: ["bug"],
+    });
+    fireEvent.click(pencil());
+    fireEvent.change(screen.getByLabelText("Capture text"), { target: { value: "Corrected." } });
+    fireEvent.click(saveText());
+    await waitFor(() => expect(screen.queryByLabelText("Capture text")).not.toBeInTheDocument());
+
+    onDirtyChange.mockClear();
+    // What Alfred hands back: the corrected text, and the enrichment gone.
+    rerender(
+      <InboxDetailView
+        inboxItem={{
+          ...capture(),
+          capturedText: "Corrected.",
+          aiStatus: "not_started",
+          suggestItem: false,
+          suggestIntent: false,
+          suggestedItemText: null,
+          suggestedIntentText: null,
+          suggestedTags: [],
+        }}
+        contexts={CONTEXTS}
+        items={ITEMS}
+        tagPool={[]}
+        onProcess={jest.fn()}
+        onDiscard={jest.fn()}
+        onBack={jest.fn()}
+        onDirtyChange={onDirtyChange}
+        onSaveCaptureText={onSaveCaptureText}
+        renderRecurrence={() => null}
+      />,
+    );
+    expect(onDirtyChange).not.toHaveBeenCalledWith(true, "this capture");
   });
 });
 

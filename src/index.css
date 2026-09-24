@@ -64,3 +64,34 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* --- The bottom dock, and everything that has to sit clear of it -------------
+   Clipboard Step 17b.
+
+   `--dock-h` is the measured height of the fixed bottom dock — the Undo message
+   stacked on the Capture bar. It is published by useDockHeight (see that file for
+   why this is measured rather than chosen) and read by the two utilities below,
+   which are the ONLY things in the app that should know where the dock is.
+
+   The value here is a fallback for the moment before the first measurement, and
+   for any environment where measuring fails. It is deliberately close to the real
+   phone height rather than to the 7rem the old hard-coded offsets used: if it is
+   ever the value in play, being slightly too small hides a sliver of a footer
+   behind the bar, while being too large leaves the floating gap this replaced. */
+:root {
+  --dock-h: 4rem;
+}
+
+/* A pinned action footer. Sits flush on top of the dock, whatever height the
+   dock currently is. Replaces `sticky bottom-28 sm:bottom-32` everywhere. */
+.sticky-above-dock {
+  position: sticky;
+  bottom: var(--dock-h);
+}
+
+/* Scroll room under the last of the page's content, so it can be read clear of
+   the dock instead of ending underneath it. The extra 1.5rem is breathing space,
+   not clearance — the dock height is the clearance. */
+.pad-above-dock {
+  padding-bottom: calc(var(--dock-h) + 1.5rem);
+}

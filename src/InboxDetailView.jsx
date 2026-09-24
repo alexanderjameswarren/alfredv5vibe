@@ -3,9 +3,7 @@
  *
  * Design: docs/inbox-detail-mockups/README.md, approved 2026-09-24. Read it
  * before changing anything here; the page order and the rules are its, not this
- * file's. (⚠️ The mockup FILENAMES are shifted one along and the phone layout is
- * missing — see the table in docs/progress-clipboard.md. Go by each file's
- * <title>, not its name.)
+ * file's.
  *
  * ── Why this is a page and not a card ────────────────────────────────────────
  *
@@ -28,7 +26,7 @@
  * `InboxCard` carried four copies of the suggested-element normaliser that had
  * to stay byte-identical — including key order, because its dirty check compared
  * JSON strings. This page imports `normaliseSuggestedElements` and calls it in
- * one place, `baseline` below. Every other use reads that.
+ * one place, `computeBaseline` below. Every other use reads that result.
  *
  * ── What is deliberately NOT here ────────────────────────────────────────────
  *
@@ -37,16 +35,19 @@
  * page. Three things the old card had are also gone, and they are FEATURE LOSSES
  * rather than oversights — flagged to Alex with Step 17:
  *
- *   * editing the captured text (the pencil, Step 12.7)
  *   * "Attach this Item", which appended the new item as an element of another
  *   * Target Start Date, and a separate context/tag pair per section — this page
  *     has one Context and one Tags, shared by both sections, as designed
+ *
+ * Editing the captured text was on that list until Alex ruled it back in (Step
+ * 17b): it is the pencil on the Original capture section, and it is the only
+ * control here that the mockups do not show apart from the existing-item picker.
  *
  * The End Date survives: `RecurrenceQuickSelect` carries it, and it is only
  * meaningful alongside a repeat anyway.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Check,
@@ -61,6 +62,7 @@ import {
   Minus,
   Repeat,
   AlignLeft,
+  Pencil,
 } from "lucide-react";
 import ItemPicker, { PickedItem } from "./ItemPicker";
 import TagPicker from "./TagPicker";
@@ -88,6 +90,34 @@ function formatWhenDate(value) {
     month: "short",
     day: "numeric",
   });
+}
+
+/**
+ * What a capture proposes, read off the row once.
+ *
+ * `capturedText` is in here alongside the suggestions because two fields are
+ * seeded FROM it — an item's name and an intention's name, when the enrichment
+ * proposed neither — and the only way to tell later whether one of those is still
+ * showing the capture verbatim is to remember what the capture said at the time.
+ */
+function computeBaseline(inboxItem) {
+  const capturedText = inboxItem.capturedText || "";
+  return {
+    capturedText,
+    contextId: inboxItem.suggestedContextId || "",
+    tags: inboxItem.suggestedTags || [],
+    itemOn: !!inboxItem.suggestItem,
+    intentionOn: !!inboxItem.suggestIntent,
+    itemName: inboxItem.suggestedItemText || capturedText,
+    itemDescription: inboxItem.suggestedItemDescription || "",
+    elements: normaliseSuggestedElements(inboxItem.suggestedItemElements),
+    intentText: inboxItem.suggestedIntentText || capturedText,
+    // Nothing suggests an intention's Details: the column arrived with migration
+    // 069 and no enrichment writes it. Always starts empty.
+    intentDescription: "",
+    linkedItemId: inboxItem.suggestedItemId || "",
+    eventDate: inboxItem.suggestedEventDate || "",
+  };
 }
 
 /**
@@ -146,6 +176,10 @@ const LABEL = "flex items-center gap-2 text-sm font-bold text-foreground mb-2";
  * @param {Function} onDiscard       (inboxItemId) — archives with reason 'discarded'.
  * @param {Function} onBack          Leave the page. Goes through Alfred's unsaved-changes guard.
  * @param {Function} onDirtyChange   (dirty, label) — feeds that guard.
+ * @param {Function} onSaveCaptureText
+ *   (inboxItemId, text) => Promise<boolean> — Alfred's updateInboxCaptureText.
+ *   Corrects `captured_text` and nothing else; the row stays in the inbox. Omit it
+ *   and the pencil is not rendered.
  * @param {Function} renderRecurrence
  *   Renders the repeat control. Passed IN rather than imported because
  *   `RecurrenceQuickSelect` lives in Alfred.jsx, which imports this file —
@@ -161,37 +195,26 @@ export default function InboxDetailView({
   onDiscard,
   onBack,
   onDirtyChange,
+  onSaveCaptureText,
   renderRecurrence,
 }) {
   /**
    * Everything the capture proposes, in one place.
    *
-   * This is the seed for state AND the thing the dirty check compares against,
-   * which is the point: two separately-written copies of "what this form started
-   * as" is what made the old card report an untouched form as dirty.
+   * ⚠️ HELD IN STATE, SEEDED ONCE — not memoised on `inboxItem`.
    *
-   * Memoised on `inboxItem` alone. The page is keyed by capture id at its render
-   * site, so a different capture remounts rather than re-seeding — see the note
-   * on re-seeding below.
+   * It is both the seed for the fields below AND what the dirty check compares
+   * against, which is the whole reason the dirty check needs no hand-written
+   * dependency list. But it must not track the row: `inboxItem` changes whenever
+   * the row does, and saving a corrected capture text changes it a lot — the save
+   * clears the enrichment, so `suggestItem`, `suggestedIntentText` and the rest all
+   * go null. Recomputing from that would declare a form the user had not touched
+   * to be different from its own baseline in a dozen places at once.
+   *
+   * So it advances only when something deliberately advances it — see
+   * `handleSaveCapture`, the one place that does.
    */
-  const baseline = useMemo(() => {
-    const suggestedText = inboxItem.capturedText || "";
-    return {
-      contextId: inboxItem.suggestedContextId || "",
-      tags: inboxItem.suggestedTags || [],
-      itemOn: !!inboxItem.suggestItem,
-      intentionOn: !!inboxItem.suggestIntent,
-      itemName: inboxItem.suggestedItemText || suggestedText,
-      itemDescription: inboxItem.suggestedItemDescription || "",
-      elements: normaliseSuggestedElements(inboxItem.suggestedItemElements),
-      intentText: inboxItem.suggestedIntentText || suggestedText,
-      // Nothing suggests an intention's Details: the column arrived with
-      // migration 069 and no enrichment writes it. Always starts empty.
-      intentDescription: "",
-      linkedItemId: inboxItem.suggestedItemId || "",
-      eventDate: inboxItem.suggestedEventDate || "",
-    };
-  }, [inboxItem]);
+  const [baseline, setBaseline] = useState(() => computeBaseline(inboxItem));
 
   // Shared by both sections — one Context, one set of Tags, as designed. The old
   // card had a pair per section, which meant filing one capture could put the
@@ -223,6 +246,12 @@ export default function InboxDetailView({
   const [recurrenceConfig, setRecurrenceConfig] = useState(null);
   const [endDate, setEndDate] = useState(null);
 
+  // Correcting the capture itself — Step 12.7's pencil, kept on this page on
+  // Alex's ruling. NOT triage: it writes `captured_text` and leaves the row in the
+  // inbox with `triaged_at` still null.
+  const [editingCapture, setEditingCapture] = useState(false);
+  const [captureDraft, setCaptureDraft] = useState(inboxItem.capturedText || "");
+
   const elementDescRefs = useRef([]);
   const itemDescRef = useRef(null);
 
@@ -234,7 +263,12 @@ export default function InboxDetailView({
   // kept honest by hand. Here the comparison is a value, so the effect depends on
   // one thing and the linter has nothing to complain about.
   const sameStrings = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  // An open capture editor holding text nobody has saved. Exactly the kind of
+  // typing the guard exists for, and on the old card it was the one field that
+  // could be lost by navigating away.
+  const captureDirty = editingCapture && captureDraft.trim() !== (inboxItem.capturedText || "");
   const dirty =
+    captureDirty ||
     contextId !== baseline.contextId ||
     !sameStrings(tags, baseline.tags) ||
     itemOn !== baseline.itemOn ||
@@ -457,8 +491,50 @@ export default function InboxDetailView({
    * and on the failure path it would drop the guard over a form still full of
    * unsaved work.
    */
-  function handleProcess() {
+  /**
+   * Commit a corrected capture text. Not triage — the row stays in the inbox.
+   *
+   * ⚠️ SAVING THIS CLEARS THE ENRICHMENT, in the database: the suggestions
+   * describe text that no longer exists, so `updateInboxCaptureText` nulls them
+   * along with `ai_status`. That is why the baseline is advanced by hand here
+   * rather than recomputed — the row it would be recomputed from has just had
+   * every suggestion removed from it.
+   *
+   * Two fields follow the correction: an item or intention name that was still
+   * showing the capture VERBATIM, because that is a pre-fill rather than
+   * something the user wrote. A name they have edited is theirs and is left
+   * alone. Same rule the old card applied as you typed; applied here at the save,
+   * which is the point at which it becomes true.
+   */
+  async function handleSaveCapture() {
+    const next = captureDraft.trim();
+    if (!next) return;
+    const ok = await onSaveCaptureText?.(inboxItem.id, next);
+    // A failed save has already alerted. Leave the editor open, holding the text,
+    // rather than closing over an edit that did not land.
+    if (!ok) return false;
+
+    const wasVerbatim = baseline.capturedText;
+    if (itemName === wasVerbatim) setItemName(next);
+    if (intentText === wasVerbatim) setIntentText(next);
+    setBaseline((prev) => ({
+      ...prev,
+      capturedText: next,
+      itemName: prev.itemName === wasVerbatim ? next : prev.itemName,
+      intentText: prev.intentText === wasVerbatim ? next : prev.intentText,
+    }));
+    setEditingCapture(false);
+    return true;
+  }
+
+  async function handleProcess() {
     if (!canProcess) return;
+    // The text first, so a triage in the same press files the CORRECTED capture
+    // rather than the text being corrected. If it fails, nothing is filed.
+    if (captureDirty) {
+      const ok = await handleSaveCapture();
+      if (!ok) return;
+    }
     onProcess(inboxItem.id, {
       createItem: itemOn,
       itemData: itemOn
@@ -919,23 +995,97 @@ export default function InboxDetailView({
 
         <Divider />
 
-        {/* The capture itself, always shown, last. Read-only here: editing the
-            text is not part of this page's design — see the header note. */}
+        {/* The capture itself, always shown, last — and correctable in place.
+
+            The pencil is the one control here that is not in the mockups: Alex
+            ruled it back in, because after this page replaces the inbox card there
+            would otherwise be no way in the app to fix a typo in a capture.
+
+            It keeps its own Save and Cancel rather than committing through the
+            footer. Step 12.7b argued against a second Save on the old card and was
+            right THERE, where both pairs were labelled the same and one of them
+            filed the capture. Here the footer's primary says "Process", which is a
+            different action with a different outcome — so a scoped pair inside this
+            section is clearer than folding a typo fix into the button that files
+            the record. */}
         <div className="space-y-2.5">
-          <SectionHeading icon={AlignLeft}>Original capture</SectionHeading>
-          <div className="px-4 py-3.5 rounded-lg bg-background text-base leading-relaxed whitespace-pre-wrap">
-            {inboxItem.capturedText}
+          <div className="flex items-center justify-between gap-2">
+            <SectionHeading icon={AlignLeft}>Original capture</SectionHeading>
+            {onSaveCaptureText && !editingCapture && (
+              <button
+                onClick={() => {
+                  setCaptureDraft(inboxItem.capturedText || "");
+                  setEditingCapture(true);
+                }}
+                title="Correct this capture's text"
+                aria-label="Edit capture text"
+                className="shrink-0 flex items-center justify-center p-2 min-h-[44px] min-w-[44px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+              >
+                <Pencil className="w-4 h-4" />
+              </button>
+            )}
           </div>
+
+          {editingCapture ? (
+            <div className="space-y-2">
+              <textarea
+                value={captureDraft}
+                onChange={(e) => setCaptureDraft(e.target.value)}
+                rows={5}
+                autoFocus
+                aria-label="Capture text"
+                className={`${FIELD} resize-y min-h-[120px]`}
+              />
+              {/* A consequence, not an instruction: the suggestions describe the
+                  text being replaced, so saving removes them. Shown only when
+                  there is actually an enrichment to lose. */}
+              {captureDirty &&
+                (inboxItem.aiStatus === "enriched" || inboxItem.aiStatus === "re_enriched") && (
+                  <p className="text-xs text-muted-foreground">
+                    Saving this clears Claude's suggestions for this capture.
+                  </p>
+                )}
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSaveCapture}
+                  disabled={!captureDraft.trim()}
+                  className={`inline-flex items-center gap-1.5 min-h-[44px] px-3.5 py-2 rounded-lg text-sm transition-colors ${
+                    captureDraft.trim()
+                      ? "bg-primary hover:bg-primary-hover text-white"
+                      : "bg-secondary text-muted-foreground cursor-not-allowed"
+                  }`}
+                >
+                  <Check className="w-4 h-4" aria-hidden="true" />
+                  Save text
+                </button>
+                <button
+                  onClick={() => {
+                    setEditingCapture(false);
+                    setCaptureDraft(inboxItem.capturedText || "");
+                  }}
+                  className="inline-flex items-center gap-1.5 min-h-[44px] px-3.5 py-2 rounded-lg bg-secondary text-foreground text-sm"
+                >
+                  <X className="w-4 h-4" aria-hidden="true" />
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="px-4 py-3.5 rounded-lg bg-background text-base leading-relaxed whitespace-pre-wrap">
+              {inboxItem.capturedText}
+            </div>
+          )}
         </div>
 
-        {/* Footer, pinned to the bottom of the card and above the global capture
-            bar. bottom-28 / sm:bottom-32 is the space that bar already reserves
-            through the main wrapper's pb-28 sm:pb-32 — the same two numbers the
-            item and context forms use, and if one moves the others have to. */}
-        {/* The negative margins pull it out to the card's own edges — bottom
+        {/* Footer, pinned to the bottom of the card and flush on top of the
+            global capture bar. `sticky-above-dock` positions it on the MEASURED
+            height of the bottom dock rather than on a chosen number — Clipboard
+            Step 17b, and the one rule every pinned footer in Alfred now uses.
+
+            The negative margins pull it out to the card's own edges — bottom
             included, so it finishes flush with the rounded corner rather than
             floating above a strip of card padding. */}
-        <div className="sticky bottom-28 sm:bottom-32 -mx-4 sm:-mx-7 -mb-4 sm:-mb-7 px-4 sm:px-7 py-3.5 flex items-center gap-2.5 bg-card border-t border-border rounded-b-xl">
+        <div className="sticky-above-dock -mx-4 sm:-mx-7 -mb-4 sm:-mb-7 px-4 sm:px-7 py-3.5 flex items-center gap-2.5 bg-card border-t border-border rounded-b-xl">
           <button
             onClick={handleProcess}
             disabled={!canProcess}

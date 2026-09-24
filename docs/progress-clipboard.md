@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. Steps 16 and 17 done; Step 17 awaiting in-app verification.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. Steps 16, 17 and 17b done; 17b awaiting in-app verification.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -48,35 +48,118 @@ The approved design is `docs/inbox-detail-mockups/` — seven files plus a READM
 that carries the rules. The README is the specification for these four steps; the
 HTML files show it applied. Read both before changing any frontend code.
 
-⚠️ **THE FILE NAMES POINT AT THE WRONG PICTURES.** Every mockup holds the design
-that belongs one filename EARLIER in alphabetical order, and the phone layout fell
-off the end and does not exist. Read each file's `<title>`, not its name.
+The seven files are correctly named as of 2026-09-24 (Step 17b, item 6). They were
+not when the page was built: the export had shifted every design one filename along,
+so six of seven pointed at the wrong picture, and two files were byte-identical
+twins. Nothing was blocked — all six desktop designs were present and were read by
+their `<title>` — but it is worth knowing the names were untrustworthy for a day,
+because the page was built against titles rather than filenames.
 
-| file name | what is actually inside | should hold |
-|---|---|---|
-| `both-alfred-bug.html` | Alfred bug, both sections | ✅ correct |
-| `both-recurring-routine.html` | Alfred bug again (byte-identical to the above) | Recurring routine |
-| `do-home-errand.html` | Recurring routine | Home errand |
-| `full-recipe-duck-mole.html` | Home errand | Duck mole tacos |
-| `full-routine-micro-workout.html` | Duck mole tacos | Micro workout rotation |
-| `keep-reflection-note.html` | Micro workout rotation | Reflection note |
-| `phone-alfred-bug.html` | Reflection note | **the phone layout — MISSING** |
-
-The first export saved README.md into `both-alfred-bug.html` and pushed every
-mockup one name along; replacing that first file on 2026-09-24 fixed position one
-and left the shift underneath, which is why two files are now identical.
-
-**All six desktop designs are present and were used**, so Step 17 was not blocked.
-The phone layout was built from the README's rule instead — one column, same order,
-footer pinned — because no picture of it exists. Committed as exported rather than
-renamed, so a re-export cannot collide with a rename.
+Renamed by title, the duplicate deleted, and `keep-reflection-note.html` restored
+from commit `fd8abe0` (the Reflection note design had been overwritten when the real
+phone mockup was saved over the file that had drifted into holding it). Seven files,
+seven distinct designs, every name matching its title, README list accurate.
 
 - [x] Step 16: Intentions need a long-text description — "Details" in the mockups. Check whether `intents` already has a suitable column; if not, write a migration adding one, with a comment, ending with the conformance check. Alex runs it; CONFORMANT required. — **written 2026-09-24**, `supabase/migrations/069_phase3_intents_description.sql`. There was no suitable column: see the notes. - **done 2026-09-24.** CONFORMANT (44 tables); `intents.description` is text, nullable, no default, commented, and 0 of 165 rows have a value. The name `description` with the label "Details" was approved.
-- [x] Step 17: The detail page itself, at its own URL through the existing routing, reached by clicking an inbox card. Everything in the README: the back link, the source pill and capture time, Context first and prominent with Tags underneath, the two push-button toggles (New Item / New Intention, either, both or neither, preselected from `suggest_item` / `suggest_intent`), the two sections, the original capture last, and the floating footer. Reuse the EXISTING element editor completely unchanged. Preserve linking an intention to an existing item (`suggested_item_id`). Collections stay hidden. Phone layout: one column, same order, footer pinned. **Its own component, not inside `InboxCard`, with exactly one normaliser.** Run the frontend suite. - **written 2026-09-24.** `src/InboxDetailView.jsx` at `/inbox/detail/:id`, plus `src/CaptureMeta.jsx` and `src/utils/suggestedElements.js` (the one normaliser). Suite green: 66 suites, 1445 tests, up from 64/1379; `react-scripts build` compiles with no warnings at all. Nothing deployed - this is the Vercel frontend and reaches the live app only on a push, which is Alex's call. **Three deliberate feature losses need his ruling before Step 18 deletes the old form - see the notes.** Awaiting his in-app verification.
+- [x] Step 17: The detail page itself, at its own URL through the existing routing, reached by clicking an inbox card. Everything in the README: the back link, the source pill and capture time, Context first and prominent with Tags underneath, the two push-button toggles (New Item / New Intention, either, both or neither, preselected from `suggest_item` / `suggest_intent`), the two sections, the original capture last, and the floating footer. Reuse the EXISTING element editor completely unchanged. Preserve linking an intention to an existing item (`suggested_item_id`). Collections stay hidden. Phone layout: one column, same order, footer pinned. **Its own component, not inside `InboxCard`, with exactly one normaliser.** Run the frontend suite. - **written 2026-09-24.** `src/InboxDetailView.jsx` at `/inbox/detail/:id`, plus `src/CaptureMeta.jsx` and `src/utils/suggestedElements.js` (the one normaliser). Suite green: 66 suites, 1445 tests, up from 64/1379; `react-scripts build` compiles with no warnings at all. Nothing deployed - this is the Vercel frontend and reaches the live app only on a push, which is Alex's call. Three deliberate feature losses were flagged for his ruling; he gave it in Step 17b, which also fixed two things this turned up. - **verified 2026-09-24**, with the Step 17b fixes.
+- [x] Step 17b: Alex's rulings on the three feature losses, plus two fixes and the mockup renames. Keep the capture-text pencil; drop "Attach this Item"; drop Target Start Date from this page only. Trace `intents.description` and prove it with a test. Fix the pinned-footer gap **globally**, with one shared measurement rather than per-screen offsets. Rename the mockups. - **done 2026-09-24.** Suite green: 68 suites, 1486 tests, up from 66/1445; build clean. See the notes.
 - [ ] Step 18: Retire the inline card expansion. Remove the old expanded form from `InboxCard`, including its four normaliser copies and the `eslint-disable`d dirty check — but only once nothing uses them. Run the frontend suite.
 - [ ] Step 19: For clipboard items the detail page also shows the captured page text (collapsed, with Show all), the links, and the screenshot slices. Run the frontend suite.
 
 ## Notes
+
+### Step 17b — rulings, two fixes, and the footer gap, 2026-09-24
+
+#### 1. The capture-text pencil is back (Alex's ruling)
+
+On the "Original capture" section, reusing `updateInboxCaptureText`. It keeps its
+OWN Save and Cancel rather than committing through the card footer. Step 12.7b
+argued against a second Save on the old card and was right there — both pairs were
+labelled the same and one of them filed the capture. Here the footer's primary says
+**Process**, a different action with a different outcome, so a pair scoped to this
+one section is clearer than folding a typo fix into the button that files a record.
+
+Pressing Process with an unsaved correction pending **writes the text first**, so a
+triage in the same press files the corrected capture rather than the text being
+corrected. If the text write fails, nothing is filed.
+
+**A bug this exposed, and the fix.** Saving the capture text clears the enrichment
+in the database — the suggestions describe text that no longer exists. `baseline`
+was `useMemo`'d on `inboxItem`, so the moment that row came back with every
+`suggested_*` field nulled, the baseline changed underneath a form nobody had
+touched and the dirty check reported a dozen differences at once. `baseline` is now
+**state, seeded once**, advanced only by `handleSaveCapture`. Two fields follow a
+correction — an item or intention name still showing the capture verbatim, because
+that is a pre-fill; a name the user wrote is theirs and is left alone.
+
+#### 2 and 3. Dropped, as ruled
+
+"Attach this Item" and Target Start Date are not on the page and were never added,
+so there was no code to remove. **The intention edit screen and
+`intents.target_start_date` are untouched** — the ruling was for this page only.
+
+#### 4. `intents.description`: traced, no fault found, now under test
+
+Traced end to end: the page emits `intentionData.description` (already tested), the
+mapping in `handleInboxSave` copies it, `toSnakeCase` leaves an already-snake key
+alone, and `storage.set` sends every key it is given — there is no column whitelist
+anywhere. **No fault.** The likeliest reading of "0 of 166" is the one Alex
+suggested: no Details text was typed on the capture that was tested, and null is the
+correct result for that.
+
+What was wrong is that this could only be answered by reading code. The mapping
+lived inside a 12,900-line component where no test could reach it, which is why
+"probably fine, here is my reasoning" was the best available answer.
+
+So the row builder is now `src/utils/triageRows.js` — `intentionRowFromTriage`,
+pure, with `src/utils/triageRows.test.js` (18 tests). And
+`InboxDetailView.test.jsx` gained a **joined-chain** group: render the page, type
+into Details, press Process, feed the emitted triage data to the real row builder
+and the real case converter, and assert on `description` in the object Postgres
+would be sent. Nothing stubbed between the keystroke and the row; only the network
+call is out of scope.
+
+#### 5. The pinned footer gap — one measurement, six footers
+
+**The cause.** Six footers were positioned `sticky bottom-28 sm:bottom-32` — 112px,
+or 128px above `sm`. The dock they were meant to sit on is about **61px** on a phone
+and **77px** above `sm`. So every one of them floated roughly 50px too high, and the
+page scrolled through the daylight underneath. The content wrapper's matching
+`pb-28 sm:pb-32` over-reserved by the same amount. Both numbers were a guess at the
+dock's height, and the guess was wrong everywhere.
+
+**Why not better numbers.** There is no correct number. The dock is one fixed
+container holding the Undo message stacked on the Capture bar, and its height moves:
+the capture textarea grows with what you type up to 50vh, the Undo message comes and
+goes, the padding changes at `sm`, and a long undo message wraps. A per-screen offset
+is the same guess repeated six times, which is exactly how five of the six came to
+share a number wrong for all of them.
+
+**The fix.** `src/useDockHeight.js` measures the dock and publishes `--dock-h` on the
+document root; `src/index.css` defines `.sticky-above-dock` (`bottom: var(--dock-h)`)
+and `.pad-above-dock`, with a fallback value for the frame before the first
+measurement. `getBoundingClientRect`, not `offsetHeight`, because the textarea's
+height is fractional and rounding leaves a half-pixel seam. A measurement of 0 is
+never published — that would drop every footer behind the bar for a frame.
+`ResizeObserver` is feature-detected. Tested: `src/useDockHeight.test.jsx`, 8 tests.
+
+**Every screen changed** — all six pinned footers plus the content padding:
+
+| where | what it is |
+|---|---|
+| `CollectionAddItems` | Add items to a collection |
+| `ItemAddToCollection` | Add this item to a collection |
+| `ContextForm` | Context add / edit, when full-screen |
+| `ItemCard` | The item edit screen |
+| `IntentionCard` | The intention edit screen |
+| `InboxDetailView` | The new inbox detail page |
+| the main content wrapper | `pb-28 sm:pb-32` -> `pad-above-dock` |
+
+`bottom-28` and `bottom-32` no longer appear anywhere in the app.
+
+#### 6. Mockups renamed
+
+See the section above the step list.
 
 ### Step 17 — the inbox detail page, 2026-09-24
 

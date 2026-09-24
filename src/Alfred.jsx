@@ -14,6 +14,7 @@ import {
   inboxIdFromPath,
 } from "./viewPaths";
 import { useExecutionRoute } from "./useExecutionRoute";
+import { useDockHeight } from "./useDockHeight";
 import InboxDetailView from "./InboxDetailView";
 import { friendlyDate, SourceIcon } from "./CaptureMeta";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
@@ -39,6 +40,7 @@ import { startOfPacificDay } from "./utils/localDay";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
 import { offsetPatch, isFirstStep } from "./utils/elementOffsets";
+import { intentionRowFromTriage } from "./utils/triageRows";
 import { matchesQuery } from "./utils/search";
 import {
   createNotificationSteps,
@@ -926,7 +928,7 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
           as a whole does not usually exceed the viewport. It is here for the
           cases that do — a very short window, or if that cap is ever lifted —
           rather than because it changes anything today. */}
-      <div className="flex gap-2 sticky bottom-28 sm:bottom-32 pt-2 pb-3 bg-background border-t border-border">
+      <div className="flex gap-2 sticky-above-dock pt-2 pb-3 bg-background border-t border-border">
         <button
           onClick={() => onAdd(Object.values(selected))}
           disabled={Object.keys(selected).length === 0}
@@ -1278,7 +1280,7 @@ function ItemAddToCollection({ item, items, collections, contexts, onBack, onAdd
 
           {/* Same offsets as CollectionAddItems. Now that the list no longer
               scrolls internally this genuinely engages on a long recipe. */}
-          <div className="flex gap-2 sticky bottom-28 sm:bottom-32 pt-2 pb-3 bg-background border-t border-border">
+          <div className="flex gap-2 sticky-above-dock pt-2 pb-3 bg-background border-t border-border">
             <button
               onClick={handleAdd}
               disabled={busy || selectedCount === 0 || !collection}
@@ -1425,6 +1427,11 @@ export default function Alfred() {
     },
     [navigate, currentPath]
   );
+  // The bottom dock's height, measured and published as `--dock-h` so that every
+  // pinned footer and the content padding sit exactly clear of it — Clipboard
+  // Step 17b. See useDockHeight for why this is measured rather than chosen.
+  const dockRef = useRef(null);
+  useDockHeight(dockRef);
   const [menuOpen, setMenuOpen] = useState(false);
   const [contexts, setContexts] = useState([]);
   const [items, setItems] = useState([]);
@@ -3167,37 +3174,21 @@ export default function Alfred() {
 
       // Create intention if Intention section was open
       if (triageData.createIntention && triageData.intentionData) {
-        const intentionItemId =
-          triageData.intentionData.itemId || createdItemId;
-        const newIntent = {
+        // The row itself is built by a pure function in utils/triageRows.js, so
+        // that the mapping — `description` in particular — is reachable by a test.
+        // It was not, which is why "is Details being saved?" could only be
+        // answered by reading code. See that file's header.
+        const newIntent = intentionRowFromTriage({
           id: uid(),
-          user_id: user.id,
-          text: triageData.intentionData.text,
-          // `intents.description`, migration 069 — "Details" on the inbox detail
-          // page.
-          //
-          // NULL when nothing was written, which is the contract the column's
-          // comment states: `not null default ''` was rejected precisely so that
-          // "no details" and "details deliberately emptied" would not be the same
-          // value. Whitespace-only counts as nothing. Deliberately unlike
-          // `items.description` a few lines above, which has always stored "" —
-          // that column's history, not a rule to copy.
-          //
-          // The old inbox card sends no `description` at all; that arrives here as
-          // undefined and lands as null, which is correct for it.
-          description: (triageData.intentionData.description || "").trim() || null,
-          createdAt: new Date().toISOString(),
-          isIntention: true,
-          isItem: !!intentionItemId,
-          archived: false,
-          itemId: intentionItemId,
-          contextId: triageData.intentionData.contextId,
-          recurrenceConfig: triageData.intentionData.recurrenceConfig || null,
-          targetStartDate: triageData.intentionData.targetStartDate || null,
-          endDate: triageData.intentionData.endDate || null,
-          tags: triageData.intentionData.tags || [],
+          userId: user.id,
+          intentionData: triageData.intentionData,
+          createdItemId,
           sourceInboxId: inboxItem.id,
-        };
+          createdAt: new Date().toISOString(),
+        });
+        // Read back off the row rather than recomputed, so the event below and the
+        // intention cannot disagree about which item this is.
+        const intentionItemId = newIntent.itemId;
         const savedIntent = wrote(await storage.set(`intent:${newIntent.id}`, newIntent));
         setIntents((prev) => [...prev, savedIntent || newIntent]);
 
@@ -5662,7 +5653,7 @@ export default function Alfred() {
       </div>
 
       {/* Main content */}
-      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 pb-28 sm:pb-32">
+      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 pad-above-dock">
         {/* Home View */}
         {view === "home" && (
           <div>
@@ -5906,6 +5897,10 @@ export default function Alfred() {
             // clear the flag themselves before calling this.
             onBack={() => guardedSetView("inbox")}
             onDirtyChange={setUnsavedChanges}
+            // Step 17b. Correcting a capture's text, which is not triage: the row
+            // stays in the inbox. Alex ruled this back in — without it, retiring
+            // the inbox card in Step 18 would leave no way to fix a typo.
+            onSaveCaptureText={updateInboxCaptureText}
             // Passed in rather than imported: RecurrenceQuickSelect lives in this
             // file, which imports InboxDetailView, so importing back would be a
             // cycle — and moving it would drag its two dialogs along.
@@ -7433,7 +7428,7 @@ export default function Alfred() {
           above the bar by document order instead of by a hard-coded offset —
           the bar's height changes as its textarea grows, and any offset would
           be wrong the moment somebody types a long capture. */}
-      <div className="fixed bottom-0 left-0 right-0 z-20">
+      <div ref={dockRef} className="fixed bottom-0 left-0 right-0 z-20">
         <UndoMessage
           pendingUndo={pendingUndo}
           onUndo={runUndo}
@@ -8943,14 +8938,16 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = 
           <span className="text-sm">Pin to home</span>
         </label>
 
-        {/* bottom-28 / sm:bottom-32 mirrors the main content wrapper's
-            pb-28 sm:pb-32, which is the space the Capture bar is already
-            reserved. Same two numbers, same reason — if one moves the other
-            has to. */}
+        {/* `sticky-above-dock` sits on the MEASURED height of the bottom
+            dock — Clipboard Step 17b. It used to be `bottom-28 sm:bottom-32`,
+            chosen to mirror the content wrapper's padding; both were a guess at
+            the dock's height, both were about 50px too big, and the footer
+            floated with the page scrolling through the gap underneath. The two
+            now read one measurement instead of agreeing with each other. */}
         <div
           className={`flex gap-2 pt-2 ${
             stickyFooter
-              ? "sticky bottom-28 sm:bottom-32 -mx-4 sm:-mx-6 px-4 sm:px-6 pb-3 bg-white border-t border-border"
+              ? "sticky-above-dock -mx-4 sm:-mx-6 px-4 sm:px-6 pb-3 bg-white border-t border-border"
               : ""
           }`}
         >
@@ -11347,7 +11344,7 @@ function ItemCard({
           <div
             className={"flex flex-wrap gap-2 pt-2 " +
               (stickyFooter
-                ? "sticky bottom-28 sm:bottom-32 -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 bg-card border-t border-border"
+                ? "sticky-above-dock -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 bg-card border-t border-border"
                 : "")}
           >
             <button
@@ -12295,7 +12292,7 @@ function IntentionCard({
             className={
               "flex gap-2 flex-wrap " +
               (stickyFooter
-                ? "sticky bottom-28 sm:bottom-32 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-3 bg-card border-t border-border"
+                ? "sticky-above-dock -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-3 bg-card border-t border-border"
                 : "")
             }
           >
