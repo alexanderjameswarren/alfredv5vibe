@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete.** Phase 3 round 1: Steps 13 and 15 done, Step 14 written and awaiting in-app verification.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. Step 16 written and awaiting its migration run.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -39,10 +39,57 @@ reworked auto-creation rules — is not in this round. Decision D still stands:
 auto-creation needs its own design conversation before any of it is built.
 
 - [x] Step 13: Migration adding `source_inbox_id text null references public.inbox(id) on delete set null` to `items`, `intents` and `events`, each with a partial index on not-null and a column comment, ending with the conformance check. Alex runs it; CONFORMANT required. — **written 2026-09-24**, `supabase/migrations/068_phase3_source_inbox_id.sql`. - **done 2026-09-24.** CONFORMANT (44 tables); the column present on all three tables, text, nullable, commented, each with the FK ON DELETE SET NULL and a partial index; all link counts 0 as expected.
-- [ ] Step 14: `handleInboxSave` archives the inbox row with `archive_reason` 'processed' and `triaged_at` instead of deleting it, AND sets `source_inbox_id` on every item, intention and event it creates — one change, because either half alone is useless or misleading. Remove the Enrich and Re-enrich buttons and every call to `ai-enrich` from the app (the function itself stays; it is retired separately). Touch `InboxCard` only where the buttons are removed — **not** the normaliser copies or the dirty check, which the detail page replaces. Run the frontend suite. - **written 2026-09-24.** Suite green (64 suites, 1379 tests); JSX compiles. The four normaliser copies and the `eslint-disable`d dirty check were left untouched, as required. Nothing deployed - this is the Vercel frontend, so it reaches the live app only on a push, which is Alex's call. Awaiting his in-app verification.
+- [x] Step 14: `handleInboxSave` archives the inbox row with `archive_reason` 'processed' and `triaged_at` instead of deleting it, AND sets `source_inbox_id` on every item, intention and event it creates — one change, because either half alone is useless or misleading. Remove the Enrich and Re-enrich buttons and every call to `ai-enrich` from the app (the function itself stays; it is retired separately). Touch `InboxCard` only where the buttons are removed — **not** the normaliser copies or the dirty check, which the detail page replaces. Run the frontend suite. - **written 2026-09-24.** Suite green (64 suites, 1379 tests); JSX compiles. The four normaliser copies and the `eslint-disable`d dirty check were left untouched, as required. Nothing deployed - this is the Vercel frontend, so it reaches the live app only on a push, which is Alex's call. - **verified 2026-09-24.** Alex confirmed triage in the app: the capture archives instead of vanishing, and the records it creates carry `source_inbox_id`. Note from his check: `no_orphan_processed_rows` also lists clips and CLI reports archived by Claude through `archive_inbox_item`; that is expected, since those create nothing.
 - [x] Step 15: Record in this file, dated, when `ai-enrich` stopped being called, so its retirement can be scheduled a week later. A note only. - **done 2026-09-24**, see the notes. The clock starts at DEPLOY, not at commit.
 
+## Phase 3, round 2: the inbox detail page
+
+The approved design is `docs/inbox-detail-mockups/` — seven files plus a README
+that carries the rules. The README is the specification for these four steps; the
+HTML files show it applied. Read both before changing any frontend code.
+
+⚠️ **`both-alfred-bug.html` is not a mockup.** It is a byte-identical copy of
+`README.md` (2,661 bytes each — `cmp` reports no difference), so the "both
+sections showing, desktop" example has no HTML. The case is still covered:
+`both-recurring-routine.html` shows both sections on desktop, and
+`phone-alfred-bug.html` is the same Alfred-bug example in the phone layout and is
+real HTML. Nothing is blocked; the file is just empty of what its name promises.
+
+- [ ] Step 16: Intentions need a long-text description — "Details" in the mockups. Check whether `intents` already has a suitable column; if not, write a migration adding one, with a comment, ending with the conformance check. Alex runs it; CONFORMANT required. — **written 2026-09-24**, `supabase/migrations/069_phase3_intents_description.sql`. There was no suitable column: see the notes. Awaiting the run.
+- [ ] Step 17: The detail page itself, at its own URL through the existing routing, reached by clicking an inbox card. Everything in the README: the back link, the source pill and capture time, Context first and prominent with Tags underneath, the two push-button toggles (New Item / New Intention, either, both or neither, preselected from `suggest_item` / `suggest_intent`), the two sections, the original capture last, and the floating footer. Reuse the EXISTING element editor completely unchanged. Preserve linking an intention to an existing item (`suggested_item_id`). Collections stay hidden. Phone layout: one column, same order, footer pinned. **Its own component, not inside `InboxCard`, with exactly one normaliser.** Run the frontend suite.
+- [ ] Step 18: Retire the inline card expansion. Remove the old expanded form from `InboxCard`, including its four normaliser copies and the `eslint-disable`d dirty check — but only once nothing uses them. Run the frontend suite.
+- [ ] Step 19: For clipboard items the detail page also shows the captured page text (collapsed, with Show all), the links, and the screenshot slices. Run the frontend suite.
+
 ## Notes
+
+### Step 16 — intentions had nowhere to put prose, 2026-09-24
+
+`supabase/migrations/069_phase3_intents_description.sql` adds
+`public.intents.description text null`.
+
+**Checked first, as asked: no existing column would do.** `public.intents` has
+sixteen columns and the only text one is `text` — the intention's NAME, NOT NULL,
+and what every list, planner row and event label renders. Widening it into "name,
+or possibly name plus three paragraphs" would push arbitrary length into every
+place an intention is displayed. The rest are a jsonb schedule
+(`recurrence_config`), two dates, a `text[]` of tags, and foreign keys.
+
+The item half of the same form already has exactly the right column:
+`items.description`, text, nullable. Intentions never had one because until now
+the only way to make one was a single-line box.
+
+**Named `description`, labelled "Details".** Matching the mockup's label would
+have made it `intents.details`, sitting beside `items.description` holding the
+same kind of content in the same position on the same form — one concept under two
+names, costing every future reader a lookup and every shared helper a translation.
+A UI label needs to read well in one place; a column name needs to be recognised
+everywhere. So the column matches its sibling and the label stays as designed.
+
+Nullable with no default, matching `items.description`: `not null default ''`
+would make "nothing written" and "emptied on purpose" indistinguishable, and every
+reader would end up treating `''` and null alike anyway. Nothing is backfilled —
+an intention's name is not its description, and copying one into the other would
+invent content.
 
 ### Step 15 — the ai-enrich retirement clock
 
