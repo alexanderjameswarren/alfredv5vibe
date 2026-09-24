@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete.** Phase 3 round 1 (plumbing) started - Step 13 migration written, awaiting Alex's run + CONFORMANT.
+## Status: **Phases 1 and 2 complete.** Phase 3 round 1: Steps 13 and 15 done, Step 14 written and awaiting in-app verification.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -38,11 +38,49 @@ The rest of Phase 3 — the detail page, the clipboard card's captured content, 
 reworked auto-creation rules — is not in this round. Decision D still stands:
 auto-creation needs its own design conversation before any of it is built.
 
-- [ ] Step 13: Migration adding `source_inbox_id text null references public.inbox(id) on delete set null` to `items`, `intents` and `events`, each with a partial index on not-null and a column comment, ending with the conformance check. Alex runs it; CONFORMANT required. — **written 2026-09-24**, `supabase/migrations/068_phase3_source_inbox_id.sql`. Not yet run.
-- [ ] Step 14: `handleInboxSave` archives the inbox row with `archive_reason` 'processed' and `triaged_at` instead of deleting it, AND sets `source_inbox_id` on every item, intention and event it creates — one change, because either half alone is useless or misleading. Remove the Enrich and Re-enrich buttons and every call to `ai-enrich` from the app (the function itself stays; it is retired separately). Touch `InboxCard` only where the buttons are removed — **not** the normaliser copies or the dirty check, which the detail page replaces. Run the frontend suite.
-- [ ] Step 15: Record in this file, dated, when `ai-enrich` stopped being called, so its retirement can be scheduled a week later. A note only.
+- [x] Step 13: Migration adding `source_inbox_id text null references public.inbox(id) on delete set null` to `items`, `intents` and `events`, each with a partial index on not-null and a column comment, ending with the conformance check. Alex runs it; CONFORMANT required. — **written 2026-09-24**, `supabase/migrations/068_phase3_source_inbox_id.sql`. - **done 2026-09-24.** CONFORMANT (44 tables); the column present on all three tables, text, nullable, commented, each with the FK ON DELETE SET NULL and a partial index; all link counts 0 as expected.
+- [ ] Step 14: `handleInboxSave` archives the inbox row with `archive_reason` 'processed' and `triaged_at` instead of deleting it, AND sets `source_inbox_id` on every item, intention and event it creates — one change, because either half alone is useless or misleading. Remove the Enrich and Re-enrich buttons and every call to `ai-enrich` from the app (the function itself stays; it is retired separately). Touch `InboxCard` only where the buttons are removed — **not** the normaliser copies or the dirty check, which the detail page replaces. Run the frontend suite. - **written 2026-09-24.** Suite green (64 suites, 1379 tests); JSX compiles. The four normaliser copies and the `eslint-disable`d dirty check were left untouched, as required. Nothing deployed - this is the Vercel frontend, so it reaches the live app only on a push, which is Alex's call. Awaiting his in-app verification.
+- [x] Step 15: Record in this file, dated, when `ai-enrich` stopped being called, so its retirement can be scheduled a week later. A note only. - **done 2026-09-24**, see the notes. The clock starts at DEPLOY, not at commit.
 
 ## Notes
+
+### Step 15 — the ai-enrich retirement clock
+
+**2026-09-24: the last caller of `ai-enrich` was removed from the code.**
+`handleEnrich` and `handleReEnrich` are gone from `src/Alfred.jsx`, along with
+the Enrich / Re-enrich / Enriching buttons, the `enriching` state, the `onEnrich`
+prop and `handleInboxEnrich`. Nothing in the repository calls
+`/functions/v1/ai-enrich` any more — verified by grep across `src/`, which now
+returns only comments.
+
+⚠️ **THE CLOCK DOES NOT START TODAY. It starts when the frontend deploys.**
+Removing the caller from the code stops nothing: Alfred is served from Vercel and
+deploys on push to `main`, and nothing has been pushed. Until then the live app
+still has its Enrich buttons and will still call the function. Counting a week
+from the commit date would schedule the retirement while calls were still
+arriving.
+
+**So: fill in the deploy date below when it happens, and count from that.**
+
+```
+ai-enrich last caller removed from code:  2026-09-24
+Frontend deployed (calls actually stop):  __________   <- fill this in
+Earliest safe retirement (deploy + 7d):   __________
+```
+
+**Before retiring, confirm from the logs rather than from reasoning.** The repo
+grep proves the app does not call it; it does not prove nothing else does. Check
+Dashboard → Edge Functions → `ai-enrich` → Logs for the seven days after the
+deploy, and look for any invocation at all. Anything found is worth identifying
+before deleting: `ai-enrich` is the only function holding `ANTHROPIC_API_KEY`, so
+a forgotten caller fails in a way that is easy to misread as an API problem
+rather than a missing function.
+
+**Retirement order, from the spec's Phase 3 section**, and the ordering is the
+point: remove the callers (done), confirm a week of silence in the logs, *then*
+delete the function and the `ANTHROPIC_API_KEY` secret. Not in one change — a
+function with no callers is harmless, and an undeletable one is not.
+
 
 ### Investigation: what happens to `captured_text` when an inbox item is triaged
 

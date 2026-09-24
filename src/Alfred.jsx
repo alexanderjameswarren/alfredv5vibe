@@ -64,7 +64,6 @@ import {
   Tag,
   Settings,
   Archive,
-  Sparkles,
   Activity,
   Wifi,
   WifiOff,
@@ -3013,11 +3012,11 @@ export default function Alfred() {
    * stale column — it is what the triage form PROPOSES. Leaving it would mean a
    * user who corrected a capture still gets offered the text they corrected.
    *
-   * The cost is a good enrichment lost to a typo fix, and it is mitigated two
-   * ways: the clear only happens when the text ACTUALLY changed, and re-enriching
-   * is one tap on a button already in this card. `ai-enrich` takes an
-   * `inbox_id` and reads `captured_text` server-side, so a re-run after an edit
-   * describes the corrected text with no extra plumbing.
+   * The cost is a good enrichment lost to a typo fix. It used to be mitigated by
+   * a re-enrich button one tap away in this card; Clipboard Step 14 removed
+   * that, so re-enriching now means asking in claude.ai. The clear still only
+   * happens when the text ACTUALLY changed, which keeps it rare, and offering
+   * the text a user just corrected would be worse than making them ask again.
    *
    * If this decision is overturned, this function is the only place to change.
    */
@@ -3051,12 +3050,6 @@ export default function Alfred() {
       );
       return true;
     });
-  }
-
-  function handleInboxEnrich(inboxItemId, updatedItem) {
-    setInboxItems((prev) =>
-      prev.map((item) => (item.id === inboxItemId ? updatedItem : item))
-    );
   }
 
   async function handleInboxSave(inboxItemId, triageData) {
@@ -3095,6 +3088,10 @@ export default function Alfred() {
           tags: triageData.itemData.tags || [],
           isCaptureTarget: false,
           createdAt: new Date().toISOString(),
+          // Where this came from — Clipboard Step 14. Only meaningful because
+          // the inbox row below is now archived rather than deleted; the FK is
+          // ON DELETE SET NULL, so a deleted capture would take the link with it.
+          sourceInboxId: inboxItem.id,
         };
 
         const context = contexts.find((c) => c.id === newItem.contextId);
@@ -3140,6 +3137,7 @@ export default function Alfred() {
           targetStartDate: triageData.intentionData.targetStartDate || null,
           endDate: triageData.intentionData.endDate || null,
           tags: triageData.intentionData.tags || [],
+          sourceInboxId: inboxItem.id,
         };
         const savedIntent = wrote(await storage.set(`intent:${newIntent.id}`, newIntent));
         setIntents((prev) => [...prev, savedIntent || newIntent]);
@@ -3156,6 +3154,10 @@ export default function Alfred() {
             archived: false,
             createdAt: new Date().toISOString(),
             text: triageData.intentionData.text,
+            // Redundant with the intention's, which carries the same value. Kept
+            // so an event reached from the calendar answers "where did this come
+            // from" without a join back through intents.
+            sourceInboxId: inboxItem.id,
           };
           const savedEvent = wrote(await storage.set(`event:${newEvent.id}`, newEvent));
           setEvents((prev) => [...prev, savedEvent || newEvent]);
@@ -3189,18 +3191,39 @@ export default function Alfred() {
         return;
       }
 
-      // Triage succeeded, so the capture has become an item, an intention, an
-      // event or a collection member. The row has no further job.
+      // -------------------------------------------------------------------
+      // TRIAGE ARCHIVES. IT USED TO DELETE — Clipboard Step 14.
+      // -------------------------------------------------------------------
       //
-      // No Undo offered here, deliberately, unlike the discard path. Undo would
-      // put the inbox row back but could not remove the records it turned into,
-      // so it would restore a capture that had already been filed — a button
-      // labelled Undo that half-undoes is worse than none. Discard has no such
-      // problem: nothing downstream exists to reverse.
-      const disposed = await storage.delete(`inbox:${inboxItem.id}`);
-      if (!disposed) {
+      // The capture has become an item, an intention, an event or a collection
+      // member, so it has no further job ON THE INBOX SCREEN. It does still have
+      // a job: the records above now carry `sourceInboxId` pointing back here,
+      // and the FK is ON DELETE SET NULL, so deleting this row would silently
+      // cut every one of those links a moment after they were written.
+      //
+      // That is why the archive and the links are ONE change. Either half alone
+      // is useless or actively misleading: links to a row that is about to
+      // vanish, or an archived row nothing points at.
+      //
+      // This was the LAST hard delete on the inbox — Step 5b turned the trash
+      // can into an archive with reason 'discarded' and deliberately left this
+      // path alone until there was a reason to keep the row. Now there is.
+      //
+      // Still no Undo, and for the unchanged reason: undo would un-archive the
+      // capture but could not remove the records it turned into, so it would
+      // restore something already filed. A button labelled Undo that half-undoes
+      // is worse than none. Discard has no such problem, which is why it offers
+      // one.
+      const processed = {
+        ...inboxItem,
+        archived: true,
+        triagedAt: new Date().toISOString(),
+        archiveReason: 'processed',
+      };
+      const disposed = await storage.set(`inbox:${inboxItem.id}`, processed);
+      if (disposed === false) {
         window.alert(
-          "Everything was saved, but the capture could not be removed from your inbox. Delete it manually.",
+          "Everything was saved, but the capture could not be filed away. It is still in your inbox — archive it by hand, and do not save it again or you will get a second copy of everything.",
         );
         return;
       }
@@ -5789,7 +5812,6 @@ export default function Alfred() {
                     collections={activeCollections}
                     onSave={handleInboxSave}
                     onDiscard={discardInboxItem}
-                    onEnrich={handleInboxEnrich}
                     onDirtyChange={setUnsavedChanges}
                     onSaveCaptureText={updateInboxCaptureText}
                   />
@@ -6493,9 +6515,11 @@ export default function Alfred() {
                 </label>
 
                 {/* The column has existed since the collections migration and
-                    ai-enrich has been reading it to decide where a capture
+                    enrichment has been reading it to decide where a capture
                     should go, but there was no UI — the only way to set it was
-                    raw SQL, which is how Groceries got its flag. */}
+                    raw SQL, which is how Groceries got its flag. (That reader is
+                    the alfred-enrich skill in claude.ai now, not the ai-enrich
+                    function — Clipboard Step 14.) */}
                 <label className="flex items-start gap-2">
                   <input
                     type="checkbox"
@@ -7444,7 +7468,9 @@ function friendlyDate(timestamp) {
 //
 // Written out in full rather than derived, so adding a `suggested_*` column and
 // forgetting it here shows up as a field this list does not mention. The columns
-// are the ones `ai-enrich` writes; see the inbox table comment.
+// are the ones enrichment writes — the alfred-enrich skill through
+// `update_inbox_item` as of Clipboard Step 14, the ai-enrich function before
+// that. Both write the same set; see the inbox table comment.
 const CLEARED_ENRICHMENT = {
   aiStatus: "not_started",
   aiConfidence: null,
@@ -7512,13 +7538,11 @@ function InboxCard({
   // with reason 'discarded', so onDelete became the lie onArchive had been. A
   // prop name is the last place anyone looks to find out behaviour changed.
   onDiscard,
-  onEnrich,
   onDirtyChange,
   onSaveCaptureText,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showAiInfo, setShowAiInfo] = useState(false);
-  const [enriching, setEnriching] = useState(false);
 
   // Step 12.7 — editing the capture itself, which is not triage.
   const [editingCapture, setEditingCapture] = useState(false);
@@ -7846,79 +7870,6 @@ function InboxCard({
 
   function handleDragEnd() {
     setDraggedIndex(null);
-  }
-
-  async function handleEnrich() {
-    setEnriching(true);
-
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const response = await fetch(
-        `${supabaseUrl}/functions/v1/ai-enrich`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({ inbox_id: inboxItem.id }),
-        }
-      );
-
-      let result;
-      try {
-        result = await response.json();
-      } catch (e) {
-        throw new Error(`Enrich failed: ${response.status} - Could not parse response`);
-      }
-
-      if (!response.ok) {
-        throw new Error(result.error || `Enrich failed: ${response.status}`);
-      }
-
-      if (result.success) {
-        // Convert snake_case to camelCase
-        const camelSuggestions = storage.toCamelCase(result.suggestions);
-        const updatedItem = {
-          ...inboxItem,
-          aiStatus: result.status,
-          ...camelSuggestions,
-        };
-        onEnrich(inboxItem.id, updatedItem);
-      } else {
-        throw new Error(result.error || 'Enrichment failed');
-      }
-    } catch (error) {
-      console.error('Enrich error:', error);
-      alert('Enrichment failed: ' + error.message);
-    } finally {
-      setEnriching(false);
-    }
-  }
-
-  async function handleReEnrich() {
-    // Save current form state back to inbox record first
-    const updatedInbox = {
-      ...inboxItem,
-      suggestedContextId: intentContextId || null,
-      suggestIntent: intentionOpen,
-      suggestedIntentText: intentText,
-      suggestItem: itemOpen,
-      suggestedItemText: itemName,
-      suggestedItemDescription: itemDescription,
-      suggestedItemElements: itemElements.length > 0 ? itemElements : null,
-      suggestEvent: !!eventDate,
-      suggestedEventDate: eventDate || null,
-      suggestedTags: intentTags.length > 0 ? intentTags : [],
-      suggestedItemId: intentItemId || null,
-      suggestedCollectionId: selectedCollectionId || null,
-    };
-
-    await storage.set(`inbox:${inboxItem.id}`, updatedInbox);
-    onEnrich(inboxItem.id, updatedInbox);
-
-    // Now trigger enrichment
-    await handleEnrich();
   }
 
   // The card's ONE Save — Step 12.7b.
@@ -8709,30 +8660,18 @@ function InboxCard({
           buttons wide on a touchscreen. */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex flex-wrap gap-3">
-          {/* Enrich / Re-enrich button */}
-          {inboxItem.aiStatus !== 'in_progress' && !enriching && (
-            <button
-              onClick={inboxItem.aiStatus === 'not_started' ? handleEnrich : handleReEnrich}
-              // Secondary as of Step 12.7b. It was `bg-primary`, identical to
-              // Save sitting next to it — two primaries in one row, which is the
-              // same dilution Step 8b settled for Start Now. Save is this card's
-              // primary action; Enrich is a tool you may reach for first.
-              className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 flex items-center gap-2"
-            >
-              <Sparkles className="w-4 h-4" />
-              {inboxItem.aiStatus === 'not_started'
-                ? 'Enrich (Sonnet)'
-                : 'Re-enrich (Opus)'}
-            </button>
-          )}
-          {(inboxItem.aiStatus === 'in_progress' || enriching) && (
-            <button
-              disabled
-              className="px-4 py-2.5 min-h-[44px] bg-warning-light text-warning rounded-lg cursor-not-allowed"
-            >
-              Enriching...
-            </button>
-          )}
+          {/* ENRICH AND RE-ENRICH ARE GONE — Clipboard Step 14.
+              Enrichment now happens only from claude.ai, through the connector
+              and the alfred-enrich skill. It ran here by calling the ai-enrich
+              edge function directly, which meant a second enrichment
+              implementation to keep in step with the skill, a server-side
+              agentic loop, and the only place in the app holding an
+              ANTHROPIC_API_KEY-backed dependency.
+              The `ai_status` badge STAYS: rows still carry the status that
+              claude.ai's enrichment writes, and reading it is still useful.
+              Only the buttons that started enrichment from here have gone.
+              The function itself is untouched and is retired separately, after
+              a week with no calls — see the spec's Phase 3 section. */}
 
           {/* The card's one Save. Enabled when there is anything to commit —
               a triage section open, OR an edited capture (Step 12.7b). It used
