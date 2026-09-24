@@ -480,13 +480,31 @@ test("holding every note of the stuck beat resumes the run", async () => {
   await chord("wrong");
   expect(frozenAt()).toBe(4200);
 
-  await hold(60, 64);
+  // ── ⚠️ THE CLOCK IS FROZEN FOR THE RESUME, ON PURPOSE ──────────────────────
+  //
+  // The resume sets `scrollStartT = performance.now() - targetTimeMs`, and the
+  // assertion below reads `performance.now()` again. With the real clock those are
+  // two different instants, so the difference is 4200 PLUS however long the render
+  // took — and this test used to allow 0.5ms for that and fail whenever the machine
+  // was busy (4200.5007 was the observed value). A tolerance cannot fix it: widen it
+  // and the test stops checking the thing it is for, which is that the offset is the
+  // beat's own time and not something near it.
+  //
+  // Frozen, the two reads are the same instant and the answer is EXACT. Restored in
+  // `finally` so nothing after this sees a stopped clock.
+  const FROZEN_NOW = 10_000;
+  const nowSpy = jest.spyOn(performance, "now").mockReturnValue(FROZEN_NOW);
+  try {
+    await hold(60, 64);
 
-  expect(frozenAt()).toBeNull();
-  // The clock is set as if the beat had been played on time: elapsed is
-  // now - scrollStartT, so scrollStartT must be now minus the beat's own time.
-  expect(performance.now() - scrollStartT()).toBeCloseTo(4200, 0);
-  expect(screen.getByText("Nothing is recorded.")).toBeInTheDocument();
+    expect(frozenAt()).toBeNull();
+    // The clock is set as if the beat had been played on time: elapsed is
+    // now - scrollStartT, so scrollStartT must be now minus the beat's own time.
+    expect(performance.now() - scrollStartT()).toBe(4200);
+    expect(screen.getByText("Nothing is recorded.")).toBeInTheDocument();
+  } finally {
+    nowSpy.mockRestore();
+  }
 });
 
 test("a partial hold does not resume", async () => {

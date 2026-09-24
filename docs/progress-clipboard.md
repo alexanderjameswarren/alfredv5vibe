@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 is code-complete.** Steps 16-19 done; 17f and 19 awaiting in-app verification.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 is code-complete.** Steps 16-19 done; 17g and 19 awaiting in-app verification.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -67,7 +67,8 @@ seven distinct designs, every name matching its title, README list accurate.
 - [x] Step 17d: Roll back the measured-dock layout to production, keep every feature from 17/17b/17c, then fix the original gap with the smallest change: move each pinned footer down to the capture bar's normal height and leave the content padding alone. - **done 2026-09-24.** Suite green: 67 suites, 1492 tests (the 11 useDockHeight tests went with the hook). - **verified 2026-09-24 and PUSHED.** The gap is gone, footers sit flush and release at the bottom of a long form, the item view's last section is visible, and the Capture button matches production.
 - [x] Step 17e: Pinned footer spacing. The buttons sat 8px from the top and 12px from the bottom, and once a footer released the card's own bottom padding stacked under it. - **done 2026-09-24.** `py-3` on all six, and a `-mb-*` matching each card's padding. Offsets and content padding untouched, as instructed.
 - [x] Step 18: Retire the inline card expansion. Remove the old expanded form from `InboxCard`, including its four normaliser copies and the `eslint-disable`d dirty check — but only once nothing uses them. Run the frontend suite. - **done 2026-09-24.** 1,224 lines removed; `InboxCard` is 44 lines and takes three props. Suite green: 67 suites, 1492 tests; build clean. - **verified 2026-09-24.**
-- [x] Step 17f: The inbox detail page's released footer had ~13px above the buttons and ~40px below. - **done 2026-09-24.** A CSS specificity fight, not the padding value — see the notes.
+- [x] Step 17f: The inbox detail page's released footer had ~13px above the buttons and ~40px below. - **done 2026-09-24.** A CSS specificity fight, not the padding value — see the notes. - **INCOMPLETE.** The same fight was live on three screens, not one; the claim that the other five were unaffected was wrong. Closed by 17g.
+- [x] Step 17g: One shared `PinnedFooter` for all six pinned footers, so the geometry cannot differ between screens. Plus the flaky SAM clock assertion. - **done 2026-09-24.** Suite green three runs in a row: 71 suites, 1569 tests; build clean.
 - [x] Step 19: For clipboard items the detail page also shows the captured page text (collapsed, with Show all), the links, and the screenshot slices. Run the frontend suite. - **done 2026-09-24.** `src/ClipboardCapture.jsx` and `src/utils/capturedClip.js`, 50 new tests. Suite: 69 suites, 1548 tests, ONE pre-existing SAM flake (see the notes); build clean.
 
 ## Notes
@@ -103,6 +104,89 @@ invisible until something else wants that property.
 **Fix: `space-y-5` → `flex flex-col gap-5` on the card.** `gap` sets no margins, so
 there is nothing to lose to. One class, no `!important`, no restructuring, and the
 other five footers were never affected because none of them is a `space-y` child.
+
+### Step 17g — one footer component, after three rounds of fixing six copies, 2026-09-24
+
+#### What 17f got wrong
+
+17f found the real mechanism — `space-y-*` beating a negative-margin utility on
+specificity — and then asserted that only the inbox detail page had it, because
+"none of the other five is a `space-y` child". **That check was wrong.** It looked at
+each footer's own class list instead of walking up to its actual parent. Walking up
+properly:
+
+| footer | its parent chain | affected? |
+|---|---|---|
+| CollectionAddItems | plain `<div>`, no card | no — nothing to cancel |
+| ItemAddToCollection | plain `<div>`, no card | no |
+| **ContextForm** | `space-y-4` → card `p-4 sm:p-6` | **yes** |
+| **ItemCard** | `space-y-3` → card `p-3 sm:p-4` | **yes** |
+| **IntentionCard** | `space-y-3` → card `p-3 sm:p-4` | **yes** |
+| InboxDetailView | card `p-4 sm:p-7` | fixed in 17f |
+
+Alex saw it on the item edit screen. It was equally true of the intention edit screen
+and the Context form.
+
+#### The fix: `src/PinnedFooter.jsx`
+
+All six footers are one component now. It owns the sticky offset, the inset that makes
+a released footer finish on its container's border, equal vertical padding, the top
+border and the flex row. Each screen passes ONE number — its container's padding —
+used for the left, right and bottom cancellation together, so those three can never
+disagree. The vertical padding is a single constant applied to both sides, so "equal
+above and below" is a property of the code rather than of two numbers that happen to
+match.
+
+`src/utils/pinnedFooterGeometry.js` holds the constant and the per-screen insets.
+
+**The cancelling margins carry `!important`**, in one rule in `index.css`, and the
+comment there names exactly what it beats. That is the only thing that reliably
+outranks `.space-y-3 > :not([hidden]) ~ :not([hidden])` at (0,3,0). Applied to all
+three sides, not just the bottom, so the next spacing utility on a container cannot
+reopen the hole from a different direction. `margin-top` is deliberately left alone —
+the container's own spacing is what puts a gap above the footer.
+
+#### A false start worth recording
+
+The geometry was inline first, on the reasoning that an inline declaration beats every
+selector and needs no `!important`. It worked in the browser and **vanished in tests**:
+jsdom's CSS parser silently discards `calc(-1 * var(…))` from an inline style, so the
+rendered `style` attribute came back holding only the padding. A mechanism that cannot
+be asserted is a mechanism that breaks quietly — which is the whole history of this
+footer — so the margins moved to the stylesheet where a test can read them.
+
+#### The computed spacing, and how it was established
+
+Identical on all six screens, released or docked:
+
+| | value | how |
+|---|---|---|
+| above the buttons | **12px** | inline `padding-top`, read back through `getComputedStyle` in jsdom for all five inset configurations |
+| below the buttons | **12px** | inline `padding-bottom`, same assertion, and compared to `paddingTop` directly |
+| residual container padding below a released footer | **0px** | the compiled rule cancels exactly `--pf-now`, and each screen's `--pf-now` is checked against its container's real padding class |
+
+There is no browser here, so the last row is arithmetic over two facts a test pins
+rather than a measurement: container `padding-bottom: P` plus footer
+`margin-bottom: -P` leaves nothing. The inset also has no effect on the two inner
+numbers — it only decides where the footer ENDS. Final confirmation on a screen is
+Alex's.
+
+Tests: `PinnedFooter.test.jsx` (12) and `utils/pinnedFooterGeometry.test.js` (9). The
+second is the structural guard: it pairs every screen's inset with its container's
+padding class, asserts all six call sites go through the component, and fails if
+`sticky-above-bar`, `bottom-28` or `bottom-32` ever come back or if a call site tries
+to pass its own padding.
+
+#### The SAM flake, fixed
+
+`src/sam/SamPlayer.practice.test.jsx` → "holding every note of the stuck beat resumes
+the run" read the real clock twice and allowed 0.5ms between them, so it failed
+whenever the machine was busy (4200.5007 observed). **A wider tolerance would have
+been the wrong fix** — it would stop the test checking the thing it exists for, which
+is that the offset is the beat's own time and not merely near it.
+
+`performance.now` is now frozen for the resume, restored in a `finally`, and the
+assertion is `toBe(4200)` — exact. Full suite run three times: clean every time.
 
 ### Step 19 — the app shows what was captured, 2026-09-24
 

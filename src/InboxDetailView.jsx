@@ -66,6 +66,8 @@ import {
 } from "lucide-react";
 import ItemPicker, { PickedItem } from "./ItemPicker";
 import TagPicker from "./TagPicker";
+import PinnedFooter, { FooterSpacer } from "./PinnedFooter";
+import { FOOTER_INSETS } from "./utils/pinnedFooterGeometry";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
 import { normaliseSuggestedElements } from "./utils/suggestedElements";
 import { isFirstStep } from "./utils/elementOffsets";
@@ -1096,24 +1098,12 @@ export default function InboxDetailView({
           {!editingCapture && renderCapturedContent?.(inboxItem)}
         </div>
 
-        {/* Footer, pinned to the bottom of the card and flush on top of the global
-            capture bar. `sticky-above-bar` is the one class every pinned footer in
-            Alfred uses; the two numbers behind it live in index.css.
-
-            The negative margins pull it out to the card's own edges — bottom
-            included, so when it releases at the bottom of the page it finishes flush
-            with the rounded corner rather than floating above a strip of card
-            padding.
-
-            ⚠️ WHICH IS WHY THE CARD USES `flex flex-col gap-5` AND NOT `space-y-5`.
-            Step 17f. `space-y-*` compiles to
-            `.space-y-5 > :not([hidden]) ~ :not([hidden]) { margin-bottom: 0 }` —
-            specificity (0,3,0) — which beat this element's `-mb-4 sm:-mb-7` at
-            (0,1,0). The negative margin was in the stylesheet and simply lost, so the
-            card's 28px bottom padding stayed under the released footer: 13px above
-            the buttons and 40px below. `gap` sets no margins, so there is nothing to
-            lose to. */}
-        <div className="sticky-above-bar -mx-4 sm:-mx-7 -mb-4 sm:-mb-7 px-4 sm:px-7 py-3 flex items-center gap-2.5 bg-card border-t border-border rounded-b-xl">
+        {/* The footer. Its geometry — the sticky offset, the inset that makes a
+            released footer finish on the card's border, and equal space above and
+            below the buttons — belongs to PinnedFooter, which all six of Alfred's
+            pinned footers now share. See that file for why it took three rounds and
+            what kept defeating it. */}
+        <PinnedFooter inset={FOOTER_INSETS.inboxDetail} className="bg-card rounded-b-xl">
           <button
             onClick={handleProcess}
             disabled={!canProcess}
@@ -1138,7 +1128,7 @@ export default function InboxDetailView({
             <X className="w-[18px] h-[18px]" aria-hidden="true" />
             Cancel
           </button>
-          <span className="flex-1" />
+          <FooterSpacer />
           <button
             onClick={handleDiscard}
             className="inline-flex items-center justify-center gap-2 min-h-[44px] px-4 py-2.5 rounded-lg bg-destructive hover:bg-destructive-hover text-white shadow-sm hover:shadow-md transition-all duration-200"
@@ -1146,7 +1136,7 @@ export default function InboxDetailView({
             <Trash2 className="w-[18px] h-[18px]" aria-hidden="true" />
             Discard
           </button>
-        </div>
+        </PinnedFooter>
       </div>
     </div>
   );

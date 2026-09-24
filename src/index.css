@@ -66,63 +66,78 @@
 }
 
 /* --- Pinned action footers ---------------------------------------------------
-   Clipboard Step 17d.
+   Clipboard Steps 17d and 17g.
 
-   Six screens end in a pinned action footer — the item and intention edit
-   screens, the Context form, both "add to a collection" pages, and the inbox
-   detail page. Each one sits flush on top of the Capture bar while the page
-   scrolls, and releases at the bottom of the page to sit at the end of its card.
+   Six screens end in a pinned action footer — the item and intention edit screens,
+   the Context form, both "add to a collection" pages, and the inbox detail page.
+   They all render `PinnedFooter`, which owns the geometry; this rule holds only the
+   two things that have to change at a breakpoint.
 
-   ── The two numbers ───────────────────────────────────────────────────────────
-
-   They are the Capture bar's height at its normal, unexpanded size:
+   ── The offset: the Capture bar's height at its normal, unexpanded size ──────
 
      63px  phone   1px border + py-2 (16px) + a 46px row
      83px  sm      1px border + py-4 (32px) + a 50px row   ← measured in the app
 
    83px is Alex's measurement of the live bar; 63px is derived from it by the two
    padding differences below `sm` (the bar's `py-4`→`py-2` and the textarea's
-   `sm:py-3`→`py-2.5`). If the bar's padding or the textarea's ever change, these
-   change with them — which is the cost of a constant, and it is accepted here on
-   purpose. See the note at the end.
+   `sm:py-3`→`py-2.5`).
 
-   ── ⚠️ WHY THIS IS NOT DERIVED FROM THE CONTENT PADDING ──────────────────────
+   ⚠️ NOT derived from the content wrapper's `pb-28 sm:pb-32`, which is a DIFFERENT
+   number doing a different job. The footer offset is clearance and must equal the
+   bar. The content padding is scroll room and must be LARGER, because it is what
+   lets the page scroll far enough for the footer to undock at the bottom of a form
+   and sit at the end of its card. Mirroring them was the original bug, and cutting
+   the padding to the bar's height in Step 17b is what killed the release.
 
-   These used to be `sticky bottom-28 sm:bottom-32` — 112px and 128px — chosen to
-   mirror the content wrapper's `pb-28 sm:pb-32`. That mirroring was the bug: the
-   two numbers do completely different jobs and only one of them is the bar's
-   height.
+   A constant, after a measured version was tried and reverted in 17d: the accepted
+   cost is that typing enough into the Capture bar grows it past 83px, and a footer
+   will overlap its top edge until you stop.
 
-     the FOOTER offset is clearance. It must equal the bar, or the footer either
-       floats above it with the page scrolling through the gap (what 112px did) or
-       tucks behind it.
+   ── `--pf-now`: the container padding the footer has to cancel ───────────────
 
-     the CONTENT padding is scroll room, and it is deliberately LARGER. It is what
-       lets the page scroll far enough for the footer's resting place to rise above
-       the sticky line — which is how the footer undocks at the bottom of a form
-       and shows the card's rounded bottom edge. Cut it to the bar's height and the
-       footer can never release.
-
-   So the content wrapper still says `pb-28 sm:pb-32`, and that is not an oversight.
-
-   ── Why a constant, after a measured version was tried and reverted ──────────
-
-   Step 17b measured the dock at runtime and published it as a custom property.
-   The idea was sound — the bar's height really does change as the capture textarea
-   grows — but it shipped three regressions and the measured value still did not
-   produce the right layout, so it was rolled back whole. A constant that is right
-   at the bar's normal height is worth more than a live value that is wrong.
-
-   The accepted cost: type enough into the Capture bar and it grows past 63/83px,
-   and a pinned footer will overlap its top edge until you stop. That is a small,
-   transient overlap while typing, and it is a deliberate trade. */
-.sticky-above-bar {
+   `PinnedFooter` sets `--pf-inset` and `--pf-inset-sm` inline, per screen, and its
+   margins and horizontal padding reference `--pf-now`. Resolving which of the two
+   applies is the only reason this rule exists — a custom property referenced from an
+   inline declaration still resolves from the element's computed value, so the
+   geometry stays inline (and therefore immune to any container spacing utility)
+   while remaining responsive with no JavaScript involved. */
+.pinned-footer {
   position: sticky;
   bottom: 63px;
+  --pf-now: var(--pf-inset, 0px);
+
+  /* Out to the container's edges, and far enough DOWN to cancel its bottom padding,
+     so a released footer finishes on the container's border instead of floating
+     above a strip of it.
+
+     ⚠️ `!important`, and it is not laziness — it is the whole bug. A container's
+     `space-y-3` compiles to
+       .space-y-3 > :not([hidden]) ~ :not([hidden]) { margin-bottom: calc(0.75rem * 0) }
+     which is specificity (0,3,0), because each `:not([hidden])` carries an attribute
+     selector's weight. This rule is a single class at (0,1,0), so without
+     `!important` the container silently wins and sets margin-bottom to ZERO. That is
+     what left the item, intention and context forms with their card's padding
+     stacked under a released footer for three rounds of fixes.
+
+     Applied to all three sides rather than only the bottom, so the next spacing
+     utility somebody puts on a container — `space-x-*`, `divide-*`, whatever — cannot
+     reopen the same hole from a different direction.
+
+     margin-TOP is deliberately left alone: the container's own spacing is what puts
+     a gap above the footer, and that is wanted. */
+  margin-left: calc(-1 * var(--pf-now)) !important;
+  margin-right: calc(-1 * var(--pf-now)) !important;
+  margin-bottom: calc(-1 * var(--pf-now)) !important;
+
+  /* Replaces the padding the margins just undid, so the buttons stay lined up with
+     the form above them. */
+  padding-left: var(--pf-now);
+  padding-right: var(--pf-now);
 }
 
 @media (min-width: 640px) {
-  .sticky-above-bar {
+  .pinned-footer {
     bottom: 83px;
+    --pf-now: var(--pf-inset-sm, 0px);
   }
 }

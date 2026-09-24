@@ -16,6 +16,8 @@ import {
 import { useExecutionRoute } from "./useExecutionRoute";
 import InboxDetailView from "./InboxDetailView";
 import ClipboardCapture from "./ClipboardCapture";
+import PinnedFooter from "./PinnedFooter";
+import { FOOTER_INSETS } from "./utils/pinnedFooterGeometry";
 import { clipIdFor } from "./utils/capturedClip";
 import { friendlyDate, SourceIcon } from "./CaptureMeta";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
@@ -928,7 +930,7 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
           as a whole does not usually exceed the viewport. It is here for the
           cases that do — a very short window, or if that cap is ever lifted —
           rather than because it changes anything today. */}
-      <div className="flex gap-2 sticky-above-bar py-3 bg-background border-t border-border">
+      <PinnedFooter inset={FOOTER_INSETS.onPageBackground} className="bg-background">
         <button
           onClick={() => onAdd(Object.values(selected))}
           disabled={Object.keys(selected).length === 0}
@@ -942,7 +944,7 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
         >
           Cancel
         </button>
-      </div>
+      </PinnedFooter>
     </div>
   );
 }
@@ -1280,7 +1282,7 @@ function ItemAddToCollection({ item, items, collections, contexts, onBack, onAdd
 
           {/* Same offsets as CollectionAddItems. Now that the list no longer
               scrolls internally this genuinely engages on a long recipe. */}
-          <div className="flex gap-2 sticky-above-bar py-3 bg-background border-t border-border">
+          <PinnedFooter inset={FOOTER_INSETS.onPageBackground} className="bg-background">
             <button
               onClick={handleAdd}
               disabled={busy || selectedCount === 0 || !collection}
@@ -1296,7 +1298,7 @@ function ItemAddToCollection({ item, items, collections, contexts, onBack, onAdd
             >
               Cancel
             </button>
-          </div>
+          </PinnedFooter>
         </>
       )}
 
@@ -7758,29 +7760,16 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = 
           <span className="text-sm">Pin to home</span>
         </label>
 
-        {/* `sticky-above-bar` — Clipboard Step 17d. One class, two numbers, in
-            index.css. It used to be `bottom-28 sm:bottom-32`, which was chosen to
-            mirror the content wrapper's `pb-28 sm:pb-32` and was about 50px taller
-            than the capture bar, so the footer floated with the page scrolling
-            through the gap underneath.
-            The content padding deliberately still says 112/128px. It is not
-            clearance — it is the scroll room that lets the footer UNDOCK at the
-            bottom of a page and sit at the end of its card.
-
-            Step 17e, and every pinned footer in Alfred now does both:
-              `py-3`   equal space above and below the buttons. It was `pt-2 pb-3`,
-                       which put 8px above them and 12px below.
-              `-mb-*`  cancels the CARD's bottom padding, which otherwise stacks
-                       under the footer once it releases — so the buttons sat
-                       centred while docked and low while released. The values
-                       mirror the card's own padding, exactly as the `-mx-*` beside
-                       them already did. */}
-        <div
-          className={`flex gap-2 ${
-            stickyFooter
-              ? "sticky-above-bar -mx-4 sm:-mx-6 -mb-4 sm:-mb-6 px-4 sm:px-6 py-3 bg-white border-t border-border"
-              : "pt-2"
-          }`}
+        {/* Everything about how this footer sits — the sticky offset, the inset
+            that makes it finish on the card's border when it releases, and equal
+            space above and below the buttons — belongs to PinnedFooter. All six of
+            Alfred's pinned footers share it, which is the point: this took three
+            rounds to get right and the third round fixed only one of the six. */}
+        <PinnedFooter
+          pinned={stickyFooter}
+          inset={FOOTER_INSETS.contextForm}
+          className="bg-white"
+          unpinnedClassName="pt-2"
         >
           <button
             onClick={() => {
@@ -7799,7 +7788,7 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = 
           >
             Cancel
           </button>
-        </div>
+        </PinnedFooter>
       </div>
     </div>
   );
@@ -10186,11 +10175,11 @@ function ItemCard({
             </div>
           </div>
 
-          <div
-            className={"flex flex-wrap gap-2 " +
-              (stickyFooter
-                ? "sticky-above-bar -mx-3 sm:-mx-4 -mb-3 sm:-mb-4 px-3 sm:px-4 py-3 bg-card border-t border-border"
-                : "pt-2")}
+          <PinnedFooter
+            pinned={stickyFooter}
+            inset={FOOTER_INSETS.itemCard}
+            className="bg-card"
+            unpinnedClassName="pt-2"
           >
             <button
               onClick={handleSave}
@@ -10219,7 +10208,7 @@ function ItemCard({
                 Archive
               </button>
             )}
-          </div>
+          </PinnedFooter>
         </div>
       </div>
     );
@@ -11161,13 +11150,10 @@ function IntentionCard({
             </div>
           )}
 
-          <div
-            className={
-              "flex gap-2 flex-wrap " +
-              (stickyFooter
-                ? "sticky-above-bar -mx-3 sm:-mx-4 -mb-3 sm:-mb-4 px-3 sm:px-4 py-3 bg-card border-t border-border"
-                : "")
-            }
+          <PinnedFooter
+            pinned={stickyFooter}
+            inset={FOOTER_INSETS.intentionCard}
+            className="bg-card"
           >
             {/* Both go through handleSave, so each still saves the form AND
                 schedules in one action — which is what the old Do Today did and
@@ -11219,7 +11205,7 @@ function IntentionCard({
                 Archive
               </button>
             )}
-          </div>
+          </PinnedFooter>
         </div>
       </div>
     );
