@@ -1085,7 +1085,7 @@ export default function InboxDetailView({
             included, so when it releases at the bottom of the page it finishes flush
             with the rounded corner rather than floating above a strip of card
             padding. */}
-        <div className="sticky-above-bar -mx-4 sm:-mx-7 -mb-4 sm:-mb-7 px-4 sm:px-7 py-3.5 flex items-center gap-2.5 bg-card border-t border-border rounded-b-xl">
+        <div className="sticky-above-bar -mx-4 sm:-mx-7 -mb-4 sm:-mb-7 px-4 sm:px-7 py-3 flex items-center gap-2.5 bg-card border-t border-border rounded-b-xl">
           <button
             onClick={handleProcess}
             disabled={!canProcess}

@@ -82,7 +82,6 @@ import {
   Layers,
   Music,
   Pin,
-  Info,
   Timer,
   Pencil,
   RefreshCw,
@@ -927,7 +926,7 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
           as a whole does not usually exceed the viewport. It is here for the
           cases that do — a very short window, or if that cap is ever lifted —
           rather than because it changes anything today. */}
-      <div className="flex gap-2 sticky-above-bar pt-2 pb-3 bg-background border-t border-border">
+      <div className="flex gap-2 sticky-above-bar py-3 bg-background border-t border-border">
         <button
           onClick={() => onAdd(Object.values(selected))}
           disabled={Object.keys(selected).length === 0}
@@ -1279,7 +1278,7 @@ function ItemAddToCollection({ item, items, collections, contexts, onBack, onAdd
 
           {/* Same offsets as CollectionAddItems. Now that the list no longer
               scrolls internally this genuinely engages on a long recipe. */}
-          <div className="flex gap-2 sticky-above-bar pt-2 pb-3 bg-background border-t border-border">
+          <div className="flex gap-2 sticky-above-bar py-3 bg-background border-t border-border">
             <button
               onClick={handleAdd}
               disabled={busy || selectedCount === 0 || !collection}
@@ -3147,23 +3146,11 @@ export default function Alfred() {
         setItems((prev) => [...prev, savedItem || newItem]);
         createdItemId = newItem.id;
 
-        // Update linked items to reference the newly created item
-        if (triageData.itemItemLinks && triageData.itemItemLinks.length > 0) {
-          for (const linkedItem of triageData.itemItemLinks) {
-            const itemToUpdate = items.find((i) => i.id === linkedItem.id);
-            if (itemToUpdate) {
-              const updatedElements = [
-                ...(itemToUpdate.elements || []),
-                {
-                  name: newItem.name,
-                  displayType: 'bullet',
-                  itemId: newItem.id,
-                },
-              ];
-              await updateItem(linkedItem.id, { elements: updatedElements });
-            }
-          }
-        }
+        // "Attach this Item" — appending the new item as a bullet element of an
+        // existing one — used to happen here, driven by `triageData.itemItemLinks`.
+        // Alex dropped the control in Step 17b and Step 18 deleted the form that
+        // was its only source, so nothing could reach this branch again. Removed
+        // rather than left looking live.
       }
 
       // Create intention if Intention section was open
@@ -3208,7 +3195,14 @@ export default function Alfred() {
         }
       }
 
-      // Add to collection if Collection section was open
+      // Add to collection if Collection section was open.
+      //
+      // ⚠️ DORMANT, NOT DEAD. The inbox detail page always sends
+      // `addToCollection: false`, because the approved design hides collections
+      // "for now" — docs/inbox-detail-mockups/README.md. This is kept, unlike the
+      // itemItemLinks branch above, precisely because that "for now" is a plan and
+      // not a removal: when the section comes back it sends the same shape and this
+      // works unchanged.
       if (triageData.addToCollection && triageData.collectionData) {
         const targetItemId = triageData.collectionData.itemId || createdItemId;
         const targetCollectionId = triageData.collectionData.collectionId;
@@ -5818,21 +5812,10 @@ export default function Alfred() {
               <div className="space-y-3">
                 {visibleInboxItems.map((inboxItem) => (
                   <InboxCard
-                    tagPool={tagPool}
                     key={inboxItem.id}
                     inboxItem={inboxItem}
-                    contexts={contexts}
-                    items={items}
-                    collections={activeCollections}
-                    onSave={handleInboxSave}
-                    onDiscard={discardInboxItem}
-                    onDirtyChange={setUnsavedChanges}
-                    onSaveCaptureText={updateInboxCaptureText}
-                    // Clipboard Step 17. Tapping a row opens the detail page
-                    // instead of expanding the card in place. Passing this makes
-                    // the card's whole expanded form unreachable, which is the
-                    // point — Step 18 deletes it once nothing can reach it.
                     onOpen={openInboxDetail}
+                    onDiscard={discardInboxItem}
                   />
                 ))}
               </div>
@@ -7539,1226 +7522,89 @@ function AiStatusBadge({ status }) {
   );
 }
 
-function InboxCard({
-  inboxItem,
-  contexts,
-  items,
-  collections,
-  tagPool = [],
-  onSave,
-  // Named for what it does, and renamed twice for that reason. Step 10 made it
-  // a hard delete and called it onDelete; Clipboard Step 5b made it an archive
-  // with reason 'discarded', so onDelete became the lie onArchive had been. A
-  // prop name is the last place anyone looks to find out behaviour changed.
-  onDiscard,
-  onDirtyChange,
-  onSaveCaptureText,
-  // Clipboard Step 17. When given, tapping the row opens the detail PAGE and the
-  // card never expands — which makes everything below the collapsed return a
-  // dead branch. Step 18 removes it, including the four normaliser copies and
-  // the eslint-disabled dirty check. Optional so that the card keeps working on
-  // its own while both paths exist.
-  onOpen,
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [showAiInfo, setShowAiInfo] = useState(false);
-
-  // Step 12.7 — editing the capture itself, which is not triage.
-  const [editingCapture, setEditingCapture] = useState(false);
-  const [captureDraft, setCaptureDraft] = useState(inboxItem.capturedText);
-
-  // Accordion section open/closed state — auto-open if suggestions exist
-  const [intentionOpen, setIntentionOpen] = useState(!!inboxItem.suggestIntent);
-  const [itemOpen, setItemOpen] = useState(!!inboxItem.suggestItem);
-  const [collectionOpen, setCollectionOpen] = useState(!!inboxItem.suggestedCollectionId);
-
-  const [eventDate, setEventDate] = useState(inboxItem.suggestedEventDate || '');
-
-  // Tags (shared suggestions applied to whichever sections are open)
-  const [intentTags, setIntentTags] = useState(inboxItem.suggestedTags || []);
-
-  // Intention form state (updated to pre-fill from suggestions)
-  const [intentText, setIntentText] = useState(
-    inboxItem.suggestedIntentText || inboxItem.capturedText
-  );
-  const [intentRecurrenceConfig, setIntentRecurrenceConfig] = useState(null);
-  const [intentEndDate, setIntentEndDate] = useState(null);
-  const [intentTargetStartDate, setIntentTargetStartDate] = useState(null);
-  const [intentContextId, setIntentContextId] = useState(
-    inboxItem.suggestedContextId || ''
-  );
-  const [intentItemId, setIntentItemId] = useState(
-    inboxItem.suggestedItemId || ''
-  );
-  const [intentItemSearch, setIntentItemSearch] = useState(
-    (inboxItem.suggestedItemId && items?.find(i => i.id === inboxItem.suggestedItemId)?.name) || ''
-  );
-
-  // Item form state (updated to pre-fill from suggestions)
-  const [itemName, setItemName] = useState(
-    inboxItem.suggestedItemText || inboxItem.capturedText
-  );
-  const [itemDescription, setItemDescription] = useState(
-    inboxItem.suggestedItemDescription || ''
-  );
-  const [itemContextId, setItemContextId] = useState(
-    inboxItem.suggestedContextId || ''
-  );
-  const [itemElements, setItemElements] = useState(
-    (inboxItem.suggestedItemElements || []).map((el) =>
-      el.name ? el : {
-        name: el.text || '',
-        displayType: el.type || 'step',
-        quantity: el.quantity || '',
-        description: el.description || '',
-        ...(el.collectable ? { collectable: true } : {}),
-        ...offsetPatch(el)
-      }
-    )
-  );
-  const [itemTags, setItemTags] = useState(inboxItem.suggestedTags || []);
-  const [draggedIndex, setDraggedIndex] = useState(null);
-  const [itemItemLinks, setItemItemLinks] = useState([]);
-  const [showItemItemPicker, setShowItemItemPicker] = useState(false);
-  const [itemItemSearch, setItemItemSearch] = useState('');
-  const inboxElementDescRefs = useRef([]);
-  const inboxItemDescRef = useRef(null);
-
-  // Collection form state
-  const [selectedCollectionId, setSelectedCollectionId] = useState(
-    inboxItem.suggestedCollectionId || ''
-  );
-  const [collectionItemId, setCollectionItemId] = useState(
-    inboxItem.suggestedItemId || ''
-  );
-  const [collectionItemSearch, setCollectionItemSearch] = useState(
-    (inboxItem.suggestedItemId && items?.find(i => i.id === inboxItem.suggestedItemId)?.name) || ''
-  );
-  const [collectionQuantity, setCollectionQuantity] = useState('1');
-
-  // Item searches on this card go through ItemPicker, which does its own
-  // filtering. Items only, as of Step 12.7c: Context used to have a typeahead
-  // too, and with nine contexts it was hiding the list rather than searching
-  // it. Items are a different problem — 375 of them.
-
-  // Re-sync local state when enrichment populates suggestions
-  useEffect(() => {
-    if (inboxItem.aiStatus === 'enriched' || inboxItem.aiStatus === 're_enriched') {
-      // Open sections based on suggestions
-      if (inboxItem.suggestIntent) {
-        setIntentionOpen(true);
-        setIntentText(inboxItem.suggestedIntentText || inboxItem.capturedText);
-        setIntentRecurrenceConfig(null);
-        setIntentEndDate(null);
-        setIntentTargetStartDate(null);
-        setIntentContextId(inboxItem.suggestedContextId || '');
-        setIntentTags(inboxItem.suggestedTags || []);
-      }
-      if (inboxItem.suggestItem) {
-        setItemOpen(true);
-        setItemName(inboxItem.suggestedItemText || inboxItem.capturedText);
-        setItemDescription(inboxItem.suggestedItemDescription || '');
-        setItemContextId(inboxItem.suggestedContextId || '');
-        setItemElements((inboxItem.suggestedItemElements || []).map((el) =>
-          el.name ? el : {
-            name: el.text || '',
-            displayType: el.type || 'step',
-            quantity: el.quantity || '',
-            description: el.description || '',
-            ...(el.collectable ? { collectable: true } : {}),
-            ...offsetPatch(el)
-          }
-        ));
-        setItemTags(inboxItem.suggestedTags || []);
-      }
-      if (inboxItem.suggestedCollectionId) {
-        setCollectionOpen(true);
-        setSelectedCollectionId(inboxItem.suggestedCollectionId);
-      }
-      if (inboxItem.suggestEvent) {
-        setEventDate(inboxItem.suggestedEventDate || '');
-      }
-      if (inboxItem.suggestedItemId) {
-        setIntentItemId(inboxItem.suggestedItemId);
-        setCollectionItemId(inboxItem.suggestedItemId);
-        const existingItem = items?.find(i => i.id === inboxItem.suggestedItemId);
-        if (existingItem) {
-          setIntentItemSearch(existingItem.name);
-          setCollectionItemSearch(existingItem.name);
-        }
-      }
-    }
-  }, [inboxItem.aiStatus, inboxItem, items]);
-
-  useEffect(() => {
-    if (!expanded || !onDirtyChange) return;
-    const isDirty =
-      intentText !== (inboxItem.suggestedIntentText || inboxItem.capturedText) ||
-      intentContextId !== (inboxItem.suggestedContextId || '') ||
-      intentItemId !== (inboxItem.suggestedItemId || '') ||
-      JSON.stringify(intentTags) !== JSON.stringify(inboxItem.suggestedTags || []) ||
-      eventDate !== (inboxItem.suggestedEventDate || '') ||
-      itemName !== (inboxItem.suggestedItemText || inboxItem.capturedText) ||
-      itemDescription !== (inboxItem.suggestedItemDescription || '') ||
-      itemContextId !== (inboxItem.suggestedContextId || '') ||
-      JSON.stringify(itemTags) !== JSON.stringify(inboxItem.suggestedTags || []) ||
-      JSON.stringify(itemElements) !== JSON.stringify(
-        (inboxItem.suggestedItemElements || []).map((el) =>
-          el.name ? el : {
-            name: el.text || '',
-            displayType: el.type || 'step',
-            quantity: el.quantity || '',
-            description: el.description || '',
-            ...(el.collectable ? { collectable: true } : {}),
-            ...offsetPatch(el)
-          }
-        )
-      ) ||
-      itemItemLinks.length > 0 ||
-      selectedCollectionId !== (inboxItem.suggestedCollectionId || '') ||
-      collectionItemId !== (inboxItem.suggestedItemId || '') ||
-      intentionOpen !== !!inboxItem.suggestIntent ||
-      itemOpen !== !!inboxItem.suggestItem ||
-      collectionOpen !== !!inboxItem.suggestedCollectionId ||
-      // Step 12.7. An open capture editor with unsaved text is exactly the kind
-      // of typing this guard exists for, and it was the one field on this card
-      // that could be lost by navigating away.
-      (editingCapture && captureDraft !== inboxItem.capturedText);
-    onDirtyChange(isDirty, "this inbox item");
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    expanded, intentText, intentContextId, intentItemId,
-    intentTags, eventDate, itemName, itemDescription, itemContextId,
-    itemElements, itemTags, itemItemLinks, selectedCollectionId,
-    collectionItemId, intentionOpen, itemOpen, collectionOpen,
-    editingCapture, captureDraft
-  ]);
-
-  useEffect(() => {
-    return () => { if (onDirtyChange) onDirtyChange(false); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Is there anything to commit? Step 12.7b.
-  //
-  // Two independent reasons, and the second one is why this exists: the Save
-  // used to be disabled whenever no triage section was open, which is exactly
-  // the state a text-only edit leaves the card in.
-  const captureTextDirty =
-    editingCapture && captureDraft.trim() !== inboxItem.capturedText;
-  // Collection open with nothing to add. The triage handler skips a collection
-  // step that has no item, and then files the capture anyway — so Save used to
-  // "succeed", remove the capture from the inbox, and add nothing anywhere.
-  // Blocked here, with the reason shown under the Item field. Create Item
-  // being open counts: the new item is what gets added.
-  const collectionNeedsItem = collectionOpen && !collectionItemId && !itemOpen;
-  const canSave =
-    (intentionOpen || itemOpen || collectionOpen || captureTextDirty) &&
-    !collectionNeedsItem;
-
-  // Item element helpers
-  function addElement() {
-    setItemElements([
-      ...itemElements,
-      { name: "", displayType: "step", quantity: "", description: "" },
-    ]);
-    setTimeout(() => {
-      const inputs = document.querySelectorAll('.inbox-element-input');
-      if (inputs.length) {
-        inputs[inputs.length - 1].scrollIntoView({ block: 'nearest' });
-        inputs[inputs.length - 1].focus();
-      }
-    }, 50);
-  }
-
-  function insertElementAbove(index) {
-    const newElements = [...itemElements];
-    newElements.splice(index, 0, {
-      name: "",
-      displayType: "step",
-      quantity: "",
-      description: "",
-    });
-    setItemElements(newElements);
-    setTimeout(() => {
-      const inputs = document.querySelectorAll('.inbox-element-input');
-      if (inputs[index]) {
-        inputs[index].scrollIntoView({ block: 'nearest' });
-        inputs[index].focus();
-      }
-    }, 50);
-  }
-
-  function updateElement(index, field, value) {
-    const newElements = [...itemElements];
-    const next = { ...newElements[index], [field]: value };
-    // An offset is a gap before a step. Changing a row to a header or a bullet
-    // drops it rather than leaving a scheduling instruction on a row that can
-    // never be scheduled — mirroring `collectable` on bullets in the item
-    // editor's copy of this function.
-    if (field === "displayType" && value !== "step") delete next.offsetMinutes;
-    newElements[index] = next;
-    setItemElements(newElements);
-  }
-
-  function handleInboxItemNameChange(newName) {
-    const OVERFLOW_THRESHOLD = 50;
-    if (itemDescription && itemDescription.trim().length > 0) {
-      setItemName(newName);
-      return;
-    }
-    if (newName.length > OVERFLOW_THRESHOLD) {
-      const textUpToThreshold = newName.substring(0, OVERFLOW_THRESHOLD);
-      const lastSpaceIndex = textUpToThreshold.lastIndexOf(' ');
-      if (lastSpaceIndex > 0) {
-        const nameText = newName.substring(0, lastSpaceIndex).trim();
-        const overflowText = newName.substring(lastSpaceIndex + 1).trim();
-        setItemName(nameText);
-        setItemDescription(overflowText);
-        setTimeout(() => {
-          if (inboxItemDescRef.current) {
-            inboxItemDescRef.current.focus();
-            inboxItemDescRef.current.setSelectionRange(overflowText.length, overflowText.length);
-          }
-        }, 0);
-        return;
-      }
-    }
-    setItemName(newName);
-  }
-
-  function handleElementNameChange(index, newName, currentDescription) {
-    const OVERFLOW_THRESHOLD = 30;
-    if (currentDescription && currentDescription.trim().length > 0) {
-      updateElement(index, 'name', newName);
-      return;
-    }
-    if (newName.length > OVERFLOW_THRESHOLD) {
-      const textUpToThreshold = newName.substring(0, OVERFLOW_THRESHOLD);
-      const lastSpaceIndex = textUpToThreshold.lastIndexOf(' ');
-      if (lastSpaceIndex > 0) {
-        const nameText = newName.substring(0, lastSpaceIndex).trim();
-        const overflowText = newName.substring(lastSpaceIndex + 1).trim();
-        const updatedElements = [...itemElements];
-        updatedElements[index] = { ...updatedElements[index], name: nameText, description: overflowText };
-        setItemElements(updatedElements);
-        setTimeout(() => {
-          const descField = inboxElementDescRefs.current[index];
-          if (descField) {
-            descField.focus();
-            descField.setSelectionRange(overflowText.length, overflowText.length);
-          }
-        }, 0);
-        return;
-      }
-    }
-    updateElement(index, 'name', newName);
-  }
-
-  function deleteElement(index) {
-    setItemElements(itemElements.filter((_, i) => i !== index));
-  }
-
-  function handleElementKeyPress(e, index) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      insertElementAbove(index + 1);
-      setTimeout(() => {
-        const inputs = document.querySelectorAll(".inbox-element-input");
-        if (inputs[index + 1]) {
-          inputs[index + 1].focus();
-        }
-      }, 50);
-    }
-  }
-
-  function handleDragStart(e, index) {
-    setDraggedIndex(index);
-    e.dataTransfer.effectAllowed = "move";
-  }
-
-  function handleDragOver(e, index) {
-    e.preventDefault();
-    if (draggedIndex === null || draggedIndex === index) return;
-    const newElements = [...itemElements];
-    const draggedItem = newElements[draggedIndex];
-    newElements.splice(draggedIndex, 1);
-    newElements.splice(index, 0, draggedItem);
-    setItemElements(newElements);
-    setDraggedIndex(index);
-  }
-
-  function handleDragEnd() {
-    setDraggedIndex(null);
-  }
-
-  // The card's ONE Save — Step 12.7b.
-  //
-  // "Commit what I changed on this card", which is what Save means on every
-  // other card in Alfred. Two things can be pending and they are not
-  // alternatives:
-  //
-  //   * the capture text, which is an edit to the row and LEAVES IT in the inbox
-  //   * a triage, which files the capture and deletes the row (Step 10)
-  //
-  // The text is written first, so a triage in the same press files the corrected
-  // text rather than the text being corrected. If no triage section is open the
-  // save stops there and the row stays — which is the whole point of 12.7, and
-  // is why the button is no longer disabled on "nothing to triage" alone.
-  async function handleSave() {
-    const captureDirty =
-      editingCapture && captureDraft.trim() !== inboxItem.capturedText;
-
-    if (captureDirty) {
-      const ok = await onSaveCaptureText(inboxItem.id, captureDraft);
-      if (!ok) return;
-      setEditingCapture(false);
-    }
-
-    if (onDirtyChange) onDirtyChange(false);
-    if (!intentionOpen && !itemOpen && !collectionOpen) {
-      // Text-only save. Close the editor and leave the row where it is.
-      setEditingCapture(false);
-      return;
-    }
-    if (intentionOpen && !intentText.trim()) return;
-    if (itemOpen && !itemName.trim()) return;
-    if (collectionOpen && !selectedCollectionId) return;
-    if (collectionNeedsItem) return;
-
-    onSave(inboxItem.id, {
-      createIntention: intentionOpen,
-      intentionData: intentionOpen
-        ? {
-            text: intentText,
-            contextId: intentContextId || null,
-            recurrenceConfig: intentRecurrenceConfig,
-            endDate: intentEndDate,
-            targetStartDate: intentTargetStartDate,
-            itemId: intentItemId || null,
-            tags: intentTags,
-            createEvent: !!eventDate,
-            eventDate: eventDate || null,
-          }
-        : null,
-      createItem: itemOpen,
-      itemData: itemOpen
-        ? {
-            name: itemName,
-            description: itemDescription,
-            contextId: itemContextId || null,
-            elements: itemElements,
-            tags: itemTags,
-          }
-        : null,
-      itemItemLinks: itemOpen ? itemItemLinks : [],
-      addToCollection: collectionOpen,
-      collectionData: collectionOpen
-        ? {
-            collectionId: selectedCollectionId,
-            itemId: collectionItemId || null,
-            quantity: collectionQuantity,
-          }
-        : null,
-    });
-  }
-
-  function handleCancel() {
-    if (onDirtyChange) onDirtyChange(false);
-    setExpanded(false);
-
-    // The capture editor is part of this card now, so the card's one Cancel
-    // discards it along with everything else — Step 12.7b.
-    setEditingCapture(false);
-    setCaptureDraft(inboxItem.capturedText);
-
-    // Reset accordion states
-    setIntentionOpen(!!inboxItem.suggestIntent);
-    setItemOpen(!!inboxItem.suggestItem);
-    setCollectionOpen(!!inboxItem.suggestedCollectionId);
-
-    // Reset Intention form to suggestions
-    setIntentText(inboxItem.suggestedIntentText || inboxItem.capturedText);
-    setIntentRecurrenceConfig(null);
-    setIntentEndDate(null);
-    setIntentTargetStartDate(null);
-    setIntentContextId(inboxItem.suggestedContextId || '');
-    setIntentItemId(inboxItem.suggestedItemId || '');
-    setIntentItemSearch(
-      (inboxItem.suggestedItemId && items?.find(i => i.id === inboxItem.suggestedItemId)?.name) || ''
-    );
-    setIntentTags(inboxItem.suggestedTags || []);
-    setEventDate(inboxItem.suggestedEventDate || '');
-
-    // Reset Item form to suggestions
-    setItemName(inboxItem.suggestedItemText || inboxItem.capturedText);
-    setItemDescription(inboxItem.suggestedItemDescription || '');
-    setItemContextId(inboxItem.suggestedContextId || '');
-    setItemElements((inboxItem.suggestedItemElements || []).map((el) =>
-      el.name ? el : {
-        name: el.text || '',
-        displayType: el.type || 'step',
-        quantity: el.quantity || '',
-        description: el.description || '',
-        ...(el.collectable ? { collectable: true } : {}),
-        ...offsetPatch(el)
-      }
-    ));
-    setItemTags(inboxItem.suggestedTags || []);
-    setItemItemLinks([]);
-    setShowItemItemPicker(false);
-    setItemItemSearch('');
-
-    // Reset Collection form to suggestions
-    setSelectedCollectionId(inboxItem.suggestedCollectionId || '');
-    setCollectionItemId(inboxItem.suggestedItemId || '');
-    setCollectionItemSearch(
-      (inboxItem.suggestedItemId && items?.find(i => i.id === inboxItem.suggestedItemId)?.name) || ''
-    );
-    setCollectionQuantity('1');
-  }
-
-  // Collapsed display
-  if (!expanded) {
-    const truncated = inboxItem.capturedText.length > 100
-      ? inboxItem.capturedText.substring(0, 100) + '...'
+/**
+ * One capture, as a row in the inbox list.
+ *
+ * ── It used to be the triage form too ────────────────────────────────────────
+ *
+ * Until Clipboard Step 18 this component was 1,240 lines: the collapsed row
+ * below, plus a whole triage form that expanded in place — an element editor, an
+ * intention form, a collection picker, a capture-text editor and their footer.
+ * Step 17 moved all of that to `InboxDetailView` at its own URL, and made this
+ * row navigate there; Step 18 deleted what nothing could reach any more.
+ *
+ * Four things went with it that are worth naming, because each was a hazard
+ * rather than merely dead weight:
+ *
+ *   FOUR COPIES OF THE ELEMENT NORMALISER, which had to stay byte-identical —
+ *   key order included, because the dirty check compared `JSON.stringify` of the
+ *   live elements against a freshly normalised copy. Two spellings of the same
+ *   element differ as strings, so a form nobody had touched would report itself
+ *   dirty and demand a confirm on the way out. There is now ONE, in
+ *   `utils/suggestedElements.js`, with tests.
+ *
+ *   AN `eslint-disable`D DIRTY CHECK, whose dependency array was maintained by
+ *   hand across eighteen values. `InboxDetailView` computes its dirty flag as a
+ *   value during render and depends on that one boolean, so it needs no disable.
+ *
+ *   THE COLLECTION PICKER, which the approved design drops for now.
+ *
+ *   THE CAPTURE-TEXT EDITOR, which is not lost: it is the pencil on the detail
+ *   page's "Original capture" section (Step 17b).
+ *
+ * ── What is left, and why this file still has a component for it ─────────────
+ *
+ * A row, its timestamp, what enriched it, where it came from, and a way to bin
+ * it. The trash can is here rather than only on the detail page because
+ * disposing of a capture you can already read in full should not require opening
+ * a form first — Step 5b's reasoning, unchanged.
+ *
+ * @param {object}   inboxItem  The capture.
+ * @param {Function} onOpen     (id) => void. Opens the detail page. REQUIRED: a
+ *   row with nothing to open is a dead end now that it cannot expand.
+ * @param {Function} onDiscard  (id) => void. Archives with reason 'discarded'.
+ */
+function InboxCard({ inboxItem, onOpen, onDiscard }) {
+  const truncated =
+    inboxItem.capturedText.length > 100
+      ? inboxItem.capturedText.substring(0, 100) + "..."
       : inboxItem.capturedText;
 
-    return (
-      <div
-        className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary transition-colors shadow-sm hover:shadow-md"
-        onClick={() => (onOpen ? onOpen(inboxItem.id) : setExpanded(true))}
-      >
-        <p className="text-foreground mb-2">{truncated}</p>
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>{friendlyDate(inboxItem.createdAt)}</span>
-          <div className="flex items-center gap-2">
-            <AiStatusBadge status={inboxItem.aiStatus} />
-            <span className="flex items-center gap-1">
-              source: <SourceIcon sourceType={inboxItem.sourceType} />
-            </span>
-            {/* Every action on this card used to live behind expansion — the
-                collapsed row was a pure expand target. Disposing of a capture
-                you can already read in full should not require opening the
-                triage form first.
-
-                Behaviour is deliberately untouched: this is the SAME call the
-                expanded footer makes. Step 10 turned both into a hard delete
-                and relabelled them "Delete"; Clipboard Step 5b turned both back
-                into an archive, reason 'discarded', and relabelled them again.
-
-                stopPropagation because the whole card is the expand target. */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (onDirtyChange) onDirtyChange(false);
-                onDiscard(inboxItem.id);
-              }}
-              title="Discard this capture (reversible)"
-              // ml-1 on top of the row's gap-2 = 12px. The badges stay tightly
-              // grouped as one informational cluster; the action separates from
-              // them. Its neighbour is the source icon, which LOOKS static but
-              // is card-click — tap it and the card expands instead.
-              className="ml-1 flex items-center justify-center p-2 min-h-[44px] min-w-[44px] rounded-lg text-muted-foreground hover:text-destructive hover:bg-secondary transition-colors shrink-0"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Expanded triage view
   return (
-    <div className="p-3 sm:p-4 bg-card border-2 border-primary rounded-lg shadow-md">
-      {/* Captured text — editable in place as of Step 12.7.
-
-          A capture often lands half-written, and until now the only way to
-          change it was to triage it into something. This edits `captured_text`
-          and nothing else: no item, no intention, no event, and the row stays in
-          the inbox with `triaged_at` still null. */}
-      {editingCapture ? (
-        <div className="mb-2">
-          {/* NO buttons of its own — Step 12.7b. This card already has a Save
-              and a Cancel in its footer, and a second identically-labelled pair
-              250px above them is the exact inconsistency this phase removes.
-              Worse here than usually, because the two outcomes are not
-              symmetrical: the footer's Save FILES the capture and deletes the
-              row, this one fixes a typo.
-
-              So the capture text is now simply another dirty field of the card,
-              committed by the footer Save like every other field on it. */}
-          <textarea
-            value={captureDraft}
-            onChange={(e) => {
-              const next = e.target.value;
-              // Keep the triage fields in step while they are still showing the
-              // capture verbatim — which is how they are seeded. Once the user
-              // has edited one it is theirs, and this leaves it alone.
-              //
-              // Doing it here rather than after the save is what removes the
-              // race: there is no moment where the text has been written and
-              // the form below still proposes the sentence it replaced.
-              if (intentText === captureDraft) setIntentText(next);
-              if (itemName === captureDraft) setItemName(next);
-              setCaptureDraft(next);
-            }}
-            rows={4}
-            autoFocus
-            className="w-full px-3 py-2 border border-border rounded text-base resize-y min-h-[96px]"
-          />
-          {captureDraft !== inboxItem.capturedText &&
-            (inboxItem.aiStatus === "enriched" ||
-              inboxItem.aiStatus === "re_enriched") && (
-              <p className="text-xs text-muted-foreground mt-2">
-                Saving will clear the existing suggestions — they describe the text
-                you are replacing. Re-enrich afterwards to rebuild them.
-              </p>
-            )}
-        </div>
-      ) : (
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <p className="text-lg text-foreground whitespace-pre-wrap min-w-0">
-            {inboxItem.capturedText}
-          </p>
-          {onSaveCaptureText && (
-            <button
-              onClick={() => {
-                setCaptureDraft(inboxItem.capturedText);
-                setEditingCapture(true);
-              }}
-              title="Edit this capture"
-              className="shrink-0 flex items-center justify-center p-2 min-h-[44px] min-w-[44px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            >
-              <Pencil className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Metadata row */}
-      <div className="flex items-center justify-between text-xs text-muted-foreground mb-3">
+    <div
+      className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary transition-colors shadow-sm hover:shadow-md"
+      onClick={() => onOpen(inboxItem.id)}
+    >
+      <p className="text-foreground mb-2">{truncated}</p>
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>{friendlyDate(inboxItem.createdAt)}</span>
         <div className="flex items-center gap-2">
+          {/* The badge stays. Enrichment still happens — from claude.ai through
+              the connector, since Step 14 removed the in-app buttons — and which
+              captures have been through it is still worth seeing at a glance. */}
           <AiStatusBadge status={inboxItem.aiStatus} />
-          {(inboxItem.aiStatus === 'enriched' || inboxItem.aiStatus === 're_enriched') && (
-            <button
-              onClick={() => setShowAiInfo(!showAiInfo)}
-              className="text-muted-foreground hover:text-foreground transition-colors"
-              title="Enrichment details"
-            >
-              <Info className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* AI info panel (collapsible) */}
-      {showAiInfo && (inboxItem.aiStatus === 'enriched' || inboxItem.aiStatus === 're_enriched') && (
-        <div className="mb-3 p-3 bg-muted border border-border rounded text-sm">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-muted-foreground">Source:</span>
-            <SourceIcon sourceType={inboxItem.sourceType} />
-            <span>{inboxItem.sourceType || 'manual'}</span>
-          </div>
-          {inboxItem.aiConfidence != null && (
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-muted-foreground">Confidence:</span>
-              <span>{Math.round(inboxItem.aiConfidence * 100)}%</span>
-              <div className="flex-1 max-w-[120px] h-1.5 bg-secondary rounded-full">
-                <div
-                  className="h-full bg-primary rounded-full"
-                  style={{ width: `${inboxItem.aiConfidence * 100}%` }}
-                />
-              </div>
-            </div>
-          )}
-          {inboxItem.aiReasoning && (
-            <div>
-              <span className="text-muted-foreground">Reasoning:</span>
-              <p className="mt-1 text-foreground">{inboxItem.aiReasoning}</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      <hr className="mb-4 border-border" />
-
-      {/* Intention accordion */}
-      <div className={`border rounded mb-3 ${intentionOpen ? 'border-primary bg-white' : 'border-border bg-muted'}`}>
-        <button
-          onClick={() => setIntentionOpen(!intentionOpen)}
-          className={`flex items-center gap-2 w-full text-left px-4 py-3 font-medium ${
-            intentionOpen ? 'text-foreground' : 'text-muted-foreground'
-          }`}
-        >
-          <ChevronDown className={`w-4 h-4 transition-transform ${intentionOpen ? 'rotate-180' : ''}`} />
-          Intention
-        </button>
-        {intentionOpen && (
-          <div className="px-4 pb-4 space-y-3">
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">
-                Name
-              </label>
-              <input
-                type="text"
-                value={intentText}
-                onChange={(e) => setIntentText(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded text-base"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">
-                Linked Context (optional)
-              </label>
-              {/* A dropdown, not a typeahead — Step 12.7c.
-
-                  There are nine contexts. A search field over nine options is
-                  friction for nothing, and worse than nothing: the typeahead
-                  showed its list only once you typed, so the thing you were
-                  choosing from was hidden until you already knew its name. A
-                  select shows all nine.
-
-                  Nothing is lost. The typeahead created no contexts on the fly
-                  and filtered on nothing but `name`; both it and this exclude
-                  archived contexts, and its `.slice(0, 10)` cap never bound at
-                  nine. The X-to-clear affordance becomes the "No context"
-                  option.
-
-                  Linked Item beside this one STAYS a typeahead, deliberately —
-                  see the note there. */}
-              <select
-                value={intentContextId}
-                onChange={(e) => setIntentContextId(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded text-base"
-              >
-                <option value="">No context</option>
-                {contexts?.filter((c) => !c.archived).map((ctx) => (
-                  <option key={ctx.id} value={ctx.id}>
-                    {ctx.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">
-                Linked Item (optional)
-                {itemOpen && (
-                  <span className="text-xs text-muted-foreground ml-2">— {itemName || "new item"} will auto-link</span>
-                )}
-              </label>
-              <div className={`relative ${itemOpen ? 'opacity-50 pointer-events-none' : ''}`}>
-                <ItemPicker
-                  variant="dropdown"
-                  items={items}
-                  contexts={contexts}
-                  query={intentItemSearch}
-                  onQueryChange={setIntentItemSearch}
-                  onPick={(item) => {
-                    setIntentItemId(item.id);
-                    setIntentItemSearch(item.name);
-                  }}
-                />
-                <PickedItem
-                  selectedId={intentItemId}
-                  items={items}
-                  query={intentItemSearch}
-                  onClear={() => {
-                    setIntentItemId("");
-                    setIntentItemSearch("");
-                  }}
-                />              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">
-                Recurrence
-              </label>
-              <RecurrenceQuickSelect
-                value={intentRecurrenceConfig}
-                onChange={(config) => {
-                  setIntentRecurrenceConfig(config);
-                }}
-                onEndDateChange={setIntentEndDate}
-              />
-            </div>
-
-            <div className="flex gap-3">
-              <div className="flex-1">
-                <label className="block text-sm font-medium text-foreground mb-1">
-                  Target Start Date
-                </label>
-                <input
-                  type="date"
-                  value={intentTargetStartDate || ""}
-                  onChange={(e) => setIntentTargetStartDate(e.target.value || null)}
-                  className="w-full px-3 py-2 border border-border rounded text-base"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="block text-sm font-medium text-foreground mb-1">
-                  End Date
-                </label>
-                <input
-                  type="date"
-                  value={intentEndDate || ""}
-                  onChange={(e) => setIntentEndDate(e.target.value || null)}
-                  className="w-full px-3 py-2 border border-border rounded text-base"
-                />
-              </div>
-            </div>
-
-            {/* Tags */}
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">Tags</label>
-              <TagPicker value={intentTags} onChange={setIntentTags} pool={tagPool} />
-            </div>
-
-            {/* Schedule Event */}
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">
-                Schedule Event
-              </label>
-              <input
-                type="date"
-                value={eventDate}
-                onChange={(e) => setEventDate(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded text-base"
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Item accordion */}
-      <div className={`border rounded mb-3 ${itemOpen ? 'border-primary bg-white' : 'border-border bg-muted'}`}>
-        <button
-          onClick={() => setItemOpen(!itemOpen)}
-          className={`flex items-center gap-2 w-full text-left px-4 py-3 font-medium ${
-            itemOpen ? 'text-foreground' : 'text-muted-foreground'
-          }`}
-        >
-          <ChevronDown className={`w-4 h-4 transition-transform ${itemOpen ? 'rotate-180' : ''}`} />
-          Item
-        </button>
-        {itemOpen && (
-          <div className="px-4 pb-4 space-y-3">
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">
-                Name
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={itemName}
-                  onChange={(e) => handleInboxItemNameChange(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded text-base"
-                />
-                {itemName.length > 45 && itemName.length <= 50 && (!itemDescription || !itemDescription.trim()) && (
-                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-warning">
-                    {50 - itemName.length}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">
-                Description
-              </label>
-              <textarea
-                ref={inboxItemDescRef}
-                value={itemDescription}
-                onChange={(e) => setItemDescription(e.target.value)}
-                placeholder="Optional description"
-                className="w-full px-3 py-2 border border-border rounded text-base"
-                rows="2"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">
-                Context
-              </label>
-              <select
-                value={itemContextId}
-                onChange={(e) => setItemContextId(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded text-base"
-              >
-                <option value="">No context</option>
-                {contexts.filter((c) => !c.archived).map((ctx) => (
-                  <option key={ctx.id} value={ctx.id}>
-                    {ctx.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
-                Elements
-              </label>
-              <div className="space-y-2">
-                {itemElements.map((element, index) => (
-                  <div key={index}>
-                    <div
-                      className={`space-y-2 p-3 border border-border rounded ${draggedIndex === index ? "opacity-50" : ""}`}
-                      draggable
-                      onDragStart={(e) => handleDragStart(e, index)}
-                      onDragOver={(e) => handleDragOver(e, index)}
-                      onDragEnd={handleDragEnd}
-                    >
-                      <div className="flex items-center gap-2">
-                        <GripVertical
-                          className="w-4 h-4 text-muted-foreground cursor-move flex-shrink-0"
-                          title="Drag to reorder"
-                        />
-                        <div className="relative flex-1 min-w-0">
-                          <input
-                            type="text"
-                            value={element.name}
-                            onChange={(e) =>
-                              handleElementNameChange(index, e.target.value, element.description)
-                            }
-                            onKeyPress={(e) => handleElementKeyPress(e, index)}
-                            placeholder="Element name"
-                            className="inbox-element-input w-full px-3 py-2 border border-border rounded"
-                          />
-                          {element.name.length > 25 && element.name.length <= 30 && (!element.description || !element.description.trim()) && (
-                            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-warning">
-                              {30 - element.name.length}
-                            </span>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => deleteElement(index)}
-                          className="text-destructive hover:text-destructive-hover flex-shrink-0"
-                          title="Delete"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-
-                      <textarea
-                        ref={(el) => (inboxElementDescRefs.current[index] = el)}
-                        value={element.description || ""}
-                        onChange={(e) =>
-                          updateElement(index, "description", e.target.value)
-                        }
-                        placeholder="Description (optional)"
-                        className="w-full px-3 py-2 border border-border rounded text-sm"
-                        rows="2"
-                      />
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        <select
-                        value={element.displayType || "step"}
-                          onChange={(e) =>
-                            updateElement(index, "displayType", e.target.value)
-                          }
-                          className="px-2 py-2 border border-border rounded text-sm"
-                        >
-                          <option value="header">Header</option>
-                          <option value="bullet">Bullet</option>
-                          <option value="step">Step</option>
-                        </select>
-                        <input
-                          type="text"
-                          value={element.quantity || ""}
-                          onChange={(e) =>
-                            updateElement(index, "quantity", e.target.value)
-                          }
-                          placeholder="Qty"
-                          className="w-16 px-2 py-2 border border-border rounded text-sm"
-                        />
-                        {(element.displayType || "step") === "step" && (
-                          <label
-                            className="w-full text-sm text-muted-foreground"
-                            title="Minutes to wait after the previous step is completed."
-                          >
-                            {/* Inline flow, deliberately NOT a nested flex row.
-                          
-                                At 390px the flex version could not wrap: the sentence was
-                                squeezed into a four-word column while the nowrap note and the
-                                repeat link were pushed past the right edge, out of reach, and the
-                                page scrolled sideways.
-                          
-                                inline-block on the input keeps it ON the line with the words, so
-                                "notify [5] min after the step above is checked" still reads as one
-                                sentence — the 6b decision — while the text wraps around it at any
-                                width. w-full gives the sentence its own line beneath the type and
-                                quantity controls, which is where vertical space is cheap. */}
-                            notify{" "}
-                            <input
-                              type="number"
-                              min={0}
-                              inputMode="numeric"
-                              value={element.offsetMinutes ?? ""}
-                              onChange={(e) => {
-                                const raw = e.target.value;
-                                const parsed = parseInt(raw, 10);
-                                updateElement(
-                                  index,
-                                  "offsetMinutes",
-                                  raw === "" || Number.isNaN(parsed) ? undefined : Math.max(0, parsed),
-                                );
-                              }}
-                              placeholder="—"
-                              className="inline-block w-16 align-middle px-2 py-1.5 border border-border rounded text-sm"
-                            />{" "}
-                            min after the step above is checked.
-                            {/* Its own line: a note about the sentence, not part of it. */}
-                            {isFirstStep(itemElements, index) && (
-                              <span
-                                className="block mt-0.5 text-xs text-muted-foreground italic"
-                                title="Nothing precedes this step, so there is no completion to measure from. The value is kept and becomes live if you move this step below another one."
-                              >
-                                — at starting step, no notification will be sent
-                              </span>
-                            )}
-                          </label>
-                        )}
-                      </div>
-                    </div>
-
-                    {index < itemElements.length - 1 && (
-                      <div className="flex justify-center -my-1">
-                        <button
-                          onClick={() => insertElementAbove(index + 1)}
-                          className="text-success hover:text-success-hover text-lg"
-                          title="Insert element below"
-                        >
-                          +
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-                <button
-                  onClick={addElement}
-                  className="w-full px-4 py-2.5 border-2 border-dashed border-border rounded-lg text-muted-foreground hover:border-primary hover:text-primary transition-all duration-200"
-                >
-                  + Add Element
-                </button>
-              </div>
-            </div>
-
-            {/* Attach this Item */}
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
-                Attach this Item (Optional)
-              </label>
-
-              {itemItemLinks.length > 0 && (
-                <div className="space-y-2 mb-3">
-                  {itemItemLinks.map((link, index) => (
-                    <div
-                      key={index}
-                      className="flex items-center gap-2 p-2 bg-primary-light/20 rounded border border-primary-light"
-                    >
-                      <span className="text-sm text-primary font-medium flex-1">→ {link.name}</span>
-                      <button
-                        onClick={() => setItemItemLinks((prev) => prev.filter((_, i) => i !== index))}
-                        className="text-muted-foreground hover:text-destructive"
-                        title="Remove link"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <button
-                onClick={() => setShowItemItemPicker(true)}
-                className="flex items-center gap-2 px-3 py-2 text-sm border border-border rounded-lg hover:bg-accent transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Attach this Item
-              </button>
-            </div>
-
-            {/* Tags */}
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">Tags</label>
-              <TagPicker value={itemTags} onChange={setItemTags} pool={tagPool} />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Add to Collection accordion */}
-      <div className={`border rounded mb-3 ${collectionOpen ? 'border-primary bg-white' : 'border-border bg-muted'}`}>
-        <button
-          onClick={() => setCollectionOpen(!collectionOpen)}
-          className={`flex items-center gap-2 w-full text-left px-4 py-3 font-medium ${
-            collectionOpen ? 'text-foreground' : 'text-muted-foreground'
-          }`}
-        >
-          <ChevronDown className={`w-4 h-4 transition-transform ${collectionOpen ? 'rotate-180' : ''}`} />
-          Add to Collection
-        </button>
-        {collectionOpen && (
-          <div className="px-4 pb-4 space-y-3">
-            {/* Collection dropdown */}
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">Collection</label>
-              <select
-                value={selectedCollectionId}
-                onChange={(e) => setSelectedCollectionId(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded text-base"
-              >
-                <option value="">Select collection...</option>
-                {collections?.map((col) => (
-                  <option key={col.id} value={col.id}>{col.name}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Item — disabled if Create Item section is open */}
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">
-                Item
-                {itemOpen && (
-                  <span className="text-xs text-muted-foreground ml-2">— new item will be added</span>
-                )}
-              </label>
-              <div className={`relative ${itemOpen ? 'opacity-50 pointer-events-none' : ''}`}>
-                <ItemPicker
-                  variant="dropdown"
-                  items={items}
-                  contexts={contexts}
-                  query={collectionItemSearch}
-                  onQueryChange={setCollectionItemSearch}
-                  onPick={(item) => {
-                    setCollectionItemId(item.id);
-                    setCollectionItemSearch(item.name);
-                  }}
-                />
-                <PickedItem
-                  selectedId={collectionItemId}
-                  items={items}
-                  query={collectionItemSearch}
-                  onClear={() => {
-                    setCollectionItemId("");
-                    setCollectionItemSearch("");
-                  }}
-                />
-                {collectionNeedsItem && (
-                  <p className="mt-1 text-xs text-destructive">
-                    Pick an item to add, or open Create Item.
-                  </p>
-                )}              </div>
-            </div>
-
-            {/* Quantity */}
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1">Quantity</label>
-              <input
-                type="text"
-                value={collectionQuantity}
-                onChange={(e) => setCollectionQuantity(e.target.value)}
-                className="w-32 px-3 py-2 border border-border rounded text-base"
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Action buttons.
-
-          Order follows Step 7's standard and already did: primary, Cancel, gap,
-          destructive pushed right. `justify-between` is the gap, so Delete is as
-          far from Cancel as the row allows.
-
-          gap-3 not gap-2 as of Step 12.7b — Step 8c's 12px between adjacent
-          controls. 8px is Material's documented FLOOR, and this row is three
-          buttons wide on a touchscreen. */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-3">
-          {/* ENRICH AND RE-ENRICH ARE GONE — Clipboard Step 14.
-              Enrichment now happens only from claude.ai, through the connector
-              and the alfred-enrich skill. It ran here by calling the ai-enrich
-              edge function directly, which meant a second enrichment
-              implementation to keep in step with the skill, a server-side
-              agentic loop, and the only place in the app holding an
-              ANTHROPIC_API_KEY-backed dependency.
-              The `ai_status` badge STAYS: rows still carry the status that
-              claude.ai's enrichment writes, and reading it is still useful.
-              Only the buttons that started enrichment from here have gone.
-              The function itself is untouched and is retired separately, after
-              a week with no calls — see the spec's Phase 3 section. */}
-
-          {/* The card's one Save. Enabled when there is anything to commit —
-              a triage section open, OR an edited capture (Step 12.7b). It used
-              to be inert whenever no section was open, which is exactly the
-              state a text-only edit leaves the card in. */}
+          <span className="flex items-center gap-1">
+            source: <SourceIcon sourceType={inboxItem.sourceType} />
+          </span>
+          {/* stopPropagation because the whole row is the link to the detail
+              page. Behaviour is deliberately untouched from Step 5b: this
+              archives with reason 'discarded' and offers an undo. */}
           <button
-            onClick={handleSave}
-            disabled={!canSave}
-            className={`px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ${
-              canSave
-                ? "bg-primary hover:bg-primary-hover text-white"
-                : "bg-secondary text-muted-foreground cursor-not-allowed"
-            }`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDiscard(inboxItem.id);
+            }}
+            title="Discard this capture (reversible)"
+            // ml-1 on top of the row's gap-2 = 12px. The badges stay tightly
+            // grouped as one informational cluster; the action separates from
+            // them. Its neighbour is the source icon, which LOOKS static but is
+            // part of the row — tap it and the detail page opens.
+            className="ml-1 flex items-center justify-center p-2 min-h-[44px] min-w-[44px] rounded-lg text-muted-foreground hover:text-destructive hover:bg-secondary transition-colors shrink-0"
           >
-            Save
-          </button>
-          <button
-            onClick={handleCancel}
-            className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
-          >
-            Cancel
+            <Trash2 className="w-4 h-4" />
           </button>
         </div>
-        {/* "Discard", not "Delete" — Clipboard Step 5b. It was "Delete" while
-            this really did remove the row. It now archives with reason
-            'discarded', which is reversible and leaves the paired clip
-            reachable, so the label says the softer, truer thing. Same call as
-            the collapsed row's icon. */}
-        <button
-          onClick={() => { if (onDirtyChange) onDirtyChange(false); onDiscard(inboxItem.id); }}
-          className="min-h-[44px] text-muted-foreground hover:text-destructive transition-colors flex items-center gap-1"
-        >
-          <Trash2 className="w-4 h-4" /> Discard
-        </button>
       </div>
-
-      {/* Item Picker Modal */}
-      {showItemItemPicker && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowItemItemPicker(false)}>
-          <div className="bg-card p-6 rounded-lg max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-medium text-foreground">Select Item to Attach</h3>
-              <button onClick={() => setShowItemItemPicker(false)} className="text-muted-foreground hover:text-foreground">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Descriptions still SHOW on these rows, as they always have, but
-                no longer match: pickers search names only. */}
-            <ItemPicker
-              variant="popup"
-              items={items}
-              contexts={contexts}
-              showDescription
-              exclude={(item) => itemItemLinks.some((link) => link.id === item.id)}
-              query={itemItemSearch}
-              onQueryChange={setItemItemSearch}
-              onPick={(item) => {
-                setItemItemLinks((prev) => [...prev, { id: item.id, name: item.name }]);
-                setShowItemItemPicker(false);
-                setItemItemSearch('');
-              }}
-              placeholder="Search items..."
-              autoFocus
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -8909,12 +7755,21 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = 
             through the gap underneath.
             The content padding deliberately still says 112/128px. It is not
             clearance — it is the scroll room that lets the footer UNDOCK at the
-            bottom of a page and sit at the end of its card. */}
+            bottom of a page and sit at the end of its card.
+
+            Step 17e, and every pinned footer in Alfred now does both:
+              `py-3`   equal space above and below the buttons. It was `pt-2 pb-3`,
+                       which put 8px above them and 12px below.
+              `-mb-*`  cancels the CARD's bottom padding, which otherwise stacks
+                       under the footer once it releases — so the buttons sat
+                       centred while docked and low while released. The values
+                       mirror the card's own padding, exactly as the `-mx-*` beside
+                       them already did. */}
         <div
-          className={`flex gap-2 pt-2 ${
+          className={`flex gap-2 ${
             stickyFooter
-              ? "sticky-above-bar -mx-4 sm:-mx-6 px-4 sm:px-6 pb-3 bg-white border-t border-border"
-              : ""
+              ? "sticky-above-bar -mx-4 sm:-mx-6 -mb-4 sm:-mb-6 px-4 sm:px-6 py-3 bg-white border-t border-border"
+              : "pt-2"
           }`}
         >
           <button
@@ -11322,10 +10177,10 @@ function ItemCard({
           </div>
 
           <div
-            className={"flex flex-wrap gap-2 pt-2 " +
+            className={"flex flex-wrap gap-2 " +
               (stickyFooter
-                ? "sticky-above-bar -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 bg-card border-t border-border"
-                : "")}
+                ? "sticky-above-bar -mx-3 sm:-mx-4 -mb-3 sm:-mb-4 px-3 sm:px-4 py-3 bg-card border-t border-border"
+                : "pt-2")}
           >
             <button
               onClick={handleSave}
@@ -12300,7 +11155,7 @@ function IntentionCard({
             className={
               "flex gap-2 flex-wrap " +
               (stickyFooter
-                ? "sticky-above-bar -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-3 bg-card border-t border-border"
+                ? "sticky-above-bar -mx-3 sm:-mx-4 -mb-3 sm:-mb-4 px-3 sm:px-4 py-3 bg-card border-t border-border"
                 : "")
             }
           >

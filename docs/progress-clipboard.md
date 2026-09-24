@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. Steps 16, 17, 17b, 17c and 17d done; 17d awaiting in-app verification.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. Steps 16, 17, 17b, 17c, 17d, 17e and 18 done; 17e and 18 awaiting in-app verification. Step 19 is all that remains of round 2.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -64,11 +64,77 @@ seven distinct designs, every name matching its title, README list accurate.
 - [x] Step 17: The detail page itself, at its own URL through the existing routing, reached by clicking an inbox card. Everything in the README: the back link, the source pill and capture time, Context first and prominent with Tags underneath, the two push-button toggles (New Item / New Intention, either, both or neither, preselected from `suggest_item` / `suggest_intent`), the two sections, the original capture last, and the floating footer. Reuse the EXISTING element editor completely unchanged. Preserve linking an intention to an existing item (`suggested_item_id`). Collections stay hidden. Phone layout: one column, same order, footer pinned. **Its own component, not inside `InboxCard`, with exactly one normaliser.** Run the frontend suite. - **written 2026-09-24.** `src/InboxDetailView.jsx` at `/inbox/detail/:id`, plus `src/CaptureMeta.jsx` and `src/utils/suggestedElements.js` (the one normaliser). Suite green: 66 suites, 1445 tests, up from 64/1379; `react-scripts build` compiles with no warnings at all. Nothing deployed - this is the Vercel frontend and reaches the live app only on a push, which is Alex's call. Three deliberate feature losses were flagged for his ruling; he gave it in Step 17b, which also fixed two things this turned up. - **verified 2026-09-24**, with the Step 17b fixes.
 - [x] Step 17b: Alex's rulings on the three feature losses, plus two fixes and the mockup renames. Keep the capture-text pencil; drop "Attach this Item"; drop Target Start Date from this page only. Trace `intents.description` and prove it with a test. Fix the pinned-footer gap **globally**, with one shared measurement rather than per-screen offsets. Rename the mockups. - **done 2026-09-24.** Suite green: 68 suites, 1486 tests, up from 66/1445; build clean. - **partly verified 2026-09-24.** The capture pencil and Details both confirmed working in the app. **The global footer fix shipped a bug of its own** - see Step 17c.
 - [x] Step 17c: Three regressions from 17b's footer change, plus Details on the intention view and edit screens. Footers stopped undocking at the bottom of a page; content was cut off behind the capture bar; the Capture button looked clipped on desktop. - **done 2026-09-24.** One root cause found for the first two; the third not explained. - **FAILED in the app 2026-09-24.** `--dock-h` measured correctly (83px) and the layout was still wrong. Rolled back whole by Step 17d; item 4's Details work was kept.
-- [x] Step 17d: Roll back the measured-dock layout to production, keep every feature from 17/17b/17c, then fix the original gap with the smallest change: move each pinned footer down to the capture bar's normal height and leave the content padding alone. - **done 2026-09-24.** Suite green: 67 suites, 1492 tests (the 11 useDockHeight tests went with the hook). See the notes.
-- [ ] Step 18: Retire the inline card expansion. Remove the old expanded form from `InboxCard`, including its four normaliser copies and the `eslint-disable`d dirty check — but only once nothing uses them. Run the frontend suite.
+- [x] Step 17d: Roll back the measured-dock layout to production, keep every feature from 17/17b/17c, then fix the original gap with the smallest change: move each pinned footer down to the capture bar's normal height and leave the content padding alone. - **done 2026-09-24.** Suite green: 67 suites, 1492 tests (the 11 useDockHeight tests went with the hook). - **verified 2026-09-24 and PUSHED.** The gap is gone, footers sit flush and release at the bottom of a long form, the item view's last section is visible, and the Capture button matches production.
+- [x] Step 17e: Pinned footer spacing. The buttons sat 8px from the top and 12px from the bottom, and once a footer released the card's own bottom padding stacked under it. - **done 2026-09-24.** `py-3` on all six, and a `-mb-*` matching each card's padding. Offsets and content padding untouched, as instructed.
+- [x] Step 18: Retire the inline card expansion. Remove the old expanded form from `InboxCard`, including its four normaliser copies and the `eslint-disable`d dirty check — but only once nothing uses them. Run the frontend suite. - **done 2026-09-24.** 1,224 lines removed; `InboxCard` is 44 lines and takes three props. Suite green: 67 suites, 1492 tests; build clean.
 - [ ] Step 19: For clipboard items the detail page also shows the captured page text (collapsed, with Show all), the links, and the screenshot slices. Run the frontend suite.
 
 ## Notes
+
+### Steps 17e and 18 — footer spacing, and the inline form retired, 2026-09-24
+
+#### 17e: the buttons sat too high, in two different ways
+
+Docked, the footers were `pt-2 pb-3` — 8px above the buttons and 12px below.
+Released, it was worse: the card's own bottom padding stacks underneath a footer
+that has let go, so the space below grew to `pb-3` PLUS `p-3`/`p-4`.
+
+Two changes, applied to all six:
+
+* **`py-3`** — equal above and below. The inbox detail page's footer came down from
+  `py-3.5` to match, so all six share one number.
+* **`-mb-3 sm:-mb-4`** (or `-mb-4 sm:-mb-6`, or `-mb-4 sm:-mb-7`) — cancels the
+  card's bottom padding, mirroring the `-mx-*` already beside it. Only the three
+  footers that live inside a card need it; the two add pages sit on the page
+  background, and the inbox detail page already had it.
+
+The `pt-2` in `ContextForm`'s and `ItemCard`'s BASE class moved into the two
+branches of their `stickyFooter` ternary. Left where it was, this change would have
+reached those components' unpinned mode too — a screen Alex did not ask about.
+
+**Offsets and content padding untouched**, as instructed, and for the reason Step
+17d settled: the offset is clearance and the padding is the scroll room that lets a
+footer undock.
+
+#### 18: 1,224 lines removed
+
+`InboxCard` was 1,240 lines. It is now **44**, and takes three props — `inboxItem`,
+`onOpen`, `onDiscard`. `src/Alfred.jsx` went from 12,990 lines to 11,845.
+
+Gone with it: **all four normaliser copies** (0 left in the file), the
+**`eslint-disable`d dirty check**, the collection picker, the capture-text editor
+(which lives on as the detail page's pencil), the enrichment info panel, and the
+seven props the form needed. The `Info` icon import went with the panel.
+
+**Nothing else referenced any of it**, checked three ways: `<InboxCard` has exactly
+one render site; seventeen symbols the form owned now appear zero times; and the
+build reported exactly one newly-unused import, which was removed.
+
+Two branches of `handleInboxSave` became unreachable, and they are treated
+differently ON PURPOSE:
+
+| branch | verdict |
+|---|---|
+| `itemItemLinks` — "Attach this Item" | **REMOVED.** Alex dropped the control in 17b, so nothing will ever feed it again. Dead for good. |
+| `addToCollection` | **KEPT**, with a comment saying it is dormant. The design hides collections *"for now"*; that is a plan, not a removal, and the section will send the same shape when it returns. |
+
+#### The guard tests had to follow the code
+
+`utils/elementOffsets.test.js` scans source text to catch a seventh normaliser being
+added with `collectable` carried through and the offset forgotten — the twin-site
+rule. It read `Alfred.jsx` alone, which was right while both element editors lived
+there. Step 17 moved one into `InboxDetailView.jsx`, so the scan now reads both files
+(plus `utils/suggestedElements.js` for the normaliser count) and the expectations
+moved with the code:
+
+* normaliser sites **6 → 3**: four copies replaced by one tested function, plus the
+  item editor's own pair.
+* `delete X.collectable` **1 → 2**: both editors render the Can buy checkbox now; it
+  was the item editor only before the detail page was built to the approved design.
+* two patterns are variable-agnostic now (`offsetPatch\(` rather than
+  `offsetPatch\(el\)`, `delete \w+\.` rather than `delete next\.`), because the
+  extracted normaliser and the new editor name their locals differently and a rule
+  about every site must not be blind to one over a variable name.
 
 ### Step 17d — the measured layout rolled back, 2026-09-24
 

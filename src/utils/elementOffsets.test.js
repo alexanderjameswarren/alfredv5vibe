@@ -6,6 +6,26 @@ import {
   isFirstStep,
 } from "./elementOffsets";
 
+// ── The files these source-scanning tests read ───────────────────────────────
+//
+// Alfred has TWO element editors: the item editor in Alfred.jsx, and the inbox
+// detail page's in InboxDetailView.jsx. They were both in Alfred.jsx until
+// Clipboard Step 17 moved one out and Step 18 deleted the old copy, so a scan of
+// Alfred.jsx alone now sees one editor and reports the other as missing.
+//
+// Concatenating is deliberate. The invariants below are about the APP containing
+// two editors that agree with each other, not about which file each one lives in
+// — so moving an editor to a third file should mean adding it here, and nothing
+// else.
+const read = (...parts) =>
+  fs.readFileSync(path.join(__dirname, "..", ...parts), "utf8");
+
+const ELEMENT_EDITOR_SOURCES = [read("Alfred.jsx"), read("InboxDetailView.jsx")].join("\n");
+
+// Plus the extracted normaliser, which is a normaliser site like any other and
+// must obey the same rule about carrying an offset patch.
+const NORMALISER_SOURCES = [ELEMENT_EDITOR_SOURCES, read("utils", "suggestedElements.js")].join("\n");
+
 describe("readOffsetMinutes", () => {
   it("reads the camelCase form held in React state", () => {
     expect(readOffsetMinutes({ offsetMinutes: 360 })).toBe(360);
@@ -255,7 +275,11 @@ describe("the notification row survives a 390px viewport", () => {
   // line, the sentence was crushed into a four-word column, and the note and
   // the repeat link were pushed past the right edge where they could not be
   // reached. The page scrolled sideways.
-  const source = fs.readFileSync(path.join(__dirname, "..", "Alfred.jsx"), "utf8");
+  // Alfred.jsx AND InboxDetailView.jsx: the two element editors, one in each,
+  // since Clipboard Step 17. Concatenated rather than asserted per file, because
+  // what matters is that the app contains two editors with these properties —
+  // not which file each happens to sit in today.
+  const source = ELEMENT_EDITOR_SOURCES;
 
   const countOf = (needle) => source.split(needle).length - 1;
 
@@ -301,16 +325,22 @@ describe("the twin-site rule", () => {
   // the only thing that actually catches a SEVENTH normaliser being added later
   // with `collectable` carried through and the offset forgotten. That is the
   // failure, and no behavioural test of the current code can see it coming.
-  const source = fs.readFileSync(
-    path.join(__dirname, "..", "Alfred.jsx"),
-    "utf8"
-  );
+  // Both editors, plus the shared normaliser module — see NORMALISER_SOURCES.
+  const source = NORMALISER_SOURCES;
 
   const collectableSites = (source.match(/collectable: true \} : \{\}\)/g) || []).length;
-  const offsetSites = (source.match(/\.\.\.offsetPatch\(el\)/g) || []).length;
+  // `offsetPatch(...)` and not `offsetPatch(el)`: the extracted normaliser names
+  // its parameter `source`, and a rule about every normaliser must not be blind to
+  // one of them over a variable name.
+  const offsetSites = (source.match(/\.\.\.offsetPatch\(/g) || []).length;
 
-  it("has the six known element normalisers", () => {
-    expect(collectableSites).toBe(6);
+  it("has the three known element normalisers", () => {
+    // SIX until Clipboard Step 18. Four of them were copies inside InboxCard's
+    // expanded triage form, which had to stay byte-identical — key order included,
+    // because the dirty check compared JSON.stringify of both sides. They are
+    // replaced by ONE tested function in utils/suggestedElements.js; the remaining
+    // two are the item editor's own pair.
+    expect(collectableSites).toBe(3);
   });
 
   it("carries an offset patch at every site that carries collectable", () => {
@@ -347,9 +377,15 @@ describe("the twin-site rule", () => {
   it("drops the offset wherever it drops collectable on a type change", () => {
     // Both updateElement copies must delete it, or a step demoted to a header
     // keeps an invisible scheduling instruction.
-    const collectableDeletes = (source.match(/delete next\.collectable/g) || []).length;
-    const offsetDeletes = (source.match(/delete next\.offsetMinutes/g) || []).length;
-    expect(collectableDeletes).toBe(1); // only the item editor renders that checkbox
-    expect(offsetDeletes).toBe(2); // both editors render the minutes input
+    //
+    // `delete \w+\.` rather than `delete next\.`: the two editors name the object
+    // differently (`next` and `updated`), and a rule about both must not depend on
+    // them agreeing about a local variable.
+    const collectableDeletes = (source.match(/delete \w+\.collectable/g) || []).length;
+    const offsetDeletes = (source.match(/delete \w+\.offsetMinutes/g) || []).length;
+    // BOTH now render the Can buy checkbox. It was the item editor only until the
+    // inbox detail page was built to the approved design, which lists it.
+    expect(collectableDeletes).toBe(2);
+    expect(offsetDeletes).toBe(2);
   });
 });
