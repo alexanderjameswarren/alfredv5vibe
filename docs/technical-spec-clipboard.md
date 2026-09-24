@@ -158,14 +158,84 @@ Cleanup of the spike; `clips` table and `clipboard` bucket; `clip-capture` funct
 
 ### Phase 3: inbox screen (later; design notes only)
 
-- Source pills with an icon and a word, one soft color per type: clipboard, capture, email, Claude (mcp), CLI, task. A filter row of the same pills at the top.
-- A one-line preview on each card, visible without expanding: target context, item and/or intention icons, memory icon, and tag pills ("+N more" past four or five).
-- A one-tap process button beside the trash can, enabled whenever the item is enriched (not only when it has a context, since memory-bound items have none). Consider tinting the preview when confidence is low. **It must archive with `archive_reason = 'processed'` rather than delete.** Step 5b turned the trash can into an archive (`discarded`) but deliberately left `handleInboxSave` alone, so successful triage through the process/save flow is now the last remaining hard delete on the inbox. This is where that goes.
-- "Recently archived" (last seven days) collapsed at the bottom, with "show all," each card showing where it went and an undo button.
-- Clip cards: title, address, slice count, and a thumbnail of the first slice (the first image the app will ever show, so new loading, error, and sizing work).
-- Scheduled-task items: `create_inbox_item` accepts a `source_type` (including `task`) and `source_metadata` (task name, date); task cards show a copy button instead of process. Copying appends a final line `Alfred inbox item: {id}`.
-- Hide the Enrich button on clipboard, CLI, and task items.
-- Before adding anything to `InboxCard`, collapse the four copies of the elements normaliser into one function.
+**Decisions taken 2026-09-24, after Phase 2 shipped.** These supersede the
+"expand inline" assumption the earlier notes were written against; the
+per-card notes below are kept because their substance still applies, on a page
+rather than in an expanded card.
+
+**A. Inbox cards open on their own page, not inline.** Tapping a card navigates
+to it. The card stays a summary.
+
+This is also the moment to pay off the debt `InboxCard` has accumulated, and the
+rebuild is what makes it affordable: the **four duplicated copies of the elements
+normaliser** collapse into one function, and the **`eslint-disable`d dirty check**
+goes with them. That check compares `JSON.stringify(state)` against
+`JSON.stringify(normalise(props))` across a hand-maintained dependency list; if
+the four copies ever diverge the card reports itself permanently dirty and the
+user gets an unsaved-changes prompt they cannot clear. A full-page form has its
+own route and its own lifecycle, so the whole mechanism can be replaced rather
+than extended. **Do not add a fifth copy in the meantime.**
+
+**B. An expanded clipboard card shows what was captured** — the page text, the
+links, and the screenshot slices. Today a clip's card shows only
+`Clip: {title} — {url}`; everything else lives in `clips` and is visible only to
+Claude. Alex should be able to see what he clipped without asking a conversation.
+This is the first place the app renders an image (see the slice-thumbnail note
+below) and the first place it reads the `clips` table.
+
+**C. Enrichment leaves the app entirely.** Remove the Enrich and Re-enrich
+buttons and every direct enrichment path from the frontend. Enrichment happens
+only from claude.ai, through the connector and the `alfred-enrich` skill.
+
+Then **plan the retirement of the `ai-enrich` edge function** once nothing calls
+it. It is the only function holding `ANTHROPIC_API_KEY`, and the only one that
+runs an agentic loop server-side, so retiring it removes a secret and a class of
+failure. Retire it in this order: remove the callers, confirm from the logs that
+nothing invokes it for a week, then delete the function and the secret. Do not
+delete it in the same change that removes the buttons — a function with no
+callers is harmless, and an undeletable one is not.
+
+**D. The rules for automatically creating items, intentions and collections from
+an inbox item will be reworked, and that needs its own design discussion before
+any build.** The current shape — three accordion sections that each write a
+different table on save — grew rather than being designed, and Phase 3 should not
+carry it forward unexamined. Nothing in this section should be built until that
+conversation has happened.
+
+**E. Saving through the inbox form archives with `archive_reason = 'processed'`
+instead of deleting.** Step 5b turned the trash can into an archive
+(`discarded`) but deliberately left `handleInboxSave` alone, so successful triage
+is now the LAST remaining hard delete on the inbox.
+
+**F. Items and intentions created from an inbox item link back to it.** A
+`source_inbox_id` on the created record, so "where did this come from" is
+answerable. This only becomes meaningful once E lands: while triage deletes the
+inbox row, any link would be broken moments after being created. **E and F ship
+together, or E first.** See the investigation in `docs/progress-clipboard.md`
+for what is and is not preserved today, and the proposed column.
+
+**Still applicable from the earlier notes:**
+
+- Source pills with an icon and a word, one soft colour per type: clipboard,
+  capture, email, Claude (mcp), CLI, task. A filter row of the same pills at the
+  top.
+- A one-line preview on each card, visible without opening it: target context,
+  item and/or intention icons, memory icon, and tag pills ("+N more" past four or
+  five).
+- A one-tap process button beside the trash can, enabled whenever the item is
+  enriched (not only when it has a context, since memory-bound items have none).
+  Consider tinting the preview when confidence is low. It archives with
+  `archive_reason = 'processed'` rather than deleting — the same change as E.
+- "Recently archived" (last seven days) collapsed at the bottom, with "show all",
+  each card showing where it went and an undo button. `archive_reason`
+  distinguishes `discarded` from `processed`, which is what lets that panel say
+  where something went rather than only that it left.
+- Clip cards: title, address, slice count, and a thumbnail of the first slice.
+- Scheduled-task items: `create_inbox_item` accepts a `source_type` (including
+  `task`) and `source_metadata` (task name, date); task cards show a copy button
+  instead of process. Copying appends a final line `Alfred inbox item: {id}`.
+- Hide the Enrich button on clipboard, CLI and task items — moot once C lands,
+  since the button goes entirely.
 
 ### Phase 4: awareness everywhere (later)
 

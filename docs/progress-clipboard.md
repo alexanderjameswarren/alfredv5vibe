@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phase 1 complete.** Phase 2: Steps 9 and 10 done; Step 11 skills written, awaiting re-upload to claude.ai.
+## Status: **Phases 1 and 2 complete.** Phase 3 decisions recorded in spec section 5; nothing built.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -25,10 +25,109 @@ Spec: docs/technical-spec-clipboard.md
 
 - [x] Step 9: Migration adding `posting_url` and `duplicate_of` to `job_applications`. Alex runs it; CONFORMANT. **Also add `clips.links_truncated` (boolean, not null, default false) in this same migration** — decided 2026-09-23, deferred here from Step 3 rather than changing the agreed data model mid-Phase-1. `clip-capture` must then set it from the `links_dropped` it already computes, and that change needs a `clip-capture` redeploy alongside the migration. See the Step 3 notes for why the gap exists. - **done 2026-09-24.** 067 run: CONFORMANT (44 tables), FK with ON DELETE SET NULL and the not-self check present, `posting_url` index partial and non-unique, `clips.links_truncated` boolean/not null/default false, existing rows untouched (0 and 0).
 - [x] Step 10: `create_job_application` and `update_job_application` accept both fields; the same-organization-and-role refusal is skipped when `duplicate_of` is given; `get_job_application_sources` excludes duplicates. Deploy, verify, test in a fresh thread. - **written and deployed 2026-09-24.** Also: `clip-capture` sets `links_truncated`; `get_recent_clips` returns it and gains `run_tag_prefix`; the `cli-workflow` skill's tag format gains a thread code. `clip-capture` v8, `mcp` v120, `deno check` delta zero. **Verified in fresh threads:** `posting_url_matches` works and never refuses; `duplicate_of` skips the org-and-role guard; both no-chain rules refuse with errors naming the rows involved; the sources report excludes duplicates and reports `duplicates_excluded`; `run_tag_prefix` works and refuses when combined with `run_tag`. Test rows deleted.
-- [ ] Step 11: Update `.claude/skills/job-search/SKILL.md` and `.claude/skills/alfred-enrich/SKILL.md` per spec section 4.6. Commit; Alex re-uploads both to claude.ai. - **written 2026-09-24.** job-search 108 to 253 lines, alfred-enrich 174 to 231. No code, nothing deployed. Awaiting Alex's re-upload to claude.ai.
-- [ ] Step 12: End-to-end jobs test: clip a job board page, open a jobs thread, confirm the evaluation, the "other listings" suggestions with links, the filed `considering` row, and the archived inbox item.
+- [x] Step 11: Update `.claude/skills/job-search/SKILL.md` and `.claude/skills/alfred-enrich/SKILL.md` per spec section 4.6. Commit; Alex re-uploads both to claude.ai. - **written 2026-09-24.** job-search 108 to 253 lines, alfred-enrich 174 to 231. No code, nothing deployed. **Re-uploaded and verified by Step 12.**
+- [x] Step 12: End-to-end jobs test. - **done 2026-09-24.** In a fresh thread, "Let's look at jobs" found an 80,000 Hours board clip unprompted, treated it as a LIST, created exactly two records on Alex's say-so (Anthropic / Engineering Manager, AI Observability as `considering`; BlueDot Impact / Program Lead as `passed`; `effort` null on both), and archived the clip with `archive_reason` 'processed'.
+
+  **`posting_url` came out null on both.** The board's cards are script-driven, so Claude could only INFER addresses from job numbers and correctly declined to store one it could not confirm - the skill's inferred-link rule working as written. Storing an unverified address in a column meaning "where this posting lives" would be worse than leaving it null. It does mean the duplicate-detection path `posting_url` exists for is unexercised on this board and stays so until a clip carries real hrefs. If `posting_url` turns out null on most real clips, the fix is to put the inferred address in `notes`, where its uncertainty can be stated, rather than loosening what the column means.
+
+**PHASE 2 COMPLETE.**
 
 ## Notes
+
+### Investigation: what happens to `captured_text` when an inbox item is triaged
+
+Asked 2026-09-24, ahead of the Phase 3 decision that created records should link
+back to the inbox item they came from.
+
+#### The short answer: nothing keeps it. There is no link, and no copy.
+
+`handleInboxSave` (`src/Alfred.jsx:3062-3208`) is the ONLY triage path. It writes
+up to four records and then hard-deletes the inbox row at
+`src/Alfred.jsx:3199`. Every field each record receives is enumerated in that
+function, and none of them is `captured_text` or the inbox id:
+
+| record | written at | fields | provenance field? |
+|---|---|---|---|
+| `items` | `Alfred.jsx:3089-3099` | id, user_id, name, description, context_id, elements, tags, is_capture_target, created_at | **none** |
+| `intents` | `Alfred.jsx:3129-3143` | id, user_id, text, created_at, is_intention, is_item, archived, item_id, context_id, recurrence_config, target_start_date, end_date, tags | **none** |
+| `events` | `Alfred.jsx:3148-3159` | id, user_id, intent_id, context_id, time, item_ids, archived, created_at, text | **none** |
+| `collection_items` | via `addItemsToCollection`, `Alfred.jsx:3170-3177` | collection_id, item_id, quantity | **none** |
+
+Confirmed against the live schema: `items` has eleven columns and not one of them
+records where the row came from. The same is true of `intents` and `events` —
+they are Alfred's original tables and predate the inbox having anything worth
+pointing at.
+
+#### The one place the text survives, and why it is not enough
+
+The triage form PRE-FILLS from the capture:
+
+- `itemName` defaults to `suggestedItemText || capturedText` (`Alfred.jsx:7519`)
+- `intentText` defaults to `suggestedIntentText || capturedText` (`Alfred.jsx:7508`)
+
+So if Alex leaves the pre-filled field alone, the capture survives — as
+`items.name` or `intents.text`, that is, **as a title**. `events.text` then copies
+the intention's text (`Alfred.jsx:3159`), so the same string can reach three
+tables.
+
+That is fine for "buy milk". It loses everything for a capture longer than a
+title: a forwarded email's body, a paragraph of context, the reason he captured
+it. Those go into a form field that exists only to name the record, get replaced
+by whatever he types, and are gone. **And nothing anywhere records that the
+record came from a capture at all**, so the loss is not visible either.
+
+#### What happens on delete today
+
+`storage.delete('inbox:{id}')` at `Alfred.jsx:3199`. The row goes.
+
+`public.inbox` is registered `audited: true`, so the `platform.audit_row` AFTER
+DELETE trigger writes the whole old row to `platform.audit_log`. **The original
+`captured_text` is therefore recoverable — by a person with SQL access, reading
+an audit table.** It is not reachable from the app, not reachable by Claude, and
+not associated with whatever the capture became. As a recovery story that is
+real; as a feature it is nothing.
+
+#### There is no tool path. Claude cannot triage at all.
+
+Worth stating plainly, because the question assumed one might exist: there is
+**no `create_item`, `create_intent` or `create_event` tool**. The MCP surface has
+75 tools and the only writers touching this area are `create_inbox_item`,
+`update_inbox_item` and `archive_inbox_item`. Claude can put things INTO the
+inbox and hide them again; it cannot turn one into an item or an intention. The
+app is the only triage path, so `handleInboxSave` is the whole of the answer.
+
+#### Proposed link-back column
+
+```
+source_inbox_id  text  null  references public.inbox(id) on delete set null
+```
+
+On `items`, `intents` and `events`. Indexed per table, partial on not-null.
+
+- **`text`, not `uuid`** — `inbox.id` is `text`, and so is `items.id`. A uuid
+  column would not match the referenced key.
+- **Nullable** — almost every existing row has no inbox origin and never will.
+  Null means "not from a capture", which is the truth for most of the table.
+- **ON DELETE SET NULL.** Not CASCADE: deleting an inbox row must never destroy
+  the item it became, and CASCADE would do exactly that to real records. Not
+  RESTRICT: that would make an inbox row undeletable once triaged, which is worse
+  than the problem it prevents. SET NULL degrades to "origin unknown", which is
+  honest.
+- **Collections are deliberately left out.** `collection_items` is a membership
+  row rather than a record of its own, and its provenance is the item's.
+
+⚠️ **This column only becomes meaningful once triage archives instead of
+deleting** (Phase 3 decision E). While `handleInboxSave` hard-deletes, ON DELETE
+SET NULL would null every link moments after it was written — the feature would
+look implemented and record nothing. **Ship E first, or both together.**
+
+⚠️ **It cannot be backfilled.** The association was never recorded, and the audit
+log holds deleted inbox rows without saying what they became. Every row that
+exists before this lands has a null `source_inbox_id`, permanently. That is an
+argument for doing it sooner rather than later, not for skipping it.
+
+**No migration written** — the proposal only, as asked.
+
 
 **2026-09-24 — the CLI report rule was rewritten** (`.claude/CLAUDE.md`, "Everything you say to Alex goes into Alfred"): Alex does not read the CLI terminal at all, so every closing message — questions, answers, corrections, blockers, not just reports — is pushed to Alfred first and printed verbatim afterwards, with the pushed and printed text identical.
 
