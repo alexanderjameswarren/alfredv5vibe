@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. Step 16 written and awaiting its migration run.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. Steps 16 and 17 done; Step 17 awaiting in-app verification.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -48,19 +48,108 @@ The approved design is `docs/inbox-detail-mockups/` — seven files plus a READM
 that carries the rules. The README is the specification for these four steps; the
 HTML files show it applied. Read both before changing any frontend code.
 
-⚠️ **`both-alfred-bug.html` is not a mockup.** It is a byte-identical copy of
-`README.md` (2,661 bytes each — `cmp` reports no difference), so the "both
-sections showing, desktop" example has no HTML. The case is still covered:
-`both-recurring-routine.html` shows both sections on desktop, and
-`phone-alfred-bug.html` is the same Alfred-bug example in the phone layout and is
-real HTML. Nothing is blocked; the file is just empty of what its name promises.
+⚠️ **THE FILE NAMES POINT AT THE WRONG PICTURES.** Every mockup holds the design
+that belongs one filename EARLIER in alphabetical order, and the phone layout fell
+off the end and does not exist. Read each file's `<title>`, not its name.
 
-- [ ] Step 16: Intentions need a long-text description — "Details" in the mockups. Check whether `intents` already has a suitable column; if not, write a migration adding one, with a comment, ending with the conformance check. Alex runs it; CONFORMANT required. — **written 2026-09-24**, `supabase/migrations/069_phase3_intents_description.sql`. There was no suitable column: see the notes. Awaiting the run.
-- [ ] Step 17: The detail page itself, at its own URL through the existing routing, reached by clicking an inbox card. Everything in the README: the back link, the source pill and capture time, Context first and prominent with Tags underneath, the two push-button toggles (New Item / New Intention, either, both or neither, preselected from `suggest_item` / `suggest_intent`), the two sections, the original capture last, and the floating footer. Reuse the EXISTING element editor completely unchanged. Preserve linking an intention to an existing item (`suggested_item_id`). Collections stay hidden. Phone layout: one column, same order, footer pinned. **Its own component, not inside `InboxCard`, with exactly one normaliser.** Run the frontend suite.
+| file name | what is actually inside | should hold |
+|---|---|---|
+| `both-alfred-bug.html` | Alfred bug, both sections | ✅ correct |
+| `both-recurring-routine.html` | Alfred bug again (byte-identical to the above) | Recurring routine |
+| `do-home-errand.html` | Recurring routine | Home errand |
+| `full-recipe-duck-mole.html` | Home errand | Duck mole tacos |
+| `full-routine-micro-workout.html` | Duck mole tacos | Micro workout rotation |
+| `keep-reflection-note.html` | Micro workout rotation | Reflection note |
+| `phone-alfred-bug.html` | Reflection note | **the phone layout — MISSING** |
+
+The first export saved README.md into `both-alfred-bug.html` and pushed every
+mockup one name along; replacing that first file on 2026-09-24 fixed position one
+and left the shift underneath, which is why two files are now identical.
+
+**All six desktop designs are present and were used**, so Step 17 was not blocked.
+The phone layout was built from the README's rule instead — one column, same order,
+footer pinned — because no picture of it exists. Committed as exported rather than
+renamed, so a re-export cannot collide with a rename.
+
+- [x] Step 16: Intentions need a long-text description — "Details" in the mockups. Check whether `intents` already has a suitable column; if not, write a migration adding one, with a comment, ending with the conformance check. Alex runs it; CONFORMANT required. — **written 2026-09-24**, `supabase/migrations/069_phase3_intents_description.sql`. There was no suitable column: see the notes. - **done 2026-09-24.** CONFORMANT (44 tables); `intents.description` is text, nullable, no default, commented, and 0 of 165 rows have a value. The name `description` with the label "Details" was approved.
+- [x] Step 17: The detail page itself, at its own URL through the existing routing, reached by clicking an inbox card. Everything in the README: the back link, the source pill and capture time, Context first and prominent with Tags underneath, the two push-button toggles (New Item / New Intention, either, both or neither, preselected from `suggest_item` / `suggest_intent`), the two sections, the original capture last, and the floating footer. Reuse the EXISTING element editor completely unchanged. Preserve linking an intention to an existing item (`suggested_item_id`). Collections stay hidden. Phone layout: one column, same order, footer pinned. **Its own component, not inside `InboxCard`, with exactly one normaliser.** Run the frontend suite. - **written 2026-09-24.** `src/InboxDetailView.jsx` at `/inbox/detail/:id`, plus `src/CaptureMeta.jsx` and `src/utils/suggestedElements.js` (the one normaliser). Suite green: 66 suites, 1445 tests, up from 64/1379; `react-scripts build` compiles with no warnings at all. Nothing deployed - this is the Vercel frontend and reaches the live app only on a push, which is Alex's call. **Three deliberate feature losses need his ruling before Step 18 deletes the old form - see the notes.** Awaiting his in-app verification.
 - [ ] Step 18: Retire the inline card expansion. Remove the old expanded form from `InboxCard`, including its four normaliser copies and the `eslint-disable`d dirty check — but only once nothing uses them. Run the frontend suite.
 - [ ] Step 19: For clipboard items the detail page also shows the captured page text (collapsed, with Show all), the links, and the screenshot slices. Run the frontend suite.
 
 ## Notes
+
+### Step 17 — the inbox detail page, 2026-09-24
+
+`/inbox/detail/:id`. New files:
+
+| file | why it is its own file |
+|---|---|
+| `src/InboxDetailView.jsx` | the page. Reads nothing global, so a test mounts it with four plain objects |
+| `src/utils/suggestedElements.js` | **the one normaliser**, replacing four copies that had to stay byte-identical |
+| `src/CaptureMeta.jsx` | `friendlyDate`, `sourceLabel`, `SourceIcon` — moved out of Alfred.jsx, which imports the page and so cannot export to it |
+
+Tests: `src/InboxDetailView.test.jsx` (41), `src/utils/suggestedElements.test.js`
+(14), plus 12 route tests in `src/viewPaths.test.js`.
+
+#### The route follows the execution precedent, not a new one
+
+`/inbox/detail/:id`, resolved by `inboxIdFromPath`, with `parentPath` falling back
+to `/inbox` rather than to the bare `/inbox/detail` — one visible correction
+instead of two. No `useExecutionRoute`-style fetch hook: `loadData` already selects
+every live inbox row into state, so the capture is a plain lookup, exactly as the
+add pages resolve their target. The only care needed is not judging a row missing
+before `dataLoaded`.
+
+#### 🛑 THREE FEATURE LOSSES, AWAITING ALEX'S RULING
+
+The approved design does not include these, and Step 18 deletes the old form that
+does. Each is a real capability going away:
+
+1. **Editing the captured text** — the pencil from Step 12.7, with
+   `updateInboxCaptureText` and `CLEARED_ENRICHMENT` behind it. After Step 18
+   there is no way in the app to fix a typo in a capture.
+2. **"Attach this Item"** — appended the new item as a bullet element of an
+   existing item (`itemItemLinks`). The page sends `[]`.
+3. **Target Start Date** — the When control has three answers and no fourth.
+   `endDate` survives, carried by the repeat control.
+
+Also absent by design: the `ai_status` badge and the enrichment info panel
+(confidence, reasoning). The badge still shows on the inbox LIST row.
+
+#### A bug found while wiring it up, and fixed
+
+`handleInboxSave` resolves the intention's item as
+`triageData.intentionData.itemId || createdItemId` — **the passed id WINS over the
+item just created.** So picking an existing item and then turning New Item on gave
+a page promising "the new item will be linked" and an intention attached to the
+earlier pick. Dimming the picker hides a stale value; it does not clear it. The
+page now sends `itemId: itemOn ? null : linkedItemId || null`, with a test.
+
+#### Decisions worth knowing
+
+* **One Context and one Tags, shared by both sections.** The old card had a pair
+  per section, so filing one capture could put the item in one context and its
+  intention in another with nothing pointing it out.
+* **"a date" means an EVENT** (`createEvent` + `eventDate`), which is what put a
+  capture on the planner before and what "do it Saturday" means in Alfred.
+* **Process is disabled with neither toggle on.** Nothing would be created, and
+  Discard is the button for "this should just go away".
+* **Nothing re-seeds the form.** The old card re-seeded when enrichment landed,
+  because it had an Enrich button and the user was waiting. Step 14 removed that
+  button, so the only way suggestions now arrive mid-edit is a coincidence — and
+  overwriting what somebody is typing to serve a coincidence is the wrong trade.
+* **Details is stored as NULL when blank**, honouring migration 069's comment.
+  Deliberately unlike `items.description`, which has always stored `''`.
+* **The dirty check has no `eslint-disable`.** `baseline` is one memoised object
+  that seeds the state AND is what the comparison reads, so the effect depends on a
+  single boolean. The old card needed the disable because its hand-written
+  dependency list could not be kept honest.
+* **`InboxCard` is otherwise untouched.** It gained one optional `onOpen` prop and
+  its collapsed row calls it, which makes the whole expanded form unreachable —
+  Step 18 then deletes dead code rather than live code.
+* **Phone layout comes from the README's rule**, not a picture: the mockup for it
+  does not exist (see the table above). One column, same order, footer pinned —
+  the card is `max-w-[860px] mx-auto` and collapses to full width below that.
 
 ### Step 16 — intentions had nowhere to put prose, 2026-09-24
 
@@ -111,9 +200,13 @@ arriving.
 
 ```
 ai-enrich last caller removed from code:  2026-09-24
-Frontend deployed (calls actually stop):  __________   <- fill this in
-Earliest safe retirement (deploy + 7d):   __________
+Frontend deployed (calls actually stop):  2026-09-24   <- Alex pushed
+Earliest safe retirement (deploy + 7d):   2026-10-01
 ```
+
+**Filled in 2026-09-24:** Alex pushed the frontend the same day the caller was
+removed, so the two dates coincide and the clock is already running. Do not retire
+`ai-enrich` before **2026-10-01**, and not then either without the log check below.
 
 **Before retiring, confirm from the logs rather than from reasoning.** The repo
 grep proves the app does not call it; it does not prove nothing else does. Check

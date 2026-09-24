@@ -18,6 +18,11 @@
 export const VIEW_TO_PATH = {
   home: "/",
   inbox: "/inbox",
+  // Clipboard Step 17. Triage used to happen inside the inbox card, which meant
+  // it had no address: browser Back could not close it, a half-filled triage
+  // could not be linked to, and a reload lost it. See the inbox sub-route at the
+  // bottom for the id-bearing form.
+  "inbox-detail": "/inbox/detail",
   contexts: "/contexts",
   "context-detail": "/contexts/detail",
   schedule: "/schedule",
@@ -72,6 +77,8 @@ export function pathToView(pathname) {
   if (isSamPath(pathname)) return "sam";
   // /schedule/execution/:id is the same view as the bare /schedule/execution.
   if (executionIdFromPath(pathname)) return "execution-detail";
+  // /inbox/detail/:id is the same view as the bare /inbox/detail.
+  if (inboxIdFromPath(pathname)) return "inbox-detail";
   // /memories/new/context/:id is the same view as the bare /memories/new.
   const add = addRouteFromPath(pathname);
   if (add) return add.view;
@@ -95,6 +102,9 @@ export function isKnownPath(pathname) {
   // /schedule/execution/a/b has no extractable id and stays unknown, so it is
   // redirected to home like any other nonsense path rather than half-served.
   if (executionIdFromPath(pathname)) return true;
+  // Same treatment for /inbox/detail/:id: a malformed one has no extractable id
+  // and is redirected to home rather than opening an empty triage form.
+  if (inboxIdFromPath(pathname)) return true;
   // A malformed add path — a bad kind, a missing id, an extra segment — returns
   // null here and is redirected to home like any other nonsense path, rather
   // than half-serving an add form with no target.
@@ -126,6 +136,9 @@ export function parentPath(pathname) {
   // is itself unrenderable cold and would redirect again — one visible
   // correction instead of two.
   if (executionIdFromPath(path)) return VIEW_TO_PATH.schedule;
+  // And an id-bearing inbox path falls back to the inbox LIST, for the same
+  // reason: /inbox/detail is not renderable cold either.
+  if (inboxIdFromPath(path)) return VIEW_TO_PATH.inbox;
   const cut = path.lastIndexOf("/");
   if (cut <= 0) return DEFAULT_PATH;
   return path.slice(0, cut);
@@ -162,6 +175,36 @@ export function executionIdFromPath(pathname) {
   const path = normalizePath(pathname);
   if (!path.startsWith(EXECUTION_PREFIX)) return null;
   const id = path.slice(EXECUTION_PREFIX.length);
+  if (!id || id.includes("/")) return null;
+  return decodeURIComponent(id);
+}
+
+// --- Inbox detail sub-route (Alfred Clipboard, Step 17) ----------------------
+//
+// Triaging a capture used to happen inside the card, expanded in place. That
+// made the triage form a thing with no address, and three ordinary expectations
+// failed because of it: browser Back could not close it (it closed the INBOX),
+// a reload lost a half-filled form, and there was no way to link to the capture
+// you were asking someone about.
+//
+// It is a page now, and it carries its id the way an execution does. The id is
+// not optional in practice — the bare /inbox/detail resolves to the view and is
+// then redirected to the list, because a triage form with no capture behind it
+// has nothing to triage.
+
+const INBOX_DETAIL_PREFIX = `${VIEW_TO_PATH["inbox-detail"]}/`;
+
+export function inboxDetailPath(inboxId) {
+  return `${INBOX_DETAIL_PREFIX}${encodeURIComponent(inboxId)}`;
+}
+
+// The inbox row id from /inbox/detail/:id, or null for any other path —
+// including the bare /inbox/detail. Mirrors executionIdFromPath: a malformed or
+// empty id degrades to null rather than throwing.
+export function inboxIdFromPath(pathname) {
+  const path = normalizePath(pathname);
+  if (!path.startsWith(INBOX_DETAIL_PREFIX)) return null;
+  const id = path.slice(INBOX_DETAIL_PREFIX.length);
   if (!id || id.includes("/")) return null;
   return decodeURIComponent(id);
 }

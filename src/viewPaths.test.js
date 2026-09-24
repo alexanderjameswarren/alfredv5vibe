@@ -9,6 +9,8 @@ import {
   samSongIdFromPath,
   executionPath,
   executionIdFromPath,
+  inboxDetailPath,
+  inboxIdFromPath,
   addPath,
   addRouteFromPath,
   isSamStatsPath,
@@ -20,9 +22,10 @@ import {
 // on — above all "never crash, fall back to home".
 
 describe("the map itself", () => {
-  it("covers all 22 view values", () => {
-    // 20 until Step 12.6 added the two add pages.
-    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(22);
+  it("covers all 23 view values", () => {
+    // 20 until Step 12.6 added the two add pages; 23 since Clipboard Step 17
+    // made inbox triage a page.
+    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(23);
   });
 
   it("is a bijection — no two views share a path", () => {
@@ -103,6 +106,7 @@ describe("parentPath (used by Step 9's cold-load redirect)", () => {
     expect(parentPath("/intentions/detail")).toBe("/intentions");
     expect(parentPath("/memories/detail")).toBe("/memories");
     expect(parentPath("/schedule/execution")).toBe("/schedule");
+    expect(parentPath("/inbox/detail")).toBe("/inbox");
     expect(parentPath("/collections/detail")).toBe("/collections");
     expect(parentPath("/collections/history")).toBe("/collections");
     expect(parentPath("/collections/add-items")).toBe("/collections");
@@ -112,8 +116,9 @@ describe("parentPath (used by Step 9's cold-load redirect)", () => {
     const details = Object.values(VIEW_TO_PATH).filter(
       (p) => p.split("/").length > 2
     );
-    // 8 until Step 12.6 added /memories/new and /intentions/new.
-    expect(details).toHaveLength(10);
+    // 8 until Step 12.6 added /memories/new and /intentions/new; 11 since
+    // Clipboard Step 17 added /inbox/detail.
+    expect(details).toHaveLength(11);
     for (const path of details) {
       expect(pathToView(parentPath(path))).not.toBe(undefined);
       expect(VIEW_TO_PATH[pathToView(parentPath(path))]).toBe(parentPath(path));
@@ -290,6 +295,66 @@ describe("execution sub-route (notification chains, Phase 1)", () => {
     // unrenderable cold and would redirect again.
     expect(parentPath("/schedule/execution/abc")).toBe("/schedule");
     expect(isKnownPath(parentPath("/schedule/execution/abc"))).toBe(true);
+  });
+});
+
+describe("inbox detail sub-route (Alfred Clipboard, Step 17)", () => {
+  it("round-trips an inbox row id", () => {
+    expect(inboxIdFromPath(inboxDetailPath("abc-123"))).toBe("abc-123");
+  });
+
+  it("round-trips a uid()-shaped id", () => {
+    const id = "m7q2x1a9k3f8d0";
+    expect(inboxIdFromPath(inboxDetailPath(id))).toBe(id);
+  });
+
+  it("round-trips a uuid, which is what clip-capture mints", () => {
+    // Captures from the Chrome extension and the CLI arrive with uuid ids, so
+    // the two id shapes in `inbox` both have to survive the URL.
+    const id = "f979a4df-cebd-4f91-b076-e1d99c452e4a";
+    expect(inboxIdFromPath(inboxDetailPath(id))).toBe(id);
+  });
+
+  it("resolves the id-bearing path to the inbox-detail view", () => {
+    expect(pathToView("/inbox/detail/abc")).toBe("inbox-detail");
+  });
+
+  it("still resolves the bare path to the same view", () => {
+    expect(pathToView("/inbox/detail")).toBe("inbox-detail");
+    expect(viewToPath("inbox-detail")).toBe("/inbox/detail");
+  });
+
+  it("does not swallow the inbox list", () => {
+    // The whole point of the /detail segment: /inbox stays the list.
+    expect(pathToView("/inbox")).toBe("inbox");
+    expect(inboxIdFromPath("/inbox")).toBeNull();
+  });
+
+  it("extracts an id only from an id-bearing inbox path", () => {
+    expect(inboxIdFromPath("/inbox/detail/9f8e")).toBe("9f8e");
+    expect(inboxIdFromPath("/inbox/detail/9f8e/")).toBe("9f8e");
+    // The bare form is the id-less address, not an id of "".
+    expect(inboxIdFromPath("/inbox/detail")).toBeNull();
+    expect(inboxIdFromPath("/memories/detail")).toBeNull();
+  });
+
+  it("degrades to no-id rather than throwing on a malformed path", () => {
+    expect(inboxIdFromPath("/inbox/detail/")).toBeNull();
+    expect(inboxIdFromPath("/inbox/detail/a/b")).toBeNull();
+  });
+
+  it("treats an id-bearing path as known", () => {
+    expect(isKnownPath("/inbox/detail/abc")).toBe(true);
+  });
+
+  it("does not rescue a malformed id-bearing path", () => {
+    expect(isKnownPath("/inbox/detail/a/b")).toBe(false);
+  });
+
+  it("falls back to the inbox list, not to the id-less form", () => {
+    // /inbox/detail is unrenderable cold and would redirect again.
+    expect(parentPath("/inbox/detail/abc")).toBe("/inbox");
+    expect(isKnownPath(parentPath("/inbox/detail/abc"))).toBe(true);
   });
 });
 

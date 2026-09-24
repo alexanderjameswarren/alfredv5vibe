@@ -10,8 +10,12 @@ import {
   executionPath,
   addPath,
   addRouteFromPath,
+  inboxDetailPath,
+  inboxIdFromPath,
 } from "./viewPaths";
 import { useExecutionRoute } from "./useExecutionRoute";
+import InboxDetailView from "./InboxDetailView";
+import { friendlyDate, SourceIcon } from "./CaptureMeta";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
 import { takePendingNavigation } from "./utils/pushRotation";
 import NotificationSettings from "./NotificationSettings";
@@ -77,18 +81,17 @@ import {
   Layers,
   Music,
   Pin,
-  Bot,
-  Mail,
   Info,
   Timer,
   Pencil,
   RefreshCw,
   ArchiveRestore,
   Gamepad2,
-  Paperclip,
-  Terminal,
 } from "lucide-react";
-import { supabase, supabaseUrl } from "./supabaseClient";
+// `supabaseUrl` used to be imported alongside this: it built the ai-enrich
+// endpoint by hand. Step 14 removed the only two callers and left the import
+// behind as a lint warning; dropped here.
+import { supabase } from "./supabaseClient";
 import { calculateNextEventDate, getRecurrenceConfig } from "./utils/recurrence";
 import { getRecurrenceDisplayString } from "./utils/recurrenceDisplay";
 import { toCamelCase, toSnakeCase } from "./utils/caseConvert";
@@ -1410,6 +1413,18 @@ export default function Alfred() {
     },
     [navigate, currentPath]
   );
+  // Opening a capture for triage, for the same reason as the line above: setView
+  // is handed a view name and has no way to know WHICH capture. Not guarded by
+  // confirmDiscardIfDirty — the only route in is a tap on an inbox row, and a
+  // list has nothing unsaved on it.
+  const openInboxDetail = useCallback(
+    (inboxItemId) => {
+      if (!inboxItemId) return;
+      const path = inboxDetailPath(inboxItemId);
+      navigate(path, { replace: path === currentPath });
+    },
+    [navigate, currentPath]
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [contexts, setContexts] = useState([]);
   const [items, setItems] = useState([]);
@@ -1618,6 +1633,30 @@ export default function Alfred() {
       fetchExecution: (id) => storage.get(`execution:${id}`),
     });
 
+  // --- Inbox detail route (Alfred Clipboard, Step 17) -----------------------
+  //
+  // `/inbox/detail/:id`. No fetch-by-id hook like `useExecutionRoute` is needed
+  // and would be the wrong shape here: `loadData` already selects every live
+  // inbox row into state, so the capture the URL names is a plain lookup. Same
+  // reasoning as the add pages below, and the same one thing to be careful
+  // about — not judging it missing before that load has happened, which is what
+  // `dataLoaded` is for.
+  const routeInboxId = inboxIdFromPath(currentPath);
+  const routeInboxItem = routeInboxId
+    ? inboxItems.find((i) => i.id === routeInboxId) || null
+    : null;
+
+  // Covers three cases with one condition, and all three want the same answer —
+  // back to the list:
+  //
+  //   the bare /inbox/detail, which carries no id and so has nothing to triage
+  //   an id that never existed, or belongs to someone else (RLS hides it)
+  //   an id that existed a moment ago and has just been filed or discarded,
+  //     which is the ORDINARY exit from this page: Process archives the row, the
+  //     row leaves `inboxItems`, and this carries us back. That is deliberate —
+  //     see the note on handleProcess in InboxDetailView.
+  const inboxDetailMissing = view === "inbox-detail" && dataLoaded && !routeInboxItem;
+
   // --- Cold-load redirects (Step 9, docs/technical-spec-navigation-urls.md) --
   //
   // Two things can put Alfred on a path it cannot actually render:
@@ -1703,14 +1742,21 @@ export default function Alfred() {
       navigate(parentPath(currentPath), { replace: true });
       return;
     }
+    // Not folded into DETAIL_VIEW_STATE: that table is consulted before
+    // `dataLoaded` is true, so an inbox-detail entry there would bounce every
+    // cold load to the list before the row it names had arrived.
+    if (inboxDetailMissing) {
+      navigate(parentPath(currentPath), { replace: true });
+      return;
+    }
     if (detailStateMissing) {
       // parentPath() consults its override table first — the last-segment rule
       // is a tiebreaker for naming, not a law.
       navigate(parentPath(currentPath), { replace: true });
     }
-    // `replace` in both cases: a path the app cannot render should not become
+    // `replace` in every case: a path the app cannot render should not become
     // a history entry the Back button can return the user to.
-  }, [currentPath, detailStateMissing, addTargetMissing, navigate]);
+  }, [currentPath, detailStateMissing, addTargetMissing, inboxDetailMissing, navigate]);
 
   // --- List sort preferences (Step 9b) --------------------------------------
   //
@@ -3127,6 +3173,19 @@ export default function Alfred() {
           id: uid(),
           user_id: user.id,
           text: triageData.intentionData.text,
+          // `intents.description`, migration 069 — "Details" on the inbox detail
+          // page.
+          //
+          // NULL when nothing was written, which is the contract the column's
+          // comment states: `not null default ''` was rejected precisely so that
+          // "no details" and "details deliberately emptied" would not be the same
+          // value. Whitespace-only counts as nothing. Deliberately unlike
+          // `items.description` a few lines above, which has always stored "" —
+          // that column's history, not a rule to copy.
+          //
+          // The old inbox card sends no `description` at all; that arrives here as
+          // undefined and lands as null, which is correct for it.
+          description: (triageData.intentionData.description || "").trim() || null,
           createdAt: new Date().toISOString(),
           isIntention: true,
           isItem: !!intentionItemId,
@@ -5814,11 +5873,50 @@ export default function Alfred() {
                     onDiscard={discardInboxItem}
                     onDirtyChange={setUnsavedChanges}
                     onSaveCaptureText={updateInboxCaptureText}
+                    // Clipboard Step 17. Tapping a row opens the detail page
+                    // instead of expanding the card in place. Passing this makes
+                    // the card's whole expanded form unreachable, which is the
+                    // point — Step 18 deletes it once nothing can reach it.
+                    onOpen={openInboxDetail}
                   />
                 ))}
               </div>
             )}
           </div>
+        )}
+
+        {/* Inbox Detail View — Alfred Clipboard, Step 17.
+
+            Rendered from `routeInboxItem`, which is resolved from the URL rather
+            than from state, so a refresh or a pasted link opens the same capture.
+            `key` is the capture id: moving from one capture to another remounts
+            the page rather than re-seeding it, which is what keeps a half-typed
+            triage from bleeding into the next one. */}
+        {view === "inbox-detail" && routeInboxItem && (
+          <InboxDetailView
+            key={routeInboxItem.id}
+            inboxItem={routeInboxItem}
+            contexts={contexts}
+            items={items}
+            tagPool={tagPool}
+            onProcess={handleInboxSave}
+            onDiscard={discardInboxItem}
+            // Guarded: Back is the one exit that can be taken with a form full of
+            // unsaved work and no intention of abandoning it. Cancel and Discard
+            // clear the flag themselves before calling this.
+            onBack={() => guardedSetView("inbox")}
+            onDirtyChange={setUnsavedChanges}
+            // Passed in rather than imported: RecurrenceQuickSelect lives in this
+            // file, which imports InboxDetailView, so importing back would be a
+            // cycle — and moving it would drag its two dialogs along.
+            renderRecurrence={({ value, onChange, onEndDateChange }) => (
+              <RecurrenceQuickSelect
+                value={value}
+                onChange={onChange}
+                onEndDateChange={onEndDateChange}
+              />
+            )}
+          />
         )}
 
         {/* Contexts View */}
@@ -7435,30 +7533,6 @@ function groupRemovalsByAction(removals) {
   return groups;
 }
 
-function friendlyDate(timestamp) {
-  const date = new Date(timestamp);
-  const now = new Date();
-  const isToday = date.toDateString() === now.toDateString();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday = date.toDateString() === yesterday.toDateString();
-
-  const timeStr = date.toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  });
-
-  if (isToday) return `Today at ${timeStr}`;
-  if (isYesterday) return `Yesterday at ${timeStr}`;
-
-  return date.toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  }) + ` at ${timeStr}`;
-}
-
 // Everything an enrichment produced, reset — Step 12.7.
 //
 // Applied when a capture's text is edited, because the suggestions describe text
@@ -7506,26 +7580,6 @@ function AiStatusBadge({ status }) {
   );
 }
 
-// How a capture arrived, as one small glyph.
-//
-// The fallback is `manual`, which means an UNRECOGNISED source_type renders as a
-// pencil rather than as nothing — quietly wrong instead of visibly wrong.
-// Nothing constrains source_type in the database (no check, no enum), so a new
-// writer that forgets to come here is not an error anywhere; it just looks
-// hand-typed. That is the reason to add the icon in the same change as the
-// writer, and the reason `clipboard` and `cli` are here now rather than later.
-function SourceIcon({ sourceType }) {
-  const icons = {
-    manual: <Pencil className="w-3.5 h-3.5" />,
-    mcp: <Bot className="w-3.5 h-3.5" />,
-    email: <Mail className="w-3.5 h-3.5" />,
-    // Alfred Clipboard — spec 4.3.
-    clipboard: <Paperclip className="w-3.5 h-3.5" />,
-    cli: <Terminal className="w-3.5 h-3.5" />,
-  };
-  return <span title={`Source: ${sourceType || 'manual'}`}>{icons[sourceType] || icons.manual}</span>;
-}
-
 function InboxCard({
   inboxItem,
   contexts,
@@ -7540,6 +7594,12 @@ function InboxCard({
   onDiscard,
   onDirtyChange,
   onSaveCaptureText,
+  // Clipboard Step 17. When given, tapping the row opens the detail PAGE and the
+  // card never expands — which makes everything below the collapsed return a
+  // dead branch. Step 18 removes it, including the four normaliser copies and
+  // the eslint-disabled dirty check. Optional so that the card keeps working on
+  // its own while both paths exist.
+  onOpen,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showAiInfo, setShowAiInfo] = useState(false);
@@ -8007,7 +8067,7 @@ function InboxCard({
     return (
       <div
         className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary transition-colors shadow-sm hover:shadow-md"
-        onClick={() => setExpanded(true)}
+        onClick={() => (onOpen ? onOpen(inboxItem.id) : setExpanded(true))}
       >
         <p className="text-foreground mb-2">{truncated}</p>
         <div className="flex items-center justify-between text-xs text-muted-foreground">
