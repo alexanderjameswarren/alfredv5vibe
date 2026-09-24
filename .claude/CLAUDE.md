@@ -41,9 +41,19 @@ Rules:
 - This applies only to read-only SELECT checks. Migrations and anything that
   changes data stay as separate statements.
 
-## Push your final report into Alfred
+## Push your report into Alfred
 
-At the end of EVERY task, before your closing message:
+**EVERY TIME YOU STOP AND WAIT FOR ALEX, not only when a task is finished.**
+Stopping to have a migration run, to have something verified, to ask a
+question, to report a blocker — all of those are stops, and each one gets its
+own report. A task that takes six stops pushes six reports, and the run tag is
+what keeps them together.
+
+The rule used to say "at the end of every task", and that was wrong in a way
+worth remembering: most of the work here stops mid-task and waits, so the
+reports Alex most needed were exactly the ones that never got pushed.
+
+Before your closing message, every time:
 
 1. Write the final report to `.clip/last-report.md` (gitignored; create the
    folder if needed).
@@ -51,7 +61,11 @@ At the end of EVERY task, before your closing message:
    `node scripts/clip.mjs --tag <tag> --title "<what this task was>" .clip/last-report.md`
    The title should name the step or task — "Clipboard Step 7", "SAM plan
    review", "DJ weekly review fix" — because that is what Alex sees in his
-   inbox.
+   inbox. When a task stops more than once, say what THIS stop is about:
+   "Clipboard Step 10: migration written, awaiting run", then later "Clipboard
+   Step 10: deployed, awaiting fresh-thread test". Several reports under one run
+   tag is normal and expected; identical titles are not, because then Alex cannot
+   tell which stop he is reading.
 
    **The run tag comes from the first line of the prompt**, `Run tag: <tag>`.
    Alex often has two or three CLI sessions running at once, so the tag is how
@@ -63,6 +77,10 @@ At the end of EVERY task, before your closing message:
    matched to a conversation and Alex may need to identify it by hand.
 3. Print the report as usual. The clip is as well as the terminal output, never
    instead of it.
+
+The report says where things stand AT THIS STOP: what was done, what is waiting
+on Alex, and anything he needs to decide. It is not a summary of the whole task
+unless the whole task is done.
 
 So Alex can say "CLI responded" in any claude.ai conversation and Claude reads
 the report with `get_recent_clips` (source `cli`) instead of him pasting it.
