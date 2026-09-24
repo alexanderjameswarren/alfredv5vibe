@@ -20,16 +20,65 @@ This skill defines how to analyze Alfred inbox captures and write structured sug
 - User references specific inbox items needing organization suggestions
 - User captures something and wants AI help categorizing it
 
+## What NOT to enrich
+
+Three kinds of inbox item are not yours. Check `source_type` on every item before
+you do anything with it, and leave these alone entirely — no research, no
+suggestions, no `update_inbox_item` call:
+
+| `source_type` | what it is | who handles it |
+|---|---|---|
+| `clipboard` | a web page Alex clipped in Chrome | the conversation he clipped it for |
+| `cli` | a report pushed by the Claude CLI | the thread that sent the CLI prompt |
+| `task` | a scheduled-task item | the task's own thread |
+
+These carry their content in a separate `clips` table, not in `captured_text` —
+the inbox row is only a pointer, so there is nothing here to enrich even if you
+tried. Enriching one would write GTD suggestions over an item that is about to be
+read and archived by somebody else, and the suggestions would be based on a
+one-line pointer rather than the page.
+
+When `get_inbox` returns one, skip it silently. Do not mention it unless Alex asks
+what is in his inbox, in which case say it is there and whose it is.
+
+### Email items that are job listings or job alerts
+
+Alex forwards job-alert emails and job postings into Alfred, and they arrive as
+ordinary `email` items. **Leave them for the jobs conversation.** Do not enrich
+them, do not suggest a context, do not file them anywhere.
+
+They look like: a job board digest, a single posting forwarded on, a recruiter
+approach, an alert from Idealist / LinkedIn / NTEN / 80,000 Hours.
+
+The `job-search` skill picks these up with `get_inbox` filtered to `email`,
+evaluates them with Alex, and archives them when it is done. Enriching one first
+would turn a role he has not decided about into an intention he never asked for.
+
+Ordinary forwarded email — a newsletter, a receipt, a note to self — is yours as
+usual. The distinction is whether it is about a job.
+
+### Never write to `job_applications`
+
+Not under any circumstances, and not for any reason. Enrichment proposes and Alex
+disposes: `job_applications` rows are decisions he makes in conversation, one at a
+time, and every row carries a `fit` and an `effort` that are his judgement and
+cannot be inferred from a capture.
+
+A job posting reaching the inbox is not evidence he applied, or that he intends
+to. If a capture is clearly about a job, that is a reason to leave it for the jobs
+thread, never a reason to record it.
+
 ## Enrichment Workflow
 
 ### Step 1: Identify Target Items
 
 **For initial enrichment:**
 - Use `get_inbox` with `ai_status: "not_started"` to find unenriched items
-- Process each item sequentially
+- **Drop every item whose `source_type` is `clipboard`, `cli` or `task`, and every `email` item that is a job listing or job alert** — see "What NOT to enrich" above. Do this before any research, so you never spend a lookup on an item you are going to skip
+- Process the rest sequentially
 
 **For re-enrichment:**
-- Use `get_inbox` (no ai_status filter) and select items where `ai_status` is `enriched` or `re_enriched` AND `archived` is `false`
+- Use `get_inbox` (no ai_status filter) and select items where `ai_status` is `enriched` or `re_enriched` AND `archived` is `false` — applying the same exclusions as above
 - Read the existing suggestions on each item before re-analyzing
 - Your goal is to improve on the previous suggestions
 
