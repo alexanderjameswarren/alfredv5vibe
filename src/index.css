@@ -73,25 +73,38 @@
    why this is measured rather than chosen) and read by the two utilities below,
    which are the ONLY things in the app that should know where the dock is.
 
-   The value here is a fallback for the moment before the first measurement, and
-   for any environment where measuring fails. It is deliberately close to the real
-   phone height rather than to the 7rem the old hard-coded offsets used: if it is
-   ever the value in play, being slightly too small hides a sliver of a footer
-   behind the bar, while being too large leaves the floating gap this replaced. */
+   ⚠️ The value here is ONLY a fallback, for the frame before the first
+   measurement. It is deliberately LARGER than any real dock — being too big leaves
+   a little unused space for one frame, while being too small is what Step 17c had
+   to fix: footers tucked behind the capture bar, and the last section of a long
+   page unable to scroll clear of it at all. Erring small here turned a missing
+   measurement into three visible bugs. */
 :root {
-  --dock-h: 4rem;
+  --dock-h: 8rem;
+
+  /* Breathing space BELOW the dock's clearance, not part of it.
+     It does two jobs, and the second is easy to remove by accident:
+       1. the last of a page's content is readable clear of the bar rather than
+          ending exactly at its edge;
+       2. it is the slack a pinned footer needs in order to UNDOCK. A sticky footer
+          releases only once the page can scroll far enough for its resting place to
+          rise above the sticky line — and the space below the content is what
+          allows that scrolling. With no slack the footer stays pinned even at the
+          bottom of the page and the card's rounded bottom edge can never appear.
+     2rem is therefore a minimum, not a decoration: it is how much of the card's
+     bottom edge you get to see. */
+  --dock-gap: 2rem;
 }
 
-/* A pinned action footer. Sits flush on top of the dock, whatever height the
-   dock currently is. Replaces `sticky bottom-28 sm:bottom-32` everywhere. */
+/* A pinned action footer. Sits flush on top of the dock while the page scrolls,
+   whatever height the dock currently is, and releases at the bottom of the page to
+   sit at the end of its card. Replaces `sticky bottom-28 sm:bottom-32` everywhere. */
 .sticky-above-dock {
   position: sticky;
   bottom: var(--dock-h);
 }
 
-/* Scroll room under the last of the page's content, so it can be read clear of
-   the dock instead of ending underneath it. The extra 1.5rem is breathing space,
-   not clearance — the dock height is the clearance. */
+/* Scroll room under the last of the page's content. */
 .pad-above-dock {
-  padding-bottom: calc(var(--dock-h) + 1.5rem);
+  padding-bottom: calc(var(--dock-h) + var(--dock-gap));
 }

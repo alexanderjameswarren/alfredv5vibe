@@ -40,7 +40,7 @@ import { startOfPacificDay } from "./utils/localDay";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
 import { offsetPatch, isFirstStep } from "./utils/elementOffsets";
-import { intentionRowFromTriage } from "./utils/triageRows";
+import { intentionRowFromTriage, intentionUpdateRow, detailsForStorage } from "./utils/intentionRows";
 import { matchesQuery } from "./utils/search";
 import {
   createNotificationSteps,
@@ -1429,9 +1429,11 @@ export default function Alfred() {
   );
   // The bottom dock's height, measured and published as `--dock-h` so that every
   // pinned footer and the content padding sit exactly clear of it — Clipboard
-  // Step 17b. See useDockHeight for why this is measured rather than chosen.
-  const dockRef = useRef(null);
-  useDockHeight(dockRef);
+  // Step 17b. See useDockHeight for why this is measured rather than chosen, and
+  // why it hands back a CALLBACK ref: this component has five early returns before
+  // the dock is rendered, so a plain ref is still null when an effect would first
+  // look at it and nothing would ever make it look again.
+  const setDockNode = useDockHeight();
   const [menuOpen, setMenuOpen] = useState(false);
   const [contexts, setContexts] = useState([]);
   const [items, setItems] = useState([]);
@@ -3174,7 +3176,7 @@ export default function Alfred() {
 
       // Create intention if Intention section was open
       if (triageData.createIntention && triageData.intentionData) {
-        // The row itself is built by a pure function in utils/triageRows.js, so
+        // The row itself is built by a pure function in utils/intentionRows.js, so
         // that the mapping — `description` in particular — is reachable by a test.
         // It was not, which is why "is Details being saved?" could only be
         // answered by reading code. See that file's header.
@@ -3342,42 +3344,12 @@ export default function Alfred() {
     const intent = intents.find((i) => i.id === intentId);
     if (!intent) return;
     return withLoading('Saving...', async () => {
-      // Be explicit about what we're storing
-      const updated = {
-        id: intent.id,
-        userId: intent.userId,
-        text: updates.text !== undefined ? updates.text : intent.text,
-        createdAt: intent.createdAt,
-        isIntention:
-          updates.isIntention !== undefined
-            ? updates.isIntention
-            : intent.isIntention || false,
-        isItem:
-          updates.isItem !== undefined ? updates.isItem : intent.isItem || false,
-        archived:
-          updates.archived !== undefined
-            ? updates.archived
-            : intent.archived || false,
-        itemId: updates.itemId !== undefined ? updates.itemId : intent.itemId,
-        contextId:
-          updates.contextId !== undefined ? updates.contextId : intent.contextId,
-        recurrenceConfig:
-          updates.recurrenceConfig !== undefined
-            ? updates.recurrenceConfig
-            : intent.recurrenceConfig || null,
-        targetStartDate:
-          updates.targetStartDate !== undefined
-            ? updates.targetStartDate
-            : intent.targetStartDate || null,
-        endDate:
-          updates.endDate !== undefined
-            ? updates.endDate
-            : intent.endDate || null,
-        tags:
-          updates.tags !== undefined ? updates.tags : intent.tags || [],
-        collectionId:
-          updates.collectionId !== undefined ? updates.collectionId : intent.collectionId || null,
-      };
+      // The whitelist lives in utils/intentionRows.js, under test. It was inline
+      // here, and `description` was missing from it — which made Details silently
+      // unwritable from the edit screen: typed, "saved", and gone, with no error.
+      // A list like this fails invisibly once per new column, so it is somewhere a
+      // test can reach.
+      const updated = intentionUpdateRow(intent, updates);
 
       const savedIntent = await storage.set(`intent:${intent.id}`, updated);
       setIntents(intents.map((i) => (i.id === intentId ? savedIntent || updated : i)));
@@ -7428,15 +7400,26 @@ export default function Alfred() {
           above the bar by document order instead of by a hard-coded offset —
           the bar's height changes as its textarea grows, and any offset would
           be wrong the moment somebody types a long capture. */}
-      <div ref={dockRef} className="fixed bottom-0 left-0 right-0 z-20">
+      <div ref={setDockNode} className="fixed bottom-0 left-0 right-0 z-20">
         <UndoMessage
           pendingUndo={pendingUndo}
           onUndo={runUndo}
           onDismiss={dismissUndo}
         />
 
-        {/* Capture bar */}
-        <div className="bg-white border-t border-border shadow-lg">
+        {/* Capture bar.
+
+            `pb-[env(safe-area-inset-bottom)]` — Step 17c — extends the bar's own
+            white into a device's home-bar / gesture area, so nothing can overlap
+            the Capture button. Zero on desktop, so it costs nothing there.
+
+            On the BAR and not on the dock wrapper above: the wrapper is transparent
+            behind the Undo message, which floats over the page, and giving it a
+            background would put a white strip behind that pill.
+
+            It is inside the measured element either way, so `--dock-h` includes it
+            and every pinned footer clears it. */}
+        <div className="bg-white border-t border-border shadow-lg pb-[env(safe-area-inset-bottom)]">
           <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2 sm:py-4">
             <div className="flex gap-2 items-end">
               <textarea
@@ -9584,6 +9567,20 @@ function IntentionDetailView({
           <ObjectIcon type="intention" className="w-6 h-6 text-primary" align="first-line" />
           <span className="min-w-0">{intention.text}</span>
         </h2>
+
+        {/* Details — `intents.description`, migration 069. Step 17c.
+            Below the name and above the metadata, because it is the intention's
+            own prose rather than a fact about the record. Absent entirely when
+            empty: an always-present blank paragraph would push the metadata down
+            on every intention to serve the few that have one.
+            `whitespace-pre-wrap`, unlike `items.description` a screen away, and
+            the difference is deliberate — this field is long text and paragraph
+            breaks are content. */}
+        {intention.description && (
+          <p className="mt-2 text-muted-foreground whitespace-pre-wrap">
+            {intention.description}
+          </p>
+        )}
 
         <DetailMeta contextName={contextName} tags={intention.tags} />
 
@@ -12064,6 +12061,9 @@ function IntentionCard({
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(intent.text);
+  // `intents.description`, migration 069 — Step 17c. Held as "" when the column is
+  // null so the textarea stays controlled; converted back to null on save.
+  const [description, setDescription] = useState(intent.description || "");
   const [recurrenceConfig, setRecurrenceConfig] = useState(intent.recurrenceConfig || null);
   const [intentEndDate, setIntentEndDate] = useState(intent.endDate || null);
   const [targetStartDate, setTargetStartDate] = useState(intent.targetStartDate || null);
@@ -12095,13 +12095,14 @@ function IntentionCard({
     if (!isEditing || !onDirtyChange) return;
     const isDirty =
       name !== intent.text ||
+      description !== (intent.description || "") ||
       JSON.stringify(recurrenceConfig) !== JSON.stringify(intent.recurrenceConfig || null) ||
       selectedItemId !== (intent.itemId || "") ||
       selectedCollectionId !== (intent.collectionId || "") ||
       selectedContextId !== (intent.contextId || "") ||
       JSON.stringify(tags) !== JSON.stringify(intent.tags || []);
     onDirtyChange(isDirty, "this intention");
-  }, [isEditing, name, recurrenceConfig, selectedItemId, selectedCollectionId, selectedContextId, tags]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isEditing, name, description, recurrenceConfig, selectedItemId, selectedCollectionId, selectedContextId, tags]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => { if (onDirtyChange) onDirtyChange(false); };
@@ -12114,9 +12115,13 @@ function IntentionCard({
     }
     if (onDirtyChange) onDirtyChange(false);
     if (onUpdate) {
+      // Blank is stored as NULL — migration 069's contract. The rule itself lives
+      // in utils/intentionRows.js so this screen and the inbox detail page cannot
+      // disagree about what "no details" means.
+      const detailsToStore = detailsForStorage(description);
       const updates = showScheduling
-        ? { text: name, recurrenceConfig, endDate: intentEndDate, targetStartDate, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null }
-        : { text: name, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null };
+        ? { text: name, description: detailsToStore, recurrenceConfig, endDate: intentEndDate, targetStartDate, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null }
+        : { text: name, description: detailsToStore, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null };
       onUpdate(intent.id, updates, scheduledDate);
     }
     if (!onCancel) {
@@ -12131,6 +12136,7 @@ function IntentionCard({
       onCancel();
     } else {
       setName(intent.text);
+      setDescription(intent.description || "");
       setRecurrenceConfig(intent.recurrenceConfig || null);
       setIntentEndDate(intent.endDate || null);
       setTargetStartDate(intent.targetStartDate || null);
@@ -12167,6 +12173,25 @@ function IntentionCard({
               onChange={(e) => setName(e.target.value)}
               className="w-full px-3 py-2 border border-border rounded text-base"
               autoFocus
+            />
+          </div>
+
+          {/* Details — `intents.description`, migration 069. Step 17c.
+              Directly under Name, matching the inbox detail page's New Intention
+              section, so the same two fields are in the same order wherever an
+              intention is written. Labelled "Details" and stored in a column named
+              `description`: the label reads well here, the column name matches
+              items.description everywhere else. */}
+          <div>
+            <label htmlFor={`intent-details-${intent.id}`} className="block text-sm font-medium text-foreground mb-1">
+              Details
+            </label>
+            <textarea
+              id={`intent-details-${intent.id}`}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              className="w-full px-3 py-2 border border-border rounded text-base resize-y"
             />
           </div>
 

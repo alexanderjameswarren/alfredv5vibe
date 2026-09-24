@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. Steps 16, 17 and 17b done; 17b awaiting in-app verification.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. Steps 16, 17, 17b and 17c done; 17c awaiting in-app verification.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -62,11 +62,103 @@ seven distinct designs, every name matching its title, README list accurate.
 
 - [x] Step 16: Intentions need a long-text description — "Details" in the mockups. Check whether `intents` already has a suitable column; if not, write a migration adding one, with a comment, ending with the conformance check. Alex runs it; CONFORMANT required. — **written 2026-09-24**, `supabase/migrations/069_phase3_intents_description.sql`. There was no suitable column: see the notes. - **done 2026-09-24.** CONFORMANT (44 tables); `intents.description` is text, nullable, no default, commented, and 0 of 165 rows have a value. The name `description` with the label "Details" was approved.
 - [x] Step 17: The detail page itself, at its own URL through the existing routing, reached by clicking an inbox card. Everything in the README: the back link, the source pill and capture time, Context first and prominent with Tags underneath, the two push-button toggles (New Item / New Intention, either, both or neither, preselected from `suggest_item` / `suggest_intent`), the two sections, the original capture last, and the floating footer. Reuse the EXISTING element editor completely unchanged. Preserve linking an intention to an existing item (`suggested_item_id`). Collections stay hidden. Phone layout: one column, same order, footer pinned. **Its own component, not inside `InboxCard`, with exactly one normaliser.** Run the frontend suite. - **written 2026-09-24.** `src/InboxDetailView.jsx` at `/inbox/detail/:id`, plus `src/CaptureMeta.jsx` and `src/utils/suggestedElements.js` (the one normaliser). Suite green: 66 suites, 1445 tests, up from 64/1379; `react-scripts build` compiles with no warnings at all. Nothing deployed - this is the Vercel frontend and reaches the live app only on a push, which is Alex's call. Three deliberate feature losses were flagged for his ruling; he gave it in Step 17b, which also fixed two things this turned up. - **verified 2026-09-24**, with the Step 17b fixes.
-- [x] Step 17b: Alex's rulings on the three feature losses, plus two fixes and the mockup renames. Keep the capture-text pencil; drop "Attach this Item"; drop Target Start Date from this page only. Trace `intents.description` and prove it with a test. Fix the pinned-footer gap **globally**, with one shared measurement rather than per-screen offsets. Rename the mockups. - **done 2026-09-24.** Suite green: 68 suites, 1486 tests, up from 66/1445; build clean. See the notes.
+- [x] Step 17b: Alex's rulings on the three feature losses, plus two fixes and the mockup renames. Keep the capture-text pencil; drop "Attach this Item"; drop Target Start Date from this page only. Trace `intents.description` and prove it with a test. Fix the pinned-footer gap **globally**, with one shared measurement rather than per-screen offsets. Rename the mockups. - **done 2026-09-24.** Suite green: 68 suites, 1486 tests, up from 66/1445; build clean. - **partly verified 2026-09-24.** The capture pencil and Details both confirmed working in the app. **The global footer fix shipped a bug of its own** - see Step 17c.
+- [x] Step 17c: Three regressions from 17b's footer change, plus Details on the intention view and edit screens. Footers stopped undocking at the bottom of a page; content was cut off behind the capture bar; the Capture button looked clipped on desktop. - **done 2026-09-24.** One root cause found for the first two; the third is not explained and needs one more observation from Alex. Suite green: 68 suites, 1503 tests. See the notes.
 - [ ] Step 18: Retire the inline card expansion. Remove the old expanded form from `InboxCard`, including its four normaliser copies and the `eslint-disable`d dirty check — but only once nothing uses them. Run the frontend suite.
 - [ ] Step 19: For clipboard items the detail page also shows the captured page text (collapsed, with Show all), the links, and the screenshot slices. Run the frontend suite.
 
 ## Notes
+
+### Step 17c — the measurement never ran, 2026-09-24
+
+#### The root cause, and why it was invisible
+
+`useDockHeight` took a ref and measured it in `useEffect(…, [ref])`.
+
+Alfred has **five early returns before the dock is rendered** — `authLoading`,
+`!user`, `!dataLoaded`, the SAM view and the Timer view — and every cold load passes
+through at least one. So on the render where the effect first ran, `ref.current` was
+null and the effect returned early. A ref object is stable for the life of a
+component, so **the dependency array never changed and the effect never ran again.**
+`--dock-h` was never published. Every screen used the CSS fallback for the whole
+session.
+
+The fallback was `4rem` (64px), chosen small on the reasoning that being slightly
+too small was the safer error. That reasoning was wrong, and it is what turned a
+silent no-op into three visible bugs:
+
+| the real dock | the fallback | what it caused |
+|---|---|---|
+| ~81px desktop | 64px | footers sat 17px BEHIND the capture bar |
+| ~81px desktop | 64 + 24 = 88px of padding | only 7px of clearance, against 128px before — last section unreachable |
+| — | — | and 7px of slack is far too little for a sticky footer to visibly release |
+
+So items 1 and 2 are one bug with one fix. The fallback is now **8rem, deliberately
+larger than any real dock**: for one frame, too much space is invisible and too
+little is broken.
+
+#### The fix
+
+`useDockHeight` now returns a **callback ref** and holds the node in state. React
+calls it the moment the dock mounts, however many renders later that is, and again
+with null when it goes — so the observer effect re-runs on both. Tested, including
+the exact failure: *"measures a dock that mounts on a LATER render"*.
+
+`--dock-gap` (2rem) is now a named token rather than a literal in one calc, because
+it does two jobs and the second is easy to delete by accident: breathing space under
+the content, AND **the slack a pinned footer needs in order to undock**. A sticky
+footer releases only once the page can scroll far enough for its resting place to
+rise above the sticky line, and the space below the content is what allows that
+scrolling. At maximum scroll the card's bottom edge now sits `--dock-gap` above the
+dock, so the footer releases and you see exactly that much of the card's rounded
+bottom edge.
+
+#### 🛑 Item 3 is NOT explained by this, and is not closed
+
+The clipped Capture button on desktop has no cause I can find. Nothing in 17b or 17c
+touches the dock's own markup or CSS beyond attaching a ref, and:
+
+* the dock is `fixed bottom-0`, so it cannot extend below the viewport;
+* no ancestor has a `transform`, `filter` or `will-change`, which are the only things
+  that would make `fixed` resolve against something other than the viewport;
+* every `z-30`/`z-40`/`z-50`/`z-[100]` in the app is a modal, the mobile drawer or a
+  dropdown — nothing that would paint over the bar in a resting state;
+* a pinned footer cannot cover it: the dock is `z-20` and a sticky footer has
+  `z-index: auto`, so the dock paints above it.
+
+What WAS true before the fix is that every pinned footer overlapped the bottom 17px
+of the dock, hidden behind it, putting the footer's `border-t` across the screen
+just above the Capture button. That may be what read as clipping. Re-check after
+this lands; if it persists, the two things to establish are whether the page scrolls
+sideways at all (a horizontal scrollbar eats the bottom of the viewport) and the
+browser zoom level.
+
+Defensively, the capture bar now carries `pb-[env(safe-area-inset-bottom)]` so a
+device's home bar cannot overlap the button. On the BAR, not the dock wrapper: the
+wrapper is transparent behind the Undo message, and a background there would put a
+white strip behind a pill that floats over the page. Zero on desktop.
+
+#### Details on the intention view and edit screens — and a second silent drop
+
+The view screen shows `intention.description` below the name, muted, absent when
+empty, `whitespace-pre-wrap` because paragraph breaks are content. The edit screen
+has a Details textarea directly under Name, matching the inbox detail page's order.
+
+**`updateIntent` would have dropped it.** That function builds an explicit whitelist
+— *"be explicit about what we're storing"* — and `description` was not in it. The edit
+screen would have shown the box, accepted the text, reported a successful save and
+changed nothing, with no error anywhere. A whitelist fails that way silently, once
+per new column.
+
+So the mapping moved to `src/utils/intentionRows.js` alongside the triage builder —
+one home for "how an intents row is built", both ways it can be built — with
+`detailsForStorage` as the single rule for blank-means-null. 28 tests.
+`src/utils/triageRows.js` is gone, folded into it.
+
+Worth knowing: an omitted column is NOT erased, because `storage.set` issues an
+UPDATE, which only names the columns it is given. That is why `source_inbox_id`
+survives an edit despite also being absent from the whitelist. The safety comes from
+UPDATE's semantics rather than from the list being complete.
 
 ### Step 17b — rulings, two fixes, and the footer gap, 2026-09-24
 

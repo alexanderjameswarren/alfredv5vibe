@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import InboxDetailView from "./InboxDetailView";
-import { intentionRowFromTriage } from "./utils/triageRows";
+import { intentionRowFromTriage } from "./utils/intentionRows";
 import { toSnakeCase } from "./utils/caseConvert";
 
 // The page is in its own module so these tests exercise IT, not a reproduction of
