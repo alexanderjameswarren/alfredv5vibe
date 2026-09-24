@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. Steps 16, 17, 17b and 17c done; 17c awaiting in-app verification.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. Steps 16, 17, 17b, 17c and 17d done; 17d awaiting in-app verification.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -63,11 +63,83 @@ seven distinct designs, every name matching its title, README list accurate.
 - [x] Step 16: Intentions need a long-text description — "Details" in the mockups. Check whether `intents` already has a suitable column; if not, write a migration adding one, with a comment, ending with the conformance check. Alex runs it; CONFORMANT required. — **written 2026-09-24**, `supabase/migrations/069_phase3_intents_description.sql`. There was no suitable column: see the notes. - **done 2026-09-24.** CONFORMANT (44 tables); `intents.description` is text, nullable, no default, commented, and 0 of 165 rows have a value. The name `description` with the label "Details" was approved.
 - [x] Step 17: The detail page itself, at its own URL through the existing routing, reached by clicking an inbox card. Everything in the README: the back link, the source pill and capture time, Context first and prominent with Tags underneath, the two push-button toggles (New Item / New Intention, either, both or neither, preselected from `suggest_item` / `suggest_intent`), the two sections, the original capture last, and the floating footer. Reuse the EXISTING element editor completely unchanged. Preserve linking an intention to an existing item (`suggested_item_id`). Collections stay hidden. Phone layout: one column, same order, footer pinned. **Its own component, not inside `InboxCard`, with exactly one normaliser.** Run the frontend suite. - **written 2026-09-24.** `src/InboxDetailView.jsx` at `/inbox/detail/:id`, plus `src/CaptureMeta.jsx` and `src/utils/suggestedElements.js` (the one normaliser). Suite green: 66 suites, 1445 tests, up from 64/1379; `react-scripts build` compiles with no warnings at all. Nothing deployed - this is the Vercel frontend and reaches the live app only on a push, which is Alex's call. Three deliberate feature losses were flagged for his ruling; he gave it in Step 17b, which also fixed two things this turned up. - **verified 2026-09-24**, with the Step 17b fixes.
 - [x] Step 17b: Alex's rulings on the three feature losses, plus two fixes and the mockup renames. Keep the capture-text pencil; drop "Attach this Item"; drop Target Start Date from this page only. Trace `intents.description` and prove it with a test. Fix the pinned-footer gap **globally**, with one shared measurement rather than per-screen offsets. Rename the mockups. - **done 2026-09-24.** Suite green: 68 suites, 1486 tests, up from 66/1445; build clean. - **partly verified 2026-09-24.** The capture pencil and Details both confirmed working in the app. **The global footer fix shipped a bug of its own** - see Step 17c.
-- [x] Step 17c: Three regressions from 17b's footer change, plus Details on the intention view and edit screens. Footers stopped undocking at the bottom of a page; content was cut off behind the capture bar; the Capture button looked clipped on desktop. - **done 2026-09-24.** One root cause found for the first two; the third is not explained and needs one more observation from Alex. Suite green: 68 suites, 1503 tests. See the notes.
+- [x] Step 17c: Three regressions from 17b's footer change, plus Details on the intention view and edit screens. Footers stopped undocking at the bottom of a page; content was cut off behind the capture bar; the Capture button looked clipped on desktop. - **done 2026-09-24.** One root cause found for the first two; the third not explained. - **FAILED in the app 2026-09-24.** `--dock-h` measured correctly (83px) and the layout was still wrong. Rolled back whole by Step 17d; item 4's Details work was kept.
+- [x] Step 17d: Roll back the measured-dock layout to production, keep every feature from 17/17b/17c, then fix the original gap with the smallest change: move each pinned footer down to the capture bar's normal height and leave the content padding alone. - **done 2026-09-24.** Suite green: 67 suites, 1492 tests (the 11 useDockHeight tests went with the hook). See the notes.
 - [ ] Step 18: Retire the inline card expansion. Remove the old expanded form from `InboxCard`, including its four normaliser copies and the `eslint-disable`d dirty check — but only once nothing uses them. Run the frontend suite.
 - [ ] Step 19: For clipboard items the detail page also shows the captured page text (collapsed, with Show all), the links, and the screenshot slices. Run the frontend suite.
 
 ## Notes
+
+### Step 17d — the measured layout rolled back, 2026-09-24
+
+Alex measured `--dock-h` in the running app: **83px**, so the 17c callback-ref fix
+worked and the measurement really was reaching the CSS. The layout was still wrong
+anyway — footers not releasing, the item view's last section still behind the bar,
+and the Capture button cramped. Production, which predates all of this, was right
+apart from the original gap.
+
+**So the measured approach was rolled back whole rather than debugged further.** That
+was Alex's call and it is the right one: two rounds of fixes had each traded one
+layout bug for another, and there was a known-good arrangement sitting in production
+to return to.
+
+#### What was removed
+
+`src/useDockHeight.js` and its 11 tests, `--dock-h`, `--dock-gap`,
+`.pad-above-dock`, and the `pb-[env(safe-area-inset-bottom)]` on the capture bar. The
+dock block in `Alfred.jsx` — all 49 lines of it, wrapper through Capture button — is
+now **byte-identical to commit 0e5b446**, checked with `diff`, and the content
+wrapper is back to `pb-28 sm:pb-32`.
+
+#### The one remaining change, and why it is enough
+
+`.sticky-above-bar` in `index.css`: `position: sticky; bottom: 63px`, and `83px` at
+`sm`. Every one of the six pinned footers uses it, and each footer's class list is
+otherwise **exactly** production's — verified by taking each production class list,
+substituting the offset token, and finding the result in the file (5 of 5, plus the
+inbox detail page's, which is new in Step 17).
+
+83px is Alex's measurement of the live bar. 63px is derived from it by the two
+padding differences below `sm`: the bar's `py-4`→`py-2` (−16px) and the textarea's
+`sm:py-3`→`py-2.5` (−4px).
+
+**The content padding is deliberately still 112/128px, and that is the load-bearing
+part.** The two numbers do different jobs, and mirroring them was the original
+mistake:
+
+| | what it is | must be |
+|---|---|---|
+| footer offset | clearance over the bar | **equal to the bar** — 112px floated it, leaving the gap |
+| content padding | scroll room | **larger than the bar** — it is what lets the footer UNDOCK |
+
+A sticky footer releases only once the page can scroll far enough for its resting
+place to rise above the sticky line. The space below the content is what allows that
+scrolling. With the offset at 63/83px and the padding at 112/128px there is ~49px of
+slack, so the footer is flush while scrolling AND releases at the bottom onto the
+card's rounded edge. Cutting the padding to the bar's height — which 17b did — is
+what killed the release.
+
+Accepted cost, agreed with Alex: type enough into the Capture bar and it grows past
+83px, and a footer will overlap its top edge until you stop. Transient, and cheaper
+than a live measurement that shipped three regressions.
+
+#### The `pb-[env(safe-area-inset-bottom)]` hypothesis: ruled out, but the mechanism is real
+
+Alex's theory was that adding `pb-[...]` to the capture bar replaced its existing
+bottom padding, costing the bar its padding on desktop.
+
+**It cannot have, on that element.** The bar div is
+`bg-white border-t border-border shadow-lg` — it has **no padding at all**. The
+padding lives on the inner `max-w-4xl … py-2 sm:py-4` div, which was never touched.
+On desktop `env(safe-area-inset-bottom)` is 0, so the declaration added nothing and
+replaced nothing.
+
+**The mechanism he describes is real, though, and would have applied one element
+down.** `pb-*` and `py-*` both set `padding-bottom`, and which wins is decided by
+source order in the generated stylesheet, not by the order in the class attribute —
+so `py-2 sm:py-4 pb-[env(…)]` on the inner div really would have zeroed the bar's
+bottom padding on desktop. Worth remembering as a Tailwind trap; it just was not this
+bug. The cramped button is unexplained and goes away with the rollback either way.
 
 ### Step 17c — the measurement never ran, 2026-09-24
 

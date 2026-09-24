@@ -14,7 +14,6 @@ import {
   inboxIdFromPath,
 } from "./viewPaths";
 import { useExecutionRoute } from "./useExecutionRoute";
-import { useDockHeight } from "./useDockHeight";
 import InboxDetailView from "./InboxDetailView";
 import { friendlyDate, SourceIcon } from "./CaptureMeta";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
@@ -928,7 +927,7 @@ function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItem
           as a whole does not usually exceed the viewport. It is here for the
           cases that do — a very short window, or if that cap is ever lifted —
           rather than because it changes anything today. */}
-      <div className="flex gap-2 sticky-above-dock pt-2 pb-3 bg-background border-t border-border">
+      <div className="flex gap-2 sticky-above-bar pt-2 pb-3 bg-background border-t border-border">
         <button
           onClick={() => onAdd(Object.values(selected))}
           disabled={Object.keys(selected).length === 0}
@@ -1280,7 +1279,7 @@ function ItemAddToCollection({ item, items, collections, contexts, onBack, onAdd
 
           {/* Same offsets as CollectionAddItems. Now that the list no longer
               scrolls internally this genuinely engages on a long recipe. */}
-          <div className="flex gap-2 sticky-above-dock pt-2 pb-3 bg-background border-t border-border">
+          <div className="flex gap-2 sticky-above-bar pt-2 pb-3 bg-background border-t border-border">
             <button
               onClick={handleAdd}
               disabled={busy || selectedCount === 0 || !collection}
@@ -1427,13 +1426,6 @@ export default function Alfred() {
     },
     [navigate, currentPath]
   );
-  // The bottom dock's height, measured and published as `--dock-h` so that every
-  // pinned footer and the content padding sit exactly clear of it — Clipboard
-  // Step 17b. See useDockHeight for why this is measured rather than chosen, and
-  // why it hands back a CALLBACK ref: this component has five early returns before
-  // the dock is rendered, so a plain ref is still null when an effect would first
-  // look at it and nothing would ever make it look again.
-  const setDockNode = useDockHeight();
   const [menuOpen, setMenuOpen] = useState(false);
   const [contexts, setContexts] = useState([]);
   const [items, setItems] = useState([]);
@@ -5625,7 +5617,7 @@ export default function Alfred() {
       </div>
 
       {/* Main content */}
-      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 pad-above-dock">
+      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 pb-28 sm:pb-32">
         {/* Home View */}
         {view === "home" && (
           <div>
@@ -7400,26 +7392,15 @@ export default function Alfred() {
           above the bar by document order instead of by a hard-coded offset —
           the bar's height changes as its textarea grows, and any offset would
           be wrong the moment somebody types a long capture. */}
-      <div ref={setDockNode} className="fixed bottom-0 left-0 right-0 z-20">
+      <div className="fixed bottom-0 left-0 right-0 z-20">
         <UndoMessage
           pendingUndo={pendingUndo}
           onUndo={runUndo}
           onDismiss={dismissUndo}
         />
 
-        {/* Capture bar.
-
-            `pb-[env(safe-area-inset-bottom)]` — Step 17c — extends the bar's own
-            white into a device's home-bar / gesture area, so nothing can overlap
-            the Capture button. Zero on desktop, so it costs nothing there.
-
-            On the BAR and not on the dock wrapper above: the wrapper is transparent
-            behind the Undo message, which floats over the page, and giving it a
-            background would put a white strip behind that pill.
-
-            It is inside the measured element either way, so `--dock-h` includes it
-            and every pinned footer clears it. */}
-        <div className="bg-white border-t border-border shadow-lg pb-[env(safe-area-inset-bottom)]">
+        {/* Capture bar */}
+        <div className="bg-white border-t border-border shadow-lg">
           <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2 sm:py-4">
             <div className="flex gap-2 items-end">
               <textarea
@@ -8921,16 +8902,18 @@ function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = 
           <span className="text-sm">Pin to home</span>
         </label>
 
-        {/* `sticky-above-dock` sits on the MEASURED height of the bottom
-            dock — Clipboard Step 17b. It used to be `bottom-28 sm:bottom-32`,
-            chosen to mirror the content wrapper's padding; both were a guess at
-            the dock's height, both were about 50px too big, and the footer
-            floated with the page scrolling through the gap underneath. The two
-            now read one measurement instead of agreeing with each other. */}
+        {/* `sticky-above-bar` — Clipboard Step 17d. One class, two numbers, in
+            index.css. It used to be `bottom-28 sm:bottom-32`, which was chosen to
+            mirror the content wrapper's `pb-28 sm:pb-32` and was about 50px taller
+            than the capture bar, so the footer floated with the page scrolling
+            through the gap underneath.
+            The content padding deliberately still says 112/128px. It is not
+            clearance — it is the scroll room that lets the footer UNDOCK at the
+            bottom of a page and sit at the end of its card. */}
         <div
           className={`flex gap-2 pt-2 ${
             stickyFooter
-              ? "sticky-above-dock -mx-4 sm:-mx-6 px-4 sm:px-6 pb-3 bg-white border-t border-border"
+              ? "sticky-above-bar -mx-4 sm:-mx-6 px-4 sm:px-6 pb-3 bg-white border-t border-border"
               : ""
           }`}
         >
@@ -11341,7 +11324,7 @@ function ItemCard({
           <div
             className={"flex flex-wrap gap-2 pt-2 " +
               (stickyFooter
-                ? "sticky-above-dock -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 bg-card border-t border-border"
+                ? "sticky-above-bar -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 bg-card border-t border-border"
                 : "")}
           >
             <button
@@ -12317,7 +12300,7 @@ function IntentionCard({
             className={
               "flex gap-2 flex-wrap " +
               (stickyFooter
-                ? "sticky-above-dock -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-3 bg-card border-t border-border"
+                ? "sticky-above-bar -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-3 bg-card border-t border-border"
                 : "")
             }
           >
