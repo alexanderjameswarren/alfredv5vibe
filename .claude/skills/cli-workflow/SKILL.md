@@ -25,23 +25,50 @@ else's. That is the run tag.
 very first line:**
 
 ```
-Run tag: <project>-<step>-<4 random characters>
+Run tag: <project>-<thread code>-<step>-<4 random characters>
 ```
+
+For example `jobs-ax4-s10-k7p2`.
 
 - Lowercase letters, digits and hyphens only, at most 40 characters. Anything
   else is refused by the push script, not corrected.
 - `<project>` is a short name for the work (`clip`, `ken`, `sam`, `dj`, `jobs`).
-- `<step>` names the step (`s8`, `7b`, `fix`).
+- **`<thread code>` is THIS conversation's own code: three lowercase letters or
+  digits, made up the first time this thread issues a prompt and then reused for
+  every prompt in this thread, unchanged.** It is not per step and not per
+  prompt. Write it down in your first prompt and keep using it.
+- `<step>` names the step (`s10`, `7b`, `fix`).
 - The 4 random characters make it unique, so two prompts for the same step never
   share a tag. Make them up; they do not need to be meaningful.
-- **A new prompt gets a new tag**, even when it continues the same work. The tag
-  identifies one prompt and its one report, not a whole project.
+- **A new prompt gets a new tag**, even when it continues the same work — only
+  the project and thread code carry over. The full tag identifies one prompt and
+  its messages; the prefix identifies the thread.
+
+**Why the thread code earns its place.** An exact tag fetches the messages from
+one prompt. The thread code is what lets this conversation fetch *everything it
+has ever been told*: `get_recent_clips` takes a `run_tag_prefix`, so
+`jobs-ax4` returns every report from this thread, oldest to newest, across every
+step. That is the difference between "what did the CLI say about step 10" and
+"remind me what has happened in this conversation" — worth having when a thread
+is picked up days later, or when a report was read and then forgotten.
+
+So: `run_tag` for one prompt's messages, `run_tag_prefix` for the whole thread.
+
+**Existing tags stay valid.** Tags already issued in the older
+`<project>-<step>-<random>` form (`clip-7b-q4m2`, `jobs-s9-t2v6`) still match
+exactly and still fetch their reports. They simply have no thread code, so a
+prefix search will not group them. Do not rewrite them, and do not go back and
+re-tag anything.
+
 - Remember the tag of the most recent prompt you issued in this thread. That is
-  the tag you look for when the report comes back.
+  the tag you look for when the report comes back — and remember the thread code,
+  which is how you find all of them.
 
 In the Alfred repo (alfred-v5), the `CLAUDE.md` rule makes the CLI push its
-final report to the clipboard with `node scripts/clip.mjs --tag <tag>` at the
-end of every task, so the prompt only needs the tag line. For a repo that does
+closing message to the clipboard with `node scripts/clip.mjs --tag <tag>` EVERY
+TIME it hands the turn back — finishing, waiting for something to be run or
+verified, or asking a question — so the prompt only needs the tag line. Expect
+several messages under one tag for a task that stops more than once. For a repo that does
 not have `scripts/clip.mjs` and that rule, add this line to the prompt after the
 tag: "When you finish, print your full report; Alex will paste it back." The
 return leg then works from the pasted text as before.
@@ -321,7 +348,7 @@ result cell. Migrations and anything that changes data stay as separate statemen
 Provide a clean, copy-paste ready prompt:
 
 ```
-Run tag: [project]-[step]-[4 random characters]
+Run tag: [project]-[thread code]-[step]-[4 random characters]
 
 I need you to [clear description of the change].
 
@@ -366,7 +393,7 @@ Create `progress-[feature-name].md`:
 **3. Initial CLI Prompt**
 
 ```
-Run tag: [project]-[step]-[4 random characters]
+Run tag: [project]-[thread code]-[step]-[4 random characters]
 
 # Project Context
 [Brief description of what we're building]
@@ -422,7 +449,7 @@ Only proceed to the next step after I confirm verification is successful.
 
 **Output:**
 ```
-Run tag: alfred-dark-p3w9
+Run tag: alfred-q2z-dark-p3w9
 
 Add a dark mode toggle to the navbar component. The toggle should:
 - Use a sun/moon icon (react-icons preferred)
@@ -478,7 +505,7 @@ Add ability to record MIDI performances and save them for playback
 
 **Initial CLI Prompt**
 ```
-Run tag: sam-midi1-h7k2
+Run tag: sam-m8t-midi1-h7k2
 
 # Project Context
 We're adding MIDI recording capability to the piano learning app. Users need to record their practice sessions and play them back.

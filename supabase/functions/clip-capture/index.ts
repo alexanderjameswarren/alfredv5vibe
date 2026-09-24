@@ -426,6 +426,12 @@ async function handleFinish(
       page_text: pageText,
       text_truncated: textTruncated,
       links,
+      // Set from the count normaliseLinks already computed. De-duplication is
+      // NOT truncation — three links with two distinct addresses leave this
+      // false — so this is true only when the 1,000 cap actually dropped
+      // something. Migration 067 added the column; until now the number was
+      // reported in the response and recorded nowhere.
+      links_truncated: linksDropped > 0,
       slice_paths: slicePaths,
       screenshot_truncated: screenshotTruncated,
       page_width: pageWidth,

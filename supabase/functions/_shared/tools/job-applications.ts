@@ -23,7 +23,7 @@ import { clampLimit, defineTool, envelope } from "../platform.ts";
 // echoing a uuid nobody can act on is noise in every response.
 const APP_COLS =
   "id, applied_on, org, role, source, fit, effort, status, deadline, " +
-  "next_action, next_action_due, notes, created_at";
+  "next_action, next_action_due, notes, posting_url, duplicate_of, created_at";
 
 // Mirrors job_applications_status_check / _fit_check / _effort_check.
 // Duplicated on purpose: a CHECK violation surfaces as an unreadable
@@ -96,6 +96,143 @@ export const JOB_VOCAB =
   "upwork, warm intro) before inventing one, or the per-source counts split " +
   "in two and the response-rate report stops meaning anything. Call " +
   "get_job_application_sources to see the spellings already in use.";
+
+// --- Duplicates -------------------------------------------------------------
+//
+// ⚠️ THE NO-CHAINS RULE LIVES HERE, BECAUSE IT CANNOT LIVE IN THE DATABASE. A
+// duplicate must point at a MAIN row — one whose own `duplicate_of` is null —
+// and a row that other rows already point at must not itself become a
+// duplicate. A CHECK constraint cannot express either half: both need to read a
+// DIFFERENT row. That would mean a trigger, and a trigger guarding an invariant
+// only these two tools can violate is more machinery than the rule is worth
+// (migration 067's column comment says the same).
+//
+// The cost of getting it wrong is not a crash, it is a wrong number: a chain
+// A -> B -> C means C is excluded from the source report but B is not, so one
+// real application is counted twice and Alex's response rates quietly drift.
+
+/** The columns needed to judge a duplicate target, and to report it back. */
+const DUP_COLS = "id, org, role, source, status, applied_on, posting_url, duplicate_of";
+
+/**
+ * Resolve and validate a `duplicate_of` value.
+ *
+ * @param selfId the row being written, when it already exists — update only
+ * @returns the validated uuid, or null when the caller asked to clear it
+ */
+async function resolveDuplicateOf(
+  tool: string,
+  ctx: { db: { from: (t: string) => any } },
+  value: unknown,
+  selfId: string | null,
+): Promise<string | null> {
+  if (value === null || value === "") return null;
+  if (typeof value !== "string" || !UUID_RE.test(value)) {
+    throw fail(
+      tool,
+      `\`duplicate_of\` must be the UUID of the MAIN application this one ` +
+        `duplicates, or null to unlink it. Got ${JSON.stringify(value)}.`,
+    );
+  }
+  if (selfId && value === selfId) {
+    throw fail(
+      tool,
+      "`duplicate_of` points at this same row. A row cannot be its own " +
+        "duplicate. Pass the id of the OTHER application, the one logged first.",
+    );
+  }
+
+  const { data: target, error } = await ctx.db
+    .from("job_applications")
+    .select(DUP_COLS)
+    .eq("id", value)
+    .maybeSingle();
+  if (error) throw dbError(tool, "duplicate_of lookup", error);
+  if (!target) {
+    throw fail(
+      tool,
+      `no application with id ${value}, so \`duplicate_of\` has nothing to ` +
+        `point at. Nothing was written. Use get_job_applications to find the ` +
+        `row this one duplicates.`,
+    );
+  }
+
+  // Half one of no-chains: the target must be a main row.
+  if (target.duplicate_of) {
+    throw fail(
+      tool,
+      `"${target.role}" at "${target.org}" (${value}) is ITSELF a duplicate of ` +
+        `${target.duplicate_of}, and duplicates do not chain. Point at the main ` +
+        `row instead — ${target.duplicate_of} — so every copy hangs off one ` +
+        `original. Nothing was written.`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Half two of no-chains: refuse to demote a row that others already point at.
+ * Update only — nothing can point at a row that does not exist yet.
+ */
+async function assertNotAMainRow(
+  tool: string,
+  ctx: { db: { from: (t: string) => any } },
+  id: string,
+): Promise<void> {
+  const { data, error } = await ctx.db
+    .from("job_applications")
+    .select("id, org, role")
+    .eq("duplicate_of", id)
+    .limit(5);
+  if (error) throw dbError(tool, "duplicate dependants lookup", error);
+  const dependants = (data ?? []) as Array<Record<string, unknown>>;
+  if (dependants.length === 0) return;
+  throw fail(
+    tool,
+    `${dependants.length} other application${dependants.length === 1 ? "" : "s"} ` +
+      `already point at this row as their main one (${
+        dependants.map((d) => `${d.role} at ${d.org} / ${d.id}`).join("; ")
+      }), so it cannot itself become a duplicate — that would make a chain. ` +
+      `Nothing was written. Either re-point those rows first, or mark the OTHER ` +
+      `application as the duplicate instead.`,
+  );
+}
+
+/**
+ * Other applications already recorded against the same posting address.
+ *
+ * ⚠️ THIS NEVER REFUSES, AND THAT IS DELIBERATE. `posting_url` is not unique
+ * (migration 067 explains why: duplicate_of exists precisely to record engaging
+ * with one posting twice, and a role can be reposted at the same address a year
+ * later). So a match is INFORMATION handed back for Claude to raise with Alex —
+ * "you already logged this one, shall I link them?" — and never a reason to
+ * reject a write he asked for.
+ */
+async function postingUrlMatches(
+  tool: string,
+  ctx: { db: { from: (t: string) => any } },
+  postingUrl: string | null,
+  excludeId: string | null,
+): Promise<Array<Record<string, unknown>>> {
+  if (!postingUrl) return [];
+  let q = ctx.db.from("job_applications").select(DUP_COLS).eq("posting_url", postingUrl).limit(10);
+  if (excludeId) q = q.neq("id", excludeId);
+  const { data, error } = await q;
+  // Non-fatal on purpose: this is a courtesy lookup, and failing the whole
+  // write because it could not run would trade a useful row for no row.
+  if (error) return [];
+  return (data ?? []) as Array<Record<string, unknown>>;
+}
+
+/** Trimmed text or null. Used for posting_url, which is freely clearable. */
+function optionalText(tool: string, name: string, v: unknown): string | null {
+  if (v === null) return null;
+  if (typeof v !== "string") {
+    throw fail(tool, `\`${name}\` must be text, null, or "" to clear it.`);
+  }
+  const t = v.trim();
+  return t === "" ? null : t;
+}
 
 // --- Pacific dates ----------------------------------------------------------
 
@@ -359,6 +496,16 @@ export const createJobApplicationTool = defineTool({
       );
     }
 
+    const postingUrl = args.posting_url === undefined
+      ? null
+      : optionalText(T, "posting_url", args.posting_url);
+
+    // Validated before the org+role guard below, because whether that guard
+    // applies at all depends on this.
+    const duplicateOf = args.duplicate_of === undefined
+      ? null
+      : await resolveDuplicateOf(T, ctx, args.duplicate_of, null);
+
     // -----------------------------------------------------------------------
     // DUPLICATE GUARD — WRITES NOTHING WHEN IT FIRES
     // -----------------------------------------------------------------------
@@ -372,12 +519,21 @@ export const createJobApplicationTool = defineTool({
     // an org like "Acme_Corp" match "AcmeXCorp". So the candidate rows are
     // re-checked here on trimmed lowercase equality, which is the rule actually
     // being claimed.
-    const { data: existing, error: dupErr } = await ctx.db
-      .from("job_applications")
-      .select("id, org, role, applied_on, status")
-      .ilike("org", org)
-      .ilike("role", role)
-      .limit(10);
+    //
+    // ⚠️ SKIPPED ENTIRELY WHEN `duplicate_of` IS GIVEN. Passing it says "I know
+    // this is the same job, record it as a second copy" — which is precisely
+    // what this guard exists to prevent happening BY ACCIDENT. Refusing a
+    // deliberate link because it looks like the accident would make spec
+    // decision 13 unreachable: duplicates are linked, not removed, and they can
+    // only be linked if they can be created.
+    const { data: existing, error: dupErr } = duplicateOf
+      ? { data: [], error: null }
+      : await ctx.db
+        .from("job_applications")
+        .select("id, org, role, applied_on, status")
+        .ilike("org", org)
+        .ilike("role", role)
+        .limit(10);
     if (dupErr) throw dbError(T, "duplicate check", dupErr);
 
     const key = (s: unknown) => String(s ?? "").trim().toLowerCase();
@@ -396,7 +552,9 @@ export const createJobApplicationTool = defineTool({
           `(id ${hit.id}, applied_on ${hit.applied_on}, status ${hit.status}). ` +
           `Matching ignores case. To move that application along, call ` +
           `update_job_application with that id. If this really is a different ` +
-          `job at the same org, make the role text distinguish them.`,
+          `job at the same org, make the role text distinguish them. If it is ` +
+          `the SAME job and Alex genuinely applied twice — through two boards, ` +
+          `say — pass duplicate_of: "${hit.id}" and this guard steps aside.`,
       );
     }
 
@@ -412,6 +570,8 @@ export const createJobApplicationTool = defineTool({
       next_action: nextAction,
       next_action_due: nextActionDue,
       notes,
+      posting_url: postingUrl,
+      duplicate_of: duplicateOf,
     };
 
     const { data, error } = await ctx.db
@@ -476,15 +636,46 @@ export const createJobApplicationTool = defineTool({
         }));
     }
 
-    return sameOrgError === null
-      ? { ...inserted, same_org_rows: sameOrgRows }
-      : {
-        ...inserted,
-        same_org_rows: sameOrgRows,
+    // -----------------------------------------------------------------------
+    // SAME-POSTING FLAG — ALSO INFORMATION, ALSO NEVER A REFUSAL
+    // -----------------------------------------------------------------------
+    // Other rows already recorded against this exact address. Looked up AFTER
+    // the insert, like same_org_rows, so a courtesy query can never cost Alex
+    // the row he asked for. `posting_url` is not unique and must not behave as
+    // if it were: the honest response to "you have seen this posting before" is
+    // to say so and let him decide whether it is a duplicate, a repost, or a
+    // second application he means to make.
+    const postingMatches = (await postingUrlMatches(T, ctx, postingUrl, inserted.id as string))
+      .map((r) => ({
+        id: r.id,
+        org: r.org,
+        role: r.role,
+        status: r.status,
+        applied_on: r.applied_on,
+        duplicate_of: r.duplicate_of,
+      }));
+
+    const postingNote = postingMatches.length > 0 && !duplicateOf
+      ? `⚠️ ${postingMatches.length} other application${
+        postingMatches.length === 1 ? "" : "s"
+      } already use this posting_url, listed in posting_url_matches. This row ` +
+        `was still created, because the same address can legitimately appear ` +
+        `twice. ASK ALEX whether it is the same job applied to again: if it is, ` +
+        `call update_job_application on THIS row with duplicate_of set to the ` +
+        `main one, so the source report counts the application once.`
+      : null;
+
+    return {
+      ...inserted,
+      same_org_rows: sameOrgRows,
+      posting_url_matches: postingMatches,
+      ...(postingNote ? { posting_url_note: postingNote } : {}),
+      ...(sameOrgError === null ? {} : {
         same_org_rows_error:
           `the application WAS created; only the same-org lookup failed, so ` +
           `same_org_rows is empty rather than known-empty: ${sameOrgError}`,
-      };
+      }),
+    };
   },
 });
 
@@ -585,6 +776,25 @@ export const updateJobApplicationTool = defineTool({
     if (args.notes !== undefined) {
       patch.notes = clearable("notes", args.notes);
     }
+    if (args.posting_url !== undefined) {
+      patch.posting_url = optionalText(T, "posting_url", args.posting_url);
+    }
+
+    // --- duplicate_of: both halves of the no-chains rule --------------------
+    //
+    // Clearing it is always safe — promoting a duplicate back to a main row
+    // cannot create a chain. SETTING it can, in two different ways, and both
+    // are checked before anything is written.
+    if (args.duplicate_of !== undefined) {
+      const target = await resolveDuplicateOf(T, ctx, args.duplicate_of, id);
+      if (target) {
+        // Half two: this row must not already BE somebody's main row.
+        // resolveDuplicateOf covered half one, that the target is not itself a
+        // duplicate.
+        await assertNotAMainRow(T, ctx, id);
+      }
+      patch.duplicate_of = target;
+    }
 
     let clearingAction = false;
     if (args.next_action !== undefined) {
@@ -640,7 +850,7 @@ export const updateJobApplicationTool = defineTool({
         T,
         "nothing to change. Pass at least one of applied_on, org, role, " +
           "source, fit, effort, status, deadline, next_action, " +
-          "next_action_due, notes, or append_note.",
+          "next_action_due, notes, append_note, posting_url, or duplicate_of.",
       );
     }
 
@@ -702,6 +912,33 @@ export const updateJobApplicationTool = defineTool({
       .single();
     if (error) throw dbError(T, "update", error);
 
+    // Same courtesy as create, and for the same reason: setting a posting_url
+    // that another row already carries is worth raising, never worth refusing.
+    if (patch.posting_url) {
+      const matches = (await postingUrlMatches(T, ctx, patch.posting_url as string, id))
+        .map((r) => ({
+          id: r.id,
+          org: r.org,
+          role: r.role,
+          status: r.status,
+          applied_on: r.applied_on,
+          duplicate_of: r.duplicate_of,
+        }));
+      if (matches.length > 0) {
+        return {
+          // `as unknown as`: supabase-js types a select's data as a union that
+          // includes GenericStringError, which does not overlap this shape.
+          ...(data as unknown as Record<string, unknown>),
+          posting_url_matches: matches,
+          posting_url_note:
+            `⚠️ ${matches.length} other application${matches.length === 1 ? "" : "s"} ` +
+            `already use this posting_url. The update was applied. Ask Alex ` +
+            `whether these are the same job; if so, link the later one with ` +
+            `duplicate_of so the source report counts it once.`,
+        };
+      }
+    }
+
     return data;
   },
 });
@@ -723,7 +960,7 @@ export const getJobApplicationSourcesTool = defineTool({
     // explicit ceiling on an aggregate, and hitting it is reported, not hidden.
     const ROW_CAP = 2000;
 
-    let q = ctx.db.from("job_applications").select("source, status");
+    let q = ctx.db.from("job_applications").select("source, status, duplicate_of");
     if (args.since !== undefined && args.since !== null) {
       q = q.gte("applied_on", requireDate(T, "since", args.since));
     }
@@ -733,7 +970,19 @@ export const getJobApplicationSourcesTool = defineTool({
       .limit(ROW_CAP);
     if (error) throw dbError(T, "read", error);
 
-    const fetched = (data ?? []) as Array<{ source: string; status: string }>;
+    const fetched = (data ?? []) as unknown as Array<
+      { source: string; status: string; duplicate_of: string | null }
+    >;
+
+    // ⚠️ DUPLICATES COME OUT FIRST, BEFORE ANYTHING IS COUNTED. A duplicate is
+    // not a second application, it is the SAME application logged twice —
+    // through two job boards, say — and spec decision 13 keeps both rows on
+    // purpose so neither source loses its share of the story. Counting both
+    // would give one real application two entries in `total` while only one of
+    // them can ever reach `screening`, which halves the response rate of
+    // whichever source lost the race.
+    const notDuplicates = fetched.filter((r) => !r.duplicate_of);
+    const duplicatesExcluded = fetched.length - notDuplicates.length;
 
     // ⚠️ considering AND passed ARE DROPPED BEFORE ANY COUNTING, NOT AFTER.
     // These are roles Alex looked at and never applied to. Leaving them in
@@ -742,8 +991,10 @@ export const getJobApplicationSourcesTool = defineTool({
     // applied to two would read as a 5% converter. They are excluded from
     // total, and therefore from responded, response_rate, reached_interview,
     // offers and waiting as well.
-    const rows = fetched.filter((r) => !NOT_APPLIED_STATUS.includes(r.status));
-    const notApplied = fetched.length - rows.length;
+    // Counted against notDuplicates, not against fetched, so each excluded row
+    // is reported in exactly one bucket and the three numbers add up.
+    const rows = notDuplicates.filter((r) => !NOT_APPLIED_STATUS.includes(r.status));
+    const notApplied = notDuplicates.length - rows.length;
 
     // Aggregated HERE rather than in SQL: the counts are a handful of boolean
     // tests over at most 2000 two-column rows, and a view or RPC would put the
@@ -799,9 +1050,15 @@ export const getJobApplicationSourcesTool = defineTool({
       since: (args.since as string | undefined) ?? null,
       applications_counted: rows.length,
       not_applied_excluded: notApplied,
+      duplicates_excluded: duplicatesExcluded,
       sources,
       reading:
-        "One entry per source, counting APPLICATIONS ONLY. Rows with status " +
+        "One entry per source, counting DISTINCT APPLICATIONS ONLY. Two kinds " +
+        "of row are removed before any counting, each reported separately and " +
+        "each counted once: rows whose `duplicate_of` is set " +
+        "(`duplicates_excluded`) are the SAME application logged twice, so " +
+        "counting both would give one application two entries in `total` while " +
+        "only one can ever reach screening. And rows with status " +
         "considering or passed were never submitted, so they are excluded " +
         "from EVERY count here, `total` included — counting them would put " +
         "roles Alex only looked at into the denominator and lower every " +

@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phase 1 complete.** Phase 2 started - Step 9 migration written, awaiting Alex's run + CONFORMANT.
+## Status: **Phase 1 complete.** Phase 2: Steps 9 done, Step 10 deployed and awaiting a fresh-thread test.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -23,8 +23,8 @@ Spec: docs/technical-spec-clipboard.md
 
 ## Phase 2: jobs
 
-- [ ] Step 9: Migration adding `posting_url` and `duplicate_of` to `job_applications`. Alex runs it; CONFORMANT. **Also add `clips.links_truncated` (boolean, not null, default false) in this same migration** — decided 2026-09-23, deferred here from Step 3 rather than changing the agreed data model mid-Phase-1. `clip-capture` must then set it from the `links_dropped` it already computes, and that change needs a `clip-capture` redeploy alongside the migration. See the Step 3 notes for why the gap exists.
-- [ ] Step 10: `create_job_application` and `update_job_application` accept both fields; the same-organization-and-role refusal is skipped when `duplicate_of` is given; `get_job_application_sources` excludes duplicates. Deploy, verify, test in a fresh thread.
+- [x] Step 9: Migration adding `posting_url` and `duplicate_of` to `job_applications`. Alex runs it; CONFORMANT. **Also add `clips.links_truncated` (boolean, not null, default false) in this same migration** — decided 2026-09-23, deferred here from Step 3 rather than changing the agreed data model mid-Phase-1. `clip-capture` must then set it from the `links_dropped` it already computes, and that change needs a `clip-capture` redeploy alongside the migration. See the Step 3 notes for why the gap exists. - **done 2026-09-24.** 067 run: CONFORMANT (44 tables), FK with ON DELETE SET NULL and the not-self check present, `posting_url` index partial and non-unique, `clips.links_truncated` boolean/not null/default false, existing rows untouched (0 and 0).
+- [ ] Step 10: `create_job_application` and `update_job_application` accept both fields; the same-organization-and-role refusal is skipped when `duplicate_of` is given; `get_job_application_sources` excludes duplicates. Deploy, verify, test in a fresh thread. - **written and deployed 2026-09-24.** Also: `clip-capture` sets `links_truncated`; `get_recent_clips` returns it and gains `run_tag_prefix`; the `cli-workflow` skill's tag format gains a thread code. `clip-capture` v8, `mcp` v120, `deno check` delta zero. Awaiting Alex's fresh-thread test.
 - [ ] Step 11: Update `.claude/skills/job-search/SKILL.md` and `.claude/skills/alfred-enrich/SKILL.md` per spec section 4.6. Commit; Alex re-uploads both to claude.ai.
 - [ ] Step 12: End-to-end jobs test: clip a job board page, open a jobs thread, confirm the evaluation, the "other listings" suggestions with links, the filed `considering` row, and the archived inbox item.
 

@@ -225,6 +225,26 @@ export const getRecentClipsTool = defineTool({
       );
     }
 
+    const runTagPrefix = args.run_tag_prefix === undefined || args.run_tag_prefix === null
+      ? null
+      : String(args.run_tag_prefix).trim().toLowerCase();
+    if (runTagPrefix !== null && !/^[a-z0-9-]{1,40}$/.test(runTagPrefix)) {
+      throw new Error(
+        `${T}: run_tag_prefix must be lowercase letters, digits and hyphens, 1 to 40 ` +
+          `characters (got ${JSON.stringify(args.run_tag_prefix)}).`,
+      );
+    }
+    if (runTag !== null && runTagPrefix !== null) {
+      // Refused rather than silently letting one win. An exact tag and a prefix
+      // express different intentions — "this one report" against "everything
+      // this thread ever got" — and quietly honouring the wrong one would give
+      // a plausible answer to a question nobody asked.
+      throw new Error(
+        `${T}: pass run_tag OR run_tag_prefix, not both. run_tag finds one ` +
+          `report; run_tag_prefix finds every report from a thread.`,
+      );
+    }
+
     // Over-fetch only when archived rows have to be filtered out here; when
     // they are included, `limit` is exact and the extra rows would be waste.
     const scan = includeArchived ? LIMIT : Math.min(ARCHIVE_SCAN_WINDOW, Math.max(LIMIT * 4, 20));
@@ -235,13 +255,16 @@ export const getRecentClipsTool = defineTool({
     // the clips query to them. An empty match short-circuits — asking for a tag
     // that produced nothing should return nothing, not everything.
     let inboxIdFilter: string[] | null = null;
-    if (runTag) {
-      const { data: tagged, error: tagError } = await ctx.db
-        .from("inbox")
-        .select("id")
-        .eq("source_metadata->>run_tag", runTag)
+    if (runTag || runTagPrefix) {
+      const tagQuery = ctx.db.from("inbox").select("id");
+      const { data: tagged, error: tagError } = await (runTag
+        ? tagQuery.eq("source_metadata->>run_tag", runTag)
+        // `like` with a trailing % — starts-with, which is what a thread code
+        // is for. The prefix is validated to the tag alphabet above, so it
+        // cannot smuggle a % or _ of its own into the pattern.
+        : tagQuery.like("source_metadata->>run_tag", `${runTagPrefix}%`))
         .limit(200);
-      if (tagError) throw new Error(`${T}: could not look up run_tag: ${tagError.message}`);
+      if (tagError) throw new Error(`${T}: could not look up the run tag: ${tagError.message}`);
       inboxIdFilter = ((tagged ?? []) as Array<{ id: string }>).map((r) => r.id);
       if (inboxIdFilter.length === 0) {
         return envelope([], { count: 0, limit_applied: LIMIT, truncated: false });
@@ -252,7 +275,7 @@ export const getRecentClipsTool = defineTool({
       .from("clips")
       .select(
         "id, source, url, title, captured_at, created_at, inbox_id, slice_count, " +
-          "screenshot_truncated, text_truncated, page_width, page_height, page_text, links",
+          "screenshot_truncated, text_truncated, links_truncated, page_width, page_height, page_text, links",
       )
       // created_at, not captured_at: created_at is server truth and never null,
       // while captured_at is whatever the client reported and may be skewed or
@@ -280,6 +303,7 @@ export const getRecentClipsTool = defineTool({
       slice_count: number;
       screenshot_truncated: boolean;
       text_truncated: boolean;
+      links_truncated: boolean | null;
       page_width: number | null;
       page_height: number | null;
       page_text: string;
@@ -322,6 +346,9 @@ export const getRecentClipsTool = defineTool({
         slice_count: r.slice_count,
         screenshot_truncated: r.screenshot_truncated,
         text_truncated: r.text_truncated,
+        // The page had more than 1,000 links and the excess was dropped. Null
+        // on clips captured before migration 067 added the column.
+        links_truncated: r.links_truncated,
         // The ORIGINAL page size in CSS pixels, before the extension scaled it to
         // 1280 wide. Returned because Claude was otherwise estimating page height
         // from the slice count, which is a guess built on a guess.
