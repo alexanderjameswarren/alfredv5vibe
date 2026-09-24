@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 complete, verified and pushed.** Round 3: the inbox list, Steps 20-23. Steps 20, 20b and 21 done; 20b deployed (mcp v122). 21 awaiting in-app verification.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 complete, verified and pushed.** Round 3: the inbox list, Steps 20-23. Steps 20, 20b, 21 and 21b done; 20b deployed (mcp v122). 21b awaiting in-app verification. Step 22 next.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -81,7 +81,8 @@ before committing, unlike round 2's folder. Read that README and
 
 - [x] Step 20: `create_inbox_item` accepts an optional `source_type` ('mcp' default, or 'task') and `source_metadata` (for a task: task name, run date). Add a task icon to the source icon map. No UI beyond the icon. - **done 2026-09-24**, deployed as mcp v121, `verify_jwt` still false. `deno check` back at the baseline 97 errors — one new one found and fixed, see the notes. - **verified 2026-09-24** by a fresh-thread test: mcp default, task stored with its name and run date at `not_started`, and all three malformed calls refused.
 - [x] Step 20b: Three fixes. Confirm from the live function that `create_inbox_item` publishes both new params; mark an mcp capture `enriched` only when something was actually suggested; give `archive_inbox_item` an optional reason. - **done 2026-09-24**, deployed as mcp v122, `verify_jwt` still false, `deno check` at the baseline 97 with no new errors.
-- [x] Step 21: The list card and the filters. One shared `InboxListCard` per the mockup: title, meta line, preview line (context chip, New item / New intention, date chip, tags), one action button plus the trash icon. **Process** files an enriched item in one tap from its suggestions, through the SAME save path as the detail page (archive as 'processed', set `source_inbox_id`), and shows only for enriched items that suggest at least an item or an intention. **Copy**, for task items, copies the captured text plus a final line `Alfred inbox item: <id>`. Source filter pills REUSE the existing tag filter component, with no "All" pill. Phone layout per the mockup. - **done 2026-09-24.** `src/InboxListCard.jsx` and `src/utils/inboxSuggestions.js`, with the one-tap/detail-page equivalence proved by test. `InboxCard` and `AiStatusBadge` are gone. Suite: 75 suites, 1636 tests; build clean. Not pushed.
+- [x] Step 21: The list card and the filters. One shared `InboxListCard` per the mockup: title, meta line, preview line (context chip, New item / New intention, date chip, tags), one action button plus the trash icon. **Process** files an enriched item in one tap from its suggestions, through the SAME save path as the detail page (archive as 'processed', set `source_inbox_id`), and shows only for enriched items that suggest at least an item or an intention. **Copy**, for task items, copies the captured text plus a final line `Alfred inbox item: <id>`. Source filter pills REUSE the existing tag filter component, with no "All" pill. Phone layout per the mockup. - **done 2026-09-24.** `src/InboxListCard.jsx` and `src/utils/inboxSuggestions.js`, with the one-tap/detail-page equivalence proved by test. `InboxCard` and `AiStatusBadge` are gone. Suite: 75 suites, 1636 tests; build clean. - **reviewed from clips 2026-09-24**: the cards match the mockup. The source PILLS were rejected and replaced in 21b.
+- [x] Step 21b: Source TABS instead of pills, reusing the front page's underline tabs; StickyNote for the Capture source everywhere including the capture bar's button; an enriched card titled by Claude's suggested name. - **done 2026-09-24.** `TagFilter`'s `noun` prop reverted. Suite: 77 suites, 1672 tests; build clean.
 - [ ] Step 22: "Recently archived (n)" — the last seven days, collapsible, with "Show all". Each row says what happened (processed; processed into an item / intention / event, via `source_inbox_id`; or discarded) and offers a working Undo that un-archives.
 - [ ] Step 23: Add every new shared piece to `docs/design-system.md` — list card, filter pills, context chip, preview line, archived row — with the rules for using them, and extend the guard tests so screens must use them.
 
@@ -160,6 +161,62 @@ accepts 'processed' or 'discarded', with an allowlist rather than a pass-through
 `inbox_archive_reason_needs_archived` checks the reason's PAIRING with `archived`, not
 its value, so an unrecognised string would be stored and then match nothing the archive
 screen knows how to describe.
+
+### Step 21b — tabs, not pills, 2026-09-24
+
+Alex reviewed the clips and rejected the source pills: they sat directly above cards
+carrying real TAG pills, so two different things looked identical. He is right, and the
+distinction is worth writing down — it is now a rule in `docs/design-system.md`:
+
+**a row that chooses a VIEW of one list is tabs; a row that selects a PROPERTY of the
+rows is pills.** Source is the first of those.
+
+#### `src/UnderlineTabs.jsx`
+
+The front page's tabs were not a component — they were the same eight-class string
+written out twice, once by hand three times over (Home) and once through a `.map` (the
+Recycle Bin). So "reuse the existing component" meant extracting one, and the inbox is
+its third caller rather than a third copy. `TagFilter`'s `noun` prop, added in Step 21
+for this, is **reverted** — nothing else wanted it.
+
+`src/utils/inboxSourceTabs.js` holds the parts worth testing on their own:
+
+* **A fixed order** — All, Capture, Claude, Clipboard, Task, CLI, Email — deliberately
+  NOT alphabetical and not by count. Six sources never change, so the row can be learned
+  by position. The tag pills sort alphabetically for the opposite reason: a tag
+  vocabulary grows and you arrive looking for a name.
+* **A source tab only while that source has items.** A tab reading "(0)" is a control
+  that does nothing, which is why CLI and Email are usually absent.
+* **All is always there**, always first, counting everything — including "All (0)" on an
+  empty inbox, because it is the way back and the number is true.
+* **The selection is DERIVED, not stored.** Process the last Claude item and the Claude
+  tab goes; a stored selection would leave the list filtered to a source with no tab to
+  unset it, which is `TagFilter`'s own "silently emptied with no visible cause" trap.
+  Deriving also means an Undo brings the selection back with the row.
+* An unrecognised `source_type` folds onto Capture in the tab, the count, the filter,
+  the icon and the label alike — one fold, five places that agree.
+
+#### StickyNote, and why the pencil had to go
+
+A hand-typed capture was a pencil, and the pencil is also the EDIT control on the inbox
+detail page — one glyph meaning two things on adjacent screens. `manual` is now
+`StickyNote` everywhere a source icon appears, and the capture bar's Capture button
+carries the same glyph before its label, so the button and the Capture tab are
+recognisably the same thing.
+
+`SourceIcon` also changed shape slightly: `SOURCE_GLYPHS` now exports the icon
+COMPONENTS rather than pre-rendered elements, because the tabs want them at 16px and the
+card meta lines at 14px, and an element built at one size cannot be reused at another.
+
+#### The card title
+
+An enriched row is titled by Claude's suggested name — the item's, else the intention's
+— falling back to the captured text. `listTitleFor`, beside the other suggestion readers.
+
+The captured text is what was said; the suggested name is what it will BECOME, and what
+the card's Process button is about to create. So the title and the action agree. NOT
+applied to unenriched rows or tasks: neither has a suggestion yet, and showing their raw
+text is the only honest thing either can do.
 
 ### Step 21 — the inbox list, 2026-09-24
 

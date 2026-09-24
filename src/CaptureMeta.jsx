@@ -10,7 +10,7 @@
  * screen and correctly on the other.
  */
 
-import { Pencil, Bot, Mail, Paperclip, Terminal, ListChecks } from "lucide-react";
+import { StickyNote, Bot, Mail, Paperclip, Terminal, ListChecks } from "lucide-react";
 
 /**
  * A capture's timestamp, in words.
@@ -85,20 +85,36 @@ export function sourceLabel(sourceType) {
  * hand-typed. That is the reason to add the icon in the same change as the
  * writer, and the reason `clipboard` and `cli` are here now rather than later.
  */
-export function SourceIcon({ sourceType }) {
-  const icons = {
-    manual: <Pencil className="w-3.5 h-3.5" />,
-    mcp: <Bot className="w-3.5 h-3.5" />,
-    // A checklist rather than a clock or a calendar: Calendar is already the
-    // schedule, CalendarClock is already an event, and this is not a moment in
-    // time — it is a named job that ran. Alfred's icon vocabulary is in
-    // Alfred.jsx's OBJECT_ICONS; these five are the SOURCE vocabulary, which is a
-    // different question ("how did this arrive") and deliberately separate.
-    task: <ListChecks className="w-3.5 h-3.5" />,
-    email: <Mail className="w-3.5 h-3.5" />,
-    // Alfred Clipboard — spec 4.3.
-    clipboard: <Paperclip className="w-3.5 h-3.5" />,
-    cli: <Terminal className="w-3.5 h-3.5" />,
-  };
-  return <span title={`Source: ${sourceType || "manual"}`}>{icons[sourceType] || icons.manual}</span>;
+export function SourceIcon({ sourceType, className = "w-3.5 h-3.5" }) {
+  const Glyph = SOURCE_GLYPHS[sourceType] || SOURCE_GLYPHS.manual;
+  return (
+    <span title={`Source: ${sourceType || "manual"}`}>
+      <Glyph className={className} />
+    </span>
+  );
 }
+
+/**
+ * The glyph per source, as COMPONENTS rather than rendered elements — Step 21b.
+ *
+ * The source tabs need them at 16px while the card meta lines want 14px, and an element
+ * built at one size cannot be reused at another. Exported so the tabs and the icon both
+ * read one map; a second list is how `clipboard` came to render correctly on one screen
+ * and as a pencil on the other.
+ */
+export const SOURCE_GLYPHS = {
+  // ⚠️ StickyNote, NOT Pencil — Step 21b. The pencil is reserved for EDITING (the
+  // capture-text pencil on the inbox detail page), and using it for "typed by hand" as
+  // well made one glyph mean two things on adjacent screens.
+  manual: StickyNote,
+  mcp: Bot,
+  // A checklist rather than a clock or a calendar: Calendar is already the schedule,
+  // CalendarClock is already an event, and a task is not a moment in time but a named
+  // job that ran. Alfred's OBJECT_ICONS is a different vocabulary — what a record IS,
+  // not how it arrived — and the two are deliberately separate.
+  task: ListChecks,
+  email: Mail,
+  // Alfred Clipboard — spec 4.3.
+  clipboard: Paperclip,
+  cli: Terminal,
+};

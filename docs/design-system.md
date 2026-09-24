@@ -1,7 +1,7 @@
 # Alfred's design system
 
-Started 2026-09-24. Two components so far. This will grow into the full contract; for
-now it records what exists and the one rule that goes with it.
+Started 2026-09-24. Four shared components so far. This will grow into the full
+contract; for now it records what exists and the rules that go with them.
 
 ## Why this file exists
 
@@ -115,6 +115,74 @@ padding stacked under a released footer.
 The `!important` is on all three margins, not just the bottom, so the next spacing
 utility cannot reopen the hole from another direction. `margin-top` is left alone: the
 container's own spacing is what puts the gap above the footer, and that is wanted.
+
+---
+
+## `UnderlineTabs` — `src/UnderlineTabs.jsx`
+
+One row of tab buttons under a hairline, the selected one carrying a brown underline.
+
+**Owns:** the row, the hairline, the underline, the active and hover colours, the
+horizontal scroll, and the `tablist` / `tab` roles.
+
+**Takes:** `tabs` (`{ key, label, count?, icon? }`), `activeKey`, `onSelect`,
+`ariaLabel`, and `className` for the gap and the margin below — layout only.
+
+**Three screens use it:** Home's Active / Paused / Today, the Recycle Bin's eight record
+types, and the Inbox's source filter. It was the same eight-class string written out in
+two of those places — once by hand three times over, once through a `.map` — and the
+inbox would have been a third copy.
+
+`count` is omitted rather than shown as `(0)` only when it is `undefined`: the Recycle
+Bin's tabs have no counts at all, while "All (0)" on an empty inbox is the truth and its
+tab has to stay, because it is the way back.
+
+### The rule
+
+**A row of filters that chooses a VIEW of one list is tabs. A row that selects a
+PROPERTY of the rows is pills.**
+
+The inbox's source filter was pills — reusing `TagFilter` — and it read wrong: the pills
+sat directly above cards carrying real tag pills, so two different things looked
+identical. Source is not a property you are picking out of a growing vocabulary; it is
+which slice of the inbox you are looking at.
+
+Consequences of being tabs rather than pills, all deliberate:
+
+- the order is **fixed** (All, Capture, Claude, Clipboard, Task, CLI, Email), not
+  alphabetical and not by count. Six sources never change, so the row can be learned by
+  position; the tag pills sort alphabetically because a tag vocabulary grows and you
+  arrive looking for a name.
+- there is an explicit **All** tab, where the pills have no "All" and use "nothing
+  selected" to mean everything. A tab row with nothing selected has no state to read.
+- selection is **single**, which a tab row implies anyway.
+
+`src/utils/inboxSourceTabs.js` holds the order, the visibility rule and the fallback:
+a source tab appears only while that source has items, and the selection is **derived**
+rather than stored, so processing the last item of a source falls back to All rather than
+leaving the list filtered by a tab that is no longer there. Deriving also means an Undo
+brings the selection back with the row.
+
+`src/UnderlineTabs.test.jsx` carries the guard: it fails if a fourth call site appears
+hand-rolled, or if the retired `pb-2 border-b-2` string comes back.
+
+---
+
+## Source icons — `src/CaptureMeta.jsx`
+
+`SOURCE_GLYPHS` maps a capture's `source_type` to its glyph, and `sourceLabel` to its
+name. Both the source tabs and the card meta lines read that one map; a second list is
+how `clipboard` once came to render correctly on one screen and as a pencil on the other.
+
+**A hand-typed capture is `StickyNote`, not a pencil.** The pencil is reserved for
+EDITING — it is the capture-text pencil on the inbox detail page — and using it for
+"typed by hand" as well made one glyph mean two things on adjacent screens. The Capture
+button in the capture bar carries the same StickyNote before its label, so the button and
+the Capture tab are recognisably the same thing.
+
+An unrecognised `source_type` folds onto `manual` everywhere — icon, label, tab and
+filter — because the column has no constraint in the database and a row has to render as
+something. Quietly wrong beats invisible.
 
 ---
 

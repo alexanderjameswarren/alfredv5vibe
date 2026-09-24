@@ -19,6 +19,13 @@ import ClipboardCapture from "./ClipboardCapture";
 import PinnedFooter from "./PinnedFooter";
 import EditCard from "./EditCard";
 import InboxListCard from "./InboxListCard";
+import UnderlineTabs from "./UnderlineTabs";
+import {
+  ALL_SOURCES,
+  effectiveSource,
+  matchesSource,
+  sourceTabsFor,
+} from "./utils/inboxSourceTabs";
 import { copyTextForTask, triageDataForOneTap } from "./utils/inboxSuggestions";
 import { clipIdFor } from "./utils/capturedClip";
 import { friendlyDate, sourceLabel } from "./CaptureMeta";
@@ -93,6 +100,7 @@ import {
   RefreshCw,
   ArchiveRestore,
   Gamepad2,
+  StickyNote,
 } from "lucide-react";
 // `supabaseUrl` used to be imported alongside this: it built the ai-enrich
 // endpoint by hand. Step 14 removed the only two callers and left the import
@@ -1483,11 +1491,12 @@ export default function Alfred() {
   const pollPausedRef = useRef(false);
   const memberWriteInFlight = useRef(0);
   const [filterTag, setFilterTag] = useState(null);
-  // The inbox's source filter — Clipboard Step 21. Its own value, not `filterTag`:
-  // that one is shared by Intentions, Memories and context detail over a TAG
-  // vocabulary, and a source name travelling onto those screens would filter them to
-  // nothing. Same reasoning as `collectionFilterTag`.
-  const [inboxSourceFilter, setInboxSourceFilter] = useState(null);
+  // Which source tab the user last chose — Clipboard Step 21b.
+  //
+  // What is STORED is the choice; what is USED is `effectiveSource` below, which falls
+  // back to All whenever the chosen source has no items left. Processing the last Claude
+  // item must not leave the list filtered to a source with no tab to unset it.
+  const [inboxSourceTab, setInboxSourceTab] = useState(ALL_SOURCES);
   // Separate from `filterTag` on purpose. That one is shared across Intentions,
   // Memories and Context Detail, all of which draw from the item/intent tag
   // pool. Collection tags are a different vocabulary entirely — per-shopping-
@@ -5350,23 +5359,15 @@ export default function Alfred() {
   const visibleScheduleEvents = sortedScheduleEvents.filter((e) =>
     matchesQuery(searchFor("schedule"), eventTitle(e)),
   );
-  // The inbox's SOURCE filter — Clipboard Step 21.
-  //
-  // `TagFilter` counts whatever is in each row's `tags` array, so each capture is
-  // handed over as a row whose one tag is its source's display NAME. That is all it
-  // takes to get counts, alphabetical order, the collapse toggle past four and `Clear`
-  // out of a component built for tags.
-  //
-  // Labels on BOTH sides, rather than a label-to-type map: `sourceLabel` already folds
-  // every unrecognised source_type onto "Capture", exactly as `SourceIcon` folds it
-  // onto the pencil, so the filter and the icon agree about an unknown value without
-  // either of them having to know it exists.
-  const sourceFilterEntities = inboxItems.map((i) => ({ tags: [sourceLabel(i.sourceType)] }));
+  // The inbox's source tabs — Clipboard Step 21b. Counted from every live capture, so
+  // the counts do not move as the search box narrows the list below them.
+  const inboxSourceTabs = sourceTabsFor(inboxItems, sourceLabel);
+  const activeInboxSource = effectiveSource(inboxSourceTab, inboxSourceTabs);
 
   const visibleInboxItems = sortRows(
     inboxItems, inboxSort.sortKey, INBOX_ACCESSORS, inboxSort.sortDir,
   )
-    .filter((i) => !inboxSourceFilter || sourceLabel(i.sourceType) === inboxSourceFilter)
+    .filter((i) => matchesSource(i, activeInboxSource))
     .filter((i) => matchesQuery(searchFor("inbox"), i.capturedText));
   // Keywords are not on the card, so a keyword hit shows a row whose visible
   // text does not contain the query. Accepted deliberately.
@@ -5688,40 +5689,20 @@ export default function Alfred() {
           <div>
             {/* Executions & Today Tabs */}
             <div className="mb-8">
-              <div className="flex gap-6 border-b border-border mb-4">
-                <button
-                  onClick={() => setExecutionTab("active")}
-                  className={`pb-2 border-b-2 cursor-pointer transition-colors ${
-                    executionTab === "active"
-                      ? "border-primary text-primary font-medium"
-                      : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
-                  }`}
-                >
-                  Active ({activeExecutions.length})
-                </button>
-                {pausedExecutions.length > 0 && (
-                  <button
-                    onClick={() => setExecutionTab("paused")}
-                    className={`pb-2 border-b-2 cursor-pointer transition-colors ${
-                      executionTab === "paused"
-                        ? "border-primary text-primary font-medium"
-                        : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
-                    }`}
-                  >
-                    Paused ({pausedExecutions.length})
-                  </button>
-                )}
-                <button
-                  onClick={() => setExecutionTab("today")}
-                  className={`pb-2 border-b-2 cursor-pointer transition-colors ${
-                    executionTab === "today"
-                      ? "border-primary text-primary font-medium"
-                      : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
-                  }`}
-                >
-                  Today ({todayEvents.length})
-                </button>
-              </div>
+              {/* The same component the Recycle Bin and the Inbox use. Paused keeps its
+                  rule: no tab while nothing is paused. */}
+              <UnderlineTabs
+                ariaLabel="Executions and today"
+                activeKey={executionTab}
+                onSelect={setExecutionTab}
+                tabs={[
+                  { key: "active", label: "Active", count: activeExecutions.length },
+                  ...(pausedExecutions.length > 0
+                    ? [{ key: "paused", label: "Paused", count: pausedExecutions.length }]
+                    : []),
+                  { key: "today", label: "Today", count: todayEvents.length },
+                ]}
+              />
 
               {executionTab === "active" && (
                 <div className="space-y-2">
@@ -5861,28 +5842,19 @@ export default function Alfred() {
         {view === "inbox" && (
           <div>
             <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Inbox</h2>
-            {/* The source filter — Clipboard Step 21.
+            {/* The source filter — Clipboard Step 21b.
 
-                `TagFilter`, unchanged, over source LABELS instead of tags. Alex chose
-                faithful reuse over a multi-select rewrite, so this is single-select
-                like every other screen: nothing selected shows everything, one pill
-                narrows, tapping it again clears, and `Clear` appears while it is on.
-
-                The trick is the `entities` it is handed: each capture becomes a row
-                whose only tag is its source's NAME, so the bar counts sources, sorts
-                them alphabetically, renders the counts, and collapses past four —
-                every one of those behaviours for free, including the ones nobody
-                would remember to reimplement. Filtering then compares labels on both
-                sides, which also means an unrecognised source_type lands under
-                "Capture" exactly as its icon does. */}
+                TABS, not pills. It was `TagFilter` in Step 21, which worked and read
+                wrong: the source pills sat directly above cards carrying real tag
+                pills, so two different things looked identical. A tab says "this is a
+                view of one list"; a pill says "this is a property of these rows". */}
             {inboxItems.length > 0 && (
-              <TagFilter
-                noun="Sources"
-                entities={sourceFilterEntities}
-                activeTag={inboxSourceFilter}
-                onFilter={setInboxSourceFilter}
-                collapsed={tagsCollapsedFor("inbox")}
-                onToggleCollapsed={toggleTagsFor("inbox")}
+              <UnderlineTabs
+                ariaLabel="Filter the inbox by source"
+                tabs={inboxSourceTabs}
+                activeKey={activeInboxSource}
+                onSelect={setInboxSourceTab}
+                className="gap-4 sm:gap-6 mb-3"
               />
             )}
             {inboxItems.length > 0 && (
@@ -7300,8 +7272,14 @@ export default function Alfred() {
             <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Recycle Bin</h2>
 
             {/* Tabs */}
-            <div className="flex gap-4 border-b border-border mb-4 overflow-x-auto">
-              {[
+            {/* No counts here, deliberately: each tab's contents are fetched per tab,
+                so a number would mean a query per tab on arrival. */}
+            <UnderlineTabs
+              ariaLabel="Recycle bin record types"
+              activeKey={recycleTab}
+              onSelect={setRecycleTab}
+              className="gap-4 mb-4 text-sm"
+              tabs={[
                 { key: "items", label: "Items" },
                 { key: "intents", label: "Intents" },
                 { key: "events", label: "Events" },
@@ -7310,20 +7288,8 @@ export default function Alfred() {
                 { key: "contexts", label: "Contexts" },
                 { key: "songs", label: "Songs" },
                 { key: "snippets", label: "Snippets" },
-              ].map((tab) => (
-                <button
-                  key={tab.key}
-                  onClick={() => setRecycleTab(tab.key)}
-                  className={`pb-2 border-b-2 whitespace-nowrap cursor-pointer transition-colors text-sm ${
-                    recycleTab === tab.key
-                      ? "border-primary text-primary font-medium"
-                      : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
+              ]}
+            />
 
             {/* Bulk action bar */}
             <div className="flex items-center justify-between mb-3">
@@ -7510,10 +7476,14 @@ export default function Alfred() {
                 rows={1}
                 className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden min-h-[44px] max-h-[50vh] text-base"
               />
+              {/* The icon matches the Capture SOURCE tab in the inbox — Step 21b. This
+                  button is what creates a 'manual' capture, so the two should be
+                  recognisably the same thing. */}
               <button
                 onClick={handleCapture}
-                className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+                className="inline-flex items-center gap-2 px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
               >
+                <StickyNote className="w-4 h-4 shrink-0" aria-hidden="true" />
                 Capture
               </button>
             </div>

@@ -4,6 +4,7 @@ import {
   canProcessInOneTap,
   triageDataForOneTap,
   copyTextForTask,
+  listTitleFor,
 } from "./inboxSuggestions";
 
 const row = (over = {}) => ({
@@ -179,5 +180,47 @@ describe("copyTextForTask", () => {
     expect(copyTextForTask(row({ id: "x", capturedText: "  text  \n\n" }))).toBe(
       "text\n\nAlfred inbox item: x",
     );
+  });
+});
+
+
+describe("listTitleFor", () => {
+  it("titles an enriched row by its suggested ITEM name", () => {
+    // What it will become, not what was said — and what Process is about to create, so
+    // the title and the action agree.
+    expect(
+      listTitleFor(row({ suggestedItemText: "Duck mole tacos", suggestedIntentText: "Cook it" })),
+    ).toBe("Duck mole tacos");
+  });
+
+  it("falls to the suggested INTENTION name when there is no item", () => {
+    expect(listTitleFor(row({ suggestedIntentText: "Retire ai-enrich" }))).toBe("Retire ai-enrich");
+  });
+
+  it("falls to the captured text when an enriched row suggests no name", () => {
+    expect(listTitleFor(row())).toBe("Retire the ai-enrich edge function");
+  });
+
+  it("ignores a blank suggestion rather than showing an empty title", () => {
+    expect(listTitleFor(row({ suggestedItemText: "   " }))).toBe(
+      "Retire the ai-enrich edge function",
+    );
+  });
+
+  it("keeps the captured text on an UNENRICHED row, whatever it carries", () => {
+    // Nothing has researched it, so there is no suggestion to prefer.
+    expect(
+      listTitleFor(row({ aiStatus: "not_started", suggestedItemText: "should not be used" })),
+    ).toBe("Retire the ai-enrich edge function");
+  });
+
+  it("keeps the captured text on a task", () => {
+    const task = row({ sourceType: "task", aiStatus: "not_started", capturedText: "DJ sync: 21" });
+    expect(listTitleFor(task)).toBe("DJ sync: 21");
+  });
+
+  it("survives junk", () => {
+    expect(listTitleFor(null)).toBe("");
+    expect(listTitleFor({})).toBe("");
   });
 });

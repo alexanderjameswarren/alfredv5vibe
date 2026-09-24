@@ -126,6 +126,34 @@ export function triageDataForOneTap(inboxItem) {
 }
 
 /**
+ * What a capture is CALLED in the list — Clipboard Step 21b.
+ *
+ * For an enriched row, Claude's suggested name: the item's, else the intention's. For
+ * anything else, the captured text.
+ *
+ * ── Why the suggestion wins ──────────────────────────────────────────────────
+ *
+ * The captured text is what was said; the suggested name is what it will BECOME. Once a
+ * row is enriched the second is the more useful title, because it is what you will be
+ * looking for afterwards — "Duck mole tacos" rather than three sentences about wanting
+ * to try a recipe. It is also what the card's Process button is about to create, so the
+ * title and the action agree.
+ *
+ * ⚠️ NOT applied to unenriched rows or tasks, and the captured text is the FALLBACK
+ * rather than the alternative. An unenriched row has no suggestion to show, and a task's
+ * is not written yet — showing its raw text is the only honest thing either can do.
+ * `computeBaseline` falls back the same way for the same reason, so a row with a blank
+ * suggestion does not end up with a blank title.
+ */
+export function listTitleFor(inboxItem) {
+  const capturedText = inboxItem?.capturedText || "";
+  if (!isEnriched(inboxItem)) return capturedText;
+  const suggested =
+    (inboxItem.suggestedItemText || "").trim() || (inboxItem.suggestedIntentText || "").trim();
+  return suggested || capturedText;
+}
+
+/**
  * The text a task item's Copy button puts on the clipboard.
  *
  * The trailing line is the point: a task capture is something a Claude session has to

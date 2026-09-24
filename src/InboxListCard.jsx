@@ -13,6 +13,10 @@
  * This card answers "what is this and what happens if I say yes" without opening it,
  * and Process acts on that answer in one tap.
  *
+ * Which is also why an enriched row is titled by Claude's SUGGESTED name rather than by
+ * its captured text — see `listTitleFor`. The suggestion is what the row will become and
+ * what Process is about to create, so the title and the action agree.
+ *
  * ── The three shapes it has ──────────────────────────────────────────────────
  *
  *   ENRICHED, suggesting an item or an intention → a preview line and **Process**,
@@ -31,7 +35,7 @@
 
 import { Calendar, Check, Copy, File, FolderOpen, Navigation2, Trash2 } from "lucide-react";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
-import { canProcessInOneTap, isEnriched } from "./utils/inboxSuggestions";
+import { canProcessInOneTap, isEnriched, listTitleFor } from "./utils/inboxSuggestions";
 
 /** A YYYY-MM-DD date, written short ("Thu, Oct 1"). */
 function shortDate(value) {
@@ -126,7 +130,7 @@ export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProc
             inline style, so the clamp would have been unassertable — and an unassertable
             rule is one that can go missing quietly. */}
         <h3 className="m-0 text-base font-bold leading-snug text-foreground line-clamp-2">
-          {inboxItem.capturedText}
+          {listTitleFor(inboxItem)}
         </h3>
 
         <p className="m-0 flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
