@@ -18,8 +18,10 @@ import InboxDetailView from "./InboxDetailView";
 import ClipboardCapture from "./ClipboardCapture";
 import PinnedFooter from "./PinnedFooter";
 import EditCard from "./EditCard";
+import InboxListCard from "./InboxListCard";
+import { copyTextForTask, triageDataForOneTap } from "./utils/inboxSuggestions";
 import { clipIdFor } from "./utils/capturedClip";
-import { friendlyDate, SourceIcon } from "./CaptureMeta";
+import { friendlyDate, sourceLabel } from "./CaptureMeta";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
 import { takePendingNavigation } from "./utils/pushRotation";
 import NotificationSettings from "./NotificationSettings";
@@ -1481,6 +1483,11 @@ export default function Alfred() {
   const pollPausedRef = useRef(false);
   const memberWriteInFlight = useRef(0);
   const [filterTag, setFilterTag] = useState(null);
+  // The inbox's source filter — Clipboard Step 21. Its own value, not `filterTag`:
+  // that one is shared by Intentions, Memories and context detail over a TAG
+  // vocabulary, and a source name travelling onto those screens would filter them to
+  // nothing. Same reasoning as `collectionFilterTag`.
+  const [inboxSourceFilter, setInboxSourceFilter] = useState(null);
   // Separate from `filterTag` on purpose. That one is shared across Intentions,
   // Memories and Context Detail, all of which draw from the item/intent tag
   // pool. Collection tags are a different vocabulary entirely — per-shopping-
@@ -3057,7 +3064,7 @@ export default function Alfred() {
    * Editing the text INVALIDATES any existing enrichment, so this clears
    * `aiStatus` back to `not_started` **and nulls the suggested_* fields with
    * it**. Clearing the status alone would not be enough, and that is the whole
-   * argument: `InboxCard` seeds its triage fields
+   * argument: the inbox detail page seeds its triage fields
    * `suggestedIntentText || capturedText`, so a stale suggestion is not merely a
    * stale column — it is what the triage form PROPOSES. Leaving it would mean a
    * user who corrected a capture still gets offered the text they corrected.
@@ -3100,6 +3107,51 @@ export default function Alfred() {
       );
       return true;
     });
+  }
+
+  /**
+   * File an enriched capture in one tap, from the list — Clipboard Step 21.
+   *
+   * ⚠️ IT GOES THROUGH `handleInboxSave`, and that is the whole design. The detail
+   * page's Process calls the same function with the same shape, so one tap archives
+   * with reason 'processed' and stamps `source_inbox_id` exactly as the careful path
+   * does. `triageDataForOneTap` is tested against what the page actually emits, so
+   * "one tap" cannot quietly come to mean something else.
+   *
+   * No confirmation. It is reversible in the sense that matters — the capture is
+   * archived rather than deleted, and what it created is an ordinary item or
+   * intention — and the button only appears where Claude has already proposed
+   * something, which is the judgement a confirm would be asking about.
+   */
+  async function processInboxItemFromList(inboxItemId) {
+    const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
+    if (!inboxItem) return;
+    return handleInboxSave(inboxItemId, triageDataForOneTap(inboxItem));
+  }
+
+  /**
+   * Copy a task capture's text, with its id, for a Claude session — Step 21.
+   *
+   * The trailing `Alfred inbox item: <id>` line is the point: pasting the text alone
+   * would leave that session with no way to archive the row afterwards.
+   *
+   * `navigator.clipboard` needs a secure context and can be refused, so the failure is
+   * reported rather than swallowed — a Copy button that silently did nothing would be
+   * indistinguishable from one that worked.
+   */
+  async function copyTaskInboxItem(inboxItemId) {
+    const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
+    if (!inboxItem) return;
+    const text = copyTextForTask(inboxItem);
+    try {
+      await navigator.clipboard.writeText(text);
+      offerUndoFor("Copied, with this item's id.", null);
+    } catch (e) {
+      window.alert(
+        "Could not reach the clipboard, so nothing was copied. This usually means the " +
+          "browser refused permission or the page is not on https.",
+      );
+    }
   }
 
   async function handleInboxSave(inboxItemId, triageData) {
@@ -5058,7 +5110,7 @@ export default function Alfred() {
   // Collections are soft-deleted from Step 4b, so `collections` now holds
   // archived rows too — the Recycle Bin reads them from there. Everything else
   // wants the live ones, and "everything else" is about fifteen places: three
-  // lists plus a collection picker on IntentionCard, InboxCard, and three
+  // lists plus a collection picker on IntentionCard and three
   // detail views. Filtering once here rather than at each use is the same move
   // `validEvents` above makes, for the same reason — fifteen filter sites is
   // fifteen places to forget one.
@@ -5298,9 +5350,24 @@ export default function Alfred() {
   const visibleScheduleEvents = sortedScheduleEvents.filter((e) =>
     matchesQuery(searchFor("schedule"), eventTitle(e)),
   );
+  // The inbox's SOURCE filter — Clipboard Step 21.
+  //
+  // `TagFilter` counts whatever is in each row's `tags` array, so each capture is
+  // handed over as a row whose one tag is its source's display NAME. That is all it
+  // takes to get counts, alphabetical order, the collapse toggle past four and `Clear`
+  // out of a component built for tags.
+  //
+  // Labels on BOTH sides, rather than a label-to-type map: `sourceLabel` already folds
+  // every unrecognised source_type onto "Capture", exactly as `SourceIcon` folds it
+  // onto the pencil, so the filter and the icon agree about an unknown value without
+  // either of them having to know it exists.
+  const sourceFilterEntities = inboxItems.map((i) => ({ tags: [sourceLabel(i.sourceType)] }));
+
   const visibleInboxItems = sortRows(
     inboxItems, inboxSort.sortKey, INBOX_ACCESSORS, inboxSort.sortDir,
-  ).filter((i) => matchesQuery(searchFor("inbox"), i.capturedText));
+  )
+    .filter((i) => !inboxSourceFilter || sourceLabel(i.sourceType) === inboxSourceFilter)
+    .filter((i) => matchesQuery(searchFor("inbox"), i.capturedText));
   // Keywords are not on the card, so a keyword hit shows a row whose visible
   // text does not contain the query. Accepted deliberately.
   const visibleContexts = sortRows(
@@ -5794,6 +5861,30 @@ export default function Alfred() {
         {view === "inbox" && (
           <div>
             <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Inbox</h2>
+            {/* The source filter — Clipboard Step 21.
+
+                `TagFilter`, unchanged, over source LABELS instead of tags. Alex chose
+                faithful reuse over a multi-select rewrite, so this is single-select
+                like every other screen: nothing selected shows everything, one pill
+                narrows, tapping it again clears, and `Clear` appears while it is on.
+
+                The trick is the `entities` it is handed: each capture becomes a row
+                whose only tag is its source's NAME, so the bar counts sources, sorts
+                them alphabetically, renders the counts, and collapses past four —
+                every one of those behaviours for free, including the ones nobody
+                would remember to reimplement. Filtering then compares labels on both
+                sides, which also means an unrecognised source_type lands under
+                "Capture" exactly as its icon does. */}
+            {inboxItems.length > 0 && (
+              <TagFilter
+                noun="Sources"
+                entities={sourceFilterEntities}
+                activeTag={inboxSourceFilter}
+                onFilter={setInboxSourceFilter}
+                collapsed={tagsCollapsedFor("inbox")}
+                onToggleCollapsed={toggleTagsFor("inbox")}
+              />
+            )}
             {inboxItems.length > 0 && (
               <ListToolbar
                 query={searchFor("inbox")}
@@ -5813,12 +5904,15 @@ export default function Alfred() {
             ) : visibleInboxItems.length === 0 ? (
               <NoMatches noun="captures" query={searchFor("inbox")} />
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-2.5">
                 {visibleInboxItems.map((inboxItem) => (
-                  <InboxCard
+                  <InboxListCard
                     key={inboxItem.id}
                     inboxItem={inboxItem}
+                    contexts={contexts}
                     onOpen={openInboxDetail}
+                    onProcess={processInboxItemFromList}
+                    onCopy={copyTaskInboxItem}
                     onDiscard={discardInboxItem}
                   />
                 ))}
@@ -7430,7 +7524,7 @@ export default function Alfred() {
   );
 }
 
-// Helper functions for InboxCard
+// Helper functions for the inbox screens
 /**
  * An item's name, or an honest stand-in when there isn't one.
  *
@@ -7490,7 +7584,7 @@ function groupRemovalsByAction(removals) {
 // Everything an enrichment produced, reset — Step 12.7.
 //
 // Applied when a capture's text is edited, because the suggestions describe text
-// that no longer exists. `aiStatus` alone would not do it: `InboxCard` seeds its
+// that no longer exists. `aiStatus` alone would not do it: the inbox detail page seeds its
 // triage fields `suggestedIntentText || capturedText`, so a stale suggestion is
 // what the form PROPOSES, not just a column nobody reads.
 //
@@ -7518,126 +7612,6 @@ const CLEARED_ENRICHMENT = {
   suggestedCollectionId: null,
 };
 
-function AiStatusBadge({ status }) {
-  const config = {
-    not_started: { label: 'Not enriched', bg: 'bg-secondary/50', text: 'text-muted-foreground', dot: 'bg-muted' },
-    in_progress: { label: 'Enriching...', bg: 'bg-warning-light', text: 'text-warning', dot: 'bg-warning animate-pulse' },
-    enriched: { label: 'Enriched (Sonnet)', bg: 'bg-success-light', text: 'text-success', dot: 'bg-success' },
-    re_enriched: { label: 'Re-enriched (Opus)', bg: 'bg-primary-light', text: 'text-primary', dot: 'bg-primary' },
-  };
-  const c = config[status] || config.not_started;
-  return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${c.bg} ${c.text}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
-      {c.label}
-    </span>
-  );
-}
-
-/**
- * One capture, as a row in the inbox list.
- *
- * ── It used to be the triage form too ────────────────────────────────────────
- *
- * Until Clipboard Step 18 this component was 1,240 lines: the collapsed row
- * below, plus a whole triage form that expanded in place — an element editor, an
- * intention form, a collection picker, a capture-text editor and their footer.
- * Step 17 moved all of that to `InboxDetailView` at its own URL, and made this
- * row navigate there; Step 18 deleted what nothing could reach any more.
- *
- * Four things went with it that are worth naming, because each was a hazard
- * rather than merely dead weight:
- *
- *   FOUR COPIES OF THE ELEMENT NORMALISER, which had to stay byte-identical —
- *   key order included, because the dirty check compared `JSON.stringify` of the
- *   live elements against a freshly normalised copy. Two spellings of the same
- *   element differ as strings, so a form nobody had touched would report itself
- *   dirty and demand a confirm on the way out. There is now ONE, in
- *   `utils/suggestedElements.js`, with tests.
- *
- *   AN `eslint-disable`D DIRTY CHECK, whose dependency array was maintained by
- *   hand across eighteen values. `InboxDetailView` computes its dirty flag as a
- *   value during render and depends on that one boolean, so it needs no disable.
- *
- *   THE COLLECTION PICKER, which the approved design drops for now.
- *
- *   THE CAPTURE-TEXT EDITOR, which is not lost: it is the pencil on the detail
- *   page's "Original capture" section (Step 17b).
- *
- * ── What is left, and why this file still has a component for it ─────────────
- *
- * A row, its timestamp, what enriched it, where it came from, and a way to bin
- * it. The trash can is here rather than only on the detail page because
- * disposing of a capture you can already read in full should not require opening
- * a form first — Step 5b's reasoning, unchanged.
- *
- * @param {object}   inboxItem  The capture.
- * @param {Function} onOpen     (id) => void. Opens the detail page. REQUIRED: a
- *   row with nothing to open is a dead end now that it cannot expand.
- * @param {Function} onDiscard  (id) => void. Archives with reason 'discarded'.
- */
-function InboxCard({ inboxItem, onOpen, onDiscard }) {
-  const truncated =
-    inboxItem.capturedText.length > 100
-      ? inboxItem.capturedText.substring(0, 100) + "..."
-      : inboxItem.capturedText;
-
-  return (
-    <div
-      className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary transition-colors shadow-sm hover:shadow-md"
-      onClick={() => onOpen(inboxItem.id)}
-    >
-      <p className="text-foreground mb-2">{truncated}</p>
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>{friendlyDate(inboxItem.createdAt)}</span>
-        <div className="flex items-center gap-2">
-          {/* The badge stays. Enrichment still happens — from claude.ai through
-              the connector, since Step 14 removed the in-app buttons — and which
-              captures have been through it is still worth seeing at a glance. */}
-          <AiStatusBadge status={inboxItem.aiStatus} />
-          <span className="flex items-center gap-1">
-            source: <SourceIcon sourceType={inboxItem.sourceType} />
-          </span>
-          {/* stopPropagation because the whole row is the link to the detail
-              page. Behaviour is deliberately untouched from Step 5b: this
-              archives with reason 'discarded' and offers an undo. */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDiscard(inboxItem.id);
-            }}
-            title="Discard this capture (reversible)"
-            // ml-1 on top of the row's gap-2 = 12px. The badges stay tightly
-            // grouped as one informational cluster; the action separates from
-            // them. Its neighbour is the source icon, which LOOKS static but is
-            // part of the row — tap it and the detail page opens.
-            className="ml-1 flex items-center justify-center p-2 min-h-[44px] min-w-[44px] rounded-lg text-muted-foreground hover:text-destructive hover:bg-secondary transition-colors shrink-0"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * @param {boolean} [stickyFooter] - Pin Save/Cancel above the Capture bar.
- *
- * Opt-in rather than always-on, because since Step 5 this form renders in two
- * places that want different treatment:
- *
- *   Contexts list    the form REPLACES the list, so it owns the screen and a
- *                    pinned footer is right — this is the "full-screen form"
- *                    the spec means.
- *   Context detail   the form is a panel with the context's items, intentions
- *                    and collections below it. A pinned footer would hover over
- *                    that content and imply it belonged to whatever you had
- *                    scrolled to, which is worse than no pinning at all.
- *
- * Defaulting to false so a third render site gets the safe behaviour and has to
- * ask for the other.
- */
 function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = false, collections = [] }) {
   const [name, setName] = useState(editing?.name || "");
   const [shared, setShared] = useState(editing?.shared || false);

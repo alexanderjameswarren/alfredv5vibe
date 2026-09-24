@@ -25,8 +25,11 @@
  *
  * `InboxCard` carried four copies of the suggested-element normaliser that had
  * to stay byte-identical — including key order, because its dirty check compared
- * JSON strings. This page imports `normaliseSuggestedElements` and calls it in
- * one place, `computeBaseline` below. Every other use reads that result.
+ * JSON strings. `normaliseSuggestedElements` is called in exactly one place —
+ * `computeBaseline`, in utils/inboxSuggestions.js — and every other use reads that
+ * result. It lives there rather than here because the inbox LIST's one-tap Process
+ * reads the same suggestions, and "one tap" has to mean exactly "open it and press
+ * Process without changing anything".
  *
  * ── What is deliberately NOT here ────────────────────────────────────────────
  *
@@ -69,7 +72,7 @@ import TagPicker from "./TagPicker";
 import PinnedFooter, { FooterSpacer } from "./PinnedFooter";
 import EditCard from "./EditCard";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
-import { normaliseSuggestedElements } from "./utils/suggestedElements";
+import { computeBaseline } from "./utils/inboxSuggestions";
 import { isFirstStep } from "./utils/elementOffsets";
 import { getRecurrenceDisplayString } from "./utils/recurrenceDisplay";
 
@@ -92,34 +95,6 @@ function formatWhenDate(value) {
     month: "short",
     day: "numeric",
   });
-}
-
-/**
- * What a capture proposes, read off the row once.
- *
- * `capturedText` is in here alongside the suggestions because two fields are
- * seeded FROM it — an item's name and an intention's name, when the enrichment
- * proposed neither — and the only way to tell later whether one of those is still
- * showing the capture verbatim is to remember what the capture said at the time.
- */
-function computeBaseline(inboxItem) {
-  const capturedText = inboxItem.capturedText || "";
-  return {
-    capturedText,
-    contextId: inboxItem.suggestedContextId || "",
-    tags: inboxItem.suggestedTags || [],
-    itemOn: !!inboxItem.suggestItem,
-    intentionOn: !!inboxItem.suggestIntent,
-    itemName: inboxItem.suggestedItemText || capturedText,
-    itemDescription: inboxItem.suggestedItemDescription || "",
-    elements: normaliseSuggestedElements(inboxItem.suggestedItemElements),
-    intentText: inboxItem.suggestedIntentText || capturedText,
-    // Nothing suggests an intention's Details: the column arrived with migration
-    // 069 and no enrichment writes it. Always starts empty.
-    intentDescription: "",
-    linkedItemId: inboxItem.suggestedItemId || "",
-    eventDate: inboxItem.suggestedEventDate || "",
-  };
 }
 
 /**

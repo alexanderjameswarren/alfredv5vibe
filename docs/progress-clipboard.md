@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 complete, verified and pushed.** Round 3: the inbox list, Steps 20-23. Step 20 done and deployed (mcp v121), awaiting verification.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 complete, verified and pushed.** Round 3: the inbox list, Steps 20-23. Steps 20, 20b and 21 done; 20b deployed (mcp v122). 21 awaiting in-app verification.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -79,8 +79,9 @@ phone board, committed as `10a08ce`. Both were confirmed to be real, distinct mo
 before committing, unlike round 2's folder. Read that README and
 `docs/design-system.md` before changing any frontend code.
 
-- [x] Step 20: `create_inbox_item` accepts an optional `source_type` ('mcp' default, or 'task') and `source_metadata` (for a task: task name, run date). Add a task icon to the source icon map. No UI beyond the icon. - **done 2026-09-24**, deployed as mcp v121, `verify_jwt` still false. `deno check` back at the baseline 97 errors — one new one found and fixed, see the notes.
-- [ ] Step 21: The list card and the filters. One shared `InboxListCard` per the mockup: title, meta line, preview line (context chip, New item / New intention, date chip, tags), one action button plus the trash icon. **Process** files an enriched item in one tap from its suggestions, through the SAME save path as the detail page (archive as 'processed', set `source_inbox_id`), and shows only for enriched items that suggest at least an item or an intention. **Copy**, for task items, copies the captured text plus a final line `Alfred inbox item: <id>`. Source filter pills REUSE the existing tag filter component, with no "All" pill. Phone layout per the mockup.
+- [x] Step 20: `create_inbox_item` accepts an optional `source_type` ('mcp' default, or 'task') and `source_metadata` (for a task: task name, run date). Add a task icon to the source icon map. No UI beyond the icon. - **done 2026-09-24**, deployed as mcp v121, `verify_jwt` still false. `deno check` back at the baseline 97 errors — one new one found and fixed, see the notes. - **verified 2026-09-24** by a fresh-thread test: mcp default, task stored with its name and run date at `not_started`, and all three malformed calls refused.
+- [x] Step 20b: Three fixes. Confirm from the live function that `create_inbox_item` publishes both new params; mark an mcp capture `enriched` only when something was actually suggested; give `archive_inbox_item` an optional reason. - **done 2026-09-24**, deployed as mcp v122, `verify_jwt` still false, `deno check` at the baseline 97 with no new errors.
+- [x] Step 21: The list card and the filters. One shared `InboxListCard` per the mockup: title, meta line, preview line (context chip, New item / New intention, date chip, tags), one action button plus the trash icon. **Process** files an enriched item in one tap from its suggestions, through the SAME save path as the detail page (archive as 'processed', set `source_inbox_id`), and shows only for enriched items that suggest at least an item or an intention. **Copy**, for task items, copies the captured text plus a final line `Alfred inbox item: <id>`. Source filter pills REUSE the existing tag filter component, with no "All" pill. Phone layout per the mockup. - **done 2026-09-24.** `src/InboxListCard.jsx` and `src/utils/inboxSuggestions.js`, with the one-tap/detail-page equivalence proved by test. `InboxCard` and `AiStatusBadge` are gone. Suite: 75 suites, 1636 tests; build clean. Not pushed.
 - [ ] Step 22: "Recently archived (n)" — the last seven days, collapsible, with "Show all". Each row says what happened (processed; processed into an item / intention / event, via `source_inbox_id`; or discarded) and offers a working Undo that un-archives.
 - [ ] Step 23: Add every new shared piece to `docs/design-system.md` — list card, filter pills, context chip, preview line, archived row — with the rules for using them, and extend the guard tests so screens must use them.
 
@@ -118,6 +119,107 @@ invisible until something else wants that property.
 **Fix: `space-y-5` → `flex flex-col gap-5` on the card.** `gap` sets no margins, so
 there is nothing to lose to. One class, no `!important`, no restructuring, and the
 other five footers were never affected because none of them is a `space-y` child.
+
+### Step 20b — three fixes, 2026-09-24
+
+#### 1. The client was showing a cached manifest
+
+Downloaded the deployed function (`supabase functions download mcp --use-api`, the
+Step 7c method) and confirmed: the live copy is **byte-identical** to the working tree,
+and its registered `create_inbox_item` schema publishes BOTH `source_type` — a
+`z.enum(["mcp", "task"])` whose description says exactly when to pass 'task' — and
+`source_metadata`.
+
+So the server was right and the test thread's tool list was stale. The fix is a
+DISCONNECT AND RECONNECT of the connector, not a new thread; spec §7 says so and this is
+the second time it has caught someone out.
+
+(The download itself errors partway with `UnsafeFunctionDownloadPathError` on a
+`src/sam/...` asset — the bundle carries the whole repo — but it extracts
+`supabase/functions/mcp/index.ts` before failing, which is what the check needs.)
+
+#### 2. `enriched` now means something was suggested
+
+It was unconditional for every mcp capture. So a bare text capture with no context, no
+item, no intention and no tags arrived looking researched: the inbox offered Process on
+it, which would have filed nothing, and the badge said there was nothing left to think
+about.
+
+`ai_status` is now `enriched` only when at least one suggestion survives — context,
+item, intention, event, tags **or collection**. Alex's list named five; collection is in
+because a row proposing one HAS been researched, and calling it `not_started` would be
+the same lie in the other direction. Tags count only if one survived normalisation: a
+caller that sent nothing but punctuation has suggested nothing.
+
+#### 3. `archive_inbox_item` takes a reason
+
+'processed' stays the default — this tool is Claude tidying up after dealing with
+something. But there was no way to say "this should not have been captured", so a
+duplicate Claude cleared away was recorded in the archive as work done. `reason` now
+accepts 'processed' or 'discarded', with an allowlist rather than a pass-through:
+`inbox_archive_reason_needs_archived` checks the reason's PAIRING with `archived`, not
+its value, so an unrecognised string would be stored and then match nothing the archive
+screen knows how to describe.
+
+### Step 21 — the inbox list, 2026-09-24
+
+`src/InboxListCard.jsx` replaces `InboxCard`, which is now deleted — along with
+`AiStatusBadge`, whose only caller it was. The mockup shows the status as words on the
+meta line, so the badge had nothing left to render on.
+
+#### The filter reuses TagFilter without touching it
+
+Alex chose single-select and faithful reuse. The trick is what `entities` it is handed:
+each capture becomes a row whose ONLY tag is its source's display NAME. `TagFilter` then
+counts sources, sorts them alphabetically, renders the counts, shows `Clear` while one
+is on and collapses past four — every one of those behaviours for free, including the
+ones nobody would remember to reimplement.
+
+Filtering compares LABELS on both sides rather than mapping a label back to a type,
+which also means an unrecognised `source_type` lands under "Capture" exactly as its icon
+does, without either the filter or the icon knowing it exists.
+
+**One additive change to TagFilter: a `noun` prop**, defaulting to "Tags". The collapse
+toggle hard-coded the word, and a source bar reading "Tags (4)" would be plainly wrong.
+Nothing else in the component knows what it is counting — that was already true; this was
+the one place the vocabulary leaked.
+
+**Two small deviations from the README, both consequences of faithful reuse:**
+
+* it says a collapsing pill appears with "more than four" sources; `COLLAPSE_MIN_TAGS`
+  is four or more. One pill earlier than the prose. Changing it would change the four
+  tag screens.
+* it says "selecting one or more"; single-select was Alex's decision.
+
+#### 🛑 One tap is DEFINED as "open it and press Process without editing"
+
+That is the risk in a fast path: it can quietly file something different from the
+careful path. So `triageDataForOneTap` lives in `src/utils/inboxSuggestions.js` beside
+`computeBaseline` — which the detail page now imports from there rather than owning —
+and `src/oneTapMatchesDetailPage.test.jsx` renders the REAL detail page, presses Process
+untouched, and asserts the emitted triage data equals what the list would send. Ten
+shapes, including elements in the enrichment's vocabulary, a suggested existing item
+that must lose to a newly created one, and a suggested collection that must be ignored.
+
+Process shows only for an enriched row suggesting an item or an intention. Both halves
+earn their place: on an unenriched row there are no suggestions to file, and a row
+suggesting only a context has nothing for triage to land on, so Process would archive it
+having created nothing.
+
+`Copy`, for tasks, appends `Alfred inbox item: <id>` as its own last line — pasting the
+text alone would leave a Claude session with no way to archive the row afterwards. The
+clipboard call can be refused (permissions, or a non-https page), so a failure is
+reported rather than swallowed; a Copy button that silently did nothing would be
+indistinguishable from one that worked.
+
+#### Two things jsdom cannot see, and what changed because of it
+
+* the title's two-line clamp is a Tailwind `line-clamp-2` class, NOT the inline webkit
+  properties it compiles to — jsdom discards `-webkit-line-clamp` from an inline style,
+  so the clamp would have been unassertable, and an unassertable rule is one that can go
+  missing quietly. Same lesson as Step 17g's margins.
+* the meta line's time and status are each in their own `<span>` rather than bare text
+  nodes between separators, so one fact can be addressed without matching the whole line.
 
 ### The existing tag filter, before reusing it for the source pills, 2026-09-24
 

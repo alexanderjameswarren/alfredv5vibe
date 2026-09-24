@@ -91,6 +91,14 @@ import { ChevronDown } from "lucide-react";
 //                      is what hides the toggle entirely, which is how a caller
 //                      opts out of collapsing — and why `collapsed` alone can
 //                      never strand you in a bar with no way to reopen it.
+// `noun`               what the collapse toggle calls the things it is hiding.
+//                      Defaults to "Tags". Added by Clipboard Step 21, which
+//                      reuses this bar to filter the inbox by SOURCE — the
+//                      behaviour is identical and only the word differs, and a
+//                      source bar reading "Tags (4)" would be plainly wrong.
+//                      Nothing else in the component knows what it is counting;
+//                      that was already true, and this is the one place the
+//                      vocabulary leaked out.
 //
 // Renders nothing at all when no tag is in use AND nothing is filtering — an
 // empty bar would be a gap above the list with nothing to say.
@@ -172,6 +180,7 @@ export default function TagFilter({
   onFilter,
   collapsed = false,
   onToggleCollapsed,
+  noun = "Tags",
 }) {
   const tagCounts = {};
   for (const entity of entities) {
@@ -234,14 +243,14 @@ export default function TagFilter({
           type="button"
           onClick={onToggleCollapsed}
           aria-expanded={!isCollapsed}
-          aria-label={isCollapsed ? "Show tags" : "Hide tags"}
+          aria-label={`${isCollapsed ? "Show" : "Hide"} ${noun.toLowerCase()}`}
           className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-full bg-secondary text-muted-foreground hover:text-dark transition-colors"
         >
           <ChevronDown
             className={`w-3.5 h-3.5 shrink-0 transition-transform ${isCollapsed ? "-rotate-90" : ""}`}
             aria-hidden="true"
           />
-          Tags ({sortedTags.length})
+          {noun} ({sortedTags.length})
         </button>
       )}
       {onlyActivePill

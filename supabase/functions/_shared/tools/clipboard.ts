@@ -5,7 +5,7 @@
 //
 //   get_recent_clips    tier 1 — what was clipped lately, as TEXT. No images.
 //   get_clip_slices     tier 1 — the screenshot of one clip, as image blocks.
-//   archive_inbox_item  tier 2 — hide a handled inbox item; reversible.
+//   archive_inbox_item  tier 2 — hide a handled inbox item, with a reason; reversible.
 //
 // ---------------------------------------------------------------------------
 // TEXT FIRST, PIXELS ON REQUEST
@@ -578,19 +578,36 @@ export const archiveInboxItemTool = defineTool({
       ? true
       : (args.archived as boolean);
 
+    // Step 20b: the reason is a choice now, not a constant.
+    //
+    // It was always 'processed', on the reasoning that this tool is Claude tidying up
+    // after dealing with something and the trash can in the app is what discards. That
+    // is the common case and stays the default — but it left Claude no way to say "this
+    // should not have been captured", so a duplicate or a mistake it cleared away was
+    // recorded in Alex's archive as work done.
+    //
+    // ⚠️ An allowlist, not a pass-through. `archive_reason` is checked by
+    // `inbox_archive_reason_needs_archived` for its PAIRING with `archived`, not for
+    // its value, so an unrecognised string would be stored and then fail to match
+    // anything the archive screen knows how to describe.
+    if (args.reason !== undefined && args.reason !== null && args.reason !== "processed" && args.reason !== "discarded") {
+      throw new Error(
+        `${T}: reason must be "processed" (you dealt with it — the default) or ` +
+          `"discarded" (it should not have been captured). Got ${JSON.stringify(args.reason)}.`,
+      );
+    }
+    const reason = args.reason === undefined || args.reason === null ? "processed" : (args.reason as string);
+
     // All three move together: stamped when hiding, cleared when putting back.
     // Leaving a stale timestamp or reason on an un-archived row would make it
     // look dispositioned while it sat in the inbox, and
     // inbox_archive_reason_needs_archived refuses that pairing anyway.
-    //
-    // 'processed' and not 'discarded': this tool is Claude tidying up after
-    // dealing with something. The trash can in the app is what discards.
     const { data, error } = await ctx.db
       .from("inbox")
       .update({
         archived,
         triaged_at: archived ? new Date().toISOString() : null,
-        archive_reason: archived ? "processed" : null,
+        archive_reason: archived ? reason : null,
       })
       .eq("id", inboxId)
       .select("id, source_type, captured_text, archived, triaged_at, archive_reason")
@@ -609,7 +626,7 @@ export const archiveInboxItemTool = defineTool({
     return {
       ...data,
       result: archived
-        ? "Archived with reason 'processed'. It has left the Alfred inbox screen " +
+        ? `Archived with reason '${reason}'. It has left the Alfred inbox screen ` +
           "immediately. Nothing was deleted — un-archive with archived: false."
         : "Un-archived: archived false, triaged_at and archive_reason cleared. " +
           "It is back in the Alfred inbox, untriaged.",

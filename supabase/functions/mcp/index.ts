@@ -229,6 +229,57 @@ const createInboxItemTool = defineTool({
       }
     }
 
+    // The suggestion fields, resolved once, BEFORE ai_status is decided — because
+    // the decision is now about whether any of them is actually present.
+    const suggestedContextId = (args.suggested_context_id as string) || null;
+    const suggestItem = (args.suggest_item as boolean) || false;
+    const suggestedItemText = (args.suggested_item_text as string) || null;
+    const suggestedItemDescription = (args.suggested_item_description as string) || null;
+    const suggestedItemElements = (args.suggested_item_elements as unknown[]) || null;
+    const suggestedItemId = (args.suggested_item_id as string) || null;
+    const suggestIntent = (args.suggest_intent as boolean) || false;
+    const suggestedIntentText = (args.suggested_intent_text as string) || null;
+    const suggestedIntentRecurrence = (args.suggested_intent_recurrence as string) || null;
+    const suggestEvent = (args.suggest_event as boolean) || false;
+    const suggestedEventDate = (args.suggested_event_date as string) || null;
+    // Normalised, not stored verbatim — this tool's caller is a model. These values
+    // reach items.tags / intents.tags unchanged on triage if the user never opens the
+    // tag box. See _shared/tags.ts.
+    const suggestedTags = normaliseTags(args.suggested_tags);
+    const suggestedCollectionId = (args.suggested_collection_id as string) || null;
+
+    /**
+     * Did anything actually get suggested?
+     *
+     * ⚠️ `ai_status: "enriched"` IS A CLAIM, AND IT USED TO BE UNCONDITIONAL. Every
+     * mcp capture said "enriched" whether or not the caller had proposed a single
+     * thing — so a bare text capture with no context, no item, no intention and no
+     * tags arrived looking researched. The inbox then offered Process on it, which
+     * would have filed nothing, and the badge told Alex there was nothing left to
+     * think about.
+     *
+     * `suggested_collection_id` counts, though Alex's list of five did not name it: a
+     * row proposing a collection HAS been researched, and calling that one
+     * `not_started` would be the same lie in the other direction.
+     *
+     * Tags count only when at least one SURVIVED normalisation — a caller that sent
+     * nothing but punctuation has suggested nothing.
+     */
+    const hasSuggestion =
+      suggestedContextId !== null ||
+      suggestItem ||
+      suggestedItemText !== null ||
+      suggestedItemDescription !== null ||
+      (suggestedItemElements !== null && suggestedItemElements.length > 0) ||
+      suggestedItemId !== null ||
+      suggestIntent ||
+      suggestedIntentText !== null ||
+      suggestedIntentRecurrence !== null ||
+      suggestEvent ||
+      suggestedEventDate !== null ||
+      suggestedTags.length > 0 ||
+      suggestedCollectionId !== null;
+
     const record = {
       id: crypto.randomUUID(),
       archived: false,
@@ -240,35 +291,31 @@ const createInboxItemTool = defineTool({
       user_id: ctx.userId,
       source_type: sourceType,
       source_metadata: sourceMetadata,
-      // ⚠️ A TASK IS NOT ENRICHED, AND THAT IS THE POINT OF IT.
+      // ⚠️ "enriched" MEANS SOMETHING WAS SUGGESTED. Two ways to fail that:
       //
-      // An "mcp" capture is created by a model that has just researched the
-      // contexts, items and tags, so it arrives with suggestions and claiming
-      // "enriched" is honest. A scheduled task has had no such conversation: it
-      // captured something for a Claude session to look at LATER. The inbox list
-      // shows that as "Needs a Claude session" and offers Copy instead of
-      // Process, and both of those read this column.
+      // A TASK has had no conversation at all — it captured something for a Claude
+      // session to look at LATER — so it is never enriched however it was called.
+      // The inbox shows that as "Needs a Claude session" and offers Copy instead of
+      // Process, and both read this column.
       //
-      // (The "mcp" branch keeps its long-standing quirk of claiming `enriched`
-      // even when the caller passed no suggestions at all. Untouched here: it
-      // predates this change and fixing it is not this step.)
-      ai_status: isTask ? "not_started" : "enriched",
-      suggested_context_id: (args.suggested_context_id as string) || null,
-      suggest_item: (args.suggest_item as boolean) || false,
-      suggested_item_text: (args.suggested_item_text as string) || null,
-      suggested_item_description: (args.suggested_item_description as string) || null,
-      suggested_item_elements: (args.suggested_item_elements as unknown[]) || null,
-      suggested_item_id: (args.suggested_item_id as string) || null,
-      suggest_intent: (args.suggest_intent as boolean) || false,
-      suggested_intent_text: (args.suggested_intent_text as string) || null,
-      suggested_intent_recurrence: (args.suggested_intent_recurrence as string) || null,
-      suggest_event: (args.suggest_event as boolean) || false,
-      suggested_event_date: (args.suggested_event_date as string) || null,
-      // Normalised, not stored verbatim — this tool's caller is a model. These
-      // values reach items.tags / intents.tags unchanged on triage if the user
-      // never opens the tag box. See _shared/tags.ts.
-      suggested_tags: normaliseTags(args.suggested_tags),
-      suggested_collection_id: (args.suggested_collection_id as string) || null,
+      // An MCP capture with NOTHING SUGGESTED is the second way, fixed in Step 20b.
+      // This used to say "enriched" unconditionally, so a bare text capture arrived
+      // looking researched: Process would have filed nothing, and the badge said
+      // there was nothing left to think about. See `hasSuggestion` above.
+      ai_status: isTask || !hasSuggestion ? "not_started" : "enriched",
+      suggested_context_id: suggestedContextId,
+      suggest_item: suggestItem,
+      suggested_item_text: suggestedItemText,
+      suggested_item_description: suggestedItemDescription,
+      suggested_item_elements: suggestedItemElements,
+      suggested_item_id: suggestedItemId,
+      suggest_intent: suggestIntent,
+      suggested_intent_text: suggestedIntentText,
+      suggested_intent_recurrence: suggestedIntentRecurrence,
+      suggest_event: suggestEvent,
+      suggested_event_date: suggestedEventDate,
+      suggested_tags: suggestedTags,
+      suggested_collection_id: suggestedCollectionId,
       ai_confidence: (args.ai_confidence as number) ?? null,
       ai_reasoning: (args.ai_reasoning as string) || null,
     };
@@ -2429,7 +2476,7 @@ export function createMcpServer(token: string) {
       title: "Archive Inbox Item",
       description:
         "Hide a handled inbox item. Call this once you have DEALT WITH a clip or a CLI report — read it, answered it, filed what it needed — so it leaves Alex's inbox screen instead of sitting there looking unread. It disappears from the app live. " +
-        "Records archive_reason 'processed', which is what distinguishes it in Alex's archive from an item he binned himself with the trash can ('discarded'). " +
+        "Records archive_reason 'processed' by default, which is what distinguishes it in Alex's archive from something binned as unwanted. Pass reason: 'discarded' instead when the item should NOT have been captured at all — a duplicate, a mistake, or something you and Alex agreed is not worth keeping. The two read very differently in his archive, so choose deliberately: 'processed' says you dealt with it, 'discarded' says it should never have been there. " +
         "Reversible in one call: pass archived: false to put it back, untriaged, with the reason cleared. Nothing is deleted either way, and the change is audited. " +
         "Takes the inbox_id, NOT the clip id — get_recent_clips returns both. Archiving does not touch the clip itself, which keeps its text and screenshot. Tier 2, no confirmation needed.",
       inputSchema: {
@@ -2438,6 +2485,12 @@ export function createMcpServer(token: string) {
           .boolean()
           .optional()
           .describe("Default true (hide it). Pass false to un-archive and return it to the inbox."),
+        reason: z
+          .enum(["processed", "discarded"])
+          .optional()
+          .describe(
+            "Why it is leaving the inbox. 'processed' (the default) means you dealt with it — read it, answered it, filed what it needed. 'discarded' means it should not have been captured: a duplicate, a mistake, or something Alex has said he does not want. Ignored when archived is false, since an un-archived row has no reason.",
+          ),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(archiveInboxItemTool, args, token),
