@@ -30,6 +30,8 @@ Spec: docs/technical-spec-clipboard.md
 
 ## Notes
 
+**2026-09-24 — the CLI report rule was rewritten** (`.claude/CLAUDE.md`, "Everything you say to Alex goes into Alfred"): Alex does not read the CLI terminal at all, so every closing message — questions, answers, corrections, blockers, not just reports — is pushed to Alfred first and printed verbatim afterwards, with the pushed and printed text identical.
+
 ### Step 1 — spike cleanup, 2026-09-23
 
 **Removed:**

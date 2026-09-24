@@ -41,54 +41,44 @@ Rules:
 - This applies only to read-only SELECT checks. Migrations and anything that
   changes data stay as separate statements.
 
-## Push your report into Alfred
+## Everything you say to Alex goes into Alfred
 
-**EVERY TIME YOU STOP AND WAIT FOR ALEX, not only when a task is finished.**
-Stopping to have a migration run, to have something verified, to ask a
-question, to report a blocker — all of those are stops, and each one gets its
-own report. A task that takes six stops pushes six reports, and the run tag is
-what keeps them together.
+**Why this rule exists.** Alex does not read this terminal. He reads your
+messages through Alfred: a claude.ai conversation fetches them from the
+Alfred clipboard and explains them to him. Anything you say that is not
+pushed to Alfred is, for practical purposes, never said. That includes
+questions you ask him, answers, corrections, apologies, and warnings, not
+just end-of-task reports. The clipboard is also his permanent record of
+every CLI session, reconstructable by run tag.
 
-The rule used to say "at the end of every task", and that was wrong in a way
-worth remembering: most of the work here stops mid-task and waits, so the
-reports Alex most needed were exactly the ones that never got pushed.
+**The rule.** Every time you hand the turn back to Alex, for any reason
+(finished, waiting for him to run something or verify something, asking
+a question, reporting a blocker, answering him, or acknowledging a
+correction), your closing message is pushed to Alfred first.
 
-Before your closing message, every time:
+**How.** Compose your complete closing message, everything you are about
+to say to Alex, and write it to .clip/last-report.md. Push that file with
+clip.mjs. Then print exactly that same text as your closing message. The
+pushed text and the printed text must be identical: do not push a summary
+and then say more, and do not add anything after the push. If you realize
+you need to say more, write a new message, push it, and print it.
 
-1. Write the final report to `.clip/last-report.md` (gitignored; create the
-   folder if needed).
-2. Push it, passing the prompt's run tag:
-   `node scripts/clip.mjs --tag <tag> --title "<what this task was>" .clip/last-report.md`
-   The title should name the step or task — "Clipboard Step 7", "SAM plan
-   review", "DJ weekly review fix" — because that is what Alex sees in his
-   inbox. When a task stops more than once, say what THIS stop is about:
-   "Clipboard Step 10: migration written, awaiting run", then later "Clipboard
-   Step 10: deployed, awaiting fresh-thread test". Several reports under one run
-   tag is normal and expected; identical titles are not, because then Alex cannot
-   tell which stop he is reading.
+**Titles** name the task and what this particular message is, for
+example "Clipboard Step 10: migration written, awaiting run", then
+"Clipboard Step 10: deployed, awaiting fresh-thread test", or "Step 10:
+question about the sources report". Several messages under one run tag
+are expected; identical titles are not.
 
-   **The run tag comes from the first line of the prompt**, `Run tag: <tag>`.
-   Alex often has two or three CLI sessions running at once, so the tag is how
-   the claude.ai thread that sent the prompt finds THIS report rather than
-   whichever run happened to finish last. Pass it exactly as given.
+**Run tags.** Pass the prompt's run tag with --tag, exactly as given on
+the prompt's first line. If the prompt has no run tag, push without one
+and say so in one line at the end of the message.
 
-   If a prompt carries **no** run tag, push without `--tag` — and say so in one
-   line at the end of the printed report, because an untagged report cannot be
-   matched to a conversation and Alex may need to identify it by hand.
-3. Print the report as usual. The clip is as well as the terminal output, never
-   instead of it.
+**What goes in.** Everything you would say to Alex. What does not: your
+command-by-command working log. Summarize what you did; do not paste
+tool transcripts.
 
-The report says where things stand AT THIS STOP: what was done, what is waiting
-on Alex, and anything he needs to decide. It is not a summary of the whole task
-unless the whole task is done.
-
-So Alex can say "CLI responded" in any claude.ai conversation and Claude reads
-the report with `get_recent_clips` (source `cli`) instead of him pasting it.
-
-**If the push fails, say so plainly at the end of the printed report — one line
-naming the error — and carry on.** A failed push is not a failed task, and it
-must never be hidden: silently skipping it would leave Alex waiting for
-something that never arrived.
+**If the push fails,** say so in one line at the end of the printed
+message, naming the error, and carry on. Never hide a failed push.
 
 `clip.mjs` reads `CLIPBOARD_URL` and `CLIPBOARD_SECRET` from the environment,
 falling back to the Windows user registry when the shell predates `setx`. It
