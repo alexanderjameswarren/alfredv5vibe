@@ -720,6 +720,63 @@ describe("correcting the captured text", () => {
   });
 });
 
+// -- Step 19: what a clipboard capture captured --------------------------------
+//
+// The page only decides WHERE it goes and WHEN to hide it. The fetching, the
+// slices and the caveats are ClipboardCapture's, tested there.
+describe("captured content", () => {
+  const captured = () => <div data-testid="captured">page text, links, slices</div>;
+
+  it("renders inside the Original capture section, after the capture itself", () => {
+    const { container } = setup({}, { renderCapturedContent: captured });
+    const block = screen.getByTestId("captured");
+    expect(block).toBeInTheDocument();
+    // After the pointer line, because the pointer is the short version of the same
+    // answer. Compared by document order rather than by asserting on markup.
+    const text = screen.getByText(/Bug: browser Back skips/);
+    expect(
+      text.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(container).toContainElement(block);
+  });
+
+  it("is given the capture, so it can read the clip id and the screenshot note", () => {
+    const render1 = jest.fn(() => null);
+    setup({ sourceType: "clipboard" }, { renderCapturedContent: render1 });
+    expect(render1).toHaveBeenCalled();
+    expect(render1.mock.calls[0][0]).toMatchObject({ id: "inbox-1", sourceType: "clipboard" });
+  });
+
+  it("shows nothing when the capture has no clip behind it", () => {
+    // Which is most captures. The prop returns null and the section is unchanged.
+    setup({}, { renderCapturedContent: () => null });
+    expect(screen.queryByTestId("captured")).not.toBeInTheDocument();
+    expect(screen.getByText(/Bug: browser Back skips/)).toBeInTheDocument();
+  });
+
+  it("is absent while the capture text is being edited", () => {
+    // The editor is about the inbox row's own one-line text. A screenshot directly
+    // under a textarea invites the reader to think they are editing the page.
+    setup({}, { renderCapturedContent: captured });
+    expect(screen.getByTestId("captured")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit capture text" }));
+    expect(screen.queryByTestId("captured")).not.toBeInTheDocument();
+  });
+
+  it("comes back when the edit is cancelled", () => {
+    setup({}, { renderCapturedContent: captured });
+    fireEvent.click(screen.getByRole("button", { name: "Edit capture text" }));
+    fireEvent.click(screen.getAllByRole("button", { name: /Cancel/ })[0]);
+    expect(screen.getByTestId("captured")).toBeInTheDocument();
+  });
+
+  it("works without the prop at all", () => {
+    // Optional, so a caller that does not care about clips is not obliged to pass it.
+    setup();
+    expect(screen.getByText(/Bug: browser Back skips/)).toBeInTheDocument();
+  });
+});
+
 describe("leaving", () => {
   it("goes back on Cancel, having cleared the guard first", () => {
     const { onBack, onDirtyChange, onProcess } = setup({

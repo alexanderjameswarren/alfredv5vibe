@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. Steps 16, 17, 17b, 17c, 17d, 17e and 18 done; 17e and 18 awaiting in-app verification. Step 19 is all that remains of round 2.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 is code-complete.** Steps 16-19 done; 17f and 19 awaiting in-app verification.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -66,10 +66,109 @@ seven distinct designs, every name matching its title, README list accurate.
 - [x] Step 17c: Three regressions from 17b's footer change, plus Details on the intention view and edit screens. Footers stopped undocking at the bottom of a page; content was cut off behind the capture bar; the Capture button looked clipped on desktop. - **done 2026-09-24.** One root cause found for the first two; the third not explained. - **FAILED in the app 2026-09-24.** `--dock-h` measured correctly (83px) and the layout was still wrong. Rolled back whole by Step 17d; item 4's Details work was kept.
 - [x] Step 17d: Roll back the measured-dock layout to production, keep every feature from 17/17b/17c, then fix the original gap with the smallest change: move each pinned footer down to the capture bar's normal height and leave the content padding alone. - **done 2026-09-24.** Suite green: 67 suites, 1492 tests (the 11 useDockHeight tests went with the hook). - **verified 2026-09-24 and PUSHED.** The gap is gone, footers sit flush and release at the bottom of a long form, the item view's last section is visible, and the Capture button matches production.
 - [x] Step 17e: Pinned footer spacing. The buttons sat 8px from the top and 12px from the bottom, and once a footer released the card's own bottom padding stacked under it. - **done 2026-09-24.** `py-3` on all six, and a `-mb-*` matching each card's padding. Offsets and content padding untouched, as instructed.
-- [x] Step 18: Retire the inline card expansion. Remove the old expanded form from `InboxCard`, including its four normaliser copies and the `eslint-disable`d dirty check — but only once nothing uses them. Run the frontend suite. - **done 2026-09-24.** 1,224 lines removed; `InboxCard` is 44 lines and takes three props. Suite green: 67 suites, 1492 tests; build clean.
-- [ ] Step 19: For clipboard items the detail page also shows the captured page text (collapsed, with Show all), the links, and the screenshot slices. Run the frontend suite.
+- [x] Step 18: Retire the inline card expansion. Remove the old expanded form from `InboxCard`, including its four normaliser copies and the `eslint-disable`d dirty check — but only once nothing uses them. Run the frontend suite. - **done 2026-09-24.** 1,224 lines removed; `InboxCard` is 44 lines and takes three props. Suite green: 67 suites, 1492 tests; build clean. - **verified 2026-09-24.**
+- [x] Step 17f: The inbox detail page's released footer had ~13px above the buttons and ~40px below. - **done 2026-09-24.** A CSS specificity fight, not the padding value — see the notes.
+- [x] Step 19: For clipboard items the detail page also shows the captured page text (collapsed, with Show all), the links, and the screenshot slices. Run the frontend suite. - **done 2026-09-24.** `src/ClipboardCapture.jsx` and `src/utils/capturedClip.js`, 50 new tests. Suite: 69 suites, 1548 tests, ONE pre-existing SAM flake (see the notes); build clean.
 
 ## Notes
+
+### Step 17f — `space-y-*` beat a negative margin, 2026-09-24
+
+The inbox detail page's released footer had ~13px above the buttons and ~40px
+below. Alex's guess was the card's bottom padding — the mockups used about 120px of
+it to clear the pinned footer.
+
+**Not that.** The card uses `p-4 sm:p-7` (16/28px); the 120px from the mockups was
+never copied, because a sticky footer does that job instead. The footer already
+carried `-mb-4 sm:-mb-7` to cancel exactly that padding, and both classes are in the
+compiled stylesheet.
+
+**The negative margin was losing a specificity fight.** `space-y-5` on the card
+compiles to:
+
+```css
+.space-y-5 > :not([hidden]) ~ :not([hidden]) { margin-bottom: calc(1.25rem * 0) }
+```
+
+— specificity **(0,3,0)**, because each `:not([hidden])` contributes an attribute
+selector. `.-mb-4` and `.sm\:-mb-7` are **(0,1,0)**. So `space-y-5` set
+`margin-bottom: 0` on the footer and won, leaving the card's 28px bottom padding
+under it: 12px of `py-3` plus a 1px border above the buttons, and 12 + 28 = 40px
+below. Exactly the numbers reported.
+
+That `space-y-*` sets `margin-bottom` **at all** is the surprise — it is there to
+support `space-y-reverse`, and it is zero in the normal direction, which makes it
+invisible until something else wants that property.
+
+**Fix: `space-y-5` → `flex flex-col gap-5` on the card.** `gap` sets no margins, so
+there is nothing to lose to. One class, no `!important`, no restructuring, and the
+other five footers were never affected because none of them is a `space-y` child.
+
+### Step 19 — the app shows what was captured, 2026-09-24
+
+Two new files:
+
+| file | what it is |
+|---|---|
+| `src/utils/capturedClip.js` | the pure decisions — finding the clip id, resolving the capture mode, deciding whether a caveat is owed, when to collapse text, cleaning the link list. 29 tests. |
+| `src/ClipboardCapture.jsx` | the fetch and the display. 21 tests, against a mocked browser client. |
+
+Plus 6 tests on the page for where it goes and when it hides.
+
+**Reads go through the browser client**, which carries the signed-in user's own
+token, so the `clipboard` bucket's folder-per-user policy is what decides — spec 4.2,
+the same rule `get_clip_slices` follows with `ctx.db`. One `createSignedUrls` call
+covers every slice; the browser then fetches and caches the images itself. Blobs were
+the alternative and would have meant up to 24 downloads held in memory plus a
+cleanup path to get wrong.
+
+**Passed IN to the page as `renderCapturedContent`**, not imported by it. The page
+takes everything as props and reads nothing global, which is what lets its 66 tests
+mount it with four plain objects; importing a Supabase-touching component would put
+the database behind every one of them. Same arrangement, same reason, as
+`renderRecurrence`.
+
+Decisions worth knowing:
+
+* **The failure state is per-slice.** One object can be missing from a set of nine,
+  and a single banner would either hide eight good images or claim all nine were
+  fine. A slice that cannot be signed keeps its POSITION, so the numbering still
+  matches the page.
+* **A missing clip is not an error.** A deleted row and one hidden by RLS both arrive
+  as null, and both mean the capture is still perfectly triageable — so it says the
+  stored page is gone and gets out of the way.
+* **The caveat covers two cases, and the second is the one that gets forgotten.**
+  Incomplete (`screenshot_truncated`) AND visible-screen-only (`capture_mode`), which
+  is not broken, not flagged, and still not the page. `get_clip_slices` learned this
+  the hard way.
+* **A missing capture mode means `full`**, resolved in `captureModeFor` exactly as the
+  tool resolves it, so the two readers cannot drift.
+* **Text is clamped, not cut.** "Show all" reveals text already in the DOM, so a
+  browser find reaches it either way.
+* **Links are behind their count.** A job board's capture carries hundreds and they
+  would bury the screenshot.
+* Hidden while the capture text is being edited: a screenshot under a textarea
+  invites the reader to think they are editing the page.
+
+#### ⚠️ One pre-existing test flake, unrelated
+
+`src/sam/SamPlayer.practice.test.jsx` → *"holding every note of the stuck beat
+resumes the run"* fails intermittently:
+
+```
+expect(performance.now() - scrollStartT()).toBeCloseTo(4200, 0)
+Expected: 4200   Received: 4200.5007
+```
+
+It reads the **real** clock and allows 0.5ms across a React state update, so it fails
+whenever the machine is under load. **It is not from this work:** the same test fails
+identically at commit `527df29` — the tree Alex verified and pushed — with Step 19
+stashed away, and it passes when run on its own. Nothing in Step 19 is imported by
+SAM.
+
+Fixable by freezing `performance.now()` for that assertion or widening the tolerance,
+but it is SAM's test and outside this phase. Left alone deliberately, recorded here so
+the next person does not read it as a Clipboard regression.
 
 ### Steps 17e and 18 — footer spacing, and the inline form retired, 2026-09-24
 

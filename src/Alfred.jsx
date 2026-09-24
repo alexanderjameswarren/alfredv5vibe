@@ -15,6 +15,8 @@ import {
 } from "./viewPaths";
 import { useExecutionRoute } from "./useExecutionRoute";
 import InboxDetailView from "./InboxDetailView";
+import ClipboardCapture from "./ClipboardCapture";
+import { clipIdFor } from "./utils/capturedClip";
 import { friendlyDate, SourceIcon } from "./CaptureMeta";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
 import { takePendingNavigation } from "./utils/pushRotation";
@@ -5858,6 +5860,14 @@ export default function Alfred() {
                 onEndDateChange={onEndDateChange}
               />
             )}
+            // Step 19. What a clipboard or CLI capture actually captured. Keyed by
+            // clip id so moving between two captures remounts it rather than
+            // showing the previous one's screenshot while the new one loads.
+            renderCapturedContent={(item) => {
+              const clipId = clipIdFor(item);
+              if (!clipId) return null;
+              return <ClipboardCapture key={clipId} clipId={clipId} inboxItem={item} />;
+            }}
           />
         )}
 

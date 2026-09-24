@@ -185,6 +185,13 @@ const LABEL = "flex items-center gap-2 text-sm font-bold text-foreground mb-2";
  *   `RecurrenceQuickSelect` lives in Alfred.jsx, which imports this file —
  *   importing back would be a cycle, and moving it here would drag two dialog
  *   components along with it. A prop also lets the test stub it.
+ * @param {Function} [renderCapturedContent]
+ *   Renders what a clipboard or CLI capture actually captured — the page text, the
+ *   links and the screenshot slices — inside the Original capture section (Step 19).
+ *   A prop for the same reason as above: `ClipboardCapture` reaches the database and
+ *   Storage, and importing it here would put Supabase behind every one of this
+ *   page's tests. Returns null for a capture with no clip behind it, which is most
+ *   of them.
  */
 export default function InboxDetailView({
   inboxItem,
@@ -197,6 +204,7 @@ export default function InboxDetailView({
   onDirtyChange,
   onSaveCaptureText,
   renderRecurrence,
+  renderCapturedContent,
 }) {
   /**
    * Everything the capture proposes, in one place.
@@ -612,7 +620,7 @@ export default function InboxDetailView({
           intention edit screens. max-w-[860px] is the mockup's card width; it
           collapses to full width below that, which is the phone layout — one
           column, same order. */}
-      <div className="max-w-[860px] mx-auto bg-card border-2 border-primary rounded-xl p-4 sm:p-7 space-y-5">
+      <div className="max-w-[860px] mx-auto bg-card border-2 border-primary rounded-xl p-4 sm:p-7 flex flex-col gap-5">
         {/* Source and time */}
         <div className="flex items-center gap-2.5">
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-muted text-muted-foreground text-xs">
@@ -1075,6 +1083,17 @@ export default function InboxDetailView({
               {inboxItem.capturedText}
             </div>
           )}
+
+          {/* Step 19. For a clipboard or CLI capture, the row above is a one-line
+              pointer — "Clip: Title — url" — and this is what it points at. It
+              belongs INSIDE this section rather than after it, because it is all one
+              answer to "what did I capture?", and it comes after the pointer because
+              the pointer is the short version.
+
+              Hidden while the capture text is being edited: the editor is about the
+              inbox row's own text, and a screenshot underneath a textarea invites
+              the reader to think they are editing the page. */}
+          {!editingCapture && renderCapturedContent?.(inboxItem)}
         </div>
 
         {/* Footer, pinned to the bottom of the card and flush on top of the global
@@ -1084,7 +1103,16 @@ export default function InboxDetailView({
             The negative margins pull it out to the card's own edges — bottom
             included, so when it releases at the bottom of the page it finishes flush
             with the rounded corner rather than floating above a strip of card
-            padding. */}
+            padding.
+
+            ⚠️ WHICH IS WHY THE CARD USES `flex flex-col gap-5` AND NOT `space-y-5`.
+            Step 17f. `space-y-*` compiles to
+            `.space-y-5 > :not([hidden]) ~ :not([hidden]) { margin-bottom: 0 }` —
+            specificity (0,3,0) — which beat this element's `-mb-4 sm:-mb-7` at
+            (0,1,0). The negative margin was in the stylesheet and simply lost, so the
+            card's 28px bottom padding stayed under the released footer: 13px above
+            the buttons and 40px below. `gap` sets no margins, so there is nothing to
+            lose to. */}
         <div className="sticky-above-bar -mx-4 sm:-mx-7 -mb-4 sm:-mb-7 px-4 sm:px-7 py-3 flex items-center gap-2.5 bg-card border-t border-border rounded-b-xl">
           <button
             onClick={handleProcess}
