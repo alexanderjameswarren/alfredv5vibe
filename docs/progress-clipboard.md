@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete.** Phase 3 decisions recorded in spec section 5; nothing built.
+## Status: **Phases 1 and 2 complete.** Phase 3 round 1 (plumbing) started - Step 13 migration written, awaiting Alex's run + CONFORMANT.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -31,6 +31,16 @@ Spec: docs/technical-spec-clipboard.md
   **`posting_url` came out null on both.** The board's cards are script-driven, so Claude could only INFER addresses from job numbers and correctly declined to store one it could not confirm - the skill's inferred-link rule working as written. Storing an unverified address in a column meaning "where this posting lives" would be worse than leaving it null. It does mean the duplicate-detection path `posting_url` exists for is unexercised on this board and stays so until a clip carries real hrefs. If `posting_url` turns out null on most real clips, the fix is to put the inferred address in `notes`, where its uncertainty can be stated, rather than loosening what the column means.
 
 **PHASE 2 COMPLETE.**
+
+## Phase 3, round 1: plumbing
+
+The rest of Phase 3 — the detail page, the clipboard card's captured content, the
+reworked auto-creation rules — is not in this round. Decision D still stands:
+auto-creation needs its own design conversation before any of it is built.
+
+- [ ] Step 13: Migration adding `source_inbox_id text null references public.inbox(id) on delete set null` to `items`, `intents` and `events`, each with a partial index on not-null and a column comment, ending with the conformance check. Alex runs it; CONFORMANT required. — **written 2026-09-24**, `supabase/migrations/068_phase3_source_inbox_id.sql`. Not yet run.
+- [ ] Step 14: `handleInboxSave` archives the inbox row with `archive_reason` 'processed' and `triaged_at` instead of deleting it, AND sets `source_inbox_id` on every item, intention and event it creates — one change, because either half alone is useless or misleading. Remove the Enrich and Re-enrich buttons and every call to `ai-enrich` from the app (the function itself stays; it is retired separately). Touch `InboxCard` only where the buttons are removed — **not** the normaliser copies or the dirty check, which the detail page replaces. Run the frontend suite.
+- [ ] Step 15: Record in this file, dated, when `ai-enrich` stopped being called, so its retirement can be scheduled a week later. A note only.
 
 ## Notes
 
