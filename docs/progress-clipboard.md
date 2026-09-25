@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 complete, verified and pushed.** Round 3: the inbox list, Steps 20-23. Steps 20 through 22 done; 20b deployed (mcp v122); 21c verified at phone width. Step 23 next, and it is the last of round 3.
+## Status: **Phases 1, 2, 3 and 4 complete.** Phase 3 ran in three rounds — plumbing (13-15), the inbox detail page (16-19), the inbox list (20-23) — and Step 23 closed the last of them. Phase 4 closed on 2026-09-25 with the scheduled-task audit and the hourly enrichment job. The project is done; anything further is a new one.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -86,10 +86,44 @@ before committing, unlike round 2's folder. Read that README and
 - [x] Step 21c: An Inbox glyph on the All tab; compress the tabs on narrow screens the way the top nav does instead of scrolling sideways; Lightbulb for the Capture source. - **done 2026-09-25.** Suite: 77 suites, 1679 tests; build clean. - **verified at phone width 2026-09-25.** The Capture glyph ended up `Send`, not Lightbulb — see `docs/design-system.md`.
 - [x] Step 21d: Icons on EVERY `UnderlineTabs` tab so all three rows compress alike; the inbox card title dropped from bold to the Schedule cards' `font-medium`; task cards titled `"<task name> · <run date>"` from `source_metadata`. - **done 2026-09-25.** `Scissors` chosen for Recycle Bin Snippets because the nav has one SAM glyph and that row needs two; `Sun` chosen for Today. See the notes.
 - [x] Step 22: "Recently archived (n)" — the last seven days, collapsible, with "Show all". Each row says what happened (processed; processed into an item / intention / event, via `source_inbox_id`; or discarded) and offers a working Undo that un-archives. - **done 2026-09-25.** `src/RecentlyArchived.jsx` and `src/utils/inboxArchive.js`. Inbox state now holds every capture and derives the live list, so archived rows are visible without a second slice to keep in step. Suite: 79 suites, 1736 tests; build clean. See the notes for the Undo warning.
-- [ ] Step 23: Add every new shared piece to `docs/design-system.md` — list card, filter pills, context chip, preview line, archived row — with the rules for using them, and extend the guard tests so screens must use them.
+- [x] Step 23: Add every new shared piece to `docs/design-system.md` — list card, filter pills, context chip, preview line, archived row — with the rules for using them, and extend the guard tests so screens must use them. - **done 2026-09-25.** Four sections added: the list card, the context chip and tag pill (one component, two shapes), the preview line (three tones, fixed order, never tappable) and the archived row (not a card, departure date not `createdAt`). Filter pills are not in the list: Step 21b replaced them with `UnderlineTabs`, which the doc already covers. Guards in `InboxListCard.test.jsx` and `RecentlyArchived.test.jsx` fail if another file copies the row shell, the chip class list, a preview label, the archived row or the section heading. Two of those guards were wrong on their first run and both were the test's fault, not the code's — see the notes.
+
+**PHASE 3 COMPLETE.**
+
+## Phase 4: awareness everywhere
+
+Spec section 5, Phase 4. Three bullets, and the last of them is deliberately open-ended.
+
+- [x] The project instruction in claude.ai: if a message carries an Alfred inbox item id, archive that item once the work is done. Covers every scheduled-task prompt without editing each skill. - **done by Alex.**
+- [x] Every scheduled task (SAM daily practice, DJ daily and weekly, Ken seed check) passes `source_type: "task"` with `source_metadata` naming the task and run date, and suggests nothing. - **audited 2026-09-25.** `git grep create_inbox_item` over `.claude/skills/` returns exactly one hit, in `mcp-platform/SKILL.md`, and it is the write-tier taxonomy explaining why the tool is tier 1 — not an instruction to call it. **No skill tells Claude to write a scheduled job's output to the inbox, so no skill needed changing.** The instructions that do live in the repo are the two task prompts under `docs/history/`: `dj-weekly-review-prompt.md` and `ken-seed-check-task-prompt.md`. Neither passes `source_type`, and the Ken one passes `suggested_context_id`, which makes its failure items arrive as `enriched`. Both are copies of prompts that run from claude.ai schedules; the live versions are Alex's to update, and he has. Flagged rather than edited, since they sit outside the directory the audit covered.
+- [x] Clipboard awareness in other skills as needed (Ken for clipped news, SAM or debugging for clipped screens). - **left alone deliberately.** `alfred-enrich` already routes `clipboard`, `cli` and `task` items away from enrichment, and `job-search` already picks up clipped postings. Nothing else has asked for a clip yet, and a skill taught to look for something nobody sends it is a skill that goes stale.
+
+**The hourly enrichment job.** `inbox_enrich_hourly`, registered in `platform_schedules`, enriches unenriched captures on the hour so the inbox is triaged without anybody asking. First verified run enriched 1.
+
+**PHASE 4 COMPLETE. PROJECT COMPLETE.**
 
 
 ## Notes
+
+### Step 23 — two guard tests that were wrong about the app, 2026-09-25
+
+A guard that asserts "this class list appears in no other file" is only as good as the
+string it picks, and both of the first two picked badly.
+
+The list card's shell starts `bg-card border border-border rounded-lg cursor-pointer
+hover:border-primary` — and so do the Schedule card, the item card and the intention
+card, which share that opening on purpose and diverge after it. The guard read that as a
+screen rebuilding the inbox row. Narrowed to `gap-3 sm:gap-4 px-4 py-3.5 bg-card border
+border-border rounded-lg`, which is this row's own shape and appears once.
+
+The archived section's guard looked for the words "Recently archived" and found a dozen
+of them in Alfred.jsx — every one a comment naming the section it wires up. Documentation
+is not a second implementation. It now matches the rendered heading,
+`Recently archived ({rows.length})`.
+
+The lesson for the next guard: match what only the owning file would contain, and check
+what already contains it before trusting the assertion. A guard that fires on
+documentation teaches whoever hits it to delete the guard.
 
 ### Step 22 — one inbox list, two views, 2026-09-25
 
