@@ -173,7 +173,13 @@ describe("when there is nothing to show", () => {
 
 // ── The guards ───────────────────────────────────────────────────────────────
 describe("it is wired into the inbox screen", () => {
-  const alfred = fs.readFileSync(path.join(__dirname, "Alfred.jsx"), "utf8");
+  // Line endings NORMALISED. These guards read Alfred.jsx as TEXT, and git
+  // checks it out CRLF on Windows, so a "\n" in a pattern below matches nothing
+  // there and the guard fails for a reason that has nothing to do with the JSX.
+  // That is exactly how this suite broke.
+  const alfred = fs
+    .readFileSync(path.join(__dirname, "Alfred.jsx"), "utf8")
+    .replace(/\r\n/g, "\n");
 
   it("renders OUTSIDE the empty-inbox branch", () => {
     // 🛑 An empty inbox is when this matters most: you have just processed the last
@@ -189,7 +195,9 @@ describe("it is wired into the inbox screen", () => {
     const section = inboxView.indexOf("<RecentlyArchived");
     expect(section).toBeGreaterThan(emptyBranch);
     // The ternary chain that handles empty / no-matches / rows closes before it.
-    expect(inboxView.slice(emptyBranch, section)).toContain("</div>\n            )}");
+    // Indentation-tolerant: the guard is about the `)}` closing, not about how
+    // many spaces happen to precede it.
+    expect(inboxView.slice(emptyBranch, section)).toMatch(/<\/div>\n\s*\)\}/);
   });
 
   it("gives it the un-archive writer, not the discard one", () => {

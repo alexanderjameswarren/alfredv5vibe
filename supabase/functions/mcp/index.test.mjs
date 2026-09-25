@@ -275,8 +275,19 @@ test("the tool count is 72 after the job-search tools", () => {
   // get_job_application_sources. Batched for the usual reason — each manifest
   // change costs a connector reconnect, so four deploys would spend four to
   // save none.
-  assert.equal(registered.length, 72,
-    `expected 72 registered tools, found ${registered.length}: ` +
+  //
+  // 2026-09-23, +3 for the clipboard, all additions, ONE deploy (mcp v111):
+  // get_recent_clips (tier 1), get_clip_slices (tier 1), archive_inbox_item
+  // (tier 2). This count was left at 72 by that commit and the test has been
+  // failing ever since — which is the thing this assertion exists to prevent,
+  // so the count is now asserted against a NAMED list rather than a bare
+  // number. A silent +1 reaches the manifest; an unnamed one now cannot.
+  const EXPECTED_ADDED_2026_09_23 = ["get_recent_clips", "get_clip_slices", "archive_inbox_item"];
+  for (const name of EXPECTED_ADDED_2026_09_23) {
+    assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
+  }
+  assert.equal(registered.length, 75,
+    `expected 75 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -752,8 +763,15 @@ test("get_job_application_sources excludes considering and passed from every cou
   // exclude them, so it has to say so — as does the tool description.
   assert.match(onlyLooked.reading, /considering or passed were never submitted/);
   assert.match(onlyLooked.reading, /lower every source's response rate/);
-  assert.match(
-    registered.find((r) => r.name === "get_job_application_sources").cfg.description,
-    /excluded from EVERY count here, `total` included/,
-  );
+  // ⚠️ ASSERTED ON MEANING, NOT ON ONE SENTENCE. This read
+  // "excluded from EVERY count here, `total` included" until 821bee5 reworded
+  // the description to add the duplicate_of exclusion, and the test then failed
+  // for a fortnight over prose while the behaviour was right. What the caller
+  // must actually be told is: which statuses, that they are named in the
+  // response, and that the removal happens before ANY count - `total` too.
+  const desc = registered.find((r) => r.name === "get_job_application_sources").cfg.description;
+  assert.match(desc, /'considering' or 'passed'|considering and passed/);
+  assert.match(desc, /not_applied_excluded/);
+  assert.match(desc, /before counting anything|`total` included/,
+    "the description must say the removal precedes every count, total included");
 });
