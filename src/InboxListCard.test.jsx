@@ -223,3 +223,39 @@ describe("what the taps do", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 });
+
+describe("the shared pieces are not rebuilt elsewhere", () => {
+  const read = (f) => fs.readFileSync(path.join(__dirname, f), "utf8");
+  const self = read("InboxListCard.jsx");
+  // Every Alfred screen file. sam/ and games/ are separate surfaces with their own lists.
+  const others = fs
+    .readdirSync(__dirname)
+    .filter((f) => /\.jsx$/.test(f) && !/\.test\.jsx$/.test(f) && f !== "InboxListCard.jsx")
+    .map((f) => [f, read(f)]);
+
+  it("has one call site", () => {
+    expect(read("Alfred.jsx").split("<InboxListCard").length - 1).toBe(1);
+  });
+
+  it("owns the row shell", () => {
+    // The WHOLE class list. The opening fragment is shared with the Schedule and item
+    // cards on purpose — what must not be copied is this row's own shape.
+    const shell = "gap-3 sm:gap-4 px-4 py-3.5 bg-card border border-border rounded-lg";
+    expect(self).toContain(shell);
+    for (const [f, src] of others) expect([f, src.includes(shell)]).toEqual([f, false]);
+  });
+
+  it("owns the chip", () => {
+    const chip = "px-2 py-0.5 bg-secondary text-foreground text-xs";
+    expect(self).toContain(chip);
+    for (const [f, src] of others) expect([f, src.includes(chip)]).toEqual([f, false]);
+  });
+
+  it("owns the preview marks", () => {
+    // The label plus its tone. A second screen writing either one has copied the line.
+    for (const mark of ["New item", "New intention"]) {
+      expect(self).toContain(mark);
+      for (const [f, src] of others) expect([f, src.includes(mark)]).toEqual([f, false]);
+    }
+  });
+});

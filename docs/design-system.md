@@ -1,7 +1,8 @@
 # Alfred's design system
 
-Started 2026-09-24. Four shared components so far. This will grow into the full
-contract; for now it records what exists and the rules that go with them.
+Started 2026-09-24. Four shared components and the inbox list's four pieces so far.
+This will grow into the full contract; for now it records what exists and the rules
+that go with them.
 
 ## Why this file exists
 
@@ -281,6 +282,84 @@ matched against — so if the reference moves, the copy fails rather than drifti
 `InboxListCard` states `text-base` explicitly where `EventCard` inherits it. Same 16px;
 spelled out because the card also states `leading-snug`, which a two-line `line-clamp-2`
 title needs and a one-line title does not.
+
+---
+
+## The list card — `src/InboxListCard.jsx`
+
+**Owns:** the row shell — `bg-card border border-border rounded-lg`, `px-4 py-3.5`,
+`hover:border-primary`. One border, not two: a list row is a lighter surface than an
+`EditCard`, which is why it is `border` and not `border-2`.
+
+Rules:
+
+- A list of captures renders the card. Do not hand-roll a row with the same shape.
+- The whole card is the link; every control inside it stops the click (`stop()`).
+- The title follows "Card titles in a list" above — `font-medium`, never bold.
+
+`InboxListCard.test.jsx` guards it: one call site in Alfred.jsx, and the shell's class
+list appears in no other file.
+
+---
+
+## The context chip and the tag pill — `Chip`, in `src/InboxListCard.jsx`
+
+One component, two shapes. `bg-secondary text-foreground text-xs px-2 py-0.5`, plus:
+
+- **context** — `rounded`, with the `FolderOpen` glyph
+- **tag** — `rounded-full` (`pill`), no glyph
+
+Rules:
+
+- The glyph is what separates the two. A context without the folder reads as a tag.
+- Tags render in the order stored, after everything else on the preview line.
+- The class list lives in one place. A second screen needing a chip exports this one
+  rather than spelling the classes again — there are already four unrelated
+  `px-2 py-0.5` pills in Alfred.jsx and they are not this.
+
+---
+
+## The preview line — `PreviewMark`, in `src/InboxListCard.jsx`
+
+What Process is about to create. Unbacked labels — no fill, no border; the colour is
+the whole signal.
+
+| mark | glyph | tone |
+|---|---|---|
+| New item | `File` | `text-primary` |
+| New intention | `Navigation2` | `text-success` |
+| the event date | `Calendar` | `text-muted-foreground` |
+
+Rules:
+
+- Shown only on an enriched row that suggests something. An unenriched row has nothing
+  to preview, and a line that is sometimes empty reads as a rendering bug.
+- Fixed order: context chip, item, intention, date, tag pills. It is the order the
+  detail page lists them in, and a row that reorders them stops being scannable down a
+  column.
+- A mark is never tappable. The card is the target; the marks describe it.
+
+---
+
+## The archived row — `src/RecentlyArchived.jsx`
+
+**Not a card, deliberately.** No border, no surface at rest, `hover:bg-secondary/60`,
+`px-3 py-2`. One truncated line of title at `text-sm text-muted-foreground`, one meta
+line, one Undo.
+
+Rules:
+
+- Everything is muted except the outcome label, which carries its own tone. It is the
+  one thing an Undo is looking for.
+- The date is the **departure** date (`archivedAt`), not `createdAt` — every other
+  inbox surface shows the opposite, and a June capture discarded this morning must not
+  read as three months old under a heading saying "recently".
+- History rows do not get a card, a hover border or a Process button. The visual gap
+  between this section and the live list directly above it is the only thing telling a
+  reader which rows still need them.
+
+`RecentlyArchived.test.jsx` guards it: the row's class list appears in no other file,
+and nothing else renders a "Recently archived" heading.
 
 ---
 

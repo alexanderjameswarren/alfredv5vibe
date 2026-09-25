@@ -205,3 +205,31 @@ describe("it is wired into the inbox screen", () => {
     );
   });
 });
+
+describe("the archived row is not rebuilt elsewhere", () => {
+  const read = (f) => fs.readFileSync(path.join(__dirname, f), "utf8");
+  const self = read("RecentlyArchived.jsx");
+  const others = fs
+    .readdirSync(__dirname)
+    .filter((f) => /\.jsx$/.test(f) && !/\.test\.jsx$/.test(f) && f !== "RecentlyArchived.jsx")
+    .map((f) => [f, read(f)]);
+
+  it("owns the row", () => {
+    const row = "flex items-start gap-3 px-3 py-2 rounded-lg hover:bg-secondary/60";
+    expect(self).toContain(row);
+    for (const [f, src] of others) expect([f, src.includes(row)]).toEqual([f, false]);
+  });
+
+  it("owns the heading", () => {
+    // The rendered heading, not the words: Alfred.jsx names the section in a dozen
+    // comments, which is documentation rather than a second implementation.
+    expect(self).toContain("Recently archived ({rows.length})");
+    for (const [f, src] of others) expect([f, src.includes("Recently archived ({")]).toEqual([f, false]);
+  });
+
+  it("is the muted shape, not a card", () => {
+    // A border or a card surface here would make history look actionable.
+    expect(self).not.toContain("bg-card");
+    expect(self).not.toContain("border-border");
+  });
+});
