@@ -19,7 +19,7 @@ no Workshop code for this job. The prompt below is the whole program.
 > version and Step 8 echoes it. An older version (or none) in a report means the task is running
 > stale text.
 >
-> ### `PROMPT VERSION: 2026-09-11c`
+> ### `PROMPT VERSION: 2026-09-25a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -155,11 +155,25 @@ areas returned in 3.2. A seed with no area simply does not come back, and that a
 
      ⚠️ **The first line is the dedupe marker.** It must begin `Ken seed check —`, with an em
      dash, character for character. The next run finds it by that prefix and nothing else.
-   - `suggested_context_id: "msxh8sz8ci2ldf6t02k"`
+   - `source_type: "task"`
+   - `source_metadata: { "task_name": "Ken seed check", "run_date": "<local_date>" }`
    - `ai_reasoning: "Created by the ken_seed_check scheduled task, run <run id>."`
 
    Set nothing else. This is a nudge, not a capture to file, so there is no item, intent or
-   event to suggest.
+   event to suggest — **and no context either.** `suggested_context_id` used to be set here and
+   was removed on 2026-09-25: a suggestion is something to accept or reject during triage, and
+   this row's only action is **Copy**.
+
+   🛑 **`source_type: "task"` IS LOAD-BEARING.** It is what says a scheduled run produced this
+   rather than Alex typing it. The row then shows the task glyph, is titled
+   `"<task_name> · <run_date>"` in the inbox list, offers **Copy** instead of **Process** — copying
+   appends `Alfred inbox item: <id>`, which is how the thread that picks it up knows what to
+   archive — and is skipped by the hourly enrichment job (`alfred/inbox_enrich_hourly`). Left as
+   the default `mcp`, this nudge arrives looking hand-typed and the enrichment job writes GTD
+   suggestions over it.
+
+   `task_name` is written as it reads, because the inbox renders it: *Ken seed check*. The
+   registered job slug stays `ken_seed_check`, in `platform_runs` and `platform_schedules`.
 
    **Keep the returned inbox id.** If the call errors, STOP with `failure_kind: "inbox_write"`.
 
@@ -218,8 +232,9 @@ worded as new.
 
 #### 7.2 — Raise it
 
-Call `create_inbox_item` with `suggested_context_id: "msxh8sz8ci2ldf6t02k"` and a
-`captured_text` of exactly this shape:
+Call `create_inbox_item` with `source_type: "task"`,
+`source_metadata: { "task_name": "Ken seed check", "run_date": "<local_date>" }`, **no
+`suggested_*` field of any kind**, and a `captured_text` of exactly this shape:
 
 ```
 Ken seed check FAILED — <failure_kind>, <local_date>
@@ -274,7 +289,7 @@ Nobody may read this. Write it anyway, in exactly this shape:
 
 ```
 Ken seed check — <local_date> (<weekday>)
-  prompt version: 2026-09-11c
+  prompt version: 2026-09-25a
   run id: <id | none — run_open failed>
   run day: <yes | no — skipped>
   seeds read: <n>   areas matched: <n>

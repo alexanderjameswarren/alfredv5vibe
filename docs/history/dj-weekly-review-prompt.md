@@ -20,6 +20,35 @@ Weekly DJ review, <YYYY-MM-DD>.
 thread that does not know to load one reads the item as a document — which is exactly how the
 first version of this prompt got critiqued instead of run (§14.30).
 
+### The call, in full
+
+```
+create_inbox_item
+  captured_text:    the body above
+  source_type:      "task"
+  source_metadata:  { "task_name": "Weekly DJ review", "run_date": "<YYYY-MM-DD>" }
+```
+
+**Nothing else. No `suggested_*` field of any kind, and no `suggest_item` / `suggest_intent`.**
+
+🛑 **`source_type: "task"` IS NOT OPTIONAL AND IT IS NOT COSMETIC.** It is what stops this
+item being mistaken for something Alex typed. A task row shows the task glyph, is titled
+`"<task_name> · <run_date>"` in the inbox list, offers **Copy** rather than **Process** — copying
+appends `Alfred inbox item: <id>` so the thread that picks it up can archive it — and is skipped
+by the hourly enrichment job. Left as the default `mcp`, this report arrives looking like a
+hand-typed capture, and the enrichment job writes GTD suggestions over a report that is about to
+be read and archived by somebody else.
+
+**And that is why there are no suggestions here.** This is a report to be read in one
+conversation, not a capture to be filed: there is no item, no intention and no event in it. A
+suggested context would be the same mistake in miniature — something to accept or reject on a row
+where the only action is Copy.
+
+`task_name` is spelled as it reads, because it is rendered: *Weekly DJ review*. The job has no
+`platform_schedules` row to take a slug from — see Appendix B.
+
+---
+
 ⚠️ **PUT NO OTHER INSTRUCTIONS IN THE ITEM.** How to *act* on the report lives in the skill, in
 one place, and changes without editing anything already filed. An item carrying its own
 instructions is frozen at the moment it was written — §14.25 records a prompt and a spec drifting
@@ -68,7 +97,7 @@ partial report that says so beats a complete one that guessed.
 | write | when | tool |
 |---|---|---|
 | derived tag facts (`derivable_as` non-null) | **immediately, without asking** — they are facts, not proposals | `record_dj_artist_tag` |
-| the inbox item | last, once the report is written | `create_inbox_item` |
+| the inbox item | last, once the report is written | `create_inbox_item`, `source_type: "task"`, no suggestions |
 
 🛑 **THIS JOB DOES NOT ACT ON THE REPORT. IT WRITES IT.** Concert statuses, tagging answers and
 playlist edits all happen later, in the conversation Alex opens from the inbox item, governed by
@@ -322,3 +351,8 @@ State these only when load-bearing for something in the report, never as a stand
   conversation, never from listening history.
 - **Artist-identity collisions are not detectable** (§14.4). The diff can tell that a search
   returned several artists; it cannot tell that two real acts share a name.
+- **This job is not registered in `platform_schedules`** — checked 2026-09-25, which returns four
+  rows: `alfred/inbox_enrich_hourly`, `alfred/notify-dispatch`, `ken/ken_seed_check` and
+  `sam/daily_plan_review`. So nothing raises a staleness alarm if the weekly review silently stops
+  running, and there is no job slug to take `task_name` from — hence the readable name in the call
+  above. Registering it is a decision for Alex, not something this prompt can do.
