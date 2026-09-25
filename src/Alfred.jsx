@@ -20,6 +20,7 @@ import PinnedFooter from "./PinnedFooter";
 import EditCard from "./EditCard";
 import InboxListCard from "./InboxListCard";
 import RecentlyArchived from "./RecentlyArchived";
+import OriginalCapture from "./OriginalCapture";
 import UnderlineTabs from "./UnderlineTabs";
 import {
   archiveOutcome,
@@ -5477,6 +5478,14 @@ export default function Alfred() {
   // that silently hid the row you were looking for because a tab was still selected is
   // the trap `effectiveSource` exists to avoid. The window and "Show all" are its own
   // controls.
+  // The capture a filed record came from, for the two detail views' Original capture
+  // section. Reads `allInboxItems` rather than `inboxItems`: triage ARCHIVES the row, so
+  // by the time anything links to it, it is out of the live list by definition.
+  const capturedTextFor = (record) =>
+    record?.sourceInboxId
+      ? allInboxItems.find((i) => i.id === record.sourceInboxId)?.capturedText || null
+      : null;
+
   const archivedInboxItems = recentlyArchived(allInboxItems, { showAll: archivedShowAll });
   const olderArchived = olderArchivedCount(allInboxItems);
   // Keywords are not on the card, so a keyword hit shows a row whose visible
@@ -6225,6 +6234,7 @@ export default function Alfred() {
           <IntentionDetailView
             tagPool={tagPool}
             intention={intents.find((i) => i.id === selectedIntentionId)}
+            capturedText={capturedTextFor(intents.find((i) => i.id === selectedIntentionId))}
             events={events}
             contexts={contexts}
             items={items}
@@ -6327,6 +6337,7 @@ export default function Alfred() {
         {view === "item-detail" && selectedItemId && (
           <ItemDetailView
             tagPool={tagPool}
+            capturedText={capturedTextFor(items.find((i) => i.id === selectedItemId))}
             onOpenAddIntention={(itemId) =>
               openAddPage("intention-add", { kind: "item", id: itemId })
             }
@@ -8395,6 +8406,9 @@ function ContextDetailView({
 function IntentionDetailView({
   tagPool = [],
   intention,
+  // The capture this intention was filed from, resolved by the caller from
+  // `sourceInboxId`. Null for one created by hand. See OriginalCapture.
+  capturedText,
   events,
   contexts,
   items,
@@ -8657,6 +8671,9 @@ function IntentionDetailView({
           </div>
         )}
       </div>
+
+      {/* Last on the page, and only when this intention was filed from a capture. */}
+      <OriginalCapture capturedText={capturedText} />
     </div>
   );
 }
@@ -8706,6 +8723,8 @@ function AddPageChrome({ title, subtitle, onBack, children }) {
 
 function ItemDetailView({
   tagPool = [],
+  // As IntentionDetailView: the capture this item was filed from, or null.
+  capturedText,
   // Step 12.6. Takes the item id so the add page can seed the intention against
   // it, exactly as the inline form did.
   onOpenAddIntention,
@@ -9209,6 +9228,9 @@ function ItemDetailView({
           </div>
         )}
       </div>
+
+      {/* Last on the page, and only when this item was filed from a capture. */}
+      <OriginalCapture capturedText={capturedText} />
     </div>
   );
 }

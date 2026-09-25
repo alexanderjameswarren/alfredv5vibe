@@ -105,12 +105,30 @@ For each inbox item, determine:
 - **Intent** (`suggest_intent: true`): Action items, tasks, things to do. "Call the plumber", "buy groceries", "cook dinner tonight".
 - **Both**: Often the right answer. A recipe (item) + "cook this tonight" (intent). A checklist (item) + "pack for trip" (intent).
 
-**Intention description**: whenever you suggest an intention, fill in
-`suggested_intent_description` as well as `suggested_intent_text`. The name is the
-short action — "Call the plumber". The description holds everything else the
-capture said that does not fit in the name: the phone number, the reason, the
-constraint, the deadline, the half-sentence of context. Leave it empty only when
-the capture is genuinely nothing but the action.
+**The description carries the substance of the capture — both kinds of record.**
+An item's `suggested_item_description` and an intention's
+`suggested_intent_description` (labelled "Details") hold what the capture said
+beyond the name: the phone number, the reason, the constraint, the deadline, the
+half-sentence of context, the thing that made it worth capturing.
+
+The name is the short version — "Call the plumber". The description is everything
+else, and it is what the record itself says. The original capture is kept and shown
+read-only at the bottom of the item or intention, so nothing is lost either way —
+but a record whose description is empty makes its reader go and read the capture to
+find out what it was about, which is exactly the work enrichment is for.
+
+Three rules, and they are the whole of it:
+
+1. **Never leave it empty** when the capture said more than its name. The name is
+   often the only part that comes from a whole paragraph; without a description,
+   the rest is lost on the way in.
+2. **Never repeat the name.** A description that restates the name adds nothing
+   and reads as though the capture said nothing else.
+3. **Keep it concise.** A sentence or two. Not the capture pasted back in — if the
+   capture is genuinely all substance, the item's elements are where its structure
+   belongs, not a wall of text in the description.
+
+Leave it empty only when the capture is genuinely nothing but the name.
 
 **Event**: If there's a specific date mentioned (or implied by "tomorrow", "next Tuesday", etc.), set `suggest_event: true` and resolve the date to `YYYY-MM-DD` format. Use today's date for reference.
 
