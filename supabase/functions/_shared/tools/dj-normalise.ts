@@ -251,6 +251,33 @@ export const ARTIST_ALIASES: ArtistAlias[] = [
       "carries the personal one. That reversal is why no automatic rule works " +
       "— 'prefer the longer form' would fix one entry and break the other.",
   },
+  {
+    from: "Art Blakey & The Jazz Messengers",
+    to: "Art Blakey",
+    why:
+      "The Jazz Messengers were Blakey's own working band for 35 years, led by " +
+      "him throughout and named as his vehicle; the Blue Note sides in this " +
+      "library are billed both ways on the same recordings. Unlike Miles Davis " +
+      "there is no catalogue split to lose — no era of Blakey here is NOT the " +
+      "Messengers, so merging them cannot make a familiarity answer wrong. " +
+      "DIRECTION IS TOWARD WHAT IS ALREADY STORED, as with Dave Brubeck and " +
+      "against the default rule: fsJ3JjpZyoA is stored 'Art Blakey' and the " +
+      "poll is sending the ensemble form, so mapping this way needs no backfill " +
+      "and re-keys nothing (§4.1.2).",
+  },
+  {
+    from: "Ahmad Jamal Trio",
+    to: "Ahmad Jamal",
+    why:
+      "Ahmad Jamal the pianist and the Ahmad Jamal Trio are one act for " +
+      "familiarity purposes — the trio is his working group and the Argo " +
+      "recordings here are his, the same argument as Red Garland one entry up. " +
+      "DIRECTION IS TOWARD WHAT IS ALREADY STORED: JDOUyH7VJ3Y is stored " +
+      "'Ahmad Jamal' and the poll is sending 'Ahmad Jamal Trio', so this needs " +
+      "no backfill. Note this is the OPPOSITE direction to Eddie Higgins on the " +
+      "identical shape of name, which is §4.1.4's whole point: the vocabularies " +
+      "reverse per act and no automatic Trio rule can work.",
+  },
 ];
 
 // ⚠️ MILES DAVIS IS DELIBERATELY NOT AN ENTRY, and is the case that shows this
@@ -321,42 +348,75 @@ export function buildMatchKey(
 // would not report, which is the failure mode the shared prepareRows exists to
 // prevent.
 //
-// WHY NOT COMPARE dj_tracks.artist DIRECTLY. That column holds the JOINED
-// display string - `artists.join(", ")`. A poll row for a collaboration stores
-// "Coldplay, BTS"; a Takeout row for the same video submits "Coldplay", because
-// the export carries only the "- Topic" channel and so knows exactly one artist.
-// Comparing those two strings fires on EVERY collaboration while nothing is
-// actually wrong: match_key uses artists[0] alone, both sides agree on the
-// primary, and the two rows group identically.
+// WHY NOT COMPARE dj_tracks.artist DIRECTLY, UNSPLIT. That column holds the
+// JOINED display string - `artists.join(", ")`. A poll row for a collaboration
+// stores "Coldplay, BTS"; a Takeout row for the same video submits "Coldplay",
+// because the export carries only the "- Topic" channel and so knows exactly one
+// artist. Comparing those two whole strings fires on EVERY collaboration while
+// nothing is actually wrong: only the primary artist decides identity, both
+// sides agree on it, and the two rows group together.
 //
 // A detector that fires on every collaboration is one its reader learns to
 // ignore, and then it will not catch the real case. Same shape as marking an
 // empty day "failed".
 //
-// WHY THE MATCH KEY AND NOT A SPLIT OF THE JOINED COLUMN. Splitting
-// "Coldplay, BTS" on ", " looks equivalent and is not: artist names contain
-// commas. "Earth, Wind & Fire", "Crosby, Stills & Nash" and "Tyler, The
-// Creator" would each yield a wrong primary and a false disagreement - the
-// exact bug being fixed, moved somewhere harder to see.
+// ⚠️ IT USED TO READ BOTH PRIMARIES OUT OF A match_key, AND THAT IS THE BUG
+// FIXED HERE (run 91151897, 2026-09-23: 19 of 21 flags false). A match_key is
+// built by whichever call site wrote the row, and the call sites disagree about
+// what `artists[]` is. record_dj_album passes the whole byline as ONE element
+// (`artists: ["Clifford Brown, Max Roach"]`), so its key carries
+// "clifford brown max roach" as the primary; the poll passes the names SPLIT
+// (`["Clifford Brown", "Max Roach"]`), so its key carries "clifford brown".
+// Two identical bylines, two different primaries, a disagreement reported
+// between a string and itself. Reading a stored key is reading whatever
+// tokenisation the writer happened to use.
 //
-// match_key is `normalisePart(canonicalArtist(artists[0])) + "|" + normalisePart(title)`,
-// and `tidy` replaces every non-letter/non-digit run, so a "|" CANNOT survive
-// normalisation. The first "|" is therefore unambiguously the separator, and
-// the text before it is the stored primary artist exactly as the grouping rules
-// saw it. No parsing guess involved.
+// ⚠️ AND WHY SPLITTING ON THE COMMA IS SAFE HERE, THOUGH THE NOTE THIS REPLACES
+// ARGUED IT WAS NOT. The old argument: "Earth, Wind & Fire", "Crosby, Stills &
+// Nash" and "Tyler, The Creator" contain commas, so a split yields a wrong
+// primary. True — but a wrong primary is only a wrong ANSWER if the two sides
+// derive it differently. Both sides go through the one function below, so the
+// same string always yields the same primary and IDENTICAL INPUT CANNOT BE
+// FLAGGED, whatever the split does to it. "Count Basie Orchestra, Joe Williams,
+// Lambert, Hendricks & Ross" is the live case: the split mangles it, both sides
+// identically, and it agrees with itself. The residual risk is the opposite and
+// much milder - two genuinely different acts sharing a first comma-token would
+// agree quietly, where before they would have been reported.
 //
-// The comparison is on NORMALISED primaries, deliberately. Two spellings that
-// normalise identically group identically, so they are not a split and there is
-// nothing to report.
+// The comparison is on NORMALISED primaries with the alias map applied,
+// deliberately. Two spellings that normalise or alias identically group
+// identically, so they are not a split and there is nothing to report.
 
 /** The stored primary artist, normalised, recovered from a match_key. Returns
  *  null when there is no key or the artist half is empty (a track stored with
- *  no artist at all). */
+ *  no artist at all).
+ *
+ *  ⚠️ NOT THE BASIS OF THE DISAGREEMENT CHECK ANY MORE, and must not become it
+ *  again - see the note above. It reflects the tokenisation of whichever call
+ *  site wrote the row, which is a fact about the writer, not about the act. */
 export function primaryArtistOfMatchKey(matchKey: string | null | undefined): string | null {
   if (!matchKey) return null;
   const i = matchKey.indexOf("|");
   if (i <= 0) return null;
   return matchKey.slice(0, i);
+}
+
+/** The primary artist, normalised and alias-translated, from a display byline
+ *  (`dj_tracks.artist`, or the same string as submitted).
+ *
+ *  ⚠️ THE ONE DERIVATION. Both sides of detectArtistDisagreement call this and
+ *  nothing else, so identical inputs give identical primaries BY CONSTRUCTION
+ *  rather than by two call sites remembering to agree - which is exactly what
+ *  they stopped doing.
+ *
+ *  Alias translation runs AFTER the split and BEFORE normalisation, matching
+ *  buildMatchKey, so the map keys stay readable. No alias `from` may contain a
+ *  comma or the split would reach it first; a test pins that. */
+export function primaryArtistOfDisplay(display: string | null | undefined): string | null {
+  if (!display) return null;
+  const first = display.split(",")[0].trim();
+  if (!first) return null;
+  return normalisePart(canonicalArtist(first)) || null;
 }
 
 export interface ArtistDisagreement {
@@ -372,20 +432,18 @@ export interface ArtistDisagreement {
 /** Returns a disagreement only when the NORMALISED PRIMARY artists differ.
  *  Null when they agree, or when either side cannot be determined.
  *
- *  BOTH primaries are read out of a match_key, so both have been through the
- *  identical derivation - alias translation, qualifier stripping, tidy - by
- *  construction rather than by two call sites remembering to agree. Passing the
- *  submitted artists[] here instead would re-derive it a second way, which is
- *  how a detector starts reporting differences that are its own. */
+ *  BOTH primaries come from primaryArtistOfDisplay, so both have been through
+ *  the identical derivation - split, alias translation, qualifier stripping,
+ *  tidy. Passing a stored match_key here instead would re-derive one side a
+ *  second way, which is how a detector starts reporting differences that are
+ *  its own. */
 export function detectArtistDisagreement(
   videoId: string,
   storedArtistDisplay: string | null,
-  storedMatchKey: string | null | undefined,
   submittedArtistDisplay: string | null,
-  submittedMatchKey: string | null | undefined,
 ): ArtistDisagreement | null {
-  const storedPrimary = primaryArtistOfMatchKey(storedMatchKey);
-  const submittedPrimary = primaryArtistOfMatchKey(submittedMatchKey);
+  const storedPrimary = primaryArtistOfDisplay(storedArtistDisplay);
+  const submittedPrimary = primaryArtistOfDisplay(submittedArtistDisplay);
   // Cannot compare is NOT the same as agrees; report neither.
   if (!storedPrimary || !submittedPrimary) return null;
   if (storedPrimary === submittedPrimary) return null;

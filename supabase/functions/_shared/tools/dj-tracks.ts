@@ -352,9 +352,7 @@ export async function resolveTrackIds(
   for (const p of prepared) {
     const known = existing.get(p.video_id);
     if (!known) continue;
-    const d = detectArtistDisagreement(
-      p.video_id, known.artist, known.match_key, p.artist, p.match_key,
-    );
+    const d = detectArtistDisagreement(p.video_id, known.artist, p.artist);
     if (d) allDisagreements.push(d);
   }
 

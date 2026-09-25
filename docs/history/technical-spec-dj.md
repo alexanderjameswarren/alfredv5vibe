@@ -324,6 +324,47 @@ one act *for familiarity purposes* is a genuine judgment call — someone deep i
 Blue* has not thereby heard *Bitches Brew*. **No such split exists in the data today.** If one
 arises it needs deciding, not inferring.
 
+---
+
+#### ⚠️ AMENDED 2026-09-25 — the detector compared two match_keys, and match_keys are not comparable across writers
+
+**Run 91151897 (2026-09-23) reported 21 artist disagreements; 19 were the detector's own.**
+Each of the 19 had IDENTICAL stored and submitted bylines — `Clifford Brown, Max Roach`
+against `Clifford Brown, Max Roach` — reported as `clifford brown max roach` vs
+`clifford brown`.
+
+**The cause: `detectArtistDisagreement` read both primaries out of a stored `match_key`, and
+the call sites that write those keys disagree about what `artists[]` is.** `record_dj_album`
+passes the whole byline as ONE element (`["Clifford Brown, Max Roach"]`, from
+`t.artist ? [t.artist] : []`), so its key carries the whole string as the primary; the poll
+passes the names split, so its key carries the first. Reading a stored key is reading
+whichever tokenisation the writer happened to use, not a fact about the act.
+
+**The fix: ONE derivation, `primaryArtistOfDisplay(byline)`, on both sides** — split at the
+first comma, alias-translate, normalise. Identical inputs are now unflaggable by
+construction. `match_key` is no longer an input to the check, and `dry_run_dj_plays` no
+longer fetches it.
+
+**⚠️ THIS REVERSES THE "WHY THE MATCH KEY AND NOT A SPLIT" NOTE, AND THAT NOTE WAS NOT
+SILLY.** Its point was that `Earth, Wind & Fire` and `Count Basie Orchestra, Joe Williams,
+Lambert, Hendricks & Ross` contain commas, so a split yields a wrong primary. True — but a
+wrong primary is only a wrong ANSWER when the two sides derive it differently. Through one
+function the mangling is identical on both sides and cannot produce a false flag. The
+residual risk inverts and is milder: two different acts sharing a first comma-token would
+agree quietly.
+
+**⚠️ `record_dj_album` STILL WRITES THE UNSPLIT KEY, AND THAT IS A SEPARATE, UNFIXED
+GROUPING BUG.** `Clifford Brown, Max Roach` is keyed as one artist name, so an album-imported
+track does not group with the poll's row for the same recording. Fixing it changes `match_key`
+derivation, which is a backfill migration under §4.1.2 and not a deploy — **open, not done.**
+
+**Two entries added to the map the same day** (both DIRECTION-TOWARD-STORED, the Brubeck
+precedent, because the poll is the side sending the ensemble form and no row needs re-keying):
+`Art Blakey & The Jazz Messengers → Art Blakey`, `Ahmad Jamal Trio → Ahmad Jamal`. Note the
+second is the OPPOSITE direction to Eddie Higgins on an identically shaped name — §14.7 again.
+
+---
+
 **⚠️ KNOWN-PERMANENT DISAGREEMENTS ARE LISTED IN `docs/dj-known-disagreements.md`.** Some
 entries are decided and will fire forever — `AbbzAPXvNZ8` (a Clark Terry collaboration, not
 a spelling variant) and the 12 unrepaired `Release` rows. Check that page before
