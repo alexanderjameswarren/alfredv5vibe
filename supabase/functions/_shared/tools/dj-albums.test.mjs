@@ -45,6 +45,10 @@ let src = readFileSync(join(HERE, "dj-albums.ts"), "utf-8")
 if (src.includes("../platform.ts") || src.includes("./dj-tracks.ts")) {
   throw new Error("an import line changed — update the stubs in this test");
 }
+// dj-normalise.ts is copied REAL, not stubbed. It is import-free and pure, and
+// splitArtistByline is the thing under test here: a stub would let the album
+// path drift back to passing the whole byline as one artist without failing.
+writeFileSync(join(dir, "dj-normalise.ts"), readFileSync(join(HERE, "dj-normalise.ts"), "utf-8"));
 writeFileSync(join(dir, "resolver-stub.ts"), RESOLVER_STUB);
 writeFileSync(join(dir, "probe.ts"), src);
 globalThis.__resolverCalls = resolverCalls;
@@ -255,6 +259,28 @@ test("only tracks WITH a video_id reach the resolver", async () => {
   });
   assert.equal(resolverCalls.length, 1);
   assert.deepEqual(resolverCalls[0].map((p) => p.video_id), ["v1", "v2"]);
+});
+
+test("THE BYLINE IS SPLIT before it reaches the resolver", async () => {
+  // 🛑 This path used to pass `[t.artist]` - the whole joined byline as ONE
+  // artist - so "Clifford Brown, Max Roach" became the primary and the row never
+  // grouped with the poll's row for the same recording. The display string must
+  // still round-trip unchanged; only the LIST shape differs.
+  resolverCalls.length = 0;
+  const db = makeDb({ rpc: () => [{ tracks_playable: 2, tracks_heard: 0 }] });
+  await rec(db, {
+    ...MINGUS,
+    tracks: [
+      { video_id: "v1", title: "Jordu", artist: "Clifford Brown, Max Roach", position: 1 },
+      { video_id: "v2", title: "September", artist: "Earth, Wind & Fire", position: 2 },
+    ],
+  });
+  assert.equal(resolverCalls.length, 1);
+  const [a, b] = resolverCalls[0];
+  // The stub joins the list back with ", ", so this asserts the split AND that
+  // the stored display column is byte-identical to what came in.
+  assert.equal(a.artist, "Clifford Brown, Max Roach", "display must round-trip");
+  assert.equal(b.artist, "Earth, Wind & Fire", "a comma NAME must survive whole");
 });
 
 test("it uses the SHARED resolver rather than a local one", async () => {

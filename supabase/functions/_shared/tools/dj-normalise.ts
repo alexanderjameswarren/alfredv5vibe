@@ -446,6 +446,87 @@ export function primaryArtistOfMatchKey(matchKey: string | null | undefined): st
   return matchKey.slice(0, i);
 }
 
+// ---------------------------------------------------------------------------
+// Act names that CONTAIN a comma — the curated exception to the split
+// ---------------------------------------------------------------------------
+//
+// A joined byline separates acts with ", ", and so do these names internally.
+// Nothing in the string tells them apart, so this is hand-curated for the same
+// reason ARTIST_ALIASES is (§14.7): a derived rule would have to know which
+// commas are punctuation and which are separators, and it cannot.
+//
+// ⚠️ WHAT IT COSTS TO BE MISSING FROM THIS LIST, stated so the next person knows
+// what they are fixing. The poll receives its artists ALREADY SPLIT by YouTube
+// Music and sends "Earth, Wind & Fire" as ONE element, so its match_key primary
+// is the whole name. record_dj_album receives one flat string and has to split
+// it. A comma name absent from this list therefore gets a TRUNCATED primary from
+// the album path and a whole one from the poll - the two rows for one recording
+// do not group. That is a narrower version of the bug being fixed, not a new
+// kind of one, and it is the reason this list exists rather than a bare split.
+//
+// It does NOT affect the disagreement detector's verdicts: that compares two
+// display strings through this same function, so a missing entry mangles both
+// sides identically and cannot produce a false flag.
+export const COMMA_ARTIST_NAMES: string[] = [
+  "Earth, Wind & Fire",
+  "Crosby, Stills & Nash",
+  "Crosby, Stills, Nash & Young",
+  "Tyler, The Creator",
+  "Blood, Sweat & Tears",
+  "Emerson, Lake & Palmer",
+];
+
+// Longest first, so "Crosby, Stills, Nash & Young" is tried before
+// "Crosby, Stills & Nash" can claim a prefix of it.
+const COMMA_NAMES_NORMALISED: string[] = [...COMMA_ARTIST_NAMES]
+  .sort((a, b) => b.length - a.length)
+  .map((n) => normalisePart(n));
+
+/**
+ * Split a joined display byline into its acts. THE one split rule.
+ *
+ * `dj_tracks.artist` is `artists.join(", ")`, so a byline is the only form the
+ * album path ever sees; the poll gets the list structured and never needs this.
+ * Both are reconciled here so an album-written match_key and a poll-written one
+ * agree about the primary artist.
+ *
+ * Known comma-containing names (above) are peeled off whole before any split,
+ * including in leading position: "Earth, Wind & Fire, Deniece Williams" is two
+ * acts, not four.
+ */
+export function splitArtistByline(display: string | null | undefined): string[] {
+  if (!display) return [];
+  const out: string[] = [];
+  let rest = display.trim();
+  while (rest.length > 0) {
+    // A known comma name at the head wins over the next comma.
+    const whole = normalisePart(rest);
+    const head = COMMA_NAMES_NORMALISED.find(
+      (n) => whole === n || whole.startsWith(n + " "),
+    );
+    if (head) {
+      // Re-find the boundary in the RAW string: count the commas the name owns.
+      const commas = COMMA_ARTIST_NAMES.find((n) => normalisePart(n) === head)!
+        .split(",").length - 1;
+      let cut = -1;
+      for (let i = 0, from = 0; i <= commas; i++) {
+        cut = rest.indexOf(",", from);
+        if (cut < 0) break;
+        from = cut + 1;
+      }
+      if (cut < 0) { out.push(rest.trim()); break; }
+      out.push(rest.slice(0, cut).trim());
+      rest = rest.slice(cut + 1).trim();
+      continue;
+    }
+    const i = rest.indexOf(",");
+    if (i < 0) { out.push(rest.trim()); break; }
+    out.push(rest.slice(0, i).trim());
+    rest = rest.slice(i + 1).trim();
+  }
+  return out.filter((a) => a.length > 0);
+}
+
 /** The primary artist, normalised and alias-translated, from a display byline
  *  (`dj_tracks.artist`, or the same string as submitted).
  *
@@ -454,12 +535,14 @@ export function primaryArtistOfMatchKey(matchKey: string | null | undefined): st
  *  rather than by two call sites remembering to agree - which is exactly what
  *  they stopped doing.
  *
- *  Alias translation runs AFTER the split and BEFORE normalisation, matching
- *  buildMatchKey, so the map keys stay readable. No alias `from` may contain a
- *  comma or the split would reach it first; a test pins that. */
+ *  The split is splitArtistByline, shared with record_dj_album so an album's
+ *  match_key and the poll's agree. Alias translation runs AFTER the split and
+ *  BEFORE normalisation, matching buildMatchKey, so the map keys stay
+ *  readable. No alias `from` may contain a comma unless it is also a
+ *  COMMA_ARTIST_NAMES entry, or the split would reach it first; a test pins
+ *  that. */
 export function primaryArtistOfDisplay(display: string | null | undefined): string | null {
-  if (!display) return null;
-  const first = display.split(",")[0].trim();
+  const first = splitArtistByline(display)[0];
   if (!first) return null;
   return normalisePart(canonicalArtist(first)) || null;
 }

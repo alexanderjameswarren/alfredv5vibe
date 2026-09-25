@@ -27,6 +27,8 @@ import {
   primaryArtistOfDisplay,
   PLACEHOLDER_ARTISTS,
   isPlaceholderArtist,
+  splitArtistByline,
+  COMMA_ARTIST_NAMES,
   isVariantCut,
   normalisePart,
   resolvePlayDate,
@@ -399,6 +401,46 @@ test("A REAL SPLIT STILL FIRES — the check can fail", () => {
   assert.equal(r.submitted_primary, "thelonious monk");
 });
 
+test("splitArtistByline — the one split rule, shared with record_dj_album", () => {
+  assert.deepEqual(splitArtistByline("Clifford Brown, Max Roach"),
+    ["Clifford Brown", "Max Roach"]);
+  assert.deepEqual(splitArtistByline("Coldplay"), ["Coldplay"]);
+  assert.deepEqual(splitArtistByline("Coldplay, Little Simz, Burna Boy"),
+    ["Coldplay", "Little Simz", "Burna Boy"]);
+  // Whitespace and empty segments never become an act.
+  assert.deepEqual(splitArtistByline("  Coldplay ,  BTS , "), ["Coldplay", "BTS"]);
+  assert.deepEqual(splitArtistByline(""), []);
+  assert.deepEqual(splitArtistByline(null), []);
+});
+
+test("A COMMA INSIDE A NAME SURVIVES THE SPLIT — the curated exception", () => {
+  // The poll sends these as ONE element, so an album-written key must agree.
+  for (const name of COMMA_ARTIST_NAMES) {
+    assert.deepEqual(splitArtistByline(name), [name], `${name} must survive whole`);
+    assert.equal(primaryArtistOfDisplay(name), normalisePart(name));
+    // ...and the key an album write produces now equals the poll's.
+    assert.equal(buildMatchKey(splitArtistByline(name), "Song"), buildMatchKey([name], "Song"));
+  }
+  // In leading position too: two acts, not four.
+  assert.deepEqual(splitArtistByline("Earth, Wind & Fire, Deniece Williams"),
+    ["Earth, Wind & Fire", "Deniece Williams"]);
+  // Longest first — the four-name form is not eaten by the three-name one.
+  assert.deepEqual(splitArtistByline("Crosby, Stills, Nash & Young"),
+    ["Crosby, Stills, Nash & Young"]);
+});
+
+test("the album path and the poll now build the SAME key for one recording", () => {
+  // The bug, stated as the thing it broke. Before: the album wrote
+  // "clifford brown max roach|jordu" and the poll wrote "clifford brown|jordu",
+  // so two rows for one recording never grouped.
+  const fromAlbum = buildMatchKey(splitArtistByline("Clifford Brown, Max Roach"), "Jordu");
+  const fromPoll = buildMatchKey(["Clifford Brown", "Max Roach"], "Jordu");
+  assert.equal(fromAlbum, fromPoll);
+  assert.equal(fromAlbum, "clifford brown|jordu");
+  // And the OLD album derivation is what it disagreed with.
+  assert.notEqual(buildMatchKey(["Clifford Brown, Max Roach"], "Jordu"), fromPoll);
+});
+
 test("A PLACEHOLDER BYLINE IS NOT A DISAGREEMENT — the six 2026-09-22 rows", () => {
   // "Various Artists" names no act, so it cannot be a second vocabulary for one.
   // Suppressed, NOT aliased: aliasing it would assert every compilation in the
@@ -482,7 +524,11 @@ test("cannot-compare is not the same as agrees", () => {
   assert.equal(detectArtistDisagreement("vid", "Coldplay", null), null);
   // A byline that normalises away entirely leaves no primary to compare.
   assert.equal(primaryArtistOfDisplay(""), null);
-  assert.equal(primaryArtistOfDisplay(", BTS"), null);
+  assert.equal(primaryArtistOfDisplay(",,"), null);
+  assert.equal(primaryArtistOfDisplay("  "), null);
+  // A LEADING empty segment is malformed, not unknowable: the real artist is
+  // right there and splitArtistByline drops the empty rather than the name.
+  assert.equal(primaryArtistOfDisplay(", BTS"), "bts");
 });
 
 test("a pipe cannot survive normalisation, so the first one is always the separator", () => {

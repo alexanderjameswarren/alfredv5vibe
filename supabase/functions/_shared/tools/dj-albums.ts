@@ -8,6 +8,7 @@
 
 import { clampLimit, defineTool } from "../platform.ts";
 import { resolveTrackIds, toTrackInput } from "./dj-tracks.ts";
+import { splitArtistByline } from "./dj-normalise.ts";
 
 const VALID_STATUS = ["proposed", "queued", "listening", "known", "dismissed"];
 
@@ -133,11 +134,24 @@ export const recordDjAlbumTool = defineTool({
         // work: a play of ANY upload of a track counts. A second implementation
         // here would agree with record_dj_playlist until one of them changed
         // (§14.6).
+        // ⚠️ THE BYLINE IS SPLIT, NOT PASSED WHOLE. This read
+        // `t.artist ? [t.artist] : []`, which made the entire joined byline the
+        // PRIMARY artist: "Clifford Brown, Max Roach" was keyed as one name, so
+        // an album-imported track never grouped with the poll's row for the same
+        // recording, and the disagreement check reported the string against
+        // itself (run 91151897). The poll receives its artists already split;
+        // this path receives one flat string and reconciles through the shared
+        // splitArtistByline so both produce the same match_key.
+        //
+        // 🛑 EXISTING ROWS ARE NOT FIXED BY THIS. match_key is written once
+        // (§4.1.2), so album rows already stored keep the unsplit key and only
+        // NEW rows are correct. Repairing the old ones is a backfill migration,
+        // not a deploy - see the plan filed with this change.
         const prepared = withVideo.map((t) =>
           toTrackInput(
             t.video_id as string,
             t.title ?? "",
-            t.artist ? [t.artist] : [],
+            splitArtistByline(t.artist),
             title,
             t.duration_seconds ?? null,
           )
