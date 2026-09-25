@@ -12,6 +12,52 @@ and the row was keyed `clifford brown max roach|jordu`. The poll keys the same
 recording `clifford brown|jordu`. Two rows for one recording that never group, so
 "have I heard this" answers no when the answer is yes.
 
+## ⚠️ AMENDED 2026-09-25 after 073 ran — SQL no longer decides anything
+
+073 returned **94 rows to re-key, 0 merges, 88 album-written, 6 not**, and
+**proposed two keys that were wrong**: `Earth, Wind & Fire` -> `earth` and
+`Tyler, The Creator` -> `tyler`. Both names were already in `COMMA_ARTIST_NAMES`.
+The query could not see that list because it lives in TypeScript, which is §14.6's
+two-runtimes drift landing on a frozen key — the worst place it can land.
+
+**So the pipeline changed shape.** `074_dump_rekey_candidates.sql` selects
+candidates on a purely STRUCTURAL test (the byline contains a comma, plus the six
+`072` video ids) and decides nothing. `scripts/dj-plan-rekey.mjs` imports the
+DEPLOYED `splitArtistByline`, `canonicalArtist`, `normalisePart` and
+`buildMatchKey`, computes every new key, works out the merges and the new group
+leaders, and emits `075` with literal values. One implementation, the live one.
+
+Proven on `scripts/fixtures/dj-rekey-074-sample.json`, which carries one row of
+every class:
+
+| input | outcome |
+|---|---|
+| `Clifford Brown, Max Roach` | re-keyed to `clifford brown\|jordu` |
+| `Earth, Wind & Fire`, `Tyler, The Creator` | **no change** — the exception list holds |
+| `Art Blakey & The Jazz Messengers, Lee Morgan` | `art blakey\|blues walk` — alias *and* split |
+| `Dec 29, 2023`, `Oct 24, 2019`, `…, 1.2M views` | **excluded**, §14.9 |
+| the six `Various Artists` | re-keyed from the byline **072** writes |
+
+## Date-as-artist: where it came from, and yes it still happens
+
+`Dec 29, 2023` is **§14.9 again, one field further along**. ytmusicapi returns a
+video's subtitle runs as `artists`; for a Topic-channel song those runs are real
+artists, and for an ordinary uploaded video they are `channel · views · upload
+date`. §14.9 already records `"Jazz and Blues Experience, 1.7M views"` from the
+same source.
+
+**The writer is `record_dj_playlist`, via `workshop/scripts/dj_import_playlists.py`**,
+which passes `[a["name"] for a in t["artists"]]` straight through;
+`dj-playlists.ts:261` filters only by *type* (`typeof a === "string"`), never by
+content. **Nothing has changed, so it still does it** — any playlist import
+containing non-Topic videos will mint more. Not fixed here: it is neither of the
+two things you asked for, and a guard on that path is its own decision. Say the
+word and it is a small change.
+
+**These rows are excluded from the backfill.** Re-keying `Dec 29, 2023` to
+`dec 29` is meaningless — the *artist* is wrong, and repairing that is a
+hand-built value table, the shape of 007, not this migration.
+
 ## How many rows, and which
 
 **Unknown until you run 073.** I cannot read the database and will not guess a
@@ -89,14 +135,18 @@ After running it: `node scripts/dj-grouping-check.js`. **CROSS_KEY must be 0.** 
 treats that as a gate rather than a formality, and this backfill merges groups,
 which is precisely the operation that can produce a CROSS_KEY violation.
 
-## Sequence, once approved
+## Sequence
 
-1. Run 073. Paste the result back.
-2. I write the backfill as numbered migrations: snapshot, re-key, canonical
-   rebuild, verify — **one statement per step**.
-3. You run them in order, in the SQL editor. I run nothing.
-4. `dj-grouping-check.js`, CROSS_KEY = 0.
-5. Spec §4.1.2 gets the entry saying what moved and why.
+1. **072** — repairs the six `Various Artists` bylines. **Must precede 075**, which
+   takes their keys from the byline 072 writes.
+2. **074** — read-only dump. Paste the single result cell back.
+3. I run `scripts/dj-plan-rekey.mjs` on it. It writes **075** and prints exactly
+   which rows re-key, which are already correct, which are excluded and why, and
+   which merge. You see that list before anything runs.
+4. You run 075's four steps in order: snapshot, re-key, canonical rebuild, verify.
+   I run nothing.
+5. `node scripts/dj-grouping-check.js`, CROSS_KEY = 0.
+6. Spec §4.1.2 gets the entry saying what moved and why.
 
 ## The residual this does not fix
 

@@ -1,5 +1,14 @@
 -- 073 - READ-ONLY DIAGNOSTIC. Nothing here changes data.
 --
+-- 🛑 SUPERSEDED BY 074 AS THE INPUT TO THE BACKFILL. Run 2026-09-25: 94 rows,
+-- 0 merges, 88 album-written, 6 not. ⚠️ ITS PROPOSED KEYS WERE WRONG. The SQL
+-- approximation below cannot see COMMA_ARTIST_NAMES, which lives in TypeScript,
+-- so it proposed "Earth, Wind & Fire" -> `earth` and "Tyler, The Creator" ->
+-- `tyler`. Both names were already in that list. THE COUNTS ARE STILL SOUND as
+-- sizing; the KEYS were never usable. 074 dumps candidates on a purely
+-- structural test and lets the deployed functions decide. Kept because the
+-- mistake is the argument for 074's shape.
+--
 -- MOVED HEADER: verification query. Not a schema change, not a backfill, never
 -- "applied". Run it, paste the single result cell back, and it is done.
 --
