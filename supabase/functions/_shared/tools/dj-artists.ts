@@ -16,6 +16,21 @@ import { clampLimit, defineTool } from "../platform.ts";
 
 const MBID_LEN = 36;
 
+// ---------------------------------------------------------------------------
+// 🛑 PostgREST `.in()` GOES IN THE URL, AND A LONG ONE KILLS THE REQUEST.
+// record_dj_artist_tag failed four times running on 2026-09-25 with "http2
+// error: stream error detected": its track lookup sent every track id from all
+// 24 concert playlists — several hundred uuids — as one `id=in.(...)`. Not
+// transient, and not a row-count problem: the URL itself was too long, so the
+// request never reached Postgres. Same 100 used by dj-tracks.ts and dj-reads.ts.
+export const IN_CHUNK = 100;
+
+export function chunk<T>(items: T[], size: number = IN_CHUNK): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
 interface ArtistRow {
   id: string;
   name: string;
@@ -351,21 +366,25 @@ export const recordDjArtistTagTool = defineTool({
     const derivable = new Set<string>();
     const plIds = ((plRows ?? []) as Array<{ id: string }>).map((p) => p.id);
     if (plIds.length > 0) {
-      const { data: ptRows, error: ptErr } = await ctx.db
-        .from("dj_playlist_tracks").select("track_id").in("playlist_id", plIds);
-      if (ptErr) {
-        throw new Error(
-          `record_dj_artist_tag: membership lookup failed: ${ptErr.message}`,
+      // ⚠️ BOTH READS ARE BATCHED. Neither id list has a ceiling: the playlists
+      // are every playlist of this kind, and the tracks are everything in them.
+      const memberIds: string[] = [];
+      for (const batch of chunk(plIds)) {
+        const { data: ptRows, error: ptErr } = await ctx.db
+          .from("dj_playlist_tracks").select("track_id").in("playlist_id", batch);
+        if (ptErr) {
+          throw new Error(
+            `record_dj_artist_tag: membership lookup failed: ${ptErr.message}`,
+          );
+        }
+        memberIds.push(
+          ...((ptRows ?? []) as Array<{ track_id: string }>).map((r) => r.track_id),
         );
       }
-      const trackIds = [
-        ...new Set(
-          ((ptRows ?? []) as Array<{ track_id: string }>).map((r) => r.track_id),
-        ),
-      ];
-      if (trackIds.length > 0) {
+      const trackIds = [...new Set(memberIds)];
+      for (const batch of chunk(trackIds)) {
         const { data: tRows, error: tErr } = await ctx.db
-          .from("dj_tracks").select("artist").in("id", trackIds);
+          .from("dj_tracks").select("artist").in("id", batch);
         if (tErr) {
           throw new Error(`record_dj_artist_tag: track lookup failed: ${tErr.message}`);
         }

@@ -292,6 +292,9 @@ function makeTagDb({ tracks = [], playlists = [], members = [], tags = [] } = {}
     dj_playlist_tracks: members,
     dj_artist_tags: tags,
   };
+  // Every .in() the tool issues, so a batched read is distinguishable from one
+  // giant URL — which is the whole bug.
+  const inCalls = [];
   function builder(table) {
     const filters = [];
     let upserts = null, wantCount = false, head = false, lim = null;
@@ -303,7 +306,11 @@ function makeTagDb({ tracks = [], playlists = [], members = [], tags = [] } = {}
         return api;
       },
       eq(c, v) { filters.push((r) => r[c] === v); return api; },
-      in(c, v) { filters.push((r) => v.includes(r[c])); return api; },
+      in(c, v) {
+        inCalls.push({ table, col: c, n: v.length });
+        filters.push((r) => v.includes(r[c]));
+        return api;
+      },
       // Multiple .order() calls compose, as PostgREST does — the read tool
       // relies on rejections sorting before active rows.
       order(c, opts = {}) { orders.push({ c, asc: opts.ascending !== false }); return api; },
@@ -355,7 +362,7 @@ function makeTagDb({ tracks = [], playlists = [], members = [], tags = [] } = {}
     };
     return api;
   }
-  return { from: (t) => builder(t), _tables: tables };
+  return { from: (t) => builder(t), _tables: tables, _inCalls: inCalls };
 }
 
 const tagCtx = (db) => ({ db, userId: USER });
@@ -660,4 +667,38 @@ test("the default mode still reads the table, not the RPC", async () => {
   const r = await readTags(TAGGED_DB());
   assert.equal(r.data.total, 4);
   assert.equal(r.data.mode, undefined, "list mode carries no mode field");
+});
+
+// ---------------------------------------------------------------------------
+// 🛑 THE ID LIST IS BATCHED, BECAUSE AN UNBATCHED ONE DIED IN THE URL
+// ---------------------------------------------------------------------------
+//
+// PostgREST puts `.in()` in the query string. On 2026-09-25 every derived
+// concert tag failed four times running with "http2 error: stream error
+// detected": the track lookup sent every track id from all 24 concert playlists
+// as one `id=in.(...)`. Not transient — the request never reached Postgres.
+
+test("500 ids split into batches of 100", () => {
+  const batches = mod.chunk(Array.from({ length: 500 }, (_, i) => `t-${i}`));
+  assert.equal(batches.length, 5);
+  assert.ok(batches.every((b) => b.length === 100));
+  assert.equal(new Set(batches.flat()).size, 500);
+});
+
+test("the track lookup issues one request per 100 ids, not one for all of them", async () => {
+  const tracks = [{ id: "seed", artist: "Taylor Swift" }];
+  const members = [];
+  for (let i = 0; i < 500; i++) {
+    tracks.push({ id: `t-${i}`, artist: `Act ${i}` });
+    members.push({ playlist_id: "pl-concert", track_id: `t-${i}` });
+  }
+  const db = makeTagDb({
+    tracks, members, playlists: [{ id: "pl-concert", kind: "concert" }],
+  });
+  const r = await tagIt(db, { artists: ["Taylor Swift"], tag: "concert" });
+  assert.equal(r.written, 1);
+
+  const lookups = db._inCalls.filter((c) => c.table === "dj_tracks" && c.col === "id");
+  assert.equal(lookups.length, 5);
+  assert.ok(lookups.every((c) => c.n === 100), JSON.stringify(lookups));
 });
