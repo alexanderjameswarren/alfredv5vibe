@@ -460,7 +460,7 @@ const getInboxTool = defineTool({
     // not.
     let q = ctx.db.from("inbox")
       .select(
-        "id, captured_text, source_type, source_metadata, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id, ai_status, ai_confidence, ai_reasoning, created_at"
+        "id, captured_text, source_type, source_metadata, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_description, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id, ai_status, ai_confidence, ai_reasoning, created_at"
       )
       .eq("archived", false)
       .is("triaged_at", null)
@@ -531,6 +531,7 @@ const updateInboxItemTool = defineTool({
       suggested_item_id: args.suggested_item_id as string | undefined,
       suggest_intent: args.suggest_intent as boolean | undefined,
       suggested_intent_text: args.suggested_intent_text as string | undefined,
+      suggested_intent_description: args.suggested_intent_description as string | undefined,
       suggested_intent_recurrence: args.suggested_intent_recurrence as
         | "once" | "daily" | "weekly" | "monthly" | "yearly" | undefined,
       suggest_event: args.suggest_event as boolean | undefined,
@@ -1082,6 +1083,7 @@ export function createMcpServer(token: string) {
         suggested_item_id: z.string().optional().describe("ID of an EXISTING item to link to (use search_items to find it)"),
         suggest_intent: z.boolean().optional().describe("Should this become an Intention/task?"),
         suggested_intent_text: z.string().optional().describe("Text for the intention (what the user intends to do)"),
+        suggested_intent_description: z.string().optional().describe("Details for the intention: what the capture said beyond its name — the number to call, the reason, the constraint. Not the name, which is suggested_intent_text."),
         suggested_intent_recurrence: z.enum(["once", "daily", "weekly", "monthly", "yearly"]).optional().describe("Recurrence pattern"),
         suggest_event: z.boolean().optional().describe("Is there a specific date associated?"),
         suggested_event_date: z.string().optional().describe("Date in YYYY-MM-DD format"),

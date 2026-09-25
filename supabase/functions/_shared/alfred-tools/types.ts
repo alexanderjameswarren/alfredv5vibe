@@ -82,6 +82,7 @@ export interface InboxItem {
   suggested_item_elements: unknown[] | null;
   suggest_intent: boolean;
   suggested_intent_text: string | null;
+  suggested_intent_description: string | null;
   suggested_intent_recurrence: string | null;
   suggest_event: boolean;
   suggested_event_date: string | null;

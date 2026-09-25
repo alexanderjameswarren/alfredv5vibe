@@ -133,4 +133,6 @@ change; run the full suite once, at the end.
 to test. No background and no reasoning unless something went wrong.
 
 **Every report ends with a timing table** — how long each phase took (reading,
-writing, tests, build, deploy, git), plus the total.
+writing, tests, build, deploy, git), plus the total. **Measured, never estimated:**
+run `date +%H:%M:%S` when a phase starts and when it ends, and report the real
+clock times and the duration between them.

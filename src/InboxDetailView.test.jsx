@@ -205,6 +205,17 @@ describe("Process", () => {
     });
   });
 
+  it("pre-fills Details from the suggestion, and sends it untouched", () => {
+    const { onProcess } = setup({
+      suggestIntent: true,
+      suggestedIntentText: "Call the plumber",
+      suggestedIntentDescription: "Ask for Dave, mornings only.",
+    });
+    expect(screen.getByLabelText("Details")).toHaveValue("Ask for Dave, mornings only.");
+    fireEvent.click(processButton());
+    expect(onProcess.mock.calls[0][1].intentionData.description).toBe("Ask for Dave, mornings only.");
+  });
+
   it("trims the names it sends", () => {
     const { onProcess } = setup({ suggestIntent: true, suggestedIntentText: "  Fix the guard  " });
     fireEvent.click(processButton());

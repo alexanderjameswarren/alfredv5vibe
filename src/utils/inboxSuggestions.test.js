@@ -76,7 +76,12 @@ describe("computeBaseline", () => {
     ]);
   });
 
-  it("starts Details empty, because nothing suggests one", () => {
+  it("pre-fills Details from the suggestion", () => {
+    const b = computeBaseline(row({ suggestedIntentDescription: "Ask for Dave, mornings only." }));
+    expect(b.intentDescription).toBe("Ask for Dave, mornings only.");
+  });
+
+  it("leaves Details empty when none was suggested, never the captured text", () => {
     expect(computeBaseline(row()).intentDescription).toBe("");
   });
 });
@@ -113,6 +118,13 @@ describe("triageDataForOneTap", () => {
       createEvent: true,
       eventDate: "2026-10-01",
     });
+  });
+
+  it("sends the suggested Details as the intention's description", () => {
+    const data = triageDataForOneTap(
+      row({ suggestIntent: true, suggestedIntentDescription: "Ask for Dave." }),
+    );
+    expect(data.intentionData.description).toBe("Ask for Dave.");
   });
 
   it("never sends a recurrence, because nothing suggests one in the right shape", () => {

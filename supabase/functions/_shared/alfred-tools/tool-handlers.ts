@@ -659,6 +659,7 @@ export async function updateInboxItem(
     suggested_item_id?: string;
     suggest_intent?: boolean;
     suggested_intent_text?: string;
+    suggested_intent_description?: string;
     suggested_intent_recurrence?: string;
     suggest_event?: boolean;
     suggested_event_date?: string;
@@ -702,6 +703,7 @@ export async function updateInboxItem(
     if (params.suggested_item_id !== undefined) updates.suggested_item_id = params.suggested_item_id;
     if (params.suggest_intent !== undefined) updates.suggest_intent = params.suggest_intent;
     if (params.suggested_intent_text !== undefined) updates.suggested_intent_text = params.suggested_intent_text;
+    if (params.suggested_intent_description !== undefined) updates.suggested_intent_description = params.suggested_intent_description;
     if (params.suggested_intent_recurrence !== undefined) updates.suggested_intent_recurrence = params.suggested_intent_recurrence;
     if (params.suggest_event !== undefined) updates.suggest_event = params.suggest_event;
     if (params.suggested_event_date !== undefined) updates.suggested_event_date = params.suggested_event_date;

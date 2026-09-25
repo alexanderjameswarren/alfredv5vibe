@@ -37,9 +37,10 @@ export function computeBaseline(inboxItem) {
     itemDescription: inboxItem.suggestedItemDescription || "",
     elements: normaliseSuggestedElements(inboxItem.suggestedItemElements),
     intentText: inboxItem.suggestedIntentText || capturedText,
-    // Nothing suggests an intention's Details: the column arrived with migration
-    // 069 and no enrichment writes it. Always starts empty.
-    intentDescription: "",
+    // Migration 070's column. Unlike the name, it does NOT fall back to the captured
+    // text: the name has to say something, and Details repeating the whole capture
+    // under a name taken from it is noise rather than a detail.
+    intentDescription: inboxItem.suggestedIntentDescription || "",
     linkedItemId: inboxItem.suggestedItemId || "",
     eventDate: inboxItem.suggestedEventDate || "",
   };
