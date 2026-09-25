@@ -47,10 +47,12 @@ enabled = true
 #
 # ⚠️ BUT NOT THE SAME PROTECTION. notify-dispatch is guarded by a shared secret
 # in the x-dispatch-secret header, checked before any work. THIS FUNCTION HAS NO
-# SECRET. The only gate is that the To address must match one of the two
+# SECRET. The only gate is that the To address must match one of the
 # hard-coded patterns in USER_MAPPINGS; anything else is refused. So the
 # endpoint is effectively public, and anyone who learns the URL and the address
-# shape can put a row in the inbox.
+# shape can put a row in the inbox. recipes@secorus.com (added 2026-09-25) is a
+# plain address rather than a plus-tag, so it is easier to guess than the
+# others — same blast radius, slightly wider door.
 #
 # That is survivable rather than fine, and worth knowing rather than
 # discovering: the inbox is the human-approval gate, so the blast radius is junk

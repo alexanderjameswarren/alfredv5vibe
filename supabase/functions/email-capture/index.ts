@@ -7,10 +7,19 @@ import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts"
 // Maps the To address pattern to a user email for lookup in auth.users
 // When email arrives at alex.warren+elise+alfred@secorus.com → Elise
 // When email arrives at alex.warren+alfred@secorus.com → Alex
+// When email arrives at recipes@secorus.com → Alex, tagged as the recipes address
+//
+// `captureAddress` is optional. When a mapping sets it, the value is written to
+// the inbox row's source_metadata as `capture_address`, so enrichment can tell
+// which address the mail came in on — a recipes@ capture is a recipe. Mappings
+// without it produce rows exactly as before.
+//
+// Every pattern carries /i, so addresses match case-insensitively.
 interface UserMapping {
   pattern: RegExp;
   userEmail: string;
   label: string;
+  captureAddress?: string;
 }
 
 const USER_MAPPINGS: UserMapping[] = [
@@ -25,13 +34,19 @@ const USER_MAPPINGS: UserMapping[] = [
     label: "Alex",
     userEmail: "alexanderjameswarren@gmail.com",
   },
+  {
+    pattern: /recipes@secorus\.com/i,
+    label: "Alex",
+    userEmail: "alexanderjameswarren@gmail.com",
+    captureAddress: "recipes",
+  },
 ];
 
 // --- Helper: Resolve user_id from To address ---
 async function resolveUserId(
   toAddress: string,
   serviceClient: ReturnType<typeof createServiceClient>
-): Promise<{ userId: string; label: string } | null> {
+): Promise<{ userId: string; label: string; captureAddress?: string } | null> {
   for (const mapping of USER_MAPPINGS) {
     if (mapping.pattern.test(toAddress)) {
       // Look up user by email in auth.users
@@ -46,7 +61,11 @@ async function resolveUserId(
       );
 
       if (user) {
-        return { userId: user.id, label: mapping.label };
+        return {
+          userId: user.id,
+          label: mapping.label,
+          captureAddress: mapping.captureAddress,
+        };
       } else {
         console.error(`[email-capture] No auth user found for email: ${mapping.userEmail}`);
         return null;
@@ -178,8 +197,10 @@ Deno.serve(async (req) => {
   // Build captured_text from subject + body
   const capturedText = cleanEmailText(payload.Subject, payload.TextBody);
 
-  // Build source_metadata
-  const sourceMetadata = {
+  // Build source_metadata. `capture_address` is added only for mappings that
+  // name one, so rows from the existing addresses keep exactly the shape they
+  // have always had.
+  const sourceMetadata: Record<string, unknown> = {
     from: payload.From,
     fromName: payload.FromName,
     subject: payload.Subject,
@@ -188,6 +209,10 @@ Deno.serve(async (req) => {
     originalRecipient: toAddress,
     to: payload.To,
   };
+
+  if (userResult.captureAddress) {
+    sourceMetadata.capture_address = userResult.captureAddress;
+  }
 
   // Insert inbox record
   const inboxRecord = {
