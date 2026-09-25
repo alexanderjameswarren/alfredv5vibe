@@ -1,5 +1,7 @@
 # Plan: re-key the album-written tracks (spec §4.1.2)
 
+**🛑 DEFERRED 2026-09-25 by Alex. 075, 076 and `scripts/dj-plan-rekey.mjs` are parked as-is, 077 was never generated, and no data has been re-keyed.**
+
 **Status: AWAITING APPROVAL. Nothing has been written. No backfill SQL exists yet —
 this file and the read-only `073_verify_album_unsplit_match_keys.sql` are the whole
 deliverable.** The code fix (commit `aeeb97e`) corrects NEW rows only.
