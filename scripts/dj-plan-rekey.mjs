@@ -18,6 +18,7 @@ import {
   buildMatchKey,
   splitArtistByline,
 } from "../supabase/functions/_shared/tools/dj-normalise.ts";
+import { bylineHasPageFurniture } from "./lib/not-an-artist.mjs";
 
 // The six from migration 072. Their stored artist is repaired by 072, so the
 // dump may still show "Various Artists" and the new key must be computed from
@@ -26,18 +27,6 @@ const VARIOUS_SIX = new Set([
   "onvLuR7E5sM", "eapPwd8v5Xg", "5TvNzAe3oGo", "Pkn2rDQx0Ok", "GbEM3eJ5Isk", "dUt4eBkHWkY",
 ]);
 const VARIOUS_SIX_ARTIST = "Charlie Parker, Dizzy Gillespie, Bud Powell, Max Roach";
-
-// A byline that is a DATE, a view count, or another scraped page run rather
-// than an act (§14.9). Re-keying "Dec 29, 2023" to `dec 29` is meaningless, so
-// these are reported and EXCLUDED rather than repaired — the artist itself is
-// wrong, and repairing it is a different migration with hand-built values.
-const MONTHS = "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec";
-const NOT_AN_ARTIST = [
-  new RegExp("^(?:" + MONTHS + ")[a-z]*\\.?\\s+\\d{1,2},\\s*\\d{4}$", "i"), // Dec 29, 2023
-  /^\d[\d.,]*[km]?\s+views$/i,                                             // 1.7M views
-  /^\d+\s+(?:songs?|videos?|tracks?)$/i,
-];
-const isNotAnArtist = (s) => NOT_AN_ARTIST.some((re) => re.test(String(s ?? "").trim()));
 
 const [, , inPath, ...rest] = process.argv;
 if (!inPath) {
@@ -76,7 +65,7 @@ for (const c of candidates) {
     process.exit(1);
   }
   const parts = splitArtistByline(artist);
-  if (isNotAnArtist(artist) || parts.some(isNotAnArtist)) {
+  if (bylineHasPageFurniture(artist, parts)) {
     excluded.push({ ...c, why: "scraped page run, not an act (§14.9)" });
     continue;
   }

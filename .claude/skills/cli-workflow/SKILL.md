@@ -135,7 +135,11 @@ Rule 5).
 without DevTools. See the tool-call rule below. SQL checks here follow Rule 5
 too.
 
-**5. Stop.** Nothing after this.
+**5. Stop — or reply to the CLI, but only if there is no testing.** If part 4
+has any testing steps, end the message there. Do not write anything for Alex to
+paste into the CLI — no answers to its questions, no "proceed", no fixes, no next
+prompt. Wait for his test results. If part 4 is empty (nothing to test), you may
+end with the reply to the CLI. See Rule 6.
 
 ### Rule 1: never reference anything by its label from the report
 
