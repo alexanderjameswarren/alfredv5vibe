@@ -107,3 +107,30 @@ message, naming the error, and carry on. Never hide a failed push.
 `clip.mjs` reads `CLIPBOARD_URL` and `CLIPBOARD_SECRET` from the environment,
 falling back to the Windows user registry when the shell predates `setx`. It
 never prints the secret, and neither should you.
+
+## Working fast
+
+**Comments.** One or two lines, and only where the code is not obvious. No
+essays in code or in tests.
+
+**Tests.** Only what the change needs. Short test names, no prose.
+
+**Search.** Use `git grep` or the Grep tool. Never a plain recursive grep over
+the repo — it scans node_modules and times out.
+
+**Run tests with:**
+
+```
+CI=true npx react-scripts test --watchAll=false
+```
+
+Never plain `npx jest`. While working, run only the test files related to the
+change; run the full suite once, at the end.
+
+**Build.** Only when asked, or before a push.
+
+**Reports to Alfred.** 25 lines at most: what changed, what Alex must do, what
+to test. No background and no reasoning unless something went wrong.
+
+**Every report ends with a timing table** — how long each phase took (reading,
+writing, tests, build, deploy, git), plus the total.

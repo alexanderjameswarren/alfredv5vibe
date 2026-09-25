@@ -9,7 +9,7 @@ This skill defines how to analyze Alfred inbox captures and write structured sug
 
 ## CRITICAL: How to Execute
 
-**Always use the Alfred MCP tools directly in the conversation.** Call `get_inbox`, `get_contexts`, `get_tags`, `get_collections`, `search_items`, and `update_inbox_item` as direct tool calls.
+**Always use the Alfred MCP tools directly in the conversation.** Call `get_inbox`, `get_contexts`, `get_tags`, `search_items`, and `update_inbox_item` as direct tool calls.
 
 **NEVER** create code artifacts, React apps, scripts, or any other programmatic wrapper to perform enrichment. The MCP tools are already available as conversation-level tools — just call them.
 
@@ -89,8 +89,10 @@ thread, never a reason to record it.
 1. **Call `get_contexts` first** to understand the user's organizational structure
 2. **Search for existing items** via `search_items` to avoid creating duplicates. If the captured text references something that already exists (like "make chicken tikka tonight"), find the existing item and use `suggested_item_id` to link to it rather than creating a new one
 3. **Check `get_tags`** and reuse the existing taxonomy. Read the counts as well as the names — a tag used many times is a real axis the user filters on; a tag used once is a mistake waiting to be cleaned up, not a precedent to follow
-4. **Check `get_collections`** to see if the capture belongs in a collection (like a grocery list or shopping list). Collections with `is_capture_target: true` are frequently used for quick capture — prioritize these
-5. **If the captured text contains a URL**, note this in your reasoning (you can't fetch URLs via MCP, but flag it for the user)
+4. **If the captured text contains a URL**, note this in your reasoning (you can't fetch URLs via MCP, but flag it for the user)
+
+Do not call `get_collections`. Collections are not part of enrichment any more — see
+"Never suggest a collection" below.
 
 ### Step 3: Analyze and Suggest
 
@@ -103,11 +105,22 @@ For each inbox item, determine:
 - **Intent** (`suggest_intent: true`): Action items, tasks, things to do. "Call the plumber", "buy groceries", "cook dinner tonight".
 - **Both**: Often the right answer. A recipe (item) + "cook this tonight" (intent). A checklist (item) + "pack for trip" (intent).
 
+**Intention description**: whenever you suggest an intention, fill in
+`suggested_intent_description` as well as `suggested_intent_text`. The name is the
+short action — "Call the plumber". The description holds everything else the
+capture said that does not fit in the name: the phone number, the reason, the
+constraint, the deadline, the half-sentence of context. Leave it empty only when
+the capture is genuinely nothing but the action.
+
 **Event**: If there's a specific date mentioned (or implied by "tomorrow", "next Tuesday", etc.), set `suggest_event: true` and resolve the date to `YYYY-MM-DD` format. Use today's date for reference.
 
 **Recurrence**: For intents, set the recurrence pattern — `once` for one-time tasks, or `daily`/`weekly`/`monthly`/`yearly` for recurring ones.
 
-**Collection**: If the capture mentions adding something to a list (groceries, shopping, packing), find the matching collection via `get_collections` and set `suggested_collection_id`.
+**Never suggest a collection.** Do not set `suggested_collection_id`, and do not
+call `get_collections`. The inbox page no longer shows collections, so a suggested
+collection cannot be reviewed, accepted or rejected — it is written and then
+silently ignored. A capture about groceries or packing becomes an item, an
+intention, or both, in the right context; Alex puts things in collections himself.
 
 **Existing Item Link**: If the capture references something that already exists as an item (like a known recipe or checklist), set `suggested_item_id` to link to it instead of creating a new item.
 
@@ -189,7 +202,7 @@ group them. Only mark `collectable` on things the user would buy.
 
 **`ai_reasoning`**: A brief sentence explaining your suggestions. This is displayed to the user during triage. Examples:
 - "Matched to existing 'Chicken Tikka Masala' recipe. Suggesting cook tonight as intent."
-- "Looks like a grocery list addition. Routing to Grocery List collection in Home context."
+- "Looks like a grocery list addition. Suggesting an intention in Home context."
 - "URL appears to be a recipe page. Created new item with parsed ingredients and steps."
 - "Ambiguous — could be a task or a note. Defaulted to intent in Home context."
 
@@ -214,10 +227,10 @@ Re-enrichment is also a chance to drop a tag the first pass shouldn't have sugge
 
 ## Key Principles
 
-- **Suggest generously, except with tags**: The user reviews and approves everything before it's created, so it's easier for them to remove a suggested context, item or collection than to add a missing one. Tags are the exception. An unwanted tag isn't removed during triage — it's accepted, and then it sits in every filter bar from then on. Be sparing there and generous everywhere else.
-- **Prefer existing over new**: Always try to link to existing contexts, items, tags, and collections rather than suggesting new ones.
+- **Suggest generously, except with tags**: The user reviews and approves everything before it's created, so it's easier for them to remove a suggested context or item than to add a missing one. Tags are the exception. An unwanted tag isn't removed during triage — it's accepted, and then it sits in every filter bar from then on. Be sparing there and generous everywhere else.
+- **Never a collection**: collections are not suggestable at all any more — see Step 3.
+- **Prefer existing over new**: Always try to link to existing contexts, items and tags rather than suggesting new ones.
 - **Items with `is_capture_target: true`** are frequently referenced — prioritize linking to these.
-- **Collections with `is_capture_target: true`** are frequently used for quick capture — prioritize routing to these.
 - **Every field is optional** except `ai_confidence` and `ai_reasoning`. Only set fields that are relevant.
 
 ## Batch Processing
