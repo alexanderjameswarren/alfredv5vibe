@@ -100,7 +100,7 @@ import {
   RefreshCw,
   ArchiveRestore,
   Gamepad2,
-  Lightbulb,
+  Send,
 } from "lucide-react";
 // `supabaseUrl` used to be imported alongside this: it built the ai-enrich
 // endpoint by hand. Step 14 removed the only two callers and left the import
@@ -7479,12 +7479,12 @@ export default function Alfred() {
               {/* The icon matches the Capture SOURCE tab in the inbox — Step 21b, and
                   the glyph changed in 21c. This button is what creates a 'manual'
                   capture, so the two must stay recognisably the same thing; if one moves,
-                  both move. See SOURCE_GLYPHS for why it is a bulb. */}
+                  both move. See SOURCE_GLYPHS for why it is a paper aeroplane. */}
               <button
                 onClick={handleCapture}
                 className="inline-flex items-center gap-2 px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
               >
-                <Lightbulb className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <Send className="w-4 h-4 shrink-0" aria-hidden="true" />
                 Capture
               </button>
             </div>

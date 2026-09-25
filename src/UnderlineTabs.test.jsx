@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import fs from "fs";
 import path from "path";
-import { Lightbulb, Inbox } from "lucide-react";
+import { Send, Inbox } from "lucide-react";
 import UnderlineTabs from "./UnderlineTabs";
 
 // The accessible name of a tab is its LABEL ALONE — `aria-label`, not the text content.
@@ -18,7 +18,7 @@ const PLAIN = [
 
 const WITH_ICONS = [
   { key: "all", label: "All", count: 6, icon: Inbox },
-  { key: "manual", label: "Capture", count: 2, icon: Lightbulb },
+  { key: "manual", label: "Capture", count: 2, icon: Send },
 ];
 
 describe("what it renders", () => {

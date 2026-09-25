@@ -206,20 +206,36 @@ and fails if the two diverge.
 
 It is not decoration: without an icon the All tab would have nothing left below `lg`.
 
-#### Capture is a Lightbulb now, and this is its third glyph
+#### Capture is `Send` now, its third glyph
 
-Worth recording all three failures, because each was a different kind:
+Worth recording all three, because the two failures were different kinds of failure:
 
 1. **Pencil** — also the EDIT control on the inbox detail page. One glyph, two meanings,
    adjacent screens.
-2. **StickyNote** (21b) — at 14px nearly indistinguishable from `File`, the ITEM icon,
-   which appears on the same card two lines below it.
-3. **Lightbulb** — a thought you had, which is what a typed capture is, and it looks like
-   nothing else in the app at any size.
+2. **StickyNote** (21b) — a rounded rectangle with a folded corner, which at 14px is
+   nearly indistinguishable from `File`, the ITEM icon, on the same card two lines below.
+3. **Send**, the paper aeroplane — a silhouette rather than an outline, so it survives
+   14px; used nowhere else in Alfred, so it cannot collide; and it reads as the gesture,
+   which is what a `manual` capture is.
+
+⚠️ The reasoning is in `docs/design-system.md` with a **do-not-change-it-back** note and
+the test any replacement has to pass: not already meaning something else in Alfred, and
+still distinguishable from `File` at 14px in a card's meta line. Both earlier choices
+looked fine at 24px and failed in place.
 
 Changed in `SOURCE_GLYPHS`, so the tab, the card meta lines and the capture bar's Capture
-button all moved together — which is the property that made this a one-line change rather
-than four.
+button all moved together — the property that made this a one-line change rather than four.
+
+#### Also in this step, and not part of the design
+
+`supabase/.temp/` is gitignored, and `supabase/.temp/cli-latest` untracked: any `supabase`
+command bumps it, so it kept surfacing as a pending change in unrelated work. The other
+eight files in that directory are still TRACKED and were deliberately left alone — see the
+report.
+
+`.claude/CLAUDE.md` gained a **Git rules** section after `git add -A` swept an uncommitted
+edit of Alex's into a commit for the second time in this project. Explicit paths only;
+never touch a file you did not change; never rewrite a commit without asking.
 
 ### Step 21b — tabs, not pills, 2026-09-24
 

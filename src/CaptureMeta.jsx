@@ -10,7 +10,7 @@
  * screen and correctly on the other.
  */
 
-import { Lightbulb, Bot, Mail, Paperclip, Terminal, ListChecks } from "lucide-react";
+import { Send, Bot, Mail, Paperclip, Terminal, ListChecks } from "lucide-react";
 
 /**
  * A capture's timestamp, in words.
@@ -103,14 +103,22 @@ export function SourceIcon({ sourceType, className = "w-3.5 h-3.5" }) {
  * and as a pencil on the other.
  */
 export const SOURCE_GLYPHS = {
-  // ⚠️ Lightbulb, and it has now been two other things — Step 21c.
+  // ⚠️ Send — the paper aeroplane — and DO NOT CHANGE IT BACK. Step 21c.
   //
-  // It was Pencil, which is ALSO the edit control on the inbox detail page, so one glyph
-  // meant two things on adjacent screens. Step 21b made it StickyNote, which at 14px is
-  // nearly indistinguishable from `File` — the ITEM icon, which appears on the same card
-  // two lines below it. A bulb is a thought you had, which is what a typed capture is,
-  // and it looks like nothing else in the app at any size.
-  manual: Lightbulb,
+  // It has been two other things, and each failed for its own reason:
+  //
+  //   Pencil       is ALSO the edit control on the inbox detail page, so one glyph meant
+  //                two things on adjacent screens.
+  //   StickyNote   (Step 21b) is a rounded rectangle with a folded corner, and at 14px
+  //                that is nearly indistinguishable from `File` — the ITEM icon, which
+  //                appears on the same card two lines below it.
+  //
+  // An aeroplane is a silhouette rather than an outlined rectangle, so it stays legible
+  // at 14px and cannot be confused with anything else in the app. It also reads as the
+  // gesture: you typed something and sent it to Alfred, which is exactly what a 'manual'
+  // capture is. The full reasoning is in docs/design-system.md so it is not undone by
+  // someone who only sees the icon.
+  manual: Send,
   mcp: Bot,
   // A checklist rather than a clock or a calendar: Calendar is already the schedule,
   // CalendarClock is already an event, and a task is not a moment in time but a named

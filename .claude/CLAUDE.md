@@ -6,6 +6,30 @@ so and say it has not been pushed. If a previous instruction in a prompt says
 "commit and push" or "commit directly to main", it still does not authorise
 pushing — ask.
 
+## Git rules
+
+These are not preferences. Each one is here because it went wrong.
+
+**Stage explicit paths only.** Never `git add -A`, never `git add .`, never
+`git commit -a`. Name every file you are committing. Twice now, `git add -A`
+has swept an uncommitted change of Alex's into a commit of mine — once
+`cli-workflow/SKILL.md` and a job-search rename, once an edit to
+`email-capture/index.ts` — and both times the sweep was invisible until after
+the commit existed.
+
+**Never stage, commit, stash, restore or discard a file you did not change in
+this task.** If one turns up in `git status`, leave it exactly where it is and
+say so in your report. A file you did not touch is somebody's work in progress,
+and "it looked unrelated" is not a reason to move it. This includes tool
+artefacts: mention them, do not tidy them.
+
+**Never amend, reset, rebase or otherwise rewrite a commit without asking Alex
+first.** If you commit something by mistake, STOP and tell him what happened.
+Do not repair it silently — a silent repair means the mistake and the fix are
+both invisible, and he cannot check either. Ask, and wait.
+
+**Never push.** See the section above; it is the same rule and it still holds.
+
 ## All SQL lives in supabase/migrations/
 
 ALL SQL goes in supabase/migrations/, numbered in sequence, no exceptions. That

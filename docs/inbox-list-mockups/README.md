@@ -53,10 +53,12 @@ any console error about support.js.
 6. The capture bar. Its Capture button carries the Capture source glyph before its
    label, so the button and the Capture tab match — Step 21b.
 
-   That glyph is `Lightbulb` as of Step 21c, and it has been two other things: a
-   pencil, which is also the EDIT control on the detail page, and then StickyNote,
-   which at 14px is nearly indistinguishable from the item icon on the same card.
-   A bulb is a thought you had, and it looks like nothing else at any size.
+   That glyph is `Send` — the paper aeroplane — as of Step 21c, and it has been two
+   other things: a pencil, which is also the EDIT control on the detail page, and
+   then StickyNote, which at 14px is nearly indistinguishable from the item icon on
+   the same card. An aeroplane is a silhouette rather than an outlined rectangle, so
+   it survives 14px, and it reads as the gesture: you typed something and sent it to
+   Alfred. Do not change it back — the reasoning is in docs/design-system.md.
 
 Phone: one column in the same order; each card's action button and trash icon sit
 on a row beneath the card's text.

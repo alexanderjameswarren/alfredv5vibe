@@ -205,19 +205,30 @@ hand-rolled, or if the retired `pb-2 border-b-2` string comes back.
 name. Both the source tabs and the card meta lines read that one map; a second list is
 how `clipboard` once came to render correctly on one screen and as a pencil on the other.
 
-**A hand-typed capture is `Lightbulb`.** It has been two other things, and both failures
-are worth keeping:
+### ⚠️ A hand-typed capture is `Send`, the paper aeroplane. Do not change it back.
 
-- `Pencil` — which is ALSO the edit control on the inbox detail page, so one glyph meant
-  two things on adjacent screens.
-- `StickyNote` — which at 14px is nearly indistinguishable from `File`, the ITEM icon,
-  which appears on the same card two lines below it.
+It has now been three glyphs, and the two that failed each failed for a different reason
+— which is why this is written down rather than left to whoever next looks at the icon and
+thinks of something nicer.
 
-A bulb is a thought you had, which is what a typed capture is, and it looks like nothing
-else in the app at any size.
+| glyph | why it was wrong |
+|---|---|
+| `Pencil` | it is ALSO the edit control on the inbox detail page — the pencil that edits a capture's text. One glyph, two meanings, on adjacent screens. |
+| `StickyNote` | a rounded rectangle with a folded corner. At 14px that is nearly indistinguishable from `File`, the ITEM icon — which appears on the same card, two lines below it. |
+
+`Send` survives both tests. It is a **silhouette rather than an outlined rectangle**, so it
+stays legible at 14px and cannot be mistaken for the item icon; and nothing else in the app
+uses it, so it cannot collide the way the pencil did. It also reads as the gesture: you
+typed something and sent it to Alfred, which is exactly what a `manual` capture is.
+
+**The test for a replacement, if there ever is one:** it must not already mean something
+else in Alfred, and it must still be distinguishable from `File` at 14px in a card's meta
+line. Both previous choices passed a look at 24px and failed in place.
 
 The Capture button in the capture bar carries the **same glyph** before its label, so the
-button and the Capture tab are recognisably the same thing. **If one moves, both move.**
+button and the Capture tab are recognisably the same thing. **If one moves, both move** —
+they read one entry in `SOURCE_GLYPHS`, which is what made the last two changes one line
+each rather than four.
 
 The Inbox source tabs' **All** tab uses `Inbox` — the same glyph the top navigation's
 Inbox tab uses (`OBJECT_ICONS.inbox`). Two references rather than one shared export,
