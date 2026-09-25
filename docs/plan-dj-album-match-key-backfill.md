@@ -24,6 +24,15 @@ number into a plan. 073 returns, in one cell:
 | `would_merge_into_existing_group` | the ones that join an existing group — the risk |
 | `dependents` | plays, playlist rows, album rows, rows pointing at an affected leader |
 | `artist_tag_rows_for_affected_bylines` | measures that `dj_artist_tags` is untouched |
+| `album_written_cross_check` | the heuristic against the structural fact — see below |
+
+**Read `album_written_cross_check` before anything else.** `affected` infers the
+defect from the SHAPE of the stored key; this asks whether the album path wrote the
+row at all. `affected_and_album_written` is the confident population.
+`affected_not_album_written` is rows the heuristic caught that no album wrote —
+either another writer shares the defect or the SQL approximation over-matches, and
+**those do not get re-keyed until we know which.** `album_written_not_affected` is
+album rows already keyed right, which is what a single-artist album looks like.
 
 ⚠️ 073's primary-artist derivation is an SQL APPROXIMATION of `normalisePart`. It is
 for SIZING only. The backfill itself must compute every new key with the real
@@ -34,9 +43,15 @@ TypeScript function — a second normaliser in SQL is the §14.6 drift, and the
 
 - **`dj_tracks`** — the only table written. `match_key` on the affected rows, and
   `canonical_track_id` on every row in an affected group.
-- **`dj_plays`, `dj_playlist_tracks`, `dj_album_tracks`** — hold `track_id`, never
-  `match_key`. **Not rewritten.** They are still affected in MEANING: regrouping
-  changes what a familiarity read returns for them, which is the point.
+- **`dj_plays`, `dj_playlist_tracks`** — hold `track_id`, never `match_key`.
+  **Not rewritten.** Still affected in MEANING: regrouping changes what a
+  familiarity read returns for them, which is the point.
+- **`dj_album_tracks`** — holds `video_id`, **not** `track_id` (023), and joins to
+  `dj_tracks` through it. Not rewritten either. ⚠️ I asserted `track_id` here in
+  the first draft and 073 failed on it in the SQL editor; the corrected query uses
+  `video_id`, and that same column now gives the backfill a STRUCTURAL way to
+  identify album-written rows rather than inferring them from key shape — see
+  `album_written_cross_check`.
 - **`dj_artist_tags`** — joins on the artist STRING. Untouched, and 073 measures it.
 - **`dj_albums`** — no artist text column at all (023). Untouched.
 - **`dj_known_disagreements`** — untouched. Its rows are decided verdicts, not keys.

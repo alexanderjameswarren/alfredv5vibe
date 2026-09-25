@@ -78,7 +78,11 @@ select json_build_object(
     select
       (select count(*) from public.dj_plays p where p.track_id in (select id from affected)) as plays,
       (select count(*) from public.dj_playlist_tracks pt where pt.track_id in (select id from affected)) as playlist_rows,
-      (select count(*) from public.dj_album_tracks at where at.track_id in (select id from affected)) as album_rows,
+      -- ⚠️ dj_album_tracks HAS NO track_id. It carries `video_id` and joins to
+      -- dj_tracks through that (023). A first draft of this query assumed a
+      -- track_id and failed on it.
+      (select count(*) from public.dj_album_tracks at
+        where at.video_id in (select video_id from affected)) as album_rows,
       (select count(*) from public.dj_tracks t2 where t2.canonical_track_id in (select id from affected)) as rows_pointing_at_an_affected_leader
   ) t),
   -- dj_artist_tags joins on the ARTIST STRING, not on match_key, so it is
@@ -86,5 +90,30 @@ select json_build_object(
   'artist_tag_rows_for_affected_bylines', (select coalesce(json_agg(t), '[]'::json) from (
     select count(*) as n from public.dj_artist_tags
     where artist in (select distinct artist from affected)
+  ) t),
+  -- ⚠️ THE STRUCTURAL CHECK ON THE HEURISTIC ABOVE, AND THE MORE TRUSTWORTHY
+  -- NUMBER OF THE TWO. `affected` infers the defect from the SHAPE of the
+  -- stored key; this asks the direct question instead - was this row written by
+  -- the album path at all? dj_album_tracks.video_id is that record.
+  --
+  -- HOW TO READ IT. `affected_and_album_written` is the confident population.
+  -- `affected_not_album_written` is rows the heuristic caught that no album
+  -- wrote: either another writer has the same defect, or the SQL normalisation
+  -- approximation is over-matching - EITHER WAY, do not re-key them until we
+  -- know which. `album_written_not_affected` is the reassuring direction: album
+  -- rows already keyed correctly, which is what a single-artist album looks like.
+  'album_written_cross_check', (select coalesce(json_agg(t), '[]'::json) from (
+    select
+      (select count(*) from affected a
+        where exists (select 1 from public.dj_album_tracks at where at.video_id = a.video_id))
+        as affected_and_album_written,
+      (select count(*) from affected a
+        where not exists (select 1 from public.dj_album_tracks at where at.video_id = a.video_id))
+        as affected_not_album_written,
+      (select count(*) from public.dj_tracks t2
+        where t2.artist like '%,%' and t2.match_key is not null
+          and exists (select 1 from public.dj_album_tracks at where at.video_id = t2.video_id)
+          and t2.id not in (select id from affected))
+        as album_written_not_affected
   ) t)
 ) as result;
