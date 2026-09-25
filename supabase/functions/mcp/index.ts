@@ -239,6 +239,7 @@ const createInboxItemTool = defineTool({
     const suggestedItemId = (args.suggested_item_id as string) || null;
     const suggestIntent = (args.suggest_intent as boolean) || false;
     const suggestedIntentText = (args.suggested_intent_text as string) || null;
+    const suggestedIntentDescription = (args.suggested_intent_description as string) || null;
     const suggestedIntentRecurrence = (args.suggested_intent_recurrence as string) || null;
     const suggestEvent = (args.suggest_event as boolean) || false;
     const suggestedEventDate = (args.suggested_event_date as string) || null;
@@ -274,6 +275,7 @@ const createInboxItemTool = defineTool({
       suggestedItemId !== null ||
       suggestIntent ||
       suggestedIntentText !== null ||
+      suggestedIntentDescription !== null ||
       suggestedIntentRecurrence !== null ||
       suggestEvent ||
       suggestedEventDate !== null ||
@@ -311,6 +313,7 @@ const createInboxItemTool = defineTool({
       suggested_item_id: suggestedItemId,
       suggest_intent: suggestIntent,
       suggested_intent_text: suggestedIntentText,
+      suggested_intent_description: suggestedIntentDescription,
       suggested_intent_recurrence: suggestedIntentRecurrence,
       suggest_event: suggestEvent,
       suggested_event_date: suggestedEventDate,
@@ -1052,6 +1055,7 @@ export function createMcpServer(token: string) {
         suggested_item_id: z.string().optional().describe("ID of an EXISTING item to link to (use search_items to find it). Use this when referencing a known item like 'make chicken tikka tonight'"),
         suggest_intent: z.boolean().optional().describe("Should this become an Intention/task? (true for action items, to-dos)"),
         suggested_intent_text: z.string().optional().describe("Suggested text for the intention (what the user intends to do)"),
+        suggested_intent_description: z.string().optional().describe("Details for the intention: what the capture said beyond its name - the number to call, the reason, the constraint. Not the name, which is suggested_intent_text."),
         suggested_intent_recurrence: z.string().optional().describe("Recurrence pattern: 'once', 'daily', 'weekly', 'monthly', 'yearly'"),
         suggest_event: z.boolean().optional().describe("Is there a specific date associated? (true if user mentions a date/time)"),
         suggested_event_date: z.string().optional().describe("Suggested date in YYYY-MM-DD format. Resolve relative dates like 'tomorrow', 'next Tuesday' to absolute dates."),

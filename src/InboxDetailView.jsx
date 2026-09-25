@@ -98,6 +98,32 @@ function formatWhenDate(value) {
 }
 
 /**
+ * Where in the capture text a click landed, or null when the browser will not say.
+ * jsdom implements neither API, so a test's click falls back to no caret at all.
+ */
+function caretOffsetFromClick(e) {
+  const block = e.currentTarget;
+  const doc = block.ownerDocument;
+  const point = doc.caretPositionFromPoint
+    ? doc.caretPositionFromPoint(e.clientX, e.clientY)
+    : doc.caretRangeFromPoint?.(e.clientX, e.clientY);
+  if (!point) return null;
+  // Two shapes for one answer: CaretPosition from the first API, Range from the second.
+  const node = point.offsetNode ?? point.startContainer;
+  const offset = point.offset ?? point.startOffset;
+  if (!node || !block.contains(node)) return null;
+  // The block holds one text node today. Counted rather than assumed, so a future
+  // highlight or link inside it does not silently put the caret in the wrong place.
+  const walk = doc.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+  let seen = 0;
+  while (walk.nextNode()) {
+    if (walk.currentNode === node) return seen + offset;
+    seen += walk.currentNode.length;
+  }
+  return null;
+}
+
+/**
  * One of the two section toggles.
  *
  * Filled when on, outlined in its own colour when off — the mockup's treatment,
@@ -236,6 +262,10 @@ export default function InboxDetailView({
   // inbox with `triaged_at` still null.
   const [editingCapture, setEditingCapture] = useState(false);
   const [captureDraft, setCaptureDraft] = useState(inboxItem.capturedText || "");
+  // Where to put the caret once the editor is open. Null for the pencil and the
+  // keyboard, which have no click point to honour.
+  const [captureCaret, setCaptureCaret] = useState(null);
+  const captureTextareaRef = useRef(null);
 
   const elementDescRefs = useRef([]);
   const itemDescRef = useRef(null);
@@ -247,6 +277,11 @@ export default function InboxDetailView({
   // list and an `eslint-disable` on top of it, because the list could not be
   // kept honest by hand. Here the comparison is a value, so the effect depends on
   // one thing and the linter has nothing to complain about.
+  // A task's text is a job for a Claude session, not prose Alex wrote, so clicking it
+  // does nothing — and neither does clicking a capture with no save handler behind it.
+  // The pencil is unchanged: a typo in a task is still fixable, just not by tapping.
+  const captureEditable = Boolean(onSaveCaptureText) && inboxItem.sourceType !== "task";
+
   const sameStrings = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   // An open capture editor holding text nobody has saved. Exactly the kind of
   // typing the guard exists for, and on the old card it was the one field that
@@ -491,6 +526,22 @@ export default function InboxDetailView({
    * alone. Same rule the old card applied as you typed; applied here at the save,
    * which is the point at which it becomes true.
    */
+  /** Open the capture editor, honouring a click's caret when there was one. */
+  function startCaptureEdit(caretOffset = null) {
+    setCaptureDraft(inboxItem.capturedText || "");
+    setCaptureCaret(caretOffset);
+    setEditingCapture(true);
+  }
+
+  // autoFocus alone lands the caret at one end; this puts it where the tap was.
+  useEffect(() => {
+    const el = captureTextareaRef.current;
+    if (!editingCapture || !el || captureCaret === null) return;
+    const at = Math.min(captureCaret, el.value.length);
+    el.focus();
+    el.setSelectionRange(at, at);
+  }, [editingCapture, captureCaret]);
+
   async function handleSaveCapture() {
     const next = captureDraft.trim();
     if (!next) return;
@@ -1004,10 +1055,7 @@ export default function InboxDetailView({
             <SectionHeading icon={AlignLeft}>Original capture</SectionHeading>
             {onSaveCaptureText && !editingCapture && (
               <button
-                onClick={() => {
-                  setCaptureDraft(inboxItem.capturedText || "");
-                  setEditingCapture(true);
-                }}
+                onClick={() => startCaptureEdit()}
                 title="Correct this capture's text"
                 aria-label="Edit capture text"
                 className="shrink-0 flex items-center justify-center p-2 min-h-[44px] min-w-[44px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
@@ -1020,6 +1068,7 @@ export default function InboxDetailView({
           {editingCapture ? (
             <div className="space-y-2">
               <textarea
+                ref={captureTextareaRef}
                 value={captureDraft}
                 onChange={(e) => setCaptureDraft(e.target.value)}
                 rows={5}
@@ -1061,6 +1110,23 @@ export default function InboxDetailView({
                 </button>
               </div>
             </div>
+          ) : captureEditable ? (
+            /* Tapping the text opens the editor at the point tapped — the pencil stays
+               as the visible hint. A button rather than a div with a handler, so Tab
+               reaches it and Enter opens it for free; `cursor-text` rather than a
+               pointer, because what happens is a caret landing, not a navigation. */
+            <button
+              type="button"
+              onClick={(e) => startCaptureEdit(caretOffsetFromClick(e))}
+              title="Correct this capture's text"
+              /* Named for what it does, not by its own contents. Unlabelled, the
+                 button's name is the whole capture — which reads badly, and makes
+                 every "find the button called X" match whatever the capture says. */
+              aria-label="Edit this capture"
+              className="block w-full text-left px-4 py-3.5 rounded-lg bg-background text-base leading-relaxed whitespace-pre-wrap cursor-text hover:bg-secondary/60 focus:outline-none focus:ring-2 focus:ring-primary transition-colors"
+            >
+              {inboxItem.capturedText}
+            </button>
           ) : (
             <div className="px-4 py-3.5 rounded-lg bg-background text-base leading-relaxed whitespace-pre-wrap">
               {inboxItem.capturedText}

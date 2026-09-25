@@ -539,6 +539,7 @@ describe("the unsaved-changes guard", () => {
 // leave no way in the app to fix a typo in a capture.
 describe("correcting the captured text", () => {
   const pencil = () => screen.getByRole("button", { name: "Edit capture text" });
+  const captureBlock = () => screen.getByRole("button", { name: "Edit this capture" });
   const saveText = () => screen.getByRole("button", { name: /Save text/ });
 
   it("shows the capture read-only until the pencil is pressed", () => {
@@ -546,6 +547,47 @@ describe("correcting the captured text", () => {
     expect(screen.queryByLabelText("Capture text")).not.toBeInTheDocument();
     fireEvent.click(pencil());
     expect(screen.getByLabelText("Capture text")).toBeInTheDocument();
+  });
+
+  it("opens the editor when the capture text itself is tapped", () => {
+    setup();
+    fireEvent.click(captureBlock());
+    expect(screen.getByLabelText("Capture text")).toBeInTheDocument();
+  });
+
+  it("puts the caret where the tap landed", () => {
+    setup();
+    const block = captureBlock();
+    const spy = jest
+      .fn()
+      .mockReturnValue({ startContainer: block.firstChild, startOffset: 12 });
+    document.caretRangeFromPoint = spy;
+    try {
+      fireEvent.click(block, { clientX: 40, clientY: 10 });
+    } finally {
+      delete document.caretRangeFromPoint;
+    }
+    const textarea = screen.getByLabelText("Capture text");
+    expect(textarea.selectionStart).toBe(12);
+    expect(textarea.selectionEnd).toBe(12);
+  });
+
+  it("is keyboard reachable, so the tap is not the only way in", () => {
+    setup();
+    expect(captureBlock().tagName).toBe("BUTTON");
+  });
+
+  it("does nothing on a task, whose text is a job rather than prose", () => {
+    setup({ sourceType: "task", sourceMetadata: { task_name: "Weekly DJ review" } });
+    expect(screen.queryByRole("button", { name: "Edit this capture" })).not.toBeInTheDocument();
+    // The pencil still works: a typo in a task is fixable, just not by tapping.
+    fireEvent.click(pencil());
+    expect(screen.getByLabelText("Capture text")).toBeInTheDocument();
+  });
+
+  it("is inert when there is no handler to save with", () => {
+    setup({}, { onSaveCaptureText: undefined });
+    expect(screen.queryByRole("button", { name: "Edit this capture" })).not.toBeInTheDocument();
   });
 
   it("hides the pencil when there is no handler for it", () => {
