@@ -8,7 +8,7 @@
 // "Earth, Wind & Fire" -> `earth`, which is the §14.6 two-runtimes drift
 // arriving exactly where it does the most damage: a frozen key.
 //
-//   node --experimental-strip-types scripts/dj-plan-rekey.mjs <074-result.json>
+//   node --experimental-strip-types scripts/dj-plan-rekey.mjs <075.json> <076.json>
 //
 // The input is the single `result` cell from 074, saved to a file. Either the
 // bare object or {"result": {...}} is accepted.
@@ -28,32 +28,68 @@ const VARIOUS_SIX = new Set([
 ]);
 const VARIOUS_SIX_ARTIST = "Charlie Parker, Dizzy Gillespie, Bud Powell, Max Roach";
 
-const [, , inPath, ...rest] = process.argv;
-if (!inPath) {
-  console.error("usage: node --experimental-strip-types scripts/dj-plan-rekey.mjs <074-result.json> [--out f.sql]");
+const args = process.argv.slice(2);
+const outIdx = args.indexOf("--out");
+const outPath = outIdx >= 0 ? args[outIdx + 1]
+  : "supabase/migrations/077_dj_tracks_rekey_album_bylines.sql";
+// Drop the flag AND its value. Filtering on `i !== outIdx` alone left the
+// output path in the input list and the script tried to read the file it was
+// about to write.
+const inPaths = args.filter((_, i) => outIdx < 0 || (i !== outIdx && i !== outIdx + 1));
+if (inPaths.length === 0) {
+  console.error("usage: node --experimental-strip-types scripts/dj-plan-rekey.mjs <075.json> <076.json> [--out f.sql]");
   process.exit(1);
 }
-const outPath = rest.includes("--out")
-  ? rest[rest.indexOf("--out") + 1]
-  : "supabase/migrations/075_dj_tracks_rekey_album_bylines.sql";
 
-const raw = JSON.parse(readFileSync(inPath, "utf-8"));
-const d = raw.result ?? raw;
-const candidates = d.candidates ?? [];
-const neighbours = d.neighbours ?? [];
-const albumWritten = new Set((d.album_written_video_ids ?? []).map((r) => r.video_id ?? r));
+// ⚠️ TWO INPUT SHAPES, AND THE COUNT GUARD MATTERS MORE THAN EITHER.
+// compact-v1 (075/076): one file per part, rows as ARRAYS, each carrying its own
+// `count`. 074's object form is still accepted for the fixture and for any dump
+// already taken. Whichever arrives, a `count` that disagrees with the rows
+// received is a HARD STOP: 074's paste silently lost its tail, and a truncated
+// dump that looks complete is the worst possible input to a re-key.
+const COMPACT_KEYS = ["video_id", "title", "artist", "match_key", "created_epoch"];
+const fromCompact = (r) => Object.fromEntries(COMPACT_KEYS.map((k, i) => [k, r[i]]));
+const sortKey = (r) => (r.created_epoch ?? r.created_at ?? 0);
 
-// A truncated dump would silently produce a partial re-key against a frozen key
-// space, which is worse than no re-key at all.
-if (candidates.length >= 1000 || neighbours.length >= 1000) {
-  console.error("🛑 the dump is CAPPED at 1000 rows. Re-run 074 with a higher cap.");
+let candidates = [], neighbours = [], albumWritten = null;
+for (const path of inPaths) {
+  const raw = JSON.parse(readFileSync(path, "utf-8"));
+  const d = Array.isArray(raw) ? (raw[0].result ?? raw[0]) : (raw.result ?? raw);
+
+  if (d.part) {                                   // compact-v1, one part per file
+    const rows = (d.rows ?? []).map(fromCompact);
+    if (d.count !== rows.length) {
+      console.error(`🛑 ${path}: the query counted ${d.count} ${d.part} but the file carries ${rows.length}. TRUNCATED - do not proceed.`);
+      process.exit(1);
+    }
+    if (d.part === "candidates") candidates = candidates.concat(rows);
+    else if (d.part === "neighbours") neighbours = neighbours.concat(rows);
+    else { console.error(`🛑 ${path}: unknown part ${JSON.stringify(d.part)}.`); process.exit(1); }
+    continue;
+  }
+
+  // 074's object form.
+  candidates = candidates.concat(d.candidates ?? []);
+  neighbours = neighbours.concat(d.neighbours ?? []);
+  if (d.album_written_video_ids) {
+    albumWritten = new Set((d.album_written_video_ids).map((r) => r.video_id ?? r));
+  }
+  const sizes = (d.sizes ?? [])[0];
+  if (sizes && (sizes.candidates !== (d.candidates ?? []).length
+             || sizes.neighbours !== (d.neighbours ?? []).length)) {
+    console.error(`🛑 ${path}: size mismatch - query counted ${sizes.candidates}/${sizes.neighbours}, file carries ${(d.candidates ?? []).length}/${(d.neighbours ?? []).length}. TRUNCATED.`);
+    process.exit(1);
+  }
+}
+
+if (candidates.length === 0) {
+  console.error("🛑 no candidates in any input file. Nothing to do, and that is more likely a bad paste than an empty result.");
   process.exit(1);
 }
-const sizes = (d.sizes ?? [])[0];
-if (sizes && (sizes.candidates !== candidates.length || sizes.neighbours !== neighbours.length)) {
-  console.error(`🛑 size mismatch: query counted ${sizes.candidates}/${sizes.neighbours}, dump carries ${candidates.length}/${neighbours.length}.`);
-  process.exit(1);
-}
+// 075 applies the dj_album_tracks join ITSELF, so a compact dump needs no
+// separate album-written list: every candidate in it is in scope by
+// construction. 074's form carried the list separately.
+const inScope = albumWritten ?? new Set(candidates.map((c) => c.video_id));
 
 // --- classify --------------------------------------------------------------
 const rekey = [], unchanged = [], excluded = [];
@@ -69,7 +105,7 @@ for (const c of candidates) {
     excluded.push({ ...c, why: "scraped page run, not an act (§14.9)" });
     continue;
   }
-  if (!isSix && !albumWritten.has(c.video_id)) {
+  if (!isSix && !inScope.has(c.video_id)) {
     excluded.push({ ...c, why: "no dj_album_tracks row — the album path did not write it" });
     continue;
   }
@@ -106,7 +142,7 @@ const say = (h, rows, f) => {
   console.log(`\n${h} (${rows.length})`);
   for (const r of rows) console.log("  " + f(r));
 };
-console.log(`candidates ${candidates.length} | neighbours ${neighbours.length} | album-written ${albumWritten.size}`);
+console.log(`candidates ${candidates.length} | neighbours ${neighbours.length} | in scope ${inScope.size}`);
 say("RE-KEY", rekey, (r) => `${r.video_id}  ${JSON.stringify(r.artist_used)}  ${r.match_key} -> ${r.new_key}`);
 say("ALREADY CORRECT (no change)", unchanged, (r) => `${r.video_id}  ${JSON.stringify(r.artist)}  ${r.match_key}`);
 say("EXCLUDED", excluded, (r) => `${r.video_id}  ${JSON.stringify(r.artist)}  - ${r.why}`);
@@ -120,11 +156,11 @@ const ts = new Date().toISOString().slice(0, 10);
 
 const lines = [];
 const p = (s) => lines.push(s);
-p("-- 075 - re-key the album-written bylines in dj_tracks (spec 4.1.2)");
+p("-- 077 - re-key the album-written bylines in dj_tracks (spec 4.1.2)");
 p("--");
 p("-- MOVED HEADER: ONE-OFF DATA REPAIR, applied once, in order, by hand.");
 p("--");
-p(`-- 🛑 GENERATED by scripts/dj-plan-rekey.mjs from 074's dump on ${ts}. Every`);
+p(`-- 🛑 GENERATED by scripts/dj-plan-rekey.mjs from the 075/076 dump on ${ts}. Every`);
 p("-- new_key below was computed by the DEPLOYED functions - splitArtistByline");
 p("-- (with COMMA_ARTIST_NAMES), canonicalArtist, normalisePart - never by SQL.");
 p("-- Do not hand-edit a key here; change the code and regenerate.");
@@ -139,7 +175,7 @@ p("-- HOW TO ROLL BACK: STEP 1 snapshots every affected row's id, match_key and"
 p("-- canonical_track_id into a permanent table. To reverse:");
 p("--   update public.dj_tracks t set match_key = s.old_match_key,");
 p("--          canonical_track_id = s.old_canonical_track_id");
-p("--     from public.dj_rekey_075_snapshot s where s.track_id = t.id;");
+p("--     from public.dj_rekey_077_snapshot s where s.track_id = t.id;");
 p("-- then re-run STEP 3. Nothing is deleted at any point.");
 p("--");
 p("-- AFTER RUNNING: node scripts/dj-grouping-check.js - CROSS_KEY MUST BE 0.");
@@ -147,7 +183,7 @@ p("");
 p("-- ============================================================================");
 p(`-- STEP 1 of 4 - snapshot. Nothing is changed. Expect: SELECT ${rekey.length}`);
 p("-- ============================================================================");
-p("create table if not exists public.dj_rekey_075_snapshot as");
+p("create table if not exists public.dj_rekey_077_snapshot as");
 p("select id as track_id, video_id, artist, match_key as old_match_key,");
 p("       canonical_track_id as old_canonical_track_id, now() as snapshot_at");
 p("from public.dj_tracks");
@@ -195,9 +231,9 @@ p("-- ==========================================================================
 p("-- STEP 4 of 4 - verify. Every column below must come back true.");
 p("-- ============================================================================");
 p("select");
-p("  (select count(*) from public.dj_tracks t join public.dj_rekey_075_snapshot s");
+p("  (select count(*) from public.dj_tracks t join public.dj_rekey_077_snapshot s");
 p("     on s.track_id = t.id where t.match_key = s.old_match_key) = 0 as no_row_left_on_its_old_key,");
-p(`  (select count(*) from public.dj_rekey_075_snapshot) = ${rekey.length} as snapshot_is_complete,`);
+p(`  (select count(*) from public.dj_rekey_077_snapshot) = ${rekey.length} as snapshot_is_complete,`);
 p("  (select count(*) from public.dj_tracks a join public.dj_tracks b");
 p("     on a.canonical_track_id = b.id where a.match_key <> b.match_key) = 0 as no_cross_key_grouping,");
 p("  (select count(*) from public.dj_tracks t where t.canonical_track_id = t.id) = 0 as no_self_reference;");

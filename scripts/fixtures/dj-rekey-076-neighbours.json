@@ -1,0 +1,10 @@
+{"result": {
+ "part": "neighbours",
+ "format": "compact-v1: [video_id, title, artist, match_key, created_epoch]",
+ "count": 3,
+ "rows": [
+  ["parkerStudio","Salt Peanuts","Charlie Parker","charlie parker|salt peanuts",1780000000.0],
+  ["KvOv82JfIXY","Countless Blues","Lester Young, The Kansas City Six","lester young the kansas city six|countless blues",1790203344.951447],
+  ["billEvansSolo","Darn That Dream","Bill Evans","bill evans|darn that dream",1781000000.0]
+ ]
+}}
