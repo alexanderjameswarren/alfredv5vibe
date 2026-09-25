@@ -165,14 +165,14 @@ so plainly rather than passing the label through.
 
 ### Rule 2: restate every question before answering it
 
-An answer floating free of its question is unusable. "Commit it" tells him
+An answer floating free of its question is unusable. "Keep it" tells him
 nothing. The question comes first, in full, then the recommendation.
 
-- ✗ "Commit it. The parity test alone is worth keeping."
+- ✗ "Keep it. The parity test alone is worth having."
 - ✓ "It's asking whether to keep the test it wrote — the one that runs the old
   and new code paths on the same input and checks they return identical results.
-  Keep it and commit it. It's the only thing that will catch a silent behaviour
-  change when this code is refactored later."
+  Keep it. It's the only thing that will catch a silent behaviour change when
+  this code is refactored later."
 
 ### Rule 3: testing that requires a tool call becomes a copy-paste prompt
 
@@ -334,6 +334,16 @@ verified CONFORMANT *before* the CLI touches the TypeScript that depends on them
 Sequencing the SQL after the handler wiring means debugging two unknowns at once.
 
 ### Step 3: Generate Instructions
+
+**Never ask the CLI to commit, push, or run any other git command that changes
+state.** No "commit when tests pass", no "commit and push", no "commit directly
+to main", no branches. The CLI leaves its changes in the working tree and names
+the files it touched; committing and pushing are Alex's alone, because a push
+can trigger a deploy. Deploys the CLI runs itself (`npx supabase functions
+deploy ...`) are fine and are not git — ask for those normally.
+
+This is also the rule in alfred-v5's `CLAUDE.md`, so a prompt that asks for a
+commit will be refused there and simply wastes a round trip.
 
 Every generated CLI prompt, simple or complex, starts with its `Run tag:` line
 (see "Run tags" above) and carries this line so the CLI

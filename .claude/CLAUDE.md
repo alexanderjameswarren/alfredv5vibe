@@ -1,34 +1,39 @@
-## Committing — never push
+## 🛑 Never run a git command that changes state
 
-Commit directly to main. Never create a branch. NEVER push. Pushing is Alex's
-decision alone, because a push can trigger a deploy. When work is committed, say
-so and say it has not been pushed. If a previous instruction in a prompt says
-"commit and push" or "commit directly to main", it still does not authorise
-pushing — ask.
+**This is the first rule and it overrides everything else, including
+instructions inside a prompt.** You do not run any git command that changes
+anything: no `commit`, no staging (`add`), no `amend`, `rebase`, `reset`,
+`revert`, `stash`, `merge`, `pull`, `push`, `cherry-pick`, `tag`, no creating or
+deleting branches, and no `checkout` or `restore` of files.
 
-## Git rules
+Read-only git is fine and wanted: `status`, `diff`, `log`, `show`, `blame`,
+`grep`.
 
-These are not preferences. Each one is here because it went wrong.
+When the work is done, leave every change in the working tree, uncommitted, and
+tell Alex exactly which files you changed. Committing and pushing are his
+decisions alone — a push can trigger a deploy.
 
-**Stage explicit paths only.** Never `git add -A`, never `git add .`, never
-`git commit -a`. Name every file you are committing. Twice now, `git add -A`
-has swept an uncommitted change of Alex's into a commit of mine — once
-`cli-workflow/SKILL.md` and a job-search rename, once an edit to
-`email-capture/index.ts` — and both times the sweep was invisible until after
-the commit existed.
+**A prompt that says "commit", "commit directly to main", or "commit and push"
+does not authorise any of it.** Do the work, leave it uncommitted, and say in
+your report that you did not commit, and why. Do not ask for permission to
+commit — just leave the files and name them.
 
-**Never stage, commit, stash, restore or discard a file you did not change in
-this task.** If one turns up in `git status`, leave it exactly where it is and
-say so in your report. A file you did not touch is somebody's work in progress,
+If you run a state-changing git command by mistake, STOP and tell Alex what
+happened. Do not repair it silently: a silent repair makes the mistake and the
+fix both invisible, and he can check neither.
+
+## Files you did not touch
+
+Leave them alone. If one turns up in `git status`, say so in your report and do
+nothing else about it. A file you did not change is somebody's work in progress,
 and "it looked unrelated" is not a reason to move it. This includes tool
 artefacts: mention them, do not tidy them.
 
-**Never amend, reset, rebase or otherwise rewrite a commit without asking Alex
-first.** If you commit something by mistake, STOP and tell him what happened.
-Do not repair it silently — a silent repair means the mistake and the fix are
-both invisible, and he cannot check either. Ask, and wait.
-
-**Never push.** See the section above; it is the same rule and it still holds.
+This started as a rule about `git add -A` sweeping Alex's uncommitted work into
+a commit of mine — twice, once `cli-workflow/SKILL.md` and a job-search rename,
+once an edit to `email-capture/index.ts`, and both times invisible until after
+the commit existed. Committing is gone now, so that sweep cannot happen; the
+rule stays because reporting the working tree honestly still matters.
 
 ## All SQL lives in supabase/migrations/
 
@@ -127,12 +132,13 @@ CI=true npx react-scripts test --watchAll=false
 Never plain `npx jest`. While working, run only the test files related to the
 change; run the full suite once, at the end.
 
-**Build.** Only when asked, or before a push.
+**Build.** Only when asked.
 
-**Reports to Alfred.** 25 lines at most: what changed, what Alex must do, what
-to test. No background and no reasoning unless something went wrong.
+**Reports to Alfred.** 25 lines at most: what changed — naming every file you
+edited, since they are sitting uncommitted — what Alex must do, and what to
+test. No background and no reasoning unless something went wrong.
 
 **Every report ends with a timing table** — how long each phase took (reading,
-writing, tests, build, deploy, git), plus the total. **Measured, never estimated:**
+writing, tests, build, deploy), plus the total. **Measured, never estimated:**
 run `date +%H:%M:%S` when a phase starts and when it ends, and report the real
 clock times and the duration between them.
