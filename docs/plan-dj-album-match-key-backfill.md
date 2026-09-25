@@ -58,6 +58,35 @@ word and it is a small change.
 `dec 29` is meaningless — the *artist* is wrong, and repairing that is a
 hand-built value table, the shape of 007, not this migration.
 
+## The Massey Hall merge — asked before writing 075, and it IS by design
+
+The six repaired rows key to `charlie parker|<title>`, and their titles carry
+`(Live at Massey Hall)`, which `QUALIFIER_RES` strips at write. So
+`A Night in Tunisia (Live at Massey Hall)` and Parker's studio
+`A Night in Tunisia` land on ONE key and **do** group.
+
+**That is §4.1.1 working, not a side effect.** `live`, `live at …` and `(Live)` are
+in the grouping vocabulary deliberately: familiarity asks "have I heard this music"
+(§5), and a play of any upload counts. The separate READ-time `isVariantCut` still
+reports these as live, which is what stops a setlist entry resolving to a concert
+recording — the two questions stay apart, as `dj-normalise.ts` says they must.
+
+| title | grouping key | `isVariantCut` |
+|---|---|---|
+| `A Night in Tunisia` | `charlie parker\|a night in tunisia` | false |
+| `A Night in Tunisia (Live at Massey Hall)` | `charlie parker\|a night in tunisia` | **true** |
+
+**And it is the state a correct import would already have produced.** Had YouTube
+Music sent the players instead of `Various Artists`, `buildMatchKey` would have
+written that key on day one. Migration 007 used the same standard: reproduce what
+correct data would have given, rather than invent a new grouping.
+
+⚠️ **What changes for you:** `days_since_last` for these titles becomes the more
+recent of the studio and live plays. That is correct and it will move numbers you
+have seen. ⚠️ **And 073's "0 merges" does not apply here** — the six were not in
+its `affected` set, because before 072 their byline had no comma. Merges are
+expected to be non-zero, and the generator lists every one before 075 runs.
+
 ## How many rows, and which
 
 **Unknown until you run 073.** I cannot read the database and will not guess a

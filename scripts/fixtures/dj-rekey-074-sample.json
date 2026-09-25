@@ -1,19 +1,152 @@
-{"result": {
- "sizes": [{"candidates": 9, "neighbours": 2, "distinct_titles": 8}],
- "candidates": [
-  {"video_id":"alb1","title":"Jordu","artist":"Clifford Brown, Max Roach","match_key":"clifford brown max roach|jordu","canonical_track_id":null,"created_at":"2026-08-31T10:00:00Z"},
-  {"video_id":"alb2","title":"Daahoud","artist":"Clifford Brown, Max Roach","match_key":"clifford brown max roach|daahoud","canonical_track_id":null,"created_at":"2026-08-31T10:00:01Z"},
-  {"video_id":"ewf1","title":"September","artist":"Earth, Wind & Fire","match_key":"earth wind and fire|september","canonical_track_id":null,"created_at":"2026-08-31T10:00:02Z"},
-  {"video_id":"tyl1","title":"EARFQUAKE","artist":"Tyler, The Creator","match_key":"tyler the creator|earfquake","canonical_track_id":null,"created_at":"2026-08-31T10:00:03Z"},
-  {"video_id":"dat1","title":"Some Guitar Piece","artist":"Dec 29, 2023","match_key":"dec 29 2023|some guitar piece","canonical_track_id":null,"created_at":"2026-08-31T10:00:04Z"},
-  {"video_id":"dat2","title":"Another Piece","artist":"Oct 24, 2019","match_key":"oct 24 2019|another piece","canonical_track_id":null,"created_at":"2026-08-31T10:00:05Z"},
-  {"video_id":"acg1","title":"Relaxing Set","artist":"Acoustic Guitar Songs, 1.2M views","match_key":"acoustic guitar songs 1 2m views|relaxing set","canonical_track_id":null,"created_at":"2026-08-31T10:00:06Z"},
-  {"video_id":"onvLuR7E5sM","title":"Salt Peanuts","artist":"Various Artists","match_key":"various artists|salt peanuts","canonical_track_id":null,"created_at":"2026-08-31T10:00:07Z"},
-  {"video_id":"alb3","title":"Blues Walk","artist":"Art Blakey & The Jazz Messengers, Lee Morgan","match_key":"art blakey and the jazz messengers lee morgan|blues walk","canonical_track_id":null,"created_at":"2026-08-31T10:00:08Z"}
- ],
- "neighbours": [
-  {"video_id":"poll1","title":"Jordu","artist":"Clifford Brown","match_key":"clifford brown|jordu","canonical_track_id":null,"created_at":"2026-05-01T10:00:00Z"},
-  {"video_id":"poll2","title":"Salt Peanuts","artist":"Charlie Parker","match_key":"charlie parker|salt peanuts","canonical_track_id":null,"created_at":"2026-04-01T10:00:00Z"}
- ],
- "album_written_video_ids": [{"video_id":"alb1"},{"video_id":"alb2"},{"video_id":"alb3"},{"video_id":"ewf1"},{"video_id":"tyl1"}]
-}}
+{
+ "result": {
+  "sizes": [
+   {
+    "candidates": 12,
+    "neighbours": 3,
+    "distinct_titles": 8
+   }
+  ],
+  "candidates": [
+   {
+    "video_id": "alb1",
+    "title": "Jordu",
+    "artist": "Clifford Brown, Max Roach",
+    "match_key": "clifford brown max roach|jordu",
+    "canonical_track_id": null,
+    "created_at": "2026-08-31T10:00:00Z"
+   },
+   {
+    "video_id": "alb2",
+    "title": "Daahoud",
+    "artist": "Clifford Brown, Max Roach",
+    "match_key": "clifford brown max roach|daahoud",
+    "canonical_track_id": null,
+    "created_at": "2026-08-31T10:00:01Z"
+   },
+   {
+    "video_id": "ewf1",
+    "title": "September",
+    "artist": "Earth, Wind & Fire",
+    "match_key": "earth wind and fire|september",
+    "canonical_track_id": null,
+    "created_at": "2026-08-31T10:00:02Z"
+   },
+   {
+    "video_id": "tyl1",
+    "title": "EARFQUAKE",
+    "artist": "Tyler, The Creator",
+    "match_key": "tyler the creator|earfquake",
+    "canonical_track_id": null,
+    "created_at": "2026-08-31T10:00:03Z"
+   },
+   {
+    "video_id": "dat1",
+    "title": "Some Guitar Piece",
+    "artist": "Dec 29, 2023",
+    "match_key": "dec 29 2023|some guitar piece",
+    "canonical_track_id": null,
+    "created_at": "2026-08-31T10:00:04Z"
+   },
+   {
+    "video_id": "dat2",
+    "title": "Another Piece",
+    "artist": "Oct 24, 2019",
+    "match_key": "oct 24 2019|another piece",
+    "canonical_track_id": null,
+    "created_at": "2026-08-31T10:00:05Z"
+   },
+   {
+    "video_id": "acg1",
+    "title": "Relaxing Set",
+    "artist": "Acoustic Guitar Songs, 1.2M views",
+    "match_key": "acoustic guitar songs 1 2m views|relaxing set",
+    "canonical_track_id": null,
+    "created_at": "2026-08-31T10:00:06Z"
+   },
+   {
+    "video_id": "onvLuR7E5sM",
+    "title": "Salt Peanuts",
+    "artist": "Various Artists",
+    "match_key": "various artists|salt peanuts",
+    "canonical_track_id": null,
+    "created_at": "2026-08-31T10:00:07Z"
+   },
+   {
+    "video_id": "alb3",
+    "title": "Blues Walk",
+    "artist": "Art Blakey & The Jazz Messengers, Lee Morgan",
+    "match_key": "art blakey and the jazz messengers lee morgan|blues walk",
+    "canonical_track_id": null,
+    "created_at": "2026-08-31T10:00:08Z"
+   },
+   {
+    "video_id": "jbe1",
+    "title": "During This Time",
+    "artist": "Jazz and Blues Experience, 1.7M views",
+    "match_key": "jazz and blues experience 1 7m views|during this time",
+    "canonical_track_id": null,
+    "created_at": "2026-08-31T10:00:09Z"
+   },
+   {
+    "video_id": "jsm1",
+    "title": "Some Upload",
+    "artist": "Joel Silva Music, 42K views",
+    "match_key": "joel silva music 42k views|some upload",
+    "canonical_track_id": null,
+    "created_at": "2026-08-31T10:00:10Z"
+   },
+   {
+    "video_id": "eapPwd8v5Xg",
+    "title": "A Night in Tunisia (Live at Massey Hall)",
+    "artist": "Various Artists",
+    "match_key": "various artists|a night in tunisia",
+    "canonical_track_id": null,
+    "created_at": "2026-08-31T10:00:11Z"
+   }
+  ],
+  "neighbours": [
+   {
+    "video_id": "poll1",
+    "title": "Jordu",
+    "artist": "Clifford Brown",
+    "match_key": "clifford brown|jordu",
+    "canonical_track_id": null,
+    "created_at": "2026-05-01T10:00:00Z"
+   },
+   {
+    "video_id": "poll2",
+    "title": "Salt Peanuts",
+    "artist": "Charlie Parker",
+    "match_key": "charlie parker|salt peanuts",
+    "canonical_track_id": null,
+    "created_at": "2026-04-01T10:00:00Z"
+   },
+   {
+    "video_id": "parkerStudio",
+    "title": "A Night in Tunisia",
+    "artist": "Charlie Parker",
+    "match_key": "charlie parker|a night in tunisia",
+    "canonical_track_id": null,
+    "created_at": "2026-03-01T10:00:00Z"
+   }
+  ],
+  "album_written_video_ids": [
+   {
+    "video_id": "alb1"
+   },
+   {
+    "video_id": "alb2"
+   },
+   {
+    "video_id": "alb3"
+   },
+   {
+    "video_id": "ewf1"
+   },
+   {
+    "video_id": "tyl1"
+   }
+  ]
+ }
+}
