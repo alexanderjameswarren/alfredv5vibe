@@ -596,18 +596,32 @@ export function makeChordPrompt({ clef, missTally = {}, rng = Math.random } = {}
 /**
  * One prompt of whichever kind the toggles ask for.
  *
+ * "focus" ignores BOTH other toggles: it draws from `focusList` and each entry
+ * carries its own clef, which is why the screen greys the clef group out. An
+ * empty focus list falls through to the requested mix rather than throwing —
+ * the screen never selects Focus without entries, and a prompt that cannot be
+ * drawn would take the screen down.
+ *
  * @param {object} options
- * @param {"notes"|"chords"|"mix"} options.mode  "mix" is a 50/50 split
+ * @param {"notes"|"chords"|"mix"|"focus"} options.mode  "mix" is a 50/50 split
  * @param {"treble"|"bass"|"both"} options.clefMode  "both" is a 50/50 split
+ * @param {Array} [options.focusList]  required by mode "focus"; see ./focusList.js
  */
 export function makePrompt({
   mode = "mix",
   clefMode = "both",
+  focusList = [],
   missTally = {},
   rng = Math.random,
 } = {}) {
+  if (mode === "focus" && focusList.length > 0) {
+    return makeFocusPrompt({ focusList, missTally, rng });
+  }
+
+  // Focus with nothing to draw from behaves as Mix, per the doc comment above.
+  const fallenBack = mode === "focus" ? "mix" : mode;
   const clef = clefMode === "both" ? (rng() < 0.5 ? "treble" : "bass") : clefMode;
-  const wantsChord = mode === "chords" || (mode === "mix" && rng() < 0.5);
+  const wantsChord = fallenBack === "chords" || (fallenBack === "mix" && rng() < 0.5);
 
   return wantsChord
     ? makeChordPrompt({ clef, missTally, rng })
@@ -681,4 +695,132 @@ export function describeChordDifference(correct, pickedLabel) {
     `${pickedLabel} wants ${pitchClassName(pickedNotes[i].name)} where the staff shows ` +
     `${pitchClassName(correctNotes[i].name)}, ${describeGap(gap)}.`
   );
+}
+
+// ---------------------------------------------------------------------------
+// Focus mode
+// ---------------------------------------------------------------------------
+//
+// Focus asks only about a hand-picked list of notes and chords — ./focusList.js
+// — instead of the whole pool. The list lives in its own file because it is
+// rewritten by hand as practice moves on; the rules for what a valid entry IS
+// live here, with the rest of the music logic, so the screen never has to know
+// what a note name or a chord quality looks like.
+//
+// ONLY THE QUESTION NARROWS. The distractors come from `noteDistractors` and
+// `chordDistractors` exactly as they do in every other mode, so the wrong
+// answers are still drawn from the full pool. Narrowing them too would turn a
+// twelve-entry list into four memorised tile positions, which trains the tiles
+// rather than the staff.
+
+/** The clefs a focus entry may name. Derived, so a new clef needs no edit. */
+export const FOCUS_CLEFS = Object.keys(CLEF_RANGES);
+
+/**
+ * Why this focus entry is unusable, or null if it is fine.
+ *
+ * Returns a sentence rather than a boolean because both callers want to say
+ * what is wrong: the test names the bad entry, and the screen logs it.
+ *
+ * @param {object} entry one element of FOCUS_LIST
+ * @returns {string|null}
+ */
+export function focusEntryError(entry) {
+  if (!entry || typeof entry !== "object") return "not an object";
+  if (!FOCUS_CLEFS.includes(entry.clef)) {
+    return `clef must be one of ${FOCUS_CLEFS.join(", ")}, got ${JSON.stringify(entry.clef)}`;
+  }
+
+  if (entry.kind === "note") {
+    if (!parseNoteName(entry.name)) return `not a note name: ${JSON.stringify(entry.name)}`;
+    // Checked against the pool by NAME, not by pitch: the pool is spelled with
+    // sharps, so "Gb3" fails here even though that pitch is in range. The
+    // focus-list comment says to write sharps; this is what enforces it.
+    if (!pitchPool(entry.clef).some((p) => p.name === entry.name)) {
+      return `${entry.name} is outside the ${entry.clef} pool (${CLEF_RANGES[entry.clef].poolLo} to ${CLEF_RANGES[entry.clef].poolHi})`;
+    }
+    return null;
+  }
+
+  if (entry.kind === "chord") {
+    if (!ROOTS.includes(entry.root)) {
+      return `root must be one of ${ROOTS.join(", ")}, got ${JSON.stringify(entry.root)}`;
+    }
+    if (!CHORD_TYPE_IDS.includes(entry.quality)) {
+      return `quality must be one of ${CHORD_TYPE_IDS.join(", ")}, got ${JSON.stringify(entry.quality)}`;
+    }
+    return null;
+  }
+
+  return `kind must be "note" or "chord", got ${JSON.stringify(entry.kind)}`;
+}
+
+/**
+ * The entries of a focus list that can actually be asked.
+ *
+ * A bad entry is dropped rather than thrown on, so a typo costs one question
+ * and not the screen. The test suite is what turns a typo into a loud failure;
+ * see the comment at the top of ./focusList.js.
+ *
+ * @param {Array} list
+ * @param {(entry: object, reason: string) => void} [onDropped]
+ */
+export function validFocusEntries(list, onDropped) {
+  if (!Array.isArray(list)) return [];
+  return list.filter((entry) => {
+    const reason = focusEntryError(entry);
+    if (reason && onDropped) onDropped(entry, reason);
+    return !reason;
+  });
+}
+
+/** The answer-tile text for a focus entry: "C4", or "Dm7". */
+export function focusLabel(entry) {
+  return entry.kind === "chord" ? chordName(entry.root, entry.quality) : entry.name;
+}
+
+/**
+ * One prompt drawn from the focus list.
+ *
+ * WEIGHTING IS BY MISSES ONLY — `1 + 2 * (times missed)`, the same factor every
+ * other mode uses, and NOT the ledger-distance factor `pitchWeight` adds. Two
+ * reasons. The list is already the hand-picked selection that the ledger
+ * weighting exists to make for you, so applying it again would re-rank a
+ * deliberate choice. And it would rank across kinds: a note four steps off the
+ * staff scores 9.8 where every chord scores 1, so the chords in a mixed list
+ * would all but vanish. Within the list, what you keep getting wrong is what
+ * comes back.
+ *
+ * The clef comes from the entry, never from the clef toggle — which is why the
+ * screen greys that toggle out while Focus is active.
+ *
+ * @param {object} options
+ * @param {Array} options.focusList already filtered by `validFocusEntries`
+ */
+export function makeFocusPrompt({ focusList = [], missTally = {}, rng = Math.random } = {}) {
+  const weights = focusList.map((e) => 1 + 2 * (missTally[focusLabel(e)] || 0));
+  const entry = weightedPick(focusList, weights, rng);
+
+  if (entry.kind === "chord") {
+    const { root, quality } = entry;
+    const octave = chordRootOctave(root, quality, entry.clef);
+    const label = chordName(root, quality);
+    return {
+      clef: entry.clef,
+      event: { duration: WHOLE_NOTE, notes: chordNotes(root, quality, octave) },
+      label,
+      options: shuffled([label, ...chordDistractors(root, quality, rng)], rng),
+      chord: { root, quality, octave },
+    };
+  }
+
+  const parsed = parseNoteName(entry.name);
+  const answer = makeNote(parsed.letter, parsed.alter, parsed.octave);
+  return {
+    clef: entry.clef,
+    event: { duration: WHOLE_NOTE, notes: [answer] },
+    label: answer.name,
+    options: shuffled([answer.name, ...noteDistractors(answer, entry.clef, rng)], rng),
+    chord: null,
+  };
 }

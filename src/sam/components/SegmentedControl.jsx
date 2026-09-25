@@ -17,23 +17,39 @@ import React from "react";
 // `aria-label` on the wrapper keep the control identifiable by hover and to a
 // screen reader. Hiding both labels frees roughly 195px, which is what keeps
 // Score playback on the same line as everything else on a laptop.
-export default function SegmentedControl({ label, value, options, onChange }) {
+// `disabled` greys the whole group; a fourth element on an option tuple greys
+// that option alone. Both are optional and additive — every existing caller
+// passes neither and is unaffected. Sight Reader's Focus mode needs both: its
+// own button is dead while the focus list is empty, and it greys the clef group
+// out while it is active, because it uses each entry's own clef.
+export default function SegmentedControl({
+  label,
+  value,
+  options,
+  onChange,
+  disabled = false,
+}) {
   return (
     <span
-      className="flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+      className={`flex items-center gap-1.5 shrink-0 whitespace-nowrap ${
+        disabled ? "opacity-40" : ""
+      }`}
       title={label}
       aria-label={label}
+      aria-disabled={disabled || undefined}
     >
       <span className="hidden xl:inline">{label}</span>
       <span className="inline-flex rounded border border-border overflow-hidden">
-        {options.map(([optionValue, optionLabel, optionTitle], i) => {
+        {options.map(([optionValue, optionLabel, optionTitle, optionDisabled], i) => {
           const selected = value === optionValue;
+          const off = disabled || Boolean(optionDisabled);
           return (
             <button
               key={optionValue}
               type="button"
               title={optionTitle || optionLabel}
               aria-pressed={selected}
+              disabled={off}
               onClick={() => onChange(optionValue)}
               className={`px-2 py-1 text-xs transition-colors ${
                 i > 0 ? "border-l border-border" : ""
@@ -41,6 +57,10 @@ export default function SegmentedControl({ label, value, options, onChange }) {
                 selected
                   ? "bg-primary-light text-primary font-medium"
                   : "bg-card text-muted-foreground hover:text-dark"
+              } ${off ? "cursor-not-allowed " : ""}${
+                // Only the option-level grey, or it would compound with the
+                // group's own opacity and fade the whole row nearly out.
+                optionDisabled && !disabled ? "opacity-50" : ""
               }`}
             >
               {optionLabel}

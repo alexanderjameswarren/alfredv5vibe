@@ -103,4 +103,9 @@ export interface ItemCollection {
 export interface ToolResult {
   data?: unknown;
   error?: string;
+  // Total matching rows before the limit, from a `count: "exact"` query. The
+  // MCP wrapper turns it into meta.truncated + meta.total so the "N of M"
+  // NOTE is measured rather than guessed. Only handlers that ask for a count
+  // set it; absent means "not measured", not "nothing was cut".
+  total?: number;
 }

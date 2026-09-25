@@ -31,6 +31,12 @@ being learned. This is the reason for the data-shape rule below: if generated
 prompts use SAM's own note shape from the start, the song-sourced mode becomes a
 different source feeding the same renderer and the same tiles, not a rewrite.
 
+Focus mode (below, added 2026-09-25) is the hand-written half of that idea and
+not a substitute for it: the same "narrow the questions, keep the tiles wide"
+shape, with a list maintained by hand rather than read out of `sam_song_measures`.
+A song-sourced mode would produce focus entries and reuse `makeFocusPrompt`
+unchanged.
+
 ## Data shapes
 
 ### Reuse SAM's note shape verbatim
@@ -231,8 +237,10 @@ Changing either toggle draws a fresh prompt. Leaving the old one on screen with
 tiles that no longer match what was asked for is the obvious bug here.
 
 Toggles:
-- What to drill: Notes / Chords / Mix. Mix is a 50/50 split.
-- Which clef: Treble / Bass / Both.
+- What to drill: Notes / Chords / Mix / Focus. Mix is a 50/50 split; Focus is
+  the fourth mode added 2026-09-25 and is described in its own section below.
+- Which clef: Treble / Bass / Both. Greyed out while Focus is active, because
+  Focus takes each entry's own clef.
 
 Answering:
 - Correct: tile turns to the success colour, advance after ~550ms.
@@ -253,6 +261,67 @@ missed list says "all time". They sit four lines apart and span different
 things, and `PracticeFigures.jsx` records what happens when that is left
 implicit — SAM once showed "Today:" beside "Total:" where one meant every song
 and the other meant this song, and neither could be read.
+
+## Focus mode (added 2026-09-25)
+
+A fourth drill mode that narrows the QUESTIONS to a hand-picked list of notes
+and chords, rewritten by hand as practice moves on. It is called Focus and never
+"Drill": that word already means a derived practice song (`song_type = 'drill'`)
+and is not reusable here.
+
+### The list — `src/games/sightReader/focusList.js`
+
+One exported array, `FOCUS_LIST`, of two entry kinds:
+
+```js
+{ kind: "note",  clef: "treble", name: "F5" }
+{ kind: "chord", clef: "bass",   root: "Bb", quality: "minor7" }
+```
+
+`clef` is required on every entry, both kinds — Focus ignores the clef toggle
+entirely, so the list is the only thing that says where a question is drawn.
+Note names are spelled with SHARPS, matching the pitch pools; a flat name is
+rejected as out of pool even when the pitch is in range. Chord roots do use
+flats, because that is how a player meets them. Chords carry no octave;
+`chordRootOctave` places them.
+
+The file's header comment is load-bearing and written to be read cold — the
+whole point of the feature is that a session with no other context can rewrite
+the array correctly.
+
+Seeded with twelve entries covering the staff edges at both ends of both clefs:
+treble C4, D4, E4, F5, G5, A5 and bass E2, F2, G2, A3, B3, C4. **C4 appears
+under both clefs deliberately** — one ledger line below the treble stave and one
+above the bass stave is two different reading problems that happen to sound the
+same.
+
+### Rules
+
+- **Only the question narrows.** The four tiles still draw their wrong answers
+  from the full pool of pitches and all eighty-four chords, via the same
+  `noteDistractors` and `chordDistractors` every other mode uses. Narrowing them
+  too would train four memorised tile positions instead of the staff.
+- **Weighting inside the list is by misses only** — `1 + 2 × (times missed)` —
+  and not by ledger distance. The list is already the hand-picked selection that
+  the ledger factor exists to make automatically, and applying that factor as
+  well would rank across kinds: a note four steps off the staff scores 9.8 where
+  every chord scores 1, so chords in a mixed list would all but vanish.
+- **Focus is the default mode** when the list has entries.
+- **An empty list greys the Focus button out and the default falls back to Mix**,
+  so a fresh clone with an emptied list still boots into a working game.
+- **Validation lives in `music.js`, not the screen** — `focusEntryError`,
+  `validFocusEntries`, `focusLabel`, `makeFocusPrompt`. The screen never learns
+  what a note name or a chord quality looks like. A bad entry is dropped with a
+  console line rather than taking the screen down; `focusList.test.js` is what
+  turns a typo into a loud failure.
+
+### `SegmentedControl` gained two optional props
+
+`disabled` greys a whole group; a fourth element on an option tuple greys one
+option. Both default to off, so `NumericSettings.jsx` — the only other caller —
+is unaffected. Focus needs both: its own button is dead while the list is empty,
+and it greys the clef group out while it is active. This is the one edit under
+`src/sam/` that this feature makes.
 
 ## Chord explanations
 
@@ -358,6 +427,11 @@ wrong for the large answer tiles.
 VexFlow is a CDN global and is therefore `undefined` under Jest. Every existing
 test covers pure helpers only.
 
+- `focusList.js` is data and **must** have tests — `focusList.test.js` checks
+  every entry against the clef and pool rules, so a typo in a hand-edited list
+  fails the suite instead of quietly costing a question. It also holds the
+  Focus-mode prompt tests, including the one that proves wrong answers are not
+  limited to the list.
 - `music.js` is pure and **must** have tests: chord spelling (D major gives F#,
   not Gb; Eb minor spells correctly), MIDI and name agreement, distractors always
   containing the correct answer and never duplicating, and pitch pools staying
@@ -374,7 +448,7 @@ test covers pure helpers only.
 3. Sharps and flats sit against their noteheads, not out by the clef.
 4. Both clefs work; ledger-line notes appear noticeably more often than notes on
    the staff.
-5. All three modes work: notes, chords, mix.
+5. All four modes work: notes, chords, mix, focus.
 6. Chords spell correctly — check D major, Bb7, F#dim by eye against the guide.
 7. A wrong chord shows an explanation naming the difference from what was
    picked, and waits for a press before moving on.
@@ -386,3 +460,6 @@ test covers pure helpers only.
 12. Usable one-handed on a phone; every tap target at least 44px. The stave and
     the four tiles are on screen together without scrolling.
 13. Existing games and practice screens are untouched and still work.
+14. Focus is selected on load, asks only about the twelve focus entries, and its
+    wrong answers still come from the whole pool. The clef group is greyed while
+    it is active. Emptying the list greys Focus out and starts the game in Mix.

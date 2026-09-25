@@ -10,8 +10,10 @@ import {
   describeChordDifference,
   makePrompt,
   pitchClassName,
+  validFocusEntries,
 } from "../sightReader/music";
 import { CHORD_TYPES, chordTypeOf } from "../sightReader/chordTypes";
+import { FOCUS_LIST } from "../sightReader/focusList";
 
 // Sight Reader — the screen.
 //
@@ -66,10 +68,32 @@ const MOST_MISSED_SHOWN = 6;
 // about 580px tall for a single notehead.
 const STAVE_MAX_WIDTH = "max-w-[360px]";
 
+// The focus list, checked once for the life of the page rather than per render
+// — it is a module constant, so the answer cannot change. A bad entry is
+// dropped with a console line naming it; the test suite is what makes a typo
+// loud (src/games/sightReader/focusList.test.js).
+const FOCUS_ENTRIES = validFocusEntries(FOCUS_LIST, (entry, reason) =>
+  console.error("[SightReader] Focus entry ignored:", reason, entry)
+);
+const HAS_FOCUS = FOCUS_ENTRIES.length > 0;
+
+// Focus is the default when there is a list to focus on. With no list the
+// button is dead and the default falls back to Mix, so a fresh clone with an
+// emptied focus list still boots into a working game.
+const DEFAULT_MODE = HAS_FOCUS ? "focus" : "mix";
+
 const DRILL_OPTIONS = [
   ["notes", "Notes", "Single notes only"],
   ["chords", "Chords", "Chords only"],
   ["mix", "Mix", "An even split of notes and chords"],
+  [
+    "focus",
+    "Focus",
+    HAS_FOCUS
+      ? `Only the ${FOCUS_ENTRIES.length} notes and chords in the focus list`
+      : "The focus list is empty — add entries to src/games/sightReader/focusList.js",
+    !HAS_FOCUS,
+  ],
 ];
 
 const CLEF_OPTIONS = [
@@ -119,8 +143,13 @@ function loadMissTally() {
 }
 
 export default function SightReader() {
-  const [mode, setMode] = useState("mix");
+  const [mode, setMode] = useState(DEFAULT_MODE);
   const [clefMode, setClefMode] = useState("both");
+
+  // Focus takes each entry's own clef, so the clef toggle is not in play while
+  // it is selected — greyed out rather than hidden, so it is visibly out of the
+  // loop rather than mysteriously missing.
+  const focusActive = mode === "focus" && HAS_FOCUS;
 
   // Read once, on the first render of the mount. Any failure — private
   // browsing, cleared cache, corrupt JSON, a save from a future build — comes
@@ -133,7 +162,12 @@ export default function SightReader() {
   // than asking one unweighted question first. The lazy initialiser runs only
   // on the first render, when `missTally` is exactly what came off disk.
   const [prompt, setPrompt] = useState(() =>
-    makePrompt({ mode: "mix", clefMode: "both", missTally })
+    makePrompt({
+      mode: DEFAULT_MODE,
+      clefMode: "both",
+      focusList: FOCUS_ENTRIES,
+      missTally,
+    })
   );
 
   // "asking" until a tile is pressed, then "correct" or "wrong" until the next
@@ -202,7 +236,7 @@ export default function SightReader() {
 
   function drawNext() {
     clearPending();
-    setPrompt(makePrompt({ mode, clefMode, missTally }));
+    setPrompt(makePrompt({ mode, clefMode, focusList: FOCUS_ENTRIES, missTally }));
     setPicked(null);
     setStatus("asking");
   }
@@ -267,7 +301,7 @@ export default function SightReader() {
     clearPending();
     disarmReset();
     setMode(next);
-    setPrompt(makePrompt({ mode: next, clefMode, missTally }));
+    setPrompt(makePrompt({ mode: next, clefMode, focusList: FOCUS_ENTRIES, missTally }));
     setPicked(null);
     setStatus("asking");
   }
@@ -276,7 +310,7 @@ export default function SightReader() {
     clearPending();
     disarmReset();
     setClefMode(next);
-    setPrompt(makePrompt({ mode, clefMode: next, missTally }));
+    setPrompt(makePrompt({ mode, clefMode: next, focusList: FOCUS_ENTRIES, missTally }));
     setPicked(null);
     setStatus("asking");
   }
@@ -296,7 +330,7 @@ export default function SightReader() {
     setMissTally({});
     // Drawn with no tally at all, so the very next prompt is already unweighted
     // rather than still leaning on the counts being thrown away.
-    setPrompt(makePrompt({ mode, clefMode }));
+    setPrompt(makePrompt({ mode, clefMode, focusList: FOCUS_ENTRIES }));
     setPicked(null);
     setStatus("asking");
   }
@@ -354,6 +388,7 @@ export default function SightReader() {
           value={clefMode}
           options={CLEF_OPTIONS}
           onChange={changeClef}
+          disabled={focusActive}
         />
       </div>
 

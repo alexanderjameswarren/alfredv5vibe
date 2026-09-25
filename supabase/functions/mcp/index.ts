@@ -387,15 +387,25 @@ const getExecutionHistoryTool = defineTool({
   name: "get_execution_history",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
+    const LIMIT = clampLimit(args.limit as number | undefined);
     const result = await getExecutionHistory(ctx.db, {
       intent_id: args.intent_id as string | undefined,
       context_id: args.context_id as string | undefined,
       date_from: args.date_from as string | undefined,
       date_to: args.date_to as string | undefined,
-      limit: clampLimit(args.limit as number | undefined),
+      limit: LIMIT,
     });
     if (result.error) throw new Error(`get_execution_history: ${result.error}`);
-    return result.data;
+    // `total` is platform_search_executions' own count over the same filtered
+    // snapshot the rows came from — dates included, all of it before the limit
+    // — so total > returned means rows were cut, not filtered out afterwards.
+    const rows = (result.data ?? []) as unknown[];
+    const total = result.total ?? rows.length;
+    return envelope(rows, {
+      limit_applied: LIMIT,
+      truncated: total > rows.length,
+      total,
+    });
   },
 });
 
@@ -403,16 +413,26 @@ const getIntentsTool = defineTool({
   name: "get_intents",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
+    const LIMIT = clampLimit(args.limit as number | undefined);
     const result = await getIntents(ctx.db, {
       context_id: args.context_id as string | undefined,
       search_text: args.search_text as string | undefined,
       tags: args.tags as string[] | undefined,
       include_archived: args.include_archived as boolean | undefined,
       recurring_only: args.recurring_only as boolean | undefined,
-      limit: clampLimit(args.limit as number | undefined),
+      limit: LIMIT,
     });
     if (result.error) throw new Error(`get_intents: ${result.error}`);
-    return result.data;
+    // `total` is the pre-limit count the handler measured, and every filter
+    // (tags included, since the overlaps fix) is in the query it counted — so
+    // total > returned means rows were genuinely cut, not filtered out here.
+    const rows = (result.data ?? []) as unknown[];
+    const total = result.total ?? rows.length;
+    return envelope(rows, {
+      limit_applied: LIMIT,
+      truncated: total > rows.length,
+      total,
+    });
   },
 });
 
@@ -932,7 +952,7 @@ export function createMcpServer(token: string) {
         context_id: z.string().optional().describe("Filter by context ID"),
         date_from: z.string().optional().describe("Start date filter (YYYY-MM-DD)"),
         date_to: z.string().optional().describe("End date filter (YYYY-MM-DD)"),
-        limit: z.number().optional().describe("Max results to return (default 20)"),
+        limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
       },
     },
     async (args) => runToolForMcp(getExecutionHistoryTool, args, token),
@@ -950,7 +970,7 @@ export function createMcpServer(token: string) {
         tags: z.array(z.string()).optional().describe("Filter intents that have ANY of these tags"),
         include_archived: z.boolean().optional().describe("Include archived intents (default false)"),
         recurring_only: z.boolean().optional().describe("Only return intents with a recurrence_config (default false)"),
-        limit: z.number().optional().describe("Max results to return (default 50)"),
+        limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
       },
     },
     async (args) => runToolForMcp(getIntentsTool, args, token),

@@ -131,80 +131,25 @@ export async function getExecutionHistory(
   try {
     const limit = params.limit || 20;
 
-    let query = client
-      .from("executions")
-      .select("id, event_id, intent_id, context_id, item_ids, started_at, closed_at, status, outcome, completed_item_ids")
-      .order("started_at", { ascending: false })
-      .limit(limit);
-
-    if (params.intent_id) {
-      query = query.eq("intent_id", params.intent_id);
-    }
-    if (params.context_id) {
-      query = query.eq("context_id", params.context_id);
-    }
-
-    const { data: executions, error } = await query;
+    // Every filter — intent, context AND the event date range — is applied in
+    // Postgres before the limit by platform_search_executions (migration 077).
+    // The date lives on events.time and executions has no FK to events, so
+    // PostgREST cannot embed that join; the function does it and returns
+    // { rows, total } from one snapshot, the same contract get_items has with
+    // platform_search_items. The intent text and event date it joins in are
+    // what this handler used to make two extra round trips for.
+    const { data, error } = await client.rpc("platform_search_executions", {
+      p_intent_id: params.intent_id ?? null,
+      p_context_id: params.context_id ?? null,
+      p_date_from: params.date_from ?? null,
+      p_date_to: params.date_to ?? null,
+      p_limit: limit,
+    });
     if (error) return { error: error.message };
-    if (!executions || executions.length === 0) return { data: [] };
 
-    // Fetch related intents for text
-    const intentIds = [...new Set(executions.map((e: { intent_id: string }) => e.intent_id))];
-    const { data: intents } = await client
-      .from("intents")
-      .select("id, text, item_id")
-      .in("id", intentIds);
-    const intentMap = Object.fromEntries(
-      (intents || []).map((i: { id: string; text: string; item_id: string | null }) => [i.id, i])
-    );
-
-    // Fetch related events for dates
-    const eventIds = [...new Set(executions.map((e: { event_id: string }) => e.event_id))];
-    const { data: events } = await client
-      .from("events")
-      .select("id, time")
-      .in("id", eventIds);
-    const eventMap = Object.fromEntries(
-      (events || []).map((e: { id: string; time: string }) => [e.id, e])
-    );
-
-    let results = executions.map((exec: {
-      id: string;
-      event_id: string;
-      intent_id: string;
-      context_id: string | null;
-      item_ids: string[];
-      started_at: number;
-      closed_at: number | null;
-      status: string;
-      outcome: string | null;
-      completed_item_ids: string[];
-    }) => ({
-      execution_id: exec.id,
-      intent_text: intentMap[exec.intent_id]?.text || null,
-      intent_item_id: intentMap[exec.intent_id]?.item_id || null,
-      event_date: eventMap[exec.event_id]?.time || null,
-      started_at: exec.started_at,
-      closed_at: exec.closed_at,
-      status: exec.status,
-      outcome: exec.outcome,
-      item_ids: exec.item_ids,
-      context_id: exec.context_id,
-    }));
-
-    // Date filtering (event.time is a date field)
-    if (params.date_from) {
-      results = results.filter((r: { event_date: string | null }) =>
-        r.event_date && r.event_date >= params.date_from!
-      );
-    }
-    if (params.date_to) {
-      results = results.filter((r: { event_date: string | null }) =>
-        r.event_date && r.event_date <= params.date_to!
-      );
-    }
-
-    return { data: results };
+    const rows = (data?.rows as unknown[]) ?? [];
+    const total = (data?.total as number) ?? rows.length;
+    return { data: rows, total };
   } catch (e) {
     return { error: String(e) };
   }
@@ -227,7 +172,10 @@ export async function getIntents(
     let query = client
       .from("intents")
       .select(
-        "id, text, is_intention, is_item, item_id, context_id, tags, collection_id, recurrence_config, target_start_date, end_date, created_at, updated_at"
+        "id, text, is_intention, is_item, item_id, context_id, tags, collection_id, recurrence_config, target_start_date, end_date, created_at, updated_at",
+        // Counted, so truncation is measured rather than inferred from
+        // "we got exactly `limit` rows back".
+        { count: "exact" }
       )
       .order("target_start_date", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: false })
@@ -245,36 +193,24 @@ export async function getIntents(
     if (params.recurring_only) {
       query = query.not("recurrence_config", "is", null);
     }
-
-    const { data: intents, error } = await query;
-    if (error) return { error: error.message };
-    if (!intents || intents.length === 0) return { data: [] };
-
-    // Tag filter is client-side. `intents.tags` has been text[] since migration
-    // 039 — this comment used to say jsonb, which stopped being true then — so
-    // the array `.includes` below is correct rather than accidentally correct.
-    // It no longer "matches get_items" either: the MCP get_items tool filters
-    // in Postgres via platform_search_items (`tags && p_tags`).
-    //
-    // ⚠️ THIS FILTERS THE PAGE, NOT THE TABLE. The `.limit()` above is applied
-    // by Postgres BEFORE this runs, so a matching row that sorts past the limit
-    // is invisible. The limit is hard-capped at 50 by clampLimit, whatever the
-    // caller asks for. With `include_archived: true` the archived rows crowd
-    // that window and a tag that plainly exists comes back as an empty array —
-    // which reads as "the tag filter is broken" and has already been
-    // misdiagnosed once as a stale deploy. It is not broken; it is narrow.
-    // Filed as its own item. The fix is to move the predicate into the query.
-    let filtered = intents;
+    // Tags are filtered in Postgres, BEFORE the limit. `overlaps` is `&&` on a
+    // text[] column (`intents.tags` since migration 039), which is "has any of
+    // these tags" — the same rule the old in-memory filter applied, minus the
+    // bug: that one ran after the limit, so it filtered one page instead of the
+    // table and matching rows past position 50 were invisible. Same pattern as
+    // get_ken_items and platform_search_items' `tags && p_tags`.
     if (params.tags && params.tags.length > 0) {
-      filtered = intents.filter((row: { tags: string[] | null }) =>
-        params.tags!.some((tag) => (row.tags || []).includes(tag))
-      );
+      query = query.overlaps("tags", params.tags);
     }
+
+    const { data: intents, error, count } = await query;
+    if (error) return { error: error.message };
+    if (!intents || intents.length === 0) return { data: [], total: count ?? 0 };
 
     // Resolve context names (same pattern as search_items).
     const contextIds = [
       ...new Set(
-        filtered
+        intents
           .map((r: { context_id: string | null }) => r.context_id)
           .filter(Boolean)
       ),
@@ -292,14 +228,14 @@ export async function getIntents(
       }
     }
 
-    const results = filtered.map(
+    const results = intents.map(
       (row: { context_id: string | null; [key: string]: unknown }) => ({
         ...row,
         context_name: row.context_id ? contextMap[row.context_id] || null : null,
       })
     );
 
-    return { data: results };
+    return { data: results, total: count ?? results.length };
   } catch (e) {
     return { error: String(e) };
   }

@@ -1,6 +1,6 @@
 # Progress: Sight Reader
 
-## Status: Build complete — Step 4 awaiting verification
+## Status: Step 5 (Focus mode) built — awaiting verification
 
 Spec: `docs/technical-spec-sight-reader.md`
 
@@ -40,6 +40,17 @@ platform conformance step.
       *(`bestAccuracy` deliberately unused — see the open question at the end.
       Full suite 1340 passing; production build compiles clean.)*
 
+- [x] Step 5 (2026-09-25): Focus mode — a fourth drill mode asking only about a
+      hand-picked list. New `src/games/sightReader/focusList.js` (the list, with
+      a header comment written to be read cold) and
+      `src/games/sightReader/focusList.test.js`. Focus logic appended to
+      `music.js`: `focusEntryError`, `validFocusEntries`, `focusLabel`,
+      `makeFocusPrompt`, and a `"focus"` branch in `makePrompt`. The screen
+      gained the fourth button, Focus as its default, and a greyed clef group
+      while Focus is active. `SegmentedControl` gained two optional disabled
+      props.
+      *(21 new tests; full suite 1776 passing, no regressions.)*
+
 ### Verification Gates
 
 Each step is verified before the next begins.
@@ -57,6 +68,10 @@ Each step is verified before the next begins.
 - [ ] Step 4 verified — a reload clears session accuracy and keeps the
       weighting; Reset clears both for good; the game still runs with storage
       unavailable
+      *(awaiting Alex)*
+- [ ] Step 5 verified — Focus is the mode on load, the questions are only the
+      twelve, the wrong answers are not, the clef group is greyed while Focus is
+      active, and Notes / Chords / Mix still behave as before
       *(awaiting Alex)*
 
 ### Notes
@@ -382,6 +397,63 @@ chord guide, out of reach of a thumb working the tiles.
 Rather than with the tally it is about to discard, so the very next question is
 already unweighted.
 
+### Step 5 — decisions the spec did not cover
+
+**29. Only the question narrows; the tiles stay wide.**
+Asked for explicitly, and it is the decision the whole mode rests on. Focus
+prompts call the same `noteDistractors` and `chordDistractors` as every other
+mode, so a twelve-entry list still puts wrong answers from the full pool on
+screen. A short list feeding the tiles would train four memorised positions
+instead of the staff.
+
+**30. Weighting inside the list is by misses only.**
+`1 + 2 × (times missed)`, and NOT the ledger-distance factor `pitchWeight`
+applies. Two reasons. The list is already the hand-picked selection that the
+ledger factor exists to make for you, so applying it again re-ranks a deliberate
+choice. And it ranks across kinds: a note four steps off the staff scores 9.8
+where every chord scores 1, so the chords in a mixed list would all but vanish.
+This is the reading of "the existing miss weighting still applies within the
+list" — the miss factor, not the whole weight function.
+
+**31. The list validates in `music.js`, not in the screen.**
+`focusEntryError` returns a SENTENCE rather than a boolean, because both callers
+want to say what is wrong: the test names the bad entry, and the screen logs it.
+The screen never learns what a note name or a chord quality looks like.
+
+**32. A bad entry is dropped at runtime and fatal in the suite.**
+A typo should not take the screen down mid-practice, so `validFocusEntries`
+filters and `console.error`s the reason. That alone would be "fails silently at
+runtime", which is exactly what was ruled out — so `focusList.test.js` checks
+every entry against the clef and pool rules, and a typo fails the suite.
+
+**33. Note names in the list must be spelled with sharps.**
+Validation checks membership of the clef's pool by NAME, not by pitch, and the
+pools are sharp-spelled. So "Gb3" is rejected even though that pitch is in
+range. Chord ROOTS still use flats (Bb, Eb, Ab), because that is how the game
+already names them and how a player meets them. Both are stated in the focus
+list's header comment, and both have a test.
+
+**34. `SegmentedControl` gained two optional disabled props.**
+`disabled` greys a group; a fourth element on an option tuple greys one option.
+Focus needs both — its own button while the list is empty, and the clef group
+while it is active. The alternative was a local copy of the control inside the
+game, which would have meant two versions of the same toolbar styling drifting
+apart. Both props default to off, so `NumericSettings.jsx`, the only other
+caller, renders identically. **This breaks the Step 4 claim that nothing under
+`src/sam/` was modified**, and it is the only such edit: additive, and the full
+suite is unchanged at 1776 passing.
+
+**35. Focus ignores the clef toggle, and the toggle says so.**
+Greyed rather than hidden. A control that vanishes and comes back as the mode
+changes is harder to read than one that is visibly out of play, and the clef
+group is where the eye goes to ask "which clef am I being shown".
+
+**36. An empty focus list falls back to Mix in two places.**
+The screen never selects Focus without entries, and `makePrompt` treats
+`mode: "focus"` with an empty list as Mix anyway. The second is redundant by
+construction — and a prompt that cannot be drawn is a blank screen, which is too
+expensive a thing to leave resting on one caller getting it right.
+
 ### Step 4 — a finding: `bestAccuracy` has no input here
 
 The spec asked for `accuracyOf`, `bestAccuracy` and `formatAccuracy`. Two of the
@@ -408,7 +480,8 @@ something. Both are additions rather than wiring, so they are yours to call.
 
 ### The build is complete
 
-Four steps, two amendments, one clipping bug found in verification and fixed.
+Four steps, two amendments, one clipping bug found in verification and fixed —
+plus Step 5, Focus mode, added 2026-09-25.
 
 | File | Lines | What it is |
 |---|---|---|
@@ -416,11 +489,15 @@ Four steps, two amendments, one clipping bug found in verification and fixed.
 | `src/games/sightReader/chordTypes.js` | 105 | The seven chord types |
 | `src/games/sightReader/music.test.js` | 777 | 72 tests |
 | `src/games/sightReader/BareStave.jsx` | 225 | One stave, one clef, one note or chord |
-| `src/games/variants/sightReader.jsx` | 526 | The screen |
+| `src/games/variants/sightReader.jsx` | 561 | The screen |
 | `src/games/variants.js` | +8 | One import, one registry entry |
+| `src/games/sightReader/focusList.js` | 90 | Step 5: the focus list, and how to edit it |
+| `src/games/sightReader/focusList.test.js` | 205 | Step 5: 21 tests |
+| `src/sam/components/SegmentedControl.jsx` | +14 | Step 5: two optional disabled props |
 
-Nothing under `src/sam/` was modified — `practiceScoring.js`, `vexflowHelpers.js`
-and `SegmentedControl.jsx` are imported and untouched, and `ScoreRenderer.jsx`,
+One file under `src/sam/` was modified, in Step 5: `SegmentedControl.jsx` gained
+two optional disabled props (decision 34). `practiceScoring.js` and
+`vexflowHelpers.js` are imported and untouched, and `ScoreRenderer.jsx`,
 `scoreRender.js` and `ScrollEngine.jsx` were never opened for writing.
 `gameStorage.js` is used as-is. No database work: no migration, no table, no MCP
 tool, no platform conformance step.
