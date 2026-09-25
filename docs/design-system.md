@@ -123,7 +123,7 @@ container's own spacing is what puts the gap above the footer, and that is wante
 One row of tab buttons under a hairline, the selected one carrying a brown underline.
 
 **Owns:** the row, the hairline, the underline, the active and hover colours, the
-horizontal scroll, and the `tablist` / `tab` roles.
+narrow-screen compression, and the `tablist` / `tab` roles.
 
 **Takes:** `tabs` (`{ key, label, count?, icon? }`), `activeKey`, `onSelect`,
 `ariaLabel`, and `className` for the gap and the margin below — layout only.
@@ -136,6 +136,37 @@ inbox would have been a third copy.
 `count` is omitted rather than shown as `(0)` only when it is `undefined`: the Recycle
 Bin's tabs have no counts at all, while "All (0)" on an empty inbox is the truth and its
 tab has to stay, because it is the way back.
+
+### Narrow screens: compress, do not scroll
+
+**Below `lg`, a tab with an icon shows only that icon and its count.** The full name stays
+as `title` and `aria-label`, so the accessible name survives the label being hidden.
+
+This is the **top navigation's** rule and the top navigation's breakpoint, reused rather
+than reinvented: the nav carries ten destinations from 640px upward with
+`hidden lg:inline` on its labels. If that breakpoint ever moves, both should move
+together — `UnderlineTabs.test.jsx` asserts the nav still uses it.
+
+The **count survives the label**, also following the nav: an inbox glyph on its own says
+nothing about whether there is anything in it.
+
+⚠️ **Only a tab with an icon compresses.** Without one there would be nothing left to show
+— a bare count, or on the Recycle Bin's tabs, which have no counts either, nothing at all.
+
+The row **wraps** rather than scrolling. It was `overflow-x-auto`, which hides tabs off
+the right edge, and a tab you have to discover by swiping is not one tap away. Wrapping is
+the nav's own safety net: a wrapped tab is still reachable; a clipped one is not.
+
+### Which rows have icons, and which do not
+
+| row | icons | why |
+|---|---|---|
+| Inbox sources | yes, all seven | up to seven tabs on a 390px phone — this is the row compression exists for |
+| Home: Active / Paused / Today | no | three tabs fit at any width, so compressing buys nothing, and inventing three glyphs to enable a compression it does not need would add a vocabulary for no gain |
+| Recycle Bin: eight record types | no | the labels ARE the content, and with no counts either an icon-only row would be eight bare glyphs |
+
+Both of those keep their labels at every width automatically, under the icon rule above —
+no special case, and no change to how they behaved before the compression existed.
 
 ### The rule
 
@@ -174,11 +205,24 @@ hand-rolled, or if the retired `pb-2 border-b-2` string comes back.
 name. Both the source tabs and the card meta lines read that one map; a second list is
 how `clipboard` once came to render correctly on one screen and as a pencil on the other.
 
-**A hand-typed capture is `StickyNote`, not a pencil.** The pencil is reserved for
-EDITING — it is the capture-text pencil on the inbox detail page — and using it for
-"typed by hand" as well made one glyph mean two things on adjacent screens. The Capture
-button in the capture bar carries the same StickyNote before its label, so the button and
-the Capture tab are recognisably the same thing.
+**A hand-typed capture is `Lightbulb`.** It has been two other things, and both failures
+are worth keeping:
+
+- `Pencil` — which is ALSO the edit control on the inbox detail page, so one glyph meant
+  two things on adjacent screens.
+- `StickyNote` — which at 14px is nearly indistinguishable from `File`, the ITEM icon,
+  which appears on the same card two lines below it.
+
+A bulb is a thought you had, which is what a typed capture is, and it looks like nothing
+else in the app at any size.
+
+The Capture button in the capture bar carries the **same glyph** before its label, so the
+button and the Capture tab are recognisably the same thing. **If one moves, both move.**
+
+The Inbox source tabs' **All** tab uses `Inbox` — the same glyph the top navigation's
+Inbox tab uses (`OBJECT_ICONS.inbox`). Two references rather than one shared export,
+because `OBJECT_ICONS` lives in the file that imports the tab logic; a guard in
+`inboxSourceTabs.test.js` reads Alfred.jsx and fails if they diverge.
 
 An unrecognised `source_type` folds onto `manual` everywhere — icon, label, tab and
 filter — because the column has no constraint in the database and a row has to render as

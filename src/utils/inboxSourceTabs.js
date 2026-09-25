@@ -12,6 +12,7 @@
  * these rows". The source filter is the first of those.
  */
 
+import { Inbox } from "lucide-react";
 import { SOURCE_GLYPHS } from "../CaptureMeta";
 
 export const ALL_SOURCES = "all";
@@ -51,7 +52,14 @@ export function sourceTabsFor(inboxItems, sourceLabel) {
   }
 
   const tabs = [
-    { key: ALL_SOURCES, label: "All", count: rows.length, icon: undefined },
+    // ⚠️ The SAME glyph the top navigation's Inbox tab uses — `OBJECT_ICONS.inbox` in
+    // Alfred.jsx, which is this lucide component. Two references rather than one shared
+    // export, because OBJECT_ICONS lives in the file that imports this one; a guard in
+    // inboxSourceTabs.test.js reads Alfred.jsx and fails if they ever diverge.
+    //
+    // It is not decoration either: below `lg` every tab compresses to its icon and its
+    // count, so a tab without one would have nothing left to show.
+    { key: ALL_SOURCES, label: "All", count: rows.length, icon: Inbox },
   ];
   for (const key of SOURCE_ORDER) {
     if (!counts[key]) continue;

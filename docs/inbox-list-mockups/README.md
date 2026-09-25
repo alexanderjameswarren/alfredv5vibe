@@ -23,6 +23,12 @@ any console error about support.js.
      the selection falls back to All.
    - The order is deliberately NOT sorted by count or alphabetically, unlike the
      tag pills: six sources never change, so the row can be learned by position.
+   - "All" carries the same Inbox glyph the top navigation's Inbox tab uses.
+   - **Below `lg` each tab shows only its icon and its count** (Step 21c), the same
+     rule and the same breakpoint the top navigation uses for its ten tabs. The
+     full name stays as the accessible name and as a hover title. The row wraps
+     rather than scrolling sideways — a tab you have to swipe to find is not one
+     tap away.
 3. The existing search, "Sort by" and direction button.
 4. Cards, styled like the Schedule cards:
    - Title, at most two lines. For an ENRICHED item it is Claude's suggested name —
@@ -44,11 +50,13 @@ any console error about support.js.
    muted, shows the source icon, the title, what happened ("Processed",
    "Processed into an intention", "Discarded" in red) and when, with an Undo
    button.
-6. The capture bar. Its Capture button carries the StickyNote icon before its
-   label, matching the Capture source tab — Step 21b. The source icon for a
-   hand-typed capture is StickyNote, NOT a pencil: the pencil is reserved for
-   editing (the capture-text pencil on the detail page), and one glyph meaning two
-   things on adjacent screens was the problem.
+6. The capture bar. Its Capture button carries the Capture source glyph before its
+   label, so the button and the Capture tab match — Step 21b.
+
+   That glyph is `Lightbulb` as of Step 21c, and it has been two other things: a
+   pencil, which is also the EDIT control on the detail page, and then StickyNote,
+   which at 14px is nearly indistinguishable from the item icon on the same card.
+   A bulb is a thought you had, and it looks like nothing else at any size.
 
 Phone: one column in the same order; each card's action button and trash icon sit
 on a row beneath the card's text.

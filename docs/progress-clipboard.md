@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 complete, verified and pushed.** Round 3: the inbox list, Steps 20-23. Steps 20, 20b, 21 and 21b done; 20b deployed (mcp v122). 21b awaiting in-app verification. Step 22 next.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 complete, verified and pushed.** Round 3: the inbox list, Steps 20-23. Steps 20, 20b, 21, 21b and 21c done; 20b deployed (mcp v122). 21c awaiting in-app verification. Step 22 next.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -82,7 +82,8 @@ before committing, unlike round 2's folder. Read that README and
 - [x] Step 20: `create_inbox_item` accepts an optional `source_type` ('mcp' default, or 'task') and `source_metadata` (for a task: task name, run date). Add a task icon to the source icon map. No UI beyond the icon. - **done 2026-09-24**, deployed as mcp v121, `verify_jwt` still false. `deno check` back at the baseline 97 errors — one new one found and fixed, see the notes. - **verified 2026-09-24** by a fresh-thread test: mcp default, task stored with its name and run date at `not_started`, and all three malformed calls refused.
 - [x] Step 20b: Three fixes. Confirm from the live function that `create_inbox_item` publishes both new params; mark an mcp capture `enriched` only when something was actually suggested; give `archive_inbox_item` an optional reason. - **done 2026-09-24**, deployed as mcp v122, `verify_jwt` still false, `deno check` at the baseline 97 with no new errors.
 - [x] Step 21: The list card and the filters. One shared `InboxListCard` per the mockup: title, meta line, preview line (context chip, New item / New intention, date chip, tags), one action button plus the trash icon. **Process** files an enriched item in one tap from its suggestions, through the SAME save path as the detail page (archive as 'processed', set `source_inbox_id`), and shows only for enriched items that suggest at least an item or an intention. **Copy**, for task items, copies the captured text plus a final line `Alfred inbox item: <id>`. Source filter pills REUSE the existing tag filter component, with no "All" pill. Phone layout per the mockup. - **done 2026-09-24.** `src/InboxListCard.jsx` and `src/utils/inboxSuggestions.js`, with the one-tap/detail-page equivalence proved by test. `InboxCard` and `AiStatusBadge` are gone. Suite: 75 suites, 1636 tests; build clean. - **reviewed from clips 2026-09-24**: the cards match the mockup. The source PILLS were rejected and replaced in 21b.
-- [x] Step 21b: Source TABS instead of pills, reusing the front page's underline tabs; StickyNote for the Capture source everywhere including the capture bar's button; an enriched card titled by Claude's suggested name. - **done 2026-09-24.** `TagFilter`'s `noun` prop reverted. Suite: 77 suites, 1672 tests; build clean.
+- [x] Step 21b: Source TABS instead of pills, reusing the front page's underline tabs; StickyNote for the Capture source everywhere including the capture bar's button; an enriched card titled by Claude's suggested name. - **done 2026-09-24.** `TagFilter`'s `noun` prop reverted. Suite: 77 suites, 1672 tests; build clean. - **reviewed from clips 2026-09-25**: the desktop tabs match the front page, titles show suggested names, the Capture button has its icon. Two changes asked for, done in 21c.
+- [x] Step 21c: An Inbox glyph on the All tab; compress the tabs on narrow screens the way the top nav does instead of scrolling sideways; Lightbulb for the Capture source. - **done 2026-09-25.** Suite: 77 suites, 1679 tests; build clean.
 - [ ] Step 22: "Recently archived (n)" — the last seven days, collapsible, with "Show all". Each row says what happened (processed; processed into an item / intention / event, via `source_inbox_id`; or discarded) and offers a working Undo that un-archives.
 - [ ] Step 23: Add every new shared piece to `docs/design-system.md` — list card, filter pills, context chip, preview line, archived row — with the rules for using them, and extend the guard tests so screens must use them.
 
@@ -161,6 +162,64 @@ accepts 'processed' or 'discarded', with an allowlist rather than a pass-through
 `inbox_archive_reason_needs_archived` checks the reason's PAIRING with `archived`, not
 its value, so an unrecognised string would be stored and then match nothing the archive
 screen knows how to describe.
+
+### Step 21c — compression, and the Capture glyph's third attempt, 2026-09-25
+
+#### The tabs compress instead of scrolling
+
+`overflow-x-auto` hid tabs off the right edge, and a tab you have to discover by swiping
+is not one tap away. Below `lg` a tab now shows **only its icon and its count**, with the
+full name kept as `title` and `aria-label`.
+
+**That is the top navigation's rule and the top navigation's breakpoint**, reused rather
+than reinvented: the nav carries ten destinations from 640px up with `hidden lg:inline` on
+its labels. A test asserts the nav still uses that exact string, so if the breakpoint ever
+moves the two move together. The count survives the label for the nav's own reason — an
+inbox glyph alone says nothing about whether there is anything in it.
+
+The row **wraps** as its safety net, as the nav does. A wrapped tab is still reachable; a
+clipped one is not.
+
+#### ⚠️ Only a tab with an icon compresses
+
+Without one there would be nothing left to show: a bare count, or on the Recycle Bin's
+tabs — which have no counts either — nothing at all.
+
+**Home and the Recycle Bin therefore keep their labels, and I gave neither icons.** Asked
+which I would do and why:
+
+| row | decision | why |
+|---|---|---|
+| Inbox sources | icons, all seven | up to seven tabs on a 390px phone. This is the row the compression exists for. |
+| Home: Active / Paused / Today | labels, no icons | three tabs fit at any width, so compressing buys nothing — and inventing three glyphs to enable a compression it does not need would add a vocabulary for no gain. |
+| Recycle Bin: eight record types | labels, no icons | the labels ARE the content, and with no counts either an icon-only row would be eight bare glyphs. Items/Intents/Events do have `OBJECT_ICONS` entries, but Songs and Snippets both map to `sam`, so two tabs would be identical. |
+
+Neither needed a special case: the icon rule covers both, and their behaviour is exactly
+what it was before the compression existed.
+
+#### The All tab's glyph
+
+`Inbox` — the same lucide component the top navigation's Inbox tab uses through
+`OBJECT_ICONS.inbox`. Two references rather than one shared export, because
+`OBJECT_ICONS` lives in Alfred.jsx, which imports the tab logic; a guard reads Alfred.jsx
+and fails if the two diverge.
+
+It is not decoration: without an icon the All tab would have nothing left below `lg`.
+
+#### Capture is a Lightbulb now, and this is its third glyph
+
+Worth recording all three failures, because each was a different kind:
+
+1. **Pencil** — also the EDIT control on the inbox detail page. One glyph, two meanings,
+   adjacent screens.
+2. **StickyNote** (21b) — at 14px nearly indistinguishable from `File`, the ITEM icon,
+   which appears on the same card two lines below it.
+3. **Lightbulb** — a thought you had, which is what a typed capture is, and it looks like
+   nothing else in the app at any size.
+
+Changed in `SOURCE_GLYPHS`, so the tab, the card meta lines and the capture bar's Capture
+button all moved together — which is the property that made this a one-line change rather
+than four.
 
 ### Step 21b — tabs, not pills, 2026-09-24
 

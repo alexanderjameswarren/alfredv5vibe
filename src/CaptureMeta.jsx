@@ -10,7 +10,7 @@
  * screen and correctly on the other.
  */
 
-import { StickyNote, Bot, Mail, Paperclip, Terminal, ListChecks } from "lucide-react";
+import { Lightbulb, Bot, Mail, Paperclip, Terminal, ListChecks } from "lucide-react";
 
 /**
  * A capture's timestamp, in words.
@@ -103,10 +103,14 @@ export function SourceIcon({ sourceType, className = "w-3.5 h-3.5" }) {
  * and as a pencil on the other.
  */
 export const SOURCE_GLYPHS = {
-  // ⚠️ StickyNote, NOT Pencil — Step 21b. The pencil is reserved for EDITING (the
-  // capture-text pencil on the inbox detail page), and using it for "typed by hand" as
-  // well made one glyph mean two things on adjacent screens.
-  manual: StickyNote,
+  // ⚠️ Lightbulb, and it has now been two other things — Step 21c.
+  //
+  // It was Pencil, which is ALSO the edit control on the inbox detail page, so one glyph
+  // meant two things on adjacent screens. Step 21b made it StickyNote, which at 14px is
+  // nearly indistinguishable from `File` — the ITEM icon, which appears on the same card
+  // two lines below it. A bulb is a thought you had, which is what a typed capture is,
+  // and it looks like nothing else in the app at any size.
+  manual: Lightbulb,
   mcp: Bot,
   // A checklist rather than a clock or a calendar: Calendar is already the schedule,
   // CalendarClock is already an event, and a task is not a moment in time but a named

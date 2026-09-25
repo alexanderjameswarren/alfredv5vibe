@@ -192,7 +192,7 @@ Deno.serve(async (req) => {
   // Insert inbox record
   const inboxRecord = {
     id: crypto.randomUUID(),
-    created_at: Date.now(),
+    created_at: new Date().toISOString(),
     archived: false,
     triaged_at: null,
     captured_text: capturedText,

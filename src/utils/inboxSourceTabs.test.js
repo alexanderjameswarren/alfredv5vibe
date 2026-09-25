@@ -5,6 +5,9 @@ import {
   effectiveSource,
   matchesSource,
 } from "./inboxSourceTabs";
+import fs from "fs";
+import path from "path";
+import { Inbox } from "lucide-react";
 import { sourceLabel, SOURCE_GLYPHS } from "../CaptureMeta";
 
 const rows = (...types) => types.map((sourceType, i) => ({ id: `i${i}`, sourceType }));
@@ -33,9 +36,9 @@ describe("which tabs are drawn", () => {
 
   it("has All even with an empty inbox", () => {
     // There must always be a way back, and the count tells the truth.
-    expect(sourceTabsFor([], sourceLabel)).toEqual([
-      { key: ALL_SOURCES, label: "All", count: 0, icon: undefined },
-    ]);
+    const tabs = sourceTabsFor([], sourceLabel);
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0]).toMatchObject({ key: ALL_SOURCES, label: "All", count: 0 });
   });
 
   it("shows a source only while it has items", () => {
@@ -53,14 +56,28 @@ describe("which tabs are drawn", () => {
     expect(tabs.find((t) => t.key === "task")).toMatchObject({ label: "Task", count: 1 });
   });
 
-  it("gives every source tab its icon FROM the shared map, and All none", () => {
+  it("gives every source tab its icon FROM the shared map", () => {
     // By reference, not by type: lucide icons are forwardRef objects rather than plain
     // functions, and what matters anyway is that the tab reads the same map `SourceIcon`
     // does — a second list is how one source came to render differently on two screens.
     const tabs = sourceTabsFor(rows("mcp", "task"), sourceLabel);
-    expect(tabs[0].icon).toBeUndefined();
     expect(tabs.find((t) => t.key === "mcp").icon).toBe(SOURCE_GLYPHS.mcp);
     expect(tabs.find((t) => t.key === "task").icon).toBe(SOURCE_GLYPHS.task);
+  });
+
+  it("gives EVERY tab an icon, including All", () => {
+    // Not decoration — Step 21c. Below `lg` a tab compresses to its icon and its count,
+    // so a tab without one would have nothing left to show.
+    const tabs = sourceTabsFor(rows("mcp", "manual", "task", "clipboard"), sourceLabel);
+    for (const t of tabs) expect(t.icon).toBeTruthy();
+  });
+
+  it("gives All the same glyph the top navigation's Inbox tab uses", () => {
+    expect(sourceTabsFor([], sourceLabel)[0].icon).toBe(Inbox);
+    // Asserted against Alfred.jsx too, because the nav reads OBJECT_ICONS rather than
+    // this import and the two could otherwise drift apart silently.
+    const alfred = fs.readFileSync(path.join(__dirname, "..", "Alfred.jsx"), "utf8");
+    expect(alfred).toContain("  inbox: Inbox,");
   });
 
   it("folds an unrecognised source onto Capture rather than inventing a tab", () => {
