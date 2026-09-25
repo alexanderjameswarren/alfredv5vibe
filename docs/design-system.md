@@ -152,21 +152,46 @@ nothing about whether there is anything in it.
 
 ⚠️ **Only a tab with an icon compresses.** Without one there would be nothing left to show
 — a bare count, or on the Recycle Bin's tabs, which have no counts either, nothing at all.
+This is a safety rule for a future caller, not a licence: see below.
 
 The row **wraps** rather than scrolling. It was `overflow-x-auto`, which hides tabs off
 the right edge, and a tab you have to discover by swiping is not one tap away. Wrapping is
 the nav's own safety net: a wrapped tab is still reachable; a clipped one is not.
 
-### Which rows have icons, and which do not
+### Every tab has an icon
 
-| row | icons | why |
+**All three rows, every tab** — Step 22. It was "the inbox has icons and the other two do
+not", which meant one row compressed on a phone and two did not: three behaviours where a
+shared component was supposed to produce one. `UnderlineTabs.test.jsx` fails on any tab
+literal in Alfred.jsx without an `icon:`, `NAV_ITEMS` included.
+
+| row | glyphs | reused or chosen |
 |---|---|---|
-| Inbox sources | yes, all seven | up to seven tabs on a 390px phone — this is the row compression exists for |
-| Home: Active / Paused / Today | no | three tabs fit at any width, so compressing buys nothing, and inventing three glyphs to enable a compression it does not need would add a vocabulary for no gain |
-| Recycle Bin: eight record types | no | the labels ARE the content, and with no counts either an icon-only row would be eight bare glyphs |
+| Inbox sources | `Inbox` for All, then `SOURCE_GLYPHS` | reused — the nav's Inbox glyph and the one source map |
+| Home | Active `Activity`, Paused `Pause`, Today `Sun` | two reused, one chosen |
+| Recycle Bin | `OBJECT_ICONS` for six record types, plus `Music` and `Scissors` | six reused, one chosen |
 
-Both of those keep their labels at every width automatically, under the icon rule above —
-no special case, and no change to how they behaved before the compression existed.
+Reused wherever the app already had a glyph for the thing:
+
+- **Active** is `OBJECT_ICONS.execution` — the same pulse the cards inside that tab carry.
+- **Paused** is `Pause`, which already means "this is paused" on an execution badge
+  (`Pause` beside the word "Paused"). The Pause **button** is the same glyph, which is a
+  verb sitting next to a noun — accepted, because the noun is the state the verb produces,
+  and nothing else says "set aside" without inventing a meaning.
+- The Recycle Bin's six record types are `OBJECT_ICONS` verbatim, so a record looks the
+  same here as it does in the nav.
+
+Two are chosen, and named as choices so they are not mistaken for vocabulary:
+
+- **Today** is `Sun`. The two glyphs that already mean "time" both mean something else —
+  `Calendar` is the Schedule, `CalendarClock` is an event — and `Sun` is used nowhere else.
+- **Snippets** is `Scissors`. ⚠️ The nav has ONE SAM entry and the Recycle Bin has two
+  rows for it, so Songs and Snippets would both be `Music`: two identical icons in a row
+  that has **no counts**, which below `lg` is all it has. A snippet is a clipping out of a
+  song; `Scissors` says so and collides with nothing.
+
+Same test as the source glyphs applies to a replacement: it must not already mean
+something else in Alfred, and it must still be legible at 14–16px.
 
 ### The rule
 
@@ -238,6 +263,24 @@ because `OBJECT_ICONS` lives in the file that imports the tab logic; a guard in
 An unrecognised `source_type` folds onto `manual` everywhere — icon, label, tab and
 filter — because the column has no constraint in the database and a row has to render as
 something. Quietly wrong beats invisible.
+
+---
+
+## Card titles in a list
+
+**`font-medium`, at the body size. Not bold.** `EventCard` on the Schedule is the
+reference — `font-medium text-foreground`, with no size of its own — and every list of
+cards reads at that weight: items, intentions, memories, contexts.
+
+The inbox's list card shipped `font-bold` in Step 21 and was corrected in Step 22. It was
+not wrong in isolation; it was wrong next to everything else, which is the only way this
+kind of thing ever goes wrong. `InboxListCard.test.jsx` asserts both halves — that the
+card is `font-medium`, and that the Schedule card's class string is still what it was
+matched against — so if the reference moves, the copy fails rather than drifting.
+
+`InboxListCard` states `text-base` explicitly where `EventCard` inherits it. Same 16px;
+spelled out because the card also states `leading-snug`, which a two-line `line-clamp-2`
+title needs and a one-line title does not.
 
 ---
 

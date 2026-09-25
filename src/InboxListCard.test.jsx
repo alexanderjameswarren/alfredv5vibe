@@ -1,6 +1,8 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import fs from "fs";
+import path from "path";
 import InboxListCard from "./InboxListCard";
 
 const CONTEXTS = [
@@ -52,6 +54,24 @@ describe("what every card shows", () => {
     // discards `-webkit-line-clamp` from an inline style, so the earlier version of
     // this could not be checked at all.
     expect(screen.getByRole("heading", { level: 3 })).toHaveClass("line-clamp-2");
+  });
+
+  it("titles at the Schedule cards' weight, not bolder — Step 22", () => {
+    // It was `font-bold`, which made a list of captures read heavier than every other
+    // list in the app. The Schedule card is the reference, and the guard below reads it
+    // out of Alfred.jsx so the two cannot drift apart silently.
+    setup();
+    expect(screen.getByRole("heading", { level: 3 })).toHaveClass("font-medium");
+    expect(screen.getByRole("heading", { level: 3 })).not.toHaveClass("font-bold");
+  });
+
+  it("matches the Schedule card's title weight, read from the source", () => {
+    // 🛑 If `EventCard`'s title weight ever changes, this fails and says so, rather than
+    // leaving the inbox quietly out of step with the screen it was styled after.
+    const alfred = fs.readFileSync(path.join(__dirname, "Alfred.jsx"), "utf8");
+    expect(alfred).toContain(
+      'className="flex items-start gap-1.5 font-medium text-foreground hover:text-primary"',
+    );
   });
 
   it("a trash can, whatever else it offers", () => {

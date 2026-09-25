@@ -1,6 +1,6 @@
 # Progress: Alfred Clipboard
 
-## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 complete, verified and pushed.** Round 3: the inbox list, Steps 20-23. Steps 20, 20b, 21, 21b and 21c done; 20b deployed (mcp v122). 21c awaiting in-app verification. Step 22 next.
+## Status: **Phases 1 and 2 complete. Phase 3 round 1 (Steps 13-15) complete.** Phase 3 round 2: the inbox detail page, Steps 16-19. **Phase 3 round 2 complete, verified and pushed.** Round 3: the inbox list, Steps 20-23. Steps 20 through 22 done; 20b deployed (mcp v122); 21c verified at phone width. Step 23 next, and it is the last of round 3.
 
 Spec: docs/technical-spec-clipboard.md
 
@@ -83,12 +83,71 @@ before committing, unlike round 2's folder. Read that README and
 - [x] Step 20b: Three fixes. Confirm from the live function that `create_inbox_item` publishes both new params; mark an mcp capture `enriched` only when something was actually suggested; give `archive_inbox_item` an optional reason. - **done 2026-09-24**, deployed as mcp v122, `verify_jwt` still false, `deno check` at the baseline 97 with no new errors.
 - [x] Step 21: The list card and the filters. One shared `InboxListCard` per the mockup: title, meta line, preview line (context chip, New item / New intention, date chip, tags), one action button plus the trash icon. **Process** files an enriched item in one tap from its suggestions, through the SAME save path as the detail page (archive as 'processed', set `source_inbox_id`), and shows only for enriched items that suggest at least an item or an intention. **Copy**, for task items, copies the captured text plus a final line `Alfred inbox item: <id>`. Source filter pills REUSE the existing tag filter component, with no "All" pill. Phone layout per the mockup. - **done 2026-09-24.** `src/InboxListCard.jsx` and `src/utils/inboxSuggestions.js`, with the one-tap/detail-page equivalence proved by test. `InboxCard` and `AiStatusBadge` are gone. Suite: 75 suites, 1636 tests; build clean. - **reviewed from clips 2026-09-24**: the cards match the mockup. The source PILLS were rejected and replaced in 21b.
 - [x] Step 21b: Source TABS instead of pills, reusing the front page's underline tabs; StickyNote for the Capture source everywhere including the capture bar's button; an enriched card titled by Claude's suggested name. - **done 2026-09-24.** `TagFilter`'s `noun` prop reverted. Suite: 77 suites, 1672 tests; build clean. - **reviewed from clips 2026-09-25**: the desktop tabs match the front page, titles show suggested names, the Capture button has its icon. Two changes asked for, done in 21c.
-- [x] Step 21c: An Inbox glyph on the All tab; compress the tabs on narrow screens the way the top nav does instead of scrolling sideways; Lightbulb for the Capture source. - **done 2026-09-25.** Suite: 77 suites, 1679 tests; build clean.
-- [ ] Step 22: "Recently archived (n)" — the last seven days, collapsible, with "Show all". Each row says what happened (processed; processed into an item / intention / event, via `source_inbox_id`; or discarded) and offers a working Undo that un-archives.
+- [x] Step 21c: An Inbox glyph on the All tab; compress the tabs on narrow screens the way the top nav does instead of scrolling sideways; Lightbulb for the Capture source. - **done 2026-09-25.** Suite: 77 suites, 1679 tests; build clean. - **verified at phone width 2026-09-25.** The Capture glyph ended up `Send`, not Lightbulb — see `docs/design-system.md`.
+- [x] Step 21d: Icons on EVERY `UnderlineTabs` tab so all three rows compress alike; the inbox card title dropped from bold to the Schedule cards' `font-medium`; task cards titled `"<task name> · <run date>"` from `source_metadata`. - **done 2026-09-25.** `Scissors` chosen for Recycle Bin Snippets because the nav has one SAM glyph and that row needs two; `Sun` chosen for Today. See the notes.
+- [x] Step 22: "Recently archived (n)" — the last seven days, collapsible, with "Show all". Each row says what happened (processed; processed into an item / intention / event, via `source_inbox_id`; or discarded) and offers a working Undo that un-archives. - **done 2026-09-25.** `src/RecentlyArchived.jsx` and `src/utils/inboxArchive.js`. Inbox state now holds every capture and derives the live list, so archived rows are visible without a second slice to keep in step. Suite: 79 suites, 1736 tests; build clean. See the notes for the Undo warning.
 - [ ] Step 23: Add every new shared piece to `docs/design-system.md` — list card, filter pills, context chip, preview line, archived row — with the rules for using them, and extend the guard tests so screens must use them.
 
 
 ## Notes
+
+### Step 22 — one inbox list, two views, 2026-09-25
+
+Alfred.jsx held `inboxItems`: the LIVE captures only. Both loaders fetched every row
+(`select("*")`, no filter) and then dropped the archived ones in JavaScript, and the
+realtime handler dropped them a third time so the two would agree.
+
+"Recently archived" needs those rows. The obvious move — a second `archivedInboxItems`
+slice — would have meant all eight writers keeping two arrays in step by hand, with an
+archive moving a row from one to the other. That is the shape of bug the pinned footer
+took four rounds to fix: a value two things depend on, stored twice.
+
+So state is now `allInboxItems`, the whole table, and both views are derived:
+`inboxItems` is `allInboxItems.filter(i => !i.archived)` and every existing reader of it
+is unchanged. The writers that used to REMOVE a row from the array now flip its
+`archived` flag, which is what the database was already recording. Three consequences,
+all good:
+
+- the realtime handler got smaller — it mirrors the table and holds no opinion about
+  `archived` at all, so an archive is an ordinary UPDATE;
+- the archived section is live rather than correct-until-you-refresh, for free;
+- it costs nothing at the network. The rows were already on the wire.
+
+`utils/inboxArchive.test.js` guards both halves: the loaders' old filter must not come
+back, and `setInboxItems(` must not reappear.
+
+### Step 22 — the Undo that cannot undo everything, 2026-09-25
+
+`handleInboxSave` has always refused to offer an Undo, and says why in a comment:
+un-archiving a processed capture puts the capture back but cannot remove the item,
+intention or event it became. Process it again and you have two of everything.
+
+Step 22 asks for an Undo on every archived row, so the button exists. What it does not do
+is pretend: `undoNeedsConfirming` is true for a processed row, and the confirmation names
+what is already out there ("This capture was filed and became an item…"). A discarded
+capture created nothing, so it goes back with no question. The wording is in
+`inboxArchive.js` rather than in the component, so it is testable and says one thing.
+
+### Step 21d — the two tab glyphs that had to be chosen, 2026-09-25
+
+Alex's instruction was to reuse what the app already had: Home's Active takes
+`OBJECT_ICONS.execution`, and the Recycle Bin's tabs take the nav's glyph per record type.
+Two tabs had nothing to reuse.
+
+**Snippets.** The nav has ONE SAM entry, so `songs` and `snippets` both resolve to
+`OBJECT_ICONS.sam` = `Music`. Reusing it verbatim would have given that row two identical
+icons — and the Recycle Bin's tabs have no counts, so below `lg` the icon is the whole
+tab: two indistinguishable controls. `Scissors`: a snippet is a clipping out of a song, and
+it is used nowhere else in the app.
+
+**Today.** Both glyphs that already mean "time" mean something else — `Calendar` is the
+Schedule, `CalendarClock` is an event. `Sun` was Alex's instruction and is also free.
+
+**Paused** needed a ruling rather than a choice: `Pause` is the BUTTON on every execution
+card, which is the collision that got the pencil retired from the Capture source. Kept
+anyway, because Alfred already writes `Pause` beside the word "Paused" as a STATUS on
+execution badges — the noun is the state the verb produces, and nothing else says "set
+aside" without inventing a meaning.
 
 ### Step 17f — `space-y-*` beat a negative margin, 2026-09-24
 

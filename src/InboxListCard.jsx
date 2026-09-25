@@ -129,7 +129,13 @@ export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProc
             it compiles to: jsdom's CSS parser DISCARDS `-webkit-line-clamp` from an
             inline style, so the clamp would have been unassertable — and an unassertable
             rule is one that can go missing quietly. */}
-        <h3 className="m-0 text-base font-bold leading-snug text-foreground line-clamp-2">
+        {/* `font-medium`, matching the Schedule cards exactly — Step 22. It was
+            `font-bold`, which made a list of captures read heavier than every other list
+            in the app; `EventCard`'s title is `font-medium text-foreground` with no size
+            of its own, so `text-base` here is the same 16px spelled explicitly.
+            `leading-snug` stays: the clamp is two lines and the default leading makes
+            them sit too far apart to read as one title. */}
+        <h3 className="m-0 text-base font-medium leading-snug text-foreground line-clamp-2">
           {listTitleFor(inboxItem)}
         </h3>
 

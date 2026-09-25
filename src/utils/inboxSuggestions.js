@@ -126,10 +126,16 @@ export function triageDataForOneTap(inboxItem) {
 }
 
 /**
- * What a capture is CALLED in the list — Clipboard Step 21b.
+ * What a capture is CALLED in the list — Clipboard Step 21b, extended in Step 22.
  *
- * For an enriched row, Claude's suggested name: the item's, else the intention's. For
- * anything else, the captured text.
+ * Three answers, in this order:
+ *
+ *   A TASK        → its task name and run date, from `source_metadata`. See
+ *                   `taskTitleFor` for why a task is the one row not titled by its own
+ *                   words. FIRST, because a task can also be enriched, and once it is
+ *                   the suggestion below would win and the run would lose its identity.
+ *   ENRICHED      → Claude's suggested name: the item's, else the intention's.
+ *   ANYTHING ELSE → the captured text.
  *
  * ── Why the suggestion wins ──────────────────────────────────────────────────
  *
@@ -139,18 +145,67 @@ export function triageDataForOneTap(inboxItem) {
  * to try a recipe. It is also what the card's Process button is about to create, so the
  * title and the action agree.
  *
- * ⚠️ NOT applied to unenriched rows or tasks, and the captured text is the FALLBACK
- * rather than the alternative. An unenriched row has no suggestion to show, and a task's
- * is not written yet — showing its raw text is the only honest thing either can do.
- * `computeBaseline` falls back the same way for the same reason, so a row with a blank
- * suggestion does not end up with a blank title.
+ * ⚠️ NOT applied to unenriched rows, and the captured text is the FALLBACK rather than
+ * the alternative. An unenriched row has no suggestion to show, so its raw text is the
+ * only honest thing it can say. `computeBaseline` falls back the same way for the same
+ * reason, so a row with a blank suggestion does not end up with a blank title.
  */
 export function listTitleFor(inboxItem) {
   const capturedText = inboxItem?.capturedText || "";
+  const task = taskTitleFor(inboxItem);
+  if (task) return task;
   if (!isEnriched(inboxItem)) return capturedText;
   const suggested =
     (inboxItem.suggestedItemText || "").trim() || (inboxItem.suggestedIntentText || "").trim();
   return suggested || capturedText;
+}
+
+/**
+ * What a TASK capture is called — Clipboard Step 22. `"Weekly DJ review · Sep 25"`.
+ *
+ * ── Why a task is titled differently from everything else ────────────────────
+ *
+ * Every other row in the list is titled by its own words, because its own words are all
+ * there is. A task row is the exception: the text is the task's OUTPUT — a paragraph of
+ * findings written for a Claude session to pick up — and the first fifty characters of
+ * it are the least identifying part. Two runs of the same weekly task produce two rows
+ * that are indistinguishable at a glance and are not the same row.
+ *
+ * `source_metadata.task_name` is the identity the writer was already required to supply
+ * (`create_inbox_item` refuses a task without it), and the run date is what separates
+ * this week's from last week's. So the title is the two facts that tell the rows apart,
+ * and the text stays where it always was — one tap away, on the detail page.
+ *
+ * ⚠️ BOTH KEY CASES ARE READ. `storage.toCamelCase` recurses into jsonb, so a row that
+ * came through React state carries `sourceMetadata.taskName` while the column itself
+ * holds `task_name`. Nothing in the app should hand this an unconverted row, and reading
+ * both costs one `||` — against a title that silently falls back to a paragraph of text
+ * if one ever does.
+ *
+ * The date is written short and WITHOUT a year, matching the app's other short dates. It
+ * is parsed field by field rather than through `new Date("2026-09-25")`, which is UTC
+ * midnight and renders as the 24th in every negative-offset zone.
+ *
+ * Returns null — not a title — for anything that is not a task, and for a task with no
+ * `task_name`, which falls back to the captured text through `listTitleFor`.
+ */
+export function taskTitleFor(inboxItem) {
+  if (inboxItem?.sourceType !== "task") return null;
+  const meta = inboxItem?.sourceMetadata || inboxItem?.source_metadata || {};
+  const name = String(meta.taskName ?? meta.task_name ?? "").trim();
+  if (!name) return null;
+  const date = shortRunDate(meta.runDate ?? meta.run_date);
+  return date ? `${name} · ${date}` : name;
+}
+
+/** A YYYY-MM-DD run date as "Sep 25", or null if it is missing or malformed. */
+function shortRunDate(value) {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? ""));
+  if (!parts) return null;
+  const [, y, m, d] = parts;
+  const local = new Date(Number(y), Number(m) - 1, Number(d));
+  if (Number.isNaN(local.getTime())) return null;
+  return local.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 /**

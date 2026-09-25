@@ -5,6 +5,7 @@ import {
   triageDataForOneTap,
   copyTextForTask,
   listTitleFor,
+  taskTitleFor,
 } from "./inboxSuggestions";
 
 const row = (over = {}) => ({
@@ -214,13 +215,115 @@ describe("listTitleFor", () => {
     ).toBe("Retire the ai-enrich edge function");
   });
 
-  it("keeps the captured text on a task", () => {
-    const task = row({ sourceType: "task", aiStatus: "not_started", capturedText: "DJ sync: 21" });
-    expect(listTitleFor(task)).toBe("DJ sync: 21");
-  });
-
   it("survives junk", () => {
     expect(listTitleFor(null)).toBe("");
     expect(listTitleFor({})).toBe("");
+  });
+});
+
+// ── Task titles — Clipboard Step 22 ──────────────────────────────────────────
+//
+// A task row is the one row not titled by its own words. The text is the task's OUTPUT,
+// written for a Claude session to pick up, and the first fifty characters of it are the
+// least identifying part — two runs of the same weekly task read identically and are not
+// the same row.
+describe("taskTitleFor", () => {
+  const task = (meta, over = {}) =>
+    row({
+      sourceType: "task",
+      aiStatus: "not_started",
+      capturedText: "Sales are up. Three artists to look at. Also the Tuesday set ran long.",
+      sourceMetadata: meta,
+      ...over,
+    });
+
+  it("names the task and dates the run", () => {
+    expect(taskTitleFor(task({ taskName: "Weekly DJ review", runDate: "2026-09-25" }))).toBe(
+      "Weekly DJ review · Sep 25",
+    );
+  });
+
+  it("reads the snake_case keys too", () => {
+    // `storage.toCamelCase` recurses into jsonb, so a row that came through React state
+    // carries `taskName` while the column holds `task_name`. Reading both costs one `||`
+    // against a title that silently falls back to a paragraph if a raw row ever arrives.
+    expect(taskTitleFor(task({ task_name: "Weekly DJ review", run_date: "2026-09-25" }))).toBe(
+      "Weekly DJ review · Sep 25",
+    );
+  });
+
+  it("reads source_metadata under its snake_case name as well", () => {
+    const raw = {
+      sourceType: "task",
+      source_metadata: { task_name: "Inbox sweep", run_date: "2026-01-02" },
+    };
+    expect(taskTitleFor(raw)).toBe("Inbox sweep · Jan 2");
+  });
+
+  it("writes the date WITHOUT a year, and in local time", () => {
+    // Field by field, not `new Date("2026-01-01")` — that is UTC midnight and renders as
+    // December 31st in every negative-offset zone.
+    expect(taskTitleFor(task({ taskName: "Sweep", runDate: "2026-01-01" }))).toBe(
+      "Sweep · Jan 1",
+    );
+  });
+
+  it("gives just the name when there is no run date", () => {
+    // `run_date` is optional in `create_inbox_item`; `task_name` is not.
+    expect(taskTitleFor(task({ taskName: "Weekly DJ review" }))).toBe("Weekly DJ review");
+  });
+
+  it("ignores a malformed run date rather than printing Invalid Date", () => {
+    for (const bad of ["25/09/2026", "2026-9-5", "soon", "", null, 20260925]) {
+      expect(taskTitleFor(task({ taskName: "Sweep", runDate: bad }))).toBe("Sweep");
+    }
+  });
+
+  it("is null for a task with no name, so the captured text can take over", () => {
+    expect(taskTitleFor(task({ runDate: "2026-09-25" }))).toBeNull();
+    expect(taskTitleFor(task({ taskName: "   " }))).toBeNull();
+    expect(taskTitleFor(task(undefined))).toBeNull();
+  });
+
+  it("is null for anything that is not a task", () => {
+    // The metadata is not consulted on an mcp row even if it happens to carry a name.
+    expect(taskTitleFor(row({ sourceMetadata: { taskName: "Weekly DJ review" } }))).toBeNull();
+    expect(taskTitleFor(null)).toBeNull();
+  });
+});
+
+describe("listTitleFor, on a task", () => {
+  it("uses the task title", () => {
+    expect(
+      listTitleFor(
+        row({
+          sourceType: "task",
+          aiStatus: "not_started",
+          capturedText: "Sales are up. Three artists to look at.",
+          sourceMetadata: { taskName: "Weekly DJ review", runDate: "2026-09-25" },
+        }),
+      ),
+    ).toBe("Weekly DJ review · Sep 25");
+  });
+
+  it("BEATS an enrichment's suggested name", () => {
+    // 🛑 The order matters. A task can be enriched later, and once it is, the suggestion
+    // would win and the run would lose the only thing that told it apart from last
+    // week's.
+    expect(
+      listTitleFor(
+        row({
+          sourceType: "task",
+          aiStatus: "enriched",
+          suggestedItemText: "Look at three artists",
+          sourceMetadata: { taskName: "Weekly DJ review", runDate: "2026-09-25" },
+        }),
+      ),
+    ).toBe("Weekly DJ review · Sep 25");
+  });
+
+  it("falls back to the captured text when task_name is missing", () => {
+    const task = row({ sourceType: "task", aiStatus: "not_started", capturedText: "DJ sync: 21" });
+    expect(listTitleFor(task)).toBe("DJ sync: 21");
   });
 });

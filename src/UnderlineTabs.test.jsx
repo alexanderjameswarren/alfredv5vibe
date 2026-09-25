@@ -153,6 +153,21 @@ describe("every underline tab row goes through this component", () => {
     expect(alfred).not.toContain("pb-2 border-b-2");
   });
 
+  it("EVERY tab in the app carries an icon", () => {
+    // 🛑 Step 22. This is what makes all three rows compress the same way: a tab with no
+    // icon keeps its label at every width, so one row without icons would behave
+    // differently from the two beside it.
+    //
+    // Every tab literal in Alfred.jsx is one line — `{ key: "items", label: "Items", … }`
+    // — and so is every NAV_ITEMS entry, which this catches too. If a new row is added
+    // without glyphs, this names the line.
+    const missing = alfred
+      .split("\n")
+      .filter((line) => line.includes("{ key: ") && line.includes("label: "))
+      .filter((line) => !line.includes("icon:"));
+    expect(missing).toEqual([]);
+  });
+
   it("uses the same breakpoint the top navigation hides its labels at", () => {
     // The whole point of reusing it rather than choosing one. If the nav's changes, this
     // fails and both should move together.

@@ -19,7 +19,15 @@ import ClipboardCapture from "./ClipboardCapture";
 import PinnedFooter from "./PinnedFooter";
 import EditCard from "./EditCard";
 import InboxListCard from "./InboxListCard";
+import RecentlyArchived from "./RecentlyArchived";
 import UnderlineTabs from "./UnderlineTabs";
+import {
+  archiveOutcome,
+  olderArchivedCount,
+  recentlyArchived,
+  undoNeedsConfirming,
+  undoWarning,
+} from "./utils/inboxArchive";
 import {
   ALL_SOURCES,
   effectiveSource,
@@ -101,6 +109,10 @@ import {
   ArchiveRestore,
   Gamepad2,
   Send,
+  // Clipboard Step 22: the last two tab glyphs, chosen rather than reused.
+  // `Sun` is Today; `Scissors` is a SAM snippet — see the tab rows for why.
+  Sun,
+  Scissors,
 } from "lucide-react";
 // `supabaseUrl` used to be imported alongside this: it built the ai-enrich
 // endpoint by hand. Step 14 removed the only two callers and left the import
@@ -1468,7 +1480,28 @@ export default function Alfred() {
   const [activeExecution, setActiveExecution] = useState(null); // currently viewed
   const [activeExecutions, setActiveExecutions] = useState([]);
   const [pausedExecutions, setPausedExecutions] = useState([]);
-  const [inboxItems, setInboxItems] = useState([]);
+  /**
+   * EVERY capture, archived or not — Clipboard Step 22.
+   *
+   * ⚠️ ONE LIST, TWO VIEWS. This used to be `inboxItems`, holding the LIVE captures
+   * only: both loaders dropped archived rows and the realtime handler had to drop them
+   * again to agree. "Recently archived" needs them, and the alternative — a second
+   * `archivedInboxItems` slice — would have meant every one of the eight writers below
+   * keeping two lists in step by hand, with an archive moving a row from one to the
+   * other. That is precisely the shape of bug the pinned footer took four rounds to fix:
+   * a value two things depend on, stored twice.
+   *
+   * So the state is the whole table and the two views are DERIVED. `inboxItems` below is
+   * the live inbox and every existing reader of it is unchanged; the writers now UPDATE
+   * a row's `archived` flag where they used to remove the row from the array, which is
+   * also what makes the archived section live rather than correct-until-you-refresh.
+   *
+   * It costs nothing at the network. Both loaders already fetched every row —
+   * `select("*")`, no filter — and threw the archived ones away in JavaScript.
+   */
+  const [allInboxItems, setAllInboxItems] = useState([]);
+  /** The live inbox: what the Inbox screen, the nav count and the detail route all mean. */
+  const inboxItems = useMemo(() => allInboxItems.filter((i) => !i.archived), [allInboxItems]);
   const [collections, setCollections] = useState([]);
   // Step 3b: collection membership is READ from the collection_items table,
   // keyed by collection id. Writes still land in the item_collections.items
@@ -1497,6 +1530,17 @@ export default function Alfred() {
   // back to All whenever the chosen source has no items left. Processing the last Claude
   // item must not leave the list filtered to a source with no tab to unset it.
   const [inboxSourceTab, setInboxSourceTab] = useState(ALL_SOURCES);
+  // "Recently archived" — Clipboard Step 22.
+  //
+  // Collapsed by default: the inbox's job is the live list, and a history opened every
+  // time you arrive pushes the capture bar off a phone screen. "Items (26)" on the
+  // context detail page starts OPEN because it is the point of that page; this is not
+  // the point of this one.
+  const [archivedExpanded, setArchivedExpanded] = useState(false);
+  // The seven-day window, off. Not persisted — it is a "let me look further back"
+  // gesture, not a preference, and a stored one would quietly turn the section into an
+  // unbounded list months later.
+  const [archivedShowAll, setArchivedShowAll] = useState(false);
   // Separate from `filterTag` on purpose. That one is shared across Intentions,
   // Memories and Context Detail, all of which draw from the item/intent tag
   // pool. Collection tags are a different vocabulary entirely — per-shopping-
@@ -2202,10 +2246,14 @@ export default function Alfred() {
       setItems((itemsData || []).map(d => storage.toCamelCase(d)));
       setIntents((intentsData || []).map(d => storage.toCamelCase(d)));
       setEvents((eventsData || []).map(d => storage.toCamelCase(d)));
-      setInboxItems(
+      // ARCHIVED ROWS ARE KEPT — Step 22. The filter that used to drop them here has
+      // moved into the `inboxItems` derivation, so the live inbox is unchanged and
+      // "Recently archived" has something to read. The query never filtered them out
+      // anyway; this only stops throwing away rows already on the wire.
+      // (A guard in utils/inboxArchive.test.js fails if that filter comes back.)
+      setAllInboxItems(
         (inboxData || [])
           .map(d => storage.toCamelCase(d))
-          .filter(item => !item.archived)
           .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
       );
       setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
@@ -2253,10 +2301,14 @@ export default function Alfred() {
       setItems((itemsData || []).map(d => storage.toCamelCase(d)));
       setIntents((intentsData || []).map(d => storage.toCamelCase(d)));
       setEvents((eventsData || []).map(d => storage.toCamelCase(d)));
-      setInboxItems(
+      // ARCHIVED ROWS ARE KEPT — Step 22. The filter that used to drop them here has
+      // moved into the `inboxItems` derivation, so the live inbox is unchanged and
+      // "Recently archived" has something to read. The query never filtered them out
+      // anyway; this only stops throwing away rows already on the wire.
+      // (A guard in utils/inboxArchive.test.js fails if that filter comes back.)
+      setAllInboxItems(
         (inboxData || [])
           .map(d => storage.toCamelCase(d))
-          .filter(item => !item.archived)
           .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
       );
       setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
@@ -2781,49 +2833,45 @@ export default function Alfred() {
   }
 
   /**
-   * Keep `inboxItems` in step with the table, live.
+   * Keep `allInboxItems` in step with the table, live.
    *
-   * ARCHIVED ROWS ARE NOT IN THIS LIST. Both loaders filter them out
-   * (`loadData` / `refreshData`), so this handler has to as well or the two
-   * disagree and what you see depends on when you last refreshed.
+   * ── This handler got SMALLER in Step 22, and that is the news ────────────────
    *
-   * That only started mattering in Step 4. Until then nothing ever wrote
-   * `archived` — human triage hard-deletes, so the DELETE branch was the whole
-   * story — and the column sat unused. `archive_inbox_item` revives it (spec
-   * decisions 8 and 9), so a row can now leave this list without being deleted,
-   * and an open inbox screen would otherwise keep showing an item Claude had
-   * already dealt with until the next background refresh.
+   * It used to know about `archived`: it dropped archived rows on INSERT, removed them
+   * from the list on UPDATE, and put un-archived ones back — because the list it
+   * maintained was the LIVE inbox and the loaders filtered the same way. Three copies of
+   * one rule, in two loaders and here, which had to be changed together or the screen
+   * disagreed with itself depending on when you last refreshed.
    *
-   * The UPDATE branch handles BOTH directions, which is one step past the
-   * literal spec line ("drop rows whose archived is true"). An un-archived row
-   * has to be put back, and by then it is no longer in `prev`, so a plain `map`
-   * would silently do nothing and the item would reappear only on refresh. Half
-   * a handler reads as a bug to whoever finds it next.
+   * Now the state is the whole table and `inboxItems` is derived from it, so this handler
+   * mirrors the table and holds no opinion at all: a row arrives, a row changes, a row
+   * goes. An archive is an ordinary UPDATE and both views follow from it — which is also
+   * how the archived section became live for free.
+   *
+   * The one thing it still owns is the ORDER, `createdAt` ascending, matching both
+   * loaders. Do not "add to top": the live inbox is a queue worked from the front, and
+   * the sort is what enforces that rather than array order. ("Recently archived" sorts
+   * itself, the other way round, in `recentlyArchived`.)
    */
   function handleInboxChange(payload, toCamelCase) {
     const { eventType, new: newRecord, old: oldRecord } = payload;
 
-    // Oldest first, matching both loaders. Do not "add to top" — the list order
-    // is `createdAt` ascending everywhere else and the sort is what enforces it.
     const upsertSorted = (prev, record) =>
       [...prev.filter(item => item.id !== record.id), record]
         .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
 
     if (eventType === 'INSERT') {
       const record = toCamelCase(newRecord);
-      if (record.archived) return;
-      setInboxItems(prev => (
+      setAllInboxItems(prev => (
         prev.find(item => item.id === record.id) ? prev : upsertSorted(prev, record)
       ));
     } else if (eventType === 'UPDATE') {
-      const record = toCamelCase(newRecord);
-      setInboxItems(prev => (
-        record.archived
-          ? prev.filter(item => item.id !== record.id)
-          : upsertSorted(prev, record)
-      ));
+      // Upsert rather than map: a row can arrive here without ever having been in `prev`
+      // (another device captured and enriched it between refreshes), and a plain `map`
+      // would silently do nothing.
+      setAllInboxItems(prev => upsertSorted(prev, toCamelCase(newRecord)));
     } else if (eventType === 'DELETE') {
-      setInboxItems(prev =>
+      setAllInboxItems(prev =>
         prev.filter(item => item.id !== oldRecord.id)
       );
     }
@@ -2981,7 +3029,7 @@ export default function Alfred() {
       // The saved row, not the one we built — see storage.set. Ours has no
       // `updatedAt`, which sorts a brand-new capture last under "Last modified"
       // and renders it with no timestamp line at all.
-      setInboxItems([...inboxItems, savedCapture || inboxItem]); // Add to end (oldest first)
+      setAllInboxItems((prev) => [...prev, savedCapture || inboxItem]); // Add to end (oldest first)
       setCaptureText("");
       if (captureRef.current) {
         captureRef.current.style.height = "auto";
@@ -3034,23 +3082,23 @@ export default function Alfred() {
         window.alert("Could not discard that capture. It is still in your inbox.");
         return;
       }
-      setInboxItems(inboxItems.filter((i) => i.id !== inboxItemId));
+      // The row STAYS in state and its `archived` flag flips — Step 22. It used to be
+      // filtered out of the array, which was the same thing while state held the live
+      // inbox only; now the live list is derived, so removing the row here would drop it
+      // from "Recently archived" too and the discard would look like a delete.
+      setAllInboxItems((prev) =>
+        prev.map((i) => (i.id === inboxItemId ? saved || discarded : i)),
+      );
 
       // The undo writes the ORIGINAL row back, which restores archived,
       // triagedAt and archiveReason to whatever they were — all three together,
       // as inbox_archive_reason_needs_archived requires. `storage.set` UPDATEs
       // by id, so this is a plain field reversal now rather than the
       // re-insert-a-deleted-row trick it used to be.
-      //
-      // (Step 2 called the createdAt re-sort load-bearing. It no longer is —
-      // Step 9b made display order a function of the sort preference rather
-      // than of array order. Kept so `inboxItems` stays in a canonical order.)
       offerUndoFor("Capture discarded.", async () => {
-        await storage.set(`inbox:${inboxItem.id}`, inboxItem);
-        setInboxItems((prev) =>
-          [...prev.filter((i) => i.id !== inboxItemId), inboxItem].sort((a, b) =>
-            (a.createdAt || "").localeCompare(b.createdAt || ""),
-          ),
+        const restored = await storage.set(`inbox:${inboxItem.id}`, inboxItem);
+        setAllInboxItems((prev) =>
+          prev.map((i) => (i.id === inboxItemId ? restored || inboxItem : i)),
         );
       });
     });
@@ -3111,7 +3159,7 @@ export default function Alfred() {
         return false;
       }
 
-      setInboxItems((prev) =>
+      setAllInboxItems((prev) =>
         prev.map((i) => (i.id === inboxItemId ? saved || updated : i)),
       );
       return true;
@@ -3330,7 +3378,61 @@ export default function Alfred() {
         );
         return;
       }
-      setInboxItems((prev) => prev.filter((i) => i.id !== inboxItemId));
+      // Flips the flag rather than dropping the row — Step 22, same change as in
+      // `discardInboxItem` and for the same reason: the live list is derived now, and
+      // "Recently archived" is what this capture goes on to appear in.
+      setAllInboxItems((prev) =>
+        prev.map((i) => (i.id === inboxItemId ? disposed || processed : i)),
+      );
+    });
+  }
+
+  /**
+   * Put an archived capture back in the inbox — Clipboard Step 22.
+   *
+   * All three archive fields move TOGETHER, because the database requires it:
+   * `inbox_archive_reason_needs_archived` (migration 066) forbids a reason on a row that
+   * is not archived, so clearing `archived` without clearing `archive_reason` is a
+   * constraint violation rather than a partial success.
+   *
+   * ⚠️ IT CANNOT UNDO A PROCESSING, only the archiving. `handleInboxSave` says why it
+   * offers no Undo of its own: the capture became an item, an intention or an event, and
+   * putting the capture back does not remove any of them. That has not changed — what
+   * changed is that the button is now asked for on every row, so instead of pretending,
+   * it WARNS: `undoNeedsConfirming` is true for a processed row and `undoWarning` names
+   * what is already out there. A discarded capture created nothing, so it just goes back
+   * with no question.
+   */
+  async function unarchiveInboxItem(inboxItemId) {
+    const inboxItem = allInboxItems.find((i) => i.id === inboxItemId);
+    if (!inboxItem) return;
+
+    const records = { items, intents, events };
+    if (
+      undoNeedsConfirming(inboxItem, records) &&
+      !window.confirm(undoWarning(inboxItem, records))
+    ) {
+      return;
+    }
+
+    return withLoading("Putting it back...", async () => {
+      const restored = {
+        ...inboxItem,
+        archived: false,
+        triagedAt: null,
+        archiveReason: null,
+      };
+      const saved = await storage.set(`inbox:${inboxItem.id}`, restored);
+      // `storage.set` swallows its own errors and returns false. Showing the row back in
+      // the inbox after a failed write would be a lie that survives until the next
+      // refresh — which is exactly when it would disappear again, with no explanation.
+      if (saved === false) {
+        window.alert("Could not put that capture back. It is still archived.");
+        return;
+      }
+      setAllInboxItems((prev) =>
+        prev.map((i) => (i.id === inboxItemId ? saved || restored : i)),
+      );
     });
   }
 
@@ -5369,6 +5471,13 @@ export default function Alfred() {
   )
     .filter((i) => matchesSource(i, activeInboxSource))
     .filter((i) => matchesQuery(searchFor("inbox"), i.capturedText));
+  // "Recently archived" — Clipboard Step 22. Deliberately NOT filtered by the source tab
+  // or the search box above it: those two controls belong to the live list, and a history
+  // that silently hid the row you were looking for because a tab was still selected is
+  // the trap `effectiveSource` exists to avoid. The window and "Show all" are its own
+  // controls.
+  const archivedInboxItems = recentlyArchived(allInboxItems, { showAll: archivedShowAll });
+  const olderArchived = olderArchivedCount(allInboxItems);
   // Keywords are not on the card, so a keyword hit shows a row whose visible
   // text does not contain the query. Accepted deliberately.
   const visibleContexts = sortRows(
@@ -5690,17 +5799,34 @@ export default function Alfred() {
             {/* Executions & Today Tabs */}
             <div className="mb-8">
               {/* The same component the Recycle Bin and the Inbox use. Paused keeps its
-                  rule: no tab while nothing is paused. */}
+                  rule: no tab while nothing is paused.
+
+                  EVERY TAB CARRIES AN ICON — Clipboard Step 22. Not decoration: below
+                  `lg` a tab compresses to its icon and its count, and a tab without one
+                  cannot, so a row of three would behave differently from the row of
+                  seven next door. Two of the three are reused rather than chosen:
+
+                    Active   `Activity`, which is OBJECT_ICONS.execution — the same pulse
+                             the cards in this tab already carry.
+                    Paused   `Pause`, which ALREADY means "this is paused" in Alfred: an
+                             execution badge writes `Pause` beside the word "Paused". The
+                             Pause BUTTON is the same glyph, and that is the one reuse
+                             here that is a verb next to a noun — accepted because the
+                             noun is the state the verb produces, and no other glyph says
+                             "set aside" without inventing a meaning.
+                    Today    `Sun`, chosen. Nothing else in the app uses it, and `Calendar`
+                             is already the Schedule while `CalendarClock` is an event —
+                             so the two glyphs that mean "time" both mean something else. */}
               <UnderlineTabs
                 ariaLabel="Executions and today"
                 activeKey={executionTab}
                 onSelect={setExecutionTab}
                 tabs={[
-                  { key: "active", label: "Active", count: activeExecutions.length },
+                  { key: "active", label: "Active", count: activeExecutions.length, icon: Activity },
                   ...(pausedExecutions.length > 0
-                    ? [{ key: "paused", label: "Paused", count: pausedExecutions.length }]
+                    ? [{ key: "paused", label: "Paused", count: pausedExecutions.length, icon: Pause }]
                     : []),
-                  { key: "today", label: "Today", count: todayEvents.length },
+                  { key: "today", label: "Today", count: todayEvents.length, icon: Sun },
                 ]}
               />
 
@@ -5890,6 +6016,24 @@ export default function Alfred() {
                 ))}
               </div>
             )}
+
+            {/* "Recently archived (n)" — Clipboard Step 22.
+
+                OUTSIDE the empty/no-matches branches above, deliberately. An empty inbox
+                is exactly when this section matters most: you have just processed the
+                last capture, and "Empty inbox — this is success, not failure" with no way
+                back would make a mistaken tap unrecoverable on the one screen that
+                celebrates it. It hides itself when there is genuinely nothing archived. */}
+            <RecentlyArchived
+              rows={archivedInboxItems}
+              olderCount={olderArchived}
+              showAll={archivedShowAll}
+              onToggleShowAll={() => setArchivedShowAll((v) => !v)}
+              expanded={archivedExpanded}
+              onToggleExpanded={() => setArchivedExpanded((v) => !v)}
+              outcomeFor={(row) => archiveOutcome(row, { items, intents, events })}
+              onUndo={unarchiveInboxItem}
+            />
           </div>
         )}
 
@@ -7273,21 +7417,38 @@ export default function Alfred() {
 
             {/* Tabs */}
             {/* No counts here, deliberately: each tab's contents are fetched per tab,
-                so a number would mean a query per tab on arrival. */}
+                so a number would mean a query per tab on arrival.
+
+                EVERY TAB CARRIES AN ICON — Clipboard Step 22 — and with no counts the
+                icon is the WHOLE tab below `lg`. So these are the six glyphs the top
+                navigation already uses for the same six records, straight out of
+                `OBJECT_ICONS`: whatever a record looks like in the nav is what it looks
+                like here.
+
+                ⚠️ Two of the eight are not in that vocabulary, because the nav has one
+                SAM entry and this row has two:
+
+                  Songs      `Music` — OBJECT_ICONS.sam, the nav's SAM glyph.
+                  Snippets   `Scissors` — CHOSEN, not reused. Reusing `Music` verbatim
+                             would give this row two identical icons, and below `lg`
+                             they are all it has: two indistinguishable tabs with no
+                             counts to tell them apart. A snippet IS a clipping out of a
+                             song, `Scissors` says so, and it is used nowhere else in
+                             Alfred so it cannot collide. */}
             <UnderlineTabs
               ariaLabel="Recycle bin record types"
               activeKey={recycleTab}
               onSelect={setRecycleTab}
               className="gap-4 mb-4 text-sm"
               tabs={[
-                { key: "items", label: "Items" },
-                { key: "intents", label: "Intents" },
-                { key: "events", label: "Events" },
-                { key: "executions", label: "Executions" },
-                { key: "collections", label: "Collections" },
-                { key: "contexts", label: "Contexts" },
-                { key: "songs", label: "Songs" },
-                { key: "snippets", label: "Snippets" },
+                { key: "items", label: "Items", icon: OBJECT_ICONS.item },
+                { key: "intents", label: "Intents", icon: OBJECT_ICONS.intention },
+                { key: "events", label: "Events", icon: OBJECT_ICONS.event },
+                { key: "executions", label: "Executions", icon: OBJECT_ICONS.execution },
+                { key: "collections", label: "Collections", icon: OBJECT_ICONS.collection },
+                { key: "contexts", label: "Contexts", icon: OBJECT_ICONS.context },
+                { key: "songs", label: "Songs", icon: OBJECT_ICONS.sam },
+                { key: "snippets", label: "Snippets", icon: Scissors },
               ]}
             />
 
