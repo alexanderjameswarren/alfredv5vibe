@@ -8,6 +8,10 @@ import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts"
 // When email arrives at alex.warren+elise+alfred@secorus.com → Elise
 // When email arrives at alex.warren+alfred@secorus.com → Alex
 // When email arrives at recipes@secorus.com → Alex, tagged as the recipes address
+// When email arrives at alfred@secorus.com → Alex
+//
+// The recipient decides WHOSE inbox a capture lands in. It does not decide
+// whether the mail is accepted at all — that is FROM_ALLOWLIST, below.
 //
 // `captureAddress` is optional. When a mapping sets it, the value is written to
 // the inbox row's source_metadata as `capture_address`, so enrichment can tell
@@ -40,7 +44,55 @@ const USER_MAPPINGS: UserMapping[] = [
     userEmail: "alexanderjameswarren@gmail.com",
     captureAddress: "recipes",
   },
+  // ⚠️ MUST STAY LAST. Every pattern here is an unanchored substring test,
+  // and "alfred@secorus.com" is a substring of "alex.warren+alfred@secorus.com"
+  // and of "alex.warren+elise+alfred@secorus.com". Move this entry up and it
+  // swallows both plus-tag addresses — which would silently file Elise's mail
+  // under Alex. It is harmless today only because it is last.
+  {
+    pattern: /alfred@secorus\.com/i,
+    label: "Alex",
+    userEmail: "alexanderjameswarren@gmail.com",
+  },
 ];
+
+// --- Sender Allowlist ---
+// Mail is accepted only from these addresses. Matched case-insensitively
+// against the sender, so add entries in whatever case reads best.
+//
+// This is a backstop, not the main gate. Gmail filters already route only these
+// senders to the capture addresses, so in normal operation nothing reaches this
+// check that would fail it. It exists because the endpoint has no shared secret
+// (see the note on [functions.email-capture] in config.toml): anyone who learns
+// the URL and an address shape could post a row into the inbox, and this turns
+// that from "any stranger" into "any stranger who can also forge one of three
+// From addresses".
+//
+// Forging a From header is easy, so this is a speed bump rather than
+// authentication. If real protection is ever wanted, put a shared secret in the
+// Postmark webhook URL — that is the cheap fix, and this list is not it.
+const FROM_ALLOWLIST: string[] = [
+  "alexanderjameswarren@gmail.com",
+  "alex.warren@secorus.com",
+  "enhdesigns@gmail.com",
+];
+
+/**
+ * Pull the bare email address out of a From value.
+ *
+ * Postmark gives a clean address in FromFull.Email, which is what the caller
+ * passes first. The fallback parses the raw From header, which may arrive as
+ * `Alex Warren <alex@example.com>` rather than a bare address — comparing that
+ * whole string against the allowlist would reject a sender who is on it.
+ */
+function normaliseSenderAddress(from: string): string {
+  const angled = from.match(/<([^>]+)>/);
+  return (angled ? angled[1] : from).trim().toLowerCase();
+}
+
+function isSenderAllowed(sender: string): boolean {
+  return FROM_ALLOWLIST.some((allowed) => allowed.toLowerCase() === sender);
+}
 
 // --- Helper: Resolve user_id from To address ---
 async function resolveUserId(
@@ -174,6 +226,28 @@ Deno.serve(async (req) => {
     "";
 
   console.log(`[email-capture] To address for mapping: ${toAddress}`);
+
+  // Refuse unknown senders before doing any work. This sits ahead of user
+  // resolution on purpose: a rejected sender should not cost a listUsers call,
+  // and must never reach the insert.
+  //
+  // 200, not 4xx. Postmark retries a failure, and there is nothing transient
+  // about a sender who is not on the list — a 4xx here would buy a retry storm
+  // and an identical rejection each time. Same reasoning as the
+  // unmappable-recipient response below.
+  const sender = normaliseSenderAddress(payload.FromFull?.Email || payload.From || "");
+  if (!isSenderAllowed(sender)) {
+    console.warn(
+      `[email-capture] Rejected: sender not on allowlist. From: ${sender || "(empty)"}, To: ${toAddress || "(empty)"}`
+    );
+    return new Response(JSON.stringify({
+      success: false,
+      error: "Sender not allowed",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   // Create service client (no user session available for webhooks)
   const serviceClient = createServiceClient();
