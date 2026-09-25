@@ -25,6 +25,8 @@ import {
   detectArtistDisagreement,
   primaryArtistOfMatchKey,
   primaryArtistOfDisplay,
+  PLACEHOLDER_ARTISTS,
+  isPlaceholderArtist,
   isVariantCut,
   normalisePart,
   resolvePlayDate,
@@ -385,15 +387,56 @@ test("A REAL SPLIT STILL FIRES — the check can fail", () => {
   assert.equal(d.stored_primary, "eddie higgins trio");
   assert.equal(d.submitted_primary, "bill evans trio");
 
-  // And the six 2026-09-22 rows the alias map does NOT cover: a compilation
-  // byline against the players on it is a real question, not a spelling.
-  const v = detectArtistDisagreement(
-    "onvLuR7E5sM",
-    "Various Artists",
+  // Two real bylines that differ still fire, including one where BOTH sides
+  // are full comma-separated lists — the placeholder rule must not reach these.
+  const r = detectArtistDisagreement(
+    "vid",
     "Charlie Parker, Dizzy Gillespie, Bud Powell, Max Roach",
+    "Thelonious Monk, Sonny Rollins",
   );
-  assert.ok(v, "Various Artists vs a named quartet must still be reported");
-  assert.equal(v.submitted_primary, "charlie parker");
+  assert.ok(r, "two different real bylines must still be reported");
+  assert.equal(r.stored_primary, "charlie parker");
+  assert.equal(r.submitted_primary, "thelonious monk");
+});
+
+test("A PLACEHOLDER BYLINE IS NOT A DISAGREEMENT — the six 2026-09-22 rows", () => {
+  // "Various Artists" names no act, so it cannot be a second vocabulary for one.
+  // Suppressed, NOT aliased: aliasing it would assert every compilation in the
+  // library is a Charlie Parker record.
+  const real = "Charlie Parker, Dizzy Gillespie, Bud Powell, Max Roach";
+  for (const p of PLACEHOLDER_ARTISTS) {
+    assert.equal(detectArtistDisagreement("vid", p, real), null, `stored ${p}`);
+    assert.equal(detectArtistDisagreement("vid", real, p), null, `submitted ${p}`);
+  }
+  // Case and punctuation are handled by normalisation, not by extra entries.
+  assert.equal(detectArtistDisagreement("vid", "VARIOUS ARTISTS", real), null);
+  assert.equal(detectArtistDisagreement("vid", "various  artists", real), null);
+  // And a placeholder leading a longer byline is still a placeholder primary.
+  assert.equal(detectArtistDisagreement("vid", "Various Artists, Bud Powell", real), null);
+});
+
+test("PLACEHOLDERS ARE NOT ALIASES — they translate nothing and move no match_key", () => {
+  // If one ever leaked into ARTIST_ALIASES it would re-key every compilation.
+  const aliasKeys = new Set(ARTIST_ALIASES.flatMap((a) => [a.from.toLowerCase(), a.to.toLowerCase()]));
+  for (const p of PLACEHOLDER_ARTISTS) {
+    assert.ok(!aliasKeys.has(p.toLowerCase()), `${p} must not appear in the alias map`);
+    assert.equal(canonicalArtist(p), p, `${p} must pass through untranslated`);
+  }
+  assert.equal(
+    buildMatchKey(["Various Artists"], "Salt Peanuts"),
+    "various artists|salt peanuts",
+    "suppression must not touch grouping",
+  );
+});
+
+test("`Release` and the page labels are DELIBERATELY not placeholders", () => {
+  // They are a different defect (§14.9) and a DECIDED permanent disagreement in
+  // dj_known_disagreements. Suppressing them here would delete that evidence.
+  for (const label of ["Release", "Topic", "Album", "Single", "Mix"]) {
+    assert.ok(!isPlaceholderArtist(normalisePart(label)), `${label} must still be reportable`);
+  }
+  const d = detectArtistDisagreement("vid", "Release", "Oscar Peterson");
+  assert.ok(d, "the 12 unrepaired Release rows must keep surfacing");
 });
 
 test("the alias map is applied on BOTH sides, so an alias is not a disagreement", () => {

@@ -1,0 +1,64 @@
+-- 072 - repair the "Various Artists" billing on six tracks in dj_tracks
+--
+-- MOVED HEADER: this is a ONE-OFF DATA REPAIR, applied once. It is not a schema
+-- change and is not part of any sequence to re-run.
+--
+-- 🛑 RUN 071 FIRST AND READ IT. If `would_change_count` is not 6, or any
+-- `artist` is not 'Various Artists', STOP - the rollback comment below is then
+-- describing rows that no longer exist as described.
+--
+-- ============================================================================
+-- WHY THIS IS SQL AND NOT A TOOL
+-- ============================================================================
+-- Same reason as 007: dj_tracks is insert-only (spec 4.1.2) and NO TOOL GAINS
+-- THE ABILITY TO UPDATE IT. If one did, record_dj_plays could reach it and the
+-- courier would be able to clobber curation, which is the exact failure 4.1.2
+-- prevents. Hand-run, enumerated, with git as the audit trail.
+--
+-- ============================================================================
+-- WHAT IS WRONG
+-- ============================================================================
+-- Six videos are stored under "Various Artists" - a compilation's stand-in
+-- billing, not an act. YouTube Music's own metadata names the players:
+-- 'Charlie Parker, Dizzy Gillespie, Bud Powell, Max Roach' (the 1953 Massey
+-- Hall quintet minus Mingus's billing). The stored string is not a spelling
+-- variant of that; it is an absence of information, and an artist-level query
+-- ("when did I last hear Charlie Parker") cannot see these plays at all.
+--
+-- ============================================================================
+-- ⚠️ WHAT THIS DOES NOT DO: match_key IS NOT TOUCHED
+-- ============================================================================
+-- These six keep their 'various artists|<title>' keys, so GROUPING IS
+-- UNCHANGED. That is deliberate and it is a known, stated incompleteness:
+-- re-keying is the separate 4.1.2 backfill question (see the record_dj_album
+-- plan), and doing half of it here would make the two halves hard to reason
+-- about later. After this runs, the artist column is right and the grouping is
+-- still wrong; 071 shows both so neither is a surprise.
+--
+-- ⚠️ AND IT DOES NOT SILENCE A DETECTOR. The disagreement check already ignores
+-- placeholder bylines (PLACEHOLDER_ARTISTS in dj-normalise.ts), so these six
+-- stopped firing without any data change. This migration is a data repair on
+-- its own merits - it makes an artist-level read correct - not a workaround.
+--
+-- ============================================================================
+-- HOW TO ROLL BACK
+-- ============================================================================
+-- Every one of the six had artist = 'Various Artists' and nothing else changes.
+-- To reverse, run exactly:
+--
+--   update dj_tracks set artist = 'Various Artists'
+--   where video_id in ('onvLuR7E5sM','eapPwd8v5Xg','5TvNzAe3oGo',
+--                      'Pkn2rDQx0Ok','GbEM3eJ5Isk','dUt4eBkHWkY');
+--
+-- match_key, canonical_track_id, dj_plays, dj_playlist_tracks and dj_albums are
+-- untouched by this file, so nothing else needs reversing.
+--
+-- ============================================================================
+-- STEP 1 of 1 - the repair. Expect: UPDATE 6.
+-- ============================================================================
+
+update dj_tracks
+set artist = 'Charlie Parker, Dizzy Gillespie, Bud Powell, Max Roach'
+where video_id in ('onvLuR7E5sM','eapPwd8v5Xg','5TvNzAe3oGo',
+                   'Pkn2rDQx0Ok','GbEM3eJ5Isk','dUt4eBkHWkY')
+  and artist = 'Various Artists';

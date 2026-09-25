@@ -291,6 +291,51 @@ export const ARTIST_ALIASES: ArtistAlias[] = [
 // user thinks about that catalogue, and it has not arisen — no such split
 // exists in the data today. If it ever does, it needs deciding, not inferring.
 
+// ---------------------------------------------------------------------------
+// Placeholder bylines — NOT aliases, and deliberately beside them
+// ---------------------------------------------------------------------------
+//
+// ⚠️ A PLACEHOLDER IS THE OPPOSITE OF AN ALIAS AND MUST NEVER BECOME ONE.
+// An alias says "these two spellings are one act". A placeholder says "this
+// string names no act at all" — it is a compilation's stand-in billing, and the
+// six 2026-09-22 rows are the case: stored "Various Artists", submitted
+// "Charlie Parker, Dizzy Gillespie, Bud Powell, Max Roach". Aliasing
+// "Various Artists" to Charlie Parker would assert that every compilation in
+// the library is a Parker record. So these are SUPPRESSED FROM THE DETECTOR,
+// not translated: nothing is claimed about identity, and no match_key moves.
+//
+// 🛑 DELIBERATELY NOT HERE: "Release", and the page labels beside it in
+// scripts/dj-label-artist-audit.js ("Topic", "Album", "Single", "Mix", …).
+// Those are a DIFFERENT defect — a scraped YouTube page label that the parser
+// correctly read from wrong source data (§14.9) — and the 12 unrepaired
+// `Release` rows are a DECIDED, PERMANENT disagreement recorded in
+// dj_known_disagreements and listed in docs/dj-known-disagreements.md. They are
+// meant to keep surfacing through that partition, which is what proves the
+// pipeline ran and CHOSE silence. Folding them in here would delete that
+// evidence and repair nothing.
+//
+// Matched on the NORMALISED PRIMARY, so case, punctuation and the ", " tail of
+// a byline are already handled. Every entry must be a string that cannot also
+// be a real act: "Live" is a real band (§ the same audit script's own note), so
+// nothing of that shape belongs here.
+export const PLACEHOLDER_ARTISTS: string[] = [
+  "Various Artists",  // the compilation billing YouTube Music sends; in the data
+  "Various",
+  "VA",
+  "Unknown Artist",
+  "Unknown",
+  "No Artist",
+];
+
+const PLACEHOLDER_KEYS = new Set(PLACEHOLDER_ARTISTS.map((p) => normalisePart(p)));
+
+/** True when a normalised primary names no act — a compilation stand-in rather
+ *  than a spelling. Takes the ALREADY-NORMALISED primary, so callers cannot
+ *  match on a second, differently-derived form. */
+export function isPlaceholderArtist(normalisedPrimary: string | null): boolean {
+  return normalisedPrimary !== null && PLACEHOLDER_KEYS.has(normalisedPrimary);
+}
+
 const ALIAS_BY_KEY = new Map(
   ARTIST_ALIASES.map((a) => [a.from.trim().toLowerCase(), a.to]),
 );
@@ -446,6 +491,10 @@ export function detectArtistDisagreement(
   const submittedPrimary = primaryArtistOfDisplay(submittedArtistDisplay);
   // Cannot compare is NOT the same as agrees; report neither.
   if (!storedPrimary || !submittedPrimary) return null;
+  // A placeholder on EITHER side is also cannot-compare, not disagreement: one
+  // of the two strings names no act, so there is no second vocabulary to be in
+  // conflict with. See PLACEHOLDER_ARTISTS - it suppresses, it does not alias.
+  if (isPlaceholderArtist(storedPrimary) || isPlaceholderArtist(submittedPrimary)) return null;
   if (storedPrimary === submittedPrimary) return null;
   return {
     video_id: videoId,
