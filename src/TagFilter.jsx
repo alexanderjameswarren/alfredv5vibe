@@ -38,7 +38,7 @@ import { ChevronDown } from "lucide-react";
 // rather than after "z" (normaliseTag preserves accents — "café" is a legal
 // tag).
 //
-// NOT the same decision as `tagPoolFrom` in Alfred.jsx, which orders the tag
+// NOT the same decision as `tagPoolFrom` in utils/tags.js, which orders the tag
 // PICKER's suggestions and stays frequency-first on purpose. That list is for
 // choosing a tag you have not named yet, where the ones you reach for most
 // belong under your thumb; this one is for finding a tag you have already

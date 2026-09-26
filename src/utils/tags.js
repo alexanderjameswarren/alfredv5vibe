@@ -21,6 +21,13 @@
  * ║                                                                          ║
  * ║  The cases in tags.test.js are the shared contract. Add a case here and  ║
  * ║  the twin must satisfy it too.                                           ║
+ * ║                                                                          ║
+ * ║  SCOPE: the twin rule covers NORMALISATION only — normaliseTag,          ║
+ * ║  normaliseTags, MAX_TAG_LENGTH, MAX_TAGS. The tag-pool functions at the  ║
+ * ║  bottom of this file are front-end only and have NO twin: they count     ║
+ * ║  rows already sitting in React state, which the Deno side never sees.    ║
+ * ║  Their tests live in tags.pool.test.js, deliberately apart from the      ║
+ * ║  shared contract in tags.test.js.                                        ║
  * ╚══════════════════════════════════════════════════════════════════════════╝
  *
  * ─── Normalise on WRITE, never on LOAD ───────────────────────────────────────
@@ -142,4 +149,77 @@ export function normaliseTags(rawList) {
   }
 
   return out;
+}
+
+// ─── Tag pools (front-end only, no Deno twin) ────────────────────────────────
+
+/**
+ * Every tag currently in use across the records passed in, most-used first.
+ *
+ * This is the suggestion pool the tag picker offers. Derived client-side from
+ * rows already loaded — the same thing `TagFilter` does with its counts (in
+ * src/TagFilter.jsx), and for the same reason: there is no query worth adding
+ * for a dozen strings that are already sitting in state.
+ *
+ * Frequency order, ties broken alphabetically. The tags you reach for most are
+ * the ones worth putting under your thumb.
+ *
+ * DELIBERATELY DIFFERENT from `TagFilter` (src/TagFilter.jsx), which went
+ * alphabetical on 2026-09-21. The two lists answer different questions: this
+ * one offers a tag you have not named yet, where the common ones should come
+ * first; that one helps you find a tag you already have in mind, where only
+ * alphabetical lets you aim. If you are here to make them agree, read the note
+ * in src/TagFilter.jsx first — the difference is the point.
+ *
+ * Items and intentions share one pool. Collections get their own in Phase 6 —
+ * per-trip tags like "tjs" have no business being suggested on a recipe.
+ *
+ * Lived in src/Alfred.jsx until 2026-09-25, where nothing could import it and
+ * so nothing tested it. Unchanged by the move: this is still a pure "count the
+ * tags in these lists" helper with no opinion about what belongs in them. The
+ * archived rule is `tagPoolForRecords` below.
+ *
+ * @param {...(Array|null|undefined)} recordLists - Lists of records with `tags`.
+ * @returns {string[]} Tags, most-used first, ties alphabetical.
+ */
+export function tagPoolFrom(...recordLists) {
+  const counts = new Map();
+  for (const list of recordLists) {
+    for (const record of list || []) {
+      for (const tag of record?.tags || []) {
+        if (typeof tag === "string" && tag) {
+          counts.set(tag, (counts.get(tag) || 0) + 1);
+        }
+      }
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([tag]) => tag);
+}
+
+/**
+ * The item/intention suggestion pool, with archived rows left out.
+ *
+ * ARCHIVED ROWS ARE EXCLUDED (§A6, 2026-09-21). They always were from the
+ * filter BAR — each list filters them out before handing rows over — but the
+ * pool was built from the raw state arrays, which hold every row the query
+ * returned, archived included. So the picker kept offering tags that no living
+ * record carried and no bar would ever show: `due`, `late`, `overdue`, `past`,
+ * `urgent`, `test tag`, `another tag`, `outdoor maintenance`, `cleaning`.
+ *
+ * A tag carried by both an archived and a live row still appears — it is
+ * counted from the live row only, so archiving can change its POSITION in the
+ * list without removing it.
+ *
+ * Separate from `tagPoolFrom` rather than folded into it so the counting helper
+ * keeps no opinion about what belongs in the lists it is given.
+ *
+ * @param {Array|null|undefined} items
+ * @param {Array|null|undefined} intents
+ * @returns {string[]} Tags on live rows, most-used first, ties alphabetical.
+ */
+export function tagPoolForRecords(items, intents) {
+  const live = (list) => (Array.isArray(list) ? list : []).filter((r) => !r?.archived);
+  return tagPoolFrom(live(items), live(intents));
 }

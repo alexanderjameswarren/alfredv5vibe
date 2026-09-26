@@ -58,6 +58,7 @@ import TagFilter, { collapseOnSearch } from "./TagFilter";
 import TagPicker from "./TagPicker";
 import RemovalMeta from "./RemovalMeta";
 import { startOfPacificDay } from "./utils/localDay";
+import { tagPoolForRecords } from "./utils/tags";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
 import { offsetPatch, isFirstStep } from "./utils/elementOffsets";
@@ -750,43 +751,6 @@ const TAG_TOGGLE_ATTR = "data-tag-toggle";
 const TAG_FILTERED_VIEWS = ["intentions", "memories", "context-detail"];
 
 /**
- * Every tag currently in use across the records passed in, most-used first.
- *
- * This is the suggestion pool the tag picker offers. Derived client-side from
- * rows already loaded — the same thing `TagFilter` does with its counts (now
- * in src/TagFilter.jsx), and for the same reason: there is no query worth
- * adding for a dozen strings that are already sitting in state.
- *
- * Frequency order, ties broken alphabetically. The tags you reach for most are
- * the ones worth putting under your thumb.
- *
- * DELIBERATELY DIFFERENT from `TagFilter` (src/TagFilter.jsx), which went
- * alphabetical on 2026-09-21. The two lists answer different questions: this
- * one offers a tag you have not named yet, where the common ones should come
- * first; that one helps you find a tag you already have in mind, where only
- * alphabetical lets you aim. If you are here to make them agree, read the note
- * in src/TagFilter.jsx first — the difference is the point.
- *
- * Items and intentions share one pool. Collections get their own in Phase 6 —
- * per-trip tags like "tjs" have no business being suggested on a recipe.
- */
-function tagPoolFrom(...recordLists) {
-  const counts = new Map();
-  for (const list of recordLists) {
-    for (const record of list || []) {
-      for (const tag of record?.tags || []) {
-        if (typeof tag === "string" && tag) {
-          counts.set(tag, (counts.get(tag) || 0) + 1);
-        }
-      }
-    }
-  }
-  return [...counts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([tag]) => tag);
-}
-
-/**
  * The metadata under a detail view's title: which context the record lives in,
  * and its tags. One component so the item and intention pages cannot drift.
  *
@@ -1460,21 +1424,18 @@ export default function Alfred() {
   // when either list changes, so a tag invented on one record is offered on the
   // next one without a reload.
   //
-  // ARCHIVED ROWS ARE EXCLUDED (§A6, 2026-09-21). They always were from the
-  // filter BAR — each list filters them out before handing rows over — but this
-  // pool was built from the raw state arrays, which hold every row the query
-  // returned, archived included. So the picker kept offering tags that no
-  // living record carried and no bar would ever show: `due`, `late`, `overdue`,
-  // `past`, `urgent`, `test tag`, `another tag`, `outdoor maintenance`,
-  // `cleaning`.
+  // ARCHIVED ROWS ARE EXCLUDED (§A6, 2026-09-21), and the rule now lives in
+  // `tagPoolForRecords` (src/utils/tags.js) rather than here — it used to be an
+  // inline `.filter((i) => !i.archived)` on each argument, which nothing could
+  // import and so nothing tested. Both it and the frequency-then-alphabetical
+  // ordering are covered by src/utils/tags.pool.test.js.
   //
-  // Filtered HERE rather than inside `tagPoolFrom`, which stays a pure "count
-  // the tags in these lists" helper with no opinion about what belongs in them.
-  // Its frequency-then-alphabetical ordering is also untouched: a suggestion
-  // list wants the tags you reach for most under your thumb, which is the
-  // opposite of what the filter bar wants. See its docblock, and TagFilter's.
+  // `tagPoolForRecords` is still a thin wrapper over `tagPoolFrom`, which stays
+  // a pure "count the tags in these lists" helper with no opinion about what
+  // belongs in them. Read both docblocks, and TagFilter's, before making this
+  // list agree with the filter bar's — the difference is the point.
   const tagPool = useMemo(
-    () => tagPoolFrom(items.filter((i) => !i.archived), intents.filter((i) => !i.archived)),
+    () => tagPoolForRecords(items, intents),
     [items, intents]
   );
   const [events, setEvents] = useState([]);
