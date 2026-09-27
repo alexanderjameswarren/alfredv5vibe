@@ -158,8 +158,19 @@ describe("loadTodayProgress", () => {
     const sb = fakeSupabase({}, [{ plan_item_id: "a", day: "2026-09-16", attempts: 3, qualifying: 2 }]);
     const map = await loadTodayProgress(sb, "p1", "2026-09-16");
     expect(sb.calls).toEqual([{ rpc: "sam_plan_item_progress", args: { p_plan_id: "p1", p_from: "2026-09-16", p_to: "2026-09-16" } }]);
-    expect(map.get("a")).toEqual({ attempts: 3, qualifying: 2 });
+    // A row from a function that predates migration 078 carries neither of the
+    // new numbers; they read as 0 rather than undefined.
+    expect(map.get("a")).toEqual({ attempts: 3, qualifying: 2, streak: 0, completions: 0 });
     expect(map.get("b")).toBeUndefined();
+  });
+
+  test("the streak and the ladder completions come straight from the function", async () => {
+    const sb = fakeSupabase({}, [{
+      plan_item_id: "a", day: "2026-09-16", attempts: 5, qualifying: 4,
+      longest_qualifying_streak: 3, ladder_completions: 2,
+    }]);
+    const map = await loadTodayProgress(sb, "p1", "2026-09-16");
+    expect(map.get("a")).toEqual({ attempts: 5, qualifying: 4, streak: 3, completions: 2 });
   });
 
   test("today is the Pacific date", () => {

@@ -41,6 +41,48 @@ function newSessionCounters() {
   return { hits: 0, misses: 0, partials: 0, totalBeats: 0, notesPlayed: 0 };
 }
 
+// A SESSION'S ID IS GENERATED HERE, NOT READ BACK FROM THE INSERT (2026-09-27).
+//
+// The session row used to be inserted fire-and-forget with `sessionIdRef` filled
+// in its `.then`, so `getSessionId()` answered null until that round trip
+// landed — and answered null for the WHOLE sitting when the insert failed, which
+// is only ever logged. Every pass written in either case carried
+// `session_id: null`.
+//
+// A null session_id is not attributable to a sitting, so the warm-up ladder's
+// in-session streak has to treat each such pass as a session of one (see the
+// comment on sam_plan_item_progress.longest_qualifying_streak, migration 078).
+// Four passes in a row then read as 1 + 3 and a consecutive target that was
+// actually met reads as failed. Nothing may depend on streaks while that is
+// possible.
+//
+// Generating the id first closes the window completely and costs nothing: no
+// await, no queue, no delay to the pass write, which is the one thing that must
+// never be traded. The new risk it introduces — a pass naming a session row that
+// never landed would violate the foreign key — is handled where the pass is
+// written: useSamPasses retries once with session_id null, so a pass is never
+// lost to a missing session.
+// `c` is a seam for the test: the insecure-context case cannot be reached by
+// deleting a getter off the jsdom global.
+export function newSessionId(c = typeof crypto !== "undefined" ? crypto : null) {
+  if (typeof c?.randomUUID === "function") return c.randomUUID();
+  // `randomUUID` needs a secure context. Over plain http on the LAN — which is
+  // how the phone reaches the dev server — it is simply undefined, so the
+  // fallbacks are load-bearing, not decoration.
+  const bytes = new Uint8Array(16);
+  if (typeof c?.getRandomValues === "function") {
+    c.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return [
+    hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20),
+  ].join("-");
+}
+
 // One entry of `summary.playthroughs`.
 function playthroughEntry(p) {
   return {
@@ -169,7 +211,14 @@ export default function usePracticeSession({ onSessionEnded, practiceModeRef } =
       return;
     }
 
+    // The id is ours, and it is known BEFORE the insert leaves — see
+    // `newSessionId`. Every pass of this sitting can therefore name the sitting,
+    // including the first one and including a sitting whose row never lands.
+    const sessionId = newSessionId();
+    sessionIdRef.current = sessionId;
+
     const row = {
+      id: sessionId,
       song_id: songId,
       settings: settings || {},
       started_at: new Date().toISOString(),
@@ -180,18 +229,22 @@ export default function usePracticeSession({ onSessionEnded, practiceModeRef } =
     };
     if (snippetId) row.snippet_id = snippetId;
 
+    // No `.select("id").single()` any more: there is nothing to read back.
     supabase
       .from("sam_sessions")
       .insert(row)
-      .select("id")
-      .single()
-      .then(({ data, error }) => {
+      .then(({ error }) => {
         if (error) {
           console.error("[Sam] Failed to create session:", error);
-        } else {
-          sessionIdRef.current = data.id;
-          console.log("[Sam] Session created:", data.id);
+          // The row never landed, so nothing may point at it. Detach the rest of
+          // the sitting rather than letting every later pass fail the foreign
+          // key; passes already written with this id are recovered by the retry
+          // in useSamPasses. Guarded on identity so a session started since
+          // (Stop, then Play again) is not cleared by this one's late failure.
+          if (sessionIdRef.current === sessionId) sessionIdRef.current = null;
+          return;
         }
+        console.log("[Sam] Session created:", sessionId);
       });
   }, []);
 

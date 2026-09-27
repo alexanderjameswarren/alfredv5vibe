@@ -74,7 +74,7 @@ export default function useSamPasses({ onPassRecorded, practiceModeRef } = {}) {
   // eligible or could not be attributed — so callers can log the distinction
   // without reaching into the ref.
   const recordPass = useCallback(({
-    songId, snippet, sessionId, bpm, playbackSpeed, handMode, playthrough, getPlanLink,
+    songId, snippet, sessionId, bpm, playbackSpeed, handMode, playthrough, getPlanLink, warmup,
   }) => {
     if (isPracticing()) return false;
     if (!armedRef.current) return false;
@@ -141,18 +141,44 @@ export default function useSamPasses({ onPassRecorded, practiceModeRef } = {}) {
       // Nulls when there is no plan or it has not loaded; a failure here must
       // never cost the pass.
       ...safePlanLink(getPlanLink, songId, snippet?.dbId || null),
+      // Warm-up ladder (warm-up spec §5.4). Both null on an ordinary pass, and
+      // both set on a ladder pass: the 1-based rung it was played at, and that
+      // rung's percent of the target tempo, denormalised so reading history back
+      // never has to resolve the ladder that was in force. Supplied by the caller
+      // at the credit instant, so the rung is the one the pass was PLAYED at and
+      // not the one an advance moved to.
+      warmup_rung: warmup?.warmupRung ?? null,
+      warmup_target_percent: warmup?.warmupTargetPercent ?? null,
     };
 
-    try {
+    // Written through a named function so the one recoverable failure can be
+    // retried without recursing into `recordPass`, which would re-run the
+    // eligibility guards and refuse.
+    //
+    // THE RECOVERABLE FAILURE (2026-09-27). `session_id` now carries a
+    // client-generated id that is known before the session row is inserted (see
+    // `newSessionId` in usePracticeSession), which is what lets the FIRST pass of
+    // a sitting name its sitting. If that session insert failed, this pass names
+    // a row that does not exist and Postgres rejects it with 23503, a foreign-key
+    // violation. A pass must never be lost to that: it is written again with no
+    // session, which is exactly the row this code produced before the id moved.
+    const writeRow = (attemptRow, retried) => {
       supabase
         .from("sam_passes")
-        .insert(row)
+        .insert(attemptRow)
         .then(({ error }) => {
           if (error) {
+            if (!retried && error.code === "23503" && attemptRow.session_id) {
+              console.error(
+                "[Sam] Pass rejected by the session foreign key — rewriting it unattached:", error
+              );
+              writeRow({ ...attemptRow, session_id: null }, true);
+              return;
+            }
             console.error("[Sam] Pass write failed (playback continues):", error);
             return;
           }
-          console.log("[Sam] Pass recorded:", row);
+          console.log("[Sam] Pass recorded:", attemptRow);
           // Notified on success only: the on-screen count claims what has been
           // recorded, so a failed write must leave it where it was.
           try {
@@ -160,11 +186,15 @@ export default function useSamPasses({ onPassRecorded, practiceModeRef } = {}) {
             // read current state: it identifies the range this pass was
             // actually credited to, which is what keeps a snippet's passes out
             // of the song's own count.
-            onPassRecordedRef.current?.({ snippetId: row.snippet_id });
+            onPassRecordedRef.current?.({ snippetId: attemptRow.snippet_id });
           } catch (cbErr) {
             console.error("[Sam] onPassRecorded callback threw:", cbErr);
           }
         });
+    };
+
+    try {
+      writeRow(row, false);
     } catch (e) {
       console.error("[Sam] Pass write threw (playback continues):", e);
       return false;

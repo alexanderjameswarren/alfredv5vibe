@@ -9,6 +9,11 @@ import PlanNextButton from "./PlanNextButton";
 //   Plan · 60 BPM · 90% · 2/4 today · Count out loud      [Set tempo]
 //   Song goal: Master m.16–17, then start m.18.
 //
+// A third line sits between them when a warm-up ladder resolves for the loaded
+// item (warm-up spec §7.3):
+//
+//   Warm-up · 50% → 70% → 100% · from the plan
+//
 // The first line appears when the loaded range matches an item, and — since
 // 2026-09-21, see OFF PLAN below — reads "Not in today's plan" when it matches
 // none. The second appears when the song is in the plan and has a song note
@@ -52,7 +57,10 @@ import PlanNextButton from "./PlanNextButton";
 // only, not in contrast. "Not in today's plan" is plan content, so it takes the
 // same full contrast; the button beside it stays muted, exactly as it does
 // beside Set tempo.
-export default function PlanLine({ item, state, songNote, heardTempo, onSetTempo, nextItem, onOpenNext }) {
+export default function PlanLine({
+  item, state, songNote, heardTempo, onSetTempo, nextItem, onOpenNext,
+  warmupSummary = null, warmupSourceLabel = null,
+}) {
   const [noteOpen, setNoteOpen] = useState(false);
   // The loaded range is in no item, but the plan still has work left in it.
   // `nextItem` is null when there is no plan or everything is done, and that
@@ -89,6 +97,16 @@ export default function PlanLine({ item, state, songNote, heardTempo, onSetTempo
             </button>
           )}
           {state.done && <PlanNextButton item={nextItem} onOpen={onOpenNext} />}
+        </div>
+      )}
+      {/* §7.3: the ladder for this item, on its own line under the plan line.
+          Shown whenever the loaded range is a plan item and a ladder resolves for
+          it — running or not — because a ramp that appears on Warm up without
+          warning is the thing the source label exists to prevent. */}
+      {item && warmupSummary && (
+        <div className="text-muted-foreground" data-state="warmup-summary">
+          Warm-up · {warmupSummary}
+          {warmupSourceLabel ? ` · ${warmupSourceLabel}` : ""}
         </div>
       )}
       {songNote && (

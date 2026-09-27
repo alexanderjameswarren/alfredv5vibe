@@ -89,6 +89,9 @@ export function snippetFromRow(row) {
     handMode: row.settings?.handMode || "both",
     dbId: row.id,
     title: row.title,
+    // The ladder for this passage, when it has one of its own (warm-up spec §4).
+    // Null means inherit from the song, then the app default.
+    warmupLadder: row.warmup_ladder ?? null,
   };
 }
 

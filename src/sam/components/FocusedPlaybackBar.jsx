@@ -1,6 +1,7 @@
 import React from "react";
-import { Pause } from "lucide-react";
+import { Pause, Flame } from "lucide-react";
 import LiveSessionCounter from "./LiveSessionCounter";
+import WarmupStrip from "./WarmupStrip";
 import { formatAccuracy } from "../lib/practiceScoring";
 
 // Collapsed top chrome during `playbackState === "playing"`. Everything the
@@ -8,8 +9,16 @@ import { formatAccuracy } from "../lib/practiceScoring";
 // status, metronome radios, etc.) is dropped from the tree entirely — the
 // parent renders this instead of the full SettingsBar / StatsBar stack.
 //
-// Row 1  → Pause | Session badge + Playthrough badge + Completed Passes + live Today
+// Row 1  → Pause | Warm up again | Session badge + Playthrough badge + Completed Passes + live Today
 // Row 2  → Loop / Hits / Misses / Session accuracy (muted, secondary)
+// Row 3  → the warm-up ladder strip, while a ladder is running
+//
+// THE WARM-UP STRIP LIVES HERE, NOT BESIDE THE PLAN LINE (warm-up spec §7.2).
+// The spec asks for it "near the plan line", but the plan line is part of the
+// stack this component REPLACES while playing — and a ladder only runs while
+// playing, so a strip rendered next to the plan line could never be seen doing
+// its job. It sits here for the run, and the plan line's own warm-up summary
+// (§7.3) covers the stopped and paused views.
 //
 // Playthrough accuracy is the one number worth reading mid-play, so it gets
 // the same oversized badge treatment as the Session timer rather than a slot
@@ -27,6 +36,11 @@ export default function FocusedPlaybackBar({
   // { text: "Plan 2/4" | "Plan ✓", state: "open" | "amber" | "done" } when the
   // loaded range is a plan item (practice plans §7.4); null otherwise.
   planBadge = null,
+  // The live ladder (warm-up spec §7.2), or null when none is running.
+  warmupView = null,
+  // "Warm up again" (§7.1): only reachable mid-play, since the ladder ends with
+  // the session and completion leaves him still looping.
+  onWarmUp = null,
 }) {
   // Null accuracy means nothing was measured; formatAccuracy shows "—".
   const playthroughPct = hasPlaythrough ? playthroughPercent : null;
@@ -40,6 +54,16 @@ export default function FocusedPlaybackBar({
         >
           <Pause className="w-4 h-4" /> Pause
         </button>
+
+        {onWarmUp && warmupView && (
+          <button
+            onClick={onWarmUp}
+            className="flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors border border-border text-muted-foreground hover:text-dark"
+          >
+            <Flame className="w-4 h-4" />
+            Warm up again
+          </button>
+        )}
 
         {/* LiveSessionCounter self-gates on playing; passing "playing"
             since FocusedPlaybackBar itself only renders during play. */}
@@ -80,6 +104,8 @@ export default function FocusedPlaybackBar({
         <span>Misses: <strong className="text-destructive">{missCount}</strong></span>
         <span>Session Accuracy: <strong className="text-dark">{formatAccuracy(accuracyPercent)}</strong></span>
       </div>
+
+      <WarmupStrip view={warmupView} />
     </>
   );
 }

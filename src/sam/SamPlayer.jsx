@@ -23,6 +23,10 @@ import {
   nextIncompleteItem, planBadgeText, planSongFor, snippetTagText,
 } from "./lib/activePlan";
 import PlanLine from "./components/PlanLine";
+import useWarmupLadder, { fetchDefaultLadder } from "./lib/useWarmupLadder";
+import {
+  ladderSummaryText, resolveLadder, resolveTarget, rungProgressText, sourceLabel,
+} from "./lib/warmupLadder";
 import usePracticeStats from "./lib/usePracticeStats";
 import useLyricEditor from "./lib/useLyricEditor";
 import useFingeringEditor from "./lib/useFingeringEditor";
@@ -229,6 +233,20 @@ export default function SamPlayer({ onBack }) {
 
   // What the plan says about what is loaded (§7.4). All counts come from
   // `activePlan.progress` — the database function — never from passes.
+  // The warm-up ladder (warm-up spec §6). It owns the rung counters for one
+  // sitting and nothing else: it never counts plan progress, and it never sets
+  // the tempo box itself — it says what the box should hold and this component
+  // sets it, through the same `bpm.set` a human typing in the box uses.
+  const warmup = useWarmupLadder();
+  // Pulled out under clearer names because three of them are reached from
+  // ScrollEngine's frame and must keep stable identities; the hook guarantees
+  // that, the destructuring makes the dep lists below readable.
+  const {
+    creditPass: creditWarmupPass,
+    takePendingTempo: takeWarmupTempo,
+    stop: stopWarmup,
+  } = warmup;
+
   const planItem = itemForLoadedRange(activePlan.plan, songDbId, snippet);
   const planItemState = planItem ? itemState(planItem, activePlan.progress) : null;
   const planSongNote = planSongFor(activePlan.plan, songDbId)?.song_note || null;
@@ -245,8 +263,13 @@ export default function SamPlayer({ onBack }) {
     ? nextIncompleteItem(activePlan.plan, activePlan.progress, planItem)
     : firstIncompleteItem(activePlan.plan, activePlan.progress);
   const planTone = (st) => (st.done ? "done" : st.amber ? "amber" : "open");
+  // "rung 2 of 3" while a ladder is running, for the mid-play plan badge — the
+  // one plan readout on screen during a run.
+  const warmupRungText = warmup.view
+    ? rungProgressText({ rung: warmup.view.rung, ladder: warmup.view.ladder, complete: warmup.view.complete })
+    : null;
   const planBadge = planItem
-    ? { text: planBadgeText(planItemState), state: planTone(planItemState) }
+    ? { text: planBadgeText(planItemState, warmupRungText), state: planTone(planItemState) }
     : null;
   // Snippet rows in the panel: a planned snippet of this song gets a tag.
   const planTagFor = (snippetId) => {
@@ -255,6 +278,31 @@ export default function SamPlayer({ onBack }) {
     const st = itemState(it, activePlan.progress);
     return { text: snippetTagText(it, st), state: planTone(st) };
   };
+
+  // The app default ladder (§3) is fetched, never copied: sam_default_warmup_ladder()
+  // is the single source of that constant. Null until it arrives, and null if it
+  // cannot be read — in which case a range with no ladder of its own simply has
+  // no warm-up, rather than being given a second, drifting copy of the default.
+  const [defaultLadder, setDefaultLadder] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    fetchDefaultLadder().then((l) => { if (alive) setDefaultLadder(l); });
+    return () => { alive = false; };
+  }, []);
+
+  // §4: which level supplies the ladder, and what the percents are percentages
+  // of. Both recomputed every render from data already in hand — no state.
+  const warmupResolved = resolveLadder({ planItem, snippet, song, defaultLadder });
+  const warmupTarget = resolveTarget({
+    planItem, song, bpm: bpm.value, playbackSpeed: playbackSpeed.value,
+  });
+  // §2 scope: drills and snippets, typically 1-5 bars. A whole song has no
+  // warm-up button, because a whole song is not what a ladder is for.
+  const warmupInScope = !!snippet || song?.songType === "drill";
+  const warmupHasLadder = !!warmupResolved.ladder && warmupResolved.ladder.length > 0;
+  const warmupDisabledReason = Number.isFinite(warmupTarget.effectiveBpm)
+    ? null
+    : "Set a tempo, or a goal tempo, before warming up.";
 
   const { armPass, disarmPass, recordPass } = useSamPasses({
     practiceModeRef,
@@ -784,6 +832,25 @@ export default function SamPlayer({ onBack }) {
   // simply never be called. Keeping that callback stable and reading mutable
   // values through here is what makes the row carry the tempo at the finish
   // line rather than the tempo the run started at.
+  // The tempo box's setters, read through a ref for the same reason
+  // `passContextRef` exists: `useNumericInput` builds a fresh `set` on every
+  // render, so a callback that closed over it would change identity every render
+  // — and ScrollEngine captures `onLoopCount` once, so a changed identity there
+  // is simply never called again.
+  const tempoSettersRef = useRef({ setBpm: null, setSpeed: null });
+  tempoSettersRef.current = { setBpm: bpm.set, setSpeed: playbackSpeed.set };
+
+  // Put one rung's tempo in the box. Deliberately the same two setters a human
+  // typing in the box uses, so the ladder introduces no second way to change
+  // tempo: ScrollEngine's scroll effect re-runs exactly as it already does when
+  // he retypes the tempo mid-play.
+  const applyRungTempo = useCallback((tempo) => {
+    if (!tempo) return;
+    const { setBpm, setSpeed } = tempoSettersRef.current;
+    if (Number.isFinite(tempo.bpm)) setBpm?.(tempo.bpm);
+    if (Number.isFinite(tempo.playbackSpeed)) setSpeed?.(tempo.playbackSpeed);
+  }, []);
+
   const passContextRef = useRef({ songId: null, snippet: null, bpm: null, playbackSpeed: null });
   passContextRef.current = {
     songId: songDbId,
@@ -802,7 +869,7 @@ export default function SamPlayer({ onBack }) {
   // at a particular instant — `handleLoopCount` does, because it defers the
   // write off the teleport frame but must capture the counters BEFORE
   // `setLoopIteration` rotates them. Omitted, they are read here as before.
-  const creditPass = useCallback((playthrough) => {
+  const creditPass = useCallback((playthrough, warmupPass) => {
     const ctx = passContextRef.current;
     recordPass({
       songId: ctx.songId,
@@ -813,6 +880,9 @@ export default function SamPlayer({ onBack }) {
       handMode: ctx.snippet?.handMode || "both",
       playthrough: playthrough ?? getCurrentPlaythrough(),
       getPlanLink,
+      // Null on an ordinary pass. On a ladder pass it names the rung the pass was
+      // PLAYED at, captured by the caller before any advance moved it.
+      warmup: warmupPass ?? null,
     });
   }, [recordPass, getSessionId, getCurrentPlaythrough, getPlanLink]);
 
@@ -851,7 +921,16 @@ export default function SamPlayer({ onBack }) {
     // re-runs the scroll effect, and the sequence can read 1, 2, 3, 0, 1.
     if (n === 0) lastCreditedPassRef.current = 0;
     lastLoopCountRef.current = n;
-  }, [setLoopIteration]);
+    // §6.4: a rung advance puts its tempo in the box HERE, at the wrap, so "the
+    // next cycle plays at the new tempo" is literally true. The rung itself
+    // already moved at the credit instant a moment ago — see useWarmupLadder for
+    // why the two are separated: on a range with rest measures the credit happens
+    // a bar before the wrap, and changing tempo there would eat the rest.
+    //
+    // Guarded on n > 0 because setting the tempo re-runs ScrollEngine's scroll
+    // effect, which re-emits 0; a pending tempo must not be taken by its own echo.
+    if (n > 0) applyRungTempo(takeWarmupTempo());
+  }, [setLoopIteration, takeWarmupTempo, applyRungTempo]);
 
   // The music of one playthrough has finished — the moment the pass is banked.
   //
@@ -869,8 +948,13 @@ export default function SamPlayer({ onBack }) {
     if (!(n > 0) || n === lastCreditedPassRef.current) return;
     lastCreditedPassRef.current = n;
     const playthrough = getCurrentPlaythrough();
-    setTimeout(() => creditPass(playthrough), 0);
-  }, [creditPass, getCurrentPlaythrough]);
+    // The ladder sees the pass BEFORE the row is written (§6.3-§6.4): it returns
+    // the rung this pass was played at, for the row, and advances itself. Nothing
+    // is counted twice — the ladder's counters drive the tempo and the strip for
+    // this sitting, and plan progress still comes only from the database.
+    const warmupPass = creditWarmupPass(playthrough);
+    setTimeout(() => creditPass(playthrough, warmupPass), 0);
+  }, [creditPass, getCurrentPlaythrough, creditWarmupPass]);
 
   // `handleStop` is a plain function declared further down the component, so it
   // is re-created every render. Reaching it through a ref keeps
@@ -932,6 +1016,7 @@ export default function SamPlayer({ onBack }) {
     clearStuckBeat();
     setPractice(false);
     disarmPass();
+    endWarmupRun();
     setLoopCount(0);
     lastLoopCountRef.current = 0;
     setMissCount(0);
@@ -1125,6 +1210,19 @@ export default function SamPlayer({ onBack }) {
   // and — finding nothing saved yet — insert a duplicate snippet.
   const playStartingRef = useRef(false);
 
+  // Whether a warm-up ladder was running when playback last paused. Not ladder
+  // PROGRESS — that is never kept (§2.9) — just the fact that a ramp was in
+  // flight, so Resume and Restart can begin a new one at rung one.
+  const warmupWasRunningRef = useRef(false);
+
+  // End the run. `remember` is true only on pause, which is the one exit Resume
+  // can come back from; a stop, a range change or closing the song forget, so a
+  // later Resume never revives a ramp he did not ask for.
+  function endWarmupRun(remember = false) {
+    warmupWasRunningRef.current = remember && !!warmup.view;
+    stopWarmup();
+  }
+
   // Shared tail of Play and Restart: both enter at the first measure of the
   // loaded range, so both arm a pass and both seek to the top.
   // `activeSnippet` is threaded through because Play may have just resolved it.
@@ -1210,6 +1308,48 @@ export default function SamPlayer({ onBack }) {
   //
   // Synchronous, unlike Play, precisely because that await is gone — but it
   // shares `playStartingRef` so it cannot interleave with a Play in flight.
+  // WARM UP (§6.1-§6.2). A session starts exactly as Play starts one: this
+  // resolves the ladder and the target, arms the run, puts rung one in the tempo
+  // box, makes sure the range loops, and then hands over to Play.
+  //
+  // Pressing it again while a ladder is already running is "Warm up again" (§7.1):
+  // the run restarts at rung one and the rung-one tempo goes into the box, which
+  // re-runs the scroll effect and re-enters the range from its first measure. No
+  // second Play, because playback never stopped.
+  // Arm a fresh run at rung one and put its tempo in the box. Returns false when
+  // there is nothing to run. Shared by Warm up, Resume and Restart so the three
+  // cannot drift apart about what "starts at rung one" means.
+  function startWarmupRun() {
+    const { ladder, source } = warmupResolved;
+    if (!ladder?.length || !Number.isFinite(warmupTarget.effectiveBpm)) return false;
+    const first = warmup.start({
+      ladder,
+      source,
+      targetEffectiveBpm: warmupTarget.effectiveBpm,
+      song,
+      // §3: a rung with no accuracy target of its own uses the item's, or 85% off
+      // plan. The item is the only place that can supply one.
+      itemAccuracyTarget: planItem?.accuracy_target ?? null,
+    });
+    if (!first) return false;
+    applyRungTempo(first);
+    // §6.2: looping on if it is not already. A snippet always loops; a drill
+    // played as a whole song loops only through whole-song repeat.
+    if (!snippet) setSongRepeat(true);
+    return true;
+  }
+
+  function handleWarmUp() {
+    if (playStartingRef.current) return;
+    if (!startWarmupRun()) return;
+    // Pressing it again mid-run is "Warm up again" (§7.1): the run restarts at
+    // rung one and the rung-one tempo goes into the box, which re-runs the scroll
+    // effect and re-enters the range from its first measure. No second Play,
+    // because playback never stopped.
+    if (playbackState === "playing") return;
+    void handlePlay();
+  }
+
   function handlePractice() {
     if (playStartingRef.current) return;
     setPractice(true);
@@ -1228,6 +1368,12 @@ export default function SamPlayer({ onBack }) {
     const meas = getCurrentMeasure();
     setPausedMeasure(meas);
     endSession();
+    // §6.6, and this is the deliberate part: pause ends the session, so it ends
+    // the ladder — a streak that survived a pause would not be a streak. What is
+    // remembered is only THAT one was running, so Resume can start a new one at
+    // rung one rather than leaving him looping at a warm-up tempo with no ladder
+    // and nothing on screen to say so.
+    endWarmupRun(true);
     if (audioElement) audioElement.pause();
     setPlaybackState("paused");
   }
@@ -1237,6 +1383,9 @@ export default function SamPlayer({ onBack }) {
     resetCounters();
     clearStuckBeat();
     if (!practiceModeRef.current) beginSession();
+    // §6.6: "Resuming starts a new session at rung 1." The streak is gone with
+    // the session it belonged to; the ramp itself picks up from the bottom.
+    if (!practiceModeRef.current && warmupWasRunningRef.current) startWarmupRun();
     clearTimers();
 
     if (audioElement && !practiceModeRef.current) {
@@ -1261,6 +1410,9 @@ export default function SamPlayer({ onBack }) {
       startFromTopOfRange(snippet, { practice: true });
       return;
     }
+    // Restart is Resume's sibling here: both re-enter the range, so both begin a
+    // new ladder at rung one when one was running (§6.6).
+    if (warmupWasRunningRef.current) startWarmupRun();
     playStartingRef.current = true;
     try {
       ensureAudioContext();
@@ -1275,6 +1427,7 @@ export default function SamPlayer({ onBack }) {
     clearTimers();
     clearStuckBeat();
     disarmPass();
+    endWarmupRun();
     setPlaybackState("stopped");
     // Before the flag is cleared, so a practice run's `endSession` is still
     // refused. Pause deliberately does NOT clear it: pause and resume are one
@@ -1295,6 +1448,7 @@ export default function SamPlayer({ onBack }) {
     clearTimers();
     clearStuckBeat();
     disarmPass();
+    endWarmupRun();
     endSession(); // refused while the flag is still set — see handleStop
     setPractice(false);
     resetCounters();
@@ -1311,6 +1465,7 @@ export default function SamPlayer({ onBack }) {
   // longer loaded. Banked passes are untouched — they are rows.
   function handleSnippetChange(next) {
     disarmPass();
+    endWarmupRun();
     setSnippet(next);
   }
 
@@ -1366,6 +1521,7 @@ export default function SamPlayer({ onBack }) {
     clearTimers();
     clearStuckBeat();
     disarmPass();
+    endWarmupRun();
     if (playbackState === "playing") endSession();
     setPractice(false);
     if (audioElement) audioElement.pause();
@@ -1579,6 +1735,8 @@ export default function SamPlayer({ onBack }) {
                 playthroughPercent={sessionStats.playthroughAccuracyPercent}
                 hasPlaythrough={sessionStats.hasPlaythrough}
                 planBadge={planBadge}
+                warmupView={warmup.view}
+                onWarmUp={handleWarmUp}
               />
               )
             ) : (
@@ -1599,6 +1757,10 @@ export default function SamPlayer({ onBack }) {
                   onSongUpdate={setSong}
                   onAudioUploaded={handleAudioUploaded}
                   onFullSong={() => handleSnippetChange(null)}
+                  onWarmUp={handleWarmUp}
+                  warmUpVisible={warmupInScope && warmupHasLadder}
+                  warmUpPrimary={!!planItem?.goal_is_warmup}
+                  warmUpDisabledReason={warmupDisabledReason}
                   onLyricsChanged={setLyricPlacements}
                   skipTiedNotes={skipTiedNotes}
                   hasImportedFingerings={hasImported}
@@ -1653,6 +1815,11 @@ export default function SamPlayer({ onBack }) {
                   nextItem={nextPlanItem}
                   // The same path the home page checklist uses — one way in.
                   onOpenNext={openPlanItem}
+                  // §7.3: one line under the plan line saying what the ladder for
+                  // this item is and where it came from. Shown whether or not a
+                  // ladder is running, so the ramp is never a surprise.
+                  warmupSummary={warmupHasLadder ? ladderSummaryText(warmupResolved.ladder) : null}
+                  warmupSourceLabel={warmupHasLadder ? sourceLabel(warmupResolved.source) : null}
                 />
 
                 <SnippetPanel

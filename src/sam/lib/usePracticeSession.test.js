@@ -60,6 +60,12 @@ beforeEach(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 
+// The id the session row was inserted with. usePracticeSession generates it
+// itself now (2026-09-27), so nothing here may hard-code one.
+function insertedSessionId() {
+  return mockInserts.find((i) => i.table === "sam_sessions")?.payload?.id;
+}
+
 async function openSession() {
   const { result } = renderHook(() => usePracticeSession());
   await act(async () => {
@@ -88,7 +94,7 @@ function wrap(session, n) {
   act(() => session.current.setLoopIteration(n));
 }
 async function endAndGetSummary(session) {
-  await waitFor(() => expect(session.current.getSessionId()).toBe("session-1"));
+  await waitFor(() => expect(session.current.getSessionId()).toBe(insertedSessionId()));
   await act(async () => {
     await session.current.endSession();
   });
@@ -229,7 +235,7 @@ const storedRows = () =>
 
 async function playAndEnd(session) {
   hit(session); partial(session); wrong(session); hit(session);
-  await waitFor(() => expect(session.current.getSessionId()).toBe("session-1"));
+  await waitFor(() => expect(session.current.getSessionId()).toBe(insertedSessionId()));
   await act(async () => { await session.current.endSession(); });
   await waitFor(() => expect(eventRows().length).toBeGreaterThan(0));
 }
@@ -241,7 +247,7 @@ test("every beat is fanned out, with the app's four result values", async () => 
   expect(rows).toHaveLength(4);
   expect(rows.map((r) => r.result)).toEqual(["hit", "partial", "wrong", "hit"]);
   expect(rows[0]).toMatchObject({
-    session_id: "session-1", song_id: "song-1", measure_number: 1, beat: 1,
+    session_id: insertedSessionId(), song_id: "song-1", measure_number: 1, beat: 1,
     expected_notes: [60], played_notes: [60], loop_iteration: 0,
   });
   // No measure rows in this fake, so measure_id stays null rather than guessing.
@@ -341,7 +347,7 @@ test("extras are capped per measure per pass, and an empty keystroke is ignored"
 
 // Ends the session without adding more scored beats.
 async function playAndEndNoExtraPlay(session) {
-  await waitFor(() => expect(session.current.getSessionId()).toBe("session-1"));
+  await waitFor(() => expect(session.current.getSessionId()).toBe(insertedSessionId()));
   await act(async () => { await session.current.endSession(); });
   await waitFor(() => expect(eventRows().length).toBeGreaterThan(0));
 }

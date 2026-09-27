@@ -39,6 +39,9 @@ export function mapSongRow(row, measures) {
     defaultChordMs: row.default_chord_ms ?? null,
     defaultMeasureWidth: row.default_measure_width ?? null,
     audioFilePath: row.audio_file_path || null,
+    // Warm-up ladder fallback for every range in this song (warm-up spec §4).
+    // Null means inherit — here that means fall through to the app default.
+    warmupLadder: row.warmup_ladder ?? null,
     showImportedFingerings: row.show_imported_fingerings ?? false,
     // Carried for the exporter, which must be able to reproduce the whole song
     // row. The `select("*")` already fetched these, so it costs no extra query.

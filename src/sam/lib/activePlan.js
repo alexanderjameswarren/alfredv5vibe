@@ -11,9 +11,14 @@ const PLAN_COLS = "id, status, starts_on, day_note, review_note, created_at";
 const PLAN_SONG_COLS = "id, song_id, position, song_note";
 const ITEM_COLS =
   "id, plan_song_id, song_id, snippet_id, position, is_free_play, target_bpm, " +
-  "target_playback_speed, target_effective_bpm, target_passes, accuracy_target, instruction";
+  "target_playback_speed, target_effective_bpm, target_passes, accuracy_target, instruction, " +
+  // Warm-up ladder (warm-up spec §5). An item's ladder overrides the snippet's
+  // and the song's while the plan is active; goal_is_warmup makes the ladder the
+  // item's goal; consecutive changes how target_passes is counted.
+  "warmup_ladder, goal_is_warmup, consecutive";
 const SONG_COLS = "id, title, audio_file_path, default_bpm";
-const SNIPPET_COLS = "id, song_id, title, start_measure, end_measure, rest_measures, settings, archived";
+const SNIPPET_COLS =
+  "id, song_id, title, start_measure, end_measure, rest_measures, settings, archived, warmup_ladder";
 
 /** Today's Pacific date, "YYYY-MM-DD". */
 export function todayKey(now = new Date()) {
@@ -89,6 +94,10 @@ export async function loadActivePlan(supabase) {
               hand_mode: sn.settings?.handMode || "both",
               settings: sn.settings,
               archived: !!sn.archived,
+              // Carried because opening a plan item builds the loaded snippet
+              // from THIS object via snippetFromRow, and a snippet that lost its
+              // ladder on the way in would silently fall through to the song's.
+              warmup_ladder: sn.warmup_ladder ?? null,
             }
           : null,
         snippet_unavailable: !!it.snippet_id && (!sn || !!sn.archived),
@@ -110,7 +119,14 @@ export async function loadTodayProgress(supabase, planId, today = todayKey()) {
   if (error) throw error;
   const map = new Map();
   for (const r of data || []) {
-    map.set(r.plan_item_id, { attempts: r.attempts ?? 0, qualifying: r.qualifying ?? 0 });
+    map.set(r.plan_item_id, {
+      attempts: r.attempts ?? 0,
+      qualifying: r.qualifying ?? 0,
+      // Added by migration 078. The function returns all three numbers and
+      // decides between none of them; `itemState` picks per the item's own flags.
+      streak: r.longest_qualifying_streak ?? 0,
+      completions: r.ladder_completions ?? 0,
+    });
   }
   return map;
 }
@@ -138,19 +154,37 @@ export function planLinkFor(plan, songId, snippetId) {
   }
 }
 
-/** Display state of one item for today. */
+/**
+ * Display state of one item for today.
+ *
+ * WHICH NUMBER DECIDES "DONE" IS THE ITEM'S OWN DECLARATION (warm-up spec §5.2,
+ * §5.3). sam_plan_item_progress returns all three and chooses between none of
+ * them, so the choice lives here, once:
+ *
+ *   goal_is_warmup  → one completed ladder that Pacific day is the whole target
+ *   consecutive     → the longest qualifying streak WITHIN ONE SESSION
+ *   neither         → the cumulative qualifying count across the day
+ *
+ * Both flags default false, so an item written before the warm-up ladder existed
+ * takes the third branch and reads exactly as it always did.
+ */
 export function itemState(item, progress) {
-  const p = progress?.get?.(item.id) || { attempts: 0, qualifying: 0 };
+  const p = progress?.get?.(item.id) || { attempts: 0, qualifying: 0, streak: 0, completions: 0 };
+  const streak = p.streak ?? 0;
+  const completions = p.completions ?? 0;
+  const base = { attempts: p.attempts, qualifying: p.qualifying, streak, completions };
+
+  if (item.goal_is_warmup) {
+    const done = completions >= 1;
+    return { ...base, warmup: true, shown: Math.min(completions, 1), target: 1, done,
+             amber: !done && p.attempts > 0 };
+  }
+
   const target = item.target_passes || 0;
-  const done = p.qualifying >= target && target > 0;
-  return {
-    attempts: p.attempts,
-    qualifying: p.qualifying,
-    shown: Math.min(p.qualifying, target),
-    target,
-    done,
-    amber: !done && p.attempts > 0 && p.qualifying < target,
-  };
+  const counted = item.consecutive ? streak : p.qualifying;
+  const done = counted >= target && target > 0;
+  return { ...base, consecutive: !!item.consecutive, shown: Math.min(counted, target), target, done,
+           amber: !done && p.attempts > 0 && counted < target };
 }
 
 // --- Working order: what to do next (2026-09-19) -----------------------------
@@ -328,13 +362,31 @@ export function planLineText(item, state) {
   if (range) parts.push(range);
   parts.push(`${item.target_effective_bpm} BPM`);
   if (!item.is_free_play) parts.push(`${item.accuracy_target}%`);
-  parts.push(`${state.done ? "Done " : ""}${state.shown}/${state.target} today`);
+  if (item.goal_is_warmup) {
+    // §7.3: a warm-up item reports the ladder, not a pass count. The live rung
+    // belongs to the mid-play badge (planBadgeText) and to the warm-up strip;
+    // this line is only ever on screen stopped or paused, where the honest
+    // answer is whether today's ladder has been completed — from the database.
+    parts.push("warm-up");
+    parts.push(state.done ? "done today" : "not yet today");
+  } else {
+    // §5.3: "in a row" is worth saying, because it changes what he has to do.
+    const suffix = item.consecutive ? " in a row" : "";
+    parts.push(`${state.done ? "Done " : ""}${state.shown}/${state.target}${suffix} today`);
+  }
   if (item.instruction) parts.push(item.instruction);
   return parts.join(" · ");
 }
 
 /** The compact playing badge: "Plan 2/4", or "Plan ✓" when done. */
-export function planBadgeText(state) {
+export function planBadgeText(state, warmupRungText = null) {
+  // A warm-up item is not measured in passes, so a pass count would be a lie
+  // (warm-up spec §5.2). While a ladder is running the live rung is the useful
+  // number, and this badge is the only plan readout on screen mid-play.
+  if (state.warmup) {
+    if (warmupRungText) return `Warm-up · ${warmupRungText}`;
+    return state.done ? "Warm-up ✓" : "Warm-up";
+  }
   return state.done ? "Plan ✓" : `Plan ${state.shown}/${state.target}`;
 }
 

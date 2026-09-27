@@ -15,6 +15,9 @@ export default function SettingsBar({
   bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed,
   playbackState, songDbId,
   onPlay, onPractice, onPause, onResume, onRestart, onStop,
+  // Warm-up ladder (warm-up spec §7.1). Forwarded straight through, like every
+  // other transport prop.
+  onWarmUp, warmUpVisible, warmUpPrimary, warmUpDisabledReason,
   onExport,
   midiConnected, midiDevice,
   pausedMeasure,
@@ -75,6 +78,10 @@ export default function SettingsBar({
             onRestart={onRestart}
             onStop={onStop}
             onFullSong={onFullSong}
+            onWarmUp={onWarmUp}
+            warmUpVisible={warmUpVisible}
+            warmUpPrimary={warmUpPrimary}
+            warmUpDisabledReason={warmUpDisabledReason}
           />
 
           <div className="flex items-center gap-2 flex-1 min-w-0">
