@@ -796,24 +796,6 @@ export async function getSamSessions(
       query = query.eq("plan_item_id", params.plan_item_id);
     }
 
-    // Warm-up ladder (warm-up spec §8). Unlike the notes_played pair above these
-    // ARE clean partitions: warmup_rung is set or it is null, with no third state,
-    // because a pass either belonged to a ladder run or it did not.
-    //
-    // `top_rung_only` is the one worth reaching for when asking how well a passage
-    // goes at tempo: it keeps ordinary passes AND the top rung, and drops only the
-    // deliberately slow ones. It is the same question get_sam_measure_stats answers
-    // by default.
-    if (params.warmup_only) {
-      query = query.not("warmup_rung", "is", null);
-    }
-    if (params.no_warmup) {
-      query = query.is("warmup_rung", null);
-    }
-    if (params.top_rung_only) {
-      query = query.or("warmup_rung.is.null,warmup_target_percent.eq.100");
-    }
-
     const { data: sessions, error } = await query;
     if (error) return { error: error.message };
 
@@ -963,6 +945,33 @@ export async function getSamPasses(
 
     if (params.plan_item_id) {
       query = query.eq("plan_item_id", params.plan_item_id);
+    }
+
+    // Warm-up ladder (warm-up spec §8). Unlike the notes_played pair above these
+    // ARE clean partitions: warmup_rung is set or it is null, with no third state,
+    // because a pass either belonged to a ladder run or it did not.
+    //
+    // `top_rung_only` is the one worth reaching for when asking how well a passage
+    // goes at tempo: it keeps ordinary passes AND the top rung, and drops only the
+    // deliberately slow ones. It is the same question get_sam_measure_stats answers
+    // by default.
+    //
+    // ⚠️ THESE WERE DEAD FOR ONE DEPLOY (2026-09-27). They were added to
+    // getSamSessions by mistake — that function has an identical plan_item_id block
+    // a few hundred lines above this one, and a search-and-replace took the first
+    // match. Nothing failed loudly: getSamSessions' params carry none of these
+    // three, so all three were permanently undefined and every filter silently did
+    // nothing — get_sam_passes returned the same rows whichever was passed. The
+    // lesson worth keeping: a filter with no test asserting that the row count
+    // CHANGES is indistinguishable from no filter at all.
+    if (params.warmup_only) {
+      query = query.not("warmup_rung", "is", null);
+    }
+    if (params.no_warmup) {
+      query = query.is("warmup_rung", null);
+    }
+    if (params.top_rung_only) {
+      query = query.or("warmup_rung.is.null,warmup_target_percent.eq.100");
     }
 
     const { data: passes, error } = await query;

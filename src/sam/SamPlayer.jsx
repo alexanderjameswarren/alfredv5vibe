@@ -894,14 +894,26 @@ export default function SamPlayer({ onBack }) {
   // at a particular instant — `handleLoopCount` does, because it defers the
   // write off the teleport frame but must capture the counters BEFORE
   // `setLoopIteration` rotates them. Omitted, they are read here as before.
-  const creditPass = useCallback((playthrough, warmupPass) => {
+  const creditPass = useCallback((playthrough, warmupPass, tempo) => {
     const ctx = passContextRef.current;
     recordPass({
       songId: ctx.songId,
       snippet: ctx.snippet,
       sessionId: getSessionId(),
-      bpm: ctx.bpm,
-      playbackSpeed: ctx.playbackSpeed,
+      // THE TEMPO IS PASSED IN, NOT READ HERE, WHEN THE CALLER HAS IT (2026-09-27).
+      //
+      // This function runs on a macrotask, deferred off ScrollEngine's frame. The
+      // warm-up ladder applies a new rung's tempo at the loop WRAP, which happens
+      // between the deferral and this call — so reading `ctx` here recorded the
+      // tempo of the rung the ladder had just moved TO, on a row labelled with the
+      // rung it had just moved FROM. Every advancing pass came out at the next
+      // rung's tempo: a 70% pass at 28 BPM was written as 34.
+      //
+      // The counters were already protected this way (`playthrough` is captured
+      // synchronously); the tempo needed the same treatment and did not have it,
+      // because before the ladder nothing changed tempo at a wrap.
+      bpm: tempo ? tempo.bpm : ctx.bpm,
+      playbackSpeed: tempo ? tempo.playbackSpeed : ctx.playbackSpeed,
       handMode: ctx.snippet?.handMode || "both",
       playthrough: playthrough ?? getCurrentPlaythrough(),
       getPlanLink,
@@ -973,12 +985,16 @@ export default function SamPlayer({ onBack }) {
     if (!(n > 0) || n === lastCreditedPassRef.current) return;
     lastCreditedPassRef.current = n;
     const playthrough = getCurrentPlaythrough();
+    // Read NOW, not in the deferred write: this is the last instant at which the
+    // tempo still belongs to the pass that just finished. See creditPass.
+    const ctx = passContextRef.current;
+    const tempo = { bpm: ctx.bpm, playbackSpeed: ctx.playbackSpeed };
     // The ladder sees the pass BEFORE the row is written (§6.3-§6.4): it returns
     // the rung this pass was played at, for the row, and advances itself. Nothing
     // is counted twice — the ladder's counters drive the tempo and the strip for
     // this sitting, and plan progress still comes only from the database.
     const warmupPass = creditWarmupPass(playthrough);
-    setTimeout(() => creditPass(playthrough, warmupPass), 0);
+    setTimeout(() => creditPass(playthrough, warmupPass, tempo), 0);
   }, [creditPass, getCurrentPlaythrough, creditWarmupPass]);
 
   // `handleStop` is a plain function declared further down the component, so it

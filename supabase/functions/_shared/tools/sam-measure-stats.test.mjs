@@ -965,3 +965,95 @@ test("no warm-up passes at all: nothing changes for anyone who never warms up", 
   assert.equal(out.sessions.excluded.warmup_below_target, 0);
   assert.equal(measure(out, 15).attempts, 4);
 });
+
+// --- a measure is late OR early, never both (2026-09-27) ----------------------
+//
+// most_late ranked over every timed measure while most_early filtered to positive
+// means, so with three or fewer timed measures an EARLY bar appeared in both lists.
+
+// `n` mid-phrase beats in one measure, all at the same offset, so the mean is exact.
+// Beat 1 of a measure is an entry beat, so these start at beat 2.
+const timedBeats = (session, measure, n, offset) =>
+  Array.from({ length: n }, (_, i) =>
+    ev(session, measure, 2 + i, "hit", { timing_delta_ms: offset }));
+
+function timingTables(rows) {
+  const t = baseTables();
+  t.sam_song_measures = [
+    { song_id: SONG, number: 15, source_measure: "15" },
+    { song_id: SONG, number: 16, source_measure: "16" },
+  ];
+  t.sam_session_events = rows;
+  return t;
+}
+
+test("an EARLY measure appears in most_early and NOT in most_late", async () => {
+  // One measure, comfortably early: +30 ms on 10 mid-phrase beats.
+  const out = await call({ song_id: SONG }, makeDb(timingTables(timedBeats(S1, 15, 10, 30))));
+  assert.deepEqual(out.rollup.most_early.map((m) => m.measure), [15]);
+  assert.deepEqual(out.rollup.most_late.map((m) => m.measure), []);
+  assert.match(out.rollup.most_late_note, /No measure was late/);
+});
+
+test("a LATE measure appears in most_late and NOT in most_early", async () => {
+  const out = await call({ song_id: SONG }, makeDb(timingTables(timedBeats(S1, 15, 10, -30))));
+  assert.deepEqual(out.rollup.most_late.map((m) => m.measure), [15]);
+  assert.deepEqual(out.rollup.most_early.map((m) => m.measure), []);
+  assert.match(out.rollup.most_early_note, /No measure was early/);
+});
+
+test("the two lists never share a measure, whichever way the bars lean", async () => {
+  const out = await call({ song_id: SONG }, makeDb(timingTables([
+    ...timedBeats(S1, 15, 10, 25),    // early
+    ...timedBeats(S1, 16, 10, -25),   // late
+  ])));
+  const lateSet = new Set(out.rollup.most_late.map((m) => m.measure));
+  const earlySet = new Set(out.rollup.most_early.map((m) => m.measure));
+  assert.deepEqual([...lateSet], [16]);
+  assert.deepEqual([...earlySet], [15]);
+  for (const m of lateSet) assert.equal(earlySet.has(m), false, `measure ${m} is in both lists`);
+});
+
+// --- the overall mean is note-weighted ----------------------------------------
+//
+// It used to average the per-SESSION means unweighted, so a three-beat sitting
+// counted as much as a thirty-beat one and the rollup disagreed with the only
+// measure it covered.
+
+test("a long sitting outweighs a short one in the overall mean", async () => {
+  // S1: 20 beats at 0 ms. S2: 2 beats at −100 ms.
+  // Unweighted over sessions that is (0 + −100) / 2 = −50.
+  // Note-weighted it is (20*0 + 2*-100) / 22 = -9.09, reported to one decimal.
+  const t = timingTables([
+    ...timedBeats(S1, 15, 20, 0),
+    ...timedBeats(S2, 15, 2, -100),
+  ]);
+  const out = await call({ song_id: SONG }, makeDb(t));
+  assert.equal(out.timing.overall.mean_offset_ms, -9.1);
+  assert.equal(out.timing.overall.timed_beats, 22);
+  assert.notEqual(out.timing.overall.mean_offset_ms, -50);
+});
+
+test("the overall figure is comparable with a measure's, mid-phrase against mid-phrase", async () => {
+  const out = await call({ song_id: SONG }, makeDb(timingTables(timedBeats(S1, 15, 12, -8))));
+  // One measure, all mid-phrase: the two numbers must be the same number.
+  assert.equal(out.timing.overall.mid_phrase_mean_offset_ms, -8);
+  assert.equal(measure(out, 15).timing.mid_phrase.mean_offset_ms, -8);
+  assert.equal(out.timing.overall.mean_offset_ms, -8);
+  assert.match(out.timing.overall.weighting, /Every struck beat counts once/);
+});
+
+test("entries are reported apart from mid-phrase, which is why an all-beats mean can differ", async () => {
+  // Beat 1 of the measure is an entry; the rest are mid-phrase.
+  const rows = [
+    ev(S1, 15, 1, "hit", { timing_delta_ms: -200 }),   // entry, very late
+    ...timedBeats(S1, 15, 9, 0),                       // mid-phrase, on time
+  ];
+  const out = await call({ song_id: SONG }, makeDb(timingTables(rows)));
+  assert.equal(out.timing.overall.entry_beats, 1);
+  assert.equal(out.timing.overall.entry_mean_offset_ms, -200);
+  assert.equal(out.timing.overall.mid_phrase_mean_offset_ms, 0);
+  // All beats pooled: (−200 + 0*9) / 10 = −20. Different from mid-phrase, and the
+  // difference is the entry, not a weighting accident.
+  assert.equal(out.timing.overall.mean_offset_ms, -20);
+});

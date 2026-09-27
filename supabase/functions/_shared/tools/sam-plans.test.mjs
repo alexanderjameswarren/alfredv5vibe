@@ -759,3 +759,31 @@ test("update_sam_song_goal: a malformed ladder is refused before the proposal", 
       makeDb()),
     /at least 2 rungs/);
 });
+
+test("update_sam_song_goal: the proposal lists EXACTLY what will be written", async () => {
+  // A ladder-only call: the prose says the goal is not changing, and the writes list
+  // must agree with it. It used to show goal_set_at: now regardless.
+  const p1 = await call(mod.updateSamSongGoalTool, { song_id: SONG_PLAIN, warmup_ladder: LADDER }, makeDb());
+  assert.deepEqual(Object.keys(p1.data.proposal.writes), ["warmup_ladder"]);
+  assert.match(p1.data.proposal.text, /goal tempo is NOT changed/);
+
+  // A goal change: goal_set_at IS written, and the list says so.
+  const p2 = await call(mod.updateSamSongGoalTool, { song_id: SONG_PLAIN, goal_bpm: 72 }, makeDb());
+  assert.deepEqual(Object.keys(p2.data.proposal.writes).sort(),
+    ["goal_bpm", "goal_playback_speed", "goal_set_at"]);
+});
+
+test("update_sam_song_goal: the proposal matches the handler write, field for field", async () => {
+  for (const args of [
+    { song_id: SONG_PLAIN, warmup_ladder: LADDER },
+    { song_id: SONG_PLAIN, goal_bpm: 72 },
+    { song_id: SONG_PLAIN, goal_bpm: 72, warmup_ladder: LADDER },
+  ]) {
+    const proposed = (await call(mod.updateSamSongGoalTool, args, makeDb())).data.proposal.writes;
+    const db = makeDb();
+    await call(mod.updateSamSongGoalTool, { ...args, confirmed: true }, db);
+    const written = db.calls.find((c) => c.op === "update" && c.name === "sam_songs").payload;
+    assert.deepEqual(Object.keys(proposed).sort(), Object.keys(written).sort(),
+      `proposal and write disagree for ${JSON.stringify(args)}`);
+  }
+});

@@ -1,6 +1,6 @@
 -- Purpose: Teach sam_create_practice_plan the three warm-up item columns, so a plan can be created with an item ladder, a warm-up goal, or consecutive counting.
 -- Kind: schema change (one function replaced)
--- Applied: NO
+-- Applied: YES — and it was WRONG. Superseded by 083, which restores six things this file dropped. Do not run this file again.
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
 -- the order files were ADDED here. Alex runs every file himself.

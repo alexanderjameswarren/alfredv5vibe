@@ -889,7 +889,14 @@ export const updateSamSongGoalTool = defineTool({
       current_goal_effective_bpm: current,
       current_goal_is_placeholder: placeholder,
       new_goal_effective_bpm: p.newHeard,
-      writes: { ...p.update, goal_set_at: "now" },
+      // EXACTLY what the handler will write, and nothing else. A ladder-only call
+      // does not touch goal_set_at, and this line used to say it did — the prose
+      // above it said the opposite, so the proposal contradicted itself. A proposal
+      // that misdescribes its own write is worse than no proposal: it is the thing
+      // being approved.
+      writes: p.mode === "warmup_ladder_only"
+        ? { ...p.update }
+        : { ...p.update, goal_set_at: "now" },
     };
   },
   handler: async (args: Record<string, unknown>, ctx) => {

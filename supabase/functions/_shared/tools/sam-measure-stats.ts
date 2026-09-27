@@ -779,7 +779,19 @@ export const getSamMeasureStatsTool = defineTool({
     }
 
     const ratioMedians = perSession.map((p) => p.interval_ratio_median).filter((x): x is number => x != null);
-    const offsets = perSession.map((p) => p.mean_offset_ms).filter((x): x is number => x != null);
+    // EVERY STRUCK BEAT, NOT EVERY SESSION'S AVERAGE (2026-09-27). This used to be
+    // `perSession.map((p) => p.mean_offset_ms)` averaged unweighted, so a three-note
+    // sitting counted as much as a three-hundred-note one — and the rollup then
+    // disagreed with the only measure it covered (−27.3 against −2.7) for no reason
+    // anyone had chosen. Note-weighted, it is the same kind of number as a measure's
+    // own mean, and the two are directly comparable.
+    //
+    // The remaining difference between this and a measure's figure is REAL and is
+    // the entry/mid split: entries run far later than mid-phrase beats, so the
+    // all-beats mean sits below the mid-phrase one. Both are reported below, so the
+    // comparison a reader actually wants — overall mid-phrase against a measure's
+    // mid-phrase — needs no arithmetic.
+    const allBeats = [...allEntry, ...allMid];
     const driftAll = perSession.map((p) => p.drift_ms_per_pass).filter((x): x is number => x != null);
     const windows = [...new Set(sessions.map((s) => s.settings?.windowMs ?? null))];
 
@@ -799,10 +811,18 @@ export const getSamMeasureStatsTool = defineTool({
     // the list just finds the bars he enters on — the first bar of a snippet,
     // the bar after a rest — which says nothing about how hard they are.
     const timed = measures.filter((m) => m.timing.mid_phrase.timed_beats >= MIN_ATTEMPTS_FOR_RANKING);
-    // A measure belongs in the early list only when it was genuinely EARLY.
-    // Sorting every measure by offset and taking the top three makes the least
+    // A measure belongs in a list only when it was genuinely early, or genuinely
+    // late. Sorting every measure by offset and taking the top three makes the least
     // late one look early when the whole sitting dragged.
+    //
+    // BOTH lists need that filter, and `most_late` did not have it (2026-09-27):
+    // it ranked over every timed measure, so a measure with a POSITIVE mean — early
+    // — appeared in most_late as well as most_early whenever there were three or
+    // fewer timed measures. Bar 1 of a two-bar drill was in both at once. The two
+    // lists are now disjoint by construction, and a mean of exactly zero is in
+    // neither, which is right: it is neither early nor late.
     const early = timed.filter((m) => (m.timing.mid_phrase.mean_offset_ms ?? 0) > 0);
+    const late = timed.filter((m) => (m.timing.mid_phrase.mean_offset_ms ?? 0) < 0);
     // deno-lint-ignore no-explicit-any
     const lateEarlyRow = (m: any) => ({
       measure: m.measure,
@@ -860,7 +880,7 @@ export const getSamMeasureStatsTool = defineTool({
             first_attempt_iterations: m.first_attempt_iterations,
             sat_out_iterations: m.sat_out_iterations,
           })),
-        most_late: [...timed]
+        most_late: [...late]
           .sort((a, b) => a.timing.mid_phrase.mean_offset_ms! - b.timing.mid_phrase.mean_offset_ms!)
           .slice(0, 3)
           .map(lateEarlyRow),
@@ -870,6 +890,9 @@ export const getSamMeasureStatsTool = defineTool({
           .map(lateEarlyRow),
         ...(early.length === 0 && timed.length > 0
           ? { most_early_note: "No measure was early: every measure with enough mid-phrase beats has a negative mean offset, so this list is EMPTY rather than showing the least late one. Remember that a constant negative offset is calibration (latency and aim) as much as dragging — read interval_ratio before concluding he plays late." }
+          : {}),
+        ...(late.length === 0 && timed.length > 0
+          ? { most_late_note: "No measure was late: every measure with enough mid-phrase beats has a positive mean offset, so this list is EMPTY rather than showing the least early one." }
           : {}),
         timing_ranking_note: `Early and late are ranked on MID-PHRASE offsets only, over measures with at least ${MIN_ATTEMPTS_FOR_RANKING} such beats. Ranked on all beats these lists just find the bars he ENTERS on, which is a different skill from playing them.`,
         most_wrong_notes: measures
@@ -897,7 +920,15 @@ export const getSamMeasureStatsTool = defineTool({
           "went on. A constant offset cannot produce drift, so this is error, not calibration.",
         thresholds: `A session's interval figures need at least ${MIN_INTERVALS_PER_SESSION} usable gaps; drift needs ${MIN_BEATS_FOR_DRIFT} timed beats in a pass. Gaps are used only between beats that were both struck, adjacent in the sequence (so a miss breaks the chain) and inside one measure and one loop.`,
         overall: {
-          mean_offset_ms: offsets.length ? round(mean(offsets)!) : null,
+          mean_offset_ms: allBeats.length ? round(mean(allBeats)!) : null,
+          timed_beats: allBeats.length,
+          // The two halves, so this block compares with a measure's own figures
+          // without the reader having to know how they were pooled.
+          entry_mean_offset_ms: allEntry.length ? round(mean(allEntry)!) : null,
+          entry_beats: allEntry.length,
+          mid_phrase_mean_offset_ms: allMid.length ? round(mean(allMid)!) : null,
+          mid_phrase_beats: allMid.length,
+          weighting: "Every struck beat counts once, so a long sitting weighs more than a short one. A measure's own mean_offset_ms is pooled the same way; compare mid_phrase with mid_phrase, since entries run much later than mid-phrase beats.",
           interval_ratio_median: ratioMedians.length ? round(median(ratioMedians)!, 3) : null,
           drift_ms_per_pass: driftAll.length ? round(median(driftAll)!) : null,
           sessions_with_intervals: ratioMedians.length,

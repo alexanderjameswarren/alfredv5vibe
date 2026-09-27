@@ -694,3 +694,53 @@ test("a rung inserted with the plus above the 100 row is saved with the rest", a
   expect(saved.map((r) => r.target_percent)).toEqual([70, 85, 100]);
   await waitFor(() => expect(warmupLine()).toHaveTextContent("Warm-up · 70% → 85% → 100% · from this snippet"));
 });
+
+// --- the advancing pass records the tempo it was PLAYED at (2026-09-27) --------
+//
+// The rung advance moves the tempo at the loop WRAP, and the pass row is written on
+// a macrotask after that. So the row used to come out with the NEXT rung's tempo
+// under the rung it had just left: a 70% pass at 42 BPM written as 51. The label was
+// never wrong; the tempo was.
+
+test("the pass that causes an advance records its own rung's tempo, not the next one", async () => {
+  await openPlanItem();
+  await pressWarmUp();
+  expect(playingBpm()).toBe(42);      // 70% of the item's 60 BPM target
+
+  await playPass(1);                  // credited at rung 1, no advance
+  await playPass(2);                  // credited at rung 1, and ADVANCES to rung 2
+  expect(playingBpm()).toBe(60);      // the box has moved on
+
+  await waitFor(() => expect(passInserts().length).toBe(2));
+  for (const [i, row] of passInserts().map((p) => p.row).entries()) {
+    expect(row.warmup_rung).toBe(1);
+    expect(row.warmup_target_percent).toBe(70);
+    // Both passes were heard at 42. Before the fix the second said 60.
+    expect(row.bpm).toBe(42);
+    expect(row.playback_speed).toBe(100);
+  }
+});
+
+test("the pass after the advance records the new rung's tempo", async () => {
+  await openPlanItem();
+  await pressWarmUp();
+  await playPass(1);
+  await playPass(2);                  // advances
+  await playPass(3);                  // first pass at the top rung
+  await waitFor(() => expect(passInserts().length).toBe(3));
+  const third = passInserts()[2].row;
+  expect(third.warmup_rung).toBe(2);
+  expect(third.warmup_target_percent).toBe(100);
+  expect(third.bpm).toBe(60);
+});
+
+test("a pass with no ladder still records the tempo box, as it always did", async () => {
+  seed({ snippetLadder: [] });
+  await openPlanItem();
+  fireEvent.click(await screen.findByRole("button", { name: /^Play$/ }));
+  await screen.findByRole("button", { name: /Pause/ });
+  mockScrollProps.scrollStateExtRef.current = { scrollStartT: 0 };
+  await playPass(1);
+  await waitFor(() => expect(passInserts().length).toBe(1));
+  expect(passInserts()[0].row).toMatchObject({ bpm: 60, playback_speed: 100, warmup_rung: null });
+});
