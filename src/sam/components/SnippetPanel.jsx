@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
-import { ChevronDown, ChevronRight, Save, Archive, ArchiveRestore } from "lucide-react";
+import { ChevronDown, ChevronRight, Save, Archive, ArchiveRestore, Flame } from "lucide-react";
 import RestControl from "./RestControl";
 import { supabase } from "../../supabaseClient";
-import { formatSnippetTitle, findMatchingSnippet, ensureSnippetSaved } from "../lib/snippetsApi";
+import { formatSnippetTitle, findMatchingSnippet, ensureSnippetSaved, snippetFromRow } from "../lib/snippetsApi";
 import useSnippetPracticeSummary from "../lib/useSnippetPracticeSummary";
 import PracticeFigures from "./PracticeFigures";
+import WarmupLadderEditor from "./WarmupLadderEditor";
+import { draftFromValue, validateMode, valueFromDraft } from "../lib/warmupLadderEdit";
 
 // Practice figures for one snippet row, in exactly the wording, order and
 // spacing used by the "This song" entry on the stats row — same
@@ -60,7 +62,35 @@ export default function SnippetPanel({
   // (snippetId) => { text, state } | null — the practice plan's tag for a
   // planned snippet (§7.4). Archived snippets aren't listed, so never tagged.
   planTagFor = null,
+  // (snippetRow) => { resolved: { ladder, source }, itemLadder } — the warm-up
+  // ladder that would actually run for this snippet, and the plan item's own
+  // ladder when one overrides it (warm-up spec §4, §7.4). Resolution lives in
+  // warmupLadder.js and is passed in, so this panel never reimplements the
+  // fallback order. Null disables the warm-up control entirely.
+  warmupFor = null,
 }) {
+  // Which snippet's ladder dialog is open, as a row, plus the DRAFT of its ladder.
+  // The draft lives here and nowhere else: that is what makes Cancel a real Cancel
+  // — it throws this away — and what stops anything being written before Save.
+  const [ladderFor, setLadderFor] = useState(null);
+  const [ladderDraft, setLadderDraft] = useState(null);
+  const [ladderShowErrors, setLadderShowErrors] = useState(false);
+  const [ladderSaving, setLadderSaving] = useState(false);
+  const [ladderError, setLadderError] = useState(null);
+
+  function openLadder(row) {
+    setLadderFor(row);
+    setLadderDraft(draftFromValue(row.warmup_ladder ?? null));
+    setLadderShowErrors(false);
+    setLadderError(null);
+  }
+
+  function closeLadder() {
+    setLadderFor(null);
+    setLadderDraft(null);
+    setLadderShowErrors(false);
+    setLadderError(null);
+  }
   const [open, setOpen] = useState(false);
   const [startMeas, setStartMeas] = useState(snippet?.startMeasure || 1);
   const [startInput, setStartInput] = useState(String(snippet?.startMeasure || 1));
@@ -188,11 +218,11 @@ export default function SnippetPanel({
       ...next,
     };
     const match = findMatchingSnippet(savedSnippets, range);
-    onSnippetChange({
-      ...range,
-      dbId: match ? match.id : null,
-      title: match ? match.title : undefined,
-    });
+    // A match is byte-identical to `range` on all four identity fields — that is
+    // what matching means — so the row's own mapping is safe to use, and it is
+    // the only one that carries everything the row has. No match means an unsaved
+    // range, which has no row and therefore no ladder of its own.
+    onSnippetChange(match ? snippetFromRow(match) : { ...range, dbId: null, title: undefined });
   }
 
   // Commit handlers for the range controls. Each one guards on the value
@@ -242,14 +272,7 @@ export default function SnippetPanel({
     const hm = s.settings?.handMode || "both";
     setHandMode(hm);
 
-    onSnippetChange({
-      startMeasure: s.start_measure,
-      endMeasure: s.end_measure,
-      restMeasures: s.rest_measures ?? 0,
-      handMode: hm,
-      dbId: s.id,
-      title: s.title,
-    });
+    onSnippetChange(snippetFromRow(s));
   }
 
   async function handleArchiveSnippet(e, s) {
@@ -266,6 +289,42 @@ export default function SnippetPanel({
       setArchivedSnippets((prev) => newestFirst([{ ...s, archived: true }, ...prev]));
       if (snippet?.dbId === s.id) onSnippetChange(null);
     }
+  }
+
+  // The ladder is one column on one row, so it is written on its own rather than
+  // folded into any other save. Three values are possible and all three are
+  // meaningful: rungs, null (inherit the song's, then the app default), and []
+  // (no warm-up for this passage, inheriting nothing).
+  // THE ONLY WRITE. Validation runs here, reports everything at once, and writes
+  // nothing on a refusal; the CHECK constraint is still the real invariant, so a
+  // refusal from it is shown too.
+  async function saveLadder() {
+    const row = ladderFor;
+    if (!row) return;
+    if (!validateMode(ladderDraft).ok) {
+      setLadderShowErrors(true);
+      return;
+    }
+    const next = valueFromDraft(ladderDraft);
+    setLadderSaving(true);
+    setLadderError(null);
+    const { error } = await supabase
+      .from("sam_snippets")
+      .update({ warmup_ladder: next })
+      .eq("id", row.id);
+    setLadderSaving(false);
+    if (error) {
+      console.error("[Sam] Warm-up ladder save failed:", error);
+      setLadderError(error.message || "That ladder was refused.");
+      return;
+    }
+    const updated = { ...row, warmup_ladder: next };
+    setSavedSnippets((prev) => prev.map((x) => (x.id === row.id ? updated : x)));
+    // If this is the range currently loaded, the player is holding a snippet
+    // object built from the OLD row — so hand it the new one, or the ladder he
+    // just saved would not apply until he reloaded the snippet.
+    if (snippet?.dbId === row.id) onSnippetChange(snippetFromRow(updated));
+    closeLadder();
   }
 
   async function handleRestoreSnippet(e, s) {
@@ -460,6 +519,22 @@ export default function SnippetPanel({
                       <SnippetRowFigures stats={practiceById[s.id]} />
                       <PlanTag tag={planTagFor?.(s.id)} />
                     </button>
+                    {/* Named by the bare measure range, NOT by
+                        formatSnippetTitle: the row's own load button already
+                        carries that exact string, and two buttons sharing it
+                        makes every lookup of a snippet row ambiguous. */}
+                    {warmupFor && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openLadder(s); }}
+                        className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-dark"
+                        title="Warm-up ladder"
+                        aria-label={`Warm-up ladder for m.${s.start_measure}-${s.end_measure}`}
+                      >
+                        <Flame className={`w-3.5 h-3.5 ${
+                          Array.isArray(s.warmup_ladder) && s.warmup_ladder.length > 0 ? "text-primary" : ""
+                        }`} />
+                      </button>
+                    )}
                     <button
                       onClick={(e) => handleArchiveSnippet(e, s)}
                       className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
@@ -524,6 +599,93 @@ export default function SnippetPanel({
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* The ladder dialog (§7.4). Two blocks at most: the plan item's ladder
+          FIRST when one overrides this snippet's — read-only, because plans are
+          immutable — and then the snippet's own, which is editable. Seeing the
+          overriding one is the point: without it, editing the snippet's ladder
+          and finding nothing change would be inexplicable. */}
+      {ladderFor && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Warm-up ladder"
+        >
+          {/* THE SHAPE THAT KEEPS THE BUTTONS REACHABLE (2026-09-27), the same one
+              AddImportSheet uses: the panel is capped at the viewport and is a
+              flex column, the BODY is the only part that scrolls, and the title
+              and the actions never leave the screen. Before this the dialog grew
+              past the bottom of the window and Close could not be reached at all.
+              The overlay's padding carries the phone's safe-area insets, so the
+              panel is never under the home indicator or the notch. */}
+          <div className="bg-card rounded-lg border border-border shadow-lg w-full max-w-2xl max-h-full flex flex-col">
+            <div className="flex items-baseline gap-2 p-4 border-b border-border shrink-0">
+              <h3 className="text-base font-medium text-foreground">
+                {formatSnippetTitle({
+                  startMeasure: ladderFor.start_measure,
+                  endMeasure: ladderFor.end_measure,
+                  handMode: ladderFor.settings?.handMode || "both",
+                  restMeasures: ladderFor.rest_measures ?? 0,
+                })}
+              </h3>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto p-4">
+            {(() => {
+              const info = warmupFor?.(ladderFor) || {};
+              return (
+                <>
+                  {info.itemLadder && (
+                    <div className="mb-4 pb-4 border-b border-border">
+                      {/* Folded away by default: it is context for the editor
+                          below, not the thing he came to change. */}
+                      <WarmupLadderEditor
+                        level="item"
+                        value={info.itemLadder}
+                        resolved={info.resolved}
+                        readOnly
+                        collapsible
+                        defaultOpen={false}
+                      />
+                    </div>
+                  )}
+                  <WarmupLadderEditor
+                    level="snippet"
+                    value={ladderFor.warmup_ladder ?? null}
+                    resolved={info.resolved}
+                    draft={ladderDraft}
+                    onDraftChange={setLadderDraft}
+                    showErrors={ladderShowErrors}
+                    error={ladderError}
+                  />
+                </>
+              );
+            })()}
+            </div>
+
+            {/* Save and Cancel, not Close: this dialog is a form now, and the only
+                write happens here. Cancel discards the draft, rung edits and the
+                state choice alike. */}
+            <div className="flex justify-end gap-3 p-4 border-t border-border shrink-0">
+              <button
+                onClick={closeLadder}
+                disabled={ladderSaving}
+                className="px-4 py-2 border border-border rounded text-sm text-foreground hover:bg-secondary min-h-[44px] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveLadder}
+                disabled={ladderSaving}
+                className="px-4 py-2 rounded text-sm font-medium bg-primary hover:bg-primary-hover text-white min-h-[44px] disabled:opacity-50"
+              >
+                {ladderSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

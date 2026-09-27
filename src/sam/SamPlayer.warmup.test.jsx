@@ -9,7 +9,7 @@
 //   - once it completes, it keeps looping and offers to start again.
 
 import React from "react";
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { MemoryRouter } from "react-router-dom";
 
@@ -133,9 +133,14 @@ const SNIPPET_LADDER = [
   { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
 ];
 
-function seed({ snippetLadder = SNIPPET_LADDER, itemLadder = null, goalIsWarmup = false } = {}) {
+function seed({
+  snippetLadder = SNIPPET_LADDER, itemLadder = null, goalIsWarmup = false,
+  songLadder = null, withPlan = true,
+} = {}) {
   mockDb.tables = {
-    sam_practice_plans: [{ id: "plan-1", status: "active", day_note: "Slow and even." }],
+    sam_practice_plans: withPlan
+      ? [{ id: "plan-1", status: "active", day_note: "Slow and even." }]
+      : [],
     sam_practice_plan_songs: [{ id: "ps-1", plan_id: "plan-1", song_id: SONG_ID, position: 1, song_note: null }],
     sam_practice_plan_items: [
       { id: "item-snip", plan_id: "plan-1", song_id: SONG_ID, snippet_id: "snip-1", position: 1,
@@ -143,11 +148,13 @@ function seed({ snippetLadder = SNIPPET_LADDER, itemLadder = null, goalIsWarmup 
         target_passes: 4, accuracy_target: 90, instruction: "Count out loud.",
         warmup_ladder: itemLadder, goal_is_warmup: goalIsWarmup, consecutive: false },
     ],
-    sam_songs: [{ id: SONG_ID, title: "Throwaway", audio_file_path: null, default_bpm: 65 }],
+    sam_songs: [{ id: SONG_ID, title: "Throwaway", audio_file_path: null, default_bpm: 65,
+      warmup_ladder: songLadder }],
     sam_snippets: [{ id: "snip-1", song_id: SONG_ID, title: "Opening bar", start_measure: 1, end_measure: 1,
       rest_measures: 0, settings: { handMode: "rh" }, archived: false, warmup_ladder: snippetLadder }],
   };
   mockDb.progressRows = [];
+  mockDb.songLadder = songLadder;
   mockDb.defaultLadder = [
     { target_percent: 85, accuracy_target: null, target_passes: 2, consecutive: true },
     { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
@@ -169,7 +176,10 @@ beforeEach(async () => {
   mockScrollProps = null;
   mockNextResult = "hit";
   window.localStorage.clear();
-  mockFetchSongById.mockReset().mockResolvedValue({ song: JSON.parse(JSON.stringify(SONG)), row: { id: SONG_ID } });
+  mockFetchSongById.mockReset().mockImplementation(async () => ({
+    song: { ...JSON.parse(JSON.stringify(SONG)), warmupLadder: mockDb.songLadder ?? null },
+    row: { id: SONG_ID },
+  }));
   window.AudioContext = function AudioContext() {
     this.state = "running";
     this.resume = () => Promise.resolve();
@@ -218,6 +228,21 @@ const playingBpm = () => mockScrollProps.bpm;
 const warmUpButton = () => screen.queryByRole("button", { name: /^Warm up/ });
 const passInserts = () => mockDb.inserts.filter((i) => i.table === "sam_passes" && !i.isUpdate);
 const strip = () => screen.queryByLabelText("Warm-up ladder");
+const warmupLine = () => screen.queryByTestId("warmup-line");
+
+// Open the song directly and pick the saved snippet from the Snippet panel, which
+// is how a range with no plan item gets loaded.
+async function openSnippetOffPlan() {
+  render(
+    <MemoryRouter initialEntries={[`/sam/songs/${SONG_ID}`]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <SamPlayer onBack={() => {}} />
+    </MemoryRouter>
+  );
+  await screen.findByLabelText(/BPM:/);
+  fireEvent.click(await screen.findByRole("button", { name: /^Snippet/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Measures 1-1 RH/ }));
+  await waitFor(() => expect(warmUpButton()).toBeInTheDocument());
+}
 
 async function pressWarmUp() {
   fireEvent.click(warmUpButton());
@@ -458,4 +483,214 @@ test("with no ladder of its own, the range falls through to the database default
   // 85% of the item's 60 BPM target.
   expect(playingBpm()).toBe(51);
   expect(mockDb.rpcs.some((r) => r.fn === "sam_default_warmup_ladder")).toBe(true);
+});
+
+
+// --- The warm-up line, wherever Warm up is available (2026-09-27) ------------
+//
+// It used to render only under the plan line, so the three cases below said
+// nothing at all — and the default case is the one that actually misled him.
+
+describe("the warm-up line says what Warm up will do", () => {
+  test("on a range with NO plan item", async () => {
+    seed({ withPlan: false });
+    await openSnippetOffPlan();
+    expect(warmupLine()).toHaveTextContent("Warm-up · 70% → 100% · from this snippet");
+  });
+
+  test("when the ladder comes from the SONG", async () => {
+    seed({
+      snippetLadder: null,
+      songLadder: [
+        { target_percent: 60, accuracy_target: null, target_passes: 2, consecutive: true },
+        { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
+      ],
+    });
+    await openPlanItem();
+    expect(warmupLine()).toHaveTextContent("Warm-up · 60% → 100% · from the song");
+  });
+
+  test("when it comes from the app DEFAULT — the case that misled him", async () => {
+    seed({ snippetLadder: null });
+    await openPlanItem();
+    await waitFor(() => expect(warmupLine()).toBeInTheDocument());
+    expect(warmupLine()).toHaveTextContent("Warm-up · 85% → 100% · default");
+  });
+
+  test("a plan item's own ladder still wins, and says so", async () => {
+    seed({ itemLadder: [
+      { target_percent: 50, accuracy_target: null, target_passes: 1, consecutive: true },
+      { target_percent: 70, accuracy_target: null, target_passes: 1, consecutive: true },
+      { target_percent: 100, accuracy_target: null, target_passes: 1, consecutive: true },
+    ] });
+    await openPlanItem();
+    expect(warmupLine()).toHaveTextContent("Warm-up · 50% → 70% → 100% · from the plan");
+  });
+
+  test("no line when there is no warm-up for the range", async () => {
+    seed({ snippetLadder: [] });
+    await openPlanItem();
+    expect(warmupLine()).not.toBeInTheDocument();
+  });
+
+  test("no line on a whole song, where there is no button either", async () => {
+    await openWholeSong();
+    expect(warmupLine()).not.toBeInTheDocument();
+    expect(warmUpButton()).not.toBeInTheDocument();
+  });
+});
+
+// --- The snippet ladder editor, end to end (§7.4) -----------------------------
+
+const openLadderDialog = async () => {
+  // Idempotent: the panel is only toggled when the flame is not already on screen,
+  // so a test can open the dialog twice without closing the panel in between.
+  if (!screen.queryByRole("button", { name: /Warm-up ladder for m\.1-1/ })) {
+    fireEvent.click(await screen.findByRole("button", { name: /^Snippet/ }));
+  }
+  fireEvent.click(await screen.findByRole("button", { name: /Warm-up ladder for m\.1-1/ }));
+  return screen.findByRole("dialog", { name: "Warm-up ladder" });
+};
+
+const ladderUpdates = () =>
+  mockDb.inserts.filter((i) => i.table === "sam_snippets" && i.isUpdate && "warmup_ladder" in i.row);
+
+describe("editing a snippet's ladder from the app", () => {
+  const dialog = () => screen.getByRole("dialog", { name: "Warm-up ladder" });
+  const modeRadio = (name) => within(dialog()).getByRole("radio", { name });
+  const save = () => within(dialog()).getByRole("button", { name: /^Save$/ });
+  const cancel = () => within(dialog()).getByRole("button", { name: /^Cancel$/ });
+
+  test("the dialog opens on the snippet row and shows what will run", async () => {
+    await openPlanItem();
+    const dlg = await openLadderDialog();
+    expect(modeRadio("Set here")).toBeChecked();
+    expect(dlg).toHaveTextContent("As things stand, pressing Warm up runs 70% → 100% · from this snippet.");
+  });
+
+  test("a rung edit writes nothing until Save, then applies straight away", async () => {
+    await openPlanItem();
+    await openLadderDialog();
+    fireEvent.change(screen.getByLabelText("Rung 1 percent of target tempo"), { target: { value: "50" } });
+    // The one thing this whole change is about: still nothing written.
+    expect(ladderUpdates()).toHaveLength(0);
+
+    fireEvent.click(save());
+    await waitFor(() => expect(ladderUpdates()).toHaveLength(1));
+    expect(ladderUpdates()[0].row.warmup_ladder).toEqual([
+      { target_percent: 50, accuracy_target: null, target_passes: 2, consecutive: true },
+      { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
+    ]);
+    // Save closes the dialog, and the loaded range picks the ladder up without a
+    // reload — the line under the plan line is the check.
+    await waitFor(() => expect(warmupLine()).toHaveTextContent("Warm-up · 50% → 100% · from this snippet"));
+  });
+
+  test("Cancel discards a rung edit AND a state change", async () => {
+    await openPlanItem();
+    await openLadderDialog();
+    fireEvent.change(screen.getByLabelText("Rung 1 percent of target tempo"), { target: { value: "50" } });
+    fireEvent.click(modeRadio("No warm-up here"));
+    fireEvent.click(cancel());
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Warm-up ladder" })).not.toBeInTheDocument());
+    expect(ladderUpdates()).toHaveLength(0);
+    // Nothing moved: the snippet still runs what it ran before.
+    expect(warmupLine()).toHaveTextContent("Warm-up · 70% → 100% · from this snippet");
+
+    // And reopening starts from what is stored, not from the abandoned draft.
+    await openLadderDialog();
+    expect(modeRadio("Set here")).toBeChecked();
+    expect(screen.getByLabelText("Rung 1 percent of target tempo")).toHaveValue(70);
+  });
+
+  test("Inherit, saved, makes the range fall through to the default", async () => {
+    await openPlanItem();
+    await openLadderDialog();
+    fireEvent.click(modeRadio("Inherit"));
+    expect(ladderUpdates()).toHaveLength(0);
+    fireEvent.click(save());
+    await waitFor(() => expect(ladderUpdates()).toHaveLength(1));
+    expect(ladderUpdates()[0].row.warmup_ladder).toBeNull();
+    await waitFor(() => expect(warmupLine()).toHaveTextContent("Warm-up · 85% → 100% · default"));
+  });
+
+  test("No warm-up here, saved, removes the Warm up button for that range", async () => {
+    await openPlanItem();
+    await openLadderDialog();
+    fireEvent.click(modeRadio("No warm-up here"));
+    expect(screen.getByTestId("ladder-consequence"))
+      .toHaveTextContent("There will be no warm-up for this range.");
+    fireEvent.click(save());
+    await waitFor(() => expect(ladderUpdates()).toHaveLength(1));
+    expect(ladderUpdates()[0].row.warmup_ladder).toEqual([]);
+
+    await waitFor(() => expect(warmUpButton()).not.toBeInTheDocument());
+    expect(warmupLine()).not.toBeInTheDocument();
+  });
+
+  test("and switching back to Inherit restores the inherited ladder", async () => {
+    seed({ snippetLadder: [] });
+    await openPlanItem();
+    expect(warmUpButton()).not.toBeInTheDocument();
+
+    await openLadderDialog();
+    expect(modeRadio("No warm-up here")).toBeChecked();
+    fireEvent.click(modeRadio("Inherit"));
+    fireEvent.click(save());
+    await waitFor(() => expect(ladderUpdates()).toHaveLength(1));
+    expect(ladderUpdates()[0].row.warmup_ladder).toBeNull();
+
+    await waitFor(() => expect(warmUpButton()).toBeInTheDocument());
+    expect(warmupLine()).toHaveTextContent("Warm-up · 85% → 100% · default");
+  });
+
+  test("a plan item's ladder is shown read-only above the snippet's, and says why", async () => {
+    seed({ itemLadder: [
+      { target_percent: 50, accuracy_target: null, target_passes: 1, consecutive: true },
+      { target_percent: 100, accuracy_target: null, target_passes: 1, consecutive: true },
+    ] });
+    await openPlanItem();
+    const dlg = await openLadderDialog();
+    // The item block is folded by default — it is context, not the thing he came
+    // to change — so its state shows in the header until he opens it.
+    expect(screen.getByTestId("ladder-collapsed-summary")).toHaveTextContent("50% → 100% · set here");
+    fireEvent.click(within(dlg).getByRole("button", { expanded: false }));
+    expect(screen.getByTestId("ladder-readonly-note")).toHaveTextContent(/plans are never edited/);
+    // The snippet's own editor is still there and still editable underneath.
+    expect(dlg).toHaveTextContent("As things stand, pressing Warm up runs 50% → 100% · from the plan.");
+    expect(within(dlg).getByRole("button", { name: /^Save$/ })).toBeInTheDocument();
+  });
+
+  test("an invalid ladder never reaches the database", async () => {
+    await openPlanItem();
+    await openLadderDialog();
+    // The target rung's percent cannot be typed into any more, so the reachable
+    // mistake is a rung above it that is not below it.
+    fireEvent.change(screen.getByLabelText("Rung 1 percent of target tempo"), { target: { value: "100" } });
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Warm-up ladder" })).getByRole("button", { name: /^Save$/ }));
+    expect(screen.getByRole("alert")).toHaveTextContent("higher than the rung above (100%)");
+    expect(ladderUpdates()).toHaveLength(0);
+    // The dialog stays open, because there is something to fix in it.
+    expect(screen.getByRole("dialog", { name: "Warm-up ladder" })).toBeInTheDocument();
+  });
+});
+
+// The inline plus controls, through the real dialog (2026-09-27).
+test("a rung inserted with the plus above the 100 row is saved with the rest", async () => {
+  await openPlanItem();
+  const dlg = await openLadderDialog();
+  const pluses = within(dlg).getAllByRole("button", { name: /^Insert a rung/ });
+  // Two rungs, so two pluses: above rung 1, and above the target.
+  expect(pluses).toHaveLength(2);
+
+  fireEvent.click(pluses[1]);
+  fireEvent.change(screen.getByLabelText("Rung 2 percent of target tempo"), { target: { value: "85" } });
+  expect(mockDb.inserts.filter((i) => i.isUpdate && "warmup_ladder" in i.row)).toHaveLength(0);
+
+  fireEvent.click(within(dlg).getByRole("button", { name: /^Save$/ }));
+  await waitFor(() => expect(mockDb.inserts.filter((i) => i.isUpdate && "warmup_ladder" in i.row)).toHaveLength(1));
+  const saved = mockDb.inserts.filter((i) => i.isUpdate && "warmup_ladder" in i.row)[0].row.warmup_ladder;
+  expect(saved.map((r) => r.target_percent)).toEqual([70, 85, 100]);
+  await waitFor(() => expect(warmupLine()).toHaveTextContent("Warm-up · 70% → 85% → 100% · from this snippet"));
 });

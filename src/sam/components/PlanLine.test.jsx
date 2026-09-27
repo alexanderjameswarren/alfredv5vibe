@@ -69,10 +69,14 @@ test("song note under the plan line, truncated until tapped", () => {
   const note = "Master m.16–17 hands separately, then put them together slowly before moving on to m.18.";
   render(<PlanLine item={ITEM} state={stateOf(ITEM, 0, 0)} songNote={note} heardTempo={60} />);
   const btn = screen.getByRole("button", { name: `Song goal: ${note}` });
-  expect(btn).toHaveClass("truncate", "text-foreground");
+  expect(btn).toHaveClass("text-foreground");
+  // The truncation lives on the text span, not the button: the button is a flex
+  // row now so that it can carry the shared icon slot (2026-09-27).
+  const noteText = () => within(btn).getByText("Song goal: " + note);
+  expect(noteText()).toHaveClass("truncate");
   expect(btn).toHaveAttribute("aria-expanded", "false");
   fireEvent.click(btn);
-  expect(btn).not.toHaveClass("truncate");
+  expect(noteText()).not.toHaveClass("truncate");
   expect(btn).toHaveAttribute("aria-expanded", "true");
   expect(screen.getByText(/Plan · Whole song · 60 BPM/)).toBeInTheDocument();
 });
@@ -241,5 +245,83 @@ describe("Next when the loaded range is in no plan item", () => {
     rerender(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />);
     expect(screen.queryByText("Not in today's plan")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" })).toBeInTheDocument();
+  });
+});
+
+// --- The icon column (2026-09-27) --------------------------------------------
+//
+// One circle family on the plan line so only the fill changes, Flame on the
+// warm-up line, Target on the song goal; all at one size and one left edge, so
+// the three lines read as a column rather than three indents.
+
+describe("the icon column", () => {
+  const LADDER = { warmupSummary: "70% → 100%", warmupSourceLabel: "from this snippet" };
+
+  test("not started: an empty circle, muted", () => {
+    render(<PlanLine item={ITEM} state={stateOf(ITEM, 0, 0)} heardTempo={60} />);
+    const icon = screen.getByRole("img", { name: "Not started" });
+    expect(icon).toHaveClass("text-muted-foreground");
+    expect(screen.queryByRole("img", { name: "In progress" })).not.toBeInTheDocument();
+  });
+
+  test("attempts today but none counted: the alert circle, amber", () => {
+    render(<PlanLine item={ITEM} state={stateOf(ITEM, 3, 0)} heardTempo={60} />);
+    expect(screen.getByRole("img", { name: "Attempted, none counted yet" })).toHaveClass("text-amber-800");
+  });
+
+  test("some counted but not finished: the dotted circle, in the line's own tone", () => {
+    render(<PlanLine item={ITEM} state={stateOf(ITEM, 3, 2)} heardTempo={60} />);
+    const icon = screen.getByRole("img", { name: "In progress" });
+    // 3 attempts with 2 qualifying is the amber case, and the icon follows the
+    // text rather than disagreeing with it.
+    expect(icon).toHaveClass("text-amber-800");
+  });
+
+  test("done: the check, at full contrast", () => {
+    render(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} />);
+    expect(screen.getByRole("img", { name: "Done" })).toHaveClass("text-foreground");
+  });
+
+  test("every line's icon is the same size, so the text starts at one left edge", () => {
+    const { container } = render(
+      <PlanLine item={ITEM} state={stateOf(ITEM, 0, 0)} songNote="Keep it steady." heardTempo={60} {...LADDER} />
+    );
+    // eslint-disable-next-line testing-library/no-node-access
+    const icons = container.querySelectorAll("svg.lucide");
+    expect(icons.length).toBe(3);
+    for (const i of icons) {
+      expect(i).toHaveClass("w-4", "h-4", "shrink-0");
+    }
+  });
+
+  test("the warm-up and song-goal icons are decorative: the text already says it", () => {
+    render(<PlanLine item={ITEM} state={stateOf(ITEM, 0, 0)} songNote="Keep it steady." heardTempo={60} {...LADDER} />);
+    // Nothing doubles the song-goal button's name, which is what a labelled icon
+    // inside it would do.
+    expect(screen.getByRole("button", { name: "Song goal: Keep it steady." })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Warm-up" })).not.toBeInTheDocument();
+  });
+
+  test("off plan: a slashed circle, muted — not one of the four plan states", () => {
+    const { container } = render(
+      <PlanLine item={null} state={null} heardTempo={60} nextItem={{ id: "n", song_title: "S", snippet_id: null }} onOpenNext={() => {}} />
+    );
+    const icon = screen.getByRole("img", { name: "Not in the plan" });
+    expect(icon).toHaveClass("text-muted-foreground", "w-4", "h-4", "shrink-0");
+    // And none of the plan-state icons, because no plan state applies.
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(container.querySelectorAll("svg.lucide-circle, svg.lucide-check, svg.lucide-circle-dot").length).toBe(0);
+  });
+
+  test("the song goal is a Mountain, not a ringed circle", () => {
+    const { container } = render(
+      <PlanLine item={ITEM} state={stateOf(ITEM, 0, 0)} songNote="Keep it steady." heardTempo={60} />
+    );
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(container.querySelector("svg.lucide-mountain")).toBeInTheDocument();
+    // Target and Crosshair are both circles, which is the silhouette the plan
+    // line owns; neither may come back.
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(container.querySelectorAll("svg.lucide-target, svg.lucide-crosshair").length).toBe(0);
   });
 });

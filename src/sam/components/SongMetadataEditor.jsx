@@ -3,6 +3,8 @@ import { Pencil, AudioWaveform } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 import { DEFAULTS } from "../lib/samConstants";
 import { goalFromEditor, heardGoalTempo } from "../lib/goalTempo";
+import WarmupLadderEditor from "./WarmupLadderEditor";
+import { draftFromValue, validateMode, valueFromDraft } from "../lib/warmupLadderEdit";
 
 // The Edit Song dialog — the ONE implementation, used by the player (pencil
 // beside the song title, via the default export below) and by the song
@@ -44,8 +46,19 @@ export function SongEditDialog({
   onSongUpdate,
   onClose,
   hasImportedFingerings = false,
+  // { ladder, source } — what the player would actually run for this song with no
+  // snippet loaded. Omitted outside the player, where nothing is loaded.
+  resolvedWarmup = null,
 }) {
   const hasAudio = !!song?.audioFilePath;
+
+  // THE LADDER IS PART OF THIS DIALOG'S SAVE (2026-09-27). It used to write on its
+  // own, which gave this dialog two saves and made its own Save and Cancel
+  // meaningless. The three states of the column are a choice inside the form
+  // instead — see WarmupLadderEditor — so one Save can carry all three.
+  const [ladderDraft, setLadderDraft] = useState(() => draftFromValue(song?.warmupLadder ?? null));
+  const [ladderOpen, setLadderOpen] = useState(false);
+  const [ladderShowErrors, setLadderShowErrors] = useState(false);
 
   // The one goal box: Goal BPM without audio, Goal Speed % with it.
   const goalTextFor = (goalBpm, goalPlaybackSpeed) => {
@@ -123,6 +136,15 @@ export function SongEditDialog({
     const goalToSave = goalFromEditor({ hasAudio, goalText: editGoal, defaultBpm: bpmNum });
     if (goalToSave.error) return;
 
+    // A bad ladder stops the WHOLE save and opens its section: a Save that did
+    // nothing, with the reason folded out of sight, would be unexplainable.
+    if (!validateMode(ladderDraft).ok) {
+      setLadderShowErrors(true);
+      setLadderOpen(true);
+      return;
+    }
+    const ladderToSave = valueFromDraft(ladderDraft);
+
     const timingNum = editTimingWindow !== "" ? Number(editTimingWindow) : null;
     const chordNum = editChordMs !== "" ? Number(editChordMs) : null;
     const widthNum = editMeasureWidth !== "" ? Number(editMeasureWidth) : null;
@@ -144,6 +166,7 @@ export function SongEditDialog({
           show_imported_fingerings: editShowImported,
           goal_bpm: goalToSave.goal_bpm,
           goal_playback_speed: goalToSave.goal_playback_speed,
+          warmup_ladder: ladderToSave,
         })
         .eq("id", songDbId);
 
@@ -166,6 +189,7 @@ export function SongEditDialog({
       defaultChordMs: chordNum,
       defaultMeasureWidth: widthNum,
       showImportedFingerings: editShowImported,
+      warmupLadder: ladderToSave,
       goalBpm: goalToSave.goal_bpm,
       goalPlaybackSpeed: goalToSave.goal_playback_speed,
       // Mirror what the database now holds, so the player's goal label is
@@ -198,12 +222,17 @@ export function SongEditDialog({
     onClose?.();
   }
 
+  // CAPPED AT THE VIEWPORT, WITH ONLY THE BODY SCROLLING (2026-09-27). This dialog
+  // was already tall and the warm-up ladder block made it taller than the window,
+  // putting Save and Cancel out of reach with nothing to scroll. Same shape as
+  // AddImportSheet: a flex column at max-h-full, one scrolling body, a header and
+  // a footer that stay. The overlay's padding carries the phone's safe-area insets.
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-card border border-border rounded-lg p-6 max-w-md w-full mx-4">
-        <h3 className="text-lg font-medium text-dark mb-4">Edit Song</h3>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]">
+      <div className="bg-card border border-border rounded-lg max-w-md w-full max-h-full flex flex-col">
+        <h3 className="text-lg font-medium text-dark px-6 pt-6 pb-4 shrink-0">Edit Song</h3>
 
-        <div className="space-y-4">
+        <div className="space-y-4 px-6 flex-1 min-h-0 overflow-y-auto">
           <div>
             <label className="block text-sm font-medium text-foreground mb-1">
               Title
@@ -324,6 +353,22 @@ export function SongEditDialog({
           <p className="text-xs text-muted-foreground -mt-2">
             Goal: {heardGoal ?? "—"} BPM. Your target for this piece. Separate from Default BPM, which is just the tempo it loads at.
           </p>
+          {/* §7.4: under the goal tempo, because a rung is a percentage OF that
+              goal and the two are read together. */}
+          <div className="border-t border-border pt-3">
+            <WarmupLadderEditor
+              level="song"
+              value={song?.warmupLadder ?? null}
+              resolved={resolvedWarmup}
+              draft={ladderDraft}
+              onDraftChange={setLadderDraft}
+              showErrors={ladderShowErrors}
+              collapsible
+              open={ladderOpen}
+              onOpenChange={setLadderOpen}
+            />
+          </div>
+
           <p className="text-xs text-muted-foreground -mt-2">Without an audio file, BPM controls how fast the sheet music scrolls. With an audio file, set Playback Speed to 100% then adjust BPM until the scroll matches the song — save once aligned. Use Playback Speed during practice to slow down or speed up without losing sync.</p>
 
           <div className="grid grid-cols-3 gap-3">
@@ -389,7 +434,7 @@ export function SongEditDialog({
           )}
         </div>
 
-        <div className="flex gap-3 mt-6">
+        <div className="flex gap-3 p-6 pt-4 shrink-0">
           <button
             onClick={onClose}
             disabled={saving}

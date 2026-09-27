@@ -300,6 +300,31 @@ export default function SamPlayer({ onBack }) {
   // warm-up button, because a whole song is not what a ladder is for.
   const warmupInScope = !!snippet || song?.songType === "drill";
   const warmupHasLadder = !!warmupResolved.ladder && warmupResolved.ladder.length > 0;
+  // ONE expression for "pressing Warm up will do something", used by the button
+  // and by the line that says what it will do. They must never disagree: on
+  // 2026-09-27 Alex ran a three-rung DEFAULT ladder believing it was his own
+  // two-rung one, because the line only rendered for a plan item and the default
+  // case had nothing on screen at all.
+  const warmupAvailable = warmupInScope && warmupHasLadder;
+
+  // What the ladder editors need for ONE saved snippet row, resolved by the same
+  // function the player uses (§4) so the editor can never disagree with what
+  // pressing Warm up will actually do. `itemLadder` is the plan item's own ladder
+  // when one overrides this snippet's — the editor shows it read-only, because a
+  // snippet ladder that is being overridden would otherwise look broken.
+  const warmupForSnippetRow = useCallback((row) => {
+    if (!row) return { resolved: { ladder: null, source: null }, itemLadder: null };
+    const item = matchPlanItem(activePlan.plan, songDbId, row.id);
+    return {
+      resolved: resolveLadder({
+        planItem: item,
+        snippet: { warmupLadder: row.warmup_ladder ?? null },
+        song,
+        defaultLadder,
+      }),
+      itemLadder: item?.warmup_ladder ?? null,
+    };
+  }, [activePlan.plan, songDbId, song, defaultLadder]);
   const warmupDisabledReason = Number.isFinite(warmupTarget.effectiveBpm)
     ? null
     : "Set a tempo, or a goal tempo, before warming up.";
@@ -1755,10 +1780,14 @@ export default function SamPlayer({ onBack }) {
                   midiConnected={midiConnected} midiDevice={midiDevice}
                   pausedMeasure={pausedMeasure}
                   onSongUpdate={setSong}
+                  // What the SONG level resolves to on its own — no snippet, no
+                  // plan item — which is what the Edit Song dialog is editing
+                  // against.
+                  songWarmup={resolveLadder({ song, defaultLadder })}
                   onAudioUploaded={handleAudioUploaded}
                   onFullSong={() => handleSnippetChange(null)}
                   onWarmUp={handleWarmUp}
-                  warmUpVisible={warmupInScope && warmupHasLadder}
+                  warmUpVisible={warmupAvailable}
                   warmUpPrimary={!!planItem?.goal_is_warmup}
                   warmUpDisabledReason={warmupDisabledReason}
                   onLyricsChanged={setLyricPlacements}
@@ -1815,11 +1844,11 @@ export default function SamPlayer({ onBack }) {
                   nextItem={nextPlanItem}
                   // The same path the home page checklist uses — one way in.
                   onOpenNext={openPlanItem}
-                  // §7.3: one line under the plan line saying what the ladder for
-                  // this item is and where it came from. Shown whether or not a
-                  // ladder is running, so the ramp is never a surprise.
-                  warmupSummary={warmupHasLadder ? ladderSummaryText(warmupResolved.ladder) : null}
-                  warmupSourceLabel={warmupHasLadder ? sourceLabel(warmupResolved.source) : null}
+                  // §7.3, widened: one line saying what pressing Warm up will do
+                  // and where the ladder came from, shown WHENEVER the button is
+                  // available — plan item or not, running or not.
+                  warmupSummary={warmupAvailable ? ladderSummaryText(warmupResolved.ladder) : null}
+                  warmupSourceLabel={warmupAvailable ? sourceLabel(warmupResolved.source) : null}
                 />
 
                 <SnippetPanel
@@ -1829,6 +1858,7 @@ export default function SamPlayer({ onBack }) {
                   onSnippetChange={handleSnippetChange}
                   scoreTools={scoreToolButtons}
                   planTagFor={planTagFor}
+                  warmupFor={warmupForSnippetRow}
                 />
               </>
             )}

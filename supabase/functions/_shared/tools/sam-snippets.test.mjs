@@ -39,6 +39,8 @@ const IMPORT = 'import { defineTool } from "../platform.ts";';
 const toolSrc = readFileSync(join(HERE, "sam-snippets.ts"), "utf-8");
 if (!toolSrc.includes(IMPORT)) throw new Error("sam-snippets.ts import line changed — update this test.");
 writeFileSync(join(dir, "sam-snippets.ts"), toolSrc.replace(IMPORT, 'import { defineTool } from "./platform.ts";'));
+// Its one sibling: the warm-up ladder rules, imported by relative path.
+writeFileSync(join(dir, "sam-warmup.ts"), readFileSync(join(HERE, "sam-warmup.ts"), "utf-8"));
 
 globalThis.Deno = { env: { get: () => "stub" } };
 const mod = await import(pathToFileURL(join(dir, "sam-snippets.ts")).href);
@@ -182,6 +184,8 @@ test("no match: inserts exactly what the app writes and returns the id first", a
     end_measure: 8,
     rest_measures: 1,
     hand_mode: "rh",
+    // Null: this snippet was created without a warm-up ladder, so it inherits.
+    warmup_ladder: null,
     archived: false,
     created_at: "2026-09-17T10:00:00Z",
     created: true,
@@ -332,4 +336,91 @@ test("a database error is reported as operational, without do-not-retry wording"
     assert.doesNotMatch(e.message, /retry/i);
     return true;
   });
+});
+
+
+// --- the warm-up ladder (warm-up spec §8) -------------------------------------
+
+const LADDER = [
+  { target_percent: 70, accuracy_target: null, target_passes: 2, consecutive: true },
+  { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
+];
+
+test("warmup_ladder: written on the row it creates", async () => {
+  const db = makeDb();
+  const out = await call({ song_id: SONG, start_measure: 2, end_measure: 3, warmup_ladder: LADDER }, db);
+  assert.equal(out.created, true);
+  assert.deepEqual(out.warmup_ladder, LADDER);
+  assert.deepEqual(db.tables.sam_snippets.at(-1).warmup_ladder, LADDER);
+});
+
+test("warmup_ladder: omitted leaves the column alone, so the snippet inherits", async () => {
+  const db = makeDb();
+  const out = await call({ song_id: SONG, start_measure: 2, end_measure: 3 }, db);
+  assert.equal(out.warmup_ladder, null);
+  assert.equal("warmup_ladder" in db.tables.sam_snippets.at(-1), false);
+});
+
+test("warmup_ladder: [] is legitimate — no warm-up for this passage", async () => {
+  const db = makeDb();
+  const out = await call({ song_id: SONG, start_measure: 2, end_measure: 3, warmup_ladder: [] }, db);
+  assert.deepEqual(out.warmup_ladder, []);
+});
+
+test("warmup_ladder: every problem is reported at once, and nothing is written", async () => {
+  const db = makeDb();
+  const before = db.tables.sam_snippets.length;
+  const bad = [
+    { target_percent: 200, accuracy_target: null, target_passes: 0, consecutive: true },
+    { target_percent: 90, accuracy_target: null, target_passes: 2, consecutive: "yes" },
+  ];
+  await assert.rejects(
+    () => call({ song_id: SONG, start_measure: 2, end_measure: 3, warmup_ladder: bad }, db),
+    (e) => {
+      assert.match(e.message, /between 10 and 100/);
+      assert.match(e.message, /target_passes must be a whole number of 1 or more/);
+      assert.match(e.message, /consecutive must be true or false/);
+      assert.match(e.message, /last rung must be 100%/);
+      return true;
+    },
+  );
+  assert.equal(db.tables.sam_snippets.length, before);
+});
+
+test("warmup_ladder: one rung is not a ladder", async () => {
+  const db = makeDb();
+  await assert.rejects(
+    () => call({ song_id: SONG, start_measure: 2, end_measure: 3,
+      warmup_ladder: [{ target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true }] }, db),
+    /at least 2 rungs/,
+  );
+});
+
+test("warmup_ladder: an unknown key is refused rather than ignored", async () => {
+  const db = makeDb();
+  await assert.rejects(
+    () => call({ song_id: SONG, start_measure: 2, end_measure: 3,
+      warmup_ladder: [{ target_percent: 70, accuracy_target: null, target_pass: 2, consecutive: true },
+                      { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true }] }, db),
+    /unknown key `target_pass`/,
+  );
+});
+
+test("a different ladder on an EXISTING range is refused: this tool creates, it does not edit", async () => {
+  const db = makeDb();
+  await call({ song_id: SONG, start_measure: 2, end_measure: 3, warmup_ladder: LADDER }, db);
+  await assert.rejects(
+    () => call({ song_id: SONG, start_measure: 2, end_measure: 3,
+      warmup_ladder: [{ target_percent: 50, accuracy_target: null, target_passes: 2, consecutive: true },
+                      { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true }] }, db),
+    /does not edit/,
+  );
+});
+
+test("the SAME ladder on an existing range is fine — it is a find, not a change", async () => {
+  const db = makeDb();
+  const first = await call({ song_id: SONG, start_measure: 2, end_measure: 3, warmup_ladder: LADDER }, db);
+  const again = await call({ song_id: SONG, start_measure: 2, end_measure: 3, warmup_ladder: LADDER }, db);
+  assert.equal(again.created, false);
+  assert.equal(again.id, first.id);
 });

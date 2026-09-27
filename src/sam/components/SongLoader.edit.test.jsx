@@ -113,6 +113,9 @@ const PLAYER_SAVE_COLUMNS = [
   "title", "artist", "default_bpm", "playback_speed",
   "default_timing_window_ms", "default_chord_ms", "default_measure_width",
   "show_imported_fingerings", "goal_bpm", "goal_playback_speed",
+  // The warm-up ladder is part of this Save as of 2026-09-27; it used to write on
+  // its own, which gave the dialog two saves.
+  "warmup_ladder",
 ].sort();
 
 function renderLibrary() {

@@ -407,14 +407,15 @@ test("create_sam_snippet registers and advertises exactly the args its handler r
   assert.match(block, /tier:\s*1\b/);
   const read = [...new Set([...block.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]))].sort();
   assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), read);
-  assert.deepEqual(read, ["end_measure", "hand_mode", "rest_measures", "song_id", "start_measure"]);
+  // warmup_ladder joined in milestone 4: a passage can be created with its ramp.
+  assert.deepEqual(read, ["end_measure", "hand_mode", "rest_measures", "song_id", "start_measure", "warmup_ladder"]);
 });
 
 test("get_sam_measure_stats registers with the params its handler reads", () => {
   const t = registered.find((r) => r.name === "get_sam_measure_stats");
   assert.ok(t, "get_sam_measure_stats not registered");
   assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(),
-    ["date_from", "date_to", "end_measure", "limit", "snippet_id", "song_id", "start_measure"]);
+    ["date_from", "date_to", "end_measure", "include_warmup", "limit", "snippet_id", "song_id", "start_measure"]);
   // The description must carry the calibration-vs-error warning: a future
   // reader must not take a large mean offset as bad playing.
   assert.match(t.cfg.description, /CALIBRATION PLUS ERROR/);

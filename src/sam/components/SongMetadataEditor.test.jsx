@@ -145,3 +145,148 @@ describe("with audio", () => {
     expect(saveButton()).toBeDisabled();
   });
 });
+
+// --- The warm-up ladder, under the goal tempo (warm-up spec §7.4) ------------
+//
+// It saves on its own rather than with this dialog's Save, because the column has
+// three meaningful states and one Save button cannot tell "clear to inherit" from
+// "no warm-up here".
+
+describe("the warm-up ladder editor", () => {
+  const RESOLVED_DEFAULT = {
+    ladder: [
+      { target_percent: 85, accuracy_target: null, target_passes: 2, consecutive: true },
+      { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
+    ],
+    source: "default",
+  };
+
+  // The section is folded by default in this dialog (it is one part of a tall
+  // one), so a test that wants the table has to open it, exactly as he would.
+  const openLadder = () => fireEvent.click(screen.getByRole("button", { expanded: false }));
+
+  function setupLadder(songOver = {}, resolvedWarmup = RESOLVED_DEFAULT) {
+    const song = {
+      title: "Pastorale", artist: null, defaultBpm: 65, playbackSpeed: 100,
+      goalBpm: 72, goalPlaybackSpeed: 100, audioFilePath: null, measures: [],
+      ...songOver,
+    };
+    const onSongUpdate = jest.fn();
+    render(
+      <SongMetadataEditor
+        song={song} songDbId="song-1" onSongUpdate={onSongUpdate}
+        resolvedWarmup={resolvedWarmup}
+        bpm={hook(65)} timingWindowMs={hook(300)} chordMs={hook(80)}
+        measureWidth={hook(500)} playbackSpeed={hook(100)}
+      />
+    );
+    fireEvent.click(screen.getByTitle("Edit song"));
+    return { onSongUpdate };
+  }
+
+  test("it is folded away by default, with its state in the header", () => {
+    setupLadder();
+    expect(screen.getByLabelText("Warm-up ladder editor")).toBeInTheDocument();
+    expect(screen.getByTestId("ladder-collapsed-summary")).toHaveTextContent("inherited");
+    expect(screen.queryByTestId("ladder-stored")).not.toBeInTheDocument();
+  });
+
+  test("opened, it says what the song will actually run", () => {
+    setupLadder();
+    openLadder();
+    expect(screen.getByRole("radio", { name: "Inherit" })).toBeChecked();
+    expect(screen.getByTestId("ladder-consequence"))
+      .toHaveTextContent("Pressing Warm up will run 85% → 100% · default.");
+  });
+
+  test("it has no Save of its own — this dialog's Save is the only one", () => {
+    setupLadder();
+    openLadder();
+    expect(screen.queryByText(/Saves on its own/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save ladder" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Clear \(inherit\)/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Save" })).toHaveLength(1);
+  });
+
+  test("a rung edit is written by the dialog's Save, with everything else", async () => {
+    const { onSongUpdate } = setupLadder({
+      warmupLadder: [
+        { target_percent: 70, accuracy_target: null, target_passes: 2, consecutive: true },
+        { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
+      ],
+    });
+    openLadder();
+    fireEvent.change(screen.getByLabelText("Rung 1 percent of target tempo"), { target: { value: "60" } });
+    // Nothing yet: the edit is a draft until Save.
+    expect(mockUpdates).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mockUpdates).toHaveLength(1));
+    expect(mockUpdates[0].warmup_ladder[0].target_percent).toBe(60);
+    // One write, carrying the song's other columns as well.
+    expect(mockUpdates[0]).toHaveProperty("title");
+    await waitFor(() => expect(onSongUpdate).toHaveBeenCalled());
+    expect(onSongUpdate.mock.calls[0][0].warmupLadder[0].target_percent).toBe(60);
+  });
+
+  test("Cancel discards a rung edit and a state change", async () => {
+    setupLadder({
+      warmupLadder: [
+        { target_percent: 70, accuracy_target: null, target_passes: 2, consecutive: true },
+        { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
+      ],
+    });
+    openLadder();
+    fireEvent.change(screen.getByLabelText("Rung 1 percent of target tempo"), { target: { value: "55" } });
+    fireEvent.click(screen.getByRole("radio", { name: "No warm-up here" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(mockUpdates).toHaveLength(0);
+  });
+
+  test("an invalid ladder stops the whole save and opens the section to say why", async () => {
+    setupLadder({
+      warmupLadder: [
+        { target_percent: 70, accuracy_target: null, target_passes: 2, consecutive: true },
+        { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
+      ],
+    });
+    openLadder();
+    fireEvent.change(screen.getByLabelText("Rung 1 percent of target tempo"), { target: { value: "100" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(mockUpdates).toHaveLength(0);
+    expect(screen.getByRole("alert")).toHaveTextContent("higher than the rung above (100%)");
+  });
+
+  // Inherit and No warm-up here are still two different writes — the distinction
+  // §7.4 insists on — now carried by the one Save rather than by two buttons.
+  const STORED = [
+    { target_percent: 70, accuracy_target: null, target_passes: 2, consecutive: true },
+    { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
+  ];
+
+  test("choosing Inherit and saving writes null", async () => {
+    setupLadder({ warmupLadder: STORED });
+    openLadder();
+    fireEvent.click(screen.getByRole("radio", { name: "Inherit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mockUpdates).toHaveLength(1));
+    expect(mockUpdates[0].warmup_ladder).toBeNull();
+  });
+
+  test("choosing No warm-up here and saving writes an empty array", async () => {
+    setupLadder({ warmupLadder: STORED });
+    openLadder();
+    fireEvent.click(screen.getByRole("radio", { name: "No warm-up here" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mockUpdates).toHaveLength(1));
+    expect(mockUpdates[0].warmup_ladder).toEqual([]);
+  });
+
+  test("saving without touching the ladder writes what was already stored", async () => {
+    setupLadder();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mockUpdates).toHaveLength(1));
+    // Inherited before, inherited after: the column is carried, not dropped.
+    expect(mockUpdates[0].warmup_ladder).toBeNull();
+  });
+});

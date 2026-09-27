@@ -876,3 +876,92 @@ test("weakest_measures ranks on the settled rate and says so", async () => {
   assert.match(out.rollup.ranking_note, /is this bar hard/);
   assert.match(out.rollup.wrong_note_reliability, /measurement artefact/);
 });
+
+// --- warm-up sittings are excluded by default (warm-up spec §8) ----------------
+//
+// A bar hit cleanly at 70% of target is not evidence that it is clean at target.
+// The unit is the SITTING, not the pass, because the per-beat rows this tool reads
+// cannot be traced back to a rung — see warmupSlowSessions for why.
+
+const pass = (session_id, over = {}) => ({
+  session_id, song_id: SONG, snippet_id: null, effective_bpm: 60,
+  warmup_rung: null, warmup_target_percent: null, notes_played: 10, ...over,
+});
+
+// A song with a confirmed goal of 60, so "below target" has something to mean.
+function warmupTables(passes) {
+  const t = baseTables();
+  t.sam_songs = [{ id: SONG, title: "Pastorale", goal_effective_bpm: 60, goal_set_at: "2026-09-01T00:00:00Z" }];
+  t.sam_session_events = [
+    ev(S1, 15, 1, "hit"), ev(S1, 15, 2, "hit"),
+    ev(S2, 15, 1, "miss"), ev(S2, 15, 2, "miss"),
+  ];
+  t.sam_passes = passes;
+  return t;
+}
+
+test("a sitting with a warm-up pass below the goal tempo is dropped, and counted", async () => {
+  // S2 warmed up at 70% of 60 = 42 BPM heard; S1 was ordinary practice.
+  const db = makeDb(warmupTables([
+    pass(S1),
+    pass(S2, { warmup_rung: 1, warmup_target_percent: 70, effective_bpm: 42 }),
+  ]));
+  const out = await call({ song_id: SONG }, db);
+  assert.equal(out.sessions.used, 1);
+  assert.equal(out.sessions.excluded.warmup_below_target, 1);
+  // S2's misses are gone, so the bar reads as the clean bar S1 says it is.
+  assert.equal(measure(out, 15).attempts, 2);
+  assert.equal(measure(out, 15).results.hit, 2);
+});
+
+test("include_warmup brings it back, for when the warm-up itself is the question", async () => {
+  const db = makeDb(warmupTables([
+    pass(S1),
+    pass(S2, { warmup_rung: 1, warmup_target_percent: 70, effective_bpm: 42 }),
+  ]));
+  const out = await call({ song_id: SONG, include_warmup: true }, db);
+  assert.equal(out.sessions.used, 2);
+  assert.equal(out.sessions.excluded.warmup_below_target, 0);
+  assert.equal(measure(out, 15).attempts, 4);
+});
+
+test("a warm-up pass AT the goal tempo keeps its sitting: the tempo decides, not the rung", async () => {
+  // Marked rung 1 of 70%, but the tempo box was nudged up, so the pass really was
+  // at target — and a pass at target IS evidence about playing at target.
+  const db = makeDb(warmupTables([
+    pass(S1),
+    pass(S2, { warmup_rung: 1, warmup_target_percent: 70, effective_bpm: 60 }),
+  ]));
+  const out = await call({ song_id: SONG }, db);
+  assert.equal(out.sessions.used, 2);
+  assert.equal(out.sessions.excluded.warmup_below_target, 0);
+});
+
+test("with no confirmed goal there is nothing to compare, so the rung decides", async () => {
+  const t = warmupTables([
+    pass(S1),
+    // Below the top rung, and a tempo that would have passed a target test.
+    pass(S2, { warmup_rung: 1, warmup_target_percent: 70, effective_bpm: 999 }),
+  ]);
+  t.sam_songs = [{ id: SONG, title: "Pastorale", goal_effective_bpm: 60, goal_set_at: null }];
+  const out = await call({ song_id: SONG }, makeDb(t));
+  assert.equal(out.sessions.used, 1);
+  assert.equal(out.sessions.excluded.warmup_below_target, 1);
+});
+
+test("a top-rung pass is never a reason to drop its sitting", async () => {
+  const db = makeDb(warmupTables([
+    pass(S1),
+    pass(S2, { warmup_rung: 3, warmup_target_percent: 100, effective_bpm: 60 }),
+  ]));
+  const out = await call({ song_id: SONG }, db);
+  assert.equal(out.sessions.used, 2);
+});
+
+test("no warm-up passes at all: nothing changes for anyone who never warms up", async () => {
+  const db = makeDb(warmupTables([pass(S1), pass(S2)]));
+  const out = await call({ song_id: SONG }, db);
+  assert.equal(out.sessions.used, 2);
+  assert.equal(out.sessions.excluded.warmup_below_target, 0);
+  assert.equal(measure(out, 15).attempts, 4);
+});

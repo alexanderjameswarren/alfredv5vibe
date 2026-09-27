@@ -71,6 +71,7 @@ import ItemPicker, { PickedItem } from "./ItemPicker";
 import TagPicker from "./TagPicker";
 import PinnedFooter, { FooterSpacer } from "./PinnedFooter";
 import EditCard from "./EditCard";
+import InsertRowButton from "./InsertRowButton";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
 import { computeBaseline } from "./utils/inboxSuggestions";
 import { isFirstStep } from "./utils/elementOffsets";
@@ -886,15 +887,10 @@ export default function InboxDetailView({
                       </div>
 
                       {index < elements.length - 1 && (
-                        <div className="flex justify-center -my-1">
-                          <button
-                            onClick={() => insertElementAbove(index + 1)}
-                            className="text-success hover:text-success-hover text-lg"
-                            title="Insert element below"
-                          >
-                            +
-                          </button>
-                        </div>
+                        <InsertRowButton
+                          onClick={() => insertElementAbove(index + 1)}
+                          title="Insert element below"
+                        />
                       )}
                     </div>
                   ))}

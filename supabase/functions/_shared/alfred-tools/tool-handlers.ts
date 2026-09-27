@@ -718,7 +718,10 @@ export async function getSamSongs(
       // simplified arrangement of another song, or a drill — and which song it
       // belongs under. Without them a reader treats a drill's numbers as if
       // they were the real piece's.
-      .select("id, title, artist, source, song_type, parent_song_id, audio_file_path, key_signature, time_signature, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, goal_set_at, source_xml_path, created_at, updated_at")
+      // warmup_ladder: the song's warm-up ramp, used by any range of it that has
+      // none of its own. NULL means it falls through to the app default; [] means
+      // no warm-up for this song at all.
+      .select("id, title, artist, source, song_type, parent_song_id, audio_file_path, key_signature, time_signature, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, goal_set_at, warmup_ladder, source_xml_path, created_at, updated_at")
       .eq("archived", false)
       .order("title");
 
@@ -791,6 +794,24 @@ export async function getSamSessions(
 
     if (params.plan_item_id) {
       query = query.eq("plan_item_id", params.plan_item_id);
+    }
+
+    // Warm-up ladder (warm-up spec §8). Unlike the notes_played pair above these
+    // ARE clean partitions: warmup_rung is set or it is null, with no third state,
+    // because a pass either belonged to a ladder run or it did not.
+    //
+    // `top_rung_only` is the one worth reaching for when asking how well a passage
+    // goes at tempo: it keeps ordinary passes AND the top rung, and drops only the
+    // deliberately slow ones. It is the same question get_sam_measure_stats answers
+    // by default.
+    if (params.warmup_only) {
+      query = query.not("warmup_rung", "is", null);
+    }
+    if (params.no_warmup) {
+      query = query.is("warmup_rung", null);
+    }
+    if (params.top_rung_only) {
+      query = query.or("warmup_rung.is.null,warmup_target_percent.eq.100");
     }
 
     const { data: sessions, error } = await query;
@@ -874,13 +895,19 @@ export async function getSamPasses(
     date_to?: string;
     plan_id?: string;
     plan_item_id?: string;
+    warmup_only?: boolean;
+    no_warmup?: boolean;
+    top_rung_only?: boolean;
     limit?: number;
   }
 ): Promise<ToolResult> {
   try {
     let query = client
       .from("sam_passes")
-      .select("id, song_id, snippet_id, session_id, plan_id, plan_item_id, bpm, playback_speed, effective_bpm, hits, misses, notes_played, accuracy_percent, hand_mode, completed_at")
+      // warmup_rung / warmup_target_percent: set when the pass was part of a
+      // warm-up ladder run, both null otherwise. The percent is of the target
+      // tempo, so 100 is the top rung — the only rung played at target.
+      .select("id, song_id, snippet_id, session_id, plan_id, plan_item_id, bpm, playback_speed, effective_bpm, hits, misses, notes_played, accuracy_percent, hand_mode, warmup_rung, warmup_target_percent, completed_at")
       .order("completed_at", { ascending: false })
       .limit(params.limit || 20);
 
@@ -989,7 +1016,9 @@ export async function getSamSnippets(
   try {
     let query = client
       .from("sam_snippets")
-      .select("id, song_id, title, start_measure, end_measure, rest_measures, settings, tags, notes, created_at")
+      // warmup_ladder: this passage's own warm-up ramp. NULL means it inherits the
+      // song's, then the app default; [] means no warm-up for this passage.
+      .select("id, song_id, title, start_measure, end_measure, rest_measures, settings, tags, notes, warmup_ladder, created_at")
       .eq("archived", false)
       .order("song_id")
       .order("start_measure");

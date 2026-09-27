@@ -20,6 +20,13 @@
 //    So the mean is reported as calibration and the interval ratio as the
 //    error. See `timing` in the result.
 //
+// 3. KEEPING SLOW PRACTICE OUT OF A JUDGEMENT ABOUT TEMPO. A warm-up ladder
+//    plays a passage at 70% of target before it plays it at target (warm-up
+//    spec §8), and a bar hit cleanly at 70% is not evidence that it is clean at
+//    target. Those sittings are excluded by default — see `warmupSlowSessions`
+//    below, which also explains why the exclusion is per SITTING and not per
+//    pass, and why that is a real limitation rather than a choice.
+//
 // Database access ONLY through ctx.db.
 // ============================================================================
 
@@ -115,6 +122,54 @@ function stdev(xs: number[]): number | null {
 }
 
 // --- session eligibility ------------------------------------------------------
+
+/**
+ * The sessions in `ids` that contain a warm-up pass played BELOW the target
+ * tempo, and so should not be read as evidence about playing at tempo.
+ *
+ * WHY THIS IS PER SITTING AND NOT PER PASS, WHICH IS A LIMITATION. The rung
+ * lives on sam_passes; this tool reads sam_session_events, whose unit is
+ * (session_id, loop_iteration). There is no column joining the two, and the
+ * ordinal does not do it either: changing the tempo re-runs the scroll engine and
+ * restarts loop_iteration at 0, and a rung advance IS a tempo change — so inside
+ * one warm-up sitting the iteration counter runs 0,1, 0,1, 0,1 and a 70% pass and
+ * a 100% pass share the key. They cannot be told apart at all, let alone filtered.
+ *
+ * So the whole sitting goes. That loses the top-rung passes in it, which is a real
+ * cost; admitting half-tempo passes into a bar's hit rate is a worse one, because
+ * it silently makes a passage look easier than it is. `include_warmup: true` brings
+ * them back when the question is about the warm-up itself.
+ *
+ * THE TEST IS THE TEMPO, NOT THE RUNG. A rung is a label about intent; the tempo
+ * is what actually decides whether the pass says anything about playing at target.
+ * They differ when the tempo box was nudged up during a low rung — that pass really
+ * was at target — so a pass is "slow" only when its heard tempo is below the song's
+ * confirmed goal. With no confirmed goal there is nothing to compare against, and
+ * the rung is the only thing left, so the percent is used instead.
+ */
+export async function warmupSlowSessions(
+  // deno-lint-ignore no-explicit-any
+  db: any,
+  ids: string[],
+  targetEffectiveBpm: number | null,
+): Promise<Set<string>> {
+  const slow = new Set<string>();
+  if (ids.length === 0) return slow;
+  const { data, error } = await db
+    .from("sam_passes")
+    .select("session_id, effective_bpm, warmup_target_percent")
+    .in("session_id", ids)
+    .not("warmup_rung", "is", null);
+  if (error) throw dbFail("warm-up pass lookup", error);
+  for (const p of (data ?? []) as Row[]) {
+    if (!p.session_id) continue;
+    const belowTarget = targetEffectiveBpm != null && typeof p.effective_bpm === "number"
+      ? p.effective_bpm < targetEffectiveBpm
+      : (p.warmup_target_percent ?? 100) < 100;
+    if (belowTarget) slow.add(p.session_id as string);
+  }
+  return slow;
+}
 
 /**
  * A session counts when a keyboard was attached and something was played.
@@ -357,10 +412,16 @@ export const getSamMeasureStatsTool = defineTool({
       throw fail(`\`date_from\` (${dateFrom}) is after \`date_to\` (${dateTo}).`);
     }
     const LIMIT = clampLimit(args.limit as number | undefined);
+    // Default false: a bar's difficulty at tempo is the question this tool exists
+    // to answer, and slow practice is not evidence about it.
+    const includeWarmup = args.include_warmup === true;
 
     // --- the song, and the snippet's own range -------------------------------
     const { data: song, error: songErr } = await ctx.db
-      .from("sam_songs").select("id, title").eq("id", songId).maybeSingle();
+      // The goal is loaded for one reason: it is what a warm-up pass's tempo is
+      // compared against. Only a CONFIRMED goal counts (goal_set_at set) — a
+      // placeholder is not a target (practice plans §2.17).
+      .from("sam_songs").select("id, title, goal_effective_bpm, goal_set_at").eq("id", songId).maybeSingle();
     if (songErr) throw dbFail("song lookup", songErr);
     if (!song) throw fail(`song ${songId} not found.`);
 
@@ -397,14 +458,26 @@ export const getSamMeasureStatsTool = defineTool({
     const { data: sessionRows, error: sessErr } = await sq.limit(200);
     if (sessErr) throw dbFail("sessions lookup", sessErr);
 
-    const excluded = { no_midi_or_no_notes: 0, outside_dates: 0 };
-    const eligible: Row[] = [];
+    const excluded = { no_midi_or_no_notes: 0, outside_dates: 0, warmup_below_target: 0 };
+    const usable: Row[] = [];
     for (const s of (sessionRows ?? []) as Row[]) {
       const day = ptDay(s.started_at);
       if ((dateFrom && day < dateFrom) || (dateTo && day > dateTo)) { excluded.outside_dates++; continue; }
       if (!sessionIsUsable(s)) { excluded.no_midi_or_no_notes++; continue; }
-      eligible.push({ ...s, pt_day: day });
+      usable.push({ ...s, pt_day: day });
     }
+
+    // §8: warm-up passes below the top rung are excluded by default, and because
+    // they cannot be separated from their sitting (see warmupSlowSessions) the
+    // sitting goes with them.
+    const target = song.goal_set_at ? (song.goal_effective_bpm as number | null) : null;
+    const slowSessions = includeWarmup
+      ? new Set<string>()
+      : await warmupSlowSessions(ctx.db, usable.map((s) => s.id as string), target);
+    const eligible = usable.filter((s) => {
+      if (slowSessions.has(s.id as string)) { excluded.warmup_below_target++; return false; }
+      return true;
+    });
     const sessions = eligible.slice(0, MAX_SESSIONS);
     const sessionsTruncated = eligible.length > sessions.length;
 

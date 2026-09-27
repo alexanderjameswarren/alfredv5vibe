@@ -18,6 +18,7 @@ import InboxDetailView from "./InboxDetailView";
 import ClipboardCapture from "./ClipboardCapture";
 import PinnedFooter from "./PinnedFooter";
 import EditCard from "./EditCard";
+import InsertRowButton from "./InsertRowButton";
 import InboxListCard from "./InboxListCard";
 import RecentlyArchived from "./RecentlyArchived";
 import OriginalCapture from "./OriginalCapture";
@@ -10225,15 +10226,10 @@ function ItemCard({
                   </div>
 
                   {index < elements.length - 1 && (
-                    <div className="flex justify-center -my-1">
-                      <button
-                        onClick={() => insertElementAbove(index + 1)}
-                        className="text-success hover:text-success-hover text-lg"
-                        title="Insert element below"
-                      >
-                        +
-                      </button>
-                    </div>
+                    <InsertRowButton
+                      onClick={() => insertElementAbove(index + 1)}
+                      title="Insert element below"
+                    />
                   )}
                 </div>
               ))}

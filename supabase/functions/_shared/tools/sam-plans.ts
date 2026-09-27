@@ -22,6 +22,7 @@
 // ============================================================================
 
 import { defineTool, clampLimit, envelope } from "../platform.ts";
+import { ladderSummary, resolveLadder, warmupLadderErrors } from "./sam-warmup.ts";
 
 // deno-lint-ignore no-explicit-any
 type Db = any;
@@ -187,11 +188,17 @@ const PLAN_COLS =
 const PLAN_SONG_COLS = "id, plan_id, song_id, position, song_note, internal_notes, created_at";
 const ITEM_COLS =
   "id, plan_id, plan_song_id, song_id, snippet_id, position, is_free_play, target_bpm, " +
-  "target_playback_speed, target_effective_bpm, target_passes, accuracy_target, instruction, created_at";
+  "target_playback_speed, target_effective_bpm, target_passes, accuracy_target, instruction, " +
+  // Warm-up ladder (warm-up spec §5.2, §5.3). warmup_ladder overrides the
+  // snippet's and the song's while this plan is active; goal_is_warmup makes
+  // finishing the ladder the item's goal instead of a pass count; consecutive
+  // makes target_passes a streak within one sitting.
+  "warmup_ladder, goal_is_warmup, consecutive, created_at";
 const SONG_COLS =
   "id, title, archived, audio_file_path, default_bpm, goal_bpm, goal_playback_speed, " +
-  "goal_effective_bpm, goal_set_at";
-const SNIPPET_COLS = "id, song_id, title, start_measure, end_measure, settings, archived";
+  "goal_effective_bpm, goal_set_at, warmup_ladder";
+const SNIPPET_COLS =
+  "id, song_id, title, start_measure, end_measure, settings, archived, warmup_ladder";
 const GOAL_COLS = "id, title, kind, status, song_id, notes, completed_at, created_at, updated_at";
 
 async function byId(db: Db, tool: string, table: string, cols: string, ids: unknown[]) {
@@ -461,6 +468,11 @@ interface PlanItemInput {
   target_passes: number;
   accuracy_target?: number;
   instruction?: string | null;
+  // Warm-up ladder (warm-up spec §5.2, §5.3). All three optional; omitting them
+  // all is exactly the old behaviour.
+  warmup_ladder?: unknown;
+  goal_is_warmup?: boolean;
+  consecutive?: boolean;
 }
 interface PlanSongInput {
   song_id: string;
@@ -531,6 +543,13 @@ export function normalisePlanInput(args: Record<string, unknown>): PlanInput {
             (it.accuracy_target as number) <= 100)) {
         errors.push(`${iw}.accuracy_target must be a whole number from 1 to 100.`);
       }
+      // Warm-up ladder: shape only here. The two RULES that need the snippet and
+      // the song — no free play, and a ladder that actually resolves — are applied
+      // in proposePlan, where both are loaded.
+      errors.push(...warmupLadderErrors(it.warmup_ladder, `${iw}.warmup_ladder`));
+      for (const k of ["goal_is_warmup", "consecutive"]) {
+        if (isSet(it[k]) && typeof it[k] !== "boolean") errors.push(`${iw}.${k} must be true or false.`);
+      }
       items.push({
         snippet_id: (it.snippet_id as string | null | undefined) ?? null,
         is_free_play: it.is_free_play === true,
@@ -539,6 +558,11 @@ export function normalisePlanInput(args: Record<string, unknown>): PlanInput {
         target_passes: it.target_passes as number,
         ...(isSet(it.accuracy_target) ? { accuracy_target: it.accuracy_target as number } : {}),
         instruction: text(it.instruction, `${iw}.instruction`) ?? null,
+        // Only sent when given, so a plan that says nothing about warm-ups reaches
+        // sam_create_practice_plan byte-identical to how it did before.
+        ...(isSet(it.warmup_ladder) ? { warmup_ladder: it.warmup_ladder } : {}),
+        ...(it.goal_is_warmup === true ? { goal_is_warmup: true } : {}),
+        ...(it.consecutive === true ? { consecutive: true } : {}),
       });
     }
     songs.push({
@@ -580,6 +604,9 @@ export async function proposePlan(db: Db, plan: PlanInput) {
 
   const errors: string[] = [];
   const lines: string[] = [];
+  // What a warm-up item's ladder resolved to, so the proposal says what finishing
+  // it will actually mean rather than just "warm-up".
+  const warmupNote = new Map<string, string>();
   const supersedes = active
     ? `Supersedes the active plan that started ${active.starts_on} (id ${active.id}). ` +
       `That plan becomes superseded and stays readable in plan history.`
@@ -619,6 +646,38 @@ export async function proposePlan(db: Db, plan: PlanInput) {
         freePlay++;
         if (isSet(it.accuracy_target)) errors.push(`${iw}: a Free Play item must not have accuracy_target.`);
       }
+
+      // --- warm-up rules that need the snippet and the song (§5.2) -------------
+      //
+      // HOW THE LADDER IS RESOLVED AT VALIDATION TIME: exactly as the player
+      // resolves it — the item's own, then the snippet's, then the song's, then
+      // sam_default_warmup_ladder() over RPC. The snippet and song rows are
+      // already loaded above for the range and tempo checks, so this costs one
+      // RPC for the whole plan and no extra reads. A level set to [] STOPS the
+      // chain rather than falling through, which is the case that makes an item
+      // resolve to no ladder at all.
+      if (it.goal_is_warmup) {
+        if (it.is_free_play) {
+          errors.push(
+            `${iw}: goal_is_warmup cannot be combined with is_free_play — a warm-up item needs an ` +
+            `accuracy_target for its top rung, and a Free Play item must not have one.`,
+          );
+        }
+        const snippetRow = it.snippet_id ? snippets.get(it.snippet_id) : null;
+        const resolved = await resolveLadder(db, {
+          item: it.warmup_ladder,
+          snippet: snippetRow?.warmup_ladder,
+          song: song.warmup_ladder,
+        });
+        if (!resolved.ladder || resolved.ladder.length === 0) {
+          errors.push(
+            `${iw}: goal_is_warmup needs a ladder, but this range resolves to none ` +
+            `(${resolved.source ?? "nothing"} says "no warm-up here"). Give the item its own warmup_ladder.`,
+          );
+        } else {
+          warmupNote.set(iw, `${ladderSummary(resolved.ladder)} · from the ${resolved.source}`);
+        }
+      }
       if (hasAudio && isSet(it.target_bpm) && it.target_bpm !== song.default_bpm) {
         errors.push(`${iw}: "${song.title}" has audio, so target_bpm must equal its default_bpm ` +
           `(${song.default_bpm}); express the target through target_playback_speed.`);
@@ -640,9 +699,14 @@ export async function proposePlan(db: Db, plan: PlanInput) {
       const parts = [
         `${position}. ${rangeText(it.snippet_id, snippets)}`,
         tempo,
-        `${it.target_passes} pass${it.target_passes === 1 ? "" : "es"}`,
+        it.goal_is_warmup
+          ? `warm-up is the goal (${warmupNote.get(iw) ?? "ladder unresolved"})`
+          : `${it.target_passes} pass${it.target_passes === 1 ? "" : "es"}${it.consecutive ? " IN A ROW, in one sitting" : ""}`,
         it.is_free_play ? "Free Play" : `${it.accuracy_target}% accuracy`,
       ];
+      if (isSet(it.warmup_ladder) && !it.goal_is_warmup) {
+        parts.push(`warm-up ${ladderSummary(it.warmup_ladder)}`);
+      }
       lines.push(`  ${parts.join(" · ")}${it.instruction ? ` — "${it.instruction}"` : ""}`);
     }
   }
@@ -734,15 +798,25 @@ export const updateSamPlanReviewNoteTool = defineTool({
 export async function planSongGoal(db: Db, args: Record<string, unknown>) {
   const tool = "update_sam_song_goal";
   const songId = requireUuid(tool, "song_id", args.song_id);
+  // The warm-up ladder rides on this tool because it belongs with the goal: a
+  // rung is a PERCENTAGE of the goal tempo, so the two are read and set together.
+  // It is not one of the mutually exclusive three below — it can come alone, or
+  // alongside any of them.
+  const ladderGiven = isSet(args.warmup_ladder);
+  if (ladderGiven) {
+    const errs = warmupLadderErrors(args.warmup_ladder, "`warmup_ladder`");
+    if (errs.length) throw fail(tool, errs.join(" "));
+  }
   const given = ["goal_bpm", "goal_playback_speed", "confirm_only"].filter((k) =>
     k === "confirm_only" ? args.confirm_only === true : isSet(args[k])
   );
   if (isSet(args.confirm_only) && typeof args.confirm_only !== "boolean") {
     throw fail(tool, "`confirm_only` must be true or omitted.");
   }
-  if (given.length !== 1) {
+  if (given.length !== 1 && !(given.length === 0 && ladderGiven)) {
     throw fail(tool, "pass exactly one of `goal_bpm` (songs without audio), `goal_playback_speed` " +
-      `(songs with audio) or \`confirm_only: true\`; got ${given.length ? given.join(", ") : "none"}.`);
+      `(songs with audio) or \`confirm_only: true\` — or \`warmup_ladder\` alone to change only the ` +
+      `warm-up ramp; got ${given.length ? given.join(", ") : "none"}.`);
   }
   for (const k of ["goal_bpm", "goal_playback_speed"]) {
     if (isSet(args[k]) && !positiveInt(args[k])) {
@@ -768,11 +842,16 @@ export async function planSongGoal(db: Db, args: Record<string, unknown>) {
   // §4: audio songs keep BPM at default_bpm; others keep speed at 100.
   const goalBpm = hasAudio ? song.default_bpm as number : (args.goal_bpm as number | undefined) ?? song.goal_bpm as number;
   const goalSpeed = hasAudio ? (args.goal_playback_speed as number | undefined) ?? song.goal_playback_speed as number : 100;
+  // A ladder-only call leaves the goal columns out of the update entirely, so it
+  // cannot re-stamp goal_set_at by writing the same numbers back.
+  const goalPart = given.length ? { goal_bpm: goalBpm, goal_playback_speed: goalSpeed } : {};
   return {
     song,
     hasAudio,
-    mode: given[0],
-    update: { goal_bpm: goalBpm, goal_playback_speed: goalSpeed },
+    mode: given.length ? given[0] : "warmup_ladder_only",
+    ladderGiven,
+    ladder: ladderGiven ? args.warmup_ladder : undefined,
+    update: { ...goalPart, ...(ladderGiven ? { warmup_ladder: args.warmup_ladder } : {}) },
     newHeard: heard(goalBpm, goalSpeed),
   };
 }
@@ -792,11 +871,19 @@ export const updateSamSongGoalTool = defineTool({
         p.mode === "confirm_only"
           ? `New goal: ${p.newHeard} BPM heard — confirming the current goal as a real target`
           : `New goal: ${p.newHeard} BPM heard`,
-        p.hasAudio
-          ? `Writes goal_playback_speed ${p.update.goal_playback_speed}% with goal_bpm held at default_bpm ${p.update.goal_bpm}.`
-          : `Writes goal_bpm ${p.update.goal_bpm} with goal_playback_speed 100.`,
-        "Marks the goal confirmed (goal_set_at = now).",
-      ].join("\n"),
+        p.mode === "warmup_ladder_only"
+          ? "The goal tempo is NOT changed, and goal_set_at is left as it is."
+          : p.hasAudio
+            ? `Writes goal_playback_speed ${p.update.goal_playback_speed}% with goal_bpm held at default_bpm ${p.update.goal_bpm}.`
+            : `Writes goal_bpm ${p.update.goal_bpm} with goal_playback_speed 100.`,
+        p.mode === "warmup_ladder_only" ? "" : "Marks the goal confirmed (goal_set_at = now).",
+        p.ladderGiven
+          ? `Warm-up ladder for this song: ${ladderSummary(p.ladder)}` +
+            (Array.isArray(p.ladder) && p.ladder.length === 0
+              ? " — an empty ladder, so NO range of this song warms up unless it sets its own."
+              : ` (was ${ladderSummary(p.song.warmup_ladder)}). Every range of this song uses it unless it sets its own.`)
+          : "",
+      ].filter(Boolean).join("\n"),
       song_title: p.song.title,
       has_audio: p.hasAudio,
       current_goal_effective_bpm: current,
@@ -810,9 +897,11 @@ export const updateSamSongGoalTool = defineTool({
     const p = await planSongGoal(ctx.db, args);
     const { data, error } = await ctx.db
       .from("sam_songs")
-      .update({ ...p.update, goal_set_at: new Date().toISOString() })
+      // A ladder-only call must not touch goal_set_at: confirming a goal is a
+      // deliberate act, and changing the warm-up ramp is not one.
+      .update(p.mode === "warmup_ladder_only" ? p.update : { ...p.update, goal_set_at: new Date().toISOString() })
       .eq("id", p.song.id)
-      .select("id, title, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, goal_set_at")
+      .select("id, title, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, goal_set_at, warmup_ladder")
       .single();
     if (error) throw dbError(tool, "goal update", error);
     return { ...data, has_audio: p.hasAudio, previous_goal_effective_bpm: p.song.goal_effective_bpm };

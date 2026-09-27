@@ -1,18 +1,67 @@
 import React, { useState } from "react";
-import { Check } from "lucide-react";
+import { Check, Circle, CircleAlert, CircleDot, CircleSlash, Flame, Mountain } from "lucide-react";
 import { planLineText } from "../lib/activePlan";
 import PlanNextButton from "./PlanNextButton";
 
+// WHY Mountain FOR THE SONG GOAL (2026-09-27). It must not be confusable with the
+// plan line's circle family at a glance, which rules out both of the obvious "goal"
+// glyphs: Target is three concentric rings and Crosshair is a ring with ticks, and
+// at 16px a step back from the keyboard either reads as "another plan circle". Flag
+// was the first pick and Mountain replaced it on sight — same reasoning, a shape
+// with no circle in it, and the thing being climbed rather than the marker at the
+// top of it.
+//
+// ONE ICON SLOT, SO THE THREE LINES READ AS A COLUMN (2026-09-27). Same size,
+// same left edge, same gap on every row — which is what makes the text of all
+// three start at one place. Before this the plan line was the only one with an
+// icon, so its text sat indented from the two lines under it.
+//
+// `shrink-0` matters: these rows wrap, and an icon allowed to squash would take
+// the column with it.
+const ICON = "w-4 h-4 shrink-0";
+
+// The plan line's state, as one shape with only the fill changing (Circle →
+// CircleDot → Check), plus CircleAlert for the amber case. One family means the
+// four states are told apart by fill rather than by four unrelated glyphs.
+//
+// The COLOUR follows the line's own text: `state.amber` still decides that, and
+// still means exactly what it meant before — attempted today, not finished — so
+// nothing about the plan line's colouring or the home checklist changes here.
+function PlanIcon({ state, tone }) {
+  if (state.done) {
+    return <Check className={`${ICON} ${tone}`} role="img" aria-label="Done" />;
+  }
+  // Attempts today but not one of them qualifying: the case worth flagging.
+  if (state.amber && !state.shown) {
+    return <CircleAlert className={`${ICON} text-amber-800`} role="img" aria-label="Attempted, none counted yet" />;
+  }
+  if (state.shown > 0) {
+    return <CircleDot className={`${ICON} ${tone}`} role="img" aria-label="In progress" />;
+  }
+  return <Circle className={`${ICON} text-muted-foreground`} role="img" aria-label="Not started" />;
+}
+
 // The practice plan, as it applies to what is loaded in the player (practice
-// plans spec §7.4). One compact line directly under the stats row:
+// plans spec §7.4). One compact line directly under the stats row, each line led
+// by an icon at a shared size and left edge so the block reads as a column:
 //
-//   Plan · 60 BPM · 90% · 2/4 today · Count out loud      [Set tempo]
-//   Song goal: Master m.16–17, then start m.18.
+//   ◉ Plan · 60 BPM · 90% · 2/4 today · Count out loud    [Set tempo]
+//   ▲ Warm-up · 70% → 100% · from this snippet
+//   ⛰ Song goal: Master m.16–17, then start m.18.
 //
-// A third line sits between them when a warm-up ladder resolves for the loaded
-// item (warm-up spec §7.3):
+// A warm-up line sits between them whenever the Warm up button is available for
+// the loaded range (warm-up spec §7.3), whether or not that range is in the plan:
 //
 //   Warm-up · 50% → 70% → 100% · from the plan
+//   Warm-up · 70% → 100% · from this snippet
+//   Warm-up · 70% → 85% → 100% · default
+//
+// IT IS NOT CONDITIONAL ON A PLAN ITEM (2026-09-27). It used to render only under
+// the plan line, so off plan — and in particular when the ladder came from the app
+// DEFAULT — nothing on screen said what Warm up would do. Alex ran a three-rung
+// default believing it was his own two-rung ladder. Its slot in this block is
+// fixed, third of four, so the lines below it do not move as he goes on and off
+// the plan.
 //
 // The first line appears when the loaded range matches an item, and — since
 // 2026-09-21, see OFF PLAN below — reads "Not in today's plan" when it matches
@@ -66,7 +115,7 @@ export default function PlanLine({
   // `nextItem` is null when there is no plan or everything is done, and that
   // is what keeps this row off screen in both of those cases.
   const offPlan = !item && !!nextItem;
-  if (!item && !songNote && !offPlan) return null;
+  if (!item && !songNote && !offPlan && !warmupSummary) return null;
 
   const tone = item && state.amber ? "text-amber-800" : "text-foreground";
   const showSetTempo = item && heardTempo !== item.target_effective_bpm;
@@ -75,6 +124,11 @@ export default function PlanLine({
     <div className="mb-2 px-1 text-sm" aria-label="Practice plan">
       {offPlan && (
         <div className="flex items-center gap-2 flex-wrap min-h-[44px]" data-state="off-plan">
+          {/* A SLASHED circle, which is the one shape that says what this row
+              means: the loaded range is not a plan item at all, so none of the
+              four plan states applies to it. Muted, because it is the absence of
+              plan work rather than plan work going badly. */}
+          <CircleSlash className={`${ICON} text-muted-foreground`} role="img" aria-label="Not in the plan" />
           <span className="text-foreground">Not in today&apos;s plan</span>
           <PlanNextButton item={nextItem} onOpen={onOpenNext} />
         </div>
@@ -84,7 +138,7 @@ export default function PlanLine({
           className="flex items-center gap-2 flex-wrap min-h-[44px]"
           data-state={state.done ? "done" : state.amber ? "amber" : "open"}
         >
-          {state.done && <Check className="w-4 h-4 text-success shrink-0" role="img" aria-label="Done" />}
+          <PlanIcon state={state} tone={tone} />
           <span className={tone}>{planLineText(item, state)}</span>
           {showSetTempo && (
             <button
@@ -99,14 +153,20 @@ export default function PlanLine({
           {state.done && <PlanNextButton item={nextItem} onOpen={onOpenNext} />}
         </div>
       )}
-      {/* §7.3: the ladder for this item, on its own line under the plan line.
-          Shown whenever the loaded range is a plan item and a ladder resolves for
-          it — running or not — because a ramp that appears on Warm up without
-          warning is the thing the source label exists to prevent. */}
-      {item && warmupSummary && (
-        <div className="text-muted-foreground" data-state="warmup-summary">
-          Warm-up · {warmupSummary}
-          {warmupSourceLabel ? ` · ${warmupSourceLabel}` : ""}
+      {/* Whenever Warm up is available — see the note at the top. A ramp that
+          appears on Warm up without warning is the thing the source label exists
+          to prevent, and the default is the case that most needs saying. */}
+      {warmupSummary && (
+        <div
+          className="flex items-center gap-2 flex-wrap text-foreground"
+          data-state="warmup-summary"
+          data-testid="warmup-line"
+        >
+          <Flame className={`${ICON} text-muted-foreground`} aria-hidden="true" />
+          <span>
+            Warm-up · {warmupSummary}
+            {warmupSourceLabel ? ` · ${warmupSourceLabel}` : ""}
+          </span>
         </div>
       )}
       {songNote && (
@@ -114,9 +174,12 @@ export default function PlanLine({
           type="button"
           onClick={() => setNoteOpen((o) => !o)}
           aria-expanded={noteOpen}
-          className={`block w-full text-left text-foreground ${noteOpen ? "whitespace-pre-wrap" : "truncate"}`}
+          className="flex w-full items-start gap-2 text-left text-foreground"
         >
-          Song goal: {songNote}
+          <Mountain className={`${ICON} mt-0.5 text-muted-foreground`} aria-hidden="true" />
+          <span className={`min-w-0 ${noteOpen ? "whitespace-pre-wrap" : "truncate"}`}>
+            Song goal: {songNote}
+          </span>
         </button>
       )}
     </div>

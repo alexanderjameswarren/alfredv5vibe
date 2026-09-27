@@ -626,6 +626,9 @@ const getSamPassesTool = defineTool({
       date_to: args.date_to as string | undefined,
       plan_id: args.plan_id as string | undefined,
       plan_item_id: args.plan_item_id as string | undefined,
+      warmup_only: args.warmup_only as boolean | undefined,
+      no_warmup: args.no_warmup as boolean | undefined,
+      top_rung_only: args.top_rung_only as boolean | undefined,
       limit: LIMIT,
     });
     if (result.error) throw new Error(`get_sam_passes: ${result.error}`);
@@ -1161,7 +1164,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get SAM Songs",
       description:
-        "Get songs in the SAM music practice app. Returns song metadata (title, artist, key, default_bpm, and the goal tempo). Use search_text to find specific songs. Does not return measure data — use get_database_schema for full details if needed. TEMPO FIELDS: default_bpm is the tempo the song loads at and drifts whenever practice tempo is saved — it is NOT the target. goal_bpm is the goal in tempo-box units (quarter notes per minute) and goal_playback_speed its paired speed percent; goal_effective_bpm = round(goal_bpm * goal_playback_speed / 100) is the goal tempo actually heard, directly comparable with sam_passes.effective_bpm. goal_set_at is when the goal was confirmed; NULL means the goal is a placeholder. " + SAM_DATA_RULES,
+        "Get songs in the SAM music practice app. Returns song metadata (title, artist, key, default_bpm, and the goal tempo). Use search_text to find specific songs. Does not return measure data — use get_database_schema for full details if needed. TEMPO FIELDS: default_bpm is the tempo the song loads at and drifts whenever practice tempo is saved — it is NOT the target. goal_bpm is the goal in tempo-box units (quarter notes per minute) and goal_playback_speed its paired speed percent; goal_effective_bpm = round(goal_bpm * goal_playback_speed / 100) is the goal tempo actually heard, directly comparable with sam_passes.effective_bpm. goal_set_at is when the goal was confirmed; NULL means the goal is a placeholder. WARM-UP LADDER: a short range can be ramped up to tempo before it counts — a couple of passes at 70% of the target tempo, then 85%, then target. `warmup_ladder` is that ramp: an array of rungs {target_percent, accuracy_target, target_passes, consecutive}. NULL means this level sets none and the next one down applies (item, then snippet, then song, then the app default); [] means no warm-up here at all, inheriting nothing. A song's ladder is the fallback for every range of it. " + SAM_DATA_RULES,
       inputSchema: {
         search_text: z.string().optional().describe("Search song titles and artists"),
       },
@@ -1196,7 +1199,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get SAM Passes",
       description:
-        "Get completed playthroughs (passes) from the SAM music app. One row per complete playthrough of whatever range was loaded: snippet_id null means the whole song, otherwise that snippet. `bpm` is the score tempo at the instant the pass FINISHED; `effective_bpm` is what was actually heard (bpm scaled by playback_speed), so 60 at 80% reads 48. A NULL playback_speed means NOT RECORDED rather than 100: that column began recording when it was DEPLOYED, part-way through 2026-09-16, so passes from that day exist both with and without a value. effective_bpm is NULL wherever the speed is. `hits`, `misses` and `notes_played` record how the playthrough went, and `hand_mode` which hand was scored. IMPORTANT: `notes_played` 0 means nothing was played — a playback test — because a miss is raised on elapsed time without consulting MIDI, so a pass with no keyboard scores 0 hits and a full count of misses and is otherwise identical to playing badly. Use exclude_zero_note to drop test data rather than inferring it. `accuracy_percent` is NULL when unmeasurable and 0 when measured-and-all-wrong; never treat NULL as 0. NOTE ON THE FILTERS: notes_played has THREE states — a positive count (played), 0 (a playback test, nothing arrived), and NULL (never recorded). exclude_zero_note and only_zero_note are therefore NOT opposites and do NOT partition the result: rows with a NULL note count are returned by NEITHER, so the two filters together can account for a small fraction of the table. Call with no filter to see everything. A NULL does not mean the pass is from before 2026-09-16: notes_played began recording when it was DEPLOYED, part-way through that day, so passes from 2026-09-16 exist on both sides of the change and completed_at cannot be used to infer what a NULL should have been. The columns were deployed at different moments, so a pass can legitimately carry a playback_speed and still have no note count. Nothing writes a pass without a note count today — a NULL always means the row predates the column. Use this to check practice instructions of the form 'at 60, four to six passes'. Returns most recent passes first, with song and range titles. plan_id / plan_item_id record the practice plan active when the pass was recorded and the item matching its range; they are history only and are never rewritten — plan progress matches passes on song and snippet (get_sam_plan_progress), so a pass can count toward a plan it was not recorded under. " + SAM_SCORING_RULES + " " + SAM_DATA_RULES,
+        "Get completed playthroughs (passes) from the SAM music app. One row per complete playthrough of whatever range was loaded: snippet_id null means the whole song, otherwise that snippet. `bpm` is the score tempo at the instant the pass FINISHED; `effective_bpm` is what was actually heard (bpm scaled by playback_speed), so 60 at 80% reads 48. A NULL playback_speed means NOT RECORDED rather than 100: that column began recording when it was DEPLOYED, part-way through 2026-09-16, so passes from that day exist both with and without a value. effective_bpm is NULL wherever the speed is. `hits`, `misses` and `notes_played` record how the playthrough went, and `hand_mode` which hand was scored. IMPORTANT: `notes_played` 0 means nothing was played — a playback test — because a miss is raised on elapsed time without consulting MIDI, so a pass with no keyboard scores 0 hits and a full count of misses and is otherwise identical to playing badly. Use exclude_zero_note to drop test data rather than inferring it. `accuracy_percent` is NULL when unmeasurable and 0 when measured-and-all-wrong; never treat NULL as 0. NOTE ON THE FILTERS: notes_played has THREE states — a positive count (played), 0 (a playback test, nothing arrived), and NULL (never recorded). exclude_zero_note and only_zero_note are therefore NOT opposites and do NOT partition the result: rows with a NULL note count are returned by NEITHER, so the two filters together can account for a small fraction of the table. Call with no filter to see everything. A NULL does not mean the pass is from before 2026-09-16: notes_played began recording when it was DEPLOYED, part-way through that day, so passes from 2026-09-16 exist on both sides of the change and completed_at cannot be used to infer what a NULL should have been. The columns were deployed at different moments, so a pass can legitimately carry a playback_speed and still have no note count. Nothing writes a pass without a note count today — a NULL always means the row predates the column. Use this to check practice instructions of the form 'at 60, four to six passes'. Returns most recent passes first, with song and range titles. plan_id / plan_item_id record the practice plan active when the pass was recorded and the item matching its range; they are history only and are never rewritten — plan progress matches passes on song and snippet (get_sam_plan_progress), so a pass can count toward a plan it was not recorded under. warmup_rung and warmup_target_percent are set when the pass was part of a warm-up ladder run and null otherwise: the percent is of the target tempo, so 100 is the top rung and anything lower was played deliberately slowly and is not evidence about playing at tempo. Filter with warmup_only, no_warmup or top_rung_only. " + SAM_SCORING_RULES + " " + SAM_DATA_RULES,
       inputSchema: {
         song_id: z.string().optional().describe("Filter by song ID"),
         snippet_id: z.string().optional().describe("Filter by snippet ID"),
@@ -1209,6 +1212,20 @@ export function createMcpServer(token: string) {
           .optional()
           .describe(
             "Return ONLY passes known to have been played (notes_played > 0). This is the filter for dropping playback tests. It ALSO drops every pass whose note count was never recorded (notes_played NULL), because unrecorded is not the same as zero — so it can drop far more rows than there are playback tests. It is NOT the complement of only_zero_note: rows with a NULL note count are returned by NEITHER filter.",
+          ),
+        warmup_only: z
+          .boolean()
+          .optional()
+          .describe("Only passes that were part of a warm-up ladder run (warmup_rung is set)."),
+        no_warmup: z
+          .boolean()
+          .optional()
+          .describe("Only ordinary passes, with no warm-up rung."),
+        top_rung_only: z
+          .boolean()
+          .optional()
+          .describe(
+            "Drop the deliberately slow ones: keeps ordinary passes and warm-up passes at the top rung (100% of target), and excludes every rung below it. This is the set that is evidence about playing the passage at tempo.",
           ),
         only_zero_note: z
           .boolean()
@@ -1231,7 +1248,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get SAM Snippets",
       description:
-        "Get practice snippets (sections of songs) from the SAM music app. Snippets define a range of measures within a song for focused practice. Includes song titles in results.",
+        "Get practice snippets (sections of songs) from the SAM music app. Snippets define a range of measures within a song for focused practice. Includes song titles in results. WARM-UP LADDER: a short range can be ramped up to tempo before it counts — a couple of passes at 70% of the target tempo, then 85%, then target. `warmup_ladder` is that ramp: an array of rungs {target_percent, accuracy_target, target_passes, consecutive}. NULL means this level sets none and the next one down applies (item, then snippet, then song, then the app default); [] means no warm-up here at all, inheriting nothing. A snippet's ladder applies whenever that passage is loaded, unless the active plan's item for it sets its own.",
       inputSchema: {
         song_id: z.string().optional().describe("Filter by song ID"),
         search_text: z.string().optional().describe("Search snippet titles and notes"),
@@ -1285,7 +1302,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get SAM Practice Plan",
       description:
-        "Read one practice plan in full — Claude's view, including internal_notes and review_instructions. Defaults to the ACTIVE plan; with no active plan it returns { plan: null } (not an error). Returns `plan` (every column: status, starts_on, ended_at, supersedes_plan_id, day_note, internal_notes, review_instructions, review_note, review_noted_at, timestamps), `songs` in position order (song_title, song_note, internal_notes, has_audio, default_bpm, goal_effective_bpm, goal_set_at) and `items` in checklist order (every item column plus song_title, snippet_title, start_measure, end_measure, hand_mode; a null snippet_id is \"Whole song\" with null range fields). Plans are never edited: a change is a new plan via create_sam_practice_plan. Tier 1. " + SAM_DATA_RULES,
+        "Read one practice plan in full — Claude's view, including internal_notes and review_instructions. Defaults to the ACTIVE plan; with no active plan it returns { plan: null } (not an error). Returns `plan` (every column: status, starts_on, ended_at, supersedes_plan_id, day_note, internal_notes, review_instructions, review_note, review_noted_at, timestamps), `songs` in position order (song_title, song_note, internal_notes, has_audio, default_bpm, goal_effective_bpm, goal_set_at) and `items` in checklist order (every item column plus song_title, snippet_title, start_measure, end_measure, hand_mode; a null snippet_id is \"Whole song\" with null range fields). Plans are never edited: a change is a new plan via create_sam_practice_plan. WARM-UP LADDER: a short range can be ramped up to tempo before it counts — a couple of passes at 70% of the target tempo, then 85%, then target. `warmup_ladder` is that ramp: an array of rungs {target_percent, accuracy_target, target_passes, consecutive}. NULL means this level sets none and the next one down applies (item, then snippet, then song, then the app default); [] means no warm-up here at all, inheriting nothing. An item's ladder wins over the snippet's and the song's while the plan is active. goal_is_warmup true means finishing the ladder IS the item's goal for the day, instead of reaching target_passes. consecutive true means its target_passes must be met as a streak inside one sitting rather than added up across the day. Tier 1. " + SAM_DATA_RULES,
       inputSchema: {
         plan_id: z.string().optional().describe("UUID of the plan. Omit for the active plan."),
       },
@@ -1313,7 +1330,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get SAM Plan Progress",
       description:
-        "Progress on a practice plan, computed by the database exactly as the app's checklist computes it. `items`: one row per plan item per Pacific day with at least one attempt — attempts, qualifying, best_accuracy, best_effective_bpm, last_completed_at — joined to the item's position, song_title, snippet_title and targets. An ATTEMPT is a pass on the item's exact song and snippet (null = whole song) with notes_played > 0; it QUALIFIES when effective_bpm >= target_effective_bpm and, unless Free Play, accuracy_percent >= accuracy_target. Matching ignores the plan_item_id stored on passes, so passes played under an earlier plan count if they fit. An item with no row for a day had no attempts that day (a skip — never a reason for concern on its own). `unplanned`: attempts per song, snippet and day that match no item in the plan (improvised practice). `range`: the dates actually read. Defaults: date_from = the plan's starts_on; date_to = today (Pacific) for an active plan, or the Pacific date it ended for a superseded one. At most 31 days: a longer range keeps the LATEST 31 and `range.capped` / `range.note` say so. Defaults to the active plan; no active plan returns { plan: null }. Tier 1. " + SAM_SCORING_RULES + " " + SAM_DATA_RULES,
+        "Progress on a practice plan, computed by the database exactly as the app's checklist computes it. `items`: one row per plan item per Pacific day with at least one attempt — attempts, qualifying, best_accuracy, best_effective_bpm, last_completed_at — joined to the item's position, song_title, snippet_title and targets. An ATTEMPT is a pass on the item's exact song and snippet (null = whole song) with notes_played > 0; it QUALIFIES when effective_bpm >= target_effective_bpm and, unless Free Play, accuracy_percent >= accuracy_target. Matching ignores the plan_item_id stored on passes, so passes played under an earlier plan count if they fit. WHICH NUMBER DECIDES \"DONE\" DEPENDS ON THE ITEM: a warm-up item (goal_is_warmup) is done when ladder_completions >= 1 that day; a consecutive item is done when longest_qualifying_streak >= target_passes; every other item is done when qualifying >= target_passes. All three numbers come back on every row and the database chooses between none of them — read the item's own flags, which get_sam_practice_plan returns. longest_qualifying_streak is the longest run of qualifying passes with no failure between them WITHIN ONE SITTING, so a stop or a pause ends it; ladder_completions counts how many times the warm-up ladder was finished that day. An item with no row for a day had no attempts that day (a skip — never a reason for concern on its own). `unplanned`: attempts per song, snippet and day that match no item in the plan (improvised practice). `range`: the dates actually read. Defaults: date_from = the plan's starts_on; date_to = today (Pacific) for an active plan, or the Pacific date it ended for a superseded one. At most 31 days: a longer range keeps the LATEST 31 and `range.capped` / `range.note` say so. Defaults to the active plan; no active plan returns { plan: null }. Tier 1. " + SAM_SCORING_RULES + " " + SAM_DATA_RULES,
       inputSchema: {
         plan_id: z.string().optional().describe("UUID of the plan. Omit for the active plan."),
         date_from: z.string().optional().describe("Pacific date YYYY-MM-DD. Default: the plan's starts_on."),
@@ -1346,7 +1363,7 @@ export function createMcpServer(token: string) {
       description:
         "Create a new practice plan in ONE call. Call ONLY after Alex has explicitly said yes to the plan in conversation. The new plan is active immediately and SUPERSEDES the current active plan (which stays readable in history). Plans are never edited; any change is a new plan. " +
         "Tier 3: the first call (without confirmed) writes nothing and returns a readable `proposal` (day note, review instructions, each song with its song note, each item with snippet and measure range, target heard tempo, passes, accuracy or Free Play, instruction, and which plan it supersedes) — show it to Alex, and call again with `confirmed: true` only after he approves. The whole plan is validated before the proposal and again by the database on confirm; any failure rejects the whole plan, and database refusals arrive as `validation error:` with the database's own message. On success returns the new plan as get_sam_practice_plan does. " +
-        "RULES: every song and snippet must exist and not be archived, and each snippet must belong to its song. A song may appear once; put all its items under it. Items are checklist-ordered by array order; at most 20 items. Non-free-play items need target_bpm and accuracy_target (1-100). Free Play items must not have accuracy_target; their tempo defaults to the song's goal pair when omitted. TEMPO (§4): for a song WITH audio, target_bpm must equal the song's default_bpm and the target is expressed through target_playback_speed; for a song WITHOUT audio, target_playback_speed is 100 (or omitted) and target_bpm is the target. A pass counts only at or above the heard target tempo AND (unless Free Play) at or above the accuracy target. Use played measure numbers in all text. day_note and song_note are shown to Alex in the app; internal_notes and review_instructions are Claude-only. review_instructions tell the daily review job, in plain language, when to post a review note. " + SAM_DATA_RULES,
+        "RULES: every song and snippet must exist and not be archived, and each snippet must belong to its song. A song may appear once; put all its items under it. Items are checklist-ordered by array order; at most 20 items. Non-free-play items need target_bpm and accuracy_target (1-100). Free Play items must not have accuracy_target; their tempo defaults to the song's goal pair when omitted. TEMPO (§4): for a song WITH audio, target_bpm must equal the song's default_bpm and the target is expressed through target_playback_speed; for a song WITHOUT audio, target_playback_speed is 100 (or omitted) and target_bpm is the target. A pass counts only at or above the heard target tempo AND (unless Free Play) at or above the accuracy target. WARM-UP (optional, per item): warmup_ladder sets the ramp, goal_is_warmup makes finishing the ramp the item's goal for the day, and consecutive makes target_passes a streak inside one sitting. Two refusals to know about: goal_is_warmup cannot be combined with is_free_play (a warm-up item needs an accuracy target and free play forbids one), and goal_is_warmup is refused when the range resolves to NO ramp — the item's own, then the snippet's, then the song's, then the app default, where an empty array at any level stops the chain. Use played measure numbers in all text. day_note and song_note are shown to Alex in the app; internal_notes and review_instructions are Claude-only. review_instructions tell the daily review job, in plain language, when to post a review note. " + SAM_DATA_RULES,
       inputSchema: {
         day_note: z.string().optional().describe("VISIBLE on the Sam tab: the day's goal in one short line."),
         internal_notes: z.string().optional().describe("Claude only: reasoning behind the plan."),
@@ -1367,6 +1384,31 @@ export function createMcpServer(token: string) {
                     target_passes: z.number().describe("Qualifying passes needed today."),
                     accuracy_target: z.number().optional().describe("1-100. Required unless Free Play; forbidden for Free Play."),
                     instruction: z.string().optional().describe("VISIBLE: one short line, e.g. 'Count out loud.'"),
+                    warmup_ladder: z
+                      .array(
+                        z.object({
+                          target_percent: z.number().describe("Percent of this item's target tempo, 10-100 whole. The last rung must be 100."),
+                          accuracy_target: z.number().nullable().describe("Accuracy this rung demands, 1-100, or null to use the item's own accuracy_target."),
+                          target_passes: z.number().describe("Good passes needed before the tempo goes up. 1 or more."),
+                          consecutive: z.boolean().describe("true = the passes must be in a row; a stop or pause resets the count."),
+                        }),
+                      )
+                      .optional()
+                      .describe(
+                        "Optional. A ramp for this item, overriding the snippet's and the song's for as long as this plan is active: a couple of passes at 70% of target, then 85%, then target. 2 to 6 rungs, ascending, the last one 100. Omit it and the item uses the snippet's ramp, then the song's, then the app default. Pass [] for no warm-up on this item.",
+                      ),
+                    goal_is_warmup: z
+                      .boolean()
+                      .optional()
+                      .describe(
+                        "Optional, default false. true = finishing the warm-up ramp IS the work for the day, instead of reaching target_passes at tempo. Use it when the week's goal is the ramp itself — getting a passage he cannot play cold up to tempo at all. Refused with is_free_play, and refused when no ramp applies to the range.",
+                      ),
+                    consecutive: z
+                      .boolean()
+                      .optional()
+                      .describe(
+                        "Optional, default false. true = the target_passes must come IN A ROW inside one sitting, with no bad pass between them; stopping or pausing starts the count again. false (the default) counts good passes cumulatively across the Pacific day, which is how every item has always worked.",
+                      ),
                   }),
                 )
                 .optional()
@@ -1407,6 +1449,19 @@ export function createMcpServer(token: string) {
         song_id: z.string().describe("UUID of the song"),
         goal_bpm: z.number().optional().describe("New goal BPM. Songs without audio only."),
         goal_playback_speed: z.number().optional().describe("New goal speed percent. Songs with audio only."),
+        warmup_ladder: z
+          .array(
+            z.object({
+              target_percent: z.number().describe("Percent of the TARGET tempo for this rung, 10-100 whole. The last rung must be 100."),
+              accuracy_target: z.number().nullable().describe("Accuracy this rung demands, 1-100, or null to use the plan item's own target (85% off plan)."),
+              target_passes: z.number().describe("Good passes needed before the tempo goes up. 1 or more."),
+              consecutive: z.boolean().describe("true = the passes must be in a row without a failure between them; a stop or pause resets the count."),
+            }),
+          )
+          .optional()
+          .describe(
+            "Optional. The song's default warm-up ramp, used by every range of it that has none of its own — because a rung is a percentage OF this goal, the two belong together. Pass [] for no warm-up anywhere in this song. Sending this alone changes only the ramp and leaves the goal tempo and its confirmation untouched.",
+          ),
         confirm_only: z.boolean().optional().describe("true = confirm the current goal as a real target without changing it (beyond applying the audio rule)."),
         confirmed: z
           .boolean()
@@ -1467,6 +1522,19 @@ export function createMcpServer(token: string) {
         start_measure: z.number().describe("First measure (played number), 1 or more"),
         end_measure: z.number().describe("Last measure (played number), not before start_measure and not past the song's last measure"),
         hand_mode: z.enum(["both", "lh", "rh"]).optional().describe("Which hand is scored. Default 'both'."),
+        warmup_ladder: z
+          .array(
+            z.object({
+              target_percent: z.number().describe("Percent of the TARGET tempo for this rung, 10-100 whole. The last rung must be 100."),
+              accuracy_target: z.number().nullable().describe("Accuracy this rung demands, 1-100, or null to use the plan item's own target (85% off plan)."),
+              target_passes: z.number().describe("Good passes needed before the tempo goes up. 1 or more."),
+              consecutive: z.boolean().describe("true = the passes must be in a row without a failure between them; a stop or pause resets the count."),
+            }),
+          )
+          .optional()
+          .describe(
+            "Optional. A ramp for working this passage up to tempo: a couple of passes at 70% of the target, then 85%, then target, before it counts. 2 to 6 rungs, ascending, the last one 100. Omit it and this passage uses the song's ramp, or the app default. Pass [] to say this passage should never warm up. Only settable when the snippet is CREATED — this tool finds or creates, it does not edit, so change an existing passage's ramp in the app's snippet panel.",
+          ),
         rest_measures: z.number().optional().describe("Silent measures between loop repetitions, 0 or more. Default 0."),
       },
     },
@@ -1487,7 +1555,7 @@ export function createMcpServer(token: string) {
         "ENTRY VERSUS MID-PHRASE TIMING: coming in after a rest or a loop restart is a different skill from playing inside a phrase, and the two run at very different offsets (live evidence: 120–225 ms late on entries, near zero mid-phrase), so mixing them corrupts both numbers. A beat is an ENTRY when it is the first struck beat of a pass or its previous struck beat sat two or more measures back. `most_late` and `most_early` rank on MID-PHRASE beats alone, because ranked on everything they simply find the bars he enters on. `most_early` is EMPTY when no measure had a positive mean offset, rather than showing the least late one. " +
         "MEASUREMENT FLOOR: offsets are quantised by the animation frame that reads the clock, about 17 ms at 60 Hz, so an interval spread or a difference between measures under roughly 20 ms is measurement noise and must not be reported as a finding. " +
         "⚠️ TIMING: MEAN OFFSET IS CALIBRATION PLUS ERROR — MIDI and audio latency, where the eye aims against the scrolling line, and genuine rushing, all added together. A constant offset shifts every note equally, so a large mean offset is NOT evidence of bad playing on its own. What isolates the error is `interval_ratio` (the gaps between struck notes against the gaps the score asks for: below 1 = genuinely faster than the tempo, above 1 = slower, and a constant offset cancels out) and `drift` (offset last third minus first third of a pass, which a constant offset cannot produce). Intervals are taken only between beats that were both struck, adjacent in the sequence — a miss breaks the chain — and inside one measure and one loop iteration, so no barline, repeat or time signature enters the arithmetic; sessions whose tempo moved mid-sitting are excluded and counted under `timing.skipped`. " +
-        "SCOPE: sessions with no MIDI and zero-note sessions are excluded; `extra` rows never count toward attempts or hit rate; a snippet or measure-range filter also drops rows outside that range — because the rest measures a loop appends can take numbers belonging to real measures — and reports how many under `range.rows_outside_range`. The most recent 30 eligible sessions are read. " +
+        "SCOPE: sessions with no MIDI and zero-note sessions are excluded; WARM-UP SITTINGS ARE EXCLUDED BY DEFAULT — a warm-up ladder plays a passage at 70% of target before it plays it at target, and a bar hit cleanly at 70% is not evidence that it is clean at tempo, so mixing them would quietly make the passage look easier than it is. A sitting is dropped when it contains a warm-up pass heard BELOW the song's confirmed goal tempo (or, with no confirmed goal, below the top rung), and the count appears as `sessions.excluded.warmup_below_target`. The unit is the SITTING and not the pass, because this tool reads per-beat events whose loop counter restarts every time the ladder changes tempo — a 70% pass and a 100% pass in the same sitting cannot be told apart. Pass include_warmup: true to read them anyway, which is the right call when the question is about the warm-up itself rather than about playing at tempo; `extra` rows never count toward attempts or hit rate; a snippet or measure-range filter also drops rows outside that range — because the rest measures a loop appends can take numbers belonging to real measures — and reports how many under `range.rows_outside_range`. The most recent 30 eligible sessions are read. " +
         "The session windows are reported, and the result says plainly when they differ — accuracy is not comparable across different matching windows. Tier 1, read-only. " + SAM_SCORING_RULES,
       inputSchema: {
         song_id: z.string().describe("UUID of the song"),
@@ -1497,6 +1565,12 @@ export function createMcpServer(token: string) {
         date_from: z.string().optional().describe("Pacific date YYYY-MM-DD, inclusive"),
         date_to: z.string().optional().describe("Pacific date YYYY-MM-DD, inclusive"),
         limit: z.number().optional().describe("Max measures returned (default 20, cap 50)"),
+        include_warmup: z
+          .boolean()
+          .optional()
+          .describe(
+            "Default false. Keep the warm-up sittings in — those where a ladder played the passage below its target tempo. Only do this when the question is about the warm-up itself; for 'is this bar hard at tempo', leaving it out is the answer you want.",
+          ),
       },
     },
     async (args) => runToolForMcp(getSamMeasureStatsTool, args, token),

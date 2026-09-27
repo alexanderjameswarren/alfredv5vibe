@@ -17,7 +17,8 @@ records it.
 tempo until it is reliable, then faster, then at target. The rungs are data, so Claude can write a
 ramp for a passage and the app follows it.
 
-**Scope: drills and snippets, typically 1–5 bars.** Not whole songs. Short ranges already loop, so
+**Scope: drills and snippets, typically 1–5 bars.** Not the whole song of a full piece — though a
+drill's own song IS in scope, because a drill is already a short range. Short ranges already loop, so
 there is no whole-song branch to design.
 
 ## 2. Settled decisions (do not re-open)
@@ -164,7 +165,11 @@ A third transport button, **Warm up**, between Play and Practice.
   with `goal_is_warmup` true.
 - Label is "Warm up"; after the ladder has been completed in this session it reads "Warm up again",
   and pressing it restarts from rung 1.
-- Hidden on whole songs (§2 scope) unless the loaded range is a snippet or the song is a drill.
+- **Shown for snippets and for drills** (§2 scope), and for nothing else: a snippet of any song, or
+  a drill played as its whole song. A drill IS a short range — that is what makes it a drill — so it
+  gets the button without a snippet. Hidden on the whole song of anything that is not a drill.
+  (Corrected 2026-09-27: this bullet used to read "hidden on whole songs", which described a drill's
+  own song as out of scope. It is not, and the app was already right.)
 
 ### 7.2 While it runs
 
@@ -200,6 +205,14 @@ Ladders must be editable without Claude.
   — a table of rungs with percent, accuracy, passes, and a consecutive toggle, plus add/remove row.
 - **Song:** the same control in the Edit Song dialog, under the goal tempo.
 - **Plan item:** read-only in the app. Plans are immutable; changing it means a new plan.
+  **Not testable until milestone 4** (noted 2026-09-27): the read-only view is built — it appears in
+  the snippet's ladder dialog, above the snippet's own editor, whenever a plan item's ladder overrides
+  it — but nothing can WRITE an item ladder yet. `sam_create_practice_plan` takes no ladder argument
+  and plan items are immutable after insert, so there is no way to produce the row that makes the
+  block appear. **Milestone 4 must test it**: create a plan whose item carries its own
+  `warmup_ladder`, load that item's snippet, open the ladder dialog from its row, and check that the
+  item's rungs are shown, uneditable, and that editing the snippet's ladder underneath changes nothing
+  about what runs.
 - Every editor shows the resolved ladder and where it came from, with a "clear" control that sets
   the column back to null (inherit) and a separate way to store an empty array (no warm-up here).
 
@@ -252,11 +265,13 @@ ladder in the plan's internal notes so the next conversation knows why it was se
 
 ## 12. Success criteria
 
-- Pressing Warm up on a snippet starts at the first rung's tempo and advances on the rule.
+- Pressing Warm up on a snippet, or on a drill, starts at the first rung's tempo and advances on the
+  rule.
 - A failed pass resets a consecutive rung to zero and leaves a cumulative rung alone.
 - Stopping or pausing ends the ladder; pressing Warm up again starts at rung one.
 - Top-rung passes count toward an ordinary plan item with no special handling.
 - Lower-rung passes never qualify, and never appear in measure stats by default.
-- The player always says which level supplied the ladder.
+- The player always says which level supplied the ladder — including the app default, and including a
+  range that is in no plan item.
 - A warm-up item completes when the ladder completes, and the checklist shows rung progress.
 - `check_platform_conformance` returns CONFORMANT after milestone 1.

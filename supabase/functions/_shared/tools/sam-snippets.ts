@@ -19,6 +19,7 @@
 // ============================================================================
 
 import { defineTool } from "../platform.ts";
+import { warmupLadderErrors } from "./sam-warmup.ts";
 
 // deno-lint-ignore no-explicit-any
 type Row = Record<string, any>;
@@ -26,7 +27,8 @@ type Row = Record<string, any>;
 export const HAND_MODES = ["both", "lh", "rh"];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SNIPPET_COLS = "id, song_id, title, start_measure, end_measure, rest_measures, settings, archived, created_at";
+const SNIPPET_COLS =
+  "id, song_id, title, start_measure, end_measure, rest_measures, settings, archived, warmup_ladder, created_at";
 
 /**
  * PORT of formatSnippetTitle in src/sam/lib/snippetsApi.js — the Edge Function
@@ -95,6 +97,7 @@ function view(row: Row, flags: { created: boolean; restored: boolean }) {
     end_measure: row.end_measure,
     rest_measures: row.rest_measures ?? 0,
     hand_mode: row.settings?.handMode || "both",
+    warmup_ladder: row.warmup_ladder ?? null,
     archived: row.archived ?? false,
     created_at: row.created_at,
     created: flags.created,
@@ -124,6 +127,12 @@ export const createSamSnippetTool = defineTool({
       ? 0
       : wholeNumber("rest_measures", args.rest_measures, 0);
 
+    // The warm-up ramp for this passage, optional. Validated here for a readable
+    // error; the CHECK constraint on the column is the invariant.
+    const ladderErrors = warmupLadderErrors(args.warmup_ladder, "`warmup_ladder`");
+    if (ladderErrors.length) throw fail(ladderErrors.join(" "));
+    const ladder = args.warmup_ladder === undefined ? null : args.warmup_ladder;
+
     // --- the song ----------------------------------------------------------------
     const { data: song, error: songErr } = await ctx.db
       .from("sam_songs").select("id, title, archived").eq("id", songId).maybeSingle();
@@ -149,6 +158,13 @@ export const createSamSnippetTool = defineTool({
     const match = findMatchingSnippet((rows ?? []) as Row[], { start, end, rest, hand });
 
     if (match && !match.archived) {
+      if (ladder !== null && JSON.stringify(match.warmup_ladder ?? null) !== JSON.stringify(ladder)) {
+        throw fail(
+          `this range already exists as snippet ${match.id} with a different warm-up ladder. ` +
+          "This tool finds or creates; it does not edit. Change the ladder in the app's snippet panel, " +
+          "or leave `warmup_ladder` out to take the snippet as it is.",
+        );
+      }
       return view(match, { created: false, restored: false });
     }
 
@@ -171,6 +187,7 @@ export const createSamSnippetTool = defineTool({
         end_measure: end,
         rest_measures: rest,
         settings: { handMode: hand },
+        ...(ladder === null ? {} : { warmup_ladder: ladder }),
       })
       .select(SNIPPET_COLS)
       .single();

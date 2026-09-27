@@ -18,6 +18,9 @@ export default function SettingsBar({
   // Warm-up ladder (warm-up spec §7.1). Forwarded straight through, like every
   // other transport prop.
   onWarmUp, warmUpVisible, warmUpPrimary, warmUpDisabledReason,
+  // { ladder, source } for the song itself, for the Edit Song dialog's ladder
+  // editor (warm-up spec §7.4).
+  songWarmup = null,
   onExport,
   midiConnected, midiDevice,
   pausedMeasure,
@@ -111,6 +114,7 @@ export default function SettingsBar({
               playbackSpeed={playbackSpeed}
               onSongUpdate={onSongUpdate}
               hasImportedFingerings={hasImportedFingerings}
+              resolvedWarmup={songWarmup}
             />
           </div>
 

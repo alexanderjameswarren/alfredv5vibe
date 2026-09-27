@@ -40,6 +40,8 @@ const toolSrc = readFileSync(join(HERE, "sam-plans.ts"), "utf-8");
 const IMPORT = 'import { defineTool, clampLimit, envelope } from "../platform.ts";';
 if (!toolSrc.includes(IMPORT)) throw new Error("sam-plans.ts import line changed — update this test.");
 writeFileSync(join(dir, "sam-plans.ts"), toolSrc.replace(IMPORT, IMPORT.replace("../platform.ts", "./platform.ts")));
+// Its one sibling: the warm-up ladder rules, imported by relative path.
+writeFileSync(join(dir, "sam-warmup.ts"), readFileSync(join(HERE, "sam-warmup.ts"), "utf-8"));
 
 globalThis.Deno = { env: { get: () => "stub" } };
 const mod = await import(pathToFileURL(join(dir, "sam-plans.ts")).href);
@@ -608,4 +610,152 @@ test("tier-3 gate: propose runs read-only instead of the handler; confirmed runs
   const plain = defineTool({ name: "plain", tier: 3, handler: async () => ({}) });
   const p = await call(plain, { y: 1 }, makeDb());
   assert.deepEqual(Object.keys(p.data), ["tool", "tier", "args", "confirmation_required", "message"]);
+});
+
+// --- the warm-up ladder on plan items (warm-up spec §5.2, §5.3, §8) -----------
+//
+// The two rules a CHECK constraint cannot express are the interesting ones: no
+// free play with a warm-up goal, and a warm-up goal on a range whose ladder
+// resolves to nothing. Both need the snippet and the song, so both live in
+// proposePlan, where those are already loaded.
+
+const LADDER = [
+  { target_percent: 70, accuracy_target: null, target_passes: 2, consecutive: true },
+  { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
+];
+const DEFAULT_LADDER = [
+  { target_percent: 85, accuracy_target: null, target_passes: 2, consecutive: true },
+  { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
+];
+const withDefaultLadder = (over = {}) =>
+  makeDb({ ...over, rpc: { sam_default_warmup_ladder: () => ({ data: DEFAULT_LADDER, error: null }), ...(over.rpc ?? {}) } });
+
+function planWith(itemOver) {
+  return {
+    review_instructions: "Post when the ramp lands three days running.",
+    songs: [{ song_id: SONG_PLAIN, items: [
+      { snippet_id: SNIP_RH, target_bpm: 60, target_passes: 4, accuracy_target: 90, ...itemOver },
+    ] }],
+  };
+}
+
+test("an item ladder reaches the function, and the proposal says what the ramp is", async () => {
+  const out = await call(mod.createSamPracticePlanTool, planWith({ warmup_ladder: LADDER }), withDefaultLadder());
+  assert.match(out.data.proposal.text, /warm-up 70% → 100%/);
+
+  let received;
+  const db2 = withDefaultLadder({ rpc: { sam_create_practice_plan: (args) => { received = args; return { data: U(29), error: null }; } } });
+  db2.tables.sam_practice_plans.push({ ...baseTables().sam_practice_plans[0], id: U(29), starts_on: "2026-09-17" });
+  await call(mod.createSamPracticePlanTool, { ...planWith({ warmup_ladder: LADDER }), confirmed: true }, db2);
+  assert.deepEqual(received.p_plan.songs[0].items[0].warmup_ladder, LADDER);
+});
+
+test("goal_is_warmup and consecutive reach the function, and neither is sent when absent", async () => {
+  let received;
+  const mk = (over) => {
+    const db = withDefaultLadder({ rpc: { sam_create_practice_plan: (args) => { received = args; return { data: U(29), error: null }; } } });
+    db.tables.sam_practice_plans.push({ ...baseTables().sam_practice_plans[0], id: U(29), starts_on: "2026-09-17" });
+    return call(mod.createSamPracticePlanTool, { ...planWith(over), confirmed: true }, db);
+  };
+
+  await mk({ goal_is_warmup: true, consecutive: true, warmup_ladder: LADDER });
+  assert.equal(received.p_plan.songs[0].items[0].goal_is_warmup, true);
+  assert.equal(received.p_plan.songs[0].items[0].consecutive, true);
+
+  // Absent means ABSENT: an ordinary plan reaches the function exactly as before.
+  await mk({});
+  assert.equal("goal_is_warmup" in received.p_plan.songs[0].items[0], false);
+  assert.equal("consecutive" in received.p_plan.songs[0].items[0], false);
+  assert.equal("warmup_ladder" in received.p_plan.songs[0].items[0], false);
+});
+
+test("a malformed ladder is refused with every problem at once, before anything is proposed", async () => {
+  await assert.rejects(
+    call(mod.createSamPracticePlanTool, planWith({
+      warmup_ladder: [
+        { target_percent: 200, accuracy_target: null, target_passes: 0, consecutive: true },
+        { target_percent: 90, accuracy_target: 0, target_passes: 2, consecutive: true },
+      ],
+    }), withDefaultLadder()),
+    (e) => {
+      assert.match(e.message, /items\[0\]\.warmup_ladder\[0\]\.target_percent must be between 10 and 100/);
+      assert.match(e.message, /items\[0\]\.warmup_ladder\[0\]\.target_passes must be a whole number of 1 or more/);
+      assert.match(e.message, /items\[0\]\.warmup_ladder\[1\]\.accuracy_target must be null/);
+      assert.match(e.message, /the last rung must be 100%/);
+      return true;
+    });
+});
+
+test("goal_is_warmup with is_free_play is refused: free play forbids the accuracy target it needs", async () => {
+  await assert.rejects(
+    call(mod.createSamPracticePlanTool, {
+      review_instructions: "x",
+      songs: [{ song_id: SONG_PLAIN, items: [
+        { snippet_id: SNIP_RH, target_bpm: 60, target_passes: 2, is_free_play: true,
+          goal_is_warmup: true, warmup_ladder: LADDER },
+      ] }],
+    }, withDefaultLadder()),
+    /goal_is_warmup cannot be combined with is_free_play/);
+});
+
+test("goal_is_warmup on a range whose ladder resolves to NOTHING is refused, naming the level that said so", async () => {
+  // The snippet opts out with an empty array, which STOPS the chain — so the
+  // song's ladder and the app default never apply, and the item could never be
+  // completed.
+  const db = withDefaultLadder();
+  db.tables.sam_snippets = db.tables.sam_snippets.map((s) =>
+    s.id === SNIP_RH ? { ...s, warmup_ladder: [] } : s);
+  await assert.rejects(
+    call(mod.createSamPracticePlanTool, planWith({ goal_is_warmup: true }), db),
+    (e) => {
+      assert.match(e.message, /goal_is_warmup needs a ladder, but this range resolves to none/);
+      assert.match(e.message, /snippet says/);
+      return true;
+    });
+});
+
+test("goal_is_warmup with no ladder of its own is accepted when a level below supplies one", async () => {
+  const db = withDefaultLadder();
+  db.tables.sam_snippets = db.tables.sam_snippets.map((s) =>
+    s.id === SNIP_RH ? { ...s, warmup_ladder: LADDER } : s);
+  const out = await call(mod.createSamPracticePlanTool, planWith({ goal_is_warmup: true }), db);
+  assert.match(out.data.proposal.text, /warm-up is the goal \(70% → 100% · from the snippet\)/);
+});
+
+test("goal_is_warmup falls all the way through to the app default, read from the database", async () => {
+  const db = withDefaultLadder();
+  const out = await call(mod.createSamPracticePlanTool, planWith({ goal_is_warmup: true }), db);
+  assert.match(out.data.proposal.text, /warm-up is the goal \(85% → 100% · from the default\)/);
+  // Read, never copied: the tool asked the database for the default.
+  assert.ok(db.calls.some((c) => c.kind === "rpc" && c.name === "sam_default_warmup_ladder"));
+});
+
+test("a consecutive item says so in the proposal, because it changes what he has to do", async () => {
+  const out = await call(mod.createSamPracticePlanTool, planWith({ consecutive: true }), withDefaultLadder());
+  assert.match(out.data.proposal.text, /4 passes IN A ROW, in one sitting/);
+});
+
+test("update_sam_song_goal: a ladder alone changes the ramp and leaves the goal and goal_set_at alone", async () => {
+  const db = makeDb();
+  await call(mod.updateSamSongGoalTool,
+    { song_id: SONG_PLAIN, warmup_ladder: LADDER, confirmed: true }, db);
+  const update = db.calls.find((c) => c.op === "update" && c.name === "sam_songs");
+  assert.deepEqual(Object.keys(update.payload), ["warmup_ladder"]);
+});
+
+test("update_sam_song_goal: a goal change still stamps goal_set_at, and can carry a ladder with it", async () => {
+  const db = makeDb();
+  await call(mod.updateSamSongGoalTool,
+    { song_id: SONG_PLAIN, goal_bpm: 72, warmup_ladder: LADDER, confirmed: true }, db);
+  const update = db.calls.find((c) => c.op === "update" && c.name === "sam_songs");
+  assert.deepEqual(Object.keys(update.payload).sort(),
+    ["goal_bpm", "goal_playback_speed", "goal_set_at", "warmup_ladder"]);
+});
+
+test("update_sam_song_goal: a malformed ladder is refused before the proposal", async () => {
+  await assert.rejects(
+    call(mod.updateSamSongGoalTool,
+      { song_id: SONG_PLAIN, warmup_ladder: [{ target_percent: 100, accuracy_target: null, target_passes: 1, consecutive: true }] },
+      makeDb()),
+    /at least 2 rungs/);
 });
