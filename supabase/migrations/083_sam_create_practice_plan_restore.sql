@@ -1,6 +1,6 @@
 -- Purpose: Restore sam_create_practice_plan. Migration 082 rewrote it from a partial reading and silently dropped six things, including the supersedes_plan_id link and the authentication check. This rebuilds it from 054's original text plus only the warm-up additions.
 -- Kind: schema change (one function replaced)
--- Applied: NO
+-- Applied: YES — 2026-09-27. All nine verification checks true, conformance CONFORMANT.
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
 -- the order files were ADDED here. Alex runs every file himself.
@@ -38,8 +38,12 @@
 -- Run the whole file in one paste. CREATE OR REPLACE with an unchanged signature:
 -- nothing to drop, no window where the function is missing.
 --
--- AFTER RUNNING IT, see the last section for the supersedes_plan_id already-written
--- rows. Nothing here backfills them.
+-- WHAT THE ROWS 082 ALREADY WROTE TURNED OUT TO BE. The last section's query was run
+-- on 2026-09-27: two plans with a null supersedes_plan_id. One is Alex's first-ever
+-- plan, where null is correct. The other is the test plan from that day, with exactly
+-- one candidate at a zero-second gap — so the whole of 082's damage is one missing
+-- link on one throwaway plan, which was replaced the next day. NOT backfilled, and
+-- see that section for why it cannot be.
 -- ============================================================================
 
 create or replace function public.sam_create_practice_plan(p_plan jsonb)
@@ -359,12 +363,18 @@ select json_build_object(
 -- one active plan per user at a time that is a tight inference, not a guess — but it
 -- IS an inference, so read the list before deciding anything.
 --
--- A BACKFILL IS SAFE ONLY WHERE would_be IS EXACTLY ONE ROW AND ITS ended_at IS
--- WITHIN SECONDS OF created_at. The function writes both in the same transaction,
--- so a real supersede shows a gap of milliseconds; anything wider is two unrelated
--- events and must be left alone. The UPDATE is written out at the end, commented,
--- for you to run per id if you choose to — the immutability trigger allows it,
--- since supersedes_plan_id is not one of the columns it guards.
+-- A BACKFILL CANNOT BE RUN, and we chose not to force one. `supersedes_plan_id` is
+-- named in sam_practice_plans_guard_update's immutability tuple (054), so an UPDATE
+-- that sets it raises:
+--
+--   ERROR: sam_practice_plans: plan content is immutable. Create a new plan instead.
+--
+-- Filling one in would therefore mean disabling the trigger for the statement and
+-- re-enabling it after, on the table whose whole point is that plan history cannot be
+-- edited. WE DID NOT: the only affected row was a test plan being replaced the next
+-- day, so the cost of the gap is nothing and the cost of turning the guard off on a
+-- live table is not. An earlier version of this file claimed the trigger allowed the
+-- update; it does not, and the statement it suggested could never have run.
 select json_build_object(
   'plans_total', (select count(*) from sam_practice_plans),
   'null_link_total', (select count(*) from sam_practice_plans where supersedes_plan_id is null),
@@ -387,9 +397,6 @@ select json_build_object(
   ) t)
 ) as result;
 
--- To link one plan, once you have read the list above and the gap is seconds:
---
--- update sam_practice_plans
---    set supersedes_plan_id = '<the would_be id>'
---  where id = '<the plan with the null>'
---    and supersedes_plan_id is null;
+-- Nothing to run here. The one affected plan was a throwaway and is left as it is;
+-- if a real plan ever loses its link, the fix is a supervised trigger-off statement,
+-- decided then and written then, not a template sitting in a migration.

@@ -1,6 +1,6 @@
 ---
 name: sam-practice
-description: Plan and review Alex's piano practice in SAM. Use whenever he asks to plan practice, review how practice is going, discuss what to work on next, update goals or goal tempos, or pastes a review note from Alfred. Covers reading his practice data correctly, designing a plan, and saving it.
+description: Plan and review Alex's piano practice in SAM. Use whenever he asks to plan practice, review how practice is going, discuss what to work on next, update goals or goal tempos, set up a warm-up ladder, or pastes a review note from Alfred. Covers reading his practice data correctly, designing a plan, and saving it.
 ---
 
 # SAM practice
@@ -87,7 +87,8 @@ Keep questions short and numbered. This is where the conversation actually happe
 Get these wrong and the conclusions are worthless. Each has already caused a false finding.
 
 - **Ignore passes with zero notes played.** He tests on a desktop with no piano.
-- **Days are Pacific.**
+- **Days are Pacific.** Raw pass timestamps are returned in UTC, so a pass from minutes ago can
+  read as early morning. Convert before drawing any conclusion about when he practised.
 - **Compare heard tempos only:** `effective_bpm`, `target_effective_bpm`, `goal_effective_bpm`.
   Never read `goal_bpm` or `default_bpm` as a target - on songs with audio they mean something
   else entirely.
@@ -106,6 +107,10 @@ Get these wrong and the conclusions are worthless. Each has already caused a fal
 - **Use notes played to tell dropped notes from wrong notes.** A bad pass with far fewer notes
   than a clean one means chords are being left out; a similar note count with low accuracy means
   wrong keys. Different problems, different fixes.
+- **Warm-up passes are marked.** A pass with a `warmup_rung` came from a warm-up ladder; one below
+  the top rung was played below target tempo and says nothing about how he plays at target.
+  `get_sam_measure_stats` excludes those sittings by default - keep it that way unless you have a
+  reason, and say so if you pass `include_warmup`.
 - **Two calibration breaks.** Timing changed 2026-09-19 (about 80-100 ms) and accuracy changed
   2026-09-20 (the tie fix). Numbers are not comparable across those dates. Never report the jump
   as improvement.
@@ -113,7 +118,7 @@ Get these wrong and the conclusions are worthless. Each has already caused a fal
   `interval_ratio` and `drift` isolate the error. The measurement floor is about 17 ms, so
   differences under roughly 20 ms are noise.
 - **Entry lateness is a different skill from mid-phrase timing.** Coming in after a rest runs far
-  later. Never mix them.
+  later. Compare mid-phrase with mid-phrase; the tools report both separately.
 - **The matching window decides how forgiving scoring is.** The same passage at different window
   settings is not comparable, and tightening it lowers accuracy on identical playing.
 - **Wrong-note lists need checking against the score.** Every pattern investigated before the
@@ -166,11 +171,51 @@ bars scored 36% with no rest and reached 100% with one.
 **Instructions are actions, not descriptions.** "Practise in 3 short blocks, not 10 in a row",
 not "three short blocks spread through the session". One short line.
 
-**Never assume he starts at the target tempo.** He warms into a tempo. Put the ramp in the
-instruction rather than adding a second item for the slower pass - the tool allows only one item
-per range per plan.
-
 **Show an estimated time column** in the chat proposal. It does not go in the plan itself.
+
+## The warm-up ladder
+
+He cannot land a passage at target tempo cold, and a fumbled first attempt used to drag down every
+figure for that item. A **warm-up ladder** fixes that: pressing Warm up on a short range plays it at
+a fraction of the target tempo until it is reliable, then faster, then at target. Rungs are data, so
+a ladder can be written for a passage.
+
+**A rung is a tempo percent, an accuracy target, a pass count, and consecutive or cumulative.** The
+last rung is always 100%. Two to six rungs.
+
+```
+[ { "target_percent": 50,  "accuracy_target": 100, "target_passes": 2, "consecutive": true },
+  { "target_percent": 75,  "accuracy_target": null, "target_passes": 2, "consecutive": true },
+  { "target_percent": 100, "accuracy_target": null, "target_passes": 3, "consecutive": false } ]
+```
+
+A null `accuracy_target` means "use the item's target", or 85% off-plan.
+
+**Where to put it**, first level that has one wins: the plan item, then the snippet, then the song,
+then the app default (70/85/100, two in a row each).
+- **On the snippet** when the ramp is a property of the passage and should still apply next month.
+  This is the usual home. He can also edit it himself in the app.
+- **On the plan item** when it is this week's decision - a gentler ramp while a passage is new.
+  Plan items are immutable, so it lasts exactly as long as the plan.
+- **An empty array means "no warm-up here"** and stops the chain rather than falling through.
+
+**Warm-up as the goal.** An item with `goal_is_warmup` is complete when the ladder finishes, not
+when a pass count is reached. Use it when the week's goal is the ramp itself - getting a passage he
+cannot play cold up to tempo at all. It cannot be combined with Free Play.
+
+**Consecutive items.** An item with `consecutive` needs its passes in a row within one sitting;
+stopping or pausing breaks the streak. Use it when reliability is the point rather than volume - a
+passage that meets its target by volume but not consistently is the case this was built for.
+`get_sam_plan_progress` reports `longest_qualifying_streak` beside `qualifying`, so both are visible.
+
+**When to reach for a ladder:** a passage whose first attempt of a sitting is far worse than the
+rest, or one where he has been dropping the tempo by hand and bringing it back up - he did exactly
+that on bars 20-21 before the feature existed. Write the ladder in the plan's internal notes so the
+next conversation knows why it was set that way.
+
+**Tool rules.** `create_sam_snippet` writes a ladder only on a snippet it creates; it refuses to
+change an existing range's ladder, which is an edit and belongs in the app. `update_sam_song_goal`
+can carry a ladder alone, leaving the goal tempo and `goal_set_at` untouched.
 
 ## Writing the plan's text
 
@@ -183,7 +228,8 @@ per range per plan.
   starts informed.
 - **Review instructions** - plain language for the daily job. Always include:
   - how to read an item: met when *qualifying passes* reach the target, attempts are not the
-    denominator
+    denominator - and for a consecutive item, met when the streak reaches it; for a warm-up item,
+    met when the ladder completes
   - a hard cap in completed practice days, so no plan runs forever
   - triggers for both directions: clearing a target early, and failing one repeatedly
   - a reshuffle flag if the bottom of the list never gets reached - reorder, never shorten
@@ -297,4 +343,5 @@ into SAM for a difficulty reading.
 
 When you cannot explain something from what SAM records, say so and suggest what it could capture.
 Several real improvements came from exactly that: per-measure hit rates, wrong-note capture,
-first-attempt rates, and the timing analysis all began as "the data cannot answer this".
+first-attempt rates, the timing analysis and the warm-up ladder itself all began as "the data
+cannot answer this".

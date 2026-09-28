@@ -1,7 +1,7 @@
 import React from "react";
 import { midiDisplayName } from "../lib/vexflowHelpers";
 import PracticeFigures from "./PracticeFigures";
-import { formatAccuracy } from "../lib/practiceScoring";
+import { formatAccuracy, goalState } from "../lib/practiceScoring";
 
 export default function StatsBar({
   lastNote,
@@ -15,11 +15,17 @@ export default function StatsBar({
   songTotalSeconds = 0,
   songPassesToday = 0,
   songPassesTotal = 0,
+  accuracyGoal = null,
 }) {
   // Accuracy is null when nothing was measured (no MIDI notes, or no scored
   // beats); formatAccuracy shows that as "—", never 0%.
   const playthroughPct = sessionStats.hasPlaythrough ? sessionStats.playthroughAccuracyPercent : null;
   const playthroughMeasured = playthroughPct != null;
+  // The same "against the target" readout the playing bar carries, so the number
+  // does not change meaning when he pauses. Colour is never the only signal: the
+  // word "met" or "short" says it too. No target, no change to this line at all.
+  const goal = Number.isFinite(accuracyGoal) ? accuracyGoal : null;
+  const met = goalState(playthroughPct, goal);
   return (
     <div className="flex items-center gap-4 mb-2 px-1 text-sm text-muted-foreground flex-wrap">
       {lastNote != null && (
@@ -33,13 +39,18 @@ export default function StatsBar({
       <span>Session Accuracy: <strong className="text-dark">{formatAccuracy(sessionStats.accuracyPercent)}</strong></span>
       {/* The current pass through the snippet, so a clean run reads 100% even
           when earlier fumbles are still dragging the session average down. */}
-      <span>
+      <span data-goal={met || "none"}>
         Playthrough Accuracy:{" "}
         <strong className={
-          playthroughPct === 100 ? "text-success" : "text-dark"
+          met === "met" ? "text-success"
+            : met === "short" ? "text-destructive"
+            : playthroughPct === 100 ? "text-success"
+            : "text-dark"
         }>
           {formatAccuracy(playthroughPct)}
         </strong>
+        {goal != null && <span className="ml-1">/ {goal}%</span>}
+        {met && <span className="ml-1">{met}</span>}
         {playthroughMeasured && (
           <span className="ml-1 opacity-70">
             ({sessionStats.playthroughHits}/{sessionStats.playthroughScored})

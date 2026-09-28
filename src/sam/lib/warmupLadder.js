@@ -210,13 +210,24 @@ export function shouldSuggestEasier(state) {
 }
 
 /**
- * The strip, as data (§7.2). One group per rung: its percent, how many marks to
- * draw, how many are filled, and whether it is done, current or still to come.
+ * The strip, as data (§7.2). One group per rung: what a pass must reach, how
+ * many marks to draw, how many are filled, and whether it is done, current or
+ * still to come.
+ *
+ * `accuracy` is the rung's RESOLVED bar — its own, else the item's, else 85 —
+ * because that is what a pass is actually judged against (§3), and a rung
+ * inheriting the item's target would otherwise show nothing at all.
+ * `effectiveBpm` is the tempo that rung puts in the box, null when the song
+ * cannot express it. Both need the run's target, which is why the second
+ * argument exists; called without it the strip still draws, with the app's
+ * off-plan bar and no tempos.
  */
-export function stripModel(state) {
+export function stripModel(state, { itemAccuracyTarget = null, targetEffectiveBpm = null, song = null } = {}) {
   if (!state) return [];
   return state.ladder.map((rung, i) => ({
     percent: rung.target_percent,
+    accuracy: rungAccuracyTarget(rung, itemAccuracyTarget),
+    effectiveBpm: rungTempo({ targetEffectiveBpm, percent: rung.target_percent, song })?.effectiveBpm ?? null,
     target: rung.target_passes,
     filled: Math.min(state.counts[i], rung.target_passes),
     consecutive: !!rung.consecutive,

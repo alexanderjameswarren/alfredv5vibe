@@ -187,6 +187,32 @@ export function itemState(item, progress) {
            amber: !done && p.attempts > 0 && counted < target };
 }
 
+/**
+ * Whether one completed pass counts towards its item, by the SAME rule
+ * sam_plan_item_progress uses (migration 078):
+ *
+ *   notes_played > 0
+ *   and effective_bpm >= the item's target
+ *   and (free play, or accuracy_percent >= the item's accuracy_target)
+ *
+ * It lives here, beside `itemState`, because the player's LIVE streak has to
+ * agree with the count the database gives back for the same passes. A second,
+ * looser rule would fill circles for passes the checklist then refuses — and
+ * the tempo half is the half that is easy to forget: a warm-up rung below the
+ * item's target cannot qualify, however clean it was.
+ *
+ * A null accuracy is unmeasured, which is not "good enough"; the SQL's
+ * coalesce(..., false) says the same.
+ */
+export function passQualifies(pass, item) {
+  if (!item || !pass) return false;
+  if (!(pass.notesPlayed > 0)) return false;
+  if (!Number.isFinite(pass.effectiveBpm) || !Number.isFinite(item.target_effective_bpm)) return false;
+  if (pass.effectiveBpm < item.target_effective_bpm) return false;
+  if (item.is_free_play) return true;
+  return Number.isFinite(pass.accuracyPercent) && pass.accuracyPercent >= item.accuracy_target;
+}
+
 // --- Working order: what to do next (2026-09-19) -----------------------------
 //
 // The checklist shows the main work first and Free Play under its own label,
@@ -316,9 +342,22 @@ export function itemRangeText(item) {
   return parts.join(" · ");
 }
 
-/** "60 BPM · 90% · 4 passes", or "78 BPM · 2 passes" for free play. */
+/**
+ * " in a row" for a consecutive item (§5.3), used everywhere the target is
+ * named. Without it "3 passes" reads identically whether he may collect them
+ * across the day or must land three clean ones back to back — and those are
+ * very different afternoons.
+ *
+ * Not for a target of one: one in a row and one are the same pass, so the words
+ * would only add noise.
+ */
+export function inARowSuffix(item) {
+  return item?.consecutive && (item?.target_passes || 0) > 1 ? " in a row" : "";
+}
+
+/** "60 BPM · 90% · 4 passes in a row", or "78 BPM · 2 passes" for free play. */
 export function itemTargetText(item) {
-  const passes = `${item.target_passes} pass${item.target_passes === 1 ? "" : "es"}`;
+  const passes = `${item.target_passes} pass${item.target_passes === 1 ? "" : "es"}${inARowSuffix(item)}`;
   return item.is_free_play
     ? `${item.target_effective_bpm} BPM · ${passes}`
     : `${item.target_effective_bpm} BPM · ${item.accuracy_target}% · ${passes}`;
@@ -370,9 +409,9 @@ export function planLineText(item, state) {
     parts.push("warm-up");
     parts.push(state.done ? "done today" : "not yet today");
   } else {
-    // §5.3: "in a row" is worth saying, because it changes what he has to do.
-    const suffix = item.consecutive ? " in a row" : "";
-    parts.push(`${state.done ? "Done " : ""}${state.shown}/${state.target}${suffix} today`);
+    // §5.3: "in a row" is worth saying, because it changes what he has to do —
+    // the same words the home checklist uses for the same item.
+    parts.push(`${state.done ? "Done " : ""}${state.shown}/${state.target}${inARowSuffix(item)} today`);
   }
   if (item.instruction) parts.push(item.instruction);
   return parts.join(" · ");

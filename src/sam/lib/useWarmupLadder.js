@@ -73,10 +73,14 @@ export default function useWarmupLadder() {
 
   const publish = useCallback(() => {
     const run = runRef.current;
+    const { itemAccuracyTarget, effectiveBpm, song } = targetRef.current;
     setView(
       run
         ? {
-            rungs: stripModel(run),
+            // The strip needs the run's target to resolve each rung's accuracy
+            // bar and tempo (§3, §4); they live in `targetRef` because the run
+            // itself is only the ladder and its counters.
+            rungs: stripModel(run, { itemAccuracyTarget, targetEffectiveBpm: effectiveBpm, song }),
             complete: run.complete,
             suggest: shouldSuggestEasier(run),
             source: targetRef.current.source,

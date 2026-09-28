@@ -7,6 +7,12 @@
 //   - every ladder pass records the rung it was played at;
 //   - stop and pause end the ladder, deliberately;
 //   - once it completes, it keeps looping and offers to start again.
+//
+// It also covers the rest of what the playing bar says about targets, because it
+// is the same bar and the same harness (2026-09-28): the in-a-row run on a
+// consecutive item, the accuracy and tempo each strip group names, the
+// playthrough figure against its target, and the "this pass cannot qualify"
+// warning. See the describe blocks at the foot of the file.
 
 import React from "react";
 import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
@@ -136,6 +142,9 @@ const SNIPPET_LADDER = [
 function seed({
   snippetLadder = SNIPPET_LADDER, itemLadder = null, goalIsWarmup = false,
   songLadder = null, withPlan = true,
+  // For the in-a-row strip: the item's own flags, and what the database says
+  // today's best run was.
+  consecutive = false, targetPasses = 4, streakToday = 0,
 } = {}) {
   mockDb.tables = {
     sam_practice_plans: withPlan
@@ -145,15 +154,18 @@ function seed({
     sam_practice_plan_items: [
       { id: "item-snip", plan_id: "plan-1", song_id: SONG_ID, snippet_id: "snip-1", position: 1,
         is_free_play: false, target_bpm: 60, target_playback_speed: 100, target_effective_bpm: 60,
-        target_passes: 4, accuracy_target: 90, instruction: "Count out loud.",
-        warmup_ladder: itemLadder, goal_is_warmup: goalIsWarmup, consecutive: false },
+        target_passes: targetPasses, accuracy_target: 90, instruction: "Count out loud.",
+        warmup_ladder: itemLadder, goal_is_warmup: goalIsWarmup, consecutive },
     ],
     sam_songs: [{ id: SONG_ID, title: "Throwaway", audio_file_path: null, default_bpm: 65,
       warmup_ladder: songLadder }],
     sam_snippets: [{ id: "snip-1", song_id: SONG_ID, title: "Opening bar", start_measure: 1, end_measure: 1,
       rest_measures: 0, settings: { handMode: "rh" }, archived: false, warmup_ladder: snippetLadder }],
   };
-  mockDb.progressRows = [];
+  mockDb.progressRows = streakToday
+    ? [{ plan_item_id: "item-snip", attempts: streakToday, qualifying: streakToday,
+         longest_qualifying_streak: streakToday, ladder_completions: 0 }]
+    : [];
   mockDb.songLadder = songLadder;
   mockDb.defaultLadder = [
     { target_percent: 85, accuracy_target: null, target_passes: 2, consecutive: true },
@@ -223,12 +235,25 @@ async function openWholeSong() {
 // playback — the prop ScrollEngine is rendered with — so that is what is asserted
 // mid-run, and the box itself only when stopped.
 const bpmBox = () => screen.getByLabelText(/BPM:/);
+
+// The strip speaks each rung as the bar it must clear and the tempo it sets. The
+// item is 60 BPM at 90%, and these rungs carry no accuracy of their own, so both
+// inherit 90 and rung one lands at 42.
+const rung1 = (filled) => `rung 1: 90 percent accuracy, at 42 BPM, ${filled} of 2 passes`;
+const rung2 = (filled) => `rung 2: 90 percent accuracy, at 60 BPM, ${filled} of 2 passes`;
 const bpmValue = () => Number(bpmBox().value);
 const playingBpm = () => mockScrollProps.bpm;
 const warmUpButton = () => screen.queryByRole("button", { name: /^Warm up/ });
 const passInserts = () => mockDb.inserts.filter((i) => i.table === "sam_passes" && !i.isUpdate);
 const strip = () => screen.queryByLabelText("Warm-up ladder");
 const warmupLine = () => screen.queryByTestId("warmup-line");
+// The in-a-row strip, and the live run it draws: the item is 3 in a row at 60
+// BPM and 90%.
+const inARow = () => screen.queryByLabelText("Passes in a row");
+const runLabel = (filled, of = 3) =>
+  `current run: 90 percent accuracy, at 60 BPM, ${filled} of ${of} passes`;
+// The playthrough badge, which carries the target and the §6 warning.
+const badge = () => document.querySelector("[data-goal]");
 
 // Open the song directly and pick the saved snippet from the Snippet panel, which
 // is how a range with no plan item gets loaded.
@@ -248,6 +273,33 @@ async function pressWarmUp() {
   fireEvent.click(warmUpButton());
   await screen.findByRole("button", { name: /Pause/ });
   mockScrollProps.scrollStateExtRef.current = { scrollStartT: 0 };
+}
+
+// A plain sitting: no ladder, the tempo box as the item left it.
+async function pressPlay() {
+  fireEvent.click(screen.getByRole("button", { name: /^Play$/ }));
+  await screen.findByRole("button", { name: /Pause/ });
+  mockScrollProps.scrollStateExtRef.current = { scrollStartT: 0 };
+}
+
+// ScrollEngine is mocked, so the beat events it would emit are handed over by
+// hand. `copies` is what it really does when looping — three renderings of the
+// same bars — and the count must survive that.
+function emitBeats(n, copies = 3) {
+  const events = [];
+  for (let c = 0; c < copies; c++) {
+    for (let b = 1; b <= n; b++) {
+      events.push({ meas: 1, beat: b, allMidi: [60], rhMidi: [60], lhMidi: [] });
+    }
+  }
+  act(() => { mockScrollProps.onBeatEvents(events); });
+}
+
+// One chord, scored, without ending the playthrough — which is what the live
+// readouts are about.
+async function playChord(result = "hit") {
+  mockNextResult = result;
+  await act(async () => { mockOnChord([60]); });
 }
 
 // One playthrough, scored as asked, signalled the way ScrollEngine signals it:
@@ -292,8 +344,8 @@ test("the strip says where the ladder came from, and which rung is live", async 
   await pressWarmUp();
   expect(strip()).toBeInTheDocument();
   expect(strip()).toHaveTextContent("from this snippet");
-  expect(screen.getByLabelText("70 percent, 0 of 2 passes")).toBeInTheDocument();
-  expect(screen.getByLabelText("100 percent, 0 of 2 passes")).toBeInTheDocument();
+  expect(screen.getByLabelText(rung1(0))).toBeInTheDocument();
+  expect(screen.getByLabelText(rung2(0))).toBeInTheDocument();
 });
 
 test("a plan item's ladder overrides the snippet's, and the strip says so", async () => {
@@ -314,14 +366,14 @@ test("a qualifying pass fills the rung; the second advances it and the NEXT cycl
   await pressWarmUp();
 
   await playPass(1);
-  expect(screen.getByLabelText("70 percent, 1 of 2 passes")).toBeInTheDocument();
+  expect(screen.getByLabelText(rung1(1))).toBeInTheDocument();
   // Still at the rung's tempo: one pass is not an advance.
   expect(playingBpm()).toBe(42);
 
   await playPass(2);
   // Advanced to the 100% rung, and the tempo followed at the wrap.
   expect(playingBpm()).toBe(60);
-  expect(screen.getByLabelText("100 percent, 0 of 2 passes")).toBeInTheDocument();
+  expect(screen.getByLabelText(rung2(0))).toBeInTheDocument();
 });
 
 test("every ladder pass records the rung it was PLAYED at, not the one it advanced to", async () => {
@@ -340,9 +392,9 @@ test("a failed pass resets a consecutive rung to zero", async () => {
   await openPlanItem();
   await pressWarmUp();
   await playPass(1);
-  expect(screen.getByLabelText("70 percent, 1 of 2 passes")).toBeInTheDocument();
+  expect(screen.getByLabelText(rung1(1))).toBeInTheDocument();
   await playPass(2, "miss");
-  expect(screen.getByLabelText("70 percent, 0 of 2 passes")).toBeInTheDocument();
+  expect(screen.getByLabelText(rung1(0))).toBeInTheDocument();
   expect(playingBpm()).toBe(42);
 });
 
@@ -356,7 +408,7 @@ test("three failures at one rung suggest starting lower, and change nothing", as
   expect(strip()).toHaveTextContent(/starting lower/);
   // The ladder has not moved itself.
   expect(playingBpm()).toBe(42);
-  expect(screen.getByLabelText("70 percent, 0 of 2 passes")).toBeInTheDocument();
+  expect(screen.getByLabelText(rung1(0))).toBeInTheDocument();
 });
 
 test("completing the top rung keeps it looping at target tempo, and offers another go", async () => {
@@ -386,7 +438,7 @@ test("Warm up again restarts at rung one without stopping", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: /^Warm up again$/ }));
   expect(playingBpm()).toBe(42);
-  expect(screen.getByLabelText("70 percent, 0 of 2 passes")).toBeInTheDocument();
+  expect(screen.getByLabelText(rung1(0))).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Pause/ })).toBeInTheDocument();
 });
 
@@ -394,7 +446,7 @@ test("PAUSE ends the ladder — deliberately, because consecutive means without 
   await openPlanItem();
   await pressWarmUp();
   await playPass(1);
-  expect(screen.getByLabelText("70 percent, 1 of 2 passes")).toBeInTheDocument();
+  expect(screen.getByLabelText(rung1(1))).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: /Pause/ }));
   await waitFor(() => expect(strip()).not.toBeInTheDocument());
@@ -404,7 +456,7 @@ test("PAUSE ends the ladder — deliberately, because consecutive means without 
   // leaving him looping at a warm-up tempo with no ladder and nothing saying so.
   fireEvent.click(await screen.findByRole("button", { name: /^Resume$/ }));
   await waitFor(() => expect(strip()).toBeInTheDocument());
-  expect(screen.getByLabelText("70 percent, 0 of 2 passes")).toBeInTheDocument();
+  expect(screen.getByLabelText(rung1(0))).toBeInTheDocument();
   expect(playingBpm()).toBe(42);
 });
 
@@ -428,7 +480,7 @@ test("a pass with no notes played leaves the ladder exactly where it was", async
     mockScrollProps.onContentEnd(2);
     mockScrollProps.onLoopCount(2);
   });
-  expect(screen.getByLabelText("70 percent, 1 of 2 passes")).toBeInTheDocument();
+  expect(screen.getByLabelText(rung1(1))).toBeInTheDocument();
   expect(playingBpm()).toBe(42);
 });
 
@@ -743,4 +795,176 @@ test("a pass with no ladder still records the tempo box, as it always did", asyn
   await playPass(1);
   await waitFor(() => expect(passInserts().length).toBe(1));
   expect(passInserts()[0].row).toMatchObject({ bpm: 60, playback_speed: 100, warmup_rung: null });
+});
+
+// --- The playing bar's target readouts (2026-09-28) --------------------------
+//
+// Three numbers share this bar and they are different numbers on purpose: the
+// warm-up rung's bar, the live in-a-row run, and the day's best run from the
+// database. Each block below pins one of them down.
+
+describe("the in-a-row strip: the CURRENT run, beside the day's best", () => {
+  test("it fills as qualifying passes land, and empties on a pass that fails", async () => {
+    seed({ consecutive: true, targetPasses: 3, snippetLadder: [], streakToday: 2 });
+    await openPlanItem();
+    await pressPlay();
+
+    expect(screen.getByLabelText(runLabel(0))).toBeInTheDocument();
+    await playPass(1);
+    expect(screen.getByLabelText(runLabel(1))).toBeInTheDocument();
+    await playPass(2);
+    expect(screen.getByLabelText(runLabel(2))).toBeInTheDocument();
+
+    await playPass(3, "miss");
+    expect(screen.getByLabelText(runLabel(0))).toBeInTheDocument();
+    // Item 3: the day's best is a different number and does NOT roll back with
+    // the run. Both are on screen, and each says which it is.
+    expect(screen.getByTestId("consecutive-best")).toHaveTextContent("best 2 of 3 today");
+  });
+
+  test("a pass below the item's tempo does not count — the warm-up rungs fill, the run does not", async () => {
+    seed({ consecutive: true, targetPasses: 3 });
+    await openPlanItem();
+    await pressWarmUp();
+    await playPass(1);
+    // Rung one is 42 BPM, under the item's 60, so the database would not count
+    // this pass either. The ladder moves; the run stays where it was.
+    expect(screen.getByLabelText(rung1(1))).toBeInTheDocument();
+    expect(screen.getByLabelText(runLabel(0))).toBeInTheDocument();
+  });
+
+  test("the run belongs to one sitting: pause and resume start it again", async () => {
+    seed({ consecutive: true, targetPasses: 3, snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    await playPass(1);
+    expect(screen.getByLabelText(runLabel(1))).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Pause/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Resume$/ }));
+    await screen.findByRole("button", { name: /Pause/ });
+    expect(screen.getByLabelText(runLabel(0))).toBeInTheDocument();
+  });
+
+  test("an item that is not consecutive has no strip at all", async () => {
+    seed({ snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    expect(inARow()).not.toBeInTheDocument();
+  });
+});
+
+describe("the strip names the accuracy it wants, with the tempo in brackets", () => {
+  test("a rung shows the bar it must clear and the BPM it sets", async () => {
+    await openPlanItem();
+    await pressWarmUp();
+    // The rungs carry no accuracy of their own, so both inherit the item's 90.
+    expect(strip()).toHaveTextContent("90% (42)");
+    expect(strip()).toHaveTextContent("90% (60)");
+    // The percent OF TARGET TEMPO is gone: it is the one number he does not play
+    // to, and it read as an accuracy at a glance.
+    expect(strip()).not.toHaveTextContent("70%");
+  });
+
+  test("the in-a-row strip says the same two things", async () => {
+    seed({ consecutive: true, targetPasses: 3, snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    expect(inARow()).toHaveTextContent("90% (60)");
+  });
+});
+
+describe("playthrough accuracy against the target", () => {
+  test("at or above the target: the figure, the bar, and the word", async () => {
+    seed({ snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    await playChord("hit");
+    expect(badge()).toHaveAttribute("data-goal", "met");
+    expect(badge()).toHaveTextContent("100%");
+    expect(badge()).toHaveTextContent("/ 90%");
+    // Not colour alone: the word and the shape both say it.
+    expect(badge()).toHaveTextContent(/met/);
+    expect(within(badge()).getByLabelText("Target met")).toBeInTheDocument();
+  });
+
+  test("below it: short, with its own word and shape", async () => {
+    seed({ snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    await playChord("miss");
+    expect(badge()).toHaveAttribute("data-goal", "short");
+    expect(badge()).toHaveTextContent("0%");
+    expect(badge()).toHaveTextContent(/short/);
+    expect(within(badge()).getByLabelText("Below target")).toBeInTheDocument();
+  });
+
+  test("while a ladder runs it is the RUNG's bar, not the item's", async () => {
+    seed({ snippetLadder: [
+      { target_percent: 70, accuracy_target: 60, target_passes: 2, consecutive: true },
+      { target_percent: 100, accuracy_target: null, target_passes: 2, consecutive: true },
+    ] });
+    await openPlanItem();
+    await pressWarmUp();
+    await playChord("hit");
+    expect(badge()).toHaveTextContent("/ 60%");
+  });
+
+  test("no target, no fraction: the badge is exactly what it always was", async () => {
+    // Off plan, and no ladder running: there is no bar to measure against.
+    seed({ withPlan: false });
+    await openSnippetOffPlan();
+    await pressPlay();
+    await playChord("hit");
+    expect(badge()).toHaveAttribute("data-goal", "none");
+    expect(badge()).not.toHaveTextContent("/");
+  });
+});
+
+describe("the target has become impossible (§6)", () => {
+  // Four scoreable beats at a 90% bar: one miss leaves a ceiling of 3/4 = 75%.
+  const seedFour = async () => {
+    seed({ snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    emitBeats(4);
+  };
+
+  test("one miss too many turns the badge red and says so in words", async () => {
+    await seedFour();
+    await playChord("miss");
+    expect(badge()).toHaveAttribute("data-goal", "impossible");
+    expect(badge()).toHaveTextContent(/can't reach/);
+    expect(within(badge()).getByLabelText("Target out of reach")).toBeInTheDocument();
+    expect(badge().className).toMatch(/bg-destructive/);
+  });
+
+  test("it clears when the next playthrough starts", async () => {
+    await seedFour();
+    await playChord("miss");
+    expect(badge()).toHaveAttribute("data-goal", "impossible");
+    await act(async () => {
+      mockScrollProps.onContentEnd(1);
+      mockScrollProps.onLoopCount(1);
+    });
+    await drain();
+    expect(badge()).not.toHaveAttribute("data-goal", "impossible");
+  });
+
+  test("a miss that still leaves the target reachable says nothing", async () => {
+    seed({ snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    emitBeats(40);          // one miss in forty still rounds to 98%
+    await playChord("miss");
+    expect(badge()).toHaveAttribute("data-goal", "short");
+  });
+
+  test("with no beat count it stays quiet — a false give-up is the worse failure", async () => {
+    seed({ snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    await playChord("miss");   // no onBeatEvents at all
+    expect(badge()).toHaveAttribute("data-goal", "short");
+  });
 });

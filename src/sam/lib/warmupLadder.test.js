@@ -230,10 +230,26 @@ describe("what the strip and the plan line say (§7.2, §7.3)", () => {
     s = applyPass(s, { playthrough: pass(10, 0), itemAccuracyTarget: 90 }).state;
     s = applyPass(s, { playthrough: pass(10, 0), itemAccuracyTarget: 90 }).state;
     expect(stripModel(s)).toEqual([
-      { percent: 50, target: 2, filled: 2, consecutive: true, state: "done" },
-      { percent: 70, target: 2, filled: 0, consecutive: true, state: "current" },
-      { percent: 100, target: 2, filled: 0, consecutive: true, state: "todo" },
+      { percent: 50, accuracy: 85, effectiveBpm: null, target: 2, filled: 2, consecutive: true, state: "done" },
+      { percent: 70, accuracy: 85, effectiveBpm: null, target: 2, filled: 0, consecutive: true, state: "current" },
+      { percent: 100, accuracy: 85, effectiveBpm: null, target: 2, filled: 0, consecutive: true, state: "todo" },
     ]);
+  });
+
+  test("each rung carries the accuracy it is judged against and the tempo it sets", () => {
+    const s = startRun([rung(70, { accuracy_target: null }), rung(100, { accuracy_target: 98 })]);
+    const rows = stripModel(s, { itemAccuracyTarget: 95, targetEffectiveBpm: 40 });
+    // The item's target fills in for a rung with none of its own; a rung with
+    // one keeps it. The tempo is the rung's percent of the target, as BPM.
+    expect(rows.map((r) => [r.accuracy, r.effectiveBpm])).toEqual([[95, 28], [98, 40]]);
+    // Off plan there is no item target, so the app's own bar applies.
+    expect(stripModel(s, { targetEffectiveBpm: 40 })[0].accuracy).toBe(85);
+  });
+
+  test("an audio song's rung tempo comes back as its heard BPM, not its speed percent", () => {
+    const s = startRun([rung(50)]);
+    const song = { audioFilePath: "a.mp3", defaultBpm: 80 };
+    expect(stripModel(s, { targetEffectiveBpm: 40, song })[0].effectiveBpm).toBe(20);
   });
 
   test("a completed ladder shows every rung done", () => {

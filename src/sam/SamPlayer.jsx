@@ -20,12 +20,12 @@ import { ensureSnippetSaved, sameLoadedRange, snippetFromRow } from "./lib/snipp
 import useActivePlan from "./lib/useActivePlan";
 import {
   firstIncompleteItem, heardTempo, itemForLoadedRange, itemState, matchPlanItem,
-  nextIncompleteItem, planBadgeText, planSongFor, snippetTagText,
+  nextIncompleteItem, passQualifies, planBadgeText, planSongFor, snippetTagText,
 } from "./lib/activePlan";
 import PlanLine from "./components/PlanLine";
 import useWarmupLadder, { fetchDefaultLadder } from "./lib/useWarmupLadder";
 import {
-  ladderSummaryText, resolveLadder, resolveTarget, rungProgressText, sourceLabel,
+  ladderSummaryText, resolveLadder, resolveTarget, rungAccuracyTarget, rungProgressText, sourceLabel,
 } from "./lib/warmupLadder";
 import usePracticeStats from "./lib/usePracticeStats";
 import useLyricEditor from "./lib/useLyricEditor";
@@ -35,7 +35,7 @@ import useAudioSync from "./lib/useAudioSync";
 import useNumericInput from "./lib/useNumericInput";
 import { DEFAULTS } from "./lib/samConstants";
 import { matchChord, findClosestBeat, nearestBeat, elapsedAt } from "./lib/noteMatching";
-import { onScreenTally } from "./lib/practiceScoring";
+import { accuracyOf, onScreenTally, scoreableBeatsPerPass } from "./lib/practiceScoring";
 import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
 import { normalizeMeasure } from "./lib/measureUtils";
 import { loadAudio } from "./lib/audioPlayer";
@@ -52,6 +52,9 @@ const EXTRA_TIMING_REACH = 2;
 // Practice passes no audio to ScrollEngine, so it passes no anchors either.
 // Module-level so the identity is stable across renders.
 const EMPTY_ANCHORS = [];
+// A stable identity, so the effect that publishes the accuracy goal does not
+// re-run on every render before a score has been laid out.
+const EMPTY_SCOREABLE = { both: 0, rh: 0, lh: 0 };
 
 function AudioMsCounter({ audioElement }) {
   const [ms, setMs] = useState(0);
@@ -204,7 +207,8 @@ export default function SamPlayer({ onBack }) {
 
   const {
     startSession, endSession, recordEvent, setLoopIteration, getSessionId,
-    getCurrentPlaythrough, noteTempo, noteMidiConnected, recordExtra, stats: sessionStats,
+    getCurrentPlaythrough, noteTempo, noteMidiConnected, noteAccuracyGoal,
+    recordExtra, stats: sessionStats,
   } = usePracticeSession({
     onSessionEnded: () => setPracticeStatsRefetchSignal((n) => n + 1),
     practiceModeRef,
@@ -249,6 +253,24 @@ export default function SamPlayer({ onBack }) {
 
   const planItem = itemForLoadedRange(activePlan.plan, songDbId, snippet);
   const planItemState = planItem ? itemState(planItem, activePlan.progress) : null;
+
+  // THE CURRENT RUN ON A CONSECUTIVE ITEM (2026-09-28). The database returns the
+  // LONGEST qualifying streak of the day and nothing else — which is the right
+  // number for "is this done", and deliberately never rolls back when a later
+  // pass fails. That leaves the live number missing: how many in a row he is on
+  // RIGHT NOW. It exists only within one sitting, so it is held here rather than
+  // read back, and it is thrown away whenever the sitting ends (see
+  // `endWarmupRun`) or the loaded range changes.
+  //
+  // A ref mirrored into state, for the reason every counter in this file is:
+  // it is written from ScrollEngine's rAF frame through a captured callback,
+  // where a state value would be a stale capture.
+  const consecutiveRunRef = useRef(0);
+  const [consecutiveRun, setConsecutiveRun] = useState(0);
+  const resetConsecutiveRun = useCallback(() => {
+    consecutiveRunRef.current = 0;
+    setConsecutiveRun(0);
+  }, []);
   const planSongNote = planSongFor(activePlan.plan, songDbId)?.song_note || null;
   // Where to go next, for the plan line's Next button. Null while nothing is
   // left to do — or while there is no plan at all — which is what hides the
@@ -270,6 +292,18 @@ export default function SamPlayer({ onBack }) {
     : null;
   const planBadge = planItem
     ? { text: planBadgeText(planItemState, warmupRungText), state: planTone(planItemState) }
+    : null;
+  // The in-a-row strip, for a consecutive item only. `filled` is the live run;
+  // `best` is the day's longest, from the database — the two are shown together
+  // and labelled, because they are different numbers and both are right.
+  const consecutiveView = planItem?.consecutive
+    ? {
+        accuracy: planItem.is_free_play ? null : planItem.accuracy_target,
+        effectiveBpm: planItem.target_effective_bpm,
+        target: planItem.target_passes,
+        filled: Math.min(consecutiveRun, planItem.target_passes),
+        best: Math.min(planItemState?.streak ?? 0, planItem.target_passes),
+      }
     : null;
   // Snippet rows in the panel: a planned snippet of this song gets a tag.
   const planTagFor = (snippetId) => {
@@ -328,6 +362,27 @@ export default function SamPlayer({ onBack }) {
   const warmupDisabledReason = Number.isFinite(warmupTarget.effectiveBpm)
     ? null
     : "Set a tempo, or a goal tempo, before warming up.";
+
+  // THE ACCURACY A PASS MUST REACH RIGHT NOW (2026-09-28), for the playthrough
+  // readout and the §6 warning. It is the RUNNING RUNG'S bar while a ladder is
+  // climbing — that is what the ladder judges the pass against, and it can be
+  // lower than the item's — and the item's own target otherwise. A completed
+  // ladder is back at target tempo, so it falls through to the item.
+  //
+  // Null means there is nothing to measure against: off plan with no ladder, or
+  // a free play item, which has no accuracy target by construction. The readout
+  // then stays exactly as it was before any of this.
+  const warmupRungNow = warmup.view && !warmup.view.complete
+    ? warmup.view.ladder?.[warmup.view.rung]
+    : null;
+  const accuracyGoal = warmupRungNow
+    ? rungAccuracyTarget(warmupRungNow, planItem?.accuracy_target ?? null)
+    : planItem && !planItem.is_free_play && Number.isFinite(planItem.accuracy_target)
+      ? planItem.accuracy_target
+      : null;
+
+  // The scoreable half is published further down, where the beat events arrive.
+  const activeHandMode = snippet?.handMode || "both";
 
   const { armPass, disarmPass, recordPass } = useSamPasses({
     practiceModeRef,
@@ -844,11 +899,26 @@ export default function SamPlayer({ onBack }) {
   });
   cancelPendingChordRef.current = cancelPendingChord;
 
+  // One pass's worth of scoreable beats in the loaded range, per hand mode —
+  // known the moment the score renders, which is what makes the §6 "this pass
+  // can no longer qualify" warning possible without scanning anything mid-play.
+  // All three hands are kept because the hand mode can change without the score
+  // re-rendering, and a stale denominator would warn on a pass that is fine.
+  const [scoreableBeats, setScoreableBeats] = useState(EMPTY_SCOREABLE);
+
   const handleBeatEvents = useCallback((events) => {
     beatEventsRef.current = events;
+    setScoreableBeats(scoreableBeatsPerPass(events));
     window.samBeatEvents = events;
     window.colorBeatEls = colorBeatEls;
   }, []);
+
+  // Handed to the session hook, which does the arithmetic per scored beat. Both
+  // halves change during a sitting — the ladder moves the bar, an edit to the
+  // range moves the beat count — so it is published rather than snapshotted.
+  useEffect(() => {
+    noteAccuracyGoal({ target: accuracyGoal, scoreable: scoreableBeats[activeHandMode] ?? 0 });
+  }, [noteAccuracyGoal, accuracyGoal, scoreableBeats, activeHandMode]);
 
   // Everything the pass writer needs, refreshed every render and read at the
   // instant a pass completes. It has to be a ref: ScrollEngine captures
@@ -876,7 +946,7 @@ export default function SamPlayer({ onBack }) {
     if (Number.isFinite(tempo.playbackSpeed)) setSpeed?.(tempo.playbackSpeed);
   }, []);
 
-  const passContextRef = useRef({ songId: null, snippet: null, bpm: null, playbackSpeed: null });
+  const passContextRef = useRef({ songId: null, snippet: null, bpm: null, playbackSpeed: null, planItem: null });
   passContextRef.current = {
     songId: songDbId,
     snippet,
@@ -884,7 +954,31 @@ export default function SamPlayer({ onBack }) {
     // Read here for the same reason as bpm: both can change mid-run, and the
     // pass must record what was true at the finish line.
     playbackSpeed: playbackSpeed.value,
+    // For the live in-a-row run, which is judged against the item's own targets.
+    planItem,
   };
+
+  // One completed pass, against the loaded item's targets, for the in-a-row
+  // circles. Called synchronously at the credit instant with the tempo that pass
+  // was played at — the same tempo the row will carry.
+  //
+  // `passQualifies` is the database's rule, not a second one (see activePlan.js).
+  // Two consequences worth knowing at the piano: a pass played at a warm-up rung
+  // below the item's target does not count, so the circles stay empty during the
+  // ramp; and a playthrough with no MIDI notes is not an attempt at all, so it
+  // neither counts nor breaks the run — the same rows the database filters out.
+  const creditConsecutivePass = useCallback((playthrough, tempo) => {
+    const item = passContextRef.current.planItem;
+    if (!item?.consecutive) return;
+    if (!(playthrough?.notesPlayed > 0)) return;
+    const qualifies = passQualifies({
+      notesPlayed: playthrough.notesPlayed,
+      accuracyPercent: accuracyOf(playthrough),
+      effectiveBpm: heardTempo(tempo?.bpm, tempo?.playbackSpeed),
+    }, item);
+    consecutiveRunRef.current = qualifies ? consecutiveRunRef.current + 1 : 0;
+    setConsecutiveRun(consecutiveRunRef.current);
+  }, []);
 
   // Credit one completed playthrough of the loaded range.
   //
@@ -994,8 +1088,11 @@ export default function SamPlayer({ onBack }) {
     // is counted twice — the ladder's counters drive the tempo and the strip for
     // this sitting, and plan progress still comes only from the database.
     const warmupPass = creditWarmupPass(playthrough);
+    // Same instant, same counters, same tempo — so the circles and the row can
+    // never disagree about whether this pass counted.
+    creditConsecutivePass(playthrough, tempo);
     setTimeout(() => creditPass(playthrough, warmupPass, tempo), 0);
-  }, [creditPass, getCurrentPlaythrough, creditWarmupPass]);
+  }, [creditPass, getCurrentPlaythrough, creditWarmupPass, creditConsecutivePass]);
 
   // `handleStop` is a plain function declared further down the component, so it
   // is re-created every render. Reaching it through a ref keeps
@@ -1262,6 +1359,11 @@ export default function SamPlayer({ onBack }) {
   function endWarmupRun(remember = false) {
     warmupWasRunningRef.current = remember && !!warmup.view;
     stopWarmup();
+    // A streak lives inside one sitting (§6.6, and sam_plan_item_progress counts
+    // it per session), and every caller of this — pause, stop, a range change —
+    // ends the sitting. The day's best is untouched: that is the database's
+    // number and it is still on screen beside these circles.
+    resetConsecutiveRun();
   }
 
   // Shared tail of Play and Restart: both enter at the first measure of the
@@ -1278,6 +1380,7 @@ export default function SamPlayer({ onBack }) {
   // seek stowed, `scheduleAudioStartOnScroll` has nothing to fire.
   function startFromTopOfRange(activeSnippet, { practice = false } = {}) {
     resetCounters();
+    resetConsecutiveRun(); // Play and Restart both begin a new sitting.
     clearStuckBeat();
     resetHeldKeys();
     setPausedMeasure(null);
@@ -1777,6 +1880,9 @@ export default function SamPlayer({ onBack }) {
                 hasPlaythrough={sessionStats.hasPlaythrough}
                 planBadge={planBadge}
                 warmupView={warmup.view}
+                consecutiveView={consecutiveView}
+                accuracyGoal={accuracyGoal}
+                playthroughImpossible={sessionStats.playthroughImpossible}
                 onWarmUp={handleWarmUp}
               />
               )
@@ -1849,6 +1955,7 @@ export default function SamPlayer({ onBack }) {
                   songTotalSeconds={perSongTotalSeconds}
                   songPassesToday={songPassesToday}
                   songPassesTotal={songPassesTotal}
+                  accuracyGoal={accuracyGoal}
                 />
 
                 <PlanLine

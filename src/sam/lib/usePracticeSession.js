@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { supabase, supabaseUrl, supabaseAnonKey } from "../../supabaseClient";
-import { accuracyOf, bestAccuracy } from "./practiceScoring";
+import { accuracyOf, bestAccuracy, targetUnreachable } from "./practiceScoring";
 
 const EMPTY_STATS = {
   hits: 0,
@@ -15,6 +15,7 @@ const EMPTY_STATS = {
   playthroughScored: 0,
   playthroughLoop: 0,
   hasPlaythrough: false,
+  playthroughImpossible: false,
 };
 
 // How many `extra` rows one measure may contribute in one pass. A brushed key
@@ -28,7 +29,10 @@ function newPlaythrough(loop) {
   // raises a miss on elapsed time alone, without consulting MIDI, so a pass
   // with no keyboard attached looks exactly like playing every note wrong —
   // 0 hits, N misses — in every other counter here.
-  return { loop, hits: 0, misses: 0, partials: 0, totalBeats: 0, notesPlayed: 0 };
+  // `impossible` latches once the accuracy target is out of reach for this pass
+  // (§6): nothing later in the pass can put it back within reach, so it is set
+  // once and cleared only by the next playthrough starting.
+  return { loop, hits: 0, misses: 0, partials: 0, totalBeats: 0, notesPlayed: 0, impossible: false };
 }
 
 // Accuracy (`accuracyOf`, practiceScoring.js) counts hits against
@@ -109,6 +113,11 @@ function playthroughStats(current, last) {
     playthroughScored: p.hits + p.misses,
     playthroughLoop: p.loop,
     hasPlaythrough: p.hits + p.misses > 0,
+    // From `current` and never the fallback: the warning is about the pass IN
+    // PROGRESS. Taking it from `last` would carry a dead pass's red badge into
+    // the opening bars of a fresh one, which is precisely the pass it would be
+    // telling him to abandon.
+    playthroughImpossible: !!current.impossible,
   };
 }
 
@@ -259,6 +268,16 @@ export default function usePracticeSession({ onSessionEnded, practiceModeRef } =
     t.max = t.max == null ? bpm : Math.max(t.max, bpm);
   }, []);
 
+  // What the pass in progress is being judged against: the accuracy target in
+  // force, and one pass's worth of scoreable beats in the loaded range. A ref
+  // because `recordEvent` is reached from ScrollEngine's frame through a
+  // captured callback, where a prop would be whatever it was when the scroll
+  // effect last ran. Both null/0 mean "no verdict", which is the quiet default.
+  const accuracyGoalRef = useRef({ target: null, scoreable: 0 });
+  const noteAccuracyGoal = useCallback(({ target = null, scoreable = 0 } = {}) => {
+    accuracyGoalRef.current = { target, scoreable };
+  }, []);
+
   // Latches true and never back: a keyboard attached at any point makes that
   // part of the sitting measurable, and unplugging it later does not unmake it.
   const noteMidiConnected = useCallback((connected) => {
@@ -297,6 +316,12 @@ export default function usePracticeSession({ onSessionEnded, practiceModeRef } =
     const notes = played?.length || 0;
     p.notesPlayed += notes;
     c.notesPlayed += notes;
+
+    // §6: one comparison per scored beat, no scanning and no new state — the
+    // range's scoreable beat count is known before the run starts, so the best
+    // accuracy still reachable is arithmetic on counters already in hand. Once
+    // it latches there is nothing to recompute.
+    if (!p.impossible && targetUnreachable(p, accuracyGoalRef.current)) p.impossible = true;
 
     if (timingDeltaMs != null) {
       timingDeltasRef.current.push(timingDeltaMs);
@@ -664,6 +689,7 @@ export default function usePracticeSession({ onSessionEnded, practiceModeRef } =
     recordExtra,
     noteTempo,
     noteMidiConnected,
+    noteAccuracyGoal,
     stats,
   };
 }

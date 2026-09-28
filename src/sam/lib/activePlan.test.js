@@ -3,7 +3,7 @@ import {
   itemState, planSummary, itemTargetText, itemRangeText, todayKey,
   heardTempo, itemForLoadedRange, planSongFor, planLineText, planBadgeText, snippetTagText,
   planItemsInOrder, firstIncompleteItem, nextIncompleteItem, planIsComplete, itemShortRange,
-  nextItemLabel,
+  nextItemLabel, passQualifies,
 } from "./activePlan";
 
 const PLAN = {
@@ -80,6 +80,23 @@ describe("planSummary and itemTargetText", () => {
       .toBe("78 BPM · 2 passes");
     expect(itemTargetText({ target_effective_bpm: 50, accuracy_target: 80, target_passes: 1 }))
       .toBe("50 BPM · 80% · 1 pass");
+  });
+
+  test("a consecutive item says so, and a target of one does not", () => {
+    const item = { target_effective_bpm: 40, accuracy_target: 95, target_passes: 3, consecutive: true };
+    expect(itemTargetText(item)).toBe("40 BPM · 95% · 3 passes in a row");
+    expect(itemTargetText({ ...item, consecutive: false })).toBe("40 BPM · 95% · 3 passes");
+    expect(itemTargetText({ ...item, target_passes: 1 })).toBe("40 BPM · 95% · 1 pass");
+    expect(itemTargetText({ ...item, is_free_play: true, accuracy_target: null }))
+      .toBe("40 BPM · 3 passes in a row");
+  });
+
+  test("the player's plan line uses the same words", () => {
+    const item = { target_effective_bpm: 40, accuracy_target: 95, target_passes: 3, consecutive: true };
+    expect(planLineText(item, { shown: 2, target: 3, done: false }))
+      .toBe("Plan · Whole song · 40 BPM · 95% · 2/3 in a row today");
+    expect(planLineText({ ...item, consecutive: false }, { shown: 2, target: 3, done: false }))
+      .toBe("Plan · Whole song · 40 BPM · 95% · 2/3 today");
   });
 });
 
@@ -424,5 +441,40 @@ describe("Free Play never jumps the queue", () => {
     // No main work exists, so there is none outstanding: Free Play is the tier.
     expect(nextIncompleteItem(plan, done("f1"), at("f1")).id).toBe("f2");
     expect(firstIncompleteItem(plan, new Map()).id).toBe("f1");
+  });
+});
+
+describe("passQualifies — the database's rule, not a second one", () => {
+  const item = { target_effective_bpm: 60, accuracy_target: 90, target_passes: 3 };
+  const pass = (o) => ({ notesPlayed: 5, accuracyPercent: 95, effectiveBpm: 60, ...o });
+
+  test("notes played, at or above the tempo, at or above the accuracy", () => {
+    expect(passQualifies(pass(), item)).toBe(true);
+    expect(passQualifies(pass({ accuracyPercent: 90, effectiveBpm: 61 }), item)).toBe(true);
+  });
+
+  test("a warm-up rung below the item's tempo never counts, however clean", () => {
+    expect(passQualifies(pass({ accuracyPercent: 100, effectiveBpm: 42 }), item)).toBe(false);
+  });
+
+  test("short of the accuracy, or unmeasured, does not count", () => {
+    expect(passQualifies(pass({ accuracyPercent: 89 }), item)).toBe(false);
+    expect(passQualifies(pass({ accuracyPercent: null }), item)).toBe(false);
+  });
+
+  test("a playthrough with no notes is not an attempt at all", () => {
+    expect(passQualifies(pass({ notesPlayed: 0 }), item)).toBe(false);
+  });
+
+  test("free play takes the tempo bar and no accuracy bar", () => {
+    const free = { ...item, is_free_play: true, accuracy_target: null };
+    expect(passQualifies(pass({ accuracyPercent: null }), free)).toBe(true);
+    expect(passQualifies(pass({ effectiveBpm: 59 }), free)).toBe(false);
+  });
+
+  test("nothing to judge against: false, never a throw", () => {
+    expect(passQualifies(pass(), null)).toBe(false);
+    expect(passQualifies(null, item)).toBe(false);
+    expect(passQualifies(pass({ effectiveBpm: null }), item)).toBe(false);
   });
 });
