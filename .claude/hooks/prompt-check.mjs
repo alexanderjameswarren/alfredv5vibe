@@ -17,6 +17,7 @@
 //   Run tag present, project matches this window   pass
 //   Run tag present, project does not match        BLOCK, naming both projects
 //   Run tag present, this window has no project    pass, and record it (main only)
+//   Run tag present but malformed                  BLOCK, showing the format
 //   No tag, short reply ("yes", "no drift")        pass
 //   No tag, looks like a pasted prompt             BLOCK, ask to confirm
 //   Starts with "override:"                        pass, said out loud and logged
@@ -37,6 +38,8 @@ import {
   classifyPrompt,
   codeOfCheckout,
   projectOfTag,
+  TAG_EXAMPLE,
+  TAG_FORMAT,
   writeMainCode,
 } from "../../scripts/lib/project-code.mjs";
 
@@ -130,7 +133,22 @@ function main() {
   if (tag) {
     const wanted = projectOfTag(tag);
     if (!wanted) {
-      allow(`tag=${tag}${wrapped} (no step segment, cannot tell)`);
+      // A tag that cannot be read is a tag that cannot be checked. This used to
+      // pass, and on 2026-09-29 a prompt tagged `rem-k4q-plan-t6v2` reached a
+      // window unchecked because of it — "plan" is not a step segment.
+      block(
+        `tag=${tag}${wrapped} unparseable`,
+        `\n🛑  MALFORMED RUN TAG — this prompt cannot be checked.\n\n` +
+          `  The tag     ${tag}\n` +
+          `  Expected    ${TAG_FORMAT}\n` +
+          `  For example ${TAG_EXAMPLE}\n\n` +
+          `  The step segment is "s" then a number — s1, s2, s10 — with a letter\n` +
+          `  added for a follow-up within a step (s3b). Words like "plan" or "fix"\n` +
+          `  do not parse, and nor does a missing or wrong-length random suffix.\n\n` +
+          `This window is ${where}${code ? `, working on "${code}"` : ", with no project set"}.\n` +
+          `Nothing has been sent to Claude. Fix the tag and resend, or resend with\n` +
+          `"override:" on the front if you meant it to go here as it is.`,
+      );
     }
     if (!code) {
       // First tagged prompt in the main checkout claims it for that project.

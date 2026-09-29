@@ -33,27 +33,54 @@ clipboard, so each thread needs a way to pick up its own report and nobody
 else's. That is the run tag.
 
 **Every CLI prompt this skill generates starts with a run tag line, as its
-very first line:**
+very first line. The shape is exact:**
 
 ```
-Run tag: <project>-<thread code>-<step>-<4 random characters>
+Run tag: <project-code>-s<step number>-<4 random lowercase letters or digits>
 ```
 
-For example `jobs-ax4-s10-k7p2`.
+```
+Run tag: rem-k4q-s1-t6v2
+```
 
-- Lowercase letters, digits and hyphens only, at most 40 characters. Anything
-  else is refused by the push script, not corrected.
-- `<project>` is a short name for the work (`clip`, `ken`, `sam`, `dj`, `jobs`).
-- **`<thread code>` is THIS conversation's own code: three lowercase letters or
-  digits, made up the first time this thread issues a prompt and then reused for
-  every prompt in this thread, unchanged.** It is not per step and not per
-  prompt. Write it down in your first prompt and keep using it.
-- `<step>` names the step (`s10`, `7b`, `fix`).
-- The 4 random characters make it unique, so two prompts for the same step never
-  share a tag. Make them up; they do not need to be meaningful.
+Four parts, three hyphens between them, and **a machine parses this** — the
+alfred-v5 prompt guard reads the project code out of it to decide whether the
+prompt is in the right window. A tag it cannot parse is **blocked**, not waved
+through.
+
+- `<project-code>` is `<project>-<thread code>`: a short name for the work
+  (`rem`, `clip`, `ken`, `sam`, `dj`, `jobs`) then THIS conversation's own three
+  lowercase letters or digits, made up the first time this thread issues a prompt
+  and then never changed. See "The project code" below — it does more work than
+  the rest of the tag put together.
+- **`s<step number>`** — the letter `s`, then digits. `s1`, `s2`, `s10`. A
+  follow-up *within* a step adds a letter: `s3b`, `s3c`. Nothing else goes here.
+- **4 random lowercase letters or digits**, so two prompts for the same step
+  never share a tag. Make them up; they mean nothing.
+- Lowercase letters, digits and hyphens throughout, at most 40 characters.
+  Anything else is refused by the push script, not corrected.
+
+**Numbering.** The plan prompt is `s1`. Confirm-and-claim is `s2`. Every prompt
+after that increments: `s3`, `s4`, `s5`. A correction or follow-up inside a step
+that is already underway keeps the number and adds a letter — `s3b` follows `s3`.
+
+| | |
+|---|---|
+| ✅ `rem-k4q-s1-t6v2` | the plan prompt |
+| ✅ `rem-k4q-s2-9xqm` | confirm and claim |
+| ✅ `rem-k4q-s10-b7zz` | tenth step, two digits |
+| ✅ `rem-k4q-s3b-k2np` | a follow-up within step 3 |
+| ❌ `rem-k4q-plan-t6v2` | "plan" is not a step segment — this is the one that got through |
+| ❌ `rem-k4q-step1-t6v2` | it is `s1`, not `step1` |
+| ❌ `rem-k4q-fix-t6v2` | `fix` is not a step either; use `s3b` |
+| ❌ `rem-k4q-s1` | no random suffix |
+| ❌ `rem-k4q-s1-t6v` | suffix must be exactly 4 characters |
+| ❌ `rem-k4q-S1-T6V2` | lowercase only |
+| ❌ `rem_k4q-s1-t6v2` | hyphens, never underscores |
+
 - **A new prompt gets a new tag**, even when it continues the same work — only
-  the project and thread code carry over. The full tag identifies one prompt and
-  its messages; the prefix identifies the thread.
+  the project code carries over. The full tag identifies one prompt and its
+  messages; the project code identifies the project.
 
 **Why the thread code earns its place.** An exact tag fetches the messages from
 one prompt. The thread code is what lets this conversation fetch *everything it
@@ -65,11 +92,11 @@ is picked up days later, or when a report was read and then forgotten.
 
 So: `run_tag` for one prompt's messages, `run_tag_prefix` for the whole thread.
 
-**Existing tags stay valid.** Tags already issued in the older
-`<project>-<step>-<random>` form (`clip-7b-q4m2`, `jobs-s9-t2v6`) still match
-exactly and still fetch their reports. They simply have no thread code, so a
-prefix search will not group them. Do not rewrite them, and do not go back and
-re-tag anything.
+**Old tags still fetch, but are not a format to copy.** Tags already issued in
+the older `<project>-<step>-<random>` form (`clip-7b-q4m2`, `jobs-s9-t2v6`) still
+match exactly in `get_recent_clips` and still fetch their reports, so do not go
+back and re-tag anything. But **do not write a new one in that shape**: it has no
+parseable step segment, so the alfred-v5 prompt guard blocks it.
 
 - Remember the tag of the most recent prompt you issued in this thread. That is
   the tag you look for when the report comes back — and remember the thread code,
@@ -91,7 +118,9 @@ work:
 - it names the worktree folder `.claude/worktrees/claims-wq7`,
 - which makes it the claims **owner** for every file that thread claims,
 - and a `UserPromptSubmit` hook blocks any prompt whose project code does not
-  match the window it was pasted into.
+  match the window it was pasted into — **and blocks any tag it cannot read the
+  project code out of**, which is why the step segment has to be `s<number>` and
+  nothing else.
 
 **Choosing one.** Pick it once, in the first prompt of a project, and never
 change it: `<project>` is a short name for the work (`claims`, `ken`, `sam`,

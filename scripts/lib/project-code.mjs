@@ -22,22 +22,42 @@ import path from "node:path";
 
 export const PROJECT_FILE = "alfred-project-code.json";
 
+// The one true run tag shape. Anchored end to end, deliberately:
+//
+//   <project-code>-s<step>-<4 random lowercase letters or digits>
+//   rem-k4q-s1-t6v2
+//
+// The first version scanned backwards for a segment starting `s<digit>` and took
+// everything before it. That got `rem-k4q-s1-s2ab` wrong — the random suffix
+// looked like a step, so the project came out as `rem-k4q-s1` and a correct
+// prompt would have been blocked as the wrong window. Roughly one tag in 360.
+// Anchoring the four-character suffix to the end removes the ambiguity: only one
+// segment can be the step.
+export const TAG_SHAPE = /^([a-z0-9][a-z0-9-]*)-(s\d[a-z0-9]*)-([a-z0-9]{4})$/;
+
+export const TAG_FORMAT =
+  "<project-code>-s<step number>-<4 random lowercase letters or digits>";
+export const TAG_EXAMPLE = "rem-k4q-s1-t6v2";
+
+/** `{ project, step, suffix }` for a well-formed tag, or null. */
+export function parseTag(tag) {
+  const m = String(tag).trim().match(TAG_SHAPE);
+  return m ? { project: m[1], step: m[2], suffix: m[3] } : null;
+}
+
 /**
- * The project part of a run tag: everything before the step segment.
+ * The project part of a run tag.
  *
  *   claims-wq7-s7d-u3rb  ->  claims-wq7
  *   alfred-ab1-s1-x9k2   ->  alfred-ab1
  *
- * The step segment is the last one shaped like s<digit>… (s1, s7c, s3fix2).
- * Returns null when there is no such segment — an older or hand-written tag —
- * and callers treat that as "cannot tell", not as a mismatch.
+ * Null for anything that is not the shape above — `rem-k4q-plan-t6v2`, or an
+ * older `clip-7b-q4m2`. The prompt guard **blocks** those rather than letting
+ * them through: a tag it cannot read is a tag it cannot check, and allowing it
+ * is how a prompt reached the wrong window unchecked on 2026-09-29.
  */
 export function projectOfTag(tag) {
-  const parts = String(tag).trim().split("-");
-  for (let i = parts.length - 1; i > 0; i -= 1) {
-    if (/^s\d/i.test(parts[i])) return parts.slice(0, i).join("-");
-  }
-  return null;
+  return parseTag(tag)?.project ?? null;
 }
 
 /** The `Run tag: <tag>` line of a prompt, or null. */
