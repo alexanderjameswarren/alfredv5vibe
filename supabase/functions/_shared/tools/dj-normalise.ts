@@ -278,6 +278,21 @@ export const ARTIST_ALIASES: ArtistAlias[] = [
       "identical shape of name, which is §4.1.4's whole point: the vocabularies " +
       "reverse per act and no automatic Trio rule can work.",
   },
+  {
+    from: "Cannonball Adderley Quintet",
+    to: "Cannonball Adderley",
+    why:
+      "The Quintet was Cannonball's own working band — his group with Nat " +
+      "Adderley, and 'Mercy, Mercy, Mercy (Live)' is its record — so the two " +
+      "names are one act for familiarity purposes, the same argument as Ahmad " +
+      "Jamal one entry up. DIRECTION IS TOWARD WHAT IS ALREADY STORED: the six " +
+      "plays flagged from that album (gteFzyLpvAQ, RVFtrlgzDBU, 9XCYYCyI99w, " +
+      "W9mYN0Tkoik, gY_focPmSYs, bRv9T06Gk74) are stored 'Cannonball Adderley' " +
+      "and the poll is sending the ensemble form, so this needs no backfill and " +
+      "re-keys nothing (§4.1.2). NAMED ENTRY ONLY, no Quintet rule — Eddie " +
+      "Higgins runs the other way on the same shape of name, and Miles Davis " +
+      "below is the Quintet case that must NOT merge.",
+  },
 ];
 
 // ⚠️ MILES DAVIS IS DELIBERATELY NOT AN ENTRY, and is the case that shows this

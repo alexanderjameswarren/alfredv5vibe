@@ -311,7 +311,7 @@ Carry these **from the tool's response, not from memory**:
 > Clark Terry collaboration, not a spelling variant) and the 12 unrepaired `Release` rows
 > are in there permanently, because insert-only means the correct incoming value is
 > discarded rather than applied (spec §11.13). **They are not news. Do not raise them, and
-> do not investigate them** — see `docs/dj-known-disagreements.md`, which is a rendering of
+> do not investigate them** — see `docs/history/dj-known-disagreements.md`, which is a rendering of
 > the `dj_known_disagreements` table.
 >
 > ⚠️ **An empty array is NOT evidence that no split exists**, and do not word it as if it

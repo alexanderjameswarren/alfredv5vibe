@@ -365,7 +365,7 @@ second is the OPPOSITE direction to Eddie Higgins on an identically shaped name 
 
 ---
 
-**⚠️ KNOWN-PERMANENT DISAGREEMENTS ARE LISTED IN `docs/dj-known-disagreements.md`.** Some
+**⚠️ KNOWN-PERMANENT DISAGREEMENTS ARE LISTED IN `docs/history/dj-known-disagreements.md`.** Some
 entries are decided and will fire forever — `AbbzAPXvNZ8` (a Clark Terry collaboration, not
 a spelling variant) and the 12 unrepaired `Release` rows. Check that page before
 investigating: an entry on it has been decided, an entry not on it is new.

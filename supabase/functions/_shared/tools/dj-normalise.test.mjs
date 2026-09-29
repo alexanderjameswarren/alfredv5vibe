@@ -486,6 +486,7 @@ test("the alias map is applied on BOTH sides, so an alias is not a disagreement"
     ["Red Garland", "The Red Garland Trio"],
     ["Art Blakey", "Art Blakey & The Jazz Messengers"],  // fsJ3JjpZyoA, 2026-09-23
     ["Ahmad Jamal", "Ahmad Jamal Trio"],                 // JDOUyH7VJ3Y, 2026-09-23
+    ["Cannonball Adderley", "Cannonball Adderley Quintet"],  // Mercy Mercy Mercy, 6 plays
   ];
   for (const [stored, submitted] of pairs) {
     assert.equal(detectArtistDisagreement("vid", stored, submitted), null, `${submitted}`);
