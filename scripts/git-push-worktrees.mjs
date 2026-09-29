@@ -47,6 +47,7 @@
 // collision the whole system exists to prevent.
 
 import {
+  fold,
   isDbItem,
   partitionByClaims,
   readState,
@@ -214,6 +215,36 @@ function doMain(w, ctx, release) {
   return "done";
 }
 
+/**
+ * Remove a finished worktree, trying plain then forced, and printing the manual
+ * recovery if both fail.
+ *
+ * Both failures happened for real in the Step 7 dry run: the plain remove
+ * refused because a file showed as modified (a line-ending flip, now settled by
+ * .gitattributes), and the forced remove then hit "Permission denied" because a
+ * VS Code window still had the folder open. Neither costs any work — the merge
+ * and push are already done by this point — but the leftover folder and the
+ * stale `git worktree list` entry both have to go, and the two commands that do
+ * it are not obvious.
+ */
+function removeWorktree(w, ctx) {
+  if (gitLive(["worktree", "remove", w.path], ctx.root)) return true;
+
+  say(`\n  Plain removal refused. Trying --force (the work is already in ${BASE}).`);
+  if (gitLive(["worktree", "remove", "--force", w.path], ctx.root)) return true;
+
+  say(`\n  Could not remove the worktree. Something still has the folder open —`);
+  say(`  a VS Code window or a terminal sitting in it${w.isCurrent ? ", this one included" : ""}.`);
+  say(`\n  The merge, the push and the claim release all succeeded. Only the`);
+  say(`  folder is left. Close whatever has it open, then run these two:`);
+  say(``);
+  say(`    Remove-Item -Recurse -Force "${w.path.replace(/\//g, "\\")}"`);
+  say(`    git -C "${ctx.root.replace(/\//g, "\\")}" worktree prune`);
+  say(``);
+  say(`  Then delete the branch:  git branch -d ${w.branch}`);
+  return false;
+}
+
 function doFinish(w, ctx) {
   heading(`Finish — ${w.owner}`);
 
@@ -235,7 +266,18 @@ function doFinish(w, ctx) {
   say(`Release all ${w.files.length + w.db.length} claim(s) held by ${w.owner}.`);
   say(`Remove  the worktree, then delete branch ${w.branch}.`);
 
-  if (!confirm("\nDo all of that?")) return "cancelled";
+  // Windows will not delete a folder anything still has open, and in the Step 7
+  // dry run that was a VS Code window sitting in the worktree. Better asked now
+  // than discovered after the merge and push have already happened.
+  say(`\n⚠  Close any VS Code window or terminal open on:`);
+  say(`     ${w.path}`);
+  if (w.isCurrent) {
+    say(`   That includes THIS terminal, which is inside it. Removal will fail`);
+    say(`   from here — the merge, push and release will still work, and the`);
+    say(`   recovery commands will be printed.`);
+  }
+
+  if (!confirm("\nClosed? Do all of that?")) return "cancelled";
 
   if (claimedChanges.length) {
     const message = ask("Commit message: ").trim();
@@ -248,12 +290,8 @@ function doFinish(w, ctx) {
   say(`\n  Released ${released.length} claim(s): ${released.join(", ") || "none"}`);
 
   // Worktree removal is last: if it fails, the work is already safely in main.
-  if (!gitLive(["worktree", "remove", w.path], ctx.root)) {
-    say(`\n  Could not remove the worktree — uncommitted changes, probably.`);
-    say(`  The merge and push succeeded and the claims are released.`);
-    say(`  To force it:  git worktree remove --force "${w.path}"`);
-    return "partial";
-  }
+  if (!removeWorktree(w, ctx)) return "partial";
+
   if (!gitLive(["branch", "-d", w.branch], ctx.root)) {
     say(`\n  Branch ${w.branch} not deleted — it may hold commits not in ${BASE}.`);
     say(`  To force it:  git branch -D ${w.branch}`);
@@ -333,14 +371,25 @@ function doCheckpoint(w, ctx) {
 }
 
 function main() {
-  const ctx = resolveRepo();
+  const here = resolveRepo();
 
   heading("gitpush");
-  if (ctx.isWorktree) {
-    stop(
-      `Run gitpush from the main checkout, not from inside a worktree —\n` +
-        `it merges worktree branches into ${BASE}, which lives there.`,
-    );
+
+  // gitpush works from any terminal, including one inside a worktree. It always
+  // operates on the main checkout, which `git worktree list` names first, so
+  // there is nothing to remember about which window you happen to be in.
+  // (gitcom and gitsync are deliberately the opposite: they act on the checkout
+  // you are standing in.)
+  const trees = listWorktrees();
+  const mainTree = trees.find((t) => t.isMain);
+  if (!mainTree) stop("Could not find the main checkout in `git worktree list`.");
+
+  // owner is pinned to main so nothing downstream can accidentally act as the
+  // worktree we happened to be launched from. The claims file itself is shared,
+  // so ctx.file and ctx.dir are the same wherever this runs.
+  const ctx = { ...here, root: mainTree.path, owner: BASE, isWorktree: false };
+  if (here.isWorktree) {
+    say(`Run from worktree ${here.owner}; operating on the main checkout.`);
   }
 
   const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], ctx.root);
@@ -351,10 +400,15 @@ function main() {
   const state = readState(ctx.file);
   // Main is always listed, first: work that never used a worktree still has to
   // get pushed and still has claims that need releasing.
-  const trees = listWorktrees().map((t) => summarise(t, state));
+  const summarised = trees.map((t) => ({
+    ...summarise(t, state),
+    // The terminal we were launched from holds a handle on its own folder, so
+    // Windows will not let that folder be deleted while we stand in it.
+    isCurrent: fold(t.path) === fold(here.root),
+  }));
 
-  say(`\n${trees.length} checkout(s):`);
-  trees.forEach((w, i) => showTree(w, i + 1));
+  say(`\n${summarised.length} checkout(s):`);
+  summarised.forEach((w, i) => showTree(w, i + 1));
 
   const pick = ask(
     "\nWhich? (numbers space separated, 'all', or enter to cancel): ",
@@ -363,10 +417,10 @@ function main() {
 
   const chosen =
     pick.toLowerCase() === "all"
-      ? trees
+      ? summarised
       : pick
           .split(/\s+/)
-          .map((t) => trees[Number(t) - 1])
+          .map((t) => summarised[Number(t) - 1])
           .filter(Boolean);
 
   if (!chosen.length) stop("Nothing recognised in that. Nothing changed.", 0);

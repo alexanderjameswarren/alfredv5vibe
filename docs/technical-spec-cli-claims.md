@@ -60,7 +60,7 @@ Node script, no dependencies beyond Node's built-ins. It works out the owner fro
 | Command | What it does |
 |---|---|
 | `status` | Prints all claims and reservations, grouped by owner, with age. |
-| `check <items...>` | Read-only. Reports, per item: free, held by this owner, held by another owner (conflict), or reserved by another owner (warning). Exit code 0 if no conflicts, 1 if any conflict. |
+| `check <items...>` | Read-only. Reports, per item: free, held by this owner, held by another owner (conflict), reserved by another owner (warning), or **reserved by this owner** (`yours … reserved for <step> — not claimed yet`). Exit code 0 if no conflicts, 1 if any conflict. |
 | `claim <items...> [--run-tag t] [--note n]` | Inside the lock, checks every item and claims all of them only if none conflict. All-or-nothing. Exit 1 and list conflicts otherwise. |
 | `reserve <item> --step <step>` | Adds a plan reservation. Never blocks. |
 | `release <items...>` / `release --all` | Removes this owner's claims (and matching reservations). Refuses `--owner`. |
@@ -89,7 +89,12 @@ mechanisms, because the first two were each defeated in testing:
 4. **The guard blocks a chained claim.** It is not documented whether Claude Code
    splits a compound command before matching a prefix rule, so `claims.mjs check x &&
    claims.mjs claim x` might ride in on the pre-approved `check` rule. `claim`,
-   `reserve` and `cleanup` must therefore stand alone.
+   `reserve` and `cleanup` must therefore stand alone — with **one exception**: a
+   leading `cd <this thread's own checkout> &&` is stripped before the check. Sessions
+   in the VS Code Claude panel add that prefix as a matter of course, and going where
+   you already are cannot change which claims file is written or which owner writes it.
+   A `cd` to anywhere else is not stripped and stays blocked, because
+   `cd ../other-worktree && claims.mjs claim x` would claim as a different owner.
 
 **The prompt is a backstop, not the confirmation.** `.claude/CLAUDE.md` draws the line
 by who named the file: **a file Alex named in his instruction is confirmed** — claim it
@@ -161,6 +166,30 @@ The list, in `scripts/lib/claims-core.mjs`: `.clip/`, `.git/`, `node_modules/`,
 `tools/sam-tools/node_modules/`, `workshop/.venv/`, `build/`, `coverage/`,
 `supabase/.temp/`. All per-worktree or generated. `claims.mjs check` reports them as
 `exempt` and `claim` skips them with a note.
+
+### Line endings
+
+`.gitattributes` sets `* text=auto eol=lf` plus explicit `binary` for media and fonts.
+
+Git for Windows puts `core.autocrlf=true` in **system** config, so every checkout here
+got CRLF in the working tree while the repo stored LF. That is invisible until it is
+not: in the Step 7 dry run, `gitpush` Finish could not remove either worktree because
+`.claude/settings.local.json` showed as modified with no visible diff. A `.gitattributes`
+overrides `core.autocrlf`, so the behaviour stops depending on a machine-wide setting
+nothing in the repo can see — which matters more here than usual, because every worktree
+is a separate checkout and they all have to agree.
+
+LF rather than CRLF, and `eol=lf` rather than `text=auto` alone: the repo is already
+all-LF (724 of 724 text files), everything that runs this code runs it on Linux (Vercel,
+Supabase/Deno), the only Windows consumers are editors and PowerShell, and there are no
+`.bat` or `.cmd` files — the one thing that genuinely needs CRLF. `text=auto` alone would
+normalise the repo but still write CRLF into the working tree, which is the half that
+caused the trouble.
+
+**No renormalisation is needed.** The index is already LF, so `git add --renormalize .`
+stages nothing. Files currently CRLF in the working tree keep their endings until they
+are next rewritten, and git sees them as clean either way; new checkouts and new
+worktrees get LF.
 
 ## Component 3: worktree setup
 
@@ -234,8 +263,12 @@ after `--`.
   on conflict names the conflicting files and the `merge --abort` command rather than
   tidying it away. Two threads should never hold the same file, so a conflict here is
   worth looking at.
-- **gitpush** (rewritten, run from the main checkout): refuses to run inside a worktree
-  or when main is not checked out. Lists **the main checkout and** every open worktree,
+- **gitpush** (rewritten, run from anywhere): it always operates on the main checkout,
+  found as the first entry of `git worktree list`, so it works from a terminal inside a
+  worktree too and there is nothing to remember about which window you are in. gitcom
+  and gitsync are deliberately the opposite — they act on the checkout you are standing
+  in. gitpush still refuses when main is not checked out. Lists **the main checkout and**
+  every open worktree,
   each with its branch (read from `git worktree list --porcelain`), its claims, what is
   unpushed and whether it has uncommitted changes. Alex picks one, several, or all.
 
@@ -254,7 +287,12 @@ after `--`.
   For each chosen worktree, one at a time, it asks which mode:
   - **Finish:** commit its claimed changes, merge its branch into main, push, release
     **all** its claims, remove the worktree and delete the branch. Unclaimed changes in
-    that worktree are left uncommitted and named, not swept in.
+    that worktree are left uncommitted and named, not swept in. Before anything happens
+    it says which folder to close in VS Code — Windows will not delete a folder anything
+    still has open, and if it is the terminal gitpush was launched from it says that too.
+    If removal still fails it tries `--force`, and if that fails it prints the two
+    recovery commands (`Remove-Item -Recurse -Force <path>` then `git worktree prune`),
+    having already merged, pushed and released.
   - **Checkpoint:** commit only the paths Alex names (normally the database and MCP files
     for a just-deployed step), merge into main, push, release only the `db:` claims he
     names, and keep the worktree. Other uncommitted work stays in the worktree and does

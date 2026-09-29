@@ -55,6 +55,7 @@ import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import {
   ClaimsError,
+  fold,
   heldBy,
   isExempt,
   readState,
@@ -184,6 +185,35 @@ const claimHint = (items) =>
 const APPROVAL_NEEDED = /claims\.mjs\s+(claim|reserve|cleanup)\b/;
 const CHAINED = /(?:&&|\|\||[;|]|\n)/;
 
+// `cd <somewhere> && ` at the very start, with the path quoted or bare.
+const CD_PREFIX = /^\s*cd\s+(?:"([^"]+)"|'([^']+)'|([^\s&|;]+))\s*&&\s*/;
+
+/**
+ * Strip a leading `cd <this checkout> &&` if that is what it is.
+ *
+ * Sessions in the VS Code Claude panel put that prefix on commands as a matter of
+ * course, and blocking it made claiming from a panel session impossible. It is
+ * safe to allow for exactly one destination — this thread's own checkout — because
+ * going somewhere it already is cannot change which claims file is written or
+ * which owner does the writing, and the command after it is still checked for
+ * every other kind of chaining.
+ *
+ * A `cd` anywhere else is not stripped, so it stays a chained command and is
+ * blocked: `cd ../other-worktree && claims.mjs claim x` would claim as a
+ * different owner, which is the thing worth refusing.
+ */
+function stripOwnCd(command, root) {
+  const m = command.match(CD_PREFIX);
+  if (!m) return command;
+  const target = m[1] ?? m[2] ?? m[3];
+  try {
+    if (fold(path.resolve(root, target)) !== fold(path.resolve(root))) return command;
+  } catch {
+    return command;
+  }
+  return command.slice(m[0].length);
+}
+
 /**
  * Refuse a claim that is chained onto another command.
  *
@@ -195,9 +225,11 @@ const CHAINED = /(?:&&|\|\||[;|]|\n)/;
  * alone removes the question: on its own it can only match a claim, reserve or
  * cleanup rule, and there are none.
  */
-function checkApprovalBypass(command) {
+function checkApprovalBypass(command, root) {
   const m = command.match(APPROVAL_NEEDED);
   if (!m) return;
+
+  command = stripOwnCd(command, root);
 
   if (!CHAINED.test(command)) {
     // Bare claim/reserve/cleanup: put it in front of Alex. See ask().
@@ -247,12 +279,12 @@ function main() {
 
   const filePath = targetPath(toolName, input);
   const command = toolName === "Bash" ? String(input.command ?? "") : "";
-  if (command) checkApprovalBypass(command);
+  const needsApproval = command && APPROVAL_NEEDED.test(command);
 
   const deploying = toolName === "Bash" && isDeploy(command);
   const indicator = command ? writeIndicator(command) : null;
 
-  if (!filePath && !deploying && !indicator) allow("not a change");
+  if (!filePath && !deploying && !indicator && !needsApproval) allow("not a change");
 
   // Hooks run from the session's directory, which in a worktree is the worktree
   // root — exactly what decides the owner.
@@ -274,6 +306,10 @@ function main() {
         `Tell Alex: the claims file is broken and needs fixing by hand.`,
     );
   }
+
+  // After resolveRepo, because working out whether a `cd` prefix points at this
+  // thread's own checkout needs to know where that is.
+  if (needsApproval) checkApprovalBypass(command, ctx.root);
 
   if (!state.existed) {
     block(

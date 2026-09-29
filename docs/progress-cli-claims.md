@@ -1,6 +1,6 @@
 # Progress: CLI Claims System
 
-## Status: Steps 1–6 done. Step 7 checklist written, awaiting Alex's dry run.
+## Status: Steps 1–7 done. Step 7c fixes awaiting verification. Step 8 next.
 
 ### Development Steps
 - [x] Step 1: Discovery (read-only). Find where `gitcom` and `gitpush` are defined and summarize what they do; find all existing Claude Code hooks (project and user settings); find the cli-workflow skill if it is in the repo; list git-ignored files a worktree needs to run; read the git rules in `CLAUDE.md`. Report and stop.
@@ -9,7 +9,7 @@
 - [x] Step 4: Worktree setup: `.gitignore` entry and `.worktreeinclude`.
 - [x] Step 5: Write `scripts/git-commit-claimed.mjs`, `scripts/git-sync.mjs` and `scripts/git-push-worktrees.mjs`; hand Alex the four PowerShell wrapper functions to paste in.
 - [x] Step 6: Add the thread protocol to `.claude/CLAUDE.md`.
-- [ ] Step 7: End-to-end dry run with two worktrees (Alex runs it, CLI writes the checklist).
+- [x] Step 7: End-to-end dry run with two worktrees (Alex runs it, CLI writes the checklist).
 - [ ] Step 8: Draft the cli-workflow skill changes so every future prompt includes the plan and claim steps, and so Supabase deploys are gated behind a `db:deploy` claim instead of being fine to ask for normally.
 
 ---
@@ -648,6 +648,122 @@ produces the same output after losing its duplicated logic. All four files parse
 guard suite is still 69/69.
 
 **Untested by definition:** the commit, push and release paths. Those are Alex's.
+
+---
+
+## Step 7 RESULT + Step 7c fixes, 2026-09-29
+
+**The dry run passed end to end.** Plan, claim and reserve in wt-a. wt-b's `check`
+reported CONFLICT on `shared.md` naming wt-a, and the guard blocked its write. The
+database flow claimed and released only `db:` items, leaving the file claims alone.
+`gitsync` in wt-b fast-forwarded wt-a's work with no conflict. `gitpush` Finish
+committed, merged, pushed and released claims for both worktrees. Final state clean,
+main's 12 claims intact. Both worktrees ran in their own VS Code windows using the
+Claude panel.
+
+**Step 7 is complete.** Five things it surfaced, all fixed below.
+
+**Files changed**
+- `.gitattributes` — new.
+- `.claude/hooks/claims-guard.mjs` — the `cd` prefix exception.
+- `scripts/claims.mjs` — `check` reports your own reservation.
+- `scripts/git-push-worktrees.mjs` — runs from anywhere; worktree-removal handling.
+- `docs/technical-spec-cli-claims.md`, `docs/progress-cli-claims.md`.
+
+Nothing was committed.
+
+### 1. Line endings
+
+`* text=auto eol=lf`, plus explicit `binary` for media and fonts, and `-diff` on the
+lockfile.
+
+`core.autocrlf=true` turns out to be in **system** config — the Git for Windows installer
+default — so every checkout got CRLF in the working tree while the repo stored LF. A
+`.gitattributes` overrides it, which is what matters here: nothing in the repo could see
+that setting, and every worktree is a separate checkout that has to agree with the others.
+
+LF rather than CRLF, and `eol=lf` rather than bare `text=auto`, because the index is
+already **724 of 724 text files LF**; everything that runs this code runs it on Linux
+(Vercel, Supabase/Deno); the only Windows consumers are editors and PowerShell, both fine
+with LF; and there are no `.bat` or `.cmd` files, the one thing that genuinely needs CRLF.
+`text=auto` alone would normalise the repo but still write CRLF into the working tree —
+the half that caused the trouble.
+
+**No renormalisation needed.** The index is already LF, so `git add --renormalize .`
+stages nothing; confirmed. Of the working tree, 536 files are LF, 178 CRLF and 10 mixed;
+git reads all of them as clean either way, and they become LF as they are rewritten. New
+checkouts and new worktrees get LF from the start, which is the case that mattered.
+
+**One honest caveat.** I could not reproduce the exact trigger — the worktrees were gone
+by the time I looked, and on paper `autocrlf=true` should have cleaned a CRLF working
+file back to LF without reporting a difference. What `.gitattributes` does for certain is
+make the behaviour deterministic and identical in every checkout, which removes the class.
+If a worktree ever shows `.claude/settings.local.json` as modified again, the other
+candidate is Claude Code persisting an approved permission rule into it during the
+session — a real content change, and one that Finish now warns about before it starts.
+
+### 2. Worktree removal
+
+Finish now says, **before** the confirmation, which folder to close in VS Code, and says
+so explicitly when that folder is the terminal gitpush itself was launched from. If plain
+removal still fails it tries `--force`, and if that fails too it prints the exact
+recovery:
+
+```
+Remove-Item -Recurse -Force "<worktree path>"
+git -C "<main path>" worktree prune
+```
+
+plus the branch delete. Both failures happened for real in the dry run — the plain remove
+refused over the line-ending flip, the forced remove hit "Permission denied" from the open
+VS Code window — and neither costs any work, since the merge, push and release are all
+done by that point. What was missing was saying so, and saying what to type.
+
+### 3. gitpush from any terminal
+
+It no longer refuses inside a worktree. It finds the main checkout as the first entry of
+`git worktree list` and operates there, printing "Run from worktree X; operating on the
+main checkout." when that applies. `ctx.owner` is pinned to `main` so nothing downstream
+can act as the worktree it happened to be launched from. It still refuses when main is not
+checked out.
+
+gitcom and gitsync stay local to the checkout they are run in, deliberately — that is what
+they mean.
+
+### 4. The `cd` prefix
+
+The guard stripped nothing before checking for chaining, so `cd <checkout> && claims.mjs
+claim x` — which Claude panel sessions produce naturally — was blocked as a chained claim.
+A leading `cd <this thread's own checkout> &&` is now stripped before the check. Safe
+because going where you already are cannot change which claims file is written or which
+owner writes it, and the rest of the command is still checked for every other kind of
+chaining. A `cd` anywhere else is **not** stripped and stays blocked:
+`cd ../other-worktree && claims.mjs claim x` would claim as a different owner, which is
+exactly what the rule is for.
+
+### 5. `check` and your own reservation
+
+An item this thread had reserved reported as plain `free`, which reads as though the plan
+had never been made. It now reads:
+
+```
+yours     db:table:inbox (reserved for Step 5 — not claimed yet)
+```
+
+Another thread still sees `warning … reserved by <owner> for <step>`. Neither is a
+conflict, so exit codes are unchanged.
+
+### Tested
+
+75 guard cases (up from 69), all passing — seven new ones covering the `cd` rule:
+own checkout with backslashes, with forward slashes, `cd .`, a different repo, `cd own &&
+claim && echo`, `cd own ; claim`, and `echo && cd own && claim`. Only the first three are
+allowed. `removeClaims` still 11/11. `check` verified from both the reserving thread and
+another. gitpush re-run from main lists correctly and cancels cleanly; gitcom unchanged.
+
+**Untested:** gitpush launched from inside a worktree, and the worktree-removal recovery
+path — both need a worktree, and creating one is Alex's. They are in the verification
+steps.
 
 ---
 

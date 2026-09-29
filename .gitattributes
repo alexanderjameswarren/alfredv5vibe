@@ -1,0 +1,54 @@
+# Line endings: LF everywhere, in the repo and in the working tree.
+#
+# ---------------------------------------------------------------------------
+# WHY THIS FILE EXISTS
+# ---------------------------------------------------------------------------
+#
+# Git for Windows sets core.autocrlf=true in SYSTEM config, so every checkout on
+# this machine got CRLF in the working tree while the repo stored LF. That is
+# invisible until it is not: during the Step 7 dry run, `gitpush` Finish could not
+# remove either worktree because `.claude/settings.local.json` showed as modified
+# with no visible diff.
+#
+# A .gitattributes overrides core.autocrlf, so behaviour stops depending on a
+# machine-wide setting that nothing in the repo can see — which matters more here
+# than usual, because every worktree is a separate checkout and they all have to
+# agree.
+#
+# ---------------------------------------------------------------------------
+# WHY LF AND NOT CRLF
+# ---------------------------------------------------------------------------
+#
+# The repo is already all-LF: 724 of 724 text files are stored LF in the index.
+# Everything that runs this code runs it on Linux — Vercel builds the React app,
+# Supabase runs the Edge Functions under Deno — and the only Windows consumers are
+# editors and PowerShell, both of which read LF without complaint. There are no
+# .bat or .cmd files, which are the one thing that genuinely needs CRLF.
+#
+# So `eol=lf` rather than `text=auto` alone: auto normalises the repo but still
+# writes CRLF into the working tree on Windows, which is the half that caused the
+# trouble.
+
+* text=auto eol=lf
+
+# Binary files: never touched, never diffed as text.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.webp   binary
+*.pdf    binary
+*.zip    binary
+*.mp3    binary
+*.wav    binary
+*.flac   binary
+*.m4a    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.otf    binary
+*.eot    binary
+
+# Lockfiles are generated. Diffing them by hand helps nobody.
+package-lock.json  -diff

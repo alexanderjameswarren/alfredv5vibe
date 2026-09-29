@@ -43,6 +43,7 @@ import {
   isExempt,
   isFolderItem,
   normaliseItem,
+  overlaps,
   readState,
   resolveRepo,
   withLock,
@@ -64,6 +65,13 @@ function describe(item, owner, state) {
     ? ` (also reserved by ${reserved.map((r) => `${r.owner} for ${r.step}`).join(", ")})`
     : "";
 
+  // This thread's own reservation. `inspect` only reports other owners', because
+  // that is what is a warning — but reporting your own plan back as "free" reads
+  // as though the plan were never made.
+  const ownReservations = state.reservations.filter(
+    (r) => r.owner === owner && overlaps(r.item, item),
+  );
+
   if (theirs.length) {
     const who = theirs
       .map((c) => `${c.owner} holds ${c.item}${c.note ? ` — ${c.note}` : ""}`)
@@ -82,6 +90,13 @@ function describe(item, owner, state) {
       line: `warning   ${item} — reserved by ${reserved
         .map((r) => `${r.owner} for ${r.step}`)
         .join(", ")}`,
+    };
+  }
+  if (ownReservations.length) {
+    const steps = ownReservations.map((r) => r.step).join(", ");
+    return {
+      status: "yours-reserved",
+      line: `yours     ${item} (reserved for ${steps} — not claimed yet)`,
     };
   }
   return { status: "free", line: `free      ${item}` };
