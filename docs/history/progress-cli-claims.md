@@ -1,6 +1,6 @@
 # Progress: CLI Claims System
 
-## Status: Steps 1–7 done. Step 7f fixes awaiting verification. Step 8 next.
+## Status: All 8 steps done. Step 8 awaiting verification and the skill upload.
 
 ### Development Steps
 - [x] Step 1: Discovery (read-only). Find where `gitcom` and `gitpush` are defined and summarize what they do; find all existing Claude Code hooks (project and user settings); find the cli-workflow skill if it is in the repo; list git-ignored files a worktree needs to run; read the git rules in `CLAUDE.md`. Report and stop.
@@ -10,7 +10,7 @@
 - [x] Step 5: Write `scripts/git-commit-claimed.mjs`, `scripts/git-sync.mjs` and `scripts/git-push-worktrees.mjs`; hand Alex the four PowerShell wrapper functions to paste in.
 - [x] Step 6: Add the thread protocol to `.claude/CLAUDE.md`.
 - [x] Step 7: End-to-end dry run with two worktrees (Alex runs it, CLI writes the checklist).
-- [ ] Step 8: Draft the cli-workflow skill changes so every future prompt includes the plan and claim steps, and so Supabase deploys are gated behind a `db:deploy` claim instead of being fine to ask for normally.
+- [x] Step 8: Draft the cli-workflow skill changes so every future prompt includes the plan and claim steps, and so Supabase deploys are gated behind a `db:deploy` claim instead of being fine to ask for normally.
 
 ---
 
@@ -744,6 +744,92 @@ check. The clone was deleted; `git worktree list` and `git branch` confirm this 
 unchanged.
 
 **Untested:** creating a worktree for real, and the lock-recovery path. Both are Alex's.
+
+---
+
+## Step 8, 2026-09-29 — the cli-workflow skill
+
+**Step 7 is fully complete.** The 7f retest passed: a pasted tagged prompt passes;
+wrong-window and untagged pasted prompts are blocked; `override:` works both typed
+before the pasted block and as its first line; "yes" passes; `gitnewtree` on an existing
+code recognises it and creates nothing.
+
+**Files changed**
+- `.claude/skills/cli-workflow/SKILL.md` — 578 lines to 770.
+- `docs/progress-cli-claims.md` — this file.
+
+Nothing was committed.
+
+### What went into the skill
+
+**Run tags on everything.** The rule was already there for task prompts; it now says
+explicitly that short follow-ups get one too — "confirmed, go ahead", "yes, claim it" —
+because alfred-v5 blocks a prompt whose tag belongs to another window, and it can only do
+that if there is a tag. A bare word Alex types himself is still fine; anything the skill
+*writes* carries one.
+
+**The project code has a section of its own.** `<project>-<thread code>`, everything
+before the step segment: `claims-wq7-s8-k6tr` → `claims-wq7`. It names the worktree
+folder, which makes it the claims owner, which is what the prompt guard tests against —
+three things that are the same string, said once. Chosen in the first prompt of a project
+and never changed, including when the project is picked up in a new claude.ai thread
+later: a new thread code would strand the worktree and its claims.
+
+**A `Window:` line on every prompt**, after the run tag. The hook already blocks a
+misdirected prompt, but Alex is reading the prompt in a claude.ai thread with several
+windows open and still has to be told where it goes.
+
+**The first two prompts of a project.** Prompt 1 is the read-only plan — every file and
+folder, every database item *with the step that needs it*, `claims.mjs check` on all of
+it, change nothing, stop. Prompt 2 confirms and claims in one command. With the reason
+they are not folded together: the value of the plan is that Alex sees what a thread
+intends to own before it owns it, and a plan that has already claimed is not a plan.
+
+**Alex's four commands** as a table, each with when to use it — `gitnewtree` (and Step 0
+first, and `npm install` only when the thread will run tests or builds), `gitcom`,
+`gitsync` (always before a database step), `gitpush` (any terminal, and the two mode sets).
+Plus: tell him to close the worktree's window and exit its Claude session before Finish,
+since a live session locks the worktree and the removal fails.
+
+**The database step** end to end, including `_pending_<owner>_<purpose>.sql` and why
+claims cannot catch a migration-number collision.
+
+**Testing steps are PowerShell-ready.** Fenced `powershell` blocks, one per terminal, each
+with a comment naming which terminal; PowerShell 5.1 constraints spelled out (no `&&`, no
+ternary, no `??`); backslash full paths; `Remove-Item -Recurse -Force`, not `rm -rf`. And
+the rule that a shell command is never typed into a Claude session — it is a chat window,
+so a command pasted there is a request, not an execution, and may well be refused.
+
+**The Supabase carve-out is gone.** It used to say deploys "are fine and are not git — ask
+for those normally". It now says a deploy may be asked for only inside the database step:
+after `gitsync`, after the drift check, while holding `db:deploy`. The guard blocks it
+otherwise, so the old wording bought a wasted round trip. The four git commands are also
+named as Alex's, so the skill does not write a prompt asking the CLI to run one.
+
+**Reading reports.** The `repo` field names the worktree — `alfred-v5 on
+worktree-claims-wq7` — so it is a second check that the work happened where it was meant
+to, and a `claims-wq7` report arriving from `main` is worth a line in the TLDR. Fetch by
+exact `run_tag` for one prompt, by `run_tag_prefix` set to the project code for
+everything the project has ever reported.
+
+### How the repo copy reaches claude.ai: it does not
+
+Worth stating plainly, because it is a trap. `.claude/skills/cli-workflow/SKILL.md` in
+this repo is what **Claude Code sessions in this repo** see. The skill claude.ai uses is a
+**separate uploaded copy**, in the account-level "My Uploads" marketplace
+(`~/.claude/plugins/synced/…/.marketplaces.json` shows it as
+`{"name": "My Uploads", "scope": "account", "source": "claudeai"}`). Nothing syncs one to
+the other, and both are loaded in a Claude Code session here — which is why
+`cli-workflow` and `anthropic-skills:cli-workflow` both appear, with what were until now
+identical descriptions.
+
+So this edit changes nothing for claude.ai until Alex uploads it. Until he does, the two
+copies have drifted and the claude.ai one is the older behaviour.
+
+### Untested
+
+The skill is prose; there is nothing to run. It is verified by using it — the steps in the
+report ask for one new prompt to be generated and checked against the new rules.
 
 ---
 

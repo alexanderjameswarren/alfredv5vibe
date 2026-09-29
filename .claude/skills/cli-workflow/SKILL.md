@@ -1,6 +1,17 @@
 ---
 name: cli-workflow
-description: Runs both halves of the CLI loop for personal projects. Use it to generate CLI instruction sets when the user asks for "CLI instructions", a "code CLI prompt", or says they're ready to implement, in both React and Python projects. ALSO use it — this is the higher-frequency half — whenever the CLI's output comes back: when the user sends just "cli", says the CLI responded in any wording (fetch the report from the Alfred clipboard with get_recent_clips, matching this thread's run tag), or pastes a block of CLI output, whether or not they say so, including when they paste it with no comment, or ask only for a "TLDR", a summary, or "flag questions". Assume the user has NOT read the CLI output. Every generated CLI prompt starts with a "Run tag:" line. Always use this skill when CLI execution is anywhere in the picture, even if the user doesn't explicitly ask for formatted instructions.
+description: >-
+  Runs both halves of the CLI loop for Alex's personal projects. Use it to write
+  CLI prompts (each starts with a "Run tag:" line and a "Window:" line) whenever
+  he asks for CLI instructions or a code CLI prompt, or is ready to implement,
+  in React or Python projects, including parallel work in worktrees (gitnewtree,
+  gitcom, gitsync, gitpush, file and database claims). Also use it, more often,
+  whenever CLI output comes back: when he sends just "cli", says the CLI
+  responded in any wording (fetch the report from the Alfred clipboard with
+  get_recent_clips by run tag or project code), pastes CLI output with or
+  without comment, or asks only for a TLDR or to flag questions. Assume he has
+  not read the CLI output. Use it whenever CLI work is involved, even if he does
+  not ask for formatted instructions.
 ---
 
 # CLI Workflow
@@ -64,6 +75,32 @@ re-tag anything.
   the tag you look for when the report comes back — and remember the thread code,
   which is how you find all of them.
 
+**EVERY prompt gets a tag — including the short ones.** "Confirmed, go ahead",
+"yes, claim it", "no drift" all get a `Run tag:` line, for the same reason the
+long ones do: alfred-v5 blocks a prompt whose tag belongs to a different window,
+and it can only do that if there is a tag. A bare one-word reply Alex types
+himself is fine; anything this skill *writes* carries a tag.
+
+### The project code
+
+`<project>-<thread code>` together — everything before the step segment — is the
+**project code**: `claims-wq7-s8-k6tr` → `claims-wq7`. It is the one part of the
+tag that never changes for the life of a project, and in alfred-v5 it does real
+work:
+
+- it names the worktree folder `.claude/worktrees/claims-wq7`,
+- which makes it the claims **owner** for every file that thread claims,
+- and a `UserPromptSubmit` hook blocks any prompt whose project code does not
+  match the window it was pasted into.
+
+**Choosing one.** Pick it once, in the first prompt of a project, and never
+change it: `<project>` is a short name for the work (`claims`, `ken`, `sam`,
+`dj`, `jobs`, `inbox`), `<thread code>` is this conversation's three characters.
+It must be lower case letters, digits and hyphens. If the same project is picked
+up in a new claude.ai thread later, keep the *original* project code — the
+worktree and its claims are named after it, and a new thread code would strand
+them.
+
 In the Alfred repo (alfred-v5), the `CLAUDE.md` rule makes the CLI push its
 closing message to the clipboard with `node scripts/clip.mjs --tag <tag>` EVERY
 TIME it hands the turn back — finishing, waiting for something to be run or
@@ -72,6 +109,109 @@ several messages under one tag for a task that stops more than once. For a repo 
 not have `scripts/clip.mjs` and that rule, add this line to the prompt after the
 tag: "When you finish, print your full report; Alex will paste it back." The
 return leg then works from the pasted text as before.
+
+## alfred-v5: windows, worktrees and claims
+
+**This section applies to alfred-v5 only.** Other repos have no claims system;
+skip it there.
+
+Alfred runs several CLI threads at once, each in its own git worktree and its own
+VS Code window, sharing one claims file. A thread claims the files it will touch,
+and the guard hook refuses to let it edit anything it has not claimed — so a
+prompt that skips the claim step does not go slowly wrong, it stops.
+
+### Say which window, every time
+
+**Every prompt names the window it goes in**, on the line after the run tag:
+
+```
+Run tag: claims-wq7-s8-k6tr
+Window: the claims-wq7 worktree
+```
+
+or
+
+```
+Run tag: jobs-ax4-s3-p1m9
+Window: the main checkout
+```
+
+This is not a courtesy. Alfred blocks a prompt whose project code does not match
+the window, so a prompt pasted into the wrong one never reaches Claude — but Alex
+still has to know where it *should* go, and he is reading this in a claude.ai
+thread with several windows open.
+
+Work in the main checkout when it is the only thing running. Use a worktree when
+two projects are live at once, or when the work is long enough that something
+else will want the repo before it is done.
+
+### A new project's first two prompts
+
+**Prompt 1 is the plan, and it is read-only.** It must:
+
+- list every file and folder the work will touch,
+- list every database item it will need — `db:table:<name>`, `db:fn:<name>`,
+  `db:deploy` — **each with the step that needs it**,
+- run `node scripts/claims.mjs check` on all of it,
+- report conflicts and warnings, change nothing, claim nothing, and stop.
+
+**Prompt 2 confirms and claims**, after Alex has read the plan: claim every file
+and folder in one command, reserve each database item with its step, then start.
+
+Do not fold these together. The whole value of the plan step is that Alex sees
+what a thread intends to own *before* it owns it, and a plan that has already
+claimed is not a plan. The exception is a change so small it touches one file
+Alex has already named — then his instruction is the confirmation and the thread
+claims that file and gets on with it.
+
+### Alex's commands
+
+The CLI never runs these. A prompt asks Alex to run one and then waits.
+
+| Command | When |
+|---|---|
+| `gitnewtree <project-code>` | Starting work that needs its own worktree. Refuses until main is committed and pushed, so `gitpush` main → Push comes first. Say yes to `npm install` when the thread will run tests or a build; skip it for docs-only work. |
+| `gitcom` | A local commit, part-way through. Commits only what this thread has claimed and has changed; asks about anything unclaimed. Releases nothing. |
+| `gitsync` | Inside a worktree, to bring main in. **Always before a database step**, so the thread is looking at everything already live. |
+| `gitpush` | Any terminal — it always acts on the main checkout. For **main**: Push (commit and push, keep the claims) / Finish (and release them) / Skip. For a **worktree**: Checkpoint (merge only named files, worktree carries on) / Finish (merge everything, release claims, remove the worktree) / Skip. |
+
+**Before asking for `gitpush` Finish on a worktree, tell him to close that
+worktree's VS Code window and exit its Claude session.** A running session locks
+the worktree and the removal fails — the merge and push still succeed, but he is
+left running recovery commands.
+
+### The database step, just in time
+
+At the step that needs the database, not before:
+
+1. `claims.mjs check` the `db:table:*`, `db:fn:*` and `db:deploy` needed.
+2. Alex runs `gitsync`.
+3. **Drift check.** If the sync brought in a migration or function change
+   touching the same tables or function, stop and re-plan that step.
+4. Alex confirms; the thread claims the items.
+5. **Number the migration now.** New SQL is written under
+   `supabase/migrations/_pending_<owner>_<purpose>.sql` and only gets its real
+   number here, after the sync, when the folder listing is current. Then the
+   numbered file is written and the `_pending_` one deleted.
+6. Alex runs the migration in the Supabase SQL editor. Function deploys the
+   thread runs itself — **but only while holding `db:deploy`.** The guard blocks
+   `supabase functions deploy` and `supabase db push` otherwise.
+7. Verify.
+8. Alex runs `gitpush` → that worktree → **Checkpoint**, naming the migration and
+   function paths, so only those reach main.
+9. The thread releases **only** the `db:` claims.
+
+**Why `_pending_`.** Two threads both look at `supabase/migrations/`, both see
+`083`, both write `084`. The filenames differ, so nothing conflicts and no claim
+is contested — claims coordinate paths, and this is a collision in a number.
+Numbering last, after a sync, is the only moment the answer is right.
+
+### Claims are never released by the thread
+
+A file or folder claim is held for the whole life of the thread; `gitpush`
+Finish releases it. Do not write a prompt that asks a thread to release a file
+claim, or to "clean up its claims when done". Database claims are the exception,
+released at step 9 above.
 
 ## Getting the report back
 
@@ -102,6 +242,18 @@ has no inbox item to archive.
 
 If a report was pushed without a run tag, or in a repo other than the one this
 thread is working on, mention that in one line in the TLDR.
+
+**The `repo` field names the worktree, not just the repo.** A report from a
+worktree reads `alfred-v5 on worktree-claims-wq7`, one from the main checkout
+`alfred-v5 on main`. So the repo field is a second check that the work happened
+where it was meant to: a report for `claims-wq7` arriving from `main` means the
+prompt was run in the wrong window, and that is worth a line in the TLDR rather
+than being read past.
+
+Fetch by exact `run_tag` for one prompt's messages, and by `run_tag_prefix` set
+to the **project code** — `claims-wq7` — for everything that project has ever
+reported, across every step and every thread that worked on it. Since the project
+code also names the worktree, the prefix and the worktree are the same string.
 
 ## The return leg: responding to CLI output
 
@@ -218,6 +370,28 @@ Then tell him: paste this into a new thread, paste the reply back here.
 Tests he can genuinely run himself — open the app, click this, look at that —
 stay as ordinary numbered steps.
 
+**Anything he types goes in a PowerShell block, and the block says which
+terminal.** He is on Windows, in PowerShell, with several VS Code windows open.
+A command given as prose, or written for bash, is a command he has to translate
+before he can run it.
+
+```powershell
+# in the claims-wq7 worktree terminal
+cd C:\Users\Alex\projects\alfred-v5\.claude\worktrees\claims-wq7
+npm test
+```
+
+- PowerShell 5.1: no `&&`, no ternary, no `??`. Use `;` or separate lines.
+- Backslash paths, and full paths — never "cd to the worktree".
+- `Remove-Item -Recurse -Force`, not `rm -rf`. `Get-Content`, not `cat`.
+- One block per terminal, with a comment naming it.
+
+**Never tell him to type a shell command into a Claude session.** A CLI session
+is a chat window; a command pasted there is a request, not an execution, and the
+thread may well refuse it under the claims rules. Commands go in a terminal. If a
+step genuinely needs the thread to run something, it belongs in the CLI prompt,
+not in the testing steps.
+
 ### Rule 4: files always get full paths
 
 Any instruction touching a file names the file completely. Never "run the SQL",
@@ -289,6 +463,10 @@ platform`. In particular, any generated prompt that creates a table or tool must
 
 When in doubt whether a task is platform-governed, it is if it writes to Supabase.
 
+In alfred-v5 this always runs through the just-in-time database step above:
+`_pending_` SQL naming, `gitsync` first, the drift check, `db:deploy` held before
+any function deploy, and a `gitpush` Checkpoint to land it.
+
 ## Skill Workflow
 
 ### Step 1: Assess Complexity
@@ -339,8 +517,17 @@ Sequencing the SQL after the handler wiring means debugging two unknowns at once
 state.** No "commit when tests pass", no "commit and push", no "commit directly
 to main", no branches. The CLI leaves its changes in the working tree and names
 the files it touched; committing and pushing are Alex's alone, because a push
-can trigger a deploy. Deploys the CLI runs itself (`npx supabase functions
-deploy ...`) are fine and are not git — ask for those normally.
+can trigger a deploy.
+
+That includes `gitcom`, `gitsync`, `gitpush` and `gitnewtree`. They live in
+alfred-v5's `scripts/`, and they do commit, merge and push — which is exactly why
+a prompt asks Alex to run one and waits, rather than asking the CLI to.
+
+**Supabase deploys are not a free pass either.** A prompt may ask the CLI to run
+`npx supabase functions deploy`, but only as part of the database step above:
+after `gitsync`, after the drift check, and while the thread holds `db:deploy`.
+The guard blocks it otherwise, so a prompt that asks for a bare deploy wastes a
+round trip. Migrations are always Alex's to run in the Supabase SQL editor.
 
 This is also the rule in alfred-v5's `CLAUDE.md`, so a prompt that asks for a
 commit will be refused there and simply wastes a round trip.
@@ -363,6 +550,7 @@ Provide a clean, copy-paste ready prompt:
 
 ```
 Run tag: [project]-[thread code]-[step]-[4 random characters]
+Window: [the main checkout | the <project code> worktree]
 
 I need you to [clear description of the change].
 
@@ -372,6 +560,9 @@ I need you to [clear description of the change].
 
 [The Rule 5 SQL line from above]
 ```
+
+Naming the files in the prompt is what lets the thread claim them without
+stopping to ask — so name them.
 
 #### For Complex Changes
 
@@ -406,8 +597,13 @@ Create `progress-[feature-name].md`:
 
 **3. Initial CLI Prompt**
 
+In alfred-v5 the first prompt of a new project is the **plan**, read-only — see
+"A new project's first two prompts" above. The template below is the one that
+follows it, once Alex has confirmed the plan and the thread has claimed.
+
 ```
 Run tag: [project]-[thread code]-[step]-[4 random characters]
+Window: [the main checkout | the <project code> worktree]
 
 # Project Context
 [Brief description of what we're building]
@@ -435,6 +631,7 @@ Only proceed to the next step after I confirm verification is successful.
 # Important
 - Mark steps complete in the progress file as you finish them
 - Add notes about any decisions or issues encountered
+- Never commit, push, merge, or run any git command that changes state
 - If you need clarification, stop and ask
 - If you need me to run more than one read-only SELECT in the Supabase SQL
   Editor, combine them into one query that returns a single JSON object: wrap
@@ -454,6 +651,12 @@ Only proceed to the next step after I confirm verification is successful.
 2. Show the progress file
 3. Show the initial prompt
 4. Say: "I've created the spec and progress tracking file. Copy these into your docs folder, then feed the initial prompt to Claude CLI."
+
+**In alfred-v5, say where it goes and what has to happen first.** If the project
+needs its own worktree, that is a `gitpush` (main → Push) then
+`gitnewtree <project code>` before the first prompt, and the prompt goes in the
+window `gitnewtree` opens. If it runs in the main checkout, say so. Either way
+name the window, because he has several open.
 
 ## Example Outputs
 
