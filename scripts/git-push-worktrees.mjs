@@ -378,16 +378,34 @@ function main() {
       stop(`${w.owner} has a detached HEAD — no branch to work with. Stopping.`);
     }
 
+    // Checkpoint before Finish, and Push before Finish: the reversible one
+    // first, so the destructive choice is never the one under the cursor.
     const mode = w.isMain
-      ? choose(`\nmain: push / finish / skip`, [
-          { key: "p", label: "push" },
-          { key: "f", label: "finish" },
-          { key: "s", label: "skip" },
+      ? choose(`\nmain:`, [
+          {
+            key: "p",
+            label: "Push",
+            hint: "commit and push main's changes, keeping its claims (the project is still going)",
+          },
+          {
+            key: "f",
+            label: "Finish",
+            hint: "commit and push, then release all of main's claims (the project is done)",
+          },
+          { key: "s", label: "Skip", hint: "leave it alone" },
         ])
-      : choose(`\n${w.owner}: finish / checkpoint / skip`, [
-          { key: "f", label: "finish" },
-          { key: "c", label: "checkpoint" },
-          { key: "s", label: "skip" },
+      : choose(`\n${w.owner}:`, [
+          {
+            key: "c",
+            label: "Checkpoint",
+            hint: "merge only the files you name into main and push, while the worktree carries on",
+          },
+          {
+            key: "f",
+            label: "Finish",
+            hint: "commit its work, merge it into main, push, release its claims, and remove the worktree",
+          },
+          { key: "s", label: "Skip", hint: "leave it alone" },
         ]);
 
     if (mode === null || mode === "s") {

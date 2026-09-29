@@ -296,10 +296,35 @@ own, never chained.
 2. Stop and ask Alex to run `gitsync` in this worktree.
 3. Drift check: after the sync, if main brought in any migration or function change touching the same tables or function since this thread planned, stop and re-plan that step.
 4. Ask Alex to confirm the claim, then `claims.mjs claim` the items.
-5. Deploy. Migrations remain a manual prerequisite Alex runs in the Supabase SQL editor; function deploys the CLI runs itself. Run `check_platform_conformance` where the platform contract requires it.
-6. Verify.
-7. Stop and ask Alex to run `gitpush` in Checkpoint mode for this worktree, naming the database and function paths.
-8. After he confirms, release the `db:` claims. Everything live is now in main.
+5. **Number the migration now**, not earlier — see below.
+6. Deploy. Migrations remain a manual prerequisite Alex runs in the Supabase SQL editor; function deploys the CLI runs itself. Run `check_platform_conformance` where the platform contract requires it.
+7. Verify.
+8. Stop and ask Alex to run `gitpush` in Checkpoint mode for this worktree, naming the database and function paths.
+9. After he confirms, release the `db:` claims. Everything live is now in main.
+
+### Migration numbers: the collision claims cannot catch
+
+Two threads each look at `supabase/migrations/`, each see `083` as the highest, and each
+write `084`. The file names differ — `084_add_filter.sql` and `084_backfill_tags.sql` —
+so **nothing conflicts, nothing is claimed twice, and the guard has nothing to object
+to.** Both land. The sequence now has two `084`s and the order they ran in is
+unknowable. Claims coordinate paths; this is a collision in a number, and no amount of
+claiming a filename catches it.
+
+The fix is to pick the number last:
+
+- A thread writes new SQL under `supabase/migrations/_pending_<owner>_<purpose>.sql` and
+  claims that path like any other file.
+- At step 5 of the database flow — after `gitsync`, which is what makes the answer
+  correct — it lists the folder, takes the next free number, writes the numbered file,
+  and deletes the `_pending_` one. The guard permits the delete because the thread holds
+  that claim.
+
+The temporary name sorts away from the numbered files and carries the owner, so a
+`_pending_` file in `git status` is a visible loose end rather than a mystery. It is
+renumbered before any commit; a `_pending_` file has no business in history.
+
+This is written into `.claude/CLAUDE.md` in both the database step and the SQL section.
 
 **Finishing.** Stop and ask Alex to run `gitpush` in Finish mode. The CLI does not release its own file claims; gitpush does.
 

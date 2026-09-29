@@ -1,6 +1,6 @@
 # Progress: CLI Claims System
 
-## Status: Steps 1–6 done. Step 6 awaiting verification.
+## Status: Steps 1–6 done. Step 7 checklist written, awaiting Alex's dry run.
 
 ### Development Steps
 - [x] Step 1: Discovery (read-only). Find where `gitcom` and `gitpush` are defined and summarize what they do; find all existing Claude Code hooks (project and user settings); find the cli-workflow skill if it is in the repo; list git-ignored files a worktree needs to run; read the git rules in `CLAUDE.md`. Report and stop.
@@ -648,6 +648,262 @@ produces the same output after losing its duplicated logic. All four files parse
 guard suite is still 69/69.
 
 **Untested by definition:** the commit, push and release paths. Those are Alex's.
+
+---
+
+## Step 7b, 2026-09-29 — gitpush prompt wording
+
+Before the dry run, three changes.
+
+**1. The mode prompts spell themselves out.** `choose()` in `git-flow.mjs` now takes an
+optional `hint` per option, and when any option has one it prints every option on its own
+line before asking. These are decisions about pushing and about releasing claims, taken
+once in a while; `[f/c/s]` is not something to have to remember.
+
+```
+wt-a:
+  c  Checkpoint — merge only the files you name into main and push, while the worktree carries on
+  f  Finish — commit its work, merge it into main, push, release its claims, and remove the worktree
+  s  Skip — leave it alone
+```
+
+```
+main:
+  p  Push — commit and push main's changes, keeping its claims (the project is still going)
+  f  Finish — commit and push, then release all of main's claims (the project is done)
+  s  Skip — leave it alone
+```
+
+**2. Order.** Checkpoint before Finish, Push before Finish. The reversible choice comes
+first, so the one that removes a worktree and releases every claim is never the option
+sitting under the cursor. The `all / none / select` prompt in gitcom has no hints and is
+unchanged.
+
+**3. Phase 0 of the checklist was wrong.** It expected a clean working tree, but the
+Step 6 and Step 7 changes — the protocol, the SQL numbering rule, the checklist itself —
+were uncommitted. The worktrees branch from `origin/main`, so they would have started
+under the *old* rules and the dry run would have proved nothing about the current ones.
+Phase 0 now begins with `gitpush` → main → Push, and the three checks confirm the
+baseline afterwards rather than assuming it.
+
+Tested by driving `choose()` directly, since there is no worktree yet to show the
+worktree prompt: `c`, the full word `finish`, an unrecognised `x` followed by `s`, and
+Enter to cancel all behave. The live `main:` prompt renders correctly from `gitpush`, and
+gitcom's prompt is unchanged. Nothing was committed and no git state changed.
+
+---
+
+## Step 7, prepared 2026-09-29 — the two-worktree dry run
+
+Step 6 verified: gitpush listed main with correct counts, cancel / Push-only-n /
+Finish-n all changed nothing, Finish named all 12 claims and Push only kept them,
+gitcom showed the same 7 files, and the real Push only committed exactly those 7,
+pushed, and kept the 12.
+
+**Alex runs this. Nothing in it is a CLI thread's to do.** Phase 0 is what gets main
+into the state the rest assumes: 12 claims held, working tree clean, nothing unpushed.
+
+The dry run uses three files that nothing holds — `docs/dryrun/wt-a.md`,
+`docs/dryrun/wt-b.md`, `docs/dryrun/shared.md` — and two fake database items,
+`db:table:dryrun_fake` and `db:deploy`. No migration is written and nothing is
+deployed: the database flow is exercised as far as claiming and releasing a `db:`
+item, which is the part the claims system is responsible for.
+
+`W` below is the worktree folder: `.claude\worktrees\wt-a` or `...\wt-b`.
+
+### Phase 0 — Step 0, get main pushed first
+
+**This is an action, not just a check.** The claims system's own rules —
+`.claude/CLAUDE.md`, the guard, the scripts — are what the two worktrees will run
+under, and `claude --worktree` branches from **origin/main**. Anything still sitting
+uncommitted here is invisible to them. Start by landing it:
+
+```powershell
+cd C:\Users\Alex\projects\alfred-v5
+gitpush
+```
+
+Pick main, pick **`p`** (Push: keeps the claims — this project is still going), give a
+message, approve. Then confirm the baseline:
+
+```powershell
+git status --short                      # expect: empty
+git log origin/main..HEAD --oneline     # expect: empty
+node scripts/claims.mjs status          # expect: main, 12 claims
+```
+
+✅ All three, or the worktrees will start from an older main and the rest of this
+proves nothing. ✅ The 12 claims are still there — Push keeps them.
+
+### Phase 1 — two worktrees
+
+Two new terminals, one each:
+
+```powershell
+cd C:\Users\Alex\projects\alfred-v5
+claude --worktree wt-a
+```
+
+```powershell
+cd C:\Users\Alex\projects\alfred-v5
+claude --worktree wt-b
+```
+
+In a third terminal, in the main checkout:
+
+```powershell
+git worktree list                       # expect: 3 entries
+```
+
+In **wt-a**, ask it to run `node scripts/claims.mjs status`.
+✅ It must say **`This thread: wt-a`**, and list main's 12 claims. Same in wt-b for
+`wt-b`. That is one claims file shared across all three checkouts.
+
+### Phase 2 — plan in wt-a (Step 1, read-only)
+
+Prompt wt-a:
+
+> Step 1 plan only, read-only. The work will create `docs/dryrun/wt-a.md` and
+> `docs/dryrun/shared.md`, one line in each. At a later step it will need
+> `db:table:dryrun_fake` and `db:deploy`. Run `claims.mjs check` on all four,
+> report, and stop. Claim nothing and change nothing.
+
+✅ All four report **free**. ✅ Nothing is claimed and no file is written.
+
+### Phase 3 — claim in wt-a (Step 2)
+
+Prompt wt-a:
+
+> Confirmed. Claim both files in one command, reserve `db:table:dryrun_fake` for
+> "Step 5", then write one line into each file.
+
+✅ **Two permission prompts** — one for the claim, one for the reserve. Approve both.
+✅ The claim is a single command with both paths, not two commands.
+✅ Both files get written, through the Edit/Write tools.
+
+### Phase 4 — wt-b hits the conflict
+
+Prompt wt-b:
+
+> Step 1 plan only, read-only. The work will create `docs/dryrun/wt-b.md` and
+> `docs/dryrun/shared.md`. Run `claims.mjs check` on both, report, and stop.
+
+✅ `wt-b.md` is **free**; `shared.md` is **CONFLICT — wt-a holds it**.
+✅ The thread stops and asks rather than carrying on.
+
+### Phase 5 — the guard blocks what the check warned about
+
+Prompt wt-b:
+
+> Drop `shared.md`. Claim `docs/dryrun/wt-b.md` and write one line into it. Then, as
+> a deliberate test, try to add a line to `docs/dryrun/shared.md`.
+
+✅ One permission prompt for the claim; `wt-b.md` is written.
+✅ The edit to `shared.md` is **blocked by the guard, naming wt-a**.
+✅ `type .claude\worktrees\wt-b\.clip\claims-guard.log` shows the BLOCK line.
+
+### Phase 6 — the database flow in wt-a, simulated
+
+Prompt wt-a:
+
+> Database step. Run `claims.mjs check` on `db:table:dryrun_fake` and `db:deploy`,
+> then stop and ask me to run gitsync.
+
+✅ Both free (the reservation is wt-a's own, so no warning). ✅ It stops.
+
+In the wt-a terminal:
+
+```powershell
+gitsync
+```
+
+✅ **"Already up to date with main. Nothing to merge."** — correct: nothing has landed
+on main since wt-a branched. Phase 8 is where gitsync does real work.
+
+Prompt wt-a:
+
+> Confirmed, no drift. Claim both database items. Treat the deploy as done — do not
+> run anything. Then release only the `db:` claims, keeping the file claims.
+
+✅ One prompt for the claim. ✅ `claims.mjs status` afterwards shows wt-a still holding
+**both files** and **no db items**. That is the whole rule in one screen: database
+claims are released just in time, file claims are not.
+
+### Phase 7 — Finish wt-a
+
+Close the wt-a Claude session first, so the worktree is not in use. Then in the main
+checkout:
+
+```powershell
+cd C:\Users\Alex\projects\alfred-v5
+gitpush
+```
+
+✅ Three entries listed: `[1] main`, plus wt-a and wt-b with their claims and dirty
+counts. Pick **wt-a's number** (not 1), then `f` for Finish — the prompt spells out
+Checkpoint, Finish and Skip on their own lines.
+✅ The plan names the two files it will commit and says it will release wt-a's claims,
+remove the worktree and delete the branch. Approve, give a message.
+
+```powershell
+git worktree list                       # expect: 2 entries, wt-a gone
+git log --oneline -3                    # expect: the merge of wt-a's branch
+node scripts/claims.mjs status          # expect: main's 12 + wt-b's 1. No wt-a.
+```
+
+### Phase 8 — wt-b syncs, then finishes
+
+In the wt-b terminal:
+
+```powershell
+gitsync
+```
+
+✅ This time it lists wt-a's commit(s) as incoming and merges them. ✅ No conflict —
+wt-b never touched wt-a's files, which is the claims system's whole promise.
+
+```powershell
+dir docs\dryrun                         # expect: all three files present now
+```
+
+Close the wt-b session, then from the main checkout:
+
+```powershell
+gitpush
+```
+
+Pick wt-b, `f`, approve, give a message.
+
+### Phase 9 — everything cleaned up
+
+```powershell
+node scripts/claims.mjs status   # expect: main only, 12 claims. No wt-a, no wt-b.
+git worktree list                # expect: 1 entry, the main checkout
+git branch                       # expect: main only, no worktree branches
+git status --short               # expect: empty
+git log origin/main..HEAD        # expect: empty
+dir docs\dryrun                  # expect: three files, now on main
+```
+
+### Phase 10 — remove the dry-run litter
+
+```powershell
+Remove-Item -Recurse -Force docs\dryrun
+gitpush
+```
+
+Pick main, `p`. The three deletions appear as **claimed by nobody** — answer `a`, give
+a message, approve. That also exercises gitcom's unclaimed-file path.
+✅ Afterwards `claims.mjs status` still shows main's 12: **Push only keeps claims.**
+
+### What would count as a failure
+
+- A `check` that reports free for a file another worktree holds.
+- The guard letting an edit through to `shared.md` from wt-b.
+- A claim running with no permission prompt.
+- A thread releasing a file claim by itself at any point.
+- gitpush Finish leaving wt-a's claims behind, or removing claims that belong to main.
+- A merge conflict in Phase 8.
 
 ### Notes
 

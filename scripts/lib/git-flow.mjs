@@ -278,9 +278,22 @@ export function confirm(question) {
   return answer === "y" || answer === "yes";
 }
 
-/** One of `choices` (keyed by first letter), or null if Alex just hits enter. */
+/**
+ * One of `choices` (keyed by first letter), or null if Alex just hits enter.
+ *
+ * A choice can carry a `hint`, and then every option is spelled out on its own
+ * line before the prompt. These are decisions about pushing and about releasing
+ * claims, taken once in a while — "f/c/s" is not something to have to remember.
+ */
 export function choose(question, choices) {
   const keys = choices.map((c) => c.key);
+  if (choices.some((c) => c.hint)) {
+    say(question);
+    for (const c of choices) {
+      say(`  ${c.key}  ${c.label}${c.hint ? ` — ${c.hint}` : ""}`);
+    }
+    question = " ";
+  }
   for (;;) {
     const answer = ask(`${question} [${keys.join("/")}] `).toLowerCase().trim();
     if (!answer) return null;

@@ -81,7 +81,8 @@ release a file claim. If the guard blocks a file that was not in the plan, stop
 and ask.
 
 **Database steps, just in time.** At the step that needs a database item, not
-before:
+before. New SQL is written under `_pending_<owner>_<purpose>.sql` until step 5 —
+see the SQL section below for why.
 
 1. `claims.mjs check` the `db:table:*`, `db:fn:*` and `db:deploy` you need.
 2. Stop and ask Alex to run `gitsync` in this worktree, so it has everything
@@ -90,14 +91,17 @@ before:
    function change touches the same tables or the same function, stop and
    re-plan that step — your plan was written against an older schema.
 4. Ask Alex to confirm, then claim the items.
-5. Deploy. Migrations are his to run in the Supabase SQL editor; function
+5. **Number the migration now**, not earlier: list `supabase/migrations/`, take
+   the next free number, write the numbered file, delete the `_pending_` one.
+   The sync in step 2 is what makes that number trustworthy.
+6. Deploy. Migrations are his to run in the Supabase SQL editor; function
    deploys you run yourself. Run `check_platform_conformance` where the platform
    contract requires it.
-6. Verify.
-7. Stop and ask Alex to run `gitpush` in **Checkpoint** mode for this worktree,
+7. Verify.
+8. Stop and ask Alex to run `gitpush` in **Checkpoint** mode for this worktree,
    naming the migration and function paths. Checkpoint puts only those paths into
    main, so half-finished front-end work is not pushed with them.
-8. After he confirms it landed, release **only** the `db:` claims. Database
+9. After he confirms it landed, release **only** the `db:` claims. Database
    claims are the one thing you do release.
 
 **Finishing.** Stop and ask Alex to run `gitpush` in **Finish** mode — for the
@@ -202,6 +206,34 @@ Never create SQL under docs/. Name the file so its purpose is obvious from the
 list, e.g. 031_backfill_sam_session_events.sql. Alex runs every migration himself
 in the Supabase SQL editor — never apply one, and never assume one has been
 applied.
+
+### Do not pick the number until the last moment
+
+**Write new SQL under a temporary name first:**
+
+```
+supabase/migrations/_pending_<owner>_<purpose>.sql
+```
+
+for example `supabase/migrations/_pending_inbox-ui_add_filter_column.sql`. Claim
+that path like any other file and work in it.
+
+**Give it its real number only when you are about to ask Alex to run it, and only
+after `gitsync`.** At that point, and not before, list `supabase/migrations/`, take
+the next free number, write the numbered file, and delete the `_pending_` one. The
+guard allows that delete because you hold the claim on it.
+
+**Why.** Claims cannot catch this one. Two threads each decide the next migration
+is `084`, and because the two files have *different names* — `084_add_filter.sql`
+and `084_backfill_tags.sql` — nothing conflicts, nothing is claimed twice, and the
+guard has nothing to object to. Both land, the sequence has two `084`s, and which
+one ran first is now unknowable. Numbering last, after a sync that shows every
+number already taken, is the only point at which the answer is actually correct.
+
+The temporary name sorts away from the numbered files and says whose it is, so a
+`_pending_` file sitting in `git status` is a visible loose end rather than a
+mystery. Renumber before asking Alex for a commit — a `_pending_` file has no
+business in history.
 
 supabase/migrations/ now holds three kinds of file, and the MOVED header on each
 says which: schema changes that must be applied in order; one-off data repairs
