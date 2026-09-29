@@ -1,0 +1,25 @@
+# Files a worktree needs to run that git does not track.
+#
+# `claude --worktree <name>` reads this when it creates a worktree: each line is a
+# gitignore-style pattern, and every git-ignored file matching one is copied into the
+# new checkout. Symlinks are skipped. Tracked files arrive through git, so they do not
+# belong here — this is only for the machine-local things git never sees.
+
+# Supabase credentials for the deployed project.
+.env.production.local
+
+# Workshop's own environment.
+workshop/.env
+
+# Machine-local Supabase link state: linked-project.json, project-ref, pooler-url.
+# Without it a worktree has to run `supabase link` before it can deploy a function.
+# (`cli-latest` in here is rewritten by any supabase command; harmless.)
+supabase/.temp/
+
+# Deliberately NOT copied:
+#   node_modules/, tools/sam-tools/node_modules/, workshop/.venv/ — reinstall instead.
+#   src/sam/lib/sam-drill-format.schema.json and the _shared copy — scripts/prebuild.js
+#     regenerates both on prestart and prebuild.
+#   build/, coverage/, songs/, separated/, workshop/data/ — output, not input.
+#   .clip/ — last-report.md is another thread's message to Alex, and
+#     claims-guard.log is that thread's log. Neither belongs in a second worktree.

@@ -40,3 +40,7 @@ yarn-error.log*
 # `cli-latest` in particular is bumped by any `supabase` command, so it turned up as a
 # pending change in the middle of unrelated work.
 /supabase/.temp/
+
+# Worktrees. `claude --worktree <name>` puts a whole second checkout here, on its own
+# branch. It is a checkout, not source: committing it would put the repo inside itself.
+/.claude/worktrees/

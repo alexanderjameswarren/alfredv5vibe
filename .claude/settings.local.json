@@ -3,8 +3,11 @@
     "allow": [
       "Bash(dir:*)",
       "Bash(findstr:*)",
-      "Bash(git -C \"c:\\\\Users\\\\Alex\\\\projects\\\\alfred-v5\" log --oneline --all)",
-      "Bash(git -C \"c:\\\\Users\\\\Alex\\\\projects\\\\alfred-v5\" log --name-status --all)",
+      "Bash(git log:*)",
+      "Bash(node scripts/claims.mjs status)",
+      "Bash(node scripts/claims.mjs status:*)",
+      "Bash(node scripts/claims.mjs check:*)",
+      "Bash(node scripts/claims.mjs release:*)",
       "Bash(npx eslint:*)",
       "Bash(npx react-scripts build:*)",
       "Bash(npm uninstall:*)",
@@ -23,16 +26,24 @@
       "Bash(supabase functions deploy:*)",
       "Bash(supabase db push:*)",
       "Bash(supabase db execute:*)",
-      "Bash(\"c:\\\\Users\\\\Alex\\\\projects\\\\alfred-v5\\\\docs\\\\progress-phase75-ui-redesign.md\":*)",
       "mcp__claude_ai_Aflred_v5__search_items",
       "mcp__claude_ai_Aflred_v5__get_database_schema",
-      "Bash(ls c:/Users/Alex/projects/alfred-v5/*.config.* c:/Users/Alex/projects/alfred-v5/package.json)",
+      "Bash(ls:*)",
       "Bash(node src/utils/recurrence.test.js)"
     ]
   },
   "preferredNotifChannel": "terminal_bell",
-  
+
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [{
+          "type": "command",
+          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/claims-guard.mjs\""
+        }]
+      }
+    ],
     "Notification": [
       {
         "matcher": "",
@@ -51,7 +62,4 @@
       }
     ]
   }
-
-
 }
-  
