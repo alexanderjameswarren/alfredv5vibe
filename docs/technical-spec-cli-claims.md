@@ -222,6 +222,25 @@ segment cannot be parsed, and is allowed with a note rather than blocked.
 Every decision is logged to `.clip/claims-guard.log` alongside the tool guard's, so the
 two read as one story.
 
+**Paste wrappers come off first.** The Claude panel in VS Code wraps anything pasted into
+it as `<pasted_content id="c70a">…</pasted_content id="c70a">` — attributes on the closing
+tag as well, which is what the panel really emits. Two consequences, both live bugs found
+on 2026-09-29 and both fixed by stripping the wrappers before anything is looked for:
+
+- The `Run tag:` line is no longer at the start of its line, so the tag is not found.
+  Every prompt pasted from claude.ai is long enough to be wrapped, so **every real prompt
+  would have been blocked as untagged** — the guard's own pass case was the one that broke.
+- An `override:` typed before the block is not at the start of the prompt, and one typed
+  as the first line inside it sits after an opening tag. Neither worked.
+
+`stripPasteWrappers` removes every `pasted_content` / `pasted_text` tag, opening or
+closing, hyphenated or underscored, wherever it is — a prompt can hold several blocks with
+typed text before, between and after them. `classifyPrompt` then returns the tag, the
+override flag and the pasted-shape reason from the unwrapped text, so the length and line
+thresholds measure what Alex actually sent rather than the panel's markup. `override:`
+is additionally accepted after a leading run of tags of any shape, so a wrapper this does
+not know about yet still cannot swallow one.
+
 ## Component 2c: `gitnewtree <project-code>`
 
 `scripts/git-new-worktree.mjs`, the front door for Step 0. It refuses while main has
@@ -240,6 +259,22 @@ it leaves you to discover that dependencies are missing.
 Copying is reimplemented here because `git worktree add` does not read
 `.worktreeinclude` — each pattern goes to `git ls-files --others --ignored
 --exclude-standard`, the same list Claude Code matches against.
+
+**A code that is already taken is answered, not failed.** The folder name is the project
+code and the claims owner, so there is no second name to fall back to and "pick another
+code" was the wrong advice. Two situations hide behind one raw git error, and they are
+told apart before anything else, including the Step 0 check:
+
+| State | Result |
+|---|---|
+| `git worktree list` has a worktree for that code — matched on path *or* on branch `worktree-<code>` | Says where it is, its branch, its lock reason and how many uncommitted files it has; offers to open its VS Code window; exits **0**. Nothing is created. |
+| A leftover folder, a leftover branch, or both, with no worktree registered | Names what is in the way, and how many commits the branch holds that `origin/main` does not, newest first; prints the cleanup commands; exits **1**. Nothing is deleted. |
+
+Nothing is ever deleted for him: a leftover branch can be the only copy of work a Finish
+never reached, so `branch -d` is printed first — its refusal is the protection — and `-D`
+only under a line saying what it throws away. The claims note points at
+`claims.mjs cleanup <owner>` rather than `gitpush`, because gitpush enumerates live
+worktrees and so cannot release the claims of an owner whose worktree has already gone.
 
 ## Component 3: worktree setup
 

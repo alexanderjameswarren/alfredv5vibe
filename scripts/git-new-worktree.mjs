@@ -26,8 +26,8 @@ import { spawnSync } from "node:child_process";
 import { resolveRepo } from "./lib/claims-core.mjs";
 import {
   changedFiles,
+  commitsAhead,
   confirm,
-  git,
   gitLive,
   heading,
   listWorktrees,
@@ -39,6 +39,13 @@ import {
 
 const BASE = "origin/main";
 const CODE = /^[a-z0-9][a-z0-9-]{1,40}$/;
+
+const winPath = (p) => p.replace(/\//g, "\\");
+
+/** Windows paths, compared the way Windows means them. */
+const samePath = (a, b) =>
+  path.resolve(a).replace(/\\/g, "/").toLowerCase() ===
+  path.resolve(b).replace(/\\/g, "/").toLowerCase();
 
 /**
  * The git-ignored files .worktreeinclude asks for, resolved against main.
@@ -68,6 +75,108 @@ function filesToCopy(root) {
   return [...found];
 }
 
+/**
+ * "<code>" already has a live worktree. Say so and offer to open its window.
+ *
+ * Never exits non-zero: the worktree existing is the answer to the question
+ * asked, not a failure, and the window is the thing actually wanted.
+ */
+function openExisting(tree, code, expectedPath) {
+  heading(`"${code}" already has a worktree`);
+  say(`Folder:   ${winPath(tree.path)}`);
+  say(`Branch:   ${tree.branch ?? "(detached)"}`);
+  if (tree.lockReason !== null) {
+    say(`Locked:   ${tree.lockReason || "(git gave no reason)"}`);
+  }
+  const dirty = changedFiles(tree.path);
+  say(
+    dirty.length
+      ? `Changes:  ${dirty.length} uncommitted file(s) in it`
+      : `Changes:  none, its working tree is clean`,
+  );
+  if (!samePath(tree.path, expectedPath)) {
+    say(`\nIt is not where gitnewtree puts worktrees — expected ${winPath(expectedPath)}.`);
+  }
+
+  say(
+    `\nThe folder name is the project code and the claims owner, so there is no\n` +
+      `other name "${code}" could use: this worktree is where its work belongs.\n` +
+      `Nothing has been created or changed.`,
+  );
+
+  if (confirm(`\nOpen its VS Code window?`)) {
+    const opened = spawnSync("code", ["-n", tree.path], { stdio: "ignore", shell: true });
+    say(
+      opened.status === 0
+        ? `\nOpened ${winPath(tree.path)}`
+        : `\nCould not run \`code\` — open it by hand:\n  ${winPath(tree.path)}`,
+    );
+  } else {
+    say(`\n  Later:  code -n "${winPath(tree.path)}"`);
+  }
+
+  say(`\nIn that window:  gitsync  to bring main in.`);
+  say(`When it is done:  gitpush  →  ${code}  →  Finish`);
+  process.exit(0);
+}
+
+/**
+ * A folder or a branch called "<code>" is left over, but git has no worktree.
+ *
+ * Nothing is deleted here. A leftover branch can be the only copy of work a
+ * Finish never reached, so the commands are printed for Alex to read and run —
+ * `branch -d` first, because its refusal is what protects that work.
+ */
+function leftovers({ code, worktreePath, branch, root, folderLeft, branchLeft }) {
+  const ahead = branchLeft ? commitsAhead(branch, BASE, root) : [];
+
+  heading(`"${code}" has leftovers, but no worktree`);
+  say(`\`git worktree list\` has no entry for it, so there is no window to open.`);
+  say(`In the way:`);
+  if (folderLeft) say(`  folder  ${winPath(worktreePath)}`);
+  if (branchLeft) {
+    say(
+      `  branch  ${branch}` +
+        (ahead.length
+          ? `  —  ${ahead.length} commit(s) that ${BASE} does not have`
+          : `  —  nothing ${BASE} does not already have`),
+    );
+    for (const line of ahead.slice(0, 8)) say(`            ${line}`);
+    if (ahead.length > 8) say(`            … and ${ahead.length - 8} more`);
+  }
+
+  say(
+    `\nThe name cannot change — it is the project code and the claims owner — so\n` +
+      `clear the leftovers and run gitnewtree again. Nothing was created or changed.`,
+  );
+
+  say(`\nTo clear it:`);
+  say(``);
+  if (folderLeft) {
+    say(`    Remove-Item -Recurse -Force "${winPath(worktreePath)}"`);
+    say(`    git -C "${winPath(root)}" worktree prune`);
+  }
+  if (branchLeft) say(`    git -C "${winPath(root)}" branch -d ${branch}`);
+  say(``);
+
+  if (ahead.length) {
+    say(`  \`branch -d\` will refuse while those ${ahead.length} commit(s) live only there.`);
+    say(`  Read them first:  git -C "${winPath(root)}" log ${branch} --oneline`);
+    say(`  Then merge them, or throw them away with:`);
+    say(`    git -C "${winPath(root)}" branch -D ${branch}`);
+    say(``);
+  }
+  // gitpush only lists live worktrees, so it cannot release the claims of an
+  // owner whose worktree is already gone. `cleanup` is the one that can.
+  say(`  Check whether "${code}" still holds claims:  node scripts/claims.mjs status`);
+  say(`  gitpush cannot release them once the worktree is gone — that is`);
+  say(`    node scripts/claims.mjs cleanup ${code}`);
+  say(`  and only once you are sure that work is in ${BASE}.`);
+
+  say(`\nThen:  gitnewtree ${code}`);
+  process.exit(1);
+}
+
 function main() {
   const code = (process.argv[2] ?? "").trim();
 
@@ -92,7 +201,8 @@ function main() {
 
   // Always act on the main checkout, wherever this was run from.
   const here = resolveRepo();
-  const mainTree = listWorktrees().find((t) => t.isMain);
+  const trees = listWorktrees();
+  const mainTree = trees.find((t) => t.isMain);
   if (!mainTree) stop("Could not find the main checkout in `git worktree list`.");
   const root = mainTree.path;
   if (here.isWorktree) say(`Run from a worktree; branching from the main checkout.`);
@@ -100,9 +210,20 @@ function main() {
   const worktreePath = path.join(root, ".claude", "worktrees", code);
   const branch = `worktree-${code}`;
 
-  if (existsSync(worktreePath)) stop(`Already exists: ${worktreePath}`);
-  if (tryGit(["rev-parse", "--verify", branch], root).ok) {
-    stop(`Branch ${branch} already exists. Pick another code, or delete it first.`);
+  // --- is "<code>" already taken? -------------------------------------------
+  // The folder name is the project code AND the claims owner, so there is no
+  // second name to fall back to. "Pick another code" was the wrong answer, and
+  // git's own error for a path that exists is worse. Two different situations
+  // hide behind one raw failure, so they are told apart and answered here.
+  const existing = trees.find(
+    (t) => !t.isMain && (samePath(t.path, worktreePath) || t.branch === branch),
+  );
+  if (existing) openExisting(existing, code, worktreePath);
+
+  const folderLeft = existsSync(worktreePath);
+  const branchLeft = tryGit(["rev-parse", "--verify", branch], root).ok;
+  if (folderLeft || branchLeft) {
+    leftovers({ code, worktreePath, branch, root, folderLeft, branchLeft });
   }
 
   // --- protocol Step 0 -------------------------------------------------------

@@ -1,6 +1,6 @@
 # Progress: CLI Claims System
 
-## Status: Steps 1–7 done. Step 7d additions awaiting verification. Step 8 next.
+## Status: Steps 1–7 done. Step 7f fixes awaiting verification. Step 8 next.
 
 ### Development Steps
 - [x] Step 1: Discovery (read-only). Find where `gitcom` and `gitpush` are defined and summarize what they do; find all existing Claude Code hooks (project and user settings); find the cli-workflow skill if it is in the repo; list git-ignored files a worktree needs to run; read the git rules in `CLAUDE.md`. Report and stop.
@@ -648,6 +648,102 @@ produces the same output after losing its duplicated logic. All four files parse
 guard suite is still 69/69.
 
 **Untested by definition:** the commit, push and release paths. Those are Alex's.
+
+---
+
+## Step 7f, 2026-09-29 — paste wrappers, and a code that is already taken
+
+**The 7e prompt-guard test found a real failure.** Wrong-tag blocks worked both ways, a
+short untagged "yes" passed, an untagged `# Your Task` prompt was blocked, and main bound
+to `claims-wq7`. But `override:` did nothing, and the reason turned out to matter far more
+than the override: the Claude panel in VS Code wraps pasted text as
+`<pasted_content id="c70a">…</pasted_content id="c70a">`, so the prompt does not start
+where the guard thought it did. **Every prompt Alex pastes from claude.ai is long enough
+to be wrapped, so the `Run tag:` line was never at the start of its line and every real
+prompt would have been blocked as untagged.** The guard's own pass case was the broken one,
+and the override that would have got round it was broken too.
+
+**Files changed**
+- `scripts/lib/project-code.mjs` — `stripPasteWrappers`, `looksPasted` (moved here from
+  the hook so it can be tested), and `classifyPrompt`.
+- `.claude/hooks/prompt-check.mjs` — uses `classifyPrompt`; logs `unwrapped` when it
+  stripped something.
+- `scripts/lib/project-code.test.mjs` — **new**, 11 tests.
+- `scripts/git-new-worktree.mjs` — the already-taken and leftover paths.
+- `docs/technical-spec-cli-claims.md`, `docs/progress-cli-claims.md`.
+
+Nothing was committed, and nothing was created in this repo.
+
+### 1. Paste wrappers
+
+The wrappers come off before anything is looked for. Every `pasted_content` /
+`pasted_text` tag goes, opening or closing, hyphenated or underscored, wherever it sits —
+a prompt can hold several blocks with typed text before, between and after them, and the
+closing tag carries attributes too, which is why a bare `</pasted_content>` was never
+going to match.
+
+`classifyPrompt` returns the tag, the override flag and the pasted-shape reason from the
+unwrapped text, so the 400-character and four-line thresholds measure what Alex sent
+rather than the panel's markup — otherwise the tags alone push a two-word reply towards
+the length limit. `override:` is accepted from the unwrapped text, which covers both
+typing it before the block and typing it as the first line inside; and, belt and braces,
+after a leading run of tags of *any* shape, so a wrapper nobody has seen yet still cannot
+swallow one.
+
+The shape check deliberately does **not** treat "it was wrapped" as proof it was pasted,
+even though literally that is what the wrapper means. A reply copied out of claude.ai —
+"confirmed, no drift" — is wrapped too, and blocking those would make the guard something
+to be worked around.
+
+### 2. gitnewtree when the code is already taken
+
+The folder name is the project code and the claims owner, so there is no second name:
+"pick another code" was the wrong answer and git's raw error for an existing path was
+worse. Two situations hid behind one failure, and they are now told apart before anything
+else, including the Step 0 check.
+
+**A live worktree** — matched on the path *or* on branch `worktree-<code>`, so a worktree
+that was moved is still found. It shows the folder, the branch, the lock reason if any and
+how many uncommitted files are in it, then offers to open its VS Code window, and exits
+**0**: the worktree existing is the answer to the question asked, not a failure.
+
+**Leftovers with no worktree** — a folder, a branch, or both. It names what is in the way
+and, for a branch, how many commits it holds that `origin/main` does not, listing them
+newest first. Nothing is deleted: a leftover branch can be the only copy of work a Finish
+never reached, so `branch -d` is printed first — its refusal is the protection — and `-D`
+only under a line saying what it throws away. Exits **1**.
+
+The claims note points at `claims.mjs cleanup <owner>`, not `gitpush`, because gitpush
+enumerates live worktrees and so cannot release the claims of an owner whose worktree has
+already gone. That gap was found while writing this.
+
+### Tested
+
+**11 new tests** in `scripts/lib/project-code.test.mjs`, run with
+`node --test scripts/lib/project-code.test.mjs`, all passing: wrapped tagged, wrapped
+untagged, wrapped override in both positions, typed text plus a wrapped block, several
+blocks with text between them, the hyphenated and bare-closing-tag spellings, short
+replies wrapped and unwrapped, a 380-character wrapped body that must stay under the
+threshold the tags would have pushed it over, and a wrapper-only paste. One test asserts
+the bug itself — `tagInPrompt` on a wrapped prompt returns null — so the stripping cannot
+quietly stop being needed.
+
+**7 end-to-end hook cases** driven the way Claude Code drives it, JSON on stdin, checking
+the exit code: wrapped tagged right window (0), wrapped tagged wrong window (2), wrapped
+untagged task prompt (2), `override:` before a wrapped wrong-project block (0), `override:`
+as the first line inside it (0), typed text plus a wrapped tagged block (0), short untagged
+reply (0). All as expected.
+
+**gitnewtree, all five paths.** The live-worktree path against the real `claims-wq8`
+worktree — it printed, offered, and exited 0 without touching anything. The other four in a
+throwaway clone in the scratchpad, since creating a stale branch here would have meant a
+state-changing git command in this repo: a stale branch alone, a leftover folder alone,
+both together with two unmerged commits shown and the `-d` refusal explained, a worktree
+registered at an unexpected path, and a free code still falling through to the Step 0
+check. The clone was deleted; `git worktree list` and `git branch` confirm this repo is
+unchanged.
+
+**Untested:** creating a worktree for real, and the lock-recovery path. Both are Alex's.
 
 ---
 

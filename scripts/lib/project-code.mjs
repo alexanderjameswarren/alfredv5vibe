@@ -46,6 +46,78 @@ export function tagInPrompt(prompt) {
   return m ? m[1] : null;
 }
 
+// ---------------------------------------------------------------------------
+// PASTED-TEXT WRAPPERS
+// ---------------------------------------------------------------------------
+//
+// The Claude panel in VS Code wraps anything pasted into it:
+//
+//   <pasted_content id="c70a">Run tag: claims-wq7-s7f-p8wz
+//   …
+//   </pasted_content id="c70a">
+//
+// Note the attributes on the CLOSING tag — that is what the panel really emits,
+// so this does not look for a bare `</pasted_content>`. Two things follow, and
+// both were live bugs on 2026-09-29:
+//
+//   The `Run tag:` line is no longer at the start of its line, so the tag was
+//   not found and every pasted prompt — all of them are long enough to be
+//   wrapped — would have been blocked as untagged.
+//
+//   A typed "override:" sits before the wrapper, and one typed inside the
+//   pasted block sits after an opening tag, so neither was at the start of the
+//   prompt and the override did nothing.
+//
+// A prompt can hold several blocks with typed text before, between and after
+// them, so every tag is removed wherever it is.
+
+const PASTE_WRAPPER = /<\/?pasted[_-](?:content|text)\b[^>]*>/gi;
+
+/** The prompt with the panel's paste wrappers removed, content untouched. */
+export function stripPasteWrappers(prompt) {
+  return String(prompt).replace(PASTE_WRAPPER, "");
+}
+
+/**
+ * Does this read like a prompt written for a CLI session, rather than an answer
+ * to one?
+ *
+ * Short replies are the common case and must never be interrupted — "yes",
+ * "confirmed, no drift", "go". A pasted task prompt is long, or has the shape of
+ * one. Three independent signals, because any single one is easy to miss.
+ *
+ * Measured on the unwrapped text: the wrapper tags are the panel's, not Alex's,
+ * and counting them would push a two-word reply towards the length threshold.
+ */
+export function looksPasted(prompt) {
+  if (/^#+\s*Your Task/mi.test(prompt)) return "has a '# Your Task' heading";
+  const trimmed = prompt.trim();
+  if (trimmed.length > 400) return `${trimmed.length} characters`;
+  const lines = prompt.split(/\r?\n/).filter((l) => l.trim()).length;
+  if (lines >= 4) return `${lines} lines`;
+  return null;
+}
+
+/**
+ * Everything the prompt guard needs to decide, from the prompt text alone.
+ *
+ * `override` also accepts a leading run of tags of any shape, so a wrapper this
+ * does not know about yet still cannot swallow an override.
+ */
+export function classifyPrompt(prompt) {
+  const raw = String(prompt);
+  const text = stripPasteWrappers(raw);
+  const override =
+    /^\s*override:/i.test(text) || /^\s*(?:<[^>]*>\s*)+override:/i.test(raw);
+  return {
+    text,
+    wrapped: text !== raw,
+    override,
+    tag: tagInPrompt(text),
+    pasted: looksPasted(text),
+  };
+}
+
 function projectFile(ctx) {
   return path.join(ctx.dir, PROJECT_FILE);
 }

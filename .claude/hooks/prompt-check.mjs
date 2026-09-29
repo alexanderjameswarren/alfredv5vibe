@@ -21,6 +21,12 @@
 //   No tag, looks like a pasted prompt             BLOCK, ask to confirm
 //   Starts with "override:"                        pass, said out loud and logged
 //
+// Pasted text arrives wrapped by the VS Code panel — <pasted_content id="c70a">
+// … </pasted_content id="c70a"> — so the wrappers come off before anything is
+// looked for, in scripts/lib/project-code.mjs. Without that the "Run tag:" line
+// of a pasted prompt is not at the start of its line, which makes every pasted
+// prompt read as untagged, and a typed "override:" is never at the front.
+//
 // Every decision goes to .clip/claims-guard.log alongside the tool guard's, so
 // the two read as one story.
 
@@ -28,9 +34,9 @@ import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { ClaimsError, resolveRepo } from "../../scripts/lib/claims-core.mjs";
 import {
+  classifyPrompt,
   codeOfCheckout,
   projectOfTag,
-  tagInPrompt,
   writeMainCode,
 } from "../../scripts/lib/project-code.mjs";
 
@@ -80,22 +86,6 @@ function block(detail, message) {
   process.exit(BLOCK);
 }
 
-/**
- * Does this read like a prompt written for a CLI session, rather than an answer
- * to one?
- *
- * Short replies are the common case and must never be interrupted — "yes",
- * "confirmed, no drift", "go". A pasted task prompt is long, or has the shape of
- * one. Three independent signals, because any single one is easy to miss.
- */
-function looksPasted(prompt) {
-  if (/^#+\s*Your Task/mi.test(prompt)) return "has a '# Your Task' heading";
-  if (prompt.length > 400) return `${prompt.length} characters`;
-  const lines = prompt.split(/\r?\n/).filter((l) => l.trim()).length;
-  if (lines >= 4) return `${lines} lines`;
-  return null;
-}
-
 function main() {
   let payload;
   try {
@@ -109,12 +99,15 @@ function main() {
   const source = payload?.source ?? "user";
   if (source !== "user") allow(`source=${source}`);
 
-  const prompt = String(payload?.prompt ?? "");
-  if (!prompt.trim()) allow("empty prompt");
+  // The panel's paste wrappers come off first: the run tag and a typed
+  // "override:" both sit inside or after them.
+  const prompt = classifyPrompt(payload?.prompt ?? "");
+  const wrapped = prompt.wrapped ? " unwrapped" : "";
+  if (!prompt.text.trim()) allow(`empty prompt${wrapped}`);
 
-  if (/^\s*override:/i.test(prompt)) {
+  if (prompt.override) {
     allow(
-      "override:",
+      `override:${wrapped}`,
       "prompt-check: 'override:' — project check skipped for this prompt.",
     );
   }
@@ -132,28 +125,28 @@ function main() {
   entry.code = code;
   const where = ctx.isWorktree ? `worktree ${path.basename(ctx.root)}` : "the main checkout";
 
-  const tag = tagInPrompt(prompt);
+  const tag = prompt.tag;
 
   if (tag) {
     const wanted = projectOfTag(tag);
     if (!wanted) {
-      allow(`tag=${tag} (no step segment, cannot tell)`);
+      allow(`tag=${tag}${wrapped} (no step segment, cannot tell)`);
     }
     if (!code) {
       // First tagged prompt in the main checkout claims it for that project.
       if (settable) {
         writeMainCode(ctx, wanted);
         allow(
-          `tag=${tag} set main project=${wanted}`,
+          `tag=${tag}${wrapped} set main project=${wanted}`,
           `prompt-check: the main checkout is now working on "${wanted}".\n` +
             `gitpush Finish on main clears that when the project is done.`,
         );
       }
-      allow(`tag=${tag} no project code for this checkout`);
+      allow(`tag=${tag}${wrapped} no project code for this checkout`);
     }
     if (wanted !== code) {
       block(
-        `tag=${tag} wants=${wanted} here=${code}`,
+        `tag=${tag}${wrapped} wants=${wanted} here=${code}`,
         `\n🛑  WRONG WINDOW — this prompt was not sent to the right place.\n\n` +
           `  This window is  ${where}, working on "${code}".\n` +
           `  The run tag      ${tag}\n` +
@@ -162,15 +155,15 @@ function main() {
           `If it really does belong here, resend it with "override:" on the front.`,
       );
     }
-    allow(`tag=${tag} matches ${code}`);
+    allow(`tag=${tag}${wrapped} matches ${code}`);
   }
 
   // No run tag from here on.
-  const why = looksPasted(prompt);
-  if (!why) allow("short untagged reply");
+  const why = prompt.pasted;
+  if (!why) allow(`short untagged reply${wrapped}`);
 
   block(
-    `untagged, looks pasted (${why})`,
+    `untagged${wrapped}, looks pasted (${why})`,
     `\n⚠  UNTAGGED PROMPT — is this the right window?\n\n` +
       `  This window is  ${where}${code ? `, working on "${code}"` : ", with no project set"}.\n` +
       `  This prompt has no "Run tag:" line, and looks like a task prompt (${why}).\n\n` +
