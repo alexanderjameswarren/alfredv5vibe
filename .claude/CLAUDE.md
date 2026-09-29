@@ -51,10 +51,24 @@ sharing one claims file. Follow this whether or not the prompt mentions it.
 **Owner.** Your name is the worktree folder name, or `main` in the main checkout.
 `node scripts/claims.mjs status` says which you are.
 
-**Step 0, before a worktree exists.** Alex pushes main. `claude --worktree`
-branches from `origin/main`, so anything committed locally but unpushed would be
-invisible to the new worktree. If you are asked to start a worktree and main has
-unpushed commits, say so first.
+**Step 0, before a worktree exists.** Alex runs `gitnewtree <project-code>`, which
+refuses until main is committed and pushed, then branches from `origin/main`,
+copies the machine-local files and opens the worktree in VS Code.
+(`claude --worktree <name>` still works and does most of the same, but it does not
+check Step 0.) If you are asked to start a worktree and main has unpushed commits,
+say so first.
+
+**Project codes and which window you are in.** A worktree's project code is its
+folder name, and that is also its claims owner. The main checkout's code is
+recorded from the first prompt that carries a run tag, and cleared by `gitpush`
+Finish on main. A run tag's project code is everything before the step segment:
+`claims-wq7-s7d-u3rb` → `claims-wq7`.
+
+A `UserPromptSubmit` hook checks the two against each other and blocks a prompt
+that has landed in the wrong window before you ever see it. You will not normally
+notice this — but if Alex says a prompt was rejected as the wrong window, that is
+what happened, and the answer is for him to paste it into the right one rather
+than for you to work around it.
 
 **Step 1, plan. Read-only.** Before touching anything, list:
 

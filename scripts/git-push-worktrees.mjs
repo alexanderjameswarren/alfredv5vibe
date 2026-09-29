@@ -54,6 +54,7 @@ import {
   removeClaims,
   resolveRepo,
 } from "./lib/claims-core.mjs";
+import { clearMainCode, readMainCode } from "./lib/project-code.mjs";
 import {
   ask,
   changedFiles,
@@ -115,6 +116,9 @@ function showTree(w, index) {
   say(`      changes ${w.dirty.length} uncommitted`);
   say(`      claims  ${w.files.length ? w.files.join(", ") : "none"}`);
   if (w.db.length) say(`      db      ${w.db.join(", ")}`);
+  if (w.lockReason !== null) {
+    say(`      LOCKED  ${w.lockReason || "(no reason given)"}`);
+  }
 }
 
 /** Stage named paths in a worktree and commit them. Returns false to stop. */
@@ -209,6 +213,12 @@ function doMain(w, ctx, release) {
   if (release) {
     const released = removeClaims(ctx, "main");
     say(`\n  Released ${released.length} claim(s): ${released.join(", ") || "none"}`);
+    // Finish means this project is done here, so main stops belonging to it and
+    // the next tagged prompt is free to set a new one.
+    const had = readMainCode(ctx);
+    if (clearMainCode(ctx) && had) {
+      say(`  Cleared main's project code ("${had}"). The next tagged prompt sets a new one.`);
+    }
   } else {
     say(`\n  Claims kept. gitpush Finish is what releases them.`);
   }
@@ -230,6 +240,29 @@ function doMain(w, ctx, release) {
 function removeWorktree(w, ctx) {
   if (gitLive(["worktree", "remove", w.path], ctx.root)) return true;
 
+  // A LOCKED worktree is a different problem from a busy one, and git says so
+  // rather than saying "permission denied". `claude --worktree` locks the tree
+  // for as long as its session is alive, so --force will not help until that
+  // session exits and the lock is lifted.
+  if (w.lockReason !== null) {
+    say(`\n  This worktree is LOCKED, so it cannot be removed yet.`);
+    say(`    reason: ${w.lockReason || "(git gave no reason)"}`);
+    if (/claude/i.test(w.lockReason || "")) {
+      say(`\n  That is a Claude Code session still running in it. Exit that session`);
+      say(`  — close the window or press Ctrl-C twice — and it may clear by itself.`);
+    }
+    say(`\n  The merge, the push and the claim release all succeeded. To finish up:`);
+    say(``);
+    say(`    git -C "${winPath(ctx.root)}" worktree unlock "${winPath(w.path)}"`);
+    say(`    git -C "${winPath(ctx.root)}" worktree remove --force "${winPath(w.path)}"`);
+    say(`    git -C "${winPath(ctx.root)}" branch -d ${w.branch}`);
+    say(``);
+    say(`  If the remove still refuses because something has the folder open:`);
+    say(`    Remove-Item -Recurse -Force "${winPath(w.path)}"`);
+    say(`    git -C "${winPath(ctx.root)}" worktree prune`);
+    return false;
+  }
+
   say(`\n  Plain removal refused. Trying --force (the work is already in ${BASE}).`);
   if (gitLive(["worktree", "remove", "--force", w.path], ctx.root)) return true;
 
@@ -238,12 +271,14 @@ function removeWorktree(w, ctx) {
   say(`\n  The merge, the push and the claim release all succeeded. Only the`);
   say(`  folder is left. Close whatever has it open, then run these two:`);
   say(``);
-  say(`    Remove-Item -Recurse -Force "${w.path.replace(/\//g, "\\")}"`);
-  say(`    git -C "${ctx.root.replace(/\//g, "\\")}" worktree prune`);
+  say(`    Remove-Item -Recurse -Force "${winPath(w.path)}"`);
+  say(`    git -C "${winPath(ctx.root)}" worktree prune`);
   say(``);
   say(`  Then delete the branch:  git branch -d ${w.branch}`);
   return false;
 }
+
+const winPath = (p) => p.replace(/\//g, "\\");
 
 function doFinish(w, ctx) {
   heading(`Finish — ${w.owner}`);
@@ -269,8 +304,13 @@ function doFinish(w, ctx) {
   // Windows will not delete a folder anything still has open, and in the Step 7
   // dry run that was a VS Code window sitting in the worktree. Better asked now
   // than discovered after the merge and push have already happened.
-  say(`\n⚠  Close any VS Code window or terminal open on:`);
+  say(`\n⚠  Exit the Claude session in that worktree and close any VS Code window`);
+  say(`   or terminal open on:`);
   say(`     ${w.path}`);
+  if (w.lockReason !== null) {
+    say(`   git says it is LOCKED: ${w.lockReason || "(no reason given)"}`);
+    say(`   A running Claude session holds that lock until it exits.`);
+  }
   if (w.isCurrent) {
     say(`   That includes THIS terminal, which is inside it. Removal will fail`);
     say(`   from here — the merge, push and release will still work, and the`);

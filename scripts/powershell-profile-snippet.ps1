@@ -13,13 +13,16 @@
 # These four functions are thin wrappers. All the behaviour lives in the repo,
 # under scripts/, where it is versioned and reviewable:
 #
+#   gitnewtree -> scripts/git-new-worktree.mjs
 #   gitcom     -> scripts/git-commit-claimed.mjs
 #   gitcommit  -> the same thing (it is an alias for gitcom, not a copy of it)
 #   gitsync    -> scripts/git-sync.mjs
 #   gitpush    -> scripts/git-push-worktrees.mjs
 #
 # The repo is found from wherever you are with `git rev-parse --show-toplevel`,
-# so these work unchanged inside a worktree.
+# so these work unchanged inside a worktree. gitnewtree and gitpush go on to act
+# on the MAIN checkout whichever window you are in; gitcom and gitsync act on the
+# checkout you are standing in.
 #
 # Written for Windows PowerShell 5.1: no `&&`, no ternary, no null-coalescing.
 # ---------------------------------------------------------------------------
@@ -50,6 +53,11 @@ function Invoke-AlfredGit {
         node $path
     }
 }
+
+# Start a project in its own worktree: checks Step 0, branches from origin/main,
+# copies the .worktreeinclude files, opens VS Code, offers to npm install.
+#   gitnewtree claims-wq7
+function gitnewtree { Invoke-AlfredGit 'git-new-worktree.mjs' $args }
 
 # Commit this thread's claimed, changed files. Asks about anything unclaimed.
 # Never touches a file another thread has claimed. Accepts -m "message".

@@ -191,6 +191,56 @@ stages nothing. Files currently CRLF in the working tree keep their endings unti
 are next rewritten, and git sees them as clean either way; new checkouts and new
 worktrees get LF.
 
+## Component 2b: prompt guard `.claude/hooks/prompt-check.mjs`
+
+A `UserPromptSubmit` hook. With main plus a worktree per project, each in its own VS
+Code window, a prompt pasted into the wrong one is easy to do and expensive to undo: the
+thread starts on the wrong branch and claims files for the wrong owner, and nothing
+downstream notices, because every one of those actions is legitimate for the window it
+ran in. Exit 2 stops the prompt before it reaches Claude.
+
+**Project codes.** A worktree's is its folder name — which is also its claims owner, so
+there is nothing to remember. The main checkout has no folder name to go on, so its code
+is recorded the first time a tagged prompt arrives and cleared by `gitpush` Finish on
+main. It is stored in `<git common dir>/alfred-project-code.json`, beside the claims
+file, for the same reasons: shared by every checkout, never tracked by git.
+
+**A run tag's project code is everything before the step segment** — the last segment
+shaped like `s<digit>…`. `claims-wq7-s7d-u3rb` → `claims-wq7`. A tag with no such
+segment cannot be parsed, and is allowed with a note rather than blocked.
+
+| Prompt | Result |
+|---|---|
+| Tagged, project matches this window | pass |
+| Tagged, project does not match | **block**, naming this window's project and the tag's |
+| Tagged, this window has no project yet | pass, and record it (main only) |
+| Untagged, short reply — "yes", "confirmed, no drift" | pass |
+| Untagged, looks pasted — a `# Your Task` heading, over 400 characters, or 4+ lines | **block**, asking to confirm |
+| Starts with `override:` | pass, said on stderr and logged |
+| `source` is not `user` (loop or schedule wake-ups, SDK, system) | pass — machinery, and blocking it would wedge the session |
+
+Every decision is logged to `.clip/claims-guard.log` alongside the tool guard's, so the
+two read as one story.
+
+## Component 2c: `gitnewtree <project-code>`
+
+`scripts/git-new-worktree.mjs`, the front door for Step 0. It refuses while main has
+uncommitted or unpushed work and says to run `gitpush` first; then fetches, creates the
+worktree at `.claude/worktrees/<code>` on branch `worktree-<code>` from `origin/main`,
+copies every file `.worktreeinclude` names, opens a new VS Code window, says that
+`node_modules` was not copied and offers to run `npm install`. It shows all of that and
+waits for a yes, like the rest.
+
+`claude --worktree <name>` remains a documented alternative and does most of the same.
+The differences are the ones that cost time in the Step 7 dry run: it does not check
+Step 0, so a worktree can branch from a stale `origin/main`; the folder name is the
+project code the prompt guard tests against, so it is worth choosing deliberately; and
+it leaves you to discover that dependencies are missing.
+
+Copying is reimplemented here because `git worktree add` does not read
+`.worktreeinclude` — each pattern goes to `git ls-files --others --ignored
+--exclude-standard`, the same list Claude Code matches against.
+
 ## Component 3: worktree setup
 
 Claude Code 2.1.284 has both halves of this natively, so no setup script is needed.
@@ -290,9 +340,14 @@ after `--`.
     that worktree are left uncommitted and named, not swept in. Before anything happens
     it says which folder to close in VS Code — Windows will not delete a folder anything
     still has open, and if it is the terminal gitpush was launched from it says that too.
-    If removal still fails it tries `--force`, and if that fails it prints the two
-    recovery commands (`Remove-Item -Recurse -Force <path>` then `git worktree prune`),
-    having already merged, pushed and released.
+    A **locked** worktree is reported separately, with git's own lock reason — a running
+    `claude --worktree` session holds the lock until it exits, and `--force` will not
+    help until then — and the recovery starts with `git worktree unlock`. Otherwise it
+    tries `--force`, and if that fails prints `Remove-Item -Recurse -Force <path>` then
+    `git worktree prune`. All of this happens after the merge, push and release have
+    already succeeded, so nothing is at stake but tidying.
+    Finish on **main** also clears main's recorded project code, freeing the next tagged
+    prompt to set a new one.
   - **Checkpoint:** commit only the paths Alex names (normally the database and MCP files
     for a just-deployed step), merge into main, push, release only the `db:` claims he
     names, and keep the worktree. Other uncommitted work stays in the worktree and does

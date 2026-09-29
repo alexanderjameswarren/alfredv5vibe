@@ -118,12 +118,17 @@ export function listWorktrees() {
 
   for (const line of out.split(/\r?\n/)) {
     if (line.startsWith("worktree ")) {
-      current = { path: line.slice(9), branch: null, detached: false };
+      // lockReason is null when unlocked, "" when locked with no reason given.
+      current = { path: line.slice(9), branch: null, detached: false, lockReason: null };
       trees.push(current);
     } else if (line.startsWith("branch ") && current) {
       current.branch = line.slice(7).replace(/^refs\/heads\//, "");
     } else if (line === "detached" && current) {
       current.detached = true;
+    } else if (line === "locked" && current) {
+      current.lockReason = "";
+    } else if (line.startsWith("locked ") && current) {
+      current.lockReason = line.slice(7).trim();
     }
   }
   // git lists the main checkout first; mark it so callers do not guess.

@@ -1,6 +1,6 @@
 # Progress: CLI Claims System
 
-## Status: Steps 1–7 done. Step 7c fixes awaiting verification. Step 8 next.
+## Status: Steps 1–7 done. Step 7d additions awaiting verification. Step 8 next.
 
 ### Development Steps
 - [x] Step 1: Discovery (read-only). Find where `gitcom` and `gitpush` are defined and summarize what they do; find all existing Claude Code hooks (project and user settings); find the cli-workflow skill if it is in the repo; list git-ignored files a worktree needs to run; read the git rules in `CLAUDE.md`. Report and stop.
@@ -648,6 +648,97 @@ produces the same output after losing its duplicated logic. All four files parse
 guard suite is still 69/69.
 
 **Untested by definition:** the commit, push and release paths. Those are Alex's.
+
+---
+
+## Step 7d, 2026-09-29 — lock handling, gitnewtree, prompt guard
+
+**The 7c retest passed.** `.gitattributes` gives `eol=lf` with no CRLF in the index;
+`check` shows "yours (reserved)"; a fresh worktree `wt-c` claimed and wrote a file with
+no `cd`-prefix block; `settings.local.json` stayed clean after a claim approval; `gitpush`
+ran from inside `wt-c` and operated on main; Finish committed, merged, pushed and
+released. Removal failed because the worktree was **locked** by a still-running
+`claude --worktree` session ("lock reason: claude session wt-c") — not an open window.
+Unlocking and force-removing worked.
+
+**Files changed**
+- `scripts/lib/project-code.mjs` — new. Project codes and run-tag parsing.
+- `.claude/hooks/prompt-check.mjs` — new. The `UserPromptSubmit` guard.
+- `scripts/git-new-worktree.mjs` — new. `gitnewtree`.
+- `scripts/lib/git-flow.mjs` — `listWorktrees` now reports lock state.
+- `scripts/git-push-worktrees.mjs` — lock handling; clears main's project code on Finish.
+- `.claude/settings.local.json` — `UserPromptSubmit` registered.
+- `scripts/powershell-profile-snippet.ps1` — the `gitnewtree` wrapper.
+- `.claude/CLAUDE.md`, `docs/technical-spec-cli-claims.md`, `docs/progress-cli-claims.md`.
+
+Nothing was committed and no worktree was created.
+
+### 1. Locked worktrees
+
+`git worktree list --porcelain` reports `locked` and often a reason, and that was being
+thrown away. A lock is a different problem from a busy folder: `--force` does not help,
+because `claude --worktree` holds the lock for as long as its session is alive. gitpush
+now shows `LOCKED <reason>` in the listing, repeats it in the pre-flight warning, and on
+failure says so plainly and prints the recovery starting with `git worktree unlock`,
+followed by the forced remove and the branch delete — and the `Remove-Item` /
+`worktree prune` pair underneath in case the folder is *also* held open. As before this
+only ever happens after the merge, push and release have succeeded, so nothing is at
+stake but tidying.
+
+### 2. gitnewtree
+
+`gitnewtree <project-code>` is now the front door for Step 0. It refuses while main has
+uncommitted or unpushed work — showing exactly what, and saying to run `gitpush` first —
+then fetches, creates `.claude/worktrees/<code>` on `worktree-<code>` from `origin/main`,
+copies what `.worktreeinclude` names, opens a new VS Code window, and says node_modules
+is not there and offers to install it. It shows the plan and waits for a yes.
+
+`claude --worktree` still works and is documented as the alternative. The three
+differences are the ones that cost time in the dry run: no Step 0 check, so a worktree
+can branch from a stale `origin/main`; the folder name is now the project code the prompt
+guard tests against, so it wants choosing deliberately; and missing dependencies used to
+be discovered at the first failing command.
+
+The copy is reimplemented because `git worktree add` does not read `.worktreeinclude` —
+each pattern goes to `git ls-files --others --ignored --exclude-standard`, the same list
+Claude Code matches. Verified read-only: **11 files**, matching what `claude --worktree`
+reported in the dry run.
+
+### 3. The prompt guard
+
+A `UserPromptSubmit` hook, because the failure it prevents is silent. A prompt pasted into
+the wrong window starts work on the wrong branch and claims files for the wrong owner, and
+nothing downstream objects — every one of those actions is legitimate *for the window it
+ran in*. There was no check anywhere for the one thing that was wrong.
+
+- A worktree's project code is its folder name, which is also its claims owner.
+- Main's is recorded from the first tagged prompt and cleared by gitpush Finish on main,
+  in `<git common dir>/alfred-project-code.json` beside the claims file.
+- A tag's project code is everything before the last `s<digit>…` segment.
+
+Tagged and matching passes; tagged and mismatched blocks, naming both projects; untagged
+short replies pass; untagged and pasted-looking (a `# Your Task` heading, over 400
+characters, or four or more lines) blocks and asks; `override:` passes loudly. Prompts
+whose `source` is not `user` — loop and schedule wake-ups, SDK, system — always pass,
+since blocking machinery would wedge the session. Everything is logged to
+`.clip/claims-guard.log` next to the tool guard's lines.
+
+A tag with no step segment cannot be parsed, so it is allowed with a note rather than
+blocked — the alternative is refusing an older or hand-written tag with no way to tell
+whether it was wrong.
+
+### Tested
+
+Three suites, all passing: **75** tool-guard cases, **14** new prompt-guard cases, **11**
+removeClaims assertions. The prompt-guard set covers the first tagged prompt recording
+main's code, a matching tag, a mismatched tag, three shapes of short reply, a pasted
+prompt with no tag, a 450-character single line, `override:` on a wrong-project prompt,
+two machinery sources, an empty prompt, and an old-style tag with no step segment.
+gitnewtree was exercised as far as it can be without creating a worktree: no argument,
+an invalid code, and the Step 0 refusal against main's real uncommitted state. The
+profile snippet parses with zero errors.
+
+**Untested:** actually creating a worktree, and the lock-recovery path. Both are Alex's.
 
 ---
 
