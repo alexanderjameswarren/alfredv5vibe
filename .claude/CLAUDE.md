@@ -9,6 +9,11 @@ deleting branches, and no `checkout` or `restore` of files.
 Read-only git is fine and wanted: `status`, `diff`, `log`, `show`, `blame`,
 `grep`.
 
+**`gitcom`, `gitsync` and `gitpush` are Alex's too.** They live in this repo, at
+`scripts/git-commit-claimed.mjs`, `scripts/git-sync.mjs` and
+`scripts/git-push-worktrees.mjs`, and they do commit, merge and push — which is
+exactly why you never run them. Ask him to. Reading them is fine.
+
 When the work is done, leave every change in the working tree, uncommitted, and
 tell Alex exactly which files you changed. Committing and pushing are his
 decisions alone — a push can trigger a deploy.
@@ -32,8 +37,73 @@ artefacts: mention them, do not tidy them.
 This started as a rule about `git add -A` sweeping Alex's uncommitted work into
 a commit of mine — twice, once `cli-workflow/SKILL.md` and a job-search rename,
 once an edit to `email-capture/index.ts`, and both times invisible until after
-the commit existed. Committing is gone now, so that sweep cannot happen; the
-rule stays because reporting the working tree honestly still matters.
+the commit existed. You cannot commit at all now, and `gitcom` stages named paths
+rather than everything, so that sweep has two locks on it. The rule stays because
+reporting the working tree honestly still matters, and because `gitcom` asks Alex
+about unclaimed changes — he can only answer well if your report already told him
+what is yours.
+
+## The thread protocol
+
+Several CLI threads work on this repo at once, each in its own git worktree,
+sharing one claims file. Follow this whether or not the prompt mentions it.
+
+**Owner.** Your name is the worktree folder name, or `main` in the main checkout.
+`node scripts/claims.mjs status` says which you are.
+
+**Step 0, before a worktree exists.** Alex pushes main. `claude --worktree`
+branches from `origin/main`, so anything committed locally but unpushed would be
+invisible to the new worktree. If you are asked to start a worktree and main has
+unpushed commits, say so first.
+
+**Step 1, plan. Read-only.** Before touching anything, list:
+
+- every file and folder the work will touch, and
+- every database item it will need — `db:table:<name>`, `db:fn:<name>`,
+  `db:deploy` — **each with the step that needs it.**
+
+Run `node scripts/claims.mjs check` on all of it. Report every conflict and
+every warning. **Change nothing, claim nothing, and stop.** A plan that has
+already edited a file is not a plan.
+
+**Step 2, claim.** After Alex confirms, claim **all the files and folders in one
+command** — one `claims.mjs claim a b c`, not one per file. It re-checks inside
+the lock, so a file another thread took since you planned is caught here rather
+than halfway through. Then `reserve` each database item with its step. If the
+claim fails, stop and report; do not start on the part that did claim.
+
+Always claim the project's own spec and progress files in `docs/`.
+
+Files Alex named in his instruction are already confirmed — see the next section.
+
+**Step 3 onward, work.** Edit only through the Edit and Write tools. Never
+release a file claim. If the guard blocks a file that was not in the plan, stop
+and ask.
+
+**Database steps, just in time.** At the step that needs a database item, not
+before:
+
+1. `claims.mjs check` the `db:table:*`, `db:fn:*` and `db:deploy` you need.
+2. Stop and ask Alex to run `gitsync` in this worktree, so it has everything
+   already live.
+3. **Drift check.** After the sync, look at what came in. If any migration or
+   function change touches the same tables or the same function, stop and
+   re-plan that step — your plan was written against an older schema.
+4. Ask Alex to confirm, then claim the items.
+5. Deploy. Migrations are his to run in the Supabase SQL editor; function
+   deploys you run yourself. Run `check_platform_conformance` where the platform
+   contract requires it.
+6. Verify.
+7. Stop and ask Alex to run `gitpush` in **Checkpoint** mode for this worktree,
+   naming the migration and function paths. Checkpoint puts only those paths into
+   main, so half-finished front-end work is not pushed with them.
+8. After he confirms it landed, release **only** the `db:` claims. Database
+   claims are the one thing you do release.
+
+**Finishing.** Stop and ask Alex to run `gitpush` in **Finish** mode — for the
+worktree, or for `main` if the work never used one. That is what releases your
+file claims, removes the worktree and deletes the branch. Do not release them
+yourself.
 
 ## Claim a file Alex named; stop and ask for one he did not
 
@@ -88,6 +158,10 @@ for minutes; file claims are held for the whole job.
 
 So: `release` is for Alex, for cleaning up, and for the database step. If you
 think you need to release a file claim, you have misread this — say so and stop.
+
+**gitpush releases them**, in Finish mode, for a worktree or for `main`. It also
+has a "push only" mode for main that pushes and deliberately keeps the claims,
+for when the project is still going. Either way it is Alex running it, not you.
 
 ## Change files with the Edit and Write tools, never the shell
 

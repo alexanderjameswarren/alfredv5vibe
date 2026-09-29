@@ -235,10 +235,23 @@ after `--`.
   tidying it away. Two threads should never hold the same file, so a conflict here is
   worth looking at.
 - **gitpush** (rewritten, run from the main checkout): refuses to run inside a worktree
-  or when main is not checked out. Lists every open worktree with its branch (read from
-  `git worktree list --porcelain`), its claims, its unpushed commits and whether it has
-  uncommitted changes. Alex picks one, several, or all. For each chosen worktree, one at
-  a time, it asks which mode:
+  or when main is not checked out. Lists **the main checkout and** every open worktree,
+  each with its branch (read from `git worktree list --porcelain`), its claims, what is
+  unpushed and whether it has uncommitted changes. Alex picks one, several, or all.
+
+  **The main checkout is always listed.** A lot of work never uses a worktree, and
+  without this there was no route through gitpush for it: solo work in main could not be
+  pushed this way and main's claims could only ever be released by hand, so they piled
+  up. There is nothing to merge for main — the work is already there — so its two modes
+  differ only in what happens to the claims:
+  - **Push only:** commit by the same rules as gitcom if anything has changed, push, and
+    **keep** the claims, because the project is still going.
+  - **Finish:** the same, then release everything main holds.
+
+  "The same rules as gitcom" is literal: the three-way split and the unclaimed prompt
+  live in `claims-core.mjs` and `git-flow.mjs`, and both commands call them.
+
+  For each chosen worktree, one at a time, it asks which mode:
   - **Finish:** commit its claimed changes, merge its branch into main, push, release
     **all** its claims, remove the worktree and delete the branch. Unclaimed changes in
     that worktree are left uncommitted and named, not swept in.
@@ -312,7 +325,16 @@ reading of "claim, edit, release" and the wrong one.
 
 **Where it goes.** `.claude/CLAUDE.md`, the tracked file that already holds rule 1. The
 root `.claude.md` has been deleted, so its contradictory `git add . / commit / push`
-block is gone with it.
+block is gone with it. Written in on 2026-09-29 as a "The thread protocol" section
+covering Step 0 through Finishing, with the file-naming, never-release and
+Edit/Write-only rules in their own sections after it.
+
+Two things in the existing text were corrected at the same time. Rule 1 now names
+`gitcom`, `gitsync` and `gitpush` as Alex's, so a thread does not read "they are in this
+repo" as "I may run them". And the "Files you did not touch" note said committing was
+gone so the `git add -A` sweep could not happen — true of threads, but `gitcom` commits
+now, and it asks Alex about unclaimed changes, which he can only answer well if the
+thread's report already said what was its own.
 
 ## Out of scope
 

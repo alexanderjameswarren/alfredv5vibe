@@ -324,6 +324,35 @@ export function repoPathsIn(command, root) {
   return [...found];
 }
 
+/** Who holds this repo-relative path, if anyone: an owner name or null. */
+export function holderOf(state, rel) {
+  const hit = state.claims.find(
+    (c) =>
+      !isDbItem(c.item) && (fold(c.item) === fold(rel) || covers(c.item, rel)),
+  );
+  return hit ? hit.owner : null;
+}
+
+/**
+ * Split changed files three ways by who has claimed them.
+ *
+ * Both gitcom and gitpush's main-checkout path decide what to stage from this,
+ * so the rule lives here once: another owner's file is never staged, and an
+ * unclaimed file is Alex's to decide about.
+ */
+export function partitionByClaims(state, owner, files) {
+  const mine = [];
+  const others = [];
+  const unclaimed = [];
+  for (const f of files) {
+    const holder = holderOf(state, f.path);
+    if (holder === owner) mine.push(f);
+    else if (holder) others.push({ ...f, holder });
+    else unclaimed.push(f);
+  }
+  return { mine, others, unclaimed };
+}
+
 /**
  * Everything one owner holds, claims and reservations, as plain item strings.
  */

@@ -6,8 +6,11 @@
 //
 // Usage:  node scripts/git-push-worktrees.mjs
 //
-// It lists every open worktree with its branch, what it has claimed and whether
-// it is dirty. Alex picks one, several, or all, and chooses a mode for each:
+// It lists the main checkout and every open worktree, each with its branch, what
+// it has claimed, what is unpushed and whether it is dirty. Alex picks one,
+// several, or all, and chooses a mode for each.
+//
+// For a worktree:
 //
 //   Finish      commit its claimed changes, merge into main, push, release ALL
 //               its claims, remove the worktree, delete the branch.
@@ -16,6 +19,18 @@
 //               function files for a step he has just deployed — merge, push,
 //               and release only the db: claims he names. The worktree stays,
 //               and everything else in it stays uncommitted.
+//
+// For the main checkout there is nothing to merge — the work is already on main
+// — so the two modes are about what happens to the claims:
+//
+//   Push only   commit by the gitcom rules if anything has changed, push, and
+//               KEEP the claims, because the project is still going.
+//
+//   Finish      the same, then release everything main holds.
+//
+// Main needs to be here at all because a lot of work never uses a worktree. Solo
+// work in the main checkout had no way through gitpush, which meant main's
+// claims could only ever be released by hand, and they quietly piled up.
 //
 // ---------------------------------------------------------------------------
 // WHY CHECKPOINT EXISTS
@@ -33,6 +48,7 @@
 
 import {
   isDbItem,
+  partitionByClaims,
   readState,
   removeClaims,
   resolveRepo,
@@ -43,13 +59,17 @@ import {
   choose,
   commitsAhead,
   confirm,
+  describeFile,
   git,
   gitLive,
   heading,
   listWorktrees,
   say,
+  selectByClaims,
+  stageAndCommit,
   stop,
   tryGit,
+  unpushed,
 } from "./lib/git-flow.mjs";
 
 const BASE = "main";
@@ -67,17 +87,30 @@ function heldBy(state, owner) {
 }
 
 function summarise(tree, state) {
-  const { files, db } = heldBy(state, tree.name);
+  const owner = tree.isMain ? "main" : tree.name;
+  const { files, db } = heldBy(state, owner);
   const dirty = changedFiles(tree.path);
-  const ahead = commitsAhead("HEAD", BASE, tree.path);
-  return { ...tree, files, db, dirty, ahead };
+  // A worktree's work is measured against main; main's against its upstream,
+  // since there is nothing for main to merge into.
+  const ahead = tree.isMain
+    ? unpushed(tree.path)
+    : { commits: commitsAhead("HEAD", BASE, tree.path), hasUpstream: true };
+  return { ...tree, owner, files, db, dirty, ahead };
 }
 
-function showWorktree(w, index) {
-  say(`\n  [${index}] ${w.name}`);
+function showTree(w, index) {
+  say(`\n  [${index}] ${w.owner}${w.isMain ? "   (the main checkout)" : ""}`);
   say(`      path    ${w.path}`);
   say(`      branch  ${w.branch ?? "(detached)"}`);
-  say(`      commits ${w.ahead.length} not yet in ${BASE}`);
+  if (w.isMain) {
+    say(
+      w.ahead.hasUpstream
+        ? `      unpushed ${w.ahead.commits.length} commit(s) vs ${w.ahead.upstream}`
+        : `      unpushed (this branch tracks nothing)`,
+    );
+  } else {
+    say(`      commits ${w.ahead.commits.length} not yet in ${BASE}`);
+  }
   say(`      changes ${w.dirty.length} uncommitted`);
   say(`      claims  ${w.files.length ? w.files.join(", ") : "none"}`);
   if (w.db.length) say(`      db      ${w.db.join(", ")}`);
@@ -119,8 +152,70 @@ function mergeAndPush(w, root) {
   return true;
 }
 
+/**
+ * The main checkout: commit by the gitcom rules, push, and either keep the
+ * claims (the project is still going) or release them (it is done).
+ *
+ * Nothing is merged — the work is already on main — so the whole difference
+ * between the two modes is what happens to the claims afterwards.
+ */
+function doMain(w, ctx, release) {
+  heading(`${release ? "Finish" : "Push only"} — main checkout`);
+
+  let staging = [];
+  if (w.dirty.length) {
+    const state = readState(ctx.file);
+    const parts = partitionByClaims(state, "main", w.dirty);
+    const picked = selectByClaims({ owner: "main", ...parts });
+    if (picked === null) return "cancelled";
+    staging = picked;
+  } else {
+    say("\nNothing is uncommitted here.");
+  }
+
+  const all = [...w.files, ...w.db];
+  heading("About to");
+  if (staging.length) {
+    say(`Commit  ${staging.length} file(s):`);
+    for (const f of staging) say(`          ${describeFile(f)}`);
+  } else {
+    say("Commit  nothing — no changes selected.");
+  }
+  say(
+    w.ahead.hasUpstream
+      ? `Push    ${w.branch} to ${w.ahead.upstream}.`
+      : `Push    ${w.branch} (it tracks nothing yet, so this may need -u).`,
+  );
+  say(
+    release
+      ? `Release all ${all.length} claim(s) main holds${all.length ? `: ${all.join(", ")}` : ""}.`
+      : `Keep    all ${all.length} claim(s) main holds — the project is still going.`,
+  );
+
+  if (!confirm("\nDo all of that?")) return "cancelled";
+
+  if (staging.length) {
+    const message = ask("Commit message: ").trim();
+    if (!message) return "cancelled";
+    if (!stageAndCommit(w.path, staging.map((f) => f.path), message)) return "failed";
+  }
+
+  if (!gitLive(["push"], w.path)) {
+    say("\n  The push failed. Anything committed above is still committed locally.");
+    return "failed";
+  }
+
+  if (release) {
+    const released = removeClaims(ctx, "main");
+    say(`\n  Released ${released.length} claim(s): ${released.join(", ") || "none"}`);
+  } else {
+    say(`\n  Claims kept. gitpush Finish is what releases them.`);
+  }
+  return "done";
+}
+
 function doFinish(w, ctx) {
-  heading(`Finish — ${w.name}`);
+  heading(`Finish — ${w.owner}`);
 
   // Finish commits what this worktree claimed and has changed. Anything it did
   // not claim is left where it is; gitcom is where unclaimed files get decided.
@@ -137,7 +232,7 @@ function doFinish(w, ctx) {
     say("  Run gitcom in that worktree first if they should go too.");
   }
   say(`\nMerge   ${w.branch} into ${BASE}, then push.`);
-  say(`Release all ${w.files.length + w.db.length} claim(s) held by ${w.name}.`);
+  say(`Release all ${w.files.length + w.db.length} claim(s) held by ${w.owner}.`);
   say(`Remove  the worktree, then delete branch ${w.branch}.`);
 
   if (!confirm("\nDo all of that?")) return "cancelled";
@@ -149,7 +244,7 @@ function doFinish(w, ctx) {
   }
   if (!mergeAndPush(w, ctx.root)) return "failed";
 
-  const released = removeClaims(ctx, w.name);
+  const released = removeClaims(ctx, w.owner);
   say(`\n  Released ${released.length} claim(s): ${released.join(", ") || "none"}`);
 
   // Worktree removal is last: if it fails, the work is already safely in main.
@@ -168,7 +263,7 @@ function doFinish(w, ctx) {
 }
 
 function doCheckpoint(w, ctx) {
-  heading(`Checkpoint — ${w.name}`);
+  heading(`Checkpoint — ${w.owner}`);
   say("Only the paths you name are committed. Everything else stays in the worktree.");
 
   if (!w.dirty.length) {
@@ -198,7 +293,7 @@ function doCheckpoint(w, ctx) {
 
   let dbToRelease = [];
   if (w.db.length) {
-    say(`\n${w.name} holds these database claims:`);
+    say(`\n${w.owner} holds these database claims:`);
     w.db.forEach((item, i) => say(`  [${i + 1}] ${item}`));
     const answer = ask(
       "Release which? (numbers, 'all', or enter for none): ",
@@ -218,7 +313,7 @@ function doCheckpoint(w, ctx) {
   say(
     `Release ${dbToRelease.length} database claim(s)${dbToRelease.length ? `: ${dbToRelease.join(", ")}` : ""}.`,
   );
-  say(`Keep    the worktree and every file claim ${w.name} holds.`);
+  say(`Keep    the worktree and every file claim ${w.owner} holds.`);
 
   if (!confirm("\nDo all of that?")) return "cancelled";
 
@@ -228,12 +323,12 @@ function doCheckpoint(w, ctx) {
   if (!mergeAndPush(w, ctx.root)) return "failed";
 
   if (dbToRelease.length) {
-    const released = removeClaims(ctx, w.name, (item) =>
+    const released = removeClaims(ctx, w.owner, (item) =>
       dbToRelease.includes(item),
     );
     say(`\n  Released ${released.join(", ")}`);
   }
-  say(`\n  ${w.name} keeps its file claims. The worktree is still open.`);
+  say(`\n  ${w.owner} keeps its file claims. The worktree is still open.`);
   return "done";
 }
 
@@ -254,15 +349,12 @@ function main() {
   }
 
   const state = readState(ctx.file);
-  const worktrees = listWorktrees()
-    .filter((t) => !t.isMain)
-    .map((t) => summarise(t, state));
+  // Main is always listed, first: work that never used a worktree still has to
+  // get pushed and still has claims that need releasing.
+  const trees = listWorktrees().map((t) => summarise(t, state));
 
-  if (!worktrees.length) stop("No worktrees are open. Nothing to do.", 0);
-
-  say(`Main checkout on ${BASE}: ${ctx.root}`);
-  say(`\n${worktrees.length} worktree(s):`);
-  worktrees.forEach((w, i) => showWorktree(w, i + 1));
+  say(`\n${trees.length} checkout(s):`);
+  trees.forEach((w, i) => showTree(w, i + 1));
 
   const pick = ask(
     "\nWhich? (numbers space separated, 'all', or enter to cancel): ",
@@ -271,10 +363,10 @@ function main() {
 
   const chosen =
     pick.toLowerCase() === "all"
-      ? worktrees
+      ? trees
       : pick
           .split(/\s+/)
-          .map((t) => worktrees[Number(t) - 1])
+          .map((t) => trees[Number(t) - 1])
           .filter(Boolean);
 
   if (!chosen.length) stop("Nothing recognised in that. Nothing changed.", 0);
@@ -283,30 +375,36 @@ function main() {
   // much harder to reason about than one that stopped where it broke.
   for (const w of chosen) {
     if (!w.branch) {
-      stop(`${w.name} has a detached HEAD — no branch to merge. Stopping.`);
+      stop(`${w.owner} has a detached HEAD — no branch to work with. Stopping.`);
     }
-    const mode = choose(
-      `\n${w.name}: finish / checkpoint / skip`,
-      [
-        { key: "f", label: "finish" },
-        { key: "c", label: "checkpoint" },
-        { key: "s", label: "skip" },
-      ],
-    );
+
+    const mode = w.isMain
+      ? choose(`\nmain: push / finish / skip`, [
+          { key: "p", label: "push" },
+          { key: "f", label: "finish" },
+          { key: "s", label: "skip" },
+        ])
+      : choose(`\n${w.owner}: finish / checkpoint / skip`, [
+          { key: "f", label: "finish" },
+          { key: "c", label: "checkpoint" },
+          { key: "s", label: "skip" },
+        ]);
+
     if (mode === null || mode === "s") {
-      say(`  Skipped ${w.name}.`);
+      say(`  Skipped ${w.owner}.`);
       continue;
     }
 
-    const result =
-      mode === "f" ? doFinish(w, ctx) : doCheckpoint(w, ctx);
+    let result;
+    if (w.isMain) result = doMain(w, ctx, mode === "f");
+    else result = mode === "f" ? doFinish(w, ctx) : doCheckpoint(w, ctx);
 
     if (result === "failed") {
-      stop(`\nStopped at ${w.name}. Nothing further was attempted.`, 1);
+      stop(`\nStopped at ${w.owner}. Nothing further was attempted.`, 1);
     }
-    if (result === "cancelled") say(`  Cancelled ${w.name}. Nothing changed for it.`);
+    if (result === "cancelled") say(`  Cancelled ${w.owner}. Nothing changed for it.`);
     if (result === "partial") {
-      stop(`\n${w.name} is merged and pushed but not fully cleaned up. Stopping.`, 1);
+      stop(`\n${w.owner} is merged and pushed but not fully cleaned up. Stopping.`, 1);
     }
   }
 

@@ -1,6 +1,6 @@
 # Progress: CLI Claims System
 
-## Status: Steps 1–5 done. Step 5 awaiting verification.
+## Status: Steps 1–6 done. Step 6 awaiting verification.
 
 ### Development Steps
 - [x] Step 1: Discovery (read-only). Find where `gitcom` and `gitpush` are defined and summarize what they do; find all existing Claude Code hooks (project and user settings); find the cli-workflow skill if it is in the repo; list git-ignored files a worktree needs to run; read the git rules in `CLAUDE.md`. Report and stop.
@@ -8,7 +8,7 @@
 - [x] Step 3: Build the guard hook `.claude/hooks/claims-guard.mjs` and register it in the existing `.claude/settings.local.json`, keeping the audio hooks, and fix the hardcoded absolute paths in `permissions.allow`.
 - [x] Step 4: Worktree setup: `.gitignore` entry and `.worktreeinclude`.
 - [x] Step 5: Write `scripts/git-commit-claimed.mjs`, `scripts/git-sync.mjs` and `scripts/git-push-worktrees.mjs`; hand Alex the four PowerShell wrapper functions to paste in.
-- [ ] Step 6: Add the thread protocol to `.claude/CLAUDE.md`.
+- [x] Step 6: Add the thread protocol to `.claude/CLAUDE.md`.
 - [ ] Step 7: End-to-end dry run with two worktrees (Alex runs it, CLI writes the checklist).
 - [ ] Step 8: Draft the cli-workflow skill changes so every future prompt includes the plan and claim steps, and so Supabase deploys are gated behind a `db:deploy` claim instead of being fine to ask for normally.
 
@@ -561,6 +561,93 @@ untracked folder to a single entry, so `.claude/hooks/` appeared instead of
 `.claude/hooks/claims-guard.mjs`, and a claim on the file inside it matched nothing — a
 claimed new file would have been offered as if nobody owned it. `changedFiles` now passes
 `-uall`.
+
+---
+
+## Step 6, 2026-09-29
+
+**Step 5 verified and complete.** gitcom listed claimed and unclaimed files correctly,
+cancel and "n" both left nothing staged, gitsync and gitpush refused correctly in the
+main checkout, and the real commit contained exactly the 17 listed files with claims
+unchanged afterwards — which is the never-release rule working. Alex installed the
+profile as `profile.ps1` (CurrentUserAllHosts), the old functions are gone, and he
+pushed.
+
+**Files changed**
+- `scripts/git-push-worktrees.mjs` — the main checkout is now a first-class entry.
+- `scripts/lib/claims-core.mjs` — `holderOf()` and `partitionByClaims()` moved in.
+- `scripts/lib/git-flow.mjs` — `unpushed()`, `describeFile()`, `selectByClaims()`,
+  `stageAndCommit()`.
+- `scripts/git-commit-claimed.mjs` — now a thin caller of the shared pieces.
+- `.claude/CLAUDE.md` — the thread protocol, plus two corrections.
+- `docs/technical-spec-cli-claims.md`, `docs/progress-cli-claims.md`.
+
+Nothing was committed.
+
+### The gitpush gap
+
+gitpush listed only worktrees, so work done in the main checkout — which is most of it —
+had no route through it. Main could not be pushed this way and **main's claims could only
+ever be released by hand**, so they piled up: twelve were sitting there when this started.
+
+Main is now always listed, first, with its branch, unpushed commits against its upstream,
+claims and dirty count. Two modes, because there is nothing to merge — the work is
+already on main — so the only real choice is what happens to the claims:
+
+- **Push only** — commit by the gitcom rules if anything changed, push, **keep** the
+  claims, because the project is still going.
+- **Finish** — the same, then release everything main holds.
+
+Finish releases main's `db:` claims along with its file claims, which is what Finish means
+for a worktree too; the confirmation lists every item by name before anything happens.
+
+**"The same rules as gitcom" is literal.** The three-way split (mine / another thread's /
+unclaimed) and the all-none-select prompt moved into `partitionByClaims` in claims-core
+and `selectByClaims` in git-flow, and both commands call them. A promise that two commands
+behave identically is only true when it is the same code; gitcom lost about forty lines to
+this and reads better for it.
+
+Unpushed commits are counted against `@{u}` for main and against `main` for a worktree,
+and a branch that tracks nothing is reported as such rather than as "nothing to push".
+
+### Step 6: the protocol in CLAUDE.md
+
+CLAUDE.md had the claim rules, the never-release rule and the Edit/Write rule, but **not
+the protocol** — no Step 0, no plan step, no claim step, no database flow, no mention of
+worktrees at all. A thread reading it would have known how to behave once it had claims
+and no idea how to get them. Added as a "The thread protocol" section covering owner
+detection, Step 0 (push main first, and say so if main has unpushed commits), Step 1
+(read-only plan naming every file **and every database item with the step that needs it**,
+`check` everything, change nothing, stop), Step 2 (claim **all files in one command** after
+confirmation, reserve the database items, always claim the project's `docs/` files), the
+just-in-time database flow (check → gitsync → drift check → claim → deploy → verify →
+gitpush Checkpoint → release only the `db:` claims), and Finishing via gitpush Finish.
+
+**Two contradictions found and fixed:**
+
+1. Rule 1 lists the git commands a thread must never run, but `gitcom`, `gitsync` and
+   `gitpush` now live in this repo. A thread could reasonably read "they are in `scripts/`"
+   as "I may run them". Rule 1 now names all three as Alex's, with reading them allowed.
+2. "Files you did not touch" said committing was gone so the `git add -A` sweep could not
+   happen. True of threads, but `gitcom` commits now. Corrected to: threads still cannot
+   commit and gitcom stages named paths, so the sweep has two locks on it — and the
+   honest-reporting rule matters *more* now, because gitcom asks Alex about unclaimed
+   changes and he can only answer well if the report already said what was the thread's.
+
+Nothing else contradicted: the SQL rule already said Alex runs migrations himself, which
+is what the database step says, and "Working fast" is about style, not git.
+
+### Tested
+
+Everything that does not change git state. gitpush now lists main with the right unpushed
+count (0 vs origin/main), dirty count and all twelve claims; selecting it offers
+push/finish/skip; **Push only** shows "Keep all 12 claim(s)…" and **Finish** shows
+"Release all 12 claim(s): …" by name; an empty answer at the confirm cancels and changes
+nothing, and `claims.mjs status` and `git status` were identical afterwards. gitcom still
+produces the same output after losing its duplicated logic. All four files parse. The
+guard suite is still 69/69.
+
+**Untested by definition:** the commit, push and release paths. Those are Alex's.
 
 ### Notes
 

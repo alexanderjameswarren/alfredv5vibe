@@ -139,6 +139,86 @@ export function commitsAhead(from, to, cwd) {
   return r.stdout.split(/\r?\n/);
 }
 
+/**
+ * Commits this checkout has that its upstream does not.
+ * `hasUpstream` is false when the branch does not track anything, which is a
+ * different situation from having nothing to push and is reported as such.
+ */
+export function unpushed(cwd) {
+  const up = tryGit(["rev-parse", "--abbrev-ref", "@{u}"], cwd);
+  if (!up.ok) return { hasUpstream: false, commits: [] };
+  return { hasUpstream: true, upstream: up.stdout, commits: commitsAhead("HEAD", "@{u}", cwd) };
+}
+
+// ---------------------------------------------------------------------------
+// committing by the claim rules
+// ---------------------------------------------------------------------------
+
+/** One changed file, as gitcom and gitpush both print it. */
+export function describeFile(f) {
+  const label = f.untracked ? "new" : f.status.trim();
+  return `${label.padEnd(3)} ${f.path}`;
+}
+
+/**
+ * Show the three buckets and ask about the unclaimed ones.
+ *
+ * Returns the files to stage, or null if Alex backed out. Shared so that
+ * committing in the main checkout through gitpush follows exactly the same
+ * rules as gitcom — "same rules" being a promise that is only true if it is
+ * literally the same code.
+ */
+export function selectByClaims({ owner, mine, others, unclaimed }) {
+  if (mine.length) {
+    say(`\nClaimed by ${owner} — will be committed:`);
+    for (const f of mine) say(`  ${describeFile(f)}`);
+  } else {
+    say(`\n${owner} has no changed files among its claims.`);
+  }
+
+  if (others.length) {
+    say("\nClaimed by another thread — WILL NOT be committed:");
+    for (const f of others) say(`  ${describeFile(f)}   (${f.holder})`);
+  }
+
+  // Unclaimed changes are usually Alex's own hand edits sitting in the tree.
+  // They are his to decide about, one at a time if he wants.
+  const extra = [];
+  if (unclaimed.length) {
+    say("\nChanged but claimed by nobody:");
+    for (const f of unclaimed) say(`  ${describeFile(f)}`);
+    say("\nThese are probably your own edits. Include them in this commit?");
+    const pick = choose("  all / none / select", [
+      { key: "a", label: "all" },
+      { key: "n", label: "none" },
+      { key: "s", label: "select" },
+    ]);
+    if (pick === null) return null;
+    if (pick === "a") extra.push(...unclaimed);
+    if (pick === "s") {
+      for (const f of unclaimed) {
+        if (confirm(`  include ${f.path}?`)) extra.push(f);
+      }
+    }
+  }
+
+  return [...mine, ...extra];
+}
+
+/** Stage named paths and commit them. Returns false to stop. */
+export function stageAndCommit(cwd, paths, message) {
+  // Explicit paths after `--`, never `git add .`.
+  if (!gitLive(["add", "--", ...paths], cwd)) {
+    say("  git add failed. Nothing was committed.");
+    return false;
+  }
+  if (!gitLive(["commit", "-m", message], cwd)) {
+    say("  git commit failed. The files are staged — `git reset` unstages them.");
+    return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // talking to Alex
 // ---------------------------------------------------------------------------
