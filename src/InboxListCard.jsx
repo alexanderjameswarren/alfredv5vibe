@@ -94,8 +94,10 @@ function PreviewMark({ icon: Glyph, tone, children }) {
  * @param {Function} onProcess   (id) => void. File it from its suggestions.
  * @param {Function} onCopy      (id) => void. Task items only.
  * @param {Function} onDiscard   (id) => void. Archives with reason 'discarded'.
+ * @param {string}   [reminderLabel] The soonest pending reminder, already formatted
+ *   ("7:17 AM"). Omitted when there is none.
  */
-export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProcess, onCopy, onDiscard }) {
+export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProcess, onCopy, onDiscard, reminderLabel }) {
   const enriched = isEnriched(inboxItem);
   const canProcess = canProcessInOneTap(inboxItem);
   const isTask = inboxItem.sourceType === "task";
@@ -151,6 +153,12 @@ export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProc
           <span>{friendlyDate(inboxItem.createdAt)}</span>
           <span aria-hidden="true">·</span>
           <span>{statusLabel(inboxItem)}</span>
+          {reminderLabel && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span title="Pending reminder (Pacific time)">🔔 {reminderLabel}</span>
+            </>
+          )}
         </p>
 
         {showPreview && (

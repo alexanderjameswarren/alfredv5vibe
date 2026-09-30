@@ -89,6 +89,19 @@ test("create_reminder surfaces a database error", async () => {
   await assert.rejects(m.createReminderTool.handler({ text: "x", due_at: FUTURE, intent_id: "x" }, { db }), /not found/);
 });
 
+test("create_reminder: an unknown intent_id fails with the database's not-found wording", async () => {
+  // No FK on intent_id; public.create_reminder (084) is the check. Pin the wording Claude sees.
+  const db = fakeDb(undefined, {
+    data: null,
+    error: { code: "P0002", message: "create_reminder: intention not-a-real-intention not found" },
+  });
+  await assert.rejects(
+    m.createReminderTool.handler({ text: "x", due_at: FUTURE, intent_id: "not-a-real-intention" }, { db }),
+    /create_reminder: intention not-a-real-intention not found/,
+  );
+  assert.equal(db.calls[0][2].p_intent_id, "not-a-real-intention");
+});
+
 test("get_reminders defaults to scheduled, soonest first, and flags truncation", async () => {
   const db = fakeDb({ data: [{ id: "a" }], error: null, count: 3 });
   const out = await m.getRemindersTool.handler({ limit: 1 }, { db });

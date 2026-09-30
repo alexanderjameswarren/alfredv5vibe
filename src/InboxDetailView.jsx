@@ -196,6 +196,9 @@ const LABEL = "flex items-center gap-2 text-sm font-bold text-foreground mb-2";
  *   Storage, and importing it here would put Supabase behind every one of this
  *   page's tests. Returns null for a capture with no clip behind it, which is most
  *   of them.
+ * @param {Function} [renderReminders]
+ *   Renders the capture's pending reminder times. A prop for the same reason:
+ *   `PendingReminder` reads the database.
  */
 export default function InboxDetailView({
   inboxItem,
@@ -209,6 +212,7 @@ export default function InboxDetailView({
   onSaveCaptureText,
   renderRecurrence,
   renderCapturedContent,
+  renderReminders,
 }) {
   /**
    * Everything the capture proposes, in one place.
@@ -1139,6 +1143,10 @@ export default function InboxDetailView({
               inbox row's own text, and a screenshot underneath a textarea invites
               the reader to think they are editing the page. */}
           {!editingCapture && renderCapturedContent?.(inboxItem)}
+
+          {/* Pending reminder times. A render prop, like the one above, so this
+              page still reads nothing global. */}
+          {renderReminders?.(inboxItem)}
         </div>
 
         {/* The footer. Its geometry — the sticky offset, the inset that makes a
