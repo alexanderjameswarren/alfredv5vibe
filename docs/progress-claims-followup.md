@@ -3,7 +3,7 @@
 Spec: [technical-spec-claims-followup.md](technical-spec-claims-followup.md). Thread:
 `claims-followup`. Solo on main — no worktrees.
 
-**Status: Step 5 done, awaiting Alex's verification.**
+**Status: Step 6 done, awaiting Alex's verification.**
 
 - [x] **1. Plan.** Read-only. All 33 items free, no conflicts. Six corrections reported.
 - [x] **2. Claim and write the docs.** 30 files claimed; `db:fn:clip-capture`,
@@ -19,9 +19,12 @@ Spec: [technical-spec-claims-followup.md](technical-spec-claims-followup.md). Th
 - [x] **4d. The prompt guard and machine traffic.** Fixed and verified live
       2026-09-30; 48 tests passing. Verified by Alex 2026-09-30 — the live
       subagent run was the check.
-- [x] **5. Items 5 + 8 — no prompt throws away an answer.** 61 tests passing,
+- [x] **5. Items 5 + 8 — no prompt throws away an answer.** Verified by Alex
+      2026-09-30: 61 passing, and a real `gitpush → main → Push` with a blank
+      message committed as `claims-followup: push 2026-09-30`, pushed, and kept
+      all 30 claims.
+- [x] **6. Item 9 — parameters for the four git commands.** 67 tests passing,
       awaiting Alex's verification.
-- [ ] **6. Item 9 — parameters for the four git commands.**
 - [ ] **7. Item 4 — `bind`/`unbind`, and hook tests on a scratch log.**
 - [ ] **8. Item 2a — underscores, local half.**
 - [ ] **9. Item 2b — underscores, Alfred half. DATABASE STEP.** Deploy `clip-capture`,
@@ -470,5 +473,69 @@ Not covered by a test, and it cannot be from here: the three prompts inside
 `doCheckpoint` and `doFinish` need a live worktree, and running either for real
 would merge and push. The shared pieces they call are all tested; the wiring is
 Alex's verification.
+
+Nothing was committed.
+
+---
+
+## Step 6, 2026-09-30 — parameters, so each command is one pasted line
+
+**Files changed**
+
+- `scripts/lib/git-flow.mjs` — new `parseArgs`, `exclusive`, `resolveUnclaimed`,
+  `UsageError`; `selectByClaims` takes an `include` answer instead of asking.
+- `scripts/git-push-worktrees.mjs` — `<checkout> <mode>` and six options.
+- `scripts/git-commit-claimed.mjs` — `--include-unclaimed`, `--message`.
+- `scripts/git-sync.mjs` — `--help`, and it refuses anything else.
+- `scripts/git-new-worktree.mjs` — `--install` / `--no-install`.
+- `scripts/powershell-profile-snippet.ps1` — comments only; it already forwarded
+  `$args`, so no profile edit is needed.
+- `scripts/lib/git-flow.test.mjs` — 6 more tests, 67 in the folder overall.
+- `docs/progress-claims-followup.md` — this.
+
+```
+gitpush rem-j7p checkpoint --paths supabase/migrations/084_x.sql --release-db
+gitcom --include-unclaimed none --message "step 5: the answer parser"
+gitnewtree parallel_threads --install
+```
+
+### There is no --yes, and the spec asked for one
+
+Item 9's example lines include `gitsync --yes` and `gitnewtree … --yes`, and the
+sentence under them says a parameter "answers a question, it does not skip the
+confirmation". Those cannot both hold: the only question `gitsync` asks *is* the
+confirmation. Alex's Step 6 instruction settles it the same way — "always asks
+one final yes/no, even when every parameter is given" — so **no command has a
+`--yes`**, and `gitsync` has no parameters at all beyond `--help`. It now refuses
+`--yes` by name rather than ignoring it.
+
+### Unknown means unknown
+
+An unrecognised option stops the command with exit 2 before anything runs, and
+so does a third positional, a missing value, and a contradictory pair
+(`--all` with `--paths`, `--release-db` with `--keep-db`, `--install` with
+`--no-install`).
+
+So does an option the chosen mode will not read — `--release-db` on a Push,
+`--paths` on a Finish — checked however the mode was chosen, because Alex can
+name one on the command line and pick another at the prompt. A silently ignored
+`--relese-db` would mean db claims held across steps with nothing to say why,
+which is the thirteen-hour bug wearing a typo.
+
+`--paths` and `--include-unclaimed` are checked against the working tree too: a
+path that is not a change here is an error, not a quiet omission. Interactively
+the same mistake still asks "carry on without them?", because at a prompt it is
+a slip to correct rather than an instruction that was already wrong when pasted.
+
+### Verified
+
+67 tests pass, 6 new, covering the pasted shape, lists, `--flag=value`, aliases,
+unknown options, extra positionals and the exclusive pairs.
+
+Run for real, all stopping before they could change anything: `--help` on each;
+`--relese-db` refused; `main checkpoint` refused; `--release-db` on a push
+refused; `--yes` refused by gitsync; `--install --no-install` refused; and
+`gitpush main push --message "probe"` printing its full plan and stopping at
+`Do all of that? [y/N]`, which is the rule the whole step turns on.
 
 Nothing was committed.

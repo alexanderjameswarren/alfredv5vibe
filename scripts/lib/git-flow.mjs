@@ -174,7 +174,7 @@ export function describeFile(f) {
  * rules as gitcom — "same rules" being a promise that is only true if it is
  * literally the same code.
  */
-export function selectByClaims({ owner, mine, others, unclaimed }) {
+export function selectByClaims({ owner, mine, others, unclaimed, include }) {
   if (mine.length) {
     say(`\nClaimed by ${owner} — will be committed:`);
     for (const f of mine) say(`  ${describeFile(f)}`);
@@ -193,6 +193,19 @@ export function selectByClaims({ owner, mine, others, unclaimed }) {
   if (unclaimed.length) {
     say("\nChanged but claimed by nobody:");
     for (const f of unclaimed) say(`  ${describeFile(f)}`);
+    // Answered on the command line, so it is reported rather than asked. The
+    // plan below still prints, and the final yes/no is still asked.
+    if (include !== undefined) {
+      const chosen = resolveUnclaimed(include, unclaimed);
+      say(
+        chosen.length
+          ? `\n--include-unclaimed: adding ${chosen.length} of them:`
+          : "\n--include-unclaimed: adding none of them.",
+      );
+      for (const f of chosen) say(`  ${describeFile(f)}`);
+      return [...mine, ...chosen];
+    }
+
     say("\nThese are probably your own edits. Include them in this commit?");
     // No `blank` default: enter re-asks. This used to cancel the whole run,
     // which is the single most expensive blank answer in these scripts — it
@@ -287,6 +300,113 @@ function readLineSync() {
     if (ch !== "\r") line += ch;
   }
   return read ? line : null;
+}
+
+// ---------------------------------------------------------------------------
+// reading the command line
+// ---------------------------------------------------------------------------
+
+/** A bad command line. Callers print the message and the usage, and stop. */
+export class UsageError extends Error {}
+
+/**
+ * Parse argv against a small option spec.
+ *
+ * Kinds: `bool` (`--all`), `value` (`--message "..."`, `--message=...`), and
+ * `list` (`--paths a b c`), which takes everything up to the next `-token`.
+ *
+ * **An unknown option is an error, never a shrug.** These commands merge and
+ * push; a typo in `--relese-db` that is quietly ignored would mean claims held
+ * for another thirteen hours with nothing to show why, and a plan that no
+ * longer describes what will happen.
+ */
+export function parseArgs(argv, options, { positionals = 0 } = {}) {
+  const byName = new Map();
+  for (const [name, def] of Object.entries(options)) {
+    byName.set(name, name);
+    if (def.alias) byName.set(def.alias, name);
+  }
+
+  const out = {};
+  const rest = [];
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (token === "--") {
+      rest.push(...argv.slice(i + 1));
+      break;
+    }
+    if (!token.startsWith("-") || token === "-") {
+      rest.push(token);
+      continue;
+    }
+
+    const eq = token.indexOf("=");
+    const flag = eq >= 0 ? token.slice(0, eq) : token;
+    const inline = eq >= 0 ? token.slice(eq + 1) : null;
+    const name = byName.get(flag.replace(/^--?/, ""));
+    if (!name) throw new UsageError(`Unknown option: ${flag}`);
+    const def = options[name];
+
+    if (def.kind === "bool") {
+      if (inline !== null) throw new UsageError(`${flag} takes no value.`);
+      out[name] = true;
+      continue;
+    }
+
+    if (def.kind === "list") {
+      const values = inline !== null ? [inline] : [];
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("-")) values.push(argv[(i += 1)]);
+      if (!values.length) throw new UsageError(`${flag} needs at least one value.`);
+      out[name] = [...(out[name] ?? []), ...values];
+      continue;
+    }
+
+    const value = inline !== null ? inline : argv[(i += 1)];
+    if (value === undefined) throw new UsageError(`${flag} needs a value.`);
+    out[name] = value;
+  }
+
+  if (rest.length > positionals) {
+    throw new UsageError(`Unexpected argument: ${rest[positionals]}`);
+  }
+  return { positionals: rest, options: out };
+}
+
+/** Refuse a pair of options that contradict each other. */
+export function exclusive(options, names) {
+  const given = names.filter((n) => options[n] !== undefined);
+  if (given.length > 1) {
+    throw new UsageError(`${given.map((n) => `--${n}`).join(" and ")} cannot both be given.`);
+  }
+  return given[0] ?? null;
+}
+
+/**
+ * Resolve an `--include-unclaimed` value against the unclaimed files.
+ *
+ * `all`, `none`, or paths. A path that is not in the list is an error rather
+ * than a silent miss: it is almost always a typo or a stale copy-paste, and the
+ * alternative is a commit quietly missing a file Alex asked for by name.
+ */
+export function resolveUnclaimed(value, unclaimed) {
+  const words = Array.isArray(value) ? value : [value];
+  if (words.length === 1 && /^(a|all)$/i.test(words[0])) return [...unclaimed];
+  if (words.length === 1 && /^(n|none)$/i.test(words[0])) return [];
+
+  const picked = [];
+  const missing = [];
+  for (const word of words) {
+    const hit = unclaimed.find((f) => f.path === word);
+    if (hit) picked.push(hit);
+    else missing.push(word);
+  }
+  if (missing.length) {
+    throw new UsageError(
+      `--include-unclaimed: not an unclaimed change here: ${missing.join(", ")}`,
+    );
+  }
+  return picked;
 }
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,12 @@
 //
 // Alex runs this. No CLI thread runs it; see scripts/lib/git-flow.mjs.
 //
-// Usage:  node scripts/git-commit-claimed.mjs [-m "message"]
+// Usage:  node scripts/git-commit-claimed.mjs [options]
+//
+// Every question it asks can be answered on the command line, so claude.ai can
+// hand Alex one line to paste. What is not given is still asked. The plan and
+// the final yes/no happen either way — a parameter answers a question, it does
+// not skip the confirmation.
 //
 // ---------------------------------------------------------------------------
 // WHAT REPLACED WHAT
@@ -36,16 +41,40 @@ import {
   confirm,
   describeFile,
   heading,
+  parseArgs,
   say,
   selectByClaims,
   stageAndCommit,
   stop,
+  UsageError,
 } from "./lib/git-flow.mjs";
 
+const USAGE = `gitcom — commit this thread's claimed, changed files.
+
+  gitcom [options]
+
+  --include-unclaimed all|none|<paths…>   what to do with changes nobody claimed
+  --message, -m "..."                     the commit message
+  --help, -h
+
+  Anything not given is asked. The plan and the final yes/no are always shown.
+  A blank message uses  <project-code>: commit <date>.`;
+
 function main() {
-  const argv = process.argv.slice(2);
-  const mIndex = argv.indexOf("-m");
-  let message = mIndex >= 0 ? argv[mIndex + 1] : null;
+  let args;
+  try {
+    args = parseArgs(process.argv.slice(2), {
+      "include-unclaimed": { kind: "list" },
+      message: { kind: "value", alias: "m" },
+      help: { kind: "bool", alias: "h" },
+    });
+  } catch (err) {
+    if (err instanceof UsageError) stop(`${err.message}\n\n${USAGE}`, 2);
+    throw err;
+  }
+  if (args.options.help) stop(USAGE, 0);
+
+  let message = args.options.message ?? null;
 
   const ctx = resolveRepo();
   const state = readState(ctx.file);
@@ -57,7 +86,17 @@ function main() {
   if (!changed.length) stop("Nothing has changed. Nothing to commit.", 0);
 
   const parts = partitionByClaims(state, ctx.owner, changed);
-  const staging = selectByClaims({ owner: ctx.owner, ...parts });
+  let staging;
+  try {
+    staging = selectByClaims({
+      owner: ctx.owner,
+      ...parts,
+      include: args.options["include-unclaimed"],
+    });
+  } catch (err) {
+    if (err instanceof UsageError) stop(`\n${err.message}`, 2);
+    throw err;
+  }
   if (!staging.length) {
     stop("Nothing selected. Nothing staged, nothing committed.", 0);
   }

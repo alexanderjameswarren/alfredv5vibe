@@ -29,14 +29,37 @@ import {
   git,
   gitLive,
   heading,
+  parseArgs,
   say,
   stop,
   tryGit,
+  UsageError,
 } from "./lib/git-flow.mjs";
 
 const BASE = "main";
 
+// gitsync asks exactly one question — the final "merge?" — and the rule for
+// these commands is that a parameter answers a question but never skips the
+// confirmation. So there is nothing here for a parameter to answer, and there
+// is deliberately no --yes: it would be the one flag that removes the
+// confirmation rather than pre-filling it.
+const USAGE = `gitsync — merge local main into this worktree's branch.
+
+  gitsync [--help]
+
+  It asks one question, the final yes/no, and that one is always asked.
+  Run it from inside a worktree; it refuses in the main checkout.`;
+
 function main() {
+  let args;
+  try {
+    args = parseArgs(process.argv.slice(2), { help: { kind: "bool", alias: "h" } });
+  } catch (err) {
+    if (err instanceof UsageError) stop(`${err.message}\n\n${USAGE}`, 2);
+    throw err;
+  }
+  if (args.options.help) stop(USAGE, 0);
+
   const ctx = resolveRepo();
 
   heading(`gitsync — ${ctx.owner}`);

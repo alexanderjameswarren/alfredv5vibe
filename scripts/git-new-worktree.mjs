@@ -28,17 +28,32 @@ import {
   changedFiles,
   commitsAhead,
   confirm,
+  exclusive,
   gitLive,
   heading,
   listWorktrees,
+  parseArgs,
   say,
   stop,
   tryGit,
   unpushed,
+  UsageError,
 } from "./lib/git-flow.mjs";
 
 const BASE = "origin/main";
 const CODE = /^[a-z0-9][a-z0-9-]{1,40}$/;
+
+const USAGE = `gitnewtree — start a project in its own worktree.
+
+  gitnewtree <project-code> [options]
+
+  --install                  run npm install in the new worktree, without asking
+  --no-install               skip it, without asking
+  --help, -h
+
+  The project code names the folder, the branch and the claims owner, and is
+  what the prompt guard checks a run tag against. The plan and the final yes/no
+  are always shown.`;
 
 const winPath = (p) => p.replace(/\//g, "\\");
 
@@ -178,16 +193,35 @@ function leftovers({ code, worktreePath, branch, root, folderLeft, branchLeft })
 }
 
 function main() {
-  const code = (process.argv[2] ?? "").trim();
+  let args;
+  try {
+    args = parseArgs(
+      process.argv.slice(2),
+      {
+        install: { kind: "bool" },
+        "no-install": { kind: "bool" },
+        help: { kind: "bool", alias: "h" },
+      },
+      { positionals: 1 },
+    );
+    exclusive(args.options, ["install", "no-install"]);
+  } catch (err) {
+    if (err instanceof UsageError) stop(`${err.message}\n\n${USAGE}`, 2);
+    throw err;
+  }
+  if (args.options.help) stop(USAGE, 0);
+
+  const code = (args.positionals[0] ?? "").trim();
+  // undefined means "ask", which is what it has always done.
+  const install = args.options.install ? true : args.options["no-install"] ? false : undefined;
 
   heading("gitnewtree");
 
   if (!code) {
     stop(
-      "Usage: gitnewtree <project-code>\n\n" +
-        "The project code names the worktree folder and the branch, and it is what\n" +
-        "the prompt guard checks a run tag against — so use the project part of the\n" +
-        "run tag you will be working under, e.g. `gitnewtree claims-wq7`.",
+      `${USAGE}\n\n` +
+        "Use the project part of the run tag you will be working under, e.g.\n" +
+        "`gitnewtree claims-wq7`.",
       2,
     );
   }
@@ -260,6 +294,9 @@ function main() {
       : `Copy    nothing — .worktreeinclude matched no files.`,
   );
   say(`Open    a new VS Code window on it.`);
+  if (install !== undefined) {
+    say(install ? `Install dependencies (--install).` : `Skip    npm install (--no-install).`);
+  }
 
   if (!confirm("\nDo all of that?")) stop("Cancelled. Nothing created.", 0);
 
@@ -290,7 +327,11 @@ function main() {
   heading("Dependencies");
   say("node_modules is not copied into a worktree, so it is not there yet.");
   say("Nothing that needs it will run until it is installed.");
-  if (confirm("\nRun `npm install` in the new worktree now? (a few minutes)")) {
+  const doInstall =
+    install === undefined
+      ? confirm("\nRun `npm install` in the new worktree now? (a few minutes)")
+      : install;
+  if (doInstall) {
     say("");
     const r = spawnSync("npm", ["install"], {
       cwd: worktreePath,

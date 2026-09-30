@@ -24,6 +24,11 @@
 # on the MAIN checkout whichever window you are in; gitcom and gitsync act on the
 # checkout you are standing in.
 #
+# Every argument is forwarded, so each command can be one pasted line — which is
+# the shape claude.ai gives them in. `--help` on any of them lists its options.
+# A parameter answers a question the command would have asked; it never skips
+# the plan or the final yes/no, so there is no --yes on any of them.
+#
 # Written for Windows PowerShell 5.1: no `&&`, no ternary, no null-coalescing.
 # ---------------------------------------------------------------------------
 
@@ -57,18 +62,25 @@ function Invoke-AlfredGit {
 # Start a project in its own worktree: checks Step 0, branches from origin/main,
 # copies the .worktreeinclude files, opens VS Code, offers to npm install.
 #   gitnewtree claims-wq7
+#   gitnewtree parallel_threads --install
 function gitnewtree { Invoke-AlfredGit 'git-new-worktree.mjs' $args }
 
 # Commit this thread's claimed, changed files. Asks about anything unclaimed.
-# Never touches a file another thread has claimed. Accepts -m "message".
+# Never touches a file another thread has claimed.
+#   gitcom
+#   gitcom --include-unclaimed none --message "step 5: the answer parser"
 function gitcom { Invoke-AlfredGit 'git-commit-claimed.mjs' $args }
 
 # The old name, kept because it is in muscle memory. Calls gitcom.
 function gitcommit { gitcom @args }
 
-# Run inside a worktree: merge local main into this branch.
+# Run inside a worktree: merge local main into this branch. No options — it asks
+# one question and that one is always asked.
 function gitsync { Invoke-AlfredGit 'git-sync.mjs' $args }
 
 # Run from the main checkout: pick worktrees, merge them into main, push,
 # release their claims. Finish or Checkpoint per worktree.
+#   gitpush
+#   gitpush main push
+#   gitpush rem-j7p checkpoint --paths supabase/migrations/084_x.sql --release-db
 function gitpush { Invoke-AlfredGit 'git-push-worktrees.mjs' $args }

@@ -10,7 +10,15 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultMessage, parseSelection, today } from "./git-flow.mjs";
+import {
+  defaultMessage,
+  exclusive,
+  parseArgs,
+  parseSelection,
+  resolveUnclaimed,
+  today,
+  UsageError,
+} from "./git-flow.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FLOW = path.join(HERE, "git-flow.mjs").replace(/\\/g, "/");
@@ -124,6 +132,73 @@ test("a path list takes ranges and literal paths together", () => {
   assert.match(r.out, /b\.js/);
   assert.doesNotMatch(r.out, /c\.js/);
   assert.match(r.out, /docs\/x\.md/);
+});
+
+// ---------------------------------------------------------------------------
+// the command line
+// ---------------------------------------------------------------------------
+
+const PUSH_OPTS = {
+  paths: { kind: "list" },
+  all: { kind: "bool" },
+  "release-db": { kind: "bool" },
+  "keep-db": { kind: "bool" },
+  "include-unclaimed": { kind: "list" },
+  message: { kind: "value", alias: "m" },
+};
+
+const parse = (line, opts = PUSH_OPTS, positionals = 2) =>
+  parseArgs(line.split(" ").filter(Boolean), opts, { positionals });
+
+test("the shape claude.ai will hand over", () => {
+  const { positionals, options } = parseArgs(
+    ["rem-j7p", "checkpoint", "--paths", "supabase/migrations/084_x.sql", "--release-db"],
+    PUSH_OPTS,
+    { positionals: 2 },
+  );
+  assert.deepEqual(positionals, ["rem-j7p", "checkpoint"]);
+  assert.deepEqual(options.paths, ["supabase/migrations/084_x.sql"]);
+  assert.equal(options["release-db"], true);
+});
+
+test("a list takes several values and stops at the next flag", () => {
+  const { options } = parse("w1 checkpoint --paths a.sql b.ts --release-db");
+  assert.deepEqual(options.paths, ["a.sql", "b.ts"]);
+  assert.equal(options["release-db"], true);
+});
+
+test("a value can be given either way, and messages keep their spaces", () => {
+  assert.equal(parseArgs(["--message", "084 reminders"], PUSH_OPTS).options.message, "084 reminders");
+  assert.equal(parseArgs(["--message=084 reminders"], PUSH_OPTS).options.message, "084 reminders");
+  assert.equal(parseArgs(["-m", "hi"], PUSH_OPTS).options.message, "hi");
+});
+
+test("an unknown option is an error, never ignored", () => {
+  // The one that matters: a typo'd --release-db would hold db claims for hours.
+  assert.throws(() => parse("w1 checkpoint --relese-db"), UsageError);
+  assert.throws(() => parse("w1 checkpoint --paths"), UsageError);
+  assert.throws(() => parseArgs(["--message"], PUSH_OPTS), UsageError);
+  assert.throws(() => parse("--all=yes"), UsageError);
+  // A third positional is an error too, not a silently dropped word.
+  assert.throws(() => parse("w1 checkpoint extra"), UsageError);
+});
+
+test("contradictory pairs are refused", () => {
+  assert.throws(() => exclusive(parse("w1 c --all --paths a.sql").options, ["paths", "all"]), UsageError);
+  assert.throws(
+    () => exclusive(parse("w1 c --release-db --keep-db").options, ["release-db", "keep-db"]),
+    UsageError,
+  );
+  assert.equal(exclusive(parse("w1 c --keep-db").options, ["release-db", "keep-db"]), "keep-db");
+  assert.equal(exclusive({}, ["release-db", "keep-db"]), null);
+});
+
+test("--include-unclaimed resolves, and a path that is not there is an error", () => {
+  const unclaimed = [{ path: "a.js" }, { path: "b.js" }];
+  assert.deepEqual(resolveUnclaimed(["all"], unclaimed), unclaimed);
+  assert.deepEqual(resolveUnclaimed(["none"], unclaimed), []);
+  assert.deepEqual(resolveUnclaimed(["b.js"], unclaimed), [{ path: "b.js" }]);
+  assert.throws(() => resolveUnclaimed(["c.js"], unclaimed), UsageError);
 });
 
 test("stdin closing ends the run instead of spinning the re-ask loop", () => {

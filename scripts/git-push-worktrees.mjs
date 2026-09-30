@@ -4,7 +4,7 @@
 // Alex runs this, from the main checkout. No CLI thread runs it; see
 // scripts/lib/git-flow.mjs.
 //
-// Usage:  node scripts/git-push-worktrees.mjs
+// Usage:  node scripts/git-push-worktrees.mjs [checkout] [mode] [options]
 //
 // It lists the main checkout and every open worktree, each with its branch, what
 // it has claimed, what is unpushed and whether it is dirty. Alex picks one,
@@ -62,6 +62,8 @@ import {
   askSelection,
   changedFiles,
   choose,
+  exclusive,
+  parseArgs,
   parseSelection,
   commitsAhead,
   confirm,
@@ -76,9 +78,81 @@ import {
   stop,
   tryGit,
   unpushed,
+  UsageError,
 } from "./lib/git-flow.mjs";
 
 const BASE = "main";
+
+const USAGE = `gitpush — bring work into main and push it.
+
+  gitpush [checkout] [mode] [options]
+
+  checkout   a worktree name, "main", or its number in the list
+  mode       push | finish | checkpoint | skip
+               main:     push (keep its claims) | finish (release them)
+               worktree: checkpoint (named paths, worktree stays) | finish
+
+  --paths <paths or numbers…>            Checkpoint: what to commit
+  --all                                  Checkpoint: every uncommitted path
+  --release-db / --keep-db               Checkpoint: the db: claims
+  --include-unclaimed all|none|<paths…>  main: changes nobody claimed
+  --message, -m "..."                    the commit message
+  --help, -h
+
+  Anything not given is asked. The plan and the final yes/no are always shown —
+  a parameter answers a question, it does not skip the confirmation.
+
+  gitpush rem-j7p checkpoint --paths supabase/migrations/084_x.sql --release-db`;
+
+/** The command line, resolved. Read by the three mode functions below. */
+let OPTS = {};
+
+const MODE_KEYS = { push: "p", finish: "f", checkpoint: "c", skip: "s" };
+const MODE_NAME = { p: "push", f: "finish", c: "checkpoint", s: "skip" };
+
+/**
+ * Refuse an option the chosen mode will not read.
+ *
+ * `--release-db` on a Finish, or `--paths` on a Push, is the same failure as a
+ * misspelled flag: Alex asked for something specific and nothing would happen.
+ * Checked however the mode was chosen, since he can name one on the command
+ * line and pick another at the prompt.
+ */
+function checkOptionsFor(mode, w) {
+  if (mode === "s") return;
+  const misplaced = [];
+  if (mode !== "c") {
+    for (const name of ["paths", "all", "release-db", "keep-db"]) {
+      if (OPTS[name] !== undefined) misplaced.push(`--${name}`);
+    }
+  }
+  if (!w.isMain && OPTS["include-unclaimed"] !== undefined) {
+    misplaced.push("--include-unclaimed");
+  }
+  if (misplaced.length) {
+    stop(
+      `\n${misplaced.join(", ")} ${misplaced.length > 1 ? "are" : "is"} not used by ` +
+        `${MODE_NAME[mode]}${w.isMain ? " on main" : ` on ${w.owner}`}.\n` +
+        `Nothing was changed.`,
+      2,
+    );
+  }
+}
+
+/** Turn a mode word into the key the rest of this file uses. */
+function modeKey(word, w) {
+  const key = MODE_KEYS[String(word).toLowerCase()];
+  if (!key) {
+    throw new UsageError(`"${word}" is not a mode. Use push, finish, checkpoint or skip.`);
+  }
+  if (w.isMain && key === "c") {
+    throw new UsageError(`Checkpoint is for a worktree. main takes push or finish.`);
+  }
+  if (!w.isMain && key === "p") {
+    throw new UsageError(`Push is for the main checkout. ${w.owner} takes checkpoint or finish.`);
+  }
+  return key;
+}
 
 /** Claims and reservations held by one worktree name. */
 function heldBy(state, owner) {
@@ -175,7 +249,11 @@ function doMain(w, ctx, release) {
   if (w.dirty.length) {
     const state = readState(ctx.file);
     const parts = partitionByClaims(state, "main", w.dirty);
-    staging = selectByClaims({ owner: "main", ...parts });
+    staging = selectByClaims({
+      owner: "main",
+      ...parts,
+      include: OPTS["include-unclaimed"],
+    });
   } else {
     say("\nNothing is uncommitted here.");
   }
@@ -202,7 +280,8 @@ function doMain(w, ctx, release) {
   if (!confirm("\nDo all of that?")) return "cancelled";
 
   if (staging.length) {
-    const message = askMessage(readMainCode(ctx) ?? "main", release ? "finish" : "push");
+    const message =
+      OPTS.message ?? askMessage(readMainCode(ctx) ?? "main", release ? "finish" : "push");
     if (!stageAndCommit(w.path, staging.map((f) => f.path), message)) return "failed";
   }
 
@@ -321,7 +400,7 @@ function doFinish(w, ctx) {
   if (!confirm("\nClosed? Do all of that?")) return "cancelled";
 
   if (claimedChanges.length) {
-    const message = askMessage(w.owner, "finish");
+    const message = OPTS.message ?? askMessage(w.owner, "finish");
     if (!commitIn(w, claimedChanges.map((f) => f.path), message)) return "failed";
   }
   if (!mergeAndPush(w, ctx.root)) return "failed";
@@ -351,25 +430,48 @@ function doCheckpoint(w, ctx) {
     w.dirty.forEach((f, i) => say(`  [${i + 1}] ${f.status.trim()} ${f.path}`));
   }
 
-  const chosen = askSelection(
-    "\nPaths to commit (numbers, ranges like 1-3, paths, or 'all'): ",
-    w.dirty,
-    `Commit all ${w.dirty.length} path(s) listed above?`,
-  );
-  if (chosen === null) return "cancelled";
+  let picked;
+  if (OPTS.all) {
+    picked = w.dirty.map((f) => f.path);
+    say(`\n--all: every one of the ${picked.length} path(s) above.`);
+  } else if (OPTS.paths) {
+    // Given on the command line, so a path that is not here is a typo, and a
+    // typo'd migration path silently dropped is the whole reason this is an
+    // error rather than a shrug.
+    const sel = parseSelection(OPTS.paths.join(" "), w.dirty.length);
+    const named = [...sel.words, ...sel.bad].filter(
+      (p) => !w.dirty.some((f) => f.path === p),
+    );
+    if (named.length) {
+      throw new UsageError(`--paths: not changed in ${w.owner}: ${named.join(", ")}`);
+    }
+    picked = sel.all
+      ? w.dirty.map((f) => f.path)
+      : [...sel.indexes.map((n) => w.dirty[n - 1].path), ...sel.words];
+    say(`\n--paths: ${picked.length} path(s).`);
+  } else {
+    const chosen = askSelection(
+      "\nPaths to commit (numbers, ranges like 1-3, paths, or 'all'): ",
+      w.dirty,
+      `Commit all ${w.dirty.length} path(s) listed above?`,
+    );
+    if (chosen === null) return "cancelled";
 
-  const picked = chosen.all
-    ? chosen.picked.map((f) => f.path)
-    : [...chosen.picked.map((f) => f.path), ...chosen.words, ...chosen.bad];
+    const answered = chosen.all
+      ? chosen.picked.map((f) => f.path)
+      : [...chosen.picked.map((f) => f.path), ...chosen.words, ...chosen.bad];
 
-  const unknown = picked.filter((p) => !w.dirty.some((f) => f.path === p));
-  if (unknown.length) {
-    say(`\nNot changed in this worktree: ${unknown.join(", ")}`);
-    if (!confirm("Carry on without them?")) return "cancelled";
+    const unknown = answered.filter((p) => !w.dirty.some((f) => f.path === p));
+    if (unknown.length) {
+      say(`\nNot changed in this worktree: ${unknown.join(", ")}`);
+      if (!confirm("Carry on without them?")) return "cancelled";
+    }
+    picked = answered.filter((p) => !unknown.includes(p));
   }
-  const paths = picked.filter((p) => !unknown.includes(p));
+
+  const paths = [...new Set(picked)];
   if (!paths.length) {
-    say("\nNothing left to commit once those are dropped.");
+    say("\nNothing to commit.");
     return "cancelled";
   }
 
@@ -379,7 +481,12 @@ function doCheckpoint(w, ctx) {
   // deploy for all of them, and every prompt along the way let it, because
   // "enter for none" was the easy answer.
   let dbToRelease = [...w.db];
-  if (w.db.length) {
+  if (w.db.length && OPTS["keep-db"]) {
+    dbToRelease = [];
+    say(`\n--keep-db: keeping ${w.db.join(", ")}.`);
+  } else if (w.db.length && OPTS["release-db"]) {
+    say(`\n--release-db: releasing ${w.db.join(", ")}.`);
+  } else if (w.db.length) {
     say(`\n${w.owner} holds these database claims:`);
     w.db.forEach((item, i) => say(`  [${i + 1}] ${item}`));
     say("A db: claim belongs to the step that deployed it — re-claim at the next one.");
@@ -408,7 +515,7 @@ function doCheckpoint(w, ctx) {
 
   if (!confirm("\nDo all of that?")) return "cancelled";
 
-  const message = askMessage(w.owner, "checkpoint");
+  const message = OPTS.message ?? askMessage(w.owner, "checkpoint");
   if (!commitIn(w, paths, message)) return "failed";
   if (!mergeAndPush(w, ctx.root)) return "failed";
 
@@ -423,6 +530,30 @@ function doCheckpoint(w, ctx) {
 }
 
 function main() {
+  let args;
+  try {
+    args = parseArgs(
+      process.argv.slice(2),
+      {
+        paths: { kind: "list" },
+        all: { kind: "bool" },
+        "release-db": { kind: "bool" },
+        "keep-db": { kind: "bool" },
+        "include-unclaimed": { kind: "list" },
+        message: { kind: "value", alias: "m" },
+        help: { kind: "bool", alias: "h" },
+      },
+      { positionals: 2 },
+    );
+    exclusive(args.options, ["paths", "all"]);
+    exclusive(args.options, ["release-db", "keep-db"]);
+  } catch (err) {
+    if (err instanceof UsageError) stop(`${err.message}\n\n${USAGE}`, 2);
+    throw err;
+  }
+  if (args.options.help) stop(USAGE, 0);
+  OPTS = args.options;
+
   const here = resolveRepo();
 
   heading("gitpush");
@@ -462,29 +593,49 @@ function main() {
   say(`\n${summarised.length} checkout(s):`);
   summarised.forEach((w, i) => showTree(w, i + 1));
 
-  // The one blank answer that still cancels, because the prompt says so and
-  // because this is the question before anything has been decided — there is
-  // no earlier answer for it to throw away.
-  const sel = parseSelection(
-    ask("\nWhich? (numbers, ranges, names, 'all', or enter to cancel): "),
-    summarised.length,
-  );
-  if (sel.blank) stop("Cancelled. Nothing changed.", 0);
+  const [wantedCheckout, wantedMode] = args.positionals;
 
-  const named = [];
-  const unrecognised = [...sel.bad];
-  for (const word of sel.words) {
-    const hit = summarised.find((t) => t.owner.toLowerCase() === word.toLowerCase());
-    if (hit) named.push(hit);
-    else unrecognised.push(word);
+  let chosen;
+  if (wantedCheckout) {
+    const hit = summarised.find(
+      (t) =>
+        t.owner.toLowerCase() === wantedCheckout.toLowerCase() ||
+        (/^\d+$/.test(wantedCheckout) && summarised[Number(wantedCheckout) - 1] === t),
+    );
+    if (!hit) {
+      stop(
+        `"${wantedCheckout}" is not one of the checkouts above.\n` +
+          `Here: ${summarised.map((t) => t.owner).join(", ")}`,
+        2,
+      );
+    }
+    chosen = [hit];
+    say(`\nChosen on the command line: ${hit.owner}`);
+  } else {
+    // The one blank answer that still cancels, because the prompt says so and
+    // because this is the question before anything has been decided — there is
+    // no earlier answer for it to throw away.
+    const sel = parseSelection(
+      ask("\nWhich? (numbers, ranges, names, 'all', or enter to cancel): "),
+      summarised.length,
+    );
+    if (sel.blank) stop("Cancelled. Nothing changed.", 0);
+
+    const named = [];
+    const unrecognised = [...sel.bad];
+    for (const word of sel.words) {
+      const hit = summarised.find((t) => t.owner.toLowerCase() === word.toLowerCase());
+      if (hit) named.push(hit);
+      else unrecognised.push(word);
+    }
+    if (unrecognised.length) say(`\n  Not a checkout here: ${unrecognised.join(", ")}`);
+
+    chosen = sel.all
+      ? summarised
+      : [...new Set([...sel.indexes.map((n) => summarised[n - 1]), ...named])];
+
+    if (!chosen.length) stop("Nothing recognised in that. Nothing changed.", 0);
   }
-  if (unrecognised.length) say(`\n  Not a checkout here: ${unrecognised.join(", ")}`);
-
-  const chosen = sel.all
-    ? summarised
-    : [...new Set([...sel.indexes.map((n) => summarised[n - 1]), ...named])];
-
-  if (!chosen.length) stop("Nothing recognised in that. Nothing changed.", 0);
 
   // One at a time, stopping at the first problem: a half-done merge queue is
   // much harder to reason about than one that stopped where it broke.
@@ -498,7 +649,9 @@ function main() {
     // `blank: "s"` — enter skips this checkout, which is the harmless answer and
     // is spelled out in the Skip line. It is the one choose() in these scripts
     // with a default, and it has one because a blank here decides nothing.
-    const mode = w.isMain
+    const mode = wantedMode
+      ? modeKey(wantedMode, w)
+      : w.isMain
       ? choose(`\nmain:`, [
           {
             key: "p",
@@ -530,6 +683,7 @@ function main() {
       say(`  Skipped ${w.owner}.`);
       continue;
     }
+    checkOptionsFor(mode, w);
 
     let result;
     if (w.isMain) result = doMain(w, ctx, mode === "f");
@@ -547,4 +701,11 @@ function main() {
   say("\nDone.");
 }
 
-main();
+try {
+  main();
+} catch (err) {
+  // A bad command line found late — `--paths` naming a file this worktree has
+  // not changed, a mode that does not fit the checkout. Nothing has run by then.
+  if (err instanceof UsageError) stop(`\n${err.message}\n\nNothing was changed.`, 2);
+  throw err;
+}
