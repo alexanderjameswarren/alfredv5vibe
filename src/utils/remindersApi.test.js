@@ -93,6 +93,13 @@ it("short label: time today, weekday otherwise, both Pacific", () => {
   expect(api.formatReminderShort("2026-10-01T06:00:00Z", now)).toBe("11:00 PM");
 });
 
+it("an item's reminder is its source capture's", () => {
+  const idx = api.indexReminders([{ inbox_id: "in1", intent_id: null, due_at: "A" }]);
+  expect(api.itemReminderDueAt({ id: "it1", sourceInboxId: "in1" }, idx)).toBe("A");
+  expect(api.itemReminderDueAt({ id: "it2", sourceInboxId: "in9" }, idx)).toBeNull();
+  expect(api.itemReminderDueAt({ id: "it3" }, idx)).toBeNull();
+});
+
 it("archived capture tap: item, else intention (direct or via event), else null", () => {
   const items = [{ id: "it1", sourceInboxId: "in1" }];
   const intents = [{ id: "int2", sourceInboxId: "in2" }];
