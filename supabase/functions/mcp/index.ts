@@ -70,6 +70,11 @@ import {
   archiveInboxItemTool,
 } from "../_shared/tools/clipboard.ts";
 import {
+  createReminderTool,
+  getRemindersTool,
+  updateReminderTool,
+} from "../_shared/tools/reminders.ts";
+import {
   getKenQuizBatchTool,
   recordKenAttemptsTool,
   createKenAreaTool,
@@ -2594,6 +2599,57 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(archiveInboxItemTool, args, token),
+  );
+
+  // --- Reminders (docs/technical-spec-reminders.md) ---
+  server.registerTool(
+    "create_reminder",
+    {
+      title: "Create Reminder",
+      description:
+        "Schedule one push notification to Alex's phone at a fixed time. Alex is in America/Los_Angeles: resolve 'at 9 tomorrow' in Pacific time and send due_at with the matching offset (-07:00 in daylight time, -08:00 in standard time). " +
+        "Every reminder is backed by something visible in Alfred, because Android notifications are easily missed: link it to an existing intention (intent_id, from get_intents) or inbox item (inbox_id, from get_inbox), or pass neither and an inbox item with the same text is created for it. At most one of the two. " +
+        "Tapping the notification opens the linked intention, else the inbox item. Rejects a due_at with no offset or in the past. Returns the reminder, including its inbox_id or intent_id. Tier 1.",
+      inputSchema: {
+        text: z.string().describe("The notification body Alex will see, short and self-explanatory, e.g. 'Call the dentist about Thursday'."),
+        due_at: z.string().describe("When to fire: ISO 8601 WITH a UTC offset, e.g. 2026-10-01T09:00:00-07:00. A time with no offset is rejected. Must be in the future."),
+        inbox_id: z.string().optional().describe("Link to this existing inbox item (get_inbox, field id). Omit when linking an intention."),
+        intent_id: z.string().optional().describe("Link to this existing intention (get_intents, field id). Omit when linking an inbox item."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createReminderTool, args, token),
+  );
+
+  server.registerTool(
+    "get_reminders",
+    {
+      title: "Get Reminders",
+      description:
+        "List Alex's standalone reminders. Default: the scheduled (still pending) ones, soonest first. Pass state for others (sent, cancelled, no_subscription, or all, most recent first), and inbox_id or intent_id to see the reminders on one item. Times are UTC; convert to America/Los_Angeles when telling Alex. Tier 1.",
+      inputSchema: {
+        state: z.enum(["scheduled", "sent", "cancelled", "no_subscription", "all"]).optional().describe("Default 'scheduled'. 'all' returns every state."),
+        inbox_id: z.string().optional().describe("Only reminders linked to this inbox item."),
+        intent_id: z.string().optional().describe("Only reminders linked to this intention."),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getRemindersTool, args, token),
+  );
+
+  server.registerTool(
+    "update_reminder",
+    {
+      title: "Update Reminder",
+      description:
+        "Change one reminder, by id (from get_reminders or create_reminder). Do ONE of: change text; reschedule with a new due_at (same rules as create_reminder — ISO 8601 with offset, in the future; this re-arms it as scheduled even if it was sent or cancelled); or cancel: true. Cancel cannot be combined with the others and does not apply to a reminder already sent. Audited and reversible. Tier 2.",
+      inputSchema: {
+        id: z.string().describe("The reminder's id."),
+        text: z.string().optional().describe("New notification body."),
+        due_at: z.string().optional().describe("New fire time, ISO 8601 WITH offset, in the future. Alex is in America/Los_Angeles."),
+        cancel: z.boolean().optional().describe("true to cancel it. Nothing else may be passed with it."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateReminderTool, args, token),
   );
 
   return server;
