@@ -20,11 +20,11 @@ import {
   moveRemindersToIntention,
   cancelRemindersForDiscard,
   restoreRemindersAfterDiscard,
-  getScheduledReminders,
+  getListReminders,
   indexReminders,
-  formatReminderShort,
+  reminderBadge,
   archivedCaptureTarget,
-  itemReminderDueAt,
+  itemReminder,
 } from "./utils/remindersApi";
 import { useExecutionRoute } from "./useExecutionRoute";
 import InboxDetailView from "./InboxDetailView";
@@ -1478,17 +1478,17 @@ export default function Alfred() {
   const [allInboxItems, setAllInboxItems] = useState([]);
   /** The live inbox: what the Inbox screen, the nav count and the detail route all mean. */
   const inboxItems = useMemo(() => allInboxItems.filter((i) => !i.archived), [allInboxItems]);
-  // Soonest scheduled reminder per inbox row and per intention, for the list cards.
-  // One query for the whole list; refreshed on list views and after reminder-changing actions.
+  // Per inbox row and per intention: the soonest scheduled reminder, else the latest
+  // sent one, for the list cards. One query for the whole list; refreshed on list
+  // views and after reminder-changing actions.
   const [reminderIndex, setReminderIndex] = useState({ byInbox: {}, byIntent: {} });
   const refreshReminderIndex = useCallback(async () => {
     try {
-      setReminderIndex(indexReminders(await getScheduledReminders()));
+      setReminderIndex(indexReminders(await getListReminders()));
     } catch (err) {
       console.error("[Reminders] list read failed:", err);
     }
   }, []);
-  const reminderLabelFor = (dueAt) => (dueAt ? formatReminderShort(dueAt) : null);
   const [collections, setCollections] = useState([]);
   // Step 3b: collection membership is READ from the collection_items table,
   // keyed by collection id. Writes still land in the item_collections.items
@@ -6091,7 +6091,7 @@ export default function Alfred() {
                     onProcess={processInboxItemFromList}
                     onCopy={copyTaskInboxItem}
                     onDiscard={discardInboxItem}
-                    reminderLabel={reminderLabelFor(reminderIndex.byInbox[inboxItem.id])}
+                    reminder={reminderBadge(reminderIndex.byInbox[inboxItem.id])}
                   />
                 ))}
               </div>
@@ -6606,7 +6606,7 @@ export default function Alfred() {
                     getIntentDisplay={getIntentDisplay}
                     showScheduling={true}
                     onViewDetail={(id) => viewIntentionDetail(id, "intentions")}
-                    reminderLabel={reminderLabelFor(reminderIndex.byIntent[intent.id])}
+                    reminder={reminderBadge(reminderIndex.byIntent[intent.id])}
                     events={validEvents}
                     onUpdateEvent={updateEvent}
                     onActivate={activate}
@@ -6664,7 +6664,7 @@ export default function Alfred() {
                     onUpdate={updateItem}
                     onViewDetail={(id) => viewItemDetail(id, "memories")}
                     // An item has no reminder link: its reminder stays on the capture it came from.
-                    reminderLabel={reminderLabelFor(itemReminderDueAt(item, reminderIndex))}
+                    reminder={reminderBadge(itemReminder(item, reminderIndex))}
                     executions={allLiveExecutions.filter((ex) => ex.itemIds?.includes(item.id))}
                     intents={intents}
                     getIntentDisplay={getIntentDisplay}
@@ -9804,9 +9804,8 @@ function ItemCard({
   // list it must stay false: sibling cards can be open at once, and several
   // footers each pinned to the same strip of viewport is nonsense.
   stickyFooter = false,
-  // Soonest pending reminder on the capture this item came from ("7:17 AM").
-  // Memories list only.
-  reminderLabel = null,
+  // `{ text, muted }` for the capture this item came from. Memories list only.
+  reminder = null,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(item.name);
@@ -10426,9 +10425,12 @@ function ItemCard({
         <ObjectIcon type="item" className="w-4 h-4 text-primary" align="first-line" />
         <span className="min-w-0">{item.name}</span>
       </p>
-      {reminderLabel && (
-        <p className="text-xs text-muted-foreground mb-2" title="Pending reminder (Pacific time)">
-          🔔 {reminderLabel}
+      {reminder && (
+        <p
+          className={`text-xs text-muted-foreground mb-2${reminder.muted ? " opacity-70" : ""}`}
+          title={reminder.muted ? "Reminder sent (Pacific time)" : "Pending reminder (Pacific time)"}
+        >
+          🔔 {reminder.text}
         </p>
       )}
       {item.tags && item.tags.length > 0 && (
@@ -11097,8 +11099,9 @@ function IntentionCard({
   onDirtyChange,
   // See ItemCard — true only on intention detail, where this card is the page.
   stickyFooter = false,
-  // Soonest pending reminder, formatted ("7:17 AM"). Intentions list only.
-  reminderLabel = null,
+  // `{ text, muted }` from reminderBadge ("7:17 AM", or muted "Sent 7:36 AM").
+  // Intentions list only.
+  reminder = null,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(intent.text);
@@ -11439,9 +11442,12 @@ function IntentionCard({
                 {contextName}
               </span>
             )}
-            {reminderLabel && (
-              <span className="text-xs text-muted-foreground" title="Pending reminder (Pacific time)">
-                🔔 {reminderLabel}
+            {reminder && (
+              <span
+                className={`text-xs text-muted-foreground${reminder.muted ? " opacity-70" : ""}`}
+                title={reminder.muted ? "Reminder sent (Pacific time)" : "Pending reminder (Pacific time)"}
+              >
+                🔔 {reminder.text}
               </span>
             )}
             {intent.tags && intent.tags.length > 0 && intent.tags.slice(0, 3).map((tag) => (

@@ -5,7 +5,7 @@ jest.mock("../supabaseClient", () => {
   const next = { data: [{ id: "r1" }], error: null };
   const chain = (entry) => {
     const c = {};
-    for (const k of ["select", "eq", "gt", "order", "update"]) {
+    for (const k of ["select", "eq", "in", "gt", "order", "update"]) {
       c[k] = (...args) => {
         entry.push([k, ...args]);
         return c;
@@ -62,11 +62,19 @@ it("restore re-arms only discard-cancelled reminders still in the future", async
   expect(calls("gt")).toEqual([["gt", "due_at", "2026-09-30T12:00:00.000Z"]]);
 });
 
-it("reads scheduled reminders for an intention, soonest first", async () => {
-  await api.getPendingReminders({ intentId: "int1" });
-  expect(calls("eq")).toEqual([["eq", "state", "scheduled"], ["eq", "intent_id", "int1"]]);
-  expect(calls("order")).toEqual([["order", "due_at", { ascending: true }]]);
-  expect(await api.getPendingReminders({})).toEqual([]);
+it("detail read: scheduled and sent for one intention, cancelled never asked for", async () => {
+  mock.__next.data = [
+    { id: "s2", state: "scheduled", due_at: "2026-10-02T00:00:00Z" },
+    { id: "s1", state: "scheduled", due_at: "2026-10-01T00:00:00Z" },
+    { id: "x1", state: "sent", due_at: "2026-09-29T00:00:00Z", sent_at: "2026-09-29T00:00:10Z" },
+  ];
+  const s = await api.getReminderSummary({ intentId: "int1" });
+  expect(calls("in")).toEqual([["in", "state", ["scheduled", "sent"]]]);
+  expect(calls("eq")).toEqual([["eq", "intent_id", "int1"]]);
+  expect(s.scheduled.map((r) => r.id)).toEqual(["s1", "s2"]);
+  expect(s.lastSent.id).toBe("x1");
+  expect(await api.getReminderSummary({})).toEqual({ scheduled: [], lastSent: null });
+  mock.__next.data = [{ id: "r1" }];
 });
 
 it("throws on a database error", async () => {
@@ -74,15 +82,31 @@ it("throws on a database error", async () => {
   await expect(api.cancelRemindersForDiscard("in1")).rejects.toThrow(/boom/);
 });
 
-it("indexes the soonest reminder per inbox row and intention, from one scheduled read", async () => {
-  await api.getScheduledReminders();
-  expect(calls("eq")).toEqual([["eq", "state", "scheduled"]]);
+it("list index: one read; soonest scheduled wins, else latest sent", async () => {
+  await api.getListReminders();
+  expect(calls("in")).toEqual([["in", "state", ["scheduled", "sent"]]]);
   const idx = api.indexReminders([
-    { inbox_id: "in1", intent_id: null, due_at: "A" },
-    { inbox_id: "in1", intent_id: null, due_at: "B" },
-    { inbox_id: null, intent_id: "int1", due_at: "C" },
+    { inbox_id: "in1", state: "sent", due_at: "2026-09-29T01:00:00Z", sent_at: "2026-09-29T01:00:05Z" },
+    { inbox_id: "in1", state: "scheduled", due_at: "2026-10-02T00:00:00Z" },
+    { inbox_id: "in1", state: "scheduled", due_at: "2026-10-01T00:00:00Z" },
+    { intent_id: "int1", state: "sent", due_at: "2026-09-20T00:00:00Z", sent_at: "2026-09-20T00:00:05Z" },
+    { intent_id: "int1", state: "sent", due_at: "2026-09-28T00:00:00Z", sent_at: "2026-09-28T00:00:05Z" },
   ]);
-  expect(idx).toEqual({ byInbox: { in1: "A" }, byIntent: { int1: "C" } });
+  expect(idx).toEqual({
+    byInbox: { in1: { kind: "scheduled", at: "2026-10-01T00:00:00Z" } },
+    byIntent: { int1: { kind: "sent", at: "2026-09-28T00:00:05Z" } },
+  });
+});
+
+it("card badge: scheduled plain, sent muted with today / weekday / date", () => {
+  const now = new Date("2026-09-30T20:00:00Z"); // Wed 1:00 PM PT
+  expect(api.reminderBadge({ kind: "scheduled", at: "2026-10-01T14:17:00Z" }, now))
+    .toEqual({ text: "Thu 7:17 AM", muted: false });
+  expect(api.reminderBadge({ kind: "sent", at: "2026-09-30T14:36:00Z" }, now))
+    .toEqual({ text: "Sent 7:36 AM", muted: true });
+  expect(api.reminderBadge({ kind: "sent", at: "2026-09-28T14:36:00Z" }, now).text).toBe("Sent Mon 7:36 AM");
+  expect(api.reminderBadge({ kind: "sent", at: "2026-09-20T14:36:00Z" }, now).text).toBe("Sent Sep 20");
+  expect(api.reminderBadge(null, now)).toBeNull();
 });
 
 it("short label: time today, weekday otherwise, both Pacific", () => {
@@ -94,10 +118,10 @@ it("short label: time today, weekday otherwise, both Pacific", () => {
 });
 
 it("an item's reminder is its source capture's", () => {
-  const idx = api.indexReminders([{ inbox_id: "in1", intent_id: null, due_at: "A" }]);
-  expect(api.itemReminderDueAt({ id: "it1", sourceInboxId: "in1" }, idx)).toBe("A");
-  expect(api.itemReminderDueAt({ id: "it2", sourceInboxId: "in9" }, idx)).toBeNull();
-  expect(api.itemReminderDueAt({ id: "it3" }, idx)).toBeNull();
+  const idx = api.indexReminders([{ inbox_id: "in1", state: "scheduled", due_at: "A" }]);
+  expect(api.itemReminder({ id: "it1", sourceInboxId: "in1" }, idx)).toEqual({ kind: "scheduled", at: "A" });
+  expect(api.itemReminder({ id: "it2", sourceInboxId: "in9" }, idx)).toBeNull();
+  expect(api.itemReminder({ id: "it3" }, idx)).toBeNull();
 });
 
 it("archived capture tap: item, else intention (direct or via event), else null", () => {

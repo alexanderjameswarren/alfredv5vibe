@@ -42,8 +42,12 @@ const trashBtn = () => screen.getByRole("button", { name: "Discard" });
 describe("pending reminder", () => {
   const item = { id: "inbox-1", capturedText: "Call Bob", sourceType: "mcp", aiStatus: "enriched", createdAt: "2026-09-24T09:10:00.000Z" };
   it("shows the bell and time when given", () => {
-    render(<InboxListCard inboxItem={item} onOpen={jest.fn()} reminderLabel="7:17 AM" />);
-    expect(screen.getByText("🔔 7:17 AM")).toBeInTheDocument();
+    render(<InboxListCard inboxItem={item} onOpen={jest.fn()} reminder={{ text: "7:17 AM", muted: false }} />);
+    expect(screen.getByText("🔔 7:17 AM")).not.toHaveClass("opacity-70");
+  });
+  it("shows a sent reminder muted", () => {
+    render(<InboxListCard inboxItem={item} onOpen={jest.fn()} reminder={{ text: "Sent 7:36 AM", muted: true }} />);
+    expect(screen.getByText("🔔 Sent 7:36 AM")).toHaveClass("opacity-70");
   });
   it("shows nothing without one", () => {
     render(<InboxListCard inboxItem={item} onOpen={jest.fn()} />);
