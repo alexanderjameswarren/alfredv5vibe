@@ -123,5 +123,13 @@ bare data.
 - **Reversing a discard** (Undo, or Put back in Recently archived): restore to
   'scheduled' the reminders with cancel_reason 'inbox_discarded' whose due_at
   is still in the future, and clear cancel_reason.
-- **Inbox detail and intention detail** show the pending reminder time, in
-  Pacific time.
+- **Where a reminder shows.** The inbox, intention and item (memory) detail pages
+  and the inbox, Intentions-list and Memories-list cards all show it, in Pacific
+  time. An item uses the reminders on its source capture (`inbox_id =
+  source_inbox_id`).
+  - A scheduled reminder takes precedence.
+  - Otherwise the latest sent one shows, muted: "Reminder sent: Wed, Sep 30,
+    7:36 AM PT" on detail pages; "Sent 7:36 AM" / "Sent Wed 7:36 AM" / "Sent Sep 30"
+    on cards.
+  - Cancelled reminders show nothing.
+  - The cards use one query per list.

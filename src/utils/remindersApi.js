@@ -9,44 +9,77 @@ import { supabase } from "../supabaseClient";
  */
 
 const TABLE = "reminders";
-const COLUMNS = "id, text, due_at, state, cancel_reason, inbox_id, intent_id";
+const SHOWN_STATES = ["scheduled", "sent"]; // cancelled and no_subscription show nothing
+const LIST_COLUMNS = "id, state, due_at, sent_at, inbox_id, intent_id";
 
-/** Scheduled reminders linked to one inbox item or intention, soonest first. */
-export async function getPendingReminders({ inboxId = null, intentId = null }) {
-  let q = supabase.from(TABLE).select(COLUMNS).eq("state", "scheduled");
-  if (inboxId) q = q.eq("inbox_id", inboxId);
-  else if (intentId) q = q.eq("intent_id", intentId);
-  else return [];
-  const { data, error } = await q.order("due_at", { ascending: true });
-  if (error) throw new Error(`Failed to read reminders: ${error.message}`);
-  return data || [];
+const sentAt = (r) => r.sent_at || r.due_at;
+
+/**
+ * What one link shows: soonest scheduled wins; else the latest sent; else null.
+ * Returns { scheduled: [rows soonest first], lastSent: row | null }.
+ */
+export function summariseReminders(rows) {
+  const scheduled = (rows || [])
+    .filter((r) => r.state === "scheduled")
+    .sort((a, b) => a.due_at.localeCompare(b.due_at));
+  const sent = (rows || []).filter((r) => r.state === "sent");
+  const lastSent = sent.reduce((best, r) => (!best || sentAt(r) > sentAt(best) ? r : best), null);
+  return { scheduled, lastSent };
 }
 
-/** Every scheduled reminder, for the list cards: one query per list, not per card. */
-export async function getScheduledReminders() {
+/** Detail pages: scheduled and sent reminders for one inbox item or intention. */
+export async function getReminderSummary({ inboxId = null, intentId = null }) {
+  let q = supabase.from(TABLE).select(`${LIST_COLUMNS}, text`).in("state", SHOWN_STATES);
+  if (inboxId) q = q.eq("inbox_id", inboxId);
+  else if (intentId) q = q.eq("intent_id", intentId);
+  else return summariseReminders([]);
+  const { data, error } = await q.order("due_at", { ascending: true });
+  if (error) throw new Error(`Failed to read reminders: ${error.message}`);
+  return summariseReminders(data);
+}
+
+/** Every scheduled or sent reminder, for the list cards: one query per list, not per card. */
+export async function getListReminders() {
   const { data, error } = await supabase
     .from(TABLE)
-    .select("id, due_at, inbox_id, intent_id")
-    .eq("state", "scheduled")
+    .select(LIST_COLUMNS)
+    .in("state", SHOWN_STATES)
     .order("due_at", { ascending: true });
   if (error) throw new Error(`Failed to read reminders: ${error.message}`);
   return data || [];
 }
 
-/** { byInbox, byIntent }: the soonest due_at per linked row. Rows arrive soonest first. */
+/**
+ * { byInbox, byIntent }, each link -> { kind: "scheduled" | "sent", at }: the soonest
+ * scheduled due_at, else the latest sent_at.
+ */
 export function indexReminders(rows) {
-  const byInbox = {};
-  const byIntent = {};
-  for (const r of rows || []) {
-    if (r.inbox_id && !byInbox[r.inbox_id]) byInbox[r.inbox_id] = r.due_at;
-    if (r.intent_id && !byIntent[r.intent_id]) byIntent[r.intent_id] = r.due_at;
-  }
-  return { byInbox, byIntent };
+  const group = (key) => {
+    const buckets = {};
+    for (const r of rows || []) {
+      if (r[key]) (buckets[r[key]] = buckets[r[key]] || []).push(r);
+    }
+    const out = {};
+    for (const [id, rs] of Object.entries(buckets)) {
+      const { scheduled, lastSent } = summariseReminders(rs);
+      if (scheduled.length) out[id] = { kind: "scheduled", at: scheduled[0].due_at };
+      else if (lastSent) out[id] = { kind: "sent", at: sentAt(lastSent) };
+    }
+    return out;
+  };
+  return { byInbox: group("inbox_id"), byIntent: group("intent_id") };
 }
 
 /** An item has no reminder link of its own: its reminder stays on its source capture. */
-export function itemReminderDueAt(item, index) {
+export function itemReminder(item, index) {
   return (item?.sourceInboxId && index?.byInbox?.[item.sourceInboxId]) || null;
+}
+
+/** Card badge for an index entry: { text, muted }, or null. */
+export function reminderBadge(entry, now = new Date()) {
+  if (!entry) return null;
+  if (entry.kind === "scheduled") return { text: formatReminderShort(entry.at, now), muted: false };
+  return { text: `Sent ${formatSentShort(entry.at, now)}`, muted: true };
 }
 
 /** Processing into an intention: every reminder on the capture follows it. */
@@ -126,6 +159,23 @@ const PACIFIC_WEEKDAY = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Los_Angeles",
   weekday: "short",
 });
+
+const PACIFIC_MONTH_DAY = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Los_Angeles",
+  month: "short",
+  day: "numeric",
+});
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Sent label: "7:36 AM" today, "Wed 7:36 AM" within the last week, else "Sep 30". */
+export function formatSentShort(iso, now = new Date()) {
+  const d = new Date(iso);
+  if (PACIFIC_DAY.format(d) === PACIFIC_DAY.format(now)) return PACIFIC_TIME.format(d);
+  if (now.getTime() - d.getTime() < WEEK_MS) {
+    return `${PACIFIC_WEEKDAY.format(d)} ${PACIFIC_TIME.format(d)}`;
+  }
+  return PACIFIC_MONTH_DAY.format(d);
+}
 
 /** Card label: "7:17 AM" today in Pacific time, else "Thu 7:17 AM". */
 export function formatReminderShort(iso, now = new Date()) {

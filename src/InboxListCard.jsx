@@ -94,10 +94,11 @@ function PreviewMark({ icon: Glyph, tone, children }) {
  * @param {Function} onProcess   (id) => void. File it from its suggestions.
  * @param {Function} onCopy      (id) => void. Task items only.
  * @param {Function} onDiscard   (id) => void. Archives with reason 'discarded'.
- * @param {string}   [reminderLabel] The soonest pending reminder, already formatted
- *   ("7:17 AM"). Omitted when there is none.
+ * @param {object}   [reminder] `{ text, muted }` from reminderBadge: the soonest scheduled
+ *   reminder ("7:17 AM"), or, muted, the latest sent one ("Sent 7:36 AM"). Omitted
+ *   when there is neither.
  */
-export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProcess, onCopy, onDiscard, reminderLabel }) {
+export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProcess, onCopy, onDiscard, reminder }) {
   const enriched = isEnriched(inboxItem);
   const canProcess = canProcessInOneTap(inboxItem);
   const isTask = inboxItem.sourceType === "task";
@@ -153,10 +154,15 @@ export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProc
           <span>{friendlyDate(inboxItem.createdAt)}</span>
           <span aria-hidden="true">·</span>
           <span>{statusLabel(inboxItem)}</span>
-          {reminderLabel && (
+          {reminder && (
             <>
               <span aria-hidden="true">·</span>
-              <span title="Pending reminder (Pacific time)">🔔 {reminderLabel}</span>
+              <span
+                title={reminder.muted ? "Reminder sent (Pacific time)" : "Pending reminder (Pacific time)"}
+                className={reminder.muted ? "opacity-70" : undefined}
+              >
+                🔔 {reminder.text}
+              </span>
             </>
           )}
         </p>
