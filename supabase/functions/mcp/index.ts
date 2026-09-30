@@ -2543,11 +2543,11 @@ export function createMcpServer(token: string) {
         run_tag_prefix: z
           .string()
           .optional()
-          .describe("Run tags STARTING WITH this text. A tag is <project>-<thread code>-<step>-<random>, so passing this conversation's own project-and-thread prefix (for example 'jobs-ax4') returns every report this thread has ever received, oldest to newest. Use it for 'what has the CLI told me in this conversation', where run_tag answers 'the one report from that prompt'. Cannot be combined with run_tag."),
+          .describe("Run tags STARTING WITH this text. A tag is <project-code>-s<step>-<4 random characters>, so passing this conversation's own project code (for example 'jobs-ax4', or 'parallel_threads') returns every report this thread has ever received, oldest to newest. A project code may contain underscores; the separators are always hyphens, and an underscore here is matched literally, not as a wildcard. Use it for 'what has the CLI told me in this conversation', where run_tag answers 'the one report from that prompt'. Cannot be combined with run_tag."),
         run_tag: z
           .string()
           .optional()
-          .describe("Exact match on the run tag of a CLI report. Lowercase letters, digits and hyphens. Use the tag from the 'Run tag: <tag>' line of the prompt THIS conversation sent to the CLI — that is how you get the right report when several runs are in flight. Returns nothing if no report carries that tag, which means that run has not finished pushing yet."),
+          .describe("Exact match on the run tag of a CLI report. Lowercase letters, digits, hyphens and underscores. Use the tag from the 'Run tag: <tag>' line of the prompt THIS conversation sent to the CLI — that is how you get the right report when several runs are in flight. Returns nothing if no report carries that tag, which means that run has not finished pushing yet."),
         include_archived: z
           .boolean()
           .optional()

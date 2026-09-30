@@ -41,6 +41,7 @@ Run tag: <project-code>-s<step number>-<4 random lowercase letters or digits>
 
 ```
 Run tag: rem-k4q-s1-t6v2
+Run tag: parallel_threads-k4q-s1-t6v2
 ```
 
 Four parts, three hyphens between them, and **a machine parses this** — the
@@ -48,17 +49,22 @@ alfred-v5 prompt guard reads the project code out of it to decide whether the
 prompt is in the right window. A tag it cannot parse is **blocked**, not waved
 through.
 
-- `<project-code>` is `<project>-<thread code>`: a short name for the work
-  (`rem`, `clip`, `ken`, `sam`, `dj`, `jobs`) then THIS conversation's own three
-  lowercase letters or digits, made up the first time this thread issues a prompt
-  and then never changed. See "The project code" below — it does more work than
-  the rest of the tag put together.
+- `<project-code>` is `<project>-<thread code>`: a name for the work then THIS
+  conversation's own three lowercase letters or digits, made up the first time
+  this thread issues a prompt and then never changed. **The name can be a
+  readable snake_case phrase** — `parallel_threads`, `job_search`,
+  `inbox_triage` — as well as the short forms (`rem`, `clip`, `ken`, `sam`,
+  `dj`, `jobs`). Prefer whichever a stranger would understand in six months.
+  See "The project code" below — it does more work than the rest of the tag put
+  together.
 - **`s<step number>`** — the letter `s`, then digits. `s1`, `s2`, `s10`. A
   follow-up *within* a step adds a letter: `s3b`, `s3c`. Nothing else goes here.
 - **4 random lowercase letters or digits**, so two prompts for the same step
   never share a tag. Make them up; they mean nothing.
-- Lowercase letters, digits and hyphens throughout, at most 40 characters.
-  Anything else is refused by the push script, not corrected.
+- Lowercase letters, digits, hyphens and underscores throughout, at most 40
+  characters. Anything else is refused by the push script, not corrected.
+  **Underscores belong inside the project name only** — the three separators
+  between name, step and suffix are always hyphens.
 
 **Numbering.** The plan prompt is `s1`. Confirm-and-claim is `s2`. Every prompt
 after that increments: `s3`, `s4`, `s5`. A correction or follow-up inside a step
@@ -70,13 +76,16 @@ that is already underway keeps the number and adds a letter — `s3b` follows `s
 | ✅ `rem-k4q-s2-9xqm` | confirm and claim |
 | ✅ `rem-k4q-s10-b7zz` | tenth step, two digits |
 | ✅ `rem-k4q-s3b-k2np` | a follow-up within step 3 |
+| ✅ `parallel_threads-k4q-s5-f2mz` | a readable snake_case project name |
+| ✅ `job_search-ax4-s2-9xqm` | underscore inside the name, hyphens between the parts |
 | ❌ `rem-k4q-plan-t6v2` | "plan" is not a step segment — this is the one that got through |
 | ❌ `rem-k4q-step1-t6v2` | it is `s1`, not `step1` |
 | ❌ `rem-k4q-fix-t6v2` | `fix` is not a step either; use `s3b` |
 | ❌ `rem-k4q-s1` | no random suffix |
 | ❌ `rem-k4q-s1-t6v` | suffix must be exactly 4 characters |
 | ❌ `rem-k4q-S1-T6V2` | lowercase only |
-| ❌ `rem_k4q-s1-t6v2` | hyphens, never underscores |
+| ❌ `rem-k4q-s1_b-t6v2` | the underscore belongs in the NAME, not the step |
+| ❌ `rem_k4q_s1_t6v2` | underscores instead of the three separators |
 
 - **A new prompt gets a new tag**, even when it continues the same work — only
   the project code carries over. The full tag identifies one prompt and its
@@ -115,7 +124,7 @@ himself is fine; anything this skill *writes* carries a tag.
 tag that never changes for the life of a project, and in alfred-v5 it does real
 work:
 
-- it names the worktree folder `.claude/worktrees/claims-wq7`,
+- it names the worktree folder `.claude/worktrees/parallel_threads`,
 - which makes it the claims **owner** for every file that thread claims,
 - and a `UserPromptSubmit` hook blocks any prompt whose project code does not
   match the window it was pasted into — **and blocks any tag it cannot read the
@@ -123,9 +132,13 @@ work:
   nothing else.
 
 **Choosing one.** Pick it once, in the first prompt of a project, and never
-change it: `<project>` is a short name for the work (`claims`, `ken`, `sam`,
-`dj`, `jobs`, `inbox`), `<thread code>` is this conversation's three characters.
-It must be lower case letters, digits and hyphens. If the same project is picked
+change it: `<project>` names the work and `<thread code>` is this conversation's
+three characters. The name can be short (`claims`, `ken`, `sam`, `dj`, `jobs`,
+`inbox`) or a readable snake_case phrase (`parallel_threads`, `job_search`) —
+**prefer the readable one**, because this string names the worktree folder and
+every claim that thread holds, and it is what you will be reading in
+`claims.mjs status` six months from now. It must be lower case letters, digits,
+hyphens and underscores. If the same project is picked
 up in a new claude.ai thread later, keep the *original* project code — the
 worktree and its claims are named after it, and a new thread code would strand
 them.

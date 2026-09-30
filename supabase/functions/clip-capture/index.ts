@@ -402,7 +402,11 @@ async function handleFinish(
   // somewhere else, and a tag is only useful if it matches exactly. A malformed
   // one is dropped rather than stored, because a stored-but-unmatchable tag
   // looks like a working one.
-  const runTag = typeof body.run_tag === "string" && /^[a-z0-9-]{1,40}$/.test(body.run_tag.trim())
+  // Underscores are allowed inside the project code — `parallel_threads-s5-f2mz`
+  // — while the separators stay hyphens. Until 2026-09-30 an underscore tag was
+  // dropped here, and the CLI printed the tag it SENT, so a push looked tagged
+  // and the clip was stored with none.
+  const runTag = typeof body.run_tag === "string" && /^[a-z0-9_-]{1,40}$/.test(body.run_tag.trim())
     ? body.run_tag.trim()
     : null;
 

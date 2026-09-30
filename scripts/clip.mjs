@@ -300,14 +300,48 @@ async function main() {
   }
   if (!json?.clip_id) fail(`/finish returned no clip id: ${body.slice(0, 400)}`);
 
+  // ⚠️ THE TAG PRINTED IS THE ONE THE SERVER KEPT, not the one we sent. The
+  // function validates the tag and stores null if it does not like it, and
+  // until 2026-09-30 this line printed `args.tag` — so a rejected tag was
+  // reported back as though it had been saved, and the report was unfindable
+  // by tag with nothing anywhere to say why. The two can only differ when the
+  // two ends disagree about what a tag looks like, which is exactly the thing
+  // worth shouting about.
+  //
+  // A function old enough not to report `run_tag` at all is a different case
+  // from one that reported null: there is nothing to compare, so it says so
+  // rather than crying mismatch on every push.
+  const reported = Object.prototype.hasOwnProperty.call(json, "run_tag");
+  const stored = typeof json.run_tag === "string" && json.run_tag ? json.run_tag : null;
+  const mismatch = reported && (args.tag ?? null) !== stored;
+
   const kb = (Buffer.byteLength(text, "utf8") / 1024).toFixed(1);
   console.log(`Pushed to Alfred as a CLI clip.`);
   console.log(`  title:    ${title}`);
-  console.log(`  run tag:  ${args.tag ?? "(none — this report cannot be matched to a prompt)"}`);
+  console.log(
+    `  run tag:  ${
+      reported
+        ? (stored ?? "(none — this report cannot be matched to a prompt)")
+        : `${args.tag ?? "(none)"}  (sent; this function does not report back what it stored)`
+    }`,
+  );
   console.log(`  where:    ${repo}${branch ? ` on ${branch}` : ""}`);
   console.log(`  size:     ${kb} KB${json.text_truncated ? " (TRUNCATED at 1 MB)" : ""}`);
   console.log(`  clip id:  ${json.clip_id}`);
   console.log(`  inbox id: ${json.inbox_id}`);
+
+  if (mismatch) {
+    console.error(
+      `\n⚠️  THE SERVER DID NOT STORE THE TAG YOU SENT.\n` +
+        `      sent:   ${args.tag ?? "(none)"}\n` +
+        `      stored: ${stored ?? "(none)"}\n\n` +
+        `    The clip is saved, but it cannot be found by the tag you sent. The\n` +
+        `    clip-capture function decides this — if it has an older idea of the\n` +
+        `    tag alphabet than this script does, deploy it:\n` +
+        `      npx supabase functions deploy clip-capture\n`,
+    );
+    process.exitCode = 1;
+  }
 }
 
 function readFileOrDie(file) {

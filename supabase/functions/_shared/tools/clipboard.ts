@@ -42,6 +42,25 @@ import { encodeBase64 } from "jsr:@std/encoding/base64";
 
 const BUCKET = "clipboard";
 
+/**
+ * The run tag alphabet: lower case letters, digits, hyphens and underscores.
+ *
+ * An underscore is allowed inside the project code — `parallel_threads-s5-f2mz`
+ * — while the three separators stay hyphens. The shape is parsed on the CLI
+ * side (scripts/lib/project-code.mjs); here only the alphabet matters, because
+ * a tag is matched, never interpreted.
+ */
+const TAG_ALPHABET = /^[a-z0-9_-]{1,40}$/;
+
+/**
+ * Make a string safe to use as the literal start of a SQL LIKE pattern.
+ *
+ * `_` matches any single character and `%` matches any run of them, so a
+ * project code containing an underscore would match other people's tags. The
+ * backslash is escaped first, since it is LIKE's own escape character.
+ */
+const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+
 /** Spec 4.2: default 5, then the platform ceiling. */
 const DEFAULT_CLIP_LIMIT = 5;
 
@@ -218,20 +237,20 @@ export const getRecentClipsTool = defineTool({
     const runTag = args.run_tag === undefined || args.run_tag === null
       ? null
       : String(args.run_tag).trim().toLowerCase();
-    if (runTag !== null && !/^[a-z0-9-]{1,40}$/.test(runTag)) {
+    if (runTag !== null && !TAG_ALPHABET.test(runTag)) {
       throw new Error(
-        `${T}: run_tag must be lowercase letters, digits and hyphens, 1 to 40 characters ` +
-          `(got ${JSON.stringify(args.run_tag)}).`,
+        `${T}: run_tag must be lowercase letters, digits, hyphens and underscores, ` +
+          `1 to 40 characters (got ${JSON.stringify(args.run_tag)}).`,
       );
     }
 
     const runTagPrefix = args.run_tag_prefix === undefined || args.run_tag_prefix === null
       ? null
       : String(args.run_tag_prefix).trim().toLowerCase();
-    if (runTagPrefix !== null && !/^[a-z0-9-]{1,40}$/.test(runTagPrefix)) {
+    if (runTagPrefix !== null && !TAG_ALPHABET.test(runTagPrefix)) {
       throw new Error(
-        `${T}: run_tag_prefix must be lowercase letters, digits and hyphens, 1 to 40 ` +
-          `characters (got ${JSON.stringify(args.run_tag_prefix)}).`,
+        `${T}: run_tag_prefix must be lowercase letters, digits, hyphens and ` +
+          `underscores, 1 to 40 characters (got ${JSON.stringify(args.run_tag_prefix)}).`,
       );
     }
     if (runTag !== null && runTagPrefix !== null) {
@@ -259,10 +278,14 @@ export const getRecentClipsTool = defineTool({
       const tagQuery = ctx.db.from("inbox").select("id");
       const { data: tagged, error: tagError } = await (runTag
         ? tagQuery.eq("source_metadata->>run_tag", runTag)
-        // `like` with a trailing % — starts-with, which is what a thread code
-        // is for. The prefix is validated to the tag alphabet above, so it
-        // cannot smuggle a % or _ of its own into the pattern.
-        : tagQuery.like("source_metadata->>run_tag", `${runTagPrefix}%`))
+        // `like` with a trailing % — starts-with, which is what a project code
+        // is for. The prefix is ESCAPED first: a project code may contain an
+        // underscore ("parallel_threads"), and `_` in SQL LIKE matches any
+        // single character, so an unescaped prefix would also return
+        // "parallelXthreads" — another thread's reports, looking like yours.
+        // This comment used to say the alphabet could not smuggle in a `%` or
+        // `_`, which stopped being true the day underscores were allowed.
+        : tagQuery.like("source_metadata->>run_tag", `${escapeLike(runTagPrefix!)}%`))
         .limit(200);
       if (tagError) throw new Error(`${T}: could not look up the run tag: ${tagError.message}`);
       inboxIdFilter = ((tagged ?? []) as Array<{ id: string }>).map((r) => r.id);

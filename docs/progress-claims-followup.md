@@ -3,8 +3,8 @@
 Spec: [technical-spec-claims-followup.md](technical-spec-claims-followup.md). Thread:
 `claims-followup`. Solo on main — no worktrees.
 
-**Status: Step 8 done, awaiting Alex's verification. Do not use an underscore
-run tag until Step 9 is deployed — see the warning in Step 8 below.**
+**Status: Step 9 deployed, both halves live and checked. Awaiting Alex's
+`gitpush main push`, then the three `db:` claims get released.**
 
 - [x] **1. Plan.** Read-only. All 33 items free, no conflicts. Six corrections reported.
 - [x] **2. Claim and write the docs.** 30 files claimed; `db:fn:clip-capture`,
@@ -29,8 +29,8 @@ run tag until Step 9 is deployed — see the warning in Step 8 below.**
       both probe runs stopping at the final `[y/N]`.
 - [x] **7. Item 4 — `bind`/`unbind`, and hook tests on a scratch log.** Verified
       by Alex 2026-09-30 and pushed.
-- [x] **8. Item 2a — underscores, local half.** 78 tests passing, awaiting
-      Alex's verification. **An underscore tag is not safe to use yet.**
+- [x] **8. Item 2a — underscores, local half.** Verified by Alex 2026-09-30 and
+      pushed: 78 passing, `Bad_Code` refused, `parallel_threads` accepted.
 - [ ] **9. Item 2b — underscores, Alfred half. DATABASE STEP.** Deploy `clip-capture`,
       push a test report under an underscore tag and confirm it landed, then `mcp`.
 - [ ] **10. Items 7 + 11 — what a fresh worktree needs to build, deploy and test.**
@@ -681,5 +681,103 @@ is pushed) and still refusing a bad one, and the live prompt guard letting
 
 By hand: `gitnewtree parallel_threads` gets past the code check, and `Bad_Code`
 and `_bad` are refused with the new one-line description.
+
+Nothing was committed.
+
+---
+
+## Step 9, 2026-09-30 — underscores, Alfred half. DATABASE STEP.
+
+**Files changed**
+
+- `supabase/functions/clip-capture/index.ts` — the stored tag's alphabet.
+- `supabase/functions/_shared/tools/clipboard.ts` — one `TAG_ALPHABET` for
+  `run_tag` and `run_tag_prefix`; `escapeLike` before the `LIKE` filter.
+- `supabase/functions/mcp/index.ts` — both tag descriptions.
+- `scripts/clip.mjs` — prints the tag the SERVER stored, and warns on a mismatch.
+- `docs/progress-claims-followup.md` — this.
+
+### The prefix had to be escaped, not just allowed
+
+`_` matches any single character in SQL `LIKE`, so `parallel_threads` as a
+prefix would have returned `parallelXthreads` too — another thread's reports,
+looking exactly like yours. `escapeLike` escapes `\`, `%` and `_` before the
+pattern is built. A hyphenated prefix comes out byte for byte identical, which
+is what keeps every existing tag working.
+
+### clip.mjs was reporting its own intentions
+
+It printed the tag it SENT. The function validates the tag and stores null if it
+does not like it, so an underscore tag was reported back as saved while the clip
+carried none — and the report was then unfindable by tag, with nothing anywhere
+to say why. It now prints what came back in the response, warns loudly and exits
+1 on a mismatch, and tells a function too old to report the field at all apart
+from one that reported null.
+
+### Deployed, and what it proved
+
+Claimed `db:fn:clip-capture`, `db:fn:mcp` and `db:deploy` in one command
+(run tag `claims-followup-s9b-e2wr`) after Alex confirmed. No `gitsync`: solo on
+main, no worktrees, so nothing could have drifted underneath it.
+
+`npx supabase functions deploy clip-capture` — no flag needed, because
+`config.toml` declares `verify_jwt = false` for it, which is the whole point of
+that block.
+
+Then a test report pushed under `claims_test-s1-u7qz`:
+
+```
+run tag:  claims_test-s1-u7qz
+clip id:  1c75aa69-4507-4442-b92d-ec8641e99ad7
+inbox id: 683b6675-2d0a-4abd-b80a-a607e6365c41
+```
+
+That line is now the **server's** answer, not ours, and it came back with no
+mismatch warning — so the field was present in the response and the comparison
+ran and passed. Before this deploy the same push would have stored null.
+
+Alex verified the stored tag from claude.ai by listing recent clips unfiltered.
+
+### Then mcp, and what the live server says
+
+`npx supabase functions deploy mcp --no-verify-jwt` — `config.toml` declares
+`verify_jwt = false` for it too, so the flag is belt and braces rather than
+load-bearing.
+
+Checked against the live server through the MCP connector:
+
+| Call | Result |
+|---|---|
+| `run_tag: claims_test-s1-u7qz` | the test clip, tag stored as sent |
+| `run_tag_prefix: claims_test` | the same one clip |
+| `run_tag_prefix: claims-followup` | today's four reports, and **not** the `claims_test` one |
+| `get_inbox` | 15 items — the rest of the server is fine |
+
+The hyphenated prefix behaving exactly as before is the regression check that
+matters: the escaping changed the pattern only for a prefix that contains an
+underscore.
+
+**A false alarm worth recording.** The first three calls came back `[]` and
+looked like a broken deploy. They were not: `get_recent_clips` excludes clips
+whose inbox item has been archived, and Alex archives each report as he reads
+it. With `include_archived: true` everything was there. Nothing was reverted;
+the check to run first in that situation is another tool — `get_inbox` answered
+it in one call.
+
+**The connector's cached tool descriptions are still the old ones**, so the
+schema claude.ai sees still says "letters, digits and hyphens". That is a
+caching layer, not the function: the live server accepts underscores, as above.
+Reconnecting the connector refreshes it.
+
+`.claude/skills/cli-workflow/SKILL.md` flipped with the deploy: snake_case
+project names are now the preferred form, with `parallel_threads` and
+`job_search` as the examples, and the old "hyphens, never underscores" row
+replaced by two that show where an underscore may and may not go.
+
+### Still to do in this step
+
+- **Release the three `db:` claims** after Alex's `gitpush main push`. On main
+  there is no Checkpoint mode, and Push only keeps every claim, so these have to
+  be released by hand — `status` starts warning after an hour.
 
 Nothing was committed.
