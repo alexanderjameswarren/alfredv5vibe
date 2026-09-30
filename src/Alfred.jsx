@@ -12,7 +12,19 @@ import {
   addRouteFromPath,
   inboxDetailPath,
   inboxIdFromPath,
+  intentionIdFromPath,
+  intentionDetailPath,
 } from "./viewPaths";
+import PendingReminder from "./PendingReminder";
+import {
+  moveRemindersToIntention,
+  cancelRemindersForDiscard,
+  restoreRemindersAfterDiscard,
+  getScheduledReminders,
+  indexReminders,
+  formatReminderShort,
+  archivedCaptureTarget,
+} from "./utils/remindersApi";
 import { useExecutionRoute } from "./useExecutionRoute";
 import InboxDetailView from "./InboxDetailView";
 import ClipboardCapture from "./ClipboardCapture";
@@ -1465,6 +1477,17 @@ export default function Alfred() {
   const [allInboxItems, setAllInboxItems] = useState([]);
   /** The live inbox: what the Inbox screen, the nav count and the detail route all mean. */
   const inboxItems = useMemo(() => allInboxItems.filter((i) => !i.archived), [allInboxItems]);
+  // Soonest scheduled reminder per inbox row and per intention, for the list cards.
+  // One query for the whole list; refreshed on list views and after reminder-changing actions.
+  const [reminderIndex, setReminderIndex] = useState({ byInbox: {}, byIntent: {} });
+  const refreshReminderIndex = useCallback(async () => {
+    try {
+      setReminderIndex(indexReminders(await getScheduledReminders()));
+    } catch (err) {
+      console.error("[Reminders] list read failed:", err);
+    }
+  }, []);
+  const reminderLabelFor = (dueAt) => (dueAt ? formatReminderShort(dueAt) : null);
   const [collections, setCollections] = useState([]);
   // Step 3b: collection membership is READ from the collection_items table,
   // keyed by collection id. Writes still land in the item_collections.items
@@ -1684,6 +1707,33 @@ export default function Alfred() {
   //     see the note on handleProcess in InboxDetailView.
   const inboxDetailMissing = view === "inbox-detail" && dataLoaded && !routeInboxItem;
 
+  // An ARCHIVED capture — typically a reminder tap after the capture was filed —
+  // opens what it became instead. "kind:id", or "" to fall back to the list.
+  const archivedInboxTarget = (() => {
+    if (!inboxDetailMissing || !routeInboxId) return "";
+    const row = allInboxItems.find((i) => i.id === routeInboxId);
+    if (!row?.archived) return "";
+    const t = archivedCaptureTarget(routeInboxId, { items, intents, events });
+    return t ? `${t.kind}:${t.id}` : "";
+  })();
+
+  // --- Intention detail route (Reminders) -----------------------------------
+  // `/intentions/detail/:id`, which is where an intention-linked reminder's tap
+  // lands. The URL's id wins over state; intents are fully loaded by `loadData`,
+  // so it is a plain lookup once `dataLoaded`, exactly like the inbox route.
+  const routeIntentionId = intentionIdFromPath(currentPath);
+  const effectiveIntentionId = routeIntentionId || selectedIntentionId;
+  const intentionDetailMissing =
+    view === "intention-detail" &&
+    dataLoaded &&
+    Boolean(routeIntentionId) &&
+    !intents.some((i) => i.id === routeIntentionId);
+
+  // Reminders are also created by Claude, outside this app, so a list view re-reads them.
+  useEffect(() => {
+    if (dataLoaded && (view === "inbox" || view === "intentions")) refreshReminderIndex();
+  }, [dataLoaded, view, refreshReminderIndex]);
+
   // --- Cold-load redirects (Step 9, docs/technical-spec-navigation-urls.md) --
   //
   // Two things can put Alfred on a path it cannot actually render:
@@ -1703,7 +1753,7 @@ export default function Alfred() {
   // redirects.
   const DETAIL_VIEW_STATE = {
     "context-detail": selectedContextId,
-    "intention-detail": selectedIntentionId,
+    "intention-detail": effectiveIntentionId,
     "item-detail": selectedItemId,
     "item-add-to-collection": selectedItemId,
     // Not `activeExecution`: the route decides which execution counts as
@@ -1772,7 +1822,22 @@ export default function Alfred() {
     // Not folded into DETAIL_VIEW_STATE: that table is consulted before
     // `dataLoaded` is true, so an inbox-detail entry there would bounce every
     // cold load to the list before the row it names had arrived.
-    if (inboxDetailMissing) {
+    if (archivedInboxTarget) {
+      const [kind, ...rest] = archivedInboxTarget.split(":");
+      const id = rest.join(":");
+      // `replace`, not viewItemDetail's push: Back must not land on this redirect again.
+      if (kind === "item") {
+        setPreviousView("inbox");
+        setItemHistoryStack([]);
+        setExecutionEditReturn(null);
+        setSelectedItemId(id);
+        navigate(viewToPath("item-detail"), { replace: true });
+      } else {
+        navigate(intentionDetailPath(id), { replace: true });
+      }
+      return;
+    }
+    if (inboxDetailMissing || intentionDetailMissing) {
       navigate(parentPath(currentPath), { replace: true });
       return;
     }
@@ -1783,7 +1848,7 @@ export default function Alfred() {
     }
     // `replace` in every case: a path the app cannot render should not become
     // a history entry the Back button can return the user to.
-  }, [currentPath, detailStateMissing, addTargetMissing, inboxDetailMissing, navigate]);
+  }, [currentPath, detailStateMissing, addTargetMissing, inboxDetailMissing, intentionDetailMissing, archivedInboxTarget, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- List sort preferences (Step 9b) --------------------------------------
   //
@@ -3054,6 +3119,15 @@ export default function Alfred() {
         prev.map((i) => (i.id === inboxItemId ? saved || discarded : i)),
       );
 
+      // A binned capture's reminders would fire for something no longer on screen.
+      try {
+        await cancelRemindersForDiscard(inboxItem.id);
+      } catch (err) {
+        console.error("[Reminders] cancel on discard failed:", err);
+        window.alert("Discarded, but its reminder could not be cancelled and may still fire.");
+      }
+      refreshReminderIndex();
+
       // The undo writes the ORIGINAL row back, which restores archived,
       // triagedAt and archiveReason to whatever they were — all three together,
       // as inbox_archive_reason_needs_archived requires. `storage.set` UPDATEs
@@ -3064,8 +3138,20 @@ export default function Alfred() {
         setAllInboxItems((prev) =>
           prev.map((i) => (i.id === inboxItemId ? restored || inboxItem : i)),
         );
+        await restoreDiscardedReminders(inboxItem.id);
       });
     });
+  }
+
+  // Undo and Put back of a discard: re-arm the reminders it cancelled that are still ahead.
+  async function restoreDiscardedReminders(inboxId) {
+    try {
+      await restoreRemindersAfterDiscard(inboxId);
+    } catch (err) {
+      console.error("[Reminders] restore after discard failed:", err);
+      window.alert("The capture is back, but its reminder could not be restored.");
+    }
+    refreshReminderIndex();
   }
 
   /**
@@ -3250,6 +3336,18 @@ export default function Alfred() {
         const savedIntent = wrote(await storage.set(`intent:${newIntent.id}`, newIntent));
         setIntents((prev) => [...prev, savedIntent || newIntent]);
 
+        // The capture's reminders follow it to the intention. Not a triage failure if
+        // this fails: they stay on the archived capture and still fire.
+        if (savedIntent) {
+          try {
+            await moveRemindersToIntention(inboxItem.id, newIntent.id);
+          } catch (err) {
+            console.error("[Reminders] move to intention failed:", err);
+            window.alert("Saved, but this capture's reminder could not be moved to the new intention. It will still fire, and opens the capture.");
+          }
+          refreshReminderIndex();
+        }
+
         // Create event if scheduled
         if (triageData.intentionData.createEvent && triageData.intentionData.eventDate) {
           const newEvent = {
@@ -3397,6 +3495,10 @@ export default function Alfred() {
       setAllInboxItems((prev) =>
         prev.map((i) => (i.id === inboxItemId ? saved || restored : i)),
       );
+      // Only a discard cancelled anything; a processed capture's reminders never stopped.
+      if (inboxItem.archiveReason === "discarded") {
+        await restoreDiscardedReminders(inboxItem.id);
+      }
     });
   }
 
@@ -5984,6 +6086,7 @@ export default function Alfred() {
                     onProcess={processInboxItemFromList}
                     onCopy={copyTaskInboxItem}
                     onDiscard={discardInboxItem}
+                    reminderLabel={reminderLabelFor(reminderIndex.byInbox[inboxItem.id])}
                   />
                 ))}
               </div>
@@ -6052,6 +6155,7 @@ export default function Alfred() {
               if (!clipId) return null;
               return <ClipboardCapture key={clipId} clipId={clipId} inboxItem={item} />;
             }}
+            renderReminders={(item) => <PendingReminder key={item.id} inboxId={item.id} />}
           />
         )}
 
@@ -6192,11 +6296,11 @@ export default function Alfred() {
         )}
 
         {/* Intention Detail View */}
-        {view === "intention-detail" && selectedIntentionId && (
+        {view === "intention-detail" && effectiveIntentionId && (
           <IntentionDetailView
             tagPool={tagPool}
-            intention={intents.find((i) => i.id === selectedIntentionId)}
-            capturedText={capturedTextFor(intents.find((i) => i.id === selectedIntentionId))}
+            intention={intents.find((i) => i.id === effectiveIntentionId)}
+            capturedText={capturedTextFor(intents.find((i) => i.id === effectiveIntentionId))}
             events={events}
             contexts={contexts}
             items={items}
@@ -6497,6 +6601,7 @@ export default function Alfred() {
                     getIntentDisplay={getIntentDisplay}
                     showScheduling={true}
                     onViewDetail={(id) => viewIntentionDetail(id, "intentions")}
+                    reminderLabel={reminderLabelFor(reminderIndex.byIntent[intent.id])}
                     events={validEvents}
                     onUpdateEvent={updateEvent}
                     onActivate={activate}
@@ -8503,6 +8608,8 @@ function IntentionDetailView({
         <p className="text-sm text-muted-foreground mt-2">
           Recurrence: {getRecurrenceDisplayString(getRecurrenceConfig(intention), intention.endDate)}
         </p>
+
+        <PendingReminder intentId={intention.id} />
 
         {/* Record actions, in the spec's order:
             Do Today · Schedule Later · Start Now · Edit · Archive.
@@ -10972,6 +11079,8 @@ function IntentionCard({
   onDirtyChange,
   // See ItemCard — true only on intention detail, where this card is the page.
   stickyFooter = false,
+  // Soonest pending reminder, formatted ("7:17 AM"). Intentions list only.
+  reminderLabel = null,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(intent.text);
@@ -11310,6 +11419,11 @@ function IntentionCard({
             {contextName && (
               <span className="text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
                 {contextName}
+              </span>
+            )}
+            {reminderLabel && (
+              <span className="text-xs text-muted-foreground" title="Pending reminder (Pacific time)">
+                🔔 {reminderLabel}
               </span>
             )}
             {intent.tags && intent.tags.length > 0 && intent.tags.slice(0, 3).map((tag) => (

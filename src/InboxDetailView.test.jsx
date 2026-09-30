@@ -773,6 +773,15 @@ describe("correcting the captured text", () => {
   });
 });
 
+describe("pending reminders", () => {
+  it("renders renderReminders with the capture", () => {
+    const renderReminders = jest.fn(() => <p>Reminder: Thu, Oct 1, 9:00 AM PT</p>);
+    setup({}, { renderReminders });
+    expect(renderReminders.mock.calls[0][0]).toMatchObject({ id: "inbox-1" });
+    expect(screen.getByText("Reminder: Thu, Oct 1, 9:00 AM PT")).toBeInTheDocument();
+  });
+});
+
 // -- Step 19: what a clipboard capture captured --------------------------------
 //
 // The page only decides WHERE it goes and WHEN to hide it. The fetching, the

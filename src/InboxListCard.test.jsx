@@ -39,6 +39,18 @@ const processBtn = () => screen.queryByRole("button", { name: /Process/ });
 const copyBtn = () => screen.queryByRole("button", { name: /Copy/ });
 const trashBtn = () => screen.getByRole("button", { name: "Discard" });
 
+describe("pending reminder", () => {
+  const item = { id: "inbox-1", capturedText: "Call Bob", sourceType: "mcp", aiStatus: "enriched", createdAt: "2026-09-24T09:10:00.000Z" };
+  it("shows the bell and time when given", () => {
+    render(<InboxListCard inboxItem={item} onOpen={jest.fn()} reminderLabel="7:17 AM" />);
+    expect(screen.getByText("🔔 7:17 AM")).toBeInTheDocument();
+  });
+  it("shows nothing without one", () => {
+    render(<InboxListCard inboxItem={item} onOpen={jest.fn()} />);
+    expect(screen.queryByText(/🔔/)).not.toBeInTheDocument();
+  });
+});
+
 describe("what every card shows", () => {
   it("the capture, the source in words, the time and the status", () => {
     setup();
