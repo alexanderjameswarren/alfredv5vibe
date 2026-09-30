@@ -53,10 +53,15 @@ sharing one claims file. Follow this whether or not the prompt mentions it.
 
 **Step 0, before a worktree exists.** Alex runs `gitnewtree <project-code>`, which
 refuses until main is committed and pushed, then branches from `origin/main`,
-copies the machine-local files and opens the worktree in VS Code.
+copies the machine-local files, runs `scripts/prebuild.js` so the generated
+schema files exist, and opens the worktree in VS Code.
 (`claude --worktree <name>` still works and does most of the same, but it does not
-check Step 0.) If you are asked to start a worktree and main has unpushed commits,
-say so first.
+check Step 0 and does not run prebuild, so a worktree made that way cannot build,
+deploy a function, or pass the SAM tests until you run it by hand.) If you are
+asked to start a worktree and main has unpushed commits, say so first.
+
+A project code may contain underscores — `parallel_threads` — and the separators
+in a run tag are always hyphens.
 
 **Project codes and which window you are in.** A worktree's project code is its
 folder name, and that is also its claims owner. The main checkout's code is
@@ -381,10 +386,20 @@ the repo — it scans node_modules and times out.
 
 ```
 CI=true npx react-scripts test --watchAll=false
+node --test "scripts/lib/*.test.mjs"
 ```
+
+The first is the app suite. The second is the CLI tooling — claims, the git
+commands, the hooks — which runs under `node --test`, needs no `npm install`,
+and is not picked up by the first. Run both at the end.
 
 Never plain `npx jest`. While working, run only the test files related to the
 change; run the full suite once, at the end.
+
+`package.json` overrides jest's `testMatch` with globs that contain no
+`<rootDir>`. Do not "tidy" that back to the CRA default: with `<rootDir>` in it,
+a worktree path under `.claude/` survives normalisation as an escape and the
+suite finds no tests at all. The reason is in `jestNote` beside it.
 
 **Build.** Only when asked.
 

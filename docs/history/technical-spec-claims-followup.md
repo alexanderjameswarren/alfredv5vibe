@@ -3,8 +3,8 @@
 ## Goal
 
 Fix what the first days of real use exposed in the CLI claims system
-([technical-spec-cli-claims.md](history/technical-spec-cli-claims.md),
-[progress-cli-claims.md](history/progress-cli-claims.md)), running two or three threads
+([technical-spec-cli-claims.md](technical-spec-cli-claims.md),
+[progress-cli-claims.md](progress-cli-claims.md)), running two or three threads
 at once. Twelve items: fewer permission popups, underscores in project names, database
 claims that are not held for half a day, prompts that do not throw away an answer,
 parameters so a command can be one pasted line, a worktree that can actually build,
@@ -311,3 +311,48 @@ positives above, and a redirect to a repo path.
    **before** deploying `mcp`. If that push fails, stop and tell Alex.
 10. Items 7 + 11 — what a fresh worktree needs to build, deploy and test.
 11. Items 6 + 10 — skill layout and the fresh-conversation note; full suite; report.
+
+Steps 4b, 4c and 4d were added while the project ran; see the progress doc.
+
+---
+
+## Where the build differs from this spec
+
+Written at the end, so the spec is not quietly rewritten to match what happened.
+Every one of these was Alex's call or reported to him at the time.
+
+**1. There is no `--yes`, anywhere.** Item 9's example lines show `gitsync --yes`
+and `gitnewtree … --yes`, and the sentence under them says a parameter "answers a
+question, it does not skip the confirmation". Both cannot hold — the only
+question `gitsync` asks *is* the confirmation. Every command now prints its plan
+and asks one final yes/no however many parameters it was given, and `gitsync`
+takes nothing but `--help`.
+
+**2. Item 4's environment variables are two, not one.** `CLAIMS_GUARD_LOG` for
+the log, as the spec says, and `CLAIMS_PROJECT_FILE` for the binding file —
+because the prompt guard *writes* the binding on the first tagged prompt of a
+project, so a test driving that path would have rebound Alex's own window.
+
+**3. Item 11 needed a second change.** CRA validates the `jest` object in
+`package.json` against a fixed key list and refuses to start if it finds a `"//"`
+comment key. The explanation lives in a top-level `jestNote` instead.
+
+**4. Item 2 folded three regexes into one.** `git-new-worktree.mjs` had its own
+project-code rule and `claims.mjs` its own wording of the refusal. Both now use
+`CODE_SHAPE` and `CODE_FORMAT` from `project-code.mjs`.
+
+**5. One fix that is in no item.** Making `choose()` re-ask on a blank answer
+turns a closed stdin into an infinite loop, so `ask()` now tells "he pressed
+enter" apart from "there is no input" and ends the run on the second.
+
+**6. Three steps that did not exist when this was written.** 4b found that the
+`PreToolUse` matcher never named the `PowerShell` tool, so every shell-write rule
+and the deploy gate could be walked around by using the other tool. 4c proved
+subagents *are* guarded. 4d found that the prompt guard was silently eating
+subagent reports, because a hand-back arrives as an ordinary user prompt with the
+parent's session id.
+
+**7. Step 9 ran on main, as planned, but the ending is not Checkpoint.** Main has
+no Checkpoint mode, and Push only keeps every claim, so the three `db:` claims
+were released by hand afterwards. Worth knowing before the next solo-on-main
+database step.

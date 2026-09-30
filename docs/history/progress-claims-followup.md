@@ -3,8 +3,8 @@
 Spec: [technical-spec-claims-followup.md](technical-spec-claims-followup.md). Thread:
 `claims-followup`. Solo on main — no worktrees.
 
-**Status: Step 10 written, awaiting the worktree proof. Step 9's `db:` claims are
-released; the 30 file claims stay.**
+**Status: all 11 steps done. Awaiting the close-out — move these two docs to
+`docs/history/`, `gitpush main finish`, re-upload the skill.**
 
 - [x] **1. Plan.** Read-only. All 33 items free, no conflicts. Six corrections reported.
 - [x] **2. Claim and write the docs.** 30 files claimed; `db:fn:clip-capture`,
@@ -35,8 +35,10 @@ released; the 30 file claims stay.**
       2026-09-30 and pushed: `run_tag_prefix claims_test` returns exactly the
       test clip. Both functions deployed; all three `db:` claims released.
 - [x] **10. Items 7 + 11 — what a fresh worktree needs to build, deploy and test.**
-      Written and checked in main; the worktree proof is Alex's.
-- [ ] **11. Items 6 + 10 — skill layout, fresh-conversation note, full suite.**
+      Verified by Alex 2026-09-30 in a real `probe_tree` worktree: both schema
+      files generated, 91 suites and 2019 tests passing inside it, and Finish
+      removed it cleanly.
+- [x] **11. Items 6 + 10 — skill layout, fresh-conversation note, full suite.**
 
 ---
 
@@ -874,3 +876,101 @@ clean, pushed main, and `gitnewtree` is Alex's command. The commands are in the
 Step 10 report.
 
 Nothing was committed.
+
+**Verified by Alex 2026-09-30**, in a real `probe_tree` worktree: both schema
+files generated, `npm test` ran 91 suites and 2019 tests all passing, and
+`gitpush probe_tree finish` merged, removed the worktree and deleted the branch.
+
+---
+
+## Step 11, 2026-09-30 — the skill, the audit, the full suite
+
+**Files changed**
+
+- `.claude/skills/cli-workflow/SKILL.md` — the git-instruction layout with its
+  six examples, `bind`/`unbind`, the one-conversation-per-project rule, and a
+  frontmatter description at 935 characters.
+- `.claude/CLAUDE.md` — Step 0 now mentions prebuild and underscores; the test
+  section names both suites and warns off "tidying" the `testMatch` override.
+- `docs/technical-spec-claims-followup.md` — a closing section recording where
+  the build differs from the spec.
+- `docs/progress-claims-followup.md` — this and the summary below.
+
+### Item 10: one layout for every git instruction
+
+A four-column table — checkout, mode, files, database claims — one line of why,
+then one command in a code block with every answer given as a parameter. Six
+worked examples, one per command and one per gitpush mode. The column that earns
+its place is the last: whether claims are kept or released is the part Alex
+cannot read off the command and the part that bites weeks later.
+
+### Item 6: one conversation per project
+
+Claude Code reads hook *settings* when a conversation starts, so a session that
+edits `.claude/settings.local.json` is the one session those settings do not
+govern — which is exactly how the PowerShell bypass survived a whole project.
+The hook *scripts* are read per call, so those take effect at once. Both facts
+are now in the skill, with the instruction to say so in a final report whenever
+a project touched either.
+
+### The audit
+
+Stale things found and fixed: `CLAUDE.md` described `gitnewtree` without the
+prebuild step and said nothing about underscores; its test section named only
+the app suite, so the 78 CLI tests were invisible to a fresh thread; and the
+skill had no mention of `bind`, `unbind`, or any of the parameters from Step 6.
+The spec's `--yes` contradiction is recorded rather than edited away.
+
+### Full suite
+
+```
+node --test "scripts/lib/*.test.mjs"        78 passed, 0 failed
+CI=true npx react-scripts test              91 suites, 2019 tests, all passing
+```
+
+Nothing was committed.
+
+---
+
+# Summary: what this project changed
+
+Twelve items, eleven planned steps and three unplanned ones, over one day on
+main. The claims system worked the whole time: 30 file claims held from Step 2
+to the end, three database claims held for the minutes of Step 9 and released
+the same hour.
+
+**The three that were not in the plan, and matter most.**
+
+1. **The guard was blind to one of its two shells.** `PreToolUse` named `Bash`
+   and not `PowerShell`, so every shell-write rule and the Supabase deploy gate
+   could be walked around by choosing the other tool. 2,355 logged decisions
+   contained not one PowerShell call. Fixed, and the rules had to be taught
+   PowerShell's aliases, escape character and parameter syntax before the fix
+   meant anything.
+2. **Subagents are guarded.** The open question from that fix. A subagent's
+   `Write` to an unclaimed path is blocked exactly as the parent's would be.
+3. **But the prompt guard was eating their reports.** A hand-back arrives as an
+   ordinary user prompt, carrying the parent's session id and no `source`, so it
+   read as a long untagged paste and was blocked — and the parent was told the
+   report had been delivered. Machine envelopes are now exempt, anchored to the
+   raw prompt so a pasted imitation is not.
+
+**The twelve items.** Fewer permission popups, with the two that matter kept;
+`db:deploy` released at every Checkpoint by default and flagged by `status` after
+an hour; guard false positives fixed (`git grep -ln` is not the `ln` command); no
+prompt throws away an answer, and a blank commit message fills in
+`<project-code>: <mode> <date>`; every command answerable in one pasted line;
+`bind` and `unbind` for main's project code; hook tests that cannot touch the
+real log or the real binding; underscores in project codes, both halves, with the
+`LIKE` escaping that makes a prefix search mean what it says; a worktree that can
+build, test and deploy; and one layout for every git instruction.
+
+**What a future thread should know.**
+
+- `package.json`'s `testMatch` override is load-bearing in a worktree. The note
+  beside it says why.
+- Two test suites, not one: `node --test "scripts/lib/*.test.mjs"` needs no
+  install and is where the CLI tooling is tested.
+- A `db:` claim belongs to one step. Re-claim at the next.
+- On main there is no Checkpoint, so `db:` claims there are released by hand.
+- Start a fresh conversation after changing hook settings.

@@ -11,7 +11,9 @@ description: >-
   get_recent_clips by run tag or project code), pastes CLI output with or
   without comment, or asks only for a TLDR or to flag questions. Assume he has
   not read the CLI output. Use it whenever CLI work is involved, even if he does
-  not ask for formatted instructions.
+  not ask for formatted instructions, and whenever he asks how to commit, sync,
+  push, checkpoint or finish — every git instruction is a short table then a
+  one-line command.
 ---
 
 # CLI Workflow
@@ -227,6 +229,149 @@ The CLI never runs these. A prompt asks Alex to run one and then waits.
 worktree's VS Code window and exit its Claude session.** A running session locks
 the worktree and the removal fails — the merge and push still succeed, but he is
 left running recovery commands.
+
+**Two more, for the main checkout's project code.** `claims.mjs bind <code>`
+points main's window at a project and `claims.mjs unbind` clears it. Neither
+touches a claim. They are the answer when main is still bound to a finished
+project and a prompt for the next one is being blocked as the wrong window —
+the guard's own message names them now.
+
+### The layout for a git instruction
+
+**Every git instruction is a short table, then one command in a code block.**
+Nothing else. He is reading this through Alfred, deciding whether to run
+something that can merge, push and trigger a deploy; the table is what he checks
+it against, and the command is what he pastes.
+
+| checkout | mode | files | database claims |
+|---|---|---|---|
+| the `rem-j7p` worktree | Checkpoint | the migration and the function | released |
+
+Why: one line.
+
+```powershell
+gitpush rem-j7p checkpoint --paths supabase/migrations/084_reminders.sql --release-db
+```
+
+Rules for the table: four columns, always in that order, and a cell that does
+not apply is `—`. "Why" is one line under it, not a paragraph. **Say whether
+claims are kept or released and why**, because that is the part he cannot see
+from the command and the part that bites weeks later.
+
+Rules for the command: **one line, every answer given as a parameter**, so there
+is nothing to type. A parameter answers a question the command would have asked;
+it never skips the plan or the final yes/no, so there is no `--yes` on any of
+them. An unknown option is refused rather than ignored. `--help` lists each
+command's options.
+
+#### The six shapes
+
+**Starting a worktree.**
+
+| checkout | mode | files | database claims |
+|---|---|---|---|
+| main → new `parallel_threads` worktree | — | — | — |
+
+Why: it branches from `origin/main`, so main must be committed and pushed first.
+
+```powershell
+gitnewtree parallel_threads --install
+```
+
+`--install` when the thread will run tests or a build, `--no-install` for
+docs-only work. Either way it runs `scripts/prebuild.js`, so the generated
+schema files exist.
+
+**A local commit, part-way through.**
+
+| checkout | mode | files | database claims |
+|---|---|---|---|
+| the `rem-j7p` worktree | — | its claimed changes, none of yours | kept |
+
+Why: a checkpoint of the thread's own work; nothing leaves the worktree.
+
+```powershell
+gitcom --include-unclaimed none --message "rem-j7p: reminder rows and the list view"
+```
+
+`--include-unclaimed` decides what happens to changes nobody has claimed —
+usually Alex's own edits sitting in the tree. `none` leaves them alone; `all`
+sweeps them in; naming paths takes just those.
+
+**Bringing main into a worktree.**
+
+| checkout | mode | files | database claims |
+|---|---|---|---|
+| the `rem-j7p` worktree | — | — | — |
+
+Why: the database step must run against everything already live.
+
+```powershell
+gitsync
+```
+
+It takes no parameters. The one question it asks is the final yes/no, and that
+one is always asked.
+
+**Pushing main, project still going.**
+
+| checkout | mode | files | database claims |
+|---|---|---|---|
+| main | Push | everything main has claimed and changed | **kept** |
+
+Why: the work continues here, so the claims stay held.
+
+```powershell
+gitpush main push --message "claims-followup: step 6, parameters"
+```
+
+**Checkpointing a worktree's database step.**
+
+| checkout | mode | files | database claims |
+|---|---|---|---|
+| the `rem-j7p` worktree | Checkpoint | only the migration and the function | **released** |
+
+Why: the deploy is live and belongs in main; the half-finished front end does
+not, and a `db:` claim belongs to one step.
+
+```powershell
+gitpush rem-j7p checkpoint --paths supabase/migrations/084_reminders.sql supabase/functions/mcp/index.ts --release-db
+```
+
+`--keep-db` instead, only when the very next step deploys again and he has said
+so. `--all` commits every uncommitted path, which is rarely what Checkpoint is
+for.
+
+**Finishing a worktree.**
+
+| checkout | mode | files | database claims |
+|---|---|---|---|
+| the `rem-j7p` worktree | Finish | everything it claimed and changed | **all released** |
+
+Why: the work is done, so the claims, the branch and the worktree all go.
+
+```powershell
+gitpush rem-j7p finish --message "rem-j7p: reminders"
+```
+
+Close that worktree's VS Code window first.
+
+For main, `gitpush main finish` is the same ending for work that never used a
+worktree: it pushes, releases every claim main holds, and clears main's project
+code so the next tagged prompt can set a new one.
+
+### One conversation per project
+
+**Start a fresh claude.ai conversation, and a fresh CLI session, for each
+project.** Claude Code reads its hook settings when a conversation starts, so a
+change to `.claude/settings.local.json` — a new hook, a new matcher, a new
+permission — does nothing in the conversation that made it. A session that
+edited the guard is the one session that cannot be trusted to be guarded by it.
+
+The hook *scripts* are read on every call, so a change to `claims-guard.mjs` or
+`prompt-check.mjs` takes effect at once; it is the settings that need the
+restart. When a project has changed either, say so in the final report and tell
+Alex to start the next one fresh.
 
 ### The database step, just in time
 
