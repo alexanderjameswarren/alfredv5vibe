@@ -3,7 +3,7 @@
 Spec: [technical-spec-claims-followup.md](technical-spec-claims-followup.md). Thread:
 `claims-followup`. Solo on main — no worktrees.
 
-**Status: Step 6 done, awaiting Alex's verification.**
+**Status: Step 7 done, awaiting Alex's verification.**
 
 - [x] **1. Plan.** Read-only. All 33 items free, no conflicts. Six corrections reported.
 - [x] **2. Claim and write the docs.** 30 files claimed; `db:fn:clip-capture`,
@@ -23,9 +23,11 @@ Spec: [technical-spec-claims-followup.md](technical-spec-claims-followup.md). Th
       2026-09-30: 61 passing, and a real `gitpush → main → Push` with a blank
       message committed as `claims-followup: push 2026-09-30`, pushed, and kept
       all 30 claims.
-- [x] **6. Item 9 — parameters for the four git commands.** 67 tests passing,
-      awaiting Alex's verification.
-- [ ] **7. Item 4 — `bind`/`unbind`, and hook tests on a scratch log.**
+- [x] **6. Item 9 — parameters for the four git commands.** Verified by Alex
+      2026-09-30 and pushed: 67 passing, every bad command line refused clearly,
+      both probe runs stopping at the final `[y/N]`.
+- [x] **7. Item 4 — `bind`/`unbind`, and hook tests on a scratch log.** 71 tests
+      passing, awaiting Alex's verification.
 - [ ] **8. Item 2a — underscores, local half.**
 - [ ] **9. Item 2b — underscores, Alfred half. DATABASE STEP.** Deploy `clip-capture`,
       push a test report under an underscore tag and confirm it landed, then `mcp`.
@@ -537,5 +539,73 @@ Run for real, all stopping before they could change anything: `--help` on each;
 refused; `--yes` refused by gitsync; `--install --no-install` refused; and
 `gitpush main push --message "probe"` printing its full plan and stopping at
 `Do all of that? [y/N]`, which is the rule the whole step turns on.
+
+Nothing was committed.
+
+---
+
+## Step 7, 2026-09-30 — bind/unbind, and tests that cannot touch the real thing
+
+**Files changed**
+
+- `scripts/claims.mjs` — `bind <code>` and `unbind`; `USAGE`; neither argument
+  is normalised as a path.
+- `scripts/lib/project-code.mjs` — `CODE_SHAPE`; `projectFile` honours
+  `CLAIMS_PROJECT_FILE`.
+- `.claude/hooks/claims-guard.mjs` — `log()` honours `CLAIMS_GUARD_LOG`.
+- `.claude/hooks/prompt-check.mjs` — both block messages name bind and unbind.
+- `.claude/CLAUDE.md` — the project-code paragraph now mentions them.
+- `scripts/git-push-worktrees.mjs` — the two small fixes below.
+- `scripts/lib/hooks.test.mjs` — 4 more tests, 71 in the folder overall.
+- `docs/progress-claims-followup.md` — this.
+
+### bind and unbind
+
+The main checkout's code could only be set by the first tagged prompt of a
+project and cleared by `gitpush` Finish. Neither helps in the case that actually
+happens: main is bound to a finished project, the next prompt is for a new one,
+the guard blocks it correctly and says nothing about what to do. Both block
+messages now name the commands, and only in the main checkout — inside a
+worktree the code is the folder name, and the message says so instead.
+
+Neither touches a claim, and both say so in their output. They are silent at the
+permission layer for the same reason `reserve` is: `claimsCommandApproval` asks
+about `claim db:deploy` and `cleanup <someone else>`, and an unrecognised
+subcommand is not one of those.
+
+### Scratch copies, and the test that proves it
+
+`CLAIMS_GUARD_LOG` and `CLAIMS_PROJECT_FILE` override the two files either hook
+writes. The binding is the one that mattered most: the prompt guard *writes* it
+on the first tagged prompt of a project, so a test driving that path would have
+rebound Alex's own window — and until now the only reason it never did was that
+no test drove that path.
+
+Every hook-driving test goes through one `drive()` helper that points both
+overrides at a fresh temp folder and, after the call, asserts the real
+`.clip/claims-guard.log` and the real `.git/alfred-project-code.json` are byte
+for byte what they were. On top of that, one test runs **the whole suite as a
+child process** and makes the same assertion across all of it; the child sets
+`HOOKS_TEST_CHILD=1` and that one test skips itself, which is what stops it
+recursing. Checked by hand that the child really runs the suite: 71 tests, one
+skipped.
+
+### Two gitpush fixes
+
+**A refusal now comes before the listing.** `gitpush main checkpoint` printed
+thirty lines of checkout detail and then refused, which reads as though
+something happened. The checkout name and the mode are resolved and checked
+first, so the refusal arrives on its own. `gitpush checkpoint` — a mode where a
+checkout belongs — now says so rather than reporting an unknown checkout.
+
+**Claims are a count.** `claims  30 — claims.mjs status for the list` instead of
+thirty paths that pushed the question itself off the screen.
+
+### Verified
+
+71 tests pass, 4 new. `bind`/`unbind` exercised against a scratch binding file —
+set, switched, cleared, cleared again — with the real one unchanged afterwards,
+and their four refusals (no code, bad code, argument to `unbind`, and a
+worktree) checked by hand.
 
 Nothing was committed.

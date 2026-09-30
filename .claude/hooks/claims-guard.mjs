@@ -119,7 +119,11 @@ const entry = { tool: "?", owner: "?", cwd: "?" };
 function log(decision, detail) {
   try {
     const root = entry.root ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
-    const file = path.join(root, LOG_RELATIVE);
+    // The tests drive this hook for real, and must not write the real log —
+    // which is the evidence trail they exist to protect.
+    const file = process.env.CLAIMS_GUARD_LOG
+      ? path.resolve(process.env.CLAIMS_GUARD_LOG)
+      : path.join(root, LOG_RELATIVE);
     mkdirSync(path.dirname(file), { recursive: true });
     try {
       // Bounded: this appends on every single tool call.

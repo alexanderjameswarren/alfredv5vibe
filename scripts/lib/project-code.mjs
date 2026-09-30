@@ -39,6 +39,15 @@ export const TAG_FORMAT =
   "<project-code>-s<step number>-<4 random lowercase letters or digits>";
 export const TAG_EXAMPLE = "rem-k4q-s1-t6v2";
 
+/**
+ * A usable project code on its own — what `claims.mjs bind` takes.
+ *
+ * The same alphabet as a tag's first segment, so a code that binds is a code a
+ * tag can carry. `git-new-worktree.mjs` has its own copy for the folder name;
+ * item 2 (underscores) changes both, and the spec lists them both.
+ */
+export const CODE_SHAPE = /^[a-z0-9][a-z0-9-]{1,40}$/;
+
 /** `{ project, step, suffix }` for a well-formed tag, or null. */
 export function parseTag(tag) {
   const m = String(tag).trim().match(TAG_SHAPE);
@@ -169,8 +178,18 @@ export function classifyPrompt(prompt) {
   };
 }
 
+/**
+ * Where the main checkout's project code is recorded.
+ *
+ * `CLAIMS_PROJECT_FILE` overrides it, for the hook tests. The prompt guard
+ * WRITES this file — the first tagged prompt in main sets the code — so a test
+ * that drives the real hook would otherwise rewrite the binding Alex is
+ * working under, which is the sort of thing a test has no business doing.
+ */
 function projectFile(ctx) {
-  return path.join(ctx.dir, PROJECT_FILE);
+  return process.env.CLAIMS_PROJECT_FILE
+    ? path.resolve(process.env.CLAIMS_PROJECT_FILE)
+    : path.join(ctx.dir, PROJECT_FILE);
 }
 
 /** The code recorded for the main checkout, or null. */

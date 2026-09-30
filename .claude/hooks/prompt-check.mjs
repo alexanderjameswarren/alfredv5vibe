@@ -185,7 +185,12 @@ function main() {
           `  The run tag      ${tag}\n` +
           `  belongs to       "${wanted}".\n\n` +
           `Nothing has been sent to Claude. Paste it into the "${wanted}" window instead.\n\n` +
-          `If it really does belong here, resend it with "override:" on the front.`,
+          `If it really does belong here, resend it with "override:" on the front.\n` +
+          (settable
+            ? `If "${code}" is finished and this window is moving on to "${wanted}":\n` +
+              `  node scripts/claims.mjs bind ${wanted}     (or  unbind  to clear it)\n` +
+              `Neither touches a claim.`
+            : `This is a worktree, so its code is the folder name and cannot be changed.`),
       );
     }
     allow(`tag=${tag}${wrapped} matches ${code}`);
@@ -203,6 +208,10 @@ function main() {
       `Nothing has been sent to Claude. Either:\n` +
       `  • add the "Run tag: ..." line and resend, so the window can be checked, or\n` +
       `  • resend it with "override:" on the front if you meant it to go here.\n\n` +
+      (settable && code
+        ? `To move this window to another project:  claims.mjs bind <code>\n` +
+          `To leave it unbound:                    claims.mjs unbind\n\n`
+        : "") +
       `Short replies — "yes", "confirmed, no drift" — are never stopped.`,
   );
 }

@@ -192,7 +192,13 @@ function showTree(w, index) {
     say(`      commits ${w.ahead.commits.length} not yet in ${BASE}`);
   }
   say(`      changes ${w.dirty.length} uncommitted`);
-  say(`      claims  ${w.files.length ? w.files.join(", ") : "none"}`);
+  // A count, not the list: main held 30 claims here and the paths filled the
+  // screen, pushing the question itself out of view.
+  say(
+    w.files.length
+      ? `      claims  ${w.files.length} — claims.mjs status for the list`
+      : `      claims  none`,
+  );
   if (w.db.length) say(`      db      ${w.db.join(", ")}`);
   if (w.lockReason !== null) {
     say(`      LOCKED  ${w.lockReason || "(no reason given)"}`);
@@ -590,27 +596,41 @@ function main() {
     isCurrent: fold(t.path) === fold(here.root),
   }));
 
-  say(`\n${summarised.length} checkout(s):`);
-  summarised.forEach((w, i) => showTree(w, i + 1));
-
   const [wantedCheckout, wantedMode] = args.positionals;
 
-  let chosen;
+  // Checked BEFORE the listing is printed. A refusal buried under thirty lines
+  // of checkout detail reads as though something happened; on its own it reads
+  // as the command not having run, which is what it is.
+  let named = null;
   if (wantedCheckout) {
-    const hit = summarised.find(
-      (t) =>
-        t.owner.toLowerCase() === wantedCheckout.toLowerCase() ||
-        (/^\d+$/.test(wantedCheckout) && summarised[Number(wantedCheckout) - 1] === t),
-    );
-    if (!hit) {
+    named =
+      summarised.find((t) => t.owner.toLowerCase() === wantedCheckout.toLowerCase()) ??
+      (/^\d+$/.test(wantedCheckout) ? summarised[Number(wantedCheckout) - 1] : undefined) ??
+      null;
+    if (!named) {
+      const isMode = MODE_KEYS[wantedCheckout.toLowerCase()] !== undefined;
       stop(
-        `"${wantedCheckout}" is not one of the checkouts above.\n` +
-          `Here: ${summarised.map((t) => t.owner).join(", ")}`,
+        `"${wantedCheckout}" is not a checkout here.\n` +
+          (isMode ? `It is a mode — the checkout comes first: gitpush main ${wantedCheckout}\n` : "") +
+          `Open: ${summarised.map((t) => t.owner).join(", ")}\n\n` +
+          `Nothing was changed.`,
         2,
       );
     }
-    chosen = [hit];
-    say(`\nChosen on the command line: ${hit.owner}`);
+    if (wantedMode) {
+      // Throws a UsageError for checkpoint-on-main and push-on-a-worktree,
+      // caught below, before a single line of the listing is printed.
+      checkOptionsFor(modeKey(wantedMode, named), named);
+    }
+  }
+
+  say(`\n${summarised.length} checkout(s):`);
+  summarised.forEach((w, i) => showTree(w, i + 1));
+
+  let chosen;
+  if (named) {
+    chosen = [named];
+    say(`\nChosen on the command line: ${named.owner}`);
   } else {
     // The one blank answer that still cancels, because the prompt says so and
     // because this is the question before anything has been decided — there is

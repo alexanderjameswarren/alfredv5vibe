@@ -19,6 +19,8 @@
 //   node scripts/claims.mjs release src/sam/
 //   node scripts/claims.mjs release --all
 //   node scripts/claims.mjs release --owner stale-thread --all
+//   node scripts/claims.mjs bind claims-followup
+//   node scripts/claims.mjs unbind
 //
 // Exit codes: 0 fine, 1 conflict or refusal, 2 bad usage or a broken claims file.
 //
@@ -50,6 +52,7 @@ import {
   staleDbClaims,
   withLock,
 } from "./lib/claims-core.mjs";
+import { clearMainCode, CODE_SHAPE, codeOfCheckout, writeMainCode } from "./lib/project-code.mjs";
 
 // ---------------------------------------------------------------------------
 // display
@@ -170,6 +173,73 @@ function cmdStatus(ctx) {
         `   blocks every other thread's deploy.`,
     );
   }
+  return 0;
+}
+
+/**
+ * Set the main checkout's project code. Touches no claim.
+ *
+ * The code decides which prompts the guard lets into this window, and until now
+ * the only ways to change it were the first tagged prompt of a project (which
+ * sets it) and `gitpush` Finish (which clears it). Neither helps when main is
+ * bound to a finished project and the next prompt is for a different one: the
+ * guard blocks it, correctly, and says nothing useful about what to do.
+ *
+ * Inside a worktree the code IS the folder name, so there is nothing to set.
+ */
+function cmdBind(ctx, items) {
+  const [code, ...extra] = items;
+  if (!code) fail("bind needs a project code, e.g. `bind claims-followup`", 2);
+  if (extra.length) fail(`bind takes one project code, not ${items.length}`, 2);
+
+  const { code: current, settable } = codeOfCheckout(ctx);
+  if (!settable) {
+    fail(
+      `This is the worktree "${current}", where the project code is the folder\n` +
+        `name and cannot be set. bind and unbind are for the main checkout.`,
+      2,
+    );
+  }
+  if (!CODE_SHAPE.test(code)) {
+    fail(
+      `"${code}" is not a usable project code.\n` +
+        `Lower case letters, digits and hyphens, 2 to 41 characters.`,
+      2,
+    );
+  }
+
+  writeMainCode(ctx, code);
+  console.log(
+    current === code
+      ? `The main checkout was already working on "${code}". Unchanged.`
+      : current
+        ? `The main checkout now works on "${code}" (was "${current}").`
+        : `The main checkout now works on "${code}".`,
+  );
+  console.log(`Claims are untouched — this only decides which prompts land here.`);
+  return 0;
+}
+
+/** Clear the main checkout's project code. Touches no claim. */
+function cmdUnbind(ctx, items) {
+  if (items.length) fail(`unbind takes no arguments, got ${items.join(", ")}`, 2);
+
+  const { code: current, settable } = codeOfCheckout(ctx);
+  if (!settable) {
+    fail(
+      `This is the worktree "${current}", where the project code is the folder\n` +
+        `name and cannot be cleared. bind and unbind are for the main checkout.`,
+      2,
+    );
+  }
+  if (!current) {
+    console.log("The main checkout has no project code. Nothing to clear.");
+    return 0;
+  }
+
+  clearMainCode(ctx);
+  console.log(`Cleared "${current}". The next tagged prompt sets a new one.`);
+  console.log(`Claims are untouched — this only decides which prompts land here.`);
   return 0;
 }
 
@@ -427,6 +497,12 @@ const USAGE = `Usage:
   node scripts/claims.mjs release <items...>
   node scripts/claims.mjs release --all
   node scripts/claims.mjs cleanup <owner>
+  node scripts/claims.mjs bind <project-code>
+  node scripts/claims.mjs unbind
+
+bind and unbind set and clear the MAIN checkout's project code, which is what
+decides whose prompts the guard lets into that window. They touch no claim, and
+they refuse inside a worktree, where the code is the folder name.
 
 Items are repo-relative paths, folders ending in /, or db:table:<name>,
 db:fn:<name>, db:deploy. --owner <name> overrides the detected worktree name
@@ -501,6 +577,8 @@ function main() {
     reserve: cmdReserve,
     release: cmdRelease,
     cleanup: cmdCleanup,
+    bind: cmdBind,
+    unbind: cmdUnbind,
   };
   const handler = commands[command];
   if (!handler) fail(`unknown command: ${command}\n\n${USAGE}`, 2);
@@ -508,11 +586,11 @@ function main() {
   try {
     const ctx = resolveRepo();
     if (flags.owner) ctx.owner = flags.owner;
-    // cleanup's argument is an owner name, not a path — do not normalise it.
-    const items =
-      command === "cleanup"
-        ? rawItems
-        : rawItems.map((raw) => normaliseItem(raw, ctx.root));
+    // cleanup takes an owner name and bind a project code — neither is a path,
+    // so neither is normalised as one.
+    const items = ["cleanup", "bind", "unbind"].includes(command)
+      ? rawItems
+      : rawItems.map((raw) => normaliseItem(raw, ctx.root));
     process.exit(handler(ctx, items, flags));
   } catch (err) {
     if (err instanceof ClaimsError) {

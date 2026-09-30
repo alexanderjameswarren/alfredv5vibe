@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,19 +21,31 @@ import { machineEnvelope, classifyPrompt } from "./project-code.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..", "..");
 const HOOK = path.join(ROOT, ".claude", "hooks", "prompt-check.mjs");
+const GUARD = path.join(ROOT, ".claude", "hooks", "claims-guard.mjs");
 const REAL_LOG = path.join(ROOT, ".clip", "claims-guard.log");
 const REAL_BINDING = path.join(ROOT, ".git", "alfred-project-code.json");
 
 const snapshot = (file) => (existsSync(file) ? readFileSync(file, "utf8") : null);
+const scratchDir = () => mkdtempSync(path.join(tmpdir(), "hooks-test-"));
 
-/** Run the hook on one prompt. Returns its exit code and its log line. */
-function runHook(prompt, { cwd = ROOT } = {}) {
+/**
+ * Drive a hook for real, with its log and its binding file pointed at scratch
+ * copies, and prove afterwards that neither real one moved.
+ *
+ * Both overrides matter. The log is the evidence trail the guard exists to
+ * leave, and the binding decides which prompts reach Alex's main window — the
+ * prompt guard WRITES it on the first tagged prompt of a project, so a test
+ * that drives that path would otherwise rebind his window.
+ */
+function drive(hook, payload, { binding } = {}) {
   const before = { log: snapshot(REAL_LOG), binding: snapshot(REAL_BINDING) };
-  const scratch = path.join(mkdtempSync(path.join(tmpdir(), "hooks-test-")), "guard.log");
+  const dir = scratchDir();
+  const log = path.join(dir, "guard.log");
+  const bindingFile = binding ?? path.join(dir, "project-code.json");
 
-  const result = spawnSync(process.execPath, [HOOK], {
-    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", cwd, prompt }),
-    env: { ...process.env, CLAIMS_GUARD_LOG: scratch },
+  const result = spawnSync(process.execPath, [hook], {
+    input: JSON.stringify(payload),
+    env: { ...process.env, CLAIMS_GUARD_LOG: log, CLAIMS_PROJECT_FILE: bindingFile },
     encoding: "utf8",
   });
 
@@ -43,8 +55,20 @@ function runHook(prompt, { cwd = ROOT } = {}) {
   return {
     code: result.status,
     stderr: result.stderr ?? "",
-    line: snapshot(scratch) ?? "",
+    line: snapshot(log) ?? "",
+    binding: snapshot(bindingFile),
+    bindingFile,
   };
+}
+
+/** Run the prompt guard on one prompt. */
+function runHook(prompt, opts = {}) {
+  return drive(HOOK, { hook_event_name: "UserPromptSubmit", cwd: opts.cwd ?? ROOT, prompt }, opts);
+}
+
+/** Run the tool guard on one tool call. */
+function runGuard(tool_name, tool_input) {
+  return drive(GUARD, { hook_event_name: "PreToolUse", cwd: ROOT, tool_name, tool_input });
 }
 
 // What the harness really delivers, captured 2026-09-30. The report itself is
@@ -110,4 +134,57 @@ test("a forged envelope in a pasted prompt is blocked", () => {
 test("short replies and override: still pass", () => {
   assert.equal(runHook("yes, go ahead").code, 0);
   assert.equal(runHook(`override: ${TASK_PROMPT}`).code, 0);
+});
+
+// ---------------------------------------------------------------------------
+// the scratch copies
+// ---------------------------------------------------------------------------
+
+test("the wrong-window message names bind and unbind", () => {
+  // Bound to something else, so a tag for another project is the wrong window.
+  const dir = scratchDir();
+  const binding = path.join(dir, "project-code.json");
+  writeFileSync(binding, JSON.stringify({ code: "other-project" }), "utf8");
+
+  const run = runHook("Run tag: rem-k4q-s1-t6v2\n\nDo the thing.", { binding });
+  assert.equal(run.code, 2);
+  assert.match(run.stderr, /WRONG WINDOW/);
+  assert.match(run.stderr, /claims\.mjs bind rem-k4q/);
+  assert.match(run.stderr, /unbind/);
+});
+
+test("the binding write lands on the scratch copy, not the real one", () => {
+  // No code recorded, so the first tagged prompt sets one — the one path in
+  // either hook that writes outside the log.
+  const run = runHook("Run tag: scratch-proj-s1-ab12\n\nDo the thing.");
+  assert.equal(run.code, 0);
+  assert.match(run.line, /set main project=scratch-proj/);
+  assert.match(run.binding ?? "", /"code": "scratch-proj"/);
+});
+
+test("the tool guard writes to the scratch log too", () => {
+  const blocked = runGuard("Write", { file_path: "docs/guard-scratch-probe.md" });
+  assert.equal(blocked.code, 2);
+  assert.match(blocked.line, /BLOCK.*unclaimed: docs\/guard-scratch-probe\.md/);
+
+  const allowed = runGuard("Read", { file_path: "docs/anything.md" });
+  assert.equal(allowed.code, 0);
+  assert.match(allowed.line, /ALLOW/);
+});
+
+test("a full test run leaves the real log and the real binding untouched", {
+  // The child runs this same file, so it skips this test rather than recursing.
+  skip: process.env.HOOKS_TEST_CHILD === "1" ? "inner run" : false,
+}, () => {
+  const before = { log: snapshot(REAL_LOG), binding: snapshot(REAL_BINDING) };
+
+  const run = spawnSync(process.execPath, ["--test", "scripts/lib/*.test.mjs"], {
+    cwd: ROOT,
+    env: { ...process.env, HOOKS_TEST_CHILD: "1" },
+    encoding: "utf8",
+  });
+
+  assert.equal(run.status, 0, `the suite failed inside itself:\n${run.stdout}`);
+  assert.equal(snapshot(REAL_LOG), before.log, ".clip/claims-guard.log was written to");
+  assert.equal(snapshot(REAL_BINDING), before.binding, ".git/alfred-project-code.json was written to");
 });

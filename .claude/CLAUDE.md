@@ -61,7 +61,9 @@ say so first.
 **Project codes and which window you are in.** A worktree's project code is its
 folder name, and that is also its claims owner. The main checkout's code is
 recorded from the first prompt that carries a run tag, and cleared by `gitpush`
-Finish on main. A run tag's project code is everything before the step segment:
+Finish on main. Alex can also set or clear it directly with `claims.mjs bind
+<code>` and `claims.mjs unbind`, which touch no claim and refuse inside a
+worktree. A run tag's project code is everything before the step segment:
 `claims-wq7-s7d-u3rb` → `claims-wq7`.
 
 A `UserPromptSubmit` hook checks the two against each other and blocks a prompt
