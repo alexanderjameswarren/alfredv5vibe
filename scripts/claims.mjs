@@ -52,7 +52,13 @@ import {
   staleDbClaims,
   withLock,
 } from "./lib/claims-core.mjs";
-import { clearMainCode, CODE_SHAPE, codeOfCheckout, writeMainCode } from "./lib/project-code.mjs";
+import {
+  clearMainCode,
+  CODE_FORMAT,
+  CODE_SHAPE,
+  codeOfCheckout,
+  writeMainCode,
+} from "./lib/project-code.mjs";
 
 // ---------------------------------------------------------------------------
 // display
@@ -201,11 +207,7 @@ function cmdBind(ctx, items) {
     );
   }
   if (!CODE_SHAPE.test(code)) {
-    fail(
-      `"${code}" is not a usable project code.\n` +
-        `Lower case letters, digits and hyphens, 2 to 41 characters.`,
-      2,
-    );
+    fail(`"${code}" is not a usable project code.\n${CODE_FORMAT}`, 2);
   }
 
   writeMainCode(ctx, code);

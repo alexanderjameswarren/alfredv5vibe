@@ -24,6 +24,10 @@ import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { resolveRepo } from "./lib/claims-core.mjs";
+// One shape for a project code, shared with `claims.mjs bind` and the tag
+// parser, because the folder name IS the claims owner and the tag's first
+// segment — three names for one string, which had three regexes.
+import { CODE_FORMAT, CODE_SHAPE } from "./lib/project-code.mjs";
 import {
   changedFiles,
   commitsAhead,
@@ -41,7 +45,6 @@ import {
 } from "./lib/git-flow.mjs";
 
 const BASE = "origin/main";
-const CODE = /^[a-z0-9][a-z0-9-]{1,40}$/;
 
 const USAGE = `gitnewtree — start a project in its own worktree.
 
@@ -225,12 +228,8 @@ function main() {
       2,
     );
   }
-  if (!CODE.test(code)) {
-    stop(
-      `"${code}" is not a usable project code.\n` +
-        "Lower case letters, digits and hyphens, 2 to 41 characters.",
-      2,
-    );
+  if (!CODE_SHAPE.test(code)) {
+    stop(`"${code}" is not a usable project code.\n${CODE_FORMAT}`, 2);
   }
 
   // Always act on the main checkout, wherever this was run from.

@@ -162,6 +162,19 @@ test("the binding write lands on the scratch copy, not the real one", () => {
   assert.match(run.binding ?? "", /"code": "scratch-proj"/);
 });
 
+test("an underscore tag reaches the window it belongs to", () => {
+  const dir = scratchDir();
+  const binding = path.join(dir, "project-code.json");
+  writeFileSync(binding, JSON.stringify({ code: "parallel_threads" }), "utf8");
+
+  const right = runHook("Run tag: parallel_threads-s5-f2mz\n\nDo the thing.", { binding });
+  assert.equal(right.code, 0);
+  assert.match(right.line, /matches parallel_threads/);
+
+  const wrong = runHook("Run tag: parallel-threads-s5-f2mz\n\nDo the thing.", { binding });
+  assert.equal(wrong.code, 2, "a hyphen is a different project, not the same one");
+});
+
 test("the tool guard writes to the scratch log too", () => {
   const blocked = runGuard("Write", { file_path: "docs/guard-scratch-probe.md" });
   assert.equal(blocked.code, 2);

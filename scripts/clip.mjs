@@ -29,14 +29,17 @@ import path from "node:path";
 const MIN_SECRET_LENGTH = 32;
 
 /**
- * Run tags: short, lowercase, letters, digits and hyphens, at most 40.
+ * Run tags: short, lowercase, letters, digits, hyphens and underscores, at
+ * most 40. An underscore is allowed only inside the project code — the tag's
+ * separators are hyphens — but this pattern just checks the alphabet, since
+ * project-code.mjs is what parses the shape.
  *
  * ⚠️ WHY THIS EXISTS. Alex often has two or three CLI sessions going at once, and
  * "CLI responded" in a claude.ai thread has to pick up the report from THIS
  * conversation's prompt rather than whichever finished last. Every prompt carries
  * a tag; the report carries it back.
  */
-const TAG_PATTERN = /^[a-z0-9-]{1,40}$/;
+const TAG_PATTERN = /^[a-z0-9_-]{1,40}$/;
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -136,7 +139,8 @@ Push a report into Alfred as a CLI clip.
                 without it the first markdown heading, then the file name, then
                 "CLI report" are tried in that order.
   --tag, -g     The run tag from the prompt ("Run tag: <tag>"). Lowercase
-                letters, digits and hyphens, at most 40. Prefixes the title as
+                letters, digits, hyphens and underscores, at most 40 — an
+                underscore only inside the project code. Prefixes the title as
                 "[tag] " and is stored so a thread can find its own report.
                 Omit it and the push still happens, untagged.
   --help, -h    This.
@@ -161,8 +165,8 @@ function parseArgs(argv) {
       const tag = String(raw).trim().toLowerCase();
       if (!TAG_PATTERN.test(tag)) {
         fail(
-          `--tag "${raw}" is not a usable run tag. Use lowercase letters, digits and ` +
-            `hyphens, 1 to 40 characters.
+          `--tag "${raw}" is not a usable run tag. Use lowercase letters, digits, ` +
+            `hyphens and underscores, 1 to 40 characters.
 
 ` +
             `A tag only works by exact match, so a mangled one would silently match ` +

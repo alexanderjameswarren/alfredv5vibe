@@ -1,6 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyPrompt, projectOfTag, stripPasteWrappers, tagInPrompt } from "./project-code.mjs";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  classifyPrompt,
+  CODE_SHAPE,
+  parseTag,
+  projectOfTag,
+  stripPasteWrappers,
+  tagInPrompt,
+} from "./project-code.mjs";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 // The wrapper the VS Code Claude panel really emits: attributes on both tags.
 const wrap = (body, id = "c70a") =>
@@ -85,4 +97,66 @@ test("wrapper-only paste reads as empty", () => {
 test("long and multi-line untagged prompts still block", () => {
   assert.ok(classifyPrompt("a\nb\nc\nd").pasted);
   assert.ok(classifyPrompt("x".repeat(401)).pasted);
+});
+
+// ---------------------------------------------------------------------------
+// underscores inside a project code
+// ---------------------------------------------------------------------------
+
+test("an underscore is part of the name, never a separator", () => {
+  assert.equal(projectOfTag("parallel_threads-s5-f2mz"), "parallel_threads");
+  assert.deepEqual(parseTag("parallel_threads-s5-f2mz"), {
+    project: "parallel_threads",
+    step: "s5",
+    suffix: "f2mz",
+  });
+  // Both kinds in one name — the hyphens still only separate the three parts.
+  assert.equal(projectOfTag("dj_weekly-review-s3b-k9m1"), "dj_weekly-review");
+  assert.equal(projectOfTag("a_b_c-s10-zz99"), "a_b_c");
+});
+
+test("every existing hyphenated tag reads exactly as before", () => {
+  assert.equal(projectOfTag("rem-k4q-s1-t6v2"), "rem-k4q");
+  assert.equal(projectOfTag("dj-c7q-s2-h5v8"), "dj-c7q");
+  assert.equal(projectOfTag("claims-followup-s8-p5vz"), "claims-followup");
+  assert.equal(projectOfTag("claims-wq7-s7d-u3rb"), "claims-wq7");
+  // And the malformed ones are still malformed.
+  assert.equal(projectOfTag("rem-k4q-plan-t6v2"), null);
+  assert.equal(projectOfTag("clip-7b-q4m2"), null);
+});
+
+test("the underscore is allowed only in the name, not in step or suffix", () => {
+  assert.equal(projectOfTag("rem-k4q-s1_b-t6v2"), null);
+  assert.equal(projectOfTag("rem-k4q-s1-t6v_"), null);
+});
+
+test("an underscore tag is found in a prompt", () => {
+  assert.equal(
+    tagInPrompt("Run tag: parallel_threads-s5-f2mz\nWindow: worktree"),
+    "parallel_threads-s5-f2mz",
+  );
+});
+
+test("a project code may hold underscores, but not lead with one", () => {
+  for (const code of ["parallel_threads", "dj_weekly-review", "rem-j7p", "a1"]) {
+    assert.ok(CODE_SHAPE.test(code), code);
+  }
+  for (const code of ["_leading", "-leading", "Upper_Case", "with space", "a"]) {
+    assert.ok(!CODE_SHAPE.test(code), code);
+  }
+});
+
+// clip.mjs keeps its own alphabet check, because it runs before anything is
+// parsed. Driven with --help so the tag is validated and nothing is pushed.
+const clipTag = (tag) =>
+  spawnSync(process.execPath, ["scripts/clip.mjs", "--tag", tag, "--help"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+
+test("clip.mjs takes an underscore tag and still refuses a bad one", () => {
+  assert.equal(clipTag("parallel_threads-s5-f2mz").status, 0);
+  assert.equal(clipTag("claims-followup-s8-p5vz").status, 0);
+  assert.notEqual(clipTag("bad tag!").status, 0);
+  assert.notEqual(clipTag("x".repeat(41)).status, 0);
 });

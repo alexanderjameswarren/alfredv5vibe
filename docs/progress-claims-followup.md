@@ -3,7 +3,8 @@
 Spec: [technical-spec-claims-followup.md](technical-spec-claims-followup.md). Thread:
 `claims-followup`. Solo on main — no worktrees.
 
-**Status: Step 7 done, awaiting Alex's verification.**
+**Status: Step 8 done, awaiting Alex's verification. Do not use an underscore
+run tag until Step 9 is deployed — see the warning in Step 8 below.**
 
 - [x] **1. Plan.** Read-only. All 33 items free, no conflicts. Six corrections reported.
 - [x] **2. Claim and write the docs.** 30 files claimed; `db:fn:clip-capture`,
@@ -26,9 +27,10 @@ Spec: [technical-spec-claims-followup.md](technical-spec-claims-followup.md). Th
 - [x] **6. Item 9 — parameters for the four git commands.** Verified by Alex
       2026-09-30 and pushed: 67 passing, every bad command line refused clearly,
       both probe runs stopping at the final `[y/N]`.
-- [x] **7. Item 4 — `bind`/`unbind`, and hook tests on a scratch log.** 71 tests
-      passing, awaiting Alex's verification.
-- [ ] **8. Item 2a — underscores, local half.**
+- [x] **7. Item 4 — `bind`/`unbind`, and hook tests on a scratch log.** Verified
+      by Alex 2026-09-30 and pushed.
+- [x] **8. Item 2a — underscores, local half.** 78 tests passing, awaiting
+      Alex's verification. **An underscore tag is not safe to use yet.**
 - [ ] **9. Item 2b — underscores, Alfred half. DATABASE STEP.** Deploy `clip-capture`,
       push a test report under an underscore tag and confirm it landed, then `mcp`.
 - [ ] **10. Items 7 + 11 — what a fresh worktree needs to build, deploy and test.**
@@ -607,5 +609,77 @@ thirty paths that pushed the question itself off the screen.
 set, switched, cleared, cleared again — with the real one unchanged afterwards,
 and their four refusals (no code, bad code, argument to `unbind`, and a
 worktree) checked by hand.
+
+Nothing was committed.
+
+---
+
+## Step 8, 2026-09-30 — underscores in project codes, local half
+
+**Files changed**
+
+- `scripts/lib/project-code.mjs` — `TAG_SHAPE`, `CODE_SHAPE`, `tagInPrompt`'s
+  character class; new `CODE_FORMAT`, one sentence every refusal now quotes.
+- `scripts/git-new-worktree.mjs` — its own `CODE` regex deleted; it uses
+  `CODE_SHAPE` and `CODE_FORMAT`.
+- `scripts/claims.mjs` — `bind`'s refusal quotes `CODE_FORMAT`.
+- `scripts/clip.mjs` — `TAG_PATTERN`, the `--help` text and the refusal.
+- `scripts/lib/project-code.test.mjs`, `scripts/lib/hooks.test.mjs` — 7 more
+  tests, 78 in the folder overall.
+- `docs/progress-claims-followup.md` — this.
+
+`parallel_threads-s5-f2mz` parses as `parallel_threads` + `s5` + `f2mz`. The
+underscore is part of the NAME; the three separators are still hyphens, and the
+step and the random suffix still take no underscore. `dj_weekly-review-s3b-k9m1`
+— both kinds in one name — parses as `dj_weekly-review`.
+
+**Three regexes became one.** `git-new-worktree.mjs` had its own copy of the
+code rule and `claims.mjs` had its own wording of the refusal, for a string that
+is the folder name, the claims owner and the tag's first segment all at once.
+They now share `CODE_SHAPE` and `CODE_FORMAT`, so this item changed one place
+instead of three and the next one will too. `clip.mjs` keeps its own alphabet
+check on purpose: it runs before anything is parsed, and it is the last thing
+between a mangled tag and the clipboard.
+
+### ⚠ The Alfred side rejects an underscore tag today
+
+Read-only check of the three files Step 9 owns. **Do not use an underscore run
+tag until Step 9 is deployed.**
+
+| Where | Rule | What happens today |
+|---|---|---|
+| `clip-capture/index.ts:405` | `/^[a-z0-9-]{1,40}$/` | the tag is **dropped to null** and the clip is stored untagged |
+| `_shared/tools/clipboard.ts:221` | the same, on `run_tag` | `get_recent_clips` errors |
+| `_shared/tools/clipboard.ts:231` | the same, on `run_tag_prefix` | the same |
+
+**The first one is the dangerous one, and it is silent from this end.**
+`clip.mjs` prints the tag it *sent*, not the tag the server stored, so a push
+under an underscore tag would report `run tag: parallel_threads-s5-f2mz` and
+have saved a clip with no tag at all. The report would then be unfindable by tag
+— exactly the failure the tags exist to prevent.
+
+Also waiting for Step 9, and not a rejection but a silent wrong answer:
+`clipboard.ts:265` filters a prefix with `.like(…, prefix + "%")`, and `_` is a
+single-character wildcard in SQL `LIKE`. Once underscores are real,
+`parallel_threads` as a prefix would also match `parallelXthreads`. The comment
+beside it promises the tag alphabet cannot smuggle one in; Step 9 escapes the
+prefix and rewrites that comment.
+
+**`.claude/skills/cli-workflow/SKILL.md` was deliberately left alone.** It tells
+claude.ai "hyphens, never underscores", which is still the correct instruction
+until the Alfred half is live. It flips in Step 9, with the deploy.
+
+### Verified
+
+78 tests pass, 7 new: the underscore forms, a name with both kinds, every
+existing hyphenated tag unchanged, the malformed ones still malformed, an
+underscore refused in the step and in the suffix, `CODE_SHAPE` accepting and
+refusing, `clip.mjs` taking an underscore tag (driven with `--help`, so nothing
+is pushed) and still refusing a bad one, and the live prompt guard letting
+`parallel_threads-s5-f2mz` into a window bound to `parallel_threads` while
+`parallel-threads-…` is blocked as a different project.
+
+By hand: `gitnewtree parallel_threads` gets past the code check, and `Bad_Code`
+and `_bad` are refused with the new one-line description.
 
 Nothing was committed.

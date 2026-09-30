@@ -26,6 +26,11 @@ export const PROJECT_FILE = "alfred-project-code.json";
 //
 //   <project-code>-s<step>-<4 random lowercase letters or digits>
 //   rem-k4q-s1-t6v2
+//   parallel_threads-s5-f2mz
+//
+// A project code may contain underscores; the SEPARATORS are always hyphens.
+// That is what keeps the shape readable both ways — `parallel_threads` is one
+// segment however many words it has, and the step is still the second-to-last.
 //
 // The first version scanned backwards for a segment starting `s<digit>` and took
 // everything before it. That got `rem-k4q-s1-s2ab` wrong — the random suffix
@@ -33,20 +38,24 @@ export const PROJECT_FILE = "alfred-project-code.json";
 // prompt would have been blocked as the wrong window. Roughly one tag in 360.
 // Anchoring the four-character suffix to the end removes the ambiguity: only one
 // segment can be the step.
-export const TAG_SHAPE = /^([a-z0-9][a-z0-9-]*)-(s\d[a-z0-9]*)-([a-z0-9]{4})$/;
+export const TAG_SHAPE = /^([a-z0-9][a-z0-9_-]*)-(s\d[a-z0-9]*)-([a-z0-9]{4})$/;
 
 export const TAG_FORMAT =
   "<project-code>-s<step number>-<4 random lowercase letters or digits>";
 export const TAG_EXAMPLE = "rem-k4q-s1-t6v2";
 
 /**
- * A usable project code on its own — what `claims.mjs bind` takes.
+ * A usable project code on its own — what `claims.mjs bind` and `gitnewtree`
+ * take, and what a worktree folder is called.
  *
  * The same alphabet as a tag's first segment, so a code that binds is a code a
- * tag can carry. `git-new-worktree.mjs` has its own copy for the folder name;
- * item 2 (underscores) changes both, and the spec lists them both.
+ * tag can carry: lower case letters, digits, hyphens and underscores.
  */
-export const CODE_SHAPE = /^[a-z0-9][a-z0-9-]{1,40}$/;
+export const CODE_SHAPE = /^[a-z0-9][a-z0-9_-]{1,40}$/;
+
+/** One line describing CODE_SHAPE, so every refusal says the same thing. */
+export const CODE_FORMAT =
+  "Lower case letters, digits, hyphens and underscores, 2 to 41 characters.";
 
 /** `{ project, step, suffix }` for a well-formed tag, or null. */
 export function parseTag(tag) {
@@ -71,7 +80,7 @@ export function projectOfTag(tag) {
 
 /** The `Run tag: <tag>` line of a prompt, or null. */
 export function tagInPrompt(prompt) {
-  const m = String(prompt).match(/^[ \t]*Run tag:[ \t]*([A-Za-z0-9-]{1,60})[ \t]*$/m);
+  const m = String(prompt).match(/^[ \t]*Run tag:[ \t]*([A-Za-z0-9_-]{1,60})[ \t]*$/m);
   return m ? m[1] : null;
 }
 
