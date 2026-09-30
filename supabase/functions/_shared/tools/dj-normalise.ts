@@ -324,7 +324,7 @@ export const ARTIST_ALIASES: ArtistAlias[] = [
 // Those are a DIFFERENT defect — a scraped YouTube page label that the parser
 // correctly read from wrong source data (§14.9) — and the 12 unrepaired
 // `Release` rows are a DECIDED, PERMANENT disagreement recorded in
-// dj_known_disagreements and listed in docs/dj-known-disagreements.md. They are
+// dj_known_disagreements and listed in docs/history/dj-known-disagreements.md. They are
 // meant to keep surfacing through that partition, which is what proves the
 // pipeline ran and CHOSE silence. Folding them in here would delete that
 // evidence and repair nothing.
