@@ -15,7 +15,12 @@ import { vapidFingerprint } from "../../../src/utils/vapidFingerprint.js";
 // matching the day viewPaths.js changes, and the failure would be a
 // notification that opens the wrong screen — the exact class of drift this
 // project has been bitten by twice. Verified to load under Deno 2.1.4.
-import { executionPath } from "../../../src/viewPaths.js";
+import {
+  executionPath,
+  inboxDetailPath,
+  intentionDetailPath,
+  viewToPath,
+} from "../../../src/viewPaths.js";
 
 // notify-dispatch — send the notifications that have come due.
 //
@@ -40,12 +45,17 @@ import { executionPath } from "../../../src/viewPaths.js";
 const STEPS_TABLE = "notification_steps";
 const SUBS_TABLE = "push_subscriptions";
 const EXECUTIONS_TABLE = "executions";
+// Standalone one-off reminders (docs/technical-spec-reminders.md). No chain and
+// no execution, so they skip the active-execution filter entirely.
+const REMINDERS_TABLE = "reminders";
 
 // A bounded read. A minute's worth of due steps is normally a handful; a
 // runaway query returning thousands would blow the function's time budget and
 // send a flood. Anything beyond this waits for the next tick sixty seconds
 // later, which is the right kind of degradation.
 const MAX_STEPS_PER_RUN = 200;
+// A separate cap, so a backlog of one kind cannot crowd out the other.
+const MAX_REMINDERS_PER_RUN = 200;
 
 // A step whose user has no push_subscriptions row at all. Out of the send
 // queue so it is not retried every minute forever, but not terminal — ticking
@@ -119,6 +129,22 @@ interface StepRow {
   due_at: string;
 }
 
+interface ReminderRow {
+  id: string;
+  user_id: string;
+  text: string;
+  due_at: string;
+  inbox_id: string | null;
+  intent_id: string | null;
+}
+
+/** Tap target: the intention, else the inbox item, else the inbox list. */
+function reminderPath(r: ReminderRow): string {
+  if (r.intent_id) return intentionDetailPath(r.intent_id);
+  if (r.inbox_id) return inboxDetailPath(r.inbox_id);
+  return viewToPath("inbox");
+}
+
 interface SubRow {
   id: string;
   user_id: string;
@@ -165,7 +191,7 @@ Deno.serve(async (req) => {
   );
 
   // ── 2. Which steps have come due? ────────────────────────────────────────
-  const { data: dueSteps, error: stepsError } = await db
+  const { data: dueStepsData, error: stepsError } = await db
     .from(STEPS_TABLE)
     .select("id, execution_id, user_id, seq, text, due_at")
     .eq("state", "scheduled")
@@ -177,10 +203,27 @@ Deno.serve(async (req) => {
     console.error("[dispatch] Could not read due steps:", stepsError);
     return json({ error: `Could not read due steps: ${stepsError.message}` }, 500);
   }
-  if (!dueSteps || dueSteps.length === 0) {
+  const dueSteps = (dueStepsData ?? []) as StepRow[];
+
+  const { data: dueRemindersData, error: remindersError } = await db
+    .from(REMINDERS_TABLE)
+    .select("id, user_id, text, due_at, inbox_id, intent_id")
+    .eq("state", "scheduled")
+    .lte("due_at", nowIso)
+    .order("due_at", { ascending: true })
+    .limit(MAX_REMINDERS_PER_RUN);
+
+  if (remindersError) {
+    console.error("[dispatch] Could not read due reminders:", remindersError);
+    return json({ error: `Could not read due reminders: ${remindersError.message}` }, 500);
+  }
+  const reminders = (dueRemindersData ?? []) as ReminderRow[];
+
+  if (dueSteps.length === 0 && reminders.length === 0) {
     return json({
       checked_at: nowIso,
       due: 0,
+      reminders_due: 0,
       sent: 0,
       failed: 0,
       vapid_public_key: signingKeyFingerprint,
@@ -197,27 +240,31 @@ Deno.serve(async (req) => {
   // This is what makes PAUSING work with no state on the step rows at all — a
   // paused execution simply stops matching here, and its steps sit untouched
   // until it is resumed.
-  const executionIds = [...new Set((dueSteps as StepRow[]).map((s) => s.execution_id))];
-  const { data: activeExecutions, error: execError } = await db
-    .from(EXECUTIONS_TABLE)
-    .select("id")
-    .in("id", executionIds)
-    .eq("status", "active");
+  let steps: StepRow[] = [];
+  if (dueSteps.length > 0) {
+    const executionIds = [...new Set(dueSteps.map((s) => s.execution_id))];
+    const { data: activeExecutions, error: execError } = await db
+      .from(EXECUTIONS_TABLE)
+      .select("id")
+      .in("id", executionIds)
+      .eq("status", "active");
 
-  if (execError) {
-    console.error("[dispatch] Could not read executions:", execError);
-    return json({ error: `Could not read executions: ${execError.message}` }, 500);
+    if (execError) {
+      console.error("[dispatch] Could not read executions:", execError);
+      return json({ error: `Could not read executions: ${execError.message}` }, 500);
+    }
+
+    const activeIds = new Set((activeExecutions ?? []).map((e: { id: string }) => e.id));
+    steps = dueSteps.filter((s) => activeIds.has(s.execution_id));
   }
-
-  const activeIds = new Set((activeExecutions ?? []).map((e: { id: string }) => e.id));
-  const steps = (dueSteps as StepRow[]).filter((s) => activeIds.has(s.execution_id));
   const skippedInactive = dueSteps.length - steps.length;
 
-  if (steps.length === 0) {
+  if (steps.length === 0 && reminders.length === 0) {
     return json({
       checked_at: nowIso,
       due: dueSteps.length,
       skipped_inactive: skippedInactive,
+      reminders_due: 0,
       sent: 0,
       failed: 0,
       results: [],
@@ -226,10 +273,10 @@ Deno.serve(async (req) => {
 
   // ── 4. Subscriptions, by user. ───────────────────────────────────────────
   //
-  // Keyed on the step's OWN user_id — the reason that column is denormalised
+  // Keyed on each row's OWN user_id — the reason that column is denormalised
   // onto the step. Under the service role nothing else constrains this query,
   // so this filter is the whole of the authorisation.
-  const userIds = [...new Set(steps.map((s) => s.user_id))];
+  const userIds = [...new Set([...steps, ...reminders].map((r) => r.user_id))];
   const { data: subsData, error: subsError } = await db
     .from(SUBS_TABLE)
     .select("id, user_id, endpoint, p256dh, auth_key")
@@ -248,6 +295,42 @@ Deno.serve(async (req) => {
   }
 
   // ── 5. Send. ─────────────────────────────────────────────────────────────
+  //
+  // One payload to every device the user has; dead endpoints are removed.
+  const sendToAll = (subs: SubRow[], payload: string) =>
+    Promise.all(
+      subs.map(async (sub) => {
+        const tail = `…${sub.endpoint.slice(-20)}`;
+        try {
+          const res = await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_key } },
+            payload,
+            PUSH_SEND_OPTIONS,
+          );
+          return { endpoint_tail: tail, status: res?.statusCode ?? 201, ok: true, removed: false };
+        } catch (err) {
+          const e = err as { statusCode?: number; body?: string; message?: string };
+          const status = typeof e.statusCode === "number" ? e.statusCode : null;
+
+          let removed = false;
+          if (status !== null && DEAD_STATUS.has(status)) {
+            const { error: delError } = await db.from(SUBS_TABLE).delete().eq("id", sub.id);
+            if (!delError) removed = true;
+            else console.error(`[dispatch] Could not delete dead subscription ${sub.id}:`, delError);
+          }
+
+          return {
+            endpoint_tail: tail,
+            status,
+            ok: false,
+            removed,
+            error: e.message ?? String(err),
+            ...(e.body ? { service_body: String(e.body).slice(0, 200) } : {}),
+          };
+        }
+      }),
+    );
+
   const results = [];
 
   for (const step of steps) {
@@ -295,38 +378,7 @@ Deno.serve(async (req) => {
       url,
     });
 
-    const endpoints = await Promise.all(
-      subs.map(async (sub) => {
-        const tail = `…${sub.endpoint.slice(-20)}`;
-        try {
-          const res = await webpush.sendNotification(
-            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_key } },
-            payload,
-            PUSH_SEND_OPTIONS,
-          );
-          return { endpoint_tail: tail, status: res?.statusCode ?? 201, ok: true, removed: false };
-        } catch (err) {
-          const e = err as { statusCode?: number; body?: string; message?: string };
-          const status = typeof e.statusCode === "number" ? e.statusCode : null;
-
-          let removed = false;
-          if (status !== null && DEAD_STATUS.has(status)) {
-            const { error: delError } = await db.from(SUBS_TABLE).delete().eq("id", sub.id);
-            if (!delError) removed = true;
-            else console.error(`[dispatch] Could not delete dead subscription ${sub.id}:`, delError);
-          }
-
-          return {
-            endpoint_tail: tail,
-            status,
-            ok: false,
-            removed,
-            error: e.message ?? String(err),
-            ...(e.body ? { service_body: String(e.body).slice(0, 200) } : {}),
-          };
-        }
-      }),
-    );
+    const endpoints = await sendToAll(subs, payload);
 
     // At least one endpoint succeeding counts as sent. Cross-device
     // deduplication is out of scope; what matters is that the step is not
@@ -358,7 +410,65 @@ Deno.serve(async (req) => {
     });
   }
 
+  // ── 6. Reminders. Same send and same guards as steps, but no chain: ──────
+  // no_subscription and sent are both simply out of the queue.
+  const reminderResults = [];
+
+  for (const reminder of reminders) {
+    const subs = subsByUser.get(reminder.user_id) ?? [];
+    if (subs.length === 0) {
+      const { error: markError } = await db
+        .from(REMINDERS_TABLE)
+        .update({ state: NO_SUBSCRIPTION })
+        .eq("id", reminder.id)
+        .eq("state", "scheduled");
+      if (markError) {
+        console.error(`[dispatch] Could not mark reminder ${reminder.id} ${NO_SUBSCRIPTION}:`, markError);
+      }
+      reminderResults.push({
+        reminder_id: reminder.id,
+        sent: false,
+        state: NO_SUBSCRIPTION,
+        reason: "no push subscriptions for this user",
+        endpoints: [],
+      });
+      continue;
+    }
+
+    const url = reminderPath(reminder);
+    const payload = JSON.stringify({
+      title: "Alfred reminder",
+      body: reminder.text,
+      tag: `alfred-reminder-${reminder.id}`,
+      url,
+    });
+
+    const endpoints = await sendToAll(subs, payload);
+    const anySucceeded = endpoints.some((e) => e.ok);
+
+    if (anySucceeded) {
+      const { error: markError } = await db
+        .from(REMINDERS_TABLE)
+        .update({ state: "sent", sent_at: new Date().toISOString() })
+        .eq("id", reminder.id)
+        // Only from scheduled: a cancel or reschedule since the read wins.
+        .eq("state", "scheduled");
+      if (markError) {
+        console.error(`[dispatch] Sent reminder ${reminder.id} but could not mark it sent:`, markError);
+      }
+    }
+
+    reminderResults.push({
+      reminder_id: reminder.id,
+      text: reminder.text,
+      url,
+      sent: anySucceeded,
+      endpoints,
+    });
+  }
+
   const sent = results.filter((r) => r.sent).length;
+  const remindersSent = reminderResults.filter((r) => r.sent).length;
   const summary = {
     checked_at: nowIso,
     // The key this run SIGNED with. Compare against the client's subscribe
@@ -371,11 +481,18 @@ Deno.serve(async (req) => {
     sent,
     failed: steps.length - sent,
     results,
+    reminders_due: reminders.length,
+    reminders_sent: remindersSent,
+    reminders_failed: reminders.length - remindersSent,
+    reminder_results: reminderResults,
   };
 
   // Logged as well as returned: pg_net stores the response body, but the
   // function's own logs are where this is read when the response is not.
-  console.log(`[dispatch] due=${dueSteps.length} inactive=${skippedInactive} sent=${sent} failed=${steps.length - sent}`);
+  console.log(
+    `[dispatch] due=${dueSteps.length} inactive=${skippedInactive} sent=${sent} failed=${steps.length - sent} ` +
+      `reminders_due=${reminders.length} reminders_sent=${remindersSent}`,
+  );
 
   return json(summary);
 });

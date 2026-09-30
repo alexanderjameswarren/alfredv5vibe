@@ -79,6 +79,8 @@ export function pathToView(pathname) {
   if (executionIdFromPath(pathname)) return "execution-detail";
   // /inbox/detail/:id is the same view as the bare /inbox/detail.
   if (inboxIdFromPath(pathname)) return "inbox-detail";
+  // /intentions/detail/:id is the same view as the bare /intentions/detail.
+  if (intentionIdFromPath(pathname)) return "intention-detail";
   // /memories/new/context/:id is the same view as the bare /memories/new.
   const add = addRouteFromPath(pathname);
   if (add) return add.view;
@@ -105,6 +107,7 @@ export function isKnownPath(pathname) {
   // Same treatment for /inbox/detail/:id: a malformed one has no extractable id
   // and is redirected to home rather than opening an empty triage form.
   if (inboxIdFromPath(pathname)) return true;
+  if (intentionIdFromPath(pathname)) return true;
   // A malformed add path — a bad kind, a missing id, an extra segment — returns
   // null here and is redirected to home like any other nonsense path, rather
   // than half-serving an add form with no target.
@@ -139,6 +142,7 @@ export function parentPath(pathname) {
   // And an id-bearing inbox path falls back to the inbox LIST, for the same
   // reason: /inbox/detail is not renderable cold either.
   if (inboxIdFromPath(path)) return VIEW_TO_PATH.inbox;
+  if (intentionIdFromPath(path)) return VIEW_TO_PATH.intentions;
   const cut = path.lastIndexOf("/");
   if (cut <= 0) return DEFAULT_PATH;
   return path.slice(0, cut);
@@ -205,6 +209,25 @@ export function inboxIdFromPath(pathname) {
   const path = normalizePath(pathname);
   if (!path.startsWith(INBOX_DETAIL_PREFIX)) return null;
   const id = path.slice(INBOX_DETAIL_PREFIX.length);
+  if (!id || id.includes("/")) return null;
+  return decodeURIComponent(id);
+}
+
+// --- Intention detail sub-route (Reminders) ----------------------------------
+//
+// A reminder linked to an intention opens it when tapped, so the intention needs
+// an address. Same shape as the inbox route above.
+
+const INTENTION_DETAIL_PREFIX = `${VIEW_TO_PATH["intention-detail"]}/`;
+
+export function intentionDetailPath(intentId) {
+  return `${INTENTION_DETAIL_PREFIX}${encodeURIComponent(intentId)}`;
+}
+
+export function intentionIdFromPath(pathname) {
+  const path = normalizePath(pathname);
+  if (!path.startsWith(INTENTION_DETAIL_PREFIX)) return null;
+  const id = path.slice(INTENTION_DETAIL_PREFIX.length);
   if (!id || id.includes("/")) return null;
   return decodeURIComponent(id);
 }
