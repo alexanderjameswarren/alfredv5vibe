@@ -81,12 +81,67 @@ by lookup, not deduction. See `docs/dj-release-repair-review.md`.
 
 ---
 
+## 3. The five *Smokin' At The Half Note* tracks · decided 2026-09-29, migration 085
+
+| | |
+|---|---|
+| stored | `Wynton Kelly Trio, Wes Montgomery` |
+| submitted | `Wes Montgomery, Wynton Kelly Trio` |
+
+| video_id | title | | video_id | title |
+|---|---|---|---|---|
+| `Z6Piiu3d3sE` | What's New | | `FsnO8hmlxmM` | Four on Six |
+| `D12_468jvNk` | Unit 7 | | `I0V2ZTwnuK8` | If You Could See Me Now |
+| `BCKjFxn0xKY` | No Blues | | | |
+
+**Decision: leave it. Do NOT add an alias-map entry.**
+
+**The same two artists, with the lead credit reversed.** Both sides derive their primary
+through `primaryArtistOfDisplay`, which cuts at the first comma, so one side reads
+`wynton kelly trio` and the other `wes montgomery`. The two bylines genuinely differ — the
+detector is right to report it, and this is **not** a false flag.
+
+**Why the alias map is the wrong tool.** The map is for **one act spelled two ways**. Wes
+Montgomery and the Wynton Kelly Trio are two acts, and an entry either way would fold one
+artist's work into the other's — the `AbbzAPXvNZ8` case above, word for word: a crediting
+difference, not a vocabulary variant.
+
+**Consequence, accepted knowingly:** each of these raises the disagreement whenever played,
+for as long as the rows stand. `dj_tracks` is insert-only, so the incoming value is discarded
+rather than applied (spec §11.13) and they cannot fix themselves.
+
+⚠️ **One thing this decision does NOT cover, and it is open.** The five rows are keyed
+`wynton kelly trio|<title>` — verified 2026-09-29, **split at the first artist**, so the
+unsplit-key defect that `record_dj_album` used to cause does not apply to them. But the poll
+derives its primary as `wes montgomery`, so **another upload of one of these recordings would
+be keyed `wes montgomery|<title>` and would not group with the row stored here** — one
+recording, two canonical groups, from the credit order alone. `match_key` is frozen at write
+(spec §4.1.2). A decision row silences a notification; it repairs no identity.
+
+🛑 **Nor does it make the detector order-insensitive.** Comparing the normalised *set* of
+artists on each side, and suppressing a permutation, would be a fix rather than a suppression
+— but it would also silence the case where a changed lead credit is the news. That is its own
+decision, not a side effect of recording these five.
+
+---
+
 ## What is NOT on this list
 
 **Collaborations no longer fire at all.** `Coldplay, BTS` vs `Coldplay` and five others used
 to appear here; the detector was comparing the joined display string against a single
-submitted artist. It now compares **normalised primary artists, both read from `match_key`**
-(spec §11.7). If a plain collaboration shows up again, the detector has regressed.
+submitted artist (spec §11.7). It now compares **normalised primary artists derived the same
+way on both sides — `primaryArtistOfDisplay` on each display byline, which cuts at the first
+comma, alias-translates and normalises.** Identical inputs are unflaggable by construction. If
+a plain collaboration shows up again, the detector has regressed.
+
+⚠️ **`match_key` is NOT the basis, and reading it was itself the bug** — amended 2026-09-25,
+spec §4.1.4. The detector used to take both primaries out of a stored `match_key`, but the
+call sites that write those keys disagree about what `artists[]` is: `record_dj_album` passed
+the whole byline as one element while the poll passes it split. So a stored key carried
+whichever tokenisation its writer happened to use, and run `91151897` reported **19 pairs of
+identical bylines against themselves** — `Clifford Brown, Max Roach` vs
+`Clifford Brown, Max Roach`. If a future edit reaches for `match_key` again, that is the
+regression to expect.
 
 ## Adding to this page
 

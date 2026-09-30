@@ -241,11 +241,28 @@ Wednesday differ — no code change, no deploy, nothing recording why. That is �
 worst axis: table state as a silent input to identity, leaving no trace. A constant is in git
 and versioned with its reader. **Changing it is a migration (§4.1.2), not a deploy.**
 
-**Direction: canonicalise to the POLL's vocabulary**, even though the export is the larger
-population. **"Which source keeps writing" beats "larger population":** Takeout is a one-time
-import, the poll runs forever. Translating toward the poll applies the map once at import and
-never again, and leaves the 17 already-stored rows **already correct — no UPDATE needed**,
-so the insert-only guarantee is never bent.
+**Direction — AMENDED 2026-09-30, and this is the rule: point toward the STORED spelling when
+existing rows already use it; otherwise toward the spelling the POLL sends.**
+
+The test is ordered, and the first clause decides most cases. **What is already stored wins
+because `match_key` is frozen at write (§4.1.2):** translating away from it re-keys every row
+that carries it, plus everything that depends on the artist string. When nothing is stored
+either way yet, nothing is frozen and there is nothing to preserve, so the second clause
+applies — **"which source keeps writing" beats "larger population"**, because Takeout is a
+one-time import and the poll runs forever, and translating toward the poll applies the map
+once at import and never again.
+
+**The original rule was the second clause alone**, and it was written when the only two
+entries were Takeout→poll. Every entry added since has followed the first clause: **Dave
+Brubeck, Art Blakey and Cannonball Adderley all point toward the stored spelling**, each
+recording in its own `why` that the poll is the side sending the other form and that mapping
+this way needs no backfill. Three entries in a row are not three exceptions — the rule was
+incomplete, and this is what it always did in practice.
+
+⚠️ **The two clauses can point opposite ways on the same shape of name, and that is expected,
+not a defect.** `Eddie Higgins → Eddie Higgins Trio` was decided under the second clause with
+nothing stored; `Ahmad Jamal Trio → Ahmad Jamal` under the first, with rows already stored
+bare. §14.7 stands: no automatic Trio rule can work, and a test pins both directions.
 
 ---
 
@@ -282,10 +299,18 @@ means a **backfill**, which is what the rule was designed to avoid. The choice i
 | follow the rule (`bare → The`) | backfill 26 rows' `artist` **and** `match_key`, plus every artist-string dependent (`dj_artist_tags`, playlist membership) |
 | the shipped entry (`The → bare`) | a permanent per-poll `Map` lookup, **and a map that is no longer uniformly Takeout→poll** |
 
-**OPEN DECISION for Alex.** The shipped entry is the cheaper one and needs no backfill, but it
-makes the map bidirectionally inconsistent — which is why two invariants in `dj-normalise.ts` had
-to be falsified to accommodate it. If uniformity matters more than the backfill, reverse it.
-**Nothing downstream is wrong either way today**; both spellings converge on one `match_key`.
+**~~OPEN DECISION for Alex.~~ CLOSED 2026-09-30 — the shipped entry stands, and the rule was
+amended to match it.** The choice was: keep `The → bare` and accept a map that is no longer
+uniformly Takeout→poll, or follow the rule literally and backfill 26 rows. **Decided: keep the
+shipped entry.** The rule now reads "toward the stored spelling when existing rows already use
+it; otherwise toward the poll" (see the amended Direction above), so this entry is an
+**application of the rule rather than an exception to it**, and the same is true of Art Blakey
+and Cannonball Adderley.
+
+What was traded away is the uniformity: the map's `from` is not always the Takeout form, which
+is why two invariants in `dj-normalise.ts` had to be falsified. That cost is accepted and
+recorded. **Nothing downstream is wrong either way today**; both spellings converge on one
+`match_key`.
 
 ⚠️ **APPLIED LITERALLY THE RULE GIVES THE WRONG ANSWER HERE, for its own stated reason.** Its
 justification is that translating toward the poll *"leaves the already-stored rows already
