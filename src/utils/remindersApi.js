@@ -44,6 +44,11 @@ export function indexReminders(rows) {
   return { byInbox, byIntent };
 }
 
+/** An item has no reminder link of its own: its reminder stays on its source capture. */
+export function itemReminderDueAt(item, index) {
+  return (item?.sourceInboxId && index?.byInbox?.[item.sourceInboxId]) || null;
+}
+
 /** Processing into an intention: every reminder on the capture follows it. */
 export async function moveRemindersToIntention(inboxId, intentId) {
   const { data, error } = await supabase

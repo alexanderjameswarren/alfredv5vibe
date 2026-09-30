@@ -21,6 +21,7 @@ Spec: [technical-spec-reminders.md](technical-spec-reminders.md). Thread: `rem-j
   - [x] 🔔 time on inbox cards and Intentions-list cards, from one query per list, refreshed on list views and after process, discard, Undo and Put back
   - [x] Browser: the bells on inbox and intention cards, the bell moving on processing, discard with Undo and Put back. The bells stay on the list cards only, by decision.
   - [x] An archived capture on `/inbox/detail/:id` opens what it became, found by sourceInboxId. The item comes first, then the intention (directly, or through the event it created). With neither, it falls back to the Inbox list. Uses `replace`, so Back does not loop.
+  - [x] Items (memories): the detail page and the Memories-list card show the reminder on the item's source capture (`inbox_id = source_inbox_id`). This reuses the same one-query index, refreshed on the Memories view and after processing.
   - [ ] Phone test after deploy
 
 ## Notes
@@ -29,4 +30,5 @@ Spec: [technical-spec-reminders.md](technical-spec-reminders.md). Thread: `rem-j
 - Android must have Chrome's battery setting on Unrestricted, or pushes wait until the app is opened. Urgency high alone is not enough.
 - The claims guard gave two false positives in this thread. It blocked a read-only `sed -n` plus `grep -i` as an in-place edit, and a `>` redirect to `$TEMP` as a write to `supabase/functions/mcp`.
 - `supabase/functions/_shared/sam-drill-format.schema.json` and `src/sam/lib/sam-drill-format.schema.json` are gitignored and were not copied into the worktree. Without them, `functions deploy mcp` fails to bundle, and the app build and 11 SAM test suites fail. Both were copied in from the main checkout on 2026-09-30. gitnewtree's local-file list needs both files. A file the deploy or the build needs probably should not be gitignored at all.
+- `react-scripts build` reported a stale `no-undef` on Alfred.jsx, one line above the real use. ESLint run directly on the changed files passes with 0 warnings, and the build compiles with `DISABLE_ESLINT_PLUGIN=true`. The build's ESLint cache under node_modules/.cache is stale. I left it untouched.
 - intent_id has no FK. `public.create_reminder` (084) refuses an intention the caller cannot see, with the error "intention <id> not found". Intentions in shared contexts are allowed, by decision. A test pins the wording.

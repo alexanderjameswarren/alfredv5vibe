@@ -24,6 +24,7 @@ import {
   indexReminders,
   formatReminderShort,
   archivedCaptureTarget,
+  itemReminderDueAt,
 } from "./utils/remindersApi";
 import { useExecutionRoute } from "./useExecutionRoute";
 import InboxDetailView from "./InboxDetailView";
@@ -1731,7 +1732,9 @@ export default function Alfred() {
 
   // Reminders are also created by Claude, outside this app, so a list view re-reads them.
   useEffect(() => {
-    if (dataLoaded && (view === "inbox" || view === "intentions")) refreshReminderIndex();
+    if (dataLoaded && (view === "inbox" || view === "intentions" || view === "memories")) {
+      refreshReminderIndex();
+    }
   }, [dataLoaded, view, refreshReminderIndex]);
 
   // --- Cold-load redirects (Step 9, docs/technical-spec-navigation-urls.md) --
@@ -3446,6 +3449,8 @@ export default function Alfred() {
       setAllInboxItems((prev) =>
         prev.map((i) => (i.id === inboxItemId ? disposed || processed : i)),
       );
+      // An item filed from this capture shows the capture's reminder on its card.
+      refreshReminderIndex();
     });
   }
 
@@ -6658,6 +6663,8 @@ export default function Alfred() {
                     contexts={contexts}
                     onUpdate={updateItem}
                     onViewDetail={(id) => viewItemDetail(id, "memories")}
+                    // An item has no reminder link: its reminder stays on the capture it came from.
+                    reminderLabel={reminderLabelFor(itemReminderDueAt(item, reminderIndex))}
                     executions={allLiveExecutions.filter((ex) => ex.itemIds?.includes(item.id))}
                     intents={intents}
                     getIntentDisplay={getIntentDisplay}
@@ -8920,6 +8927,9 @@ function ItemDetailView({
 
         <DetailMeta contextName={contextName} tags={item.tags} />
 
+        {/* Reminders stay on the capture the item was filed from. */}
+        {item.sourceInboxId && <PendingReminder inboxId={item.sourceInboxId} />}
+
         {/* Record actions, in the spec's order:
             Start Now · Clone · Edit · Add to Collection · Archive.
 
@@ -9794,6 +9804,9 @@ function ItemCard({
   // list it must stay false: sibling cards can be open at once, and several
   // footers each pinned to the same strip of viewport is nonsense.
   stickyFooter = false,
+  // Soonest pending reminder on the capture this item came from ("7:17 AM").
+  // Memories list only.
+  reminderLabel = null,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(item.name);
@@ -10413,6 +10426,11 @@ function ItemCard({
         <ObjectIcon type="item" className="w-4 h-4 text-primary" align="first-line" />
         <span className="min-w-0">{item.name}</span>
       </p>
+      {reminderLabel && (
+        <p className="text-xs text-muted-foreground mb-2" title="Pending reminder (Pacific time)">
+          🔔 {reminderLabel}
+        </p>
+      )}
       {item.tags && item.tags.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-2">
           {item.tags.slice(0, 3).map((tag) => (
