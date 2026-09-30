@@ -283,11 +283,13 @@ test("the tool count is 72 after the job-search tools", () => {
   // so the count is now asserted against a NAMED list rather than a bare
   // number. A silent +1 reaches the manifest; an unnamed one now cannot.
   const EXPECTED_ADDED_2026_09_23 = ["get_recent_clips", "get_clip_slices", "archive_inbox_item"];
-  for (const name of EXPECTED_ADDED_2026_09_23) {
+  // 2026-09-30, +3 for standalone reminders, all additions, ONE deploy.
+  const EXPECTED_ADDED_2026_09_30 = ["create_reminder", "get_reminders", "update_reminder"];
+  for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 75,
-    `expected 75 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 78,
+    `expected 78 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -311,6 +313,19 @@ test("the job-search surface is registered, and its schemas match its handlers",
     const advertised = Object.keys(t.cfg.inputSchema ?? {}).sort();
     assert.deepEqual(advertised, [...read].sort(),
       `${name}: schema advertises [${advertised}] but the handler reads [${[...read].sort()}]`);
+  }
+});
+
+test("reminder schemas advertise exactly the args their handlers read", () => {
+  const src = readFileSync(join(TOOLS, "reminders.ts"), "utf-8");
+  const blocks = src.split("defineTool({").slice(1);
+  assert.equal(blocks.length, 3, `expected 3 reminder tools, found ${blocks.length}`);
+  for (const b of blocks) {
+    const name = /name:\s*"([^"]+)"/.exec(b)[1];
+    const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
   }
 });
 
