@@ -355,72 +355,61 @@ nothing. The question comes first, in full, then the recommendation.
   Keep it. It's the only thing that will catch a silent behaviour change when
   this code is refactored later."
 
-### Rule 3: testing that requires a tool call becomes a copy-paste prompt
+### Rule 3: every test step is either one app action or one paste-ready block
 
-He cannot run a tool by being told its name and arguments. Telling him to "call
-`create_ken_area` with name 'Music Theory' and confirm you get an id back" is
-not a testing instruction — it is a description of a test he has no way to
-perform.
+A test step is one of two things, never both, never several:
 
-When a test requires an MCP tool call, produce instead a fenced block he can
-paste into a **new thread**, then paste that thread's reply back into this one.
+- **An app action** he does himself: open this screen, tap this button, look
+  for this text. One action per step.
+- **A paste-ready block**: a fenced code block containing the exact text he
+  pastes into a new Claude thread. Never a description of what to ask
+  ("Ask Claude for a reminder 10 minutes out"), never a quoted sentence inside
+  a numbered list.
 
-**The new thread is mandatory, not a convenience.** A session loads its tool
-manifest once, when it starts, and that list is frozen for the life of the
-session. So a tool that was just deployed is invisible to every session that was
-already running — including the CLI session that deployed it, and including the
-current web chat thread. Neither can test it. Only a session started *after* the
-deploy has the new tool in its manifest.
+**One block per paste.** If he has to paste, wait for a reply, then paste
+again, each paste is its own numbered step with its own fenced block. Never
+put two prompts in one block and never put a prompt inside prose.
 
-Two consequences, both non-negotiable:
+**Expected results go after the block, as a separate short line.** Never
+mixed into the block, where he'd paste them into Claude.
 
-- Never fold tool-call verification into the CLI prompt itself on the theory
-  that the CLI can check its own work. For a newly created tool it cannot.
-- Never attempt the tool call yourself in the current thread to "just check" —
-  it will fail for the same reason, and the failure says nothing about whether
-  the deploy worked.
+**Split sequences.** If a sentence in a test contains "then", "and ask",
+"press", or more than one verb aimed at different places (the app and
+Claude), it is several steps. Split it until each step is one action or one
+paste.
 
-The fresh thread has none of this conversation's context, so the prompt must
-carry everything it needs, and must specify exactly what to report back and in
-what shape — so the reply is pasteable without being read.
+**Each block tells the fresh thread what to report back**, so he can paste
+the reply here without reading it.
 
+The new thread is mandatory for newly deployed tools: a session loads its
+tool list once at startup, so only a thread started after the deploy can see
+a new tool. Never fold tool-call checks into the CLI prompt, and never try
+the call in the current thread.
+
+Example, from a bad instruction ("Make another reminder, discard its item,
+and ask Claude for get_reminders with state all: it should be cancelled.
+Press Undo: it's scheduled again."):
+
+1. Paste into a new thread:
 ```
-Run these tool calls in order and report the raw results, nothing else.
-
-1. create_ken_area with name "Music Theory"
-2. get_ken_areas
-
-Report: the id returned by step 1, and whether "Music Theory" appears in
-the step 2 results. No commentary, no interpretation.
+   Use create_reminder to remind me "Test R3: discard" 30 minutes from now.
+   Report only the reminder id and the inbox item id.
 ```
-
-Then tell him: paste this into a new thread, paste the reply back here.
-
-Tests he can genuinely run himself — open the app, click this, look at that —
-stay as ordinary numbered steps.
-
-**Anything he types goes in a PowerShell block, and the block says which
-terminal.** He is on Windows, in PowerShell, with several VS Code windows open.
-A command given as prose, or written for bash, is a command he has to translate
-before he can run it.
-
-```powershell
-# in the claims-wq7 worktree terminal
-cd C:\Users\Alex\projects\alfred-v5\.claude\worktrees\claims-wq7
-npm test
+2. In the app, open the inbox item "Test R3: discard" and discard it.
+3. Paste into the same thread:
 ```
-
-- PowerShell 5.1: no `&&`, no ternary, no `??`. Use `;` or separate lines.
-- Backslash paths, and full paths — never "cd to the worktree".
-- `Remove-Item -Recurse -Force`, not `rm -rf`. `Get-Content`, not `cat`.
-- One block per terminal, with a comment naming it.
-
-**Never tell him to type a shell command into a Claude session.** A CLI session
-is a chat window; a command pasted there is a request, not an execution, and the
-thread may well refuse it under the claims rules. Commands go in a terminal. If a
-step genuinely needs the thread to run something, it belongs in the CLI prompt,
-not in the testing steps.
-
+   Call get_reminders with state "all". Report the state and cancel reason
+   of "Test R3: discard", verbatim.
+```
+   Expected: state cancelled, reason inbox_discarded.
+4. In the app, tap Undo on the discard.
+5. Paste into the same thread:
+```
+   Call get_reminders with state "all" again. Report the state of
+   "Test R3: discard", verbatim.
+```
+   Expected: state scheduled, and the item is back in the inbox.
+   
 ### Rule 4: files always get full paths
 
 Any instruction touching a file names the file completely. Never "run the SQL",
