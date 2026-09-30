@@ -11,6 +11,8 @@ import {
   executionIdFromPath,
   inboxDetailPath,
   inboxIdFromPath,
+  intentionDetailPath,
+  intentionIdFromPath,
   addPath,
   addRouteFromPath,
   isSamStatsPath,
@@ -355,6 +357,37 @@ describe("inbox detail sub-route (Alfred Clipboard, Step 17)", () => {
     // /inbox/detail is unrenderable cold and would redirect again.
     expect(parentPath("/inbox/detail/abc")).toBe("/inbox");
     expect(isKnownPath(parentPath("/inbox/detail/abc"))).toBe(true);
+  });
+});
+
+describe("intention detail sub-route (Reminders)", () => {
+  it("round-trips an intention id", () => {
+    expect(intentionIdFromPath(intentionDetailPath("m7q2x1a9k3f8d0"))).toBe("m7q2x1a9k3f8d0");
+    expect(intentionDetailPath("a b")).toBe("/intentions/detail/a%20b");
+  });
+
+  it("resolves both forms to the intention-detail view", () => {
+    expect(pathToView("/intentions/detail/abc")).toBe("intention-detail");
+    expect(pathToView("/intentions/detail")).toBe("intention-detail");
+    expect(viewToPath("intention-detail")).toBe("/intentions/detail");
+  });
+
+  it("leaves the list and the add page alone", () => {
+    expect(pathToView("/intentions")).toBe("intentions");
+    expect(intentionIdFromPath("/intentions")).toBeNull();
+    expect(intentionIdFromPath("/intentions/new/item/x")).toBeNull();
+  });
+
+  it("degrades to no-id on a malformed path", () => {
+    expect(intentionIdFromPath("/intentions/detail")).toBeNull();
+    expect(intentionIdFromPath("/intentions/detail/")).toBeNull();
+    expect(intentionIdFromPath("/intentions/detail/a/b")).toBeNull();
+    expect(isKnownPath("/intentions/detail/a/b")).toBe(false);
+  });
+
+  it("is known and falls back to the intentions list", () => {
+    expect(isKnownPath("/intentions/detail/abc")).toBe(true);
+    expect(parentPath("/intentions/detail/abc")).toBe("/intentions");
   });
 });
 
