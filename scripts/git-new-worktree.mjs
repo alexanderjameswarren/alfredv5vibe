@@ -292,6 +292,7 @@ function main() {
       ? `Copy    ${copying.length} file(s) named by .worktreeinclude:\n          ${copying.join("\n          ")}`
       : `Copy    nothing — .worktreeinclude matched no files.`,
   );
+  say(`Run     scripts/prebuild.js in it, for the generated schema files.`);
   say(`Open    a new VS Code window on it.`);
   if (install !== undefined) {
     say(install ? `Install dependencies (--install).` : `Skip    npm install (--no-install).`);
@@ -342,6 +343,31 @@ function main() {
     say(`\n  Later:  cd "${worktreePath.replace(/\//g, "\\")}" ; npm install`);
   }
   say("  tools/sam-tools and workshop/.venv have their own installs, if you need them.");
+
+  // --- generated files -------------------------------------------------------
+  // Both copies of sam-drill-format.schema.json are git-ignored and generated
+  // from the master at the repo root, so a fresh worktree has neither: eleven
+  // SAM test suites fail, `npm run build` fails, and a `supabase functions
+  // deploy mcp` from here fails to bundle. `prestart` and `prebuild` would make
+  // them, but nothing runs either of those before the first test.
+  //
+  // Run unconditionally, and AFTER any install: prebuild.js uses only node
+  // built-ins, so it works just as well in a worktree where install was
+  // skipped — which is exactly the worktree most likely to hit the problem.
+  heading("Generated files");
+  const pre = spawnSync("node", ["scripts/prebuild.js"], {
+    cwd: worktreePath,
+    stdio: "inherit",
+    shell: true,
+  });
+  if (pre.status === 0) {
+    say("  scripts/prebuild.js: wrote the two sam-drill-format.schema.json copies");
+    say("  and .env.production.local (which holds only the two build stamps).");
+  } else {
+    say("  scripts/prebuild.js FAILED. Until it runs, SAM tests, `npm run build`");
+    say("  and a function deploy from this worktree will all fail:");
+    say(`    cd "${winPath(worktreePath)}" ; node scripts/prebuild.js`);
+  }
 
   // --- open it ---------------------------------------------------------------
   const opened = spawnSync("code", ["-n", worktreePath], { stdio: "ignore", shell: true });

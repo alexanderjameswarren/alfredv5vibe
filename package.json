@@ -28,6 +28,13 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
+  "jestNote": "Why the jest block below exists, since CRA allows no comment key inside it: testMatch is given WITHOUT <rootDir>. CRA's default embeds it, and jest normalises the result with replacePathSepForGlob, which KEEPS a backslash that precedes a dot because it looks like a deliberate escape. A worktree lives under .claude/worktrees/<code>, so that separator survives into the glob, the pattern ends up meaning 'alfred-v5.claude', and npm test finds no tests at all in a worktree. roots stays <rootDir>/src, so these globs cannot reach node_modules.",
+  "jest": {
+    "testMatch": [
+      "**/src/**/__tests__/**/*.{js,jsx,ts,tsx}",
+      "**/src/**/*.{spec,test}.{js,jsx,ts,tsx}"
+    ]
+  },
   "eslintConfig": {
     "extends": [
       "react-app",
