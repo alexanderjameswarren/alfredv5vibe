@@ -27,6 +27,11 @@
 // for "redirects into the repo" would have missed it as well. The file was
 // clobbered by `mv`.
 //
+// That last point is why a redirect out of the repo is now allowed but `mv` is
+// still not. A redirection names its own destination and can be judged on it;
+// `mv` and its neighbours cannot, so they are judged on every repo path the
+// command mentions. Both rules live in claims-core's `writeCheck`.
+//
 // Claude Code's auto mode actively tells the model to prefer shell commands for
 // file changes, so this is the normal path, not an exotic one. Guarding Edit and
 // Write alone guards nothing.
@@ -55,17 +60,38 @@ import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import {
   ClaimsError,
+  claimsCommandApproval,
   fold,
   heldBy,
+  isChained,
   isExempt,
   readState,
-  repoPathsIn,
   resolveRepo,
   toRepoRelative,
+  writeCheck,
   writeIndicator,
 } from "../../scripts/lib/claims-core.mjs";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+/**
+ * Tools that run a shell command, and which shell's syntax that is.
+ *
+ * ⚠️ POWERSHELL WAS MISSING UNTIL 2026-09-30, AND THAT WAS A HOLE THROUGH THE
+ * WHOLE GUARD. This session has a `PowerShell` tool beside `Bash`, the hook
+ * matcher in .claude/settings.local.json did not list it, and this file only
+ * read a command when the tool was `Bash` — so every shell-write rule and the
+ * Supabase deploy gate were skipped by using the other one. Found by noticing
+ * that .clip/claims-guard.log held 2,355 decisions and not a single PowerShell
+ * call; confirmed by moving a file over an unclaimed path through it, unopposed.
+ *
+ * Adding a tool here is half the fix. The other half is the matcher: a tool the
+ * matcher does not name never reaches this script at all.
+ */
+const SHELL_TOOLS = new Map([
+  ["Bash", "bash"],
+  ["PowerShell", "powershell"],
+]);
 
 // `npx supabase functions deploy mcp` contains `supabase functions deploy`, so
 // substring matching on the whitespace-normalised command covers every spelling
@@ -137,6 +163,10 @@ function block(detail, message) {
  * is the one lever that reaches the permission layer directly rather than by
  * omission.
  *
+ * That cuts the other way too, and is why `claim` and `reserve` can now be
+ * allow-listed in .claude/settings.local.json without losing the db:deploy
+ * prompt: an "ask" from here overrides an allow rule.
+ *
  * The JSON goes to stdout with exit 0; stderr and exit 2 are the block path.
  */
 function ask(detail, reason) {
@@ -156,7 +186,11 @@ function ask(detail, reason) {
 function readStdin() {
   try {
     // fd 0 in one go: the payload is small and everything else here is sync.
-    return readFileSync(0, "utf8");
+    // The BOM strip is for hand-testing: PowerShell puts one in front of
+    // anything piped to a native command, and JSON.parse refuses it — so
+    // without this, every check Alex runs from his own terminal comes back
+    // "could not parse the hook payload" and proves nothing.
+    return readFileSync(0, "utf8").replace(/^﻿/, "");
   } catch {
     return "";
   }
@@ -178,12 +212,26 @@ function isDeploy(command) {
 const claimHint = (items) =>
   `  node scripts/claims.mjs claim ${items.join(" ")}`;
 
-// `claim`, `reserve` and `cleanup` are the commands Alex approves, and Claude
-// Code's permission prompt is how he approves them. Everything else about
-// claims.mjs is pre-approved in .claude/settings.local.json so a thread can
-// check and tidy up after itself without interrupting him.
-const APPROVAL_NEEDED = /claims\.mjs\s+(claim|reserve|cleanup)\b/;
-const CHAINED = /(?:&&|\|\||[;|]|\n)/;
+// The claims.mjs commands that change who owns what. Two things happen to these
+// and to nothing else: they must not be chained onto another command, and a
+// couple of them go in front of Alex. Which ones, and why, is in claims-core's
+// `claimsCommandApproval` — it reads the ITEMS, so claiming a file is silent
+// while claiming db:deploy is not.
+const CLAIMS_COMMAND = /claims\.mjs\s+(claim|reserve|cleanup)\b/;
+
+/** What to tell Alex the prompt is for. */
+const APPROVAL_REASONS = {
+  "claim db:deploy":
+    "Claiming db:deploy is the one claim that can lead to a Supabase deploy. " +
+    "Alex approves this one — see .claude/CLAUDE.md.",
+  "claims command it cannot read":
+    "This claims command builds its arguments with shell substitution, so the guard " +
+    "cannot tell whether db:deploy is among them. Write the items out in full.",
+};
+
+const approvalReason = (key) =>
+  APPROVAL_REASONS[key] ??
+  `${key} clears another thread's claims. Alex approves this one — see .claude/CLAUDE.md.`;
 
 // `cd <somewhere> && ` at the very start, with the path quoted or bare.
 const CD_PREFIX = /^\s*cd\s+(?:"([^"]+)"|'([^']+)'|([^\s&|;]+))\s*&&\s*/;
@@ -215,39 +263,36 @@ function stripOwnCd(command, root) {
 }
 
 /**
- * Refuse a claim that is chained onto another command.
+ * Refuse a chained claim, and ask about the two that still need asking about.
  *
- * Those permission rules are prefix matches, and it is not documented whether
- * Claude Code splits a compound command before matching them. If it does not,
- * `claims.mjs check x && claims.mjs claim x` would match the pre-approved
- * `check *` rule and claim without ever asking Alex — which is exactly the
- * failure this change is fixing, one layer down. Requiring the command to stand
- * alone removes the question: on its own it can only match a claim, reserve or
- * cleanup rule, and there are none.
+ * ⚠️ THE CHAINING RULE CARRIES MORE WEIGHT NOW, NOT LESS. Permission rules are
+ * prefix matches, and it is not documented whether Claude Code splits a compound
+ * command before matching them. If it does not, `claims.mjs check x &&
+ * claims.mjs claim y db:deploy` would match the pre-approved `check` rule and
+ * claim db:deploy without ever asking Alex. That mattered when every claim
+ * prompted; now that most of them do not, this is the only thing standing
+ * between a chained command and the one claim that can trigger a deploy. So it
+ * still refuses all three subcommands, chained, whether or not they would ask.
+ *
+ * Returns normally when the command is fine to run silently.
  */
-function checkApprovalBypass(command, root) {
-  const m = command.match(APPROVAL_NEEDED);
-  if (!m) return;
+function checkClaimsCommand(command, ctx) {
+  const bare = stripOwnCd(command, ctx.root);
 
-  command = stripOwnCd(command, root);
-
-  if (!CHAINED.test(command)) {
-    // Bare claim/reserve/cleanup: put it in front of Alex. See ask().
-    ask(
-      `ask: ${m[1]}`,
-      `${m[1]} changes who owns what. Alex approves these — see .claude/CLAUDE.md.`,
+  if (isChained(bare)) {
+    block(
+      "chained claim",
+      `Claims guard is blocking this command: it chains a claim onto other commands.\n\n` +
+        `claim, reserve and cleanup must be run on their own, as a single command with\n` +
+        `nothing before or after them. Chaining can hide one behind a permission rule that\n` +
+        `approved something else — including a claim on db:deploy, which Alex approves.\n\n` +
+        `Run the claim by itself — and per .claude/CLAUDE.md, tell him which file you need\n` +
+        `and why before you run it.`,
     );
   }
 
-  block(
-    "chained claim",
-    `Claims guard is blocking this command: it chains a claim onto other commands.\n\n` +
-      `claim, reserve and cleanup must be run on their own, as a single command with\n` +
-      `nothing before or after them. Alex approves them through Claude Code's permission\n` +
-      `prompt, and chaining can hide one behind a rule that approved something else.\n\n` +
-      `Run the claim by itself — and per .claude/CLAUDE.md, tell him which file you need\n` +
-      `and why before you run it.`,
-  );
+  const reason = claimsCommandApproval(bare, ctx.owner);
+  if (reason) ask(`ask: ${reason}`, approvalReason(reason));
 }
 
 function main() {
@@ -278,13 +323,16 @@ function main() {
   entry.cwd = payload?.cwd ?? process.cwd();
 
   const filePath = targetPath(toolName, input);
-  const command = toolName === "Bash" ? String(input.command ?? "") : "";
-  const needsApproval = command && APPROVAL_NEEDED.test(command);
+  const shell = SHELL_TOOLS.get(toolName) ?? null;
+  const command = shell ? String(input.command ?? "") : "";
+  const isClaimsCommand = command !== "" && CLAIMS_COMMAND.test(command);
 
-  const deploying = toolName === "Bash" && isDeploy(command);
-  const indicator = command ? writeIndicator(command) : null;
+  // The deploy gate reads the command text, so it covers `npx supabase functions
+  // deploy mcp` in either shell the moment the command is read at all.
+  const deploying = command !== "" && isDeploy(command);
+  const indicator = command ? writeIndicator(command, shell) : null;
 
-  if (!filePath && !deploying && !indicator && !needsApproval) allow("not a change");
+  if (!filePath && !deploying && !indicator && !isClaimsCommand) allow("not a change");
 
   // Hooks run from the session's directory, which in a worktree is the worktree
   // root — exactly what decides the owner.
@@ -308,8 +356,16 @@ function main() {
   }
 
   // After resolveRepo, because working out whether a `cd` prefix points at this
-  // thread's own checkout needs to know where that is.
-  if (needsApproval) checkApprovalBypass(command, ctx.root);
+  // thread's own checkout, and whether `cleanup` names this thread, both need to
+  // know which thread this is.
+  //
+  // Before the no-claims-file block below, and that ordering matters: claiming
+  // is how the claims file comes into existence, so a guard that refused every
+  // claim until a claims file existed could never be got out of.
+  if (isClaimsCommand) {
+    checkClaimsCommand(command, ctx);
+    if (!filePath && !deploying && !indicator) allow("claims command, no approval needed");
+  }
 
   if (!state.existed) {
     block(
@@ -339,15 +395,20 @@ function main() {
 
   // --- a shell command that writes ------------------------------------------
   if (indicator) {
-    const unclaimed = repoPathsIn(command, ctx.root).filter(
-      (rel) => !heldBy(state, rel, ctx.owner),
-    );
-    if (!unclaimed.length) allow(`shell write ok (${indicator})`);
+    // writeCheck is what decides HOW MUCH of the command counts. A plain
+    // redirection is judged on its destination alone, so writing to $TEMP is
+    // not a write to the repo; anything stronger is judged on every repo path
+    // the command names. See claims-core for why the two differ.
+    const write = writeCheck(command, ctx.root, shell);
+    if (!write) allow(`writes nothing in the repo (${indicator})`);
+
+    const unclaimed = write.paths.filter((rel) => !heldBy(state, rel, ctx.owner));
+    if (!unclaimed.length) allow(`shell write ok (${write.indicator})`);
     block(
       `shell write: ${unclaimed.join(", ")}`,
       `Claims guard is blocking this command: it can change repo files ${ctx.owner}\n` +
         `has not claimed.\n\n` +
-        `  writes via: ${indicator}\n` +
+        `  writes via: ${write.indicator}\n` +
         `  unclaimed:  ${unclaimed.join("\n              ")}\n\n` +
         `STOP. Do not retry this in another form.\n\n` +
         `File changes must go through the Edit and Write tools, not the shell — that is\n` +

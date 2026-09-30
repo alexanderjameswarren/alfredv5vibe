@@ -8,6 +8,8 @@
       "Bash(node scripts/claims.mjs status:*)",
       "Bash(node scripts/claims.mjs check:*)",
       "Bash(node scripts/claims.mjs release:*)",
+      "Bash(node scripts/claims.mjs claim:*)",
+      "Bash(node scripts/claims.mjs reserve:*)",
       "Bash(npx eslint:*)",
       "Bash(npx react-scripts build:*)",
       "Bash(npm uninstall:*)",
@@ -45,7 +47,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell",
         "hooks": [{
           "type": "command",
           "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/claims-guard.mjs\""

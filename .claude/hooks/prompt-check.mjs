@@ -21,6 +21,7 @@
 //   No tag, short reply ("yes", "no drift")        pass
 //   No tag, looks like a pasted prompt             BLOCK, ask to confirm
 //   Starts with "override:"                        pass, said out loud and logged
+//   A machine envelope (a subagent's report)        pass, it is not Alex typing
 //
 // Pasted text arrives wrapped by the VS Code panel — <pasted_content id="c70a">
 // … </pasted_content id="c70a"> — so the wrappers come off before anything is
@@ -54,7 +55,10 @@ const entry = { root: null };
 function log(decision, detail) {
   try {
     const root = entry.root ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
-    const file = path.join(root, LOG_RELATIVE);
+    // The tests drive this hook for real, and must not write the real log.
+    const file = process.env.CLAIMS_GUARD_LOG
+      ? path.resolve(process.env.CLAIMS_GUARD_LOG)
+      : path.join(root, LOG_RELATIVE);
     mkdirSync(path.dirname(file), { recursive: true });
     try {
       if (statSync(file).size > LOG_MAX_BYTES) return;
@@ -92,7 +96,9 @@ function block(detail, message) {
 function main() {
   let payload;
   try {
-    payload = JSON.parse(readFileSync(0, "utf8"));
+    // The BOM strip is for hand-testing: PowerShell puts one in front of
+    // anything piped to a native command, and JSON.parse refuses it.
+    payload = JSON.parse(readFileSync(0, "utf8").replace(/^﻿/, ""));
   } catch {
     allow("unparseable payload");
   }
@@ -107,6 +113,15 @@ function main() {
   const prompt = classifyPrompt(payload?.prompt ?? "");
   const wrapped = prompt.wrapped ? " unwrapped" : "";
   if (!prompt.text.trim()) allow(`empty prompt${wrapped}`);
+
+  // Machinery too, but it arrives looking exactly like typing: `source` is
+  // absent, and the session_id is this session's, because a subagent's report
+  // is delivered into its parent's conversation. Until 2026-09-30 every one of
+  // these was blocked as an untagged pasted prompt — a subagent ran, was
+  // guarded correctly, and its report was then silently eaten, with the parent
+  // told it had been delivered. A run tag cannot help here: nothing Alex types
+  // reaches the envelope.
+  if (prompt.machine) allow(`machine envelope <${prompt.machine}>`);
 
   if (prompt.override) {
     allow(

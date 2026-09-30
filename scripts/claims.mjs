@@ -37,6 +37,7 @@
 import {
   ClaimsError,
   covers,
+  DB_CLAIM_STALE_MS,
   fold,
   inspect,
   isDbItem,
@@ -46,6 +47,7 @@ import {
   overlaps,
   readState,
   resolveRepo,
+  staleDbClaims,
   withLock,
 } from "./lib/claims-core.mjs";
 
@@ -139,18 +141,34 @@ function cmdStatus(ctx) {
     ]),
   ].sort();
 
+  // A database claim is meant to live for minutes. One was held for thirteen
+  // hours and blocked another thread's deploy the whole time, and nothing said
+  // so anywhere — this is where it gets said.
+  const stale = new Set(staleDbClaims(state));
+
   for (const owner of owners) {
     console.log(owner === ctx.owner ? `${owner}  (this thread)` : owner);
     for (const c of state.claims.filter((x) => x.owner === owner)) {
       const bits = [age(c.claimed_at)];
       if (c.run_tag) bits.push(c.run_tag);
       if (c.note) bits.push(c.note);
-      console.log(`  claim     ${c.item}  [${bits.join(", ")}]`);
+      const warn = stale.has(c) ? "   ⚠ database claim, held over an hour" : "";
+      console.log(`  claim     ${c.item}  [${bits.join(", ")}]${warn}`);
     }
     for (const r of state.reservations.filter((x) => x.owner === owner)) {
       console.log(`  reserved  ${r.item}  [${r.step}, ${age(r.reserved_at)}]`);
     }
     console.log("");
+  }
+
+  if (stale.size) {
+    const hours = DB_CLAIM_STALE_MS / 3_600_000;
+    console.log(
+      `⚠  ${stale.size} database claim(s) held for more than ${hours === 1 ? "an hour" : `${hours} hours`}.\n` +
+        `   A db: claim belongs to one step: claim it at the step that deploys, and let\n` +
+        `   gitpush Checkpoint release it once that step is in main. Held across steps it\n` +
+        `   blocks every other thread's deploy.`,
+    );
   }
   return 0;
 }
@@ -414,17 +432,25 @@ Items are repo-relative paths, folders ending in /, or db:table:<name>,
 db:fn:<name>, db:deploy. --owner <name> overrides the detected worktree name
 for status, check, claim and reserve; release never takes it.
 
-status, check and release run without interrupting Alex.
+Most of these run without interrupting Alex — status, check, release, reserve,
+and claiming files and folders. TWO raise Claude Code's permission prompt:
 
-claim, reserve and cleanup raise Claude Code's permission prompt. That prompt is
-a BACKSTOP, not Alex's approval. Claim a file he named; for one he did not,
-stop and ask him first — see .claude/CLAUDE.md.
+  claim db:deploy          the one claim that can lead to a Supabase deploy
+  cleanup <another owner>  clearing a thread that is not this one
+
+That prompt is a BACKSTOP, not Alex's approval, and a silent claim is not his
+approval either. Claim a file he named; for one he did not, stop and ask him
+first — see .claude/CLAUDE.md. Never chain a claim onto another command.
 
 A THREAD NEVER RELEASES ITS OWN FILE CLAIMS. gitpush does that, once the work is
 merged and pushed. A file claim is held for the whole life of the thread, not for
-as long as you have the file open. Database claims (db:table, db:fn, db:deploy)
-are the exception: claim them at the step that needs them, release them once Alex
-has checkpointed that step into main.`;
+as long as you have the file open.
+
+Database claims (db:table, db:fn, db:deploy) are the exception, and they are
+short-lived: claim them at the step that deploys, and gitpush Checkpoint releases
+them once that step is in main. Do not carry one across steps — status warns
+about any held for more than an hour, because one held for thirteen blocked
+another thread's deploy for all of them.`;
 
 function fail(message, code = 1) {
   process.stderr.write(`${message}\n`);

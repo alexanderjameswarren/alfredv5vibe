@@ -1,0 +1,301 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import path from "node:path";
+import {
+  claimsCommandApproval,
+  DB_CLAIM_STALE_MS,
+  isChained,
+  parseClaimsCommand,
+  scanRedirects,
+  staleDbClaims,
+  writeCheck,
+  writeIndicator,
+} from "./claims-core.mjs";
+
+const run = (sub, rest = "") => `node scripts/claims.mjs ${sub} ${rest}`.trim();
+
+// ---------------------------------------------------------------------------
+// reading a claims.mjs command
+// ---------------------------------------------------------------------------
+
+test("parses the subcommand and its items", () => {
+  assert.deepEqual(parseClaimsCommand(run("claim", "src/a.js src/b.js")), {
+    sub: "claim",
+    items: ["src/a.js", "src/b.js"],
+  });
+  assert.deepEqual(parseClaimsCommand(run("status")), { sub: "status", items: [] });
+  assert.equal(parseClaimsCommand("npm test"), null);
+});
+
+test("flag values are not items", () => {
+  const c = run("claim", 'src/a.js --run-tag x-s1-ab12 --note "db:deploy later"');
+  assert.deepEqual(parseClaimsCommand(c).items, ["src/a.js"]);
+  assert.deepEqual(parseClaimsCommand(run("release", "--all")).items, []);
+});
+
+// ---------------------------------------------------------------------------
+// which commands still ask
+// ---------------------------------------------------------------------------
+
+test("claiming files and folders is silent", () => {
+  for (const items of ["src/a.js", "src/sam/ docs/x.md", "db:table:inbox db:fn:mcp"]) {
+    assert.equal(claimsCommandApproval(run("claim", items), "main"), null, items);
+  }
+});
+
+test("claiming db:deploy asks", () => {
+  assert.equal(claimsCommandApproval(run("claim", "db:deploy"), "main"), "claim db:deploy");
+  assert.equal(
+    claimsCommandApproval(run("claim", "supabase/x.ts db:deploy"), "main"),
+    "claim db:deploy",
+  );
+});
+
+test("reserve never asks, not even for db:deploy", () => {
+  // A reservation is a note about a later step. It blocks nothing, so there is
+  // nothing for Alex to decide.
+  assert.equal(claimsCommandApproval(run("reserve", 'db:deploy --step "Step 9"'), "main"), null);
+});
+
+test("cleanup asks for another thread, not for this one", () => {
+  assert.equal(claimsCommandApproval(run("cleanup", "ghost-thread"), "main"), "cleanup ghost-thread");
+  assert.equal(claimsCommandApproval(run("cleanup", "main"), "main"), null);
+  assert.equal(claimsCommandApproval(run("cleanup", "MAIN"), "main"), null);
+});
+
+test("a command whose items are computed asks, because it cannot be read", () => {
+  assert.ok(claimsCommandApproval("node scripts/claims.mjs claim $(cat list.txt)", "main"));
+  assert.ok(claimsCommandApproval("node scripts/claims.mjs claim `echo db:deploy`", "main"));
+});
+
+test("status, check and release never ask", () => {
+  for (const c of [run("status"), run("check", "db:deploy"), run("release", "--all")]) {
+    assert.equal(claimsCommandApproval(c, "main"), null, c);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// chaining — the only thing between a compound command and a silent db:deploy
+// ---------------------------------------------------------------------------
+
+test("a chained claim is recognised however it is joined", () => {
+  const claim = run("claim", "src/a.js db:deploy");
+  assert.ok(isChained(`${run("check", "src/a.js")} && ${claim}`));
+  assert.ok(isChained(`${claim} || echo failed`));
+  assert.ok(isChained(`${claim} ; echo done`));
+  assert.ok(isChained(`${claim} | tee log`));
+  assert.ok(isChained(`echo hi\n${claim}`));
+  assert.ok(!isChained(claim));
+});
+
+// ---------------------------------------------------------------------------
+// stale database claims
+// ---------------------------------------------------------------------------
+
+const at = (msAgo) => new Date(Date.now() - msAgo).toISOString();
+
+test("only db: claims go stale, and only after an hour", () => {
+  const state = {
+    claims: [
+      { item: "db:deploy", owner: "main", claimed_at: at(DB_CLAIM_STALE_MS + 60_000) },
+      { item: "db:fn:mcp", owner: "main", claimed_at: at(5 * 60_000) },
+      { item: "src/a.js", owner: "main", claimed_at: at(13 * 3_600_000) },
+    ],
+    reservations: [],
+  };
+  assert.deepEqual(
+    staleDbClaims(state).map((c) => c.item),
+    ["db:deploy"],
+  );
+});
+
+test("an unreadable timestamp is not reported as stale", () => {
+  const state = {
+    claims: [{ item: "db:deploy", owner: "main", claimed_at: "not a date" }],
+    reservations: [],
+  };
+  assert.deepEqual(staleDbClaims(state), []);
+});
+
+// ---------------------------------------------------------------------------
+// what counts as a write
+// ---------------------------------------------------------------------------
+//
+// The real repo root, because repoPathsIn only keeps a token whose file or
+// parent folder actually exists — that is what stops `console.log` and prose
+// reading as paths.
+
+const ROOT = path.resolve(import.meta.dirname, "..", "..");
+
+/** The repo paths this command would write, or null if it writes none. */
+const writes = (command) => writeCheck(command, ROOT)?.paths ?? null;
+
+test("redirections are found outside quotes only", () => {
+  assert.deepEqual(scanRedirects("git diff > out.txt"), [{ op: ">", target: "out.txt" }]);
+  assert.deepEqual(scanRedirects("cmd >> log.txt"), [{ op: ">>", target: "log.txt" }]);
+  assert.deepEqual(scanRedirects('cmd > "my file.txt"'), [
+    { op: ">", target: "my file.txt" },
+  ]);
+  // A leading fd is a real redirect; duplication onto another stream is not.
+  assert.deepEqual(scanRedirects("cmd 2> errors.txt"), [{ op: ">", target: "errors.txt" }]);
+  assert.deepEqual(scanRedirects("cmd 2>&1"), []);
+  assert.deepEqual(scanRedirects("cmd >&2"), []);
+  // Quoted, and therefore not a redirect at all.
+  assert.deepEqual(scanRedirects("sed 's/a/>b/' file"), []);
+  assert.deepEqual(scanRedirects('grep "a > b" file'), []);
+  // Arrows in inline JS.
+  assert.deepEqual(scanRedirects("node -p \"[1].map(x => x)\""), []);
+});
+
+test("the false positives that started this: none of them writes", () => {
+  // `-ln` is a flag, not the `ln` command. Blocked three times while planning.
+  assert.equal(writeIndicator('git grep -ln "run_tag" -- supabase/'), null);
+  // `-i` belongs to grep, and a `;` is a command boundary the sed rule must not
+  // cross. This was read as an in-place sed on 2026-09-30.
+  assert.equal(
+    writeIndicator("sed -n '1,5p' scripts/claims.mjs ; grep -i foo scripts/clip.mjs"),
+    null,
+  );
+  // A `>` inside a replacement, not a redirect.
+  assert.equal(writeIndicator("sed -e 's/=.*/=<redacted>/' .env.production.local"), null);
+  assert.equal(writeIndicator("ls -la scripts/ 2>&1"), null);
+  // Sinks.
+  assert.equal(writeIndicator("node scripts/claims.mjs status > /dev/null"), null);
+  assert.equal(writeIndicator("echo hi > NUL"), null);
+});
+
+test("a redirect out of the repo is not a write to the repo", () => {
+  // Reads a repo file, writes somewhere else. Blocked before this change.
+  assert.equal(writes('git diff scripts/claims.mjs > "$TEMP/d.txt"'), null);
+  assert.equal(writes("git diff scripts/claims.mjs > /tmp/d.txt"), null);
+  assert.equal(writes("node scripts/claims.mjs status >> /tmp/claims.log"), null);
+  // Still recognised as a write in the abstract — it is only the destination
+  // that makes it none of the claims system's business.
+  assert.equal(writeIndicator("git diff > /tmp/d.txt"), "> redirection");
+});
+
+test("a redirect into the repo is still a write, and only the target counts", () => {
+  assert.deepEqual(writes("git diff scripts/claims.mjs > docs/out.md"), ["docs/out.md"]);
+  assert.deepEqual(writes("cat scripts/clip.mjs >> docs/out.md"), ["docs/out.md"]);
+  // Exempt paths need no claim.
+  assert.equal(writes("echo hi > .clip/last-report.md"), null);
+});
+
+test("mv, cp, tee and sed -i stay strict: every repo path the command names", () => {
+  for (const command of [
+    "mv /tmp/x scripts/claims.mjs",
+    "cp scripts/clip.mjs scripts/claims.mjs",
+    "cat /tmp/x | tee scripts/claims.mjs",
+    "sed -i 's/a/b/' scripts/claims.mjs",
+    'sh -c "mv /tmp/x scripts/claims.mjs"',
+  ]) {
+    assert.ok(writes(command)?.includes("scripts/claims.mjs"), command);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PowerShell — the same rules, a different syntax
+// ---------------------------------------------------------------------------
+
+/** The repo paths this PowerShell command would write, or null. */
+const psWrites = (command) => writeCheck(command, ROOT, "powershell")?.paths ?? null;
+const psIndicator = (command) => writeIndicator(command, "powershell");
+
+test("PowerShell cmdlets are writes, with -Path and -Destination read", () => {
+  for (const command of [
+    "Move-Item -Path C:\\tmp\\x -Destination src\\Alfred.jsx",
+    "Copy-Item -LiteralPath src\\App.js -Destination src\\Alfred.jsx",
+    "Set-Content -Path src\\Alfred.jsx -Value 'x'",
+    "Add-Content src\\Alfred.jsx 'x'",
+    "'x' | Out-File -FilePath src\\Alfred.jsx",
+    "New-Item -ItemType File -Force src\\Alfred.jsx",
+    "Remove-Item -Force src\\Alfred.jsx",
+    "Rename-Item src\\Alfred.jsx src\\Other.jsx",
+    "'x' | Tee-Object -FilePath src\\Alfred.jsx",
+  ]) {
+    assert.ok(psWrites(command)?.includes("src/Alfred.jsx"), command);
+  }
+});
+
+test("PowerShell's -Name:Value parameter form still yields the path", () => {
+  assert.ok(
+    psWrites("Move-Item -Path:C:\\tmp\\x -Destination:src\\Alfred.jsx")?.includes(
+      "src/Alfred.jsx",
+    ),
+  );
+});
+
+test("PowerShell array parameters are split on the comma", () => {
+  const paths = psWrites("Remove-Item -Path src\\Alfred.jsx,src\\App.js");
+  assert.ok(paths.includes("src/Alfred.jsx"));
+  assert.ok(paths.includes("src/App.js"));
+});
+
+test("an extensionless backslash path is still a path", () => {
+  assert.ok(psWrites("Remove-Item -Recurse -Force src\\sam\\lib")?.includes("src/sam/lib"));
+});
+
+test("PowerShell aliases count, but only at a command position", () => {
+  for (const command of [
+    "mi C:\\tmp\\x src\\Alfred.jsx",
+    "ci src\\App.js src\\Alfred.jsx",
+    "ni -ItemType File src\\Alfred.jsx",
+    "sc src\\Alfred.jsx 'x'",
+    "ac src\\Alfred.jsx 'x'",
+    "del src\\Alfred.jsx",
+    "move C:\\tmp\\x src\\Alfred.jsx",
+    "copy src\\App.js src\\Alfred.jsx",
+    "Get-Content src\\App.js | sc src\\Alfred.jsx",
+  ]) {
+    assert.ok(psWrites(command)?.includes("src/Alfred.jsx"), command);
+  }
+  // Mid-sentence, the same two letters are not a cmdlet.
+  assert.equal(psIndicator("Get-Content src\\App.js -TotalCount 5"), null);
+  assert.equal(psIndicator("Select-String -Pattern ci -Path src\\App.js"), null);
+});
+
+test("the project's own test command is not a copy", () => {
+  // `CI=true …` starts with what a loose, case-insensitive `ci` would match.
+  // It is Bash, so the aliases do not apply at all — and must not.
+  assert.equal(writeIndicator("CI=true npx react-scripts test --watchAll=false"), null);
+});
+
+test("PowerShell redirection follows the same outside-the-repo rule", () => {
+  assert.deepEqual(psWrites("Get-Content src\\App.js > docs\\out.md"), ["docs/out.md"]);
+  assert.equal(psWrites("Get-Content src\\App.js > $env:TEMP\\out.md"), null);
+  assert.equal(psIndicator("Get-Content src\\App.js 2>$null"), null);
+  assert.equal(psIndicator("Get-Content src\\App.js > NUL"), null);
+  // `*>` is PowerShell's all-streams redirect, and it does write a file.
+  assert.deepEqual(psWrites("Get-Content src\\App.js *> docs\\out.md"), ["docs/out.md"]);
+});
+
+test("a Windows path's backslashes are not escapes", () => {
+  // With Bash rules, the `\"` would swallow the closing quote and the redirect
+  // would vanish. PowerShell escapes with a backtick, so it must not.
+  assert.deepEqual(scanRedirects('Get-Content "C:\\tmp\\" > out.md', "powershell"), [
+    { op: ">", target: "out.md" },
+  ]);
+});
+
+test("the Move-Item form of the 2026-09-28 breach is blocked too", () => {
+  // The same trick in PowerShell: build it outside the repo, then move it over
+  // a repo file. The redirect out of the repo is allowed on its own; the
+  // Move-Item is what catches it, exactly as `mv` does in Bash.
+  const breach =
+    "Get-Content src\\utils\\recurrence.js | Set-Content $env:TEMP\\rec.js; " +
+    "Move-Item -Force $env:TEMP\\rec.js src\\utils\\recurrence.js";
+  const result = writeCheck(breach, ROOT, "powershell");
+  assert.ok(result);
+  assert.ok(result.paths.includes("src/utils/recurrence.js"));
+});
+
+test("the 2026-09-28 breach command is still blocked", () => {
+  // The one that got through: it redirected to /tmp — which the rule above now
+  // allows on its own — and then moved the result over a repo file.
+  const breach =
+    "{ printf '// note\\n'; cat src/utils/recurrence.js; } > /tmp/rec.$$ " +
+    "&& mv /tmp/rec.$$ src/utils/recurrence.js";
+  const result = writeCheck(breach, ROOT);
+  assert.equal(result.indicator, "mv/cp");
+  assert.ok(result.paths.includes("src/utils/recurrence.js"));
+});

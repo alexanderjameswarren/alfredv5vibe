@@ -17,8 +17,9 @@
 //
 //   Checkpoint  commit only the paths Alex names — normally the migration and
 //               function files for a step he has just deployed — merge, push,
-//               and release only the db: claims he names. The worktree stays,
-//               and everything else in it stays uncommitted.
+//               and release the worktree's db: claims, which defaults to all of
+//               them. The worktree stays, and everything else in it stays
+//               uncommitted, keeping its file claims.
 //
 // For the main checkout there is nothing to merge — the work is already on main
 // — so the two modes are about what happens to the claims:
@@ -57,8 +58,11 @@ import {
 import { clearMainCode, readMainCode } from "./lib/project-code.mjs";
 import {
   ask,
+  askMessage,
+  askSelection,
   changedFiles,
   choose,
+  parseSelection,
   commitsAhead,
   confirm,
   describeFile,
@@ -171,9 +175,7 @@ function doMain(w, ctx, release) {
   if (w.dirty.length) {
     const state = readState(ctx.file);
     const parts = partitionByClaims(state, "main", w.dirty);
-    const picked = selectByClaims({ owner: "main", ...parts });
-    if (picked === null) return "cancelled";
-    staging = picked;
+    staging = selectByClaims({ owner: "main", ...parts });
   } else {
     say("\nNothing is uncommitted here.");
   }
@@ -200,8 +202,7 @@ function doMain(w, ctx, release) {
   if (!confirm("\nDo all of that?")) return "cancelled";
 
   if (staging.length) {
-    const message = ask("Commit message: ").trim();
-    if (!message) return "cancelled";
+    const message = askMessage(readMainCode(ctx) ?? "main", release ? "finish" : "push");
     if (!stageAndCommit(w.path, staging.map((f) => f.path), message)) return "failed";
   }
 
@@ -320,8 +321,7 @@ function doFinish(w, ctx) {
   if (!confirm("\nClosed? Do all of that?")) return "cancelled";
 
   if (claimedChanges.length) {
-    const message = ask("Commit message: ").trim();
-    if (!message) return "cancelled";
+    const message = askMessage(w.owner, "finish");
     if (!commitIn(w, claimedChanges.map((f) => f.path), message)) return "failed";
   }
   if (!mergeAndPush(w, ctx.root)) return "failed";
@@ -351,15 +351,16 @@ function doCheckpoint(w, ctx) {
     w.dirty.forEach((f, i) => say(`  [${i + 1}] ${f.status.trim()} ${f.path}`));
   }
 
-  const picked = ask("\nPaths to commit (numbers or paths, space separated): ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((token) => {
-      const n = Number(token);
-      return Number.isInteger(n) && w.dirty[n - 1] ? w.dirty[n - 1].path : token;
-    });
+  const chosen = askSelection(
+    "\nPaths to commit (numbers, ranges like 1-3, paths, or 'all'): ",
+    w.dirty,
+    `Commit all ${w.dirty.length} path(s) listed above?`,
+  );
+  if (chosen === null) return "cancelled";
 
-  if (!picked.length) return "cancelled";
+  const picked = chosen.all
+    ? chosen.picked.map((f) => f.path)
+    : [...chosen.picked.map((f) => f.path), ...chosen.words, ...chosen.bad];
 
   const unknown = picked.filter((p) => !w.dirty.some((f) => f.path === p));
   if (unknown.length) {
@@ -367,21 +368,29 @@ function doCheckpoint(w, ctx) {
     if (!confirm("Carry on without them?")) return "cancelled";
   }
   const paths = picked.filter((p) => !unknown.includes(p));
-  if (!paths.length) return "cancelled";
+  if (!paths.length) {
+    say("\nNothing left to commit once those are dropped.");
+    return "cancelled";
+  }
 
-  let dbToRelease = [];
+  // A database claim belongs to ONE step. Releasing them here is the default
+  // rather than the exception because the alternative already happened: a thread
+  // kept db:deploy across steps for thirteen hours and blocked another thread's
+  // deploy for all of them, and every prompt along the way let it, because
+  // "enter for none" was the easy answer.
+  let dbToRelease = [...w.db];
   if (w.db.length) {
     say(`\n${w.owner} holds these database claims:`);
     w.db.forEach((item, i) => say(`  [${i + 1}] ${item}`));
-    const answer = ask(
-      "Release which? (numbers, 'all', or enter for none): ",
-    ).trim();
-    if (answer.toLowerCase() === "all") dbToRelease = [...w.db];
-    else if (answer) {
-      dbToRelease = answer
-        .split(/\s+/)
-        .map((t) => (w.db[Number(t) - 1] ? w.db[Number(t) - 1] : t))
-        .filter((item) => w.db.includes(item));
+    say("A db: claim belongs to the step that deployed it — re-claim at the next one.");
+    const answer = ask("Release which? (enter for ALL, 'none', numbers or ranges): ");
+    const sel = parseSelection(answer, w.db.length);
+    if (/^none$/i.test(answer)) dbToRelease = [];
+    else if (!sel.blank && !sel.all) {
+      dbToRelease = [
+        ...sel.indexes.map((n) => w.db[n - 1]),
+        ...sel.words.filter((t) => w.db.includes(t)),
+      ];
     }
   }
 
@@ -391,12 +400,15 @@ function doCheckpoint(w, ctx) {
   say(
     `Release ${dbToRelease.length} database claim(s)${dbToRelease.length ? `: ${dbToRelease.join(", ")}` : ""}.`,
   );
+  const dbKept = w.db.filter((item) => !dbToRelease.includes(item));
+  if (dbKept.length) {
+    say(`        KEEPING ${dbKept.join(", ")} — re-claim at the next step instead.`);
+  }
   say(`Keep    the worktree and every file claim ${w.owner} holds.`);
 
   if (!confirm("\nDo all of that?")) return "cancelled";
 
-  const message = ask("Commit message: ").trim();
-  if (!message) return "cancelled";
+  const message = askMessage(w.owner, "checkpoint");
   if (!commitIn(w, paths, message)) return "failed";
   if (!mergeAndPush(w, ctx.root)) return "failed";
 
@@ -450,18 +462,27 @@ function main() {
   say(`\n${summarised.length} checkout(s):`);
   summarised.forEach((w, i) => showTree(w, i + 1));
 
-  const pick = ask(
-    "\nWhich? (numbers space separated, 'all', or enter to cancel): ",
-  ).trim();
-  if (!pick) stop("Cancelled. Nothing changed.", 0);
+  // The one blank answer that still cancels, because the prompt says so and
+  // because this is the question before anything has been decided — there is
+  // no earlier answer for it to throw away.
+  const sel = parseSelection(
+    ask("\nWhich? (numbers, ranges, names, 'all', or enter to cancel): "),
+    summarised.length,
+  );
+  if (sel.blank) stop("Cancelled. Nothing changed.", 0);
 
-  const chosen =
-    pick.toLowerCase() === "all"
-      ? summarised
-      : pick
-          .split(/\s+/)
-          .map((t) => summarised[Number(t) - 1])
-          .filter(Boolean);
+  const named = [];
+  const unrecognised = [...sel.bad];
+  for (const word of sel.words) {
+    const hit = summarised.find((t) => t.owner.toLowerCase() === word.toLowerCase());
+    if (hit) named.push(hit);
+    else unrecognised.push(word);
+  }
+  if (unrecognised.length) say(`\n  Not a checkout here: ${unrecognised.join(", ")}`);
+
+  const chosen = sel.all
+    ? summarised
+    : [...new Set([...sel.indexes.map((n) => summarised[n - 1]), ...named])];
 
   if (!chosen.length) stop("Nothing recognised in that. Nothing changed.", 0);
 
@@ -474,6 +495,9 @@ function main() {
 
     // Checkpoint before Finish, and Push before Finish: the reversible one
     // first, so the destructive choice is never the one under the cursor.
+    // `blank: "s"` — enter skips this checkout, which is the harmless answer and
+    // is spelled out in the Skip line. It is the one choose() in these scripts
+    // with a default, and it has one because a blank here decides nothing.
     const mode = w.isMain
       ? choose(`\nmain:`, [
           {
@@ -486,8 +510,8 @@ function main() {
             label: "Finish",
             hint: "commit and push, then release all of main's claims (the project is done)",
           },
-          { key: "s", label: "Skip", hint: "leave it alone" },
-        ])
+          { key: "s", label: "Skip", hint: "leave it alone (enter does this too)" },
+        ], { blank: "s" })
       : choose(`\n${w.owner}:`, [
           {
             key: "c",
@@ -499,8 +523,8 @@ function main() {
             label: "Finish",
             hint: "commit its work, merge it into main, push, release its claims, and remove the worktree",
           },
-          { key: "s", label: "Skip", hint: "leave it alone" },
-        ]);
+          { key: "s", label: "Skip", hint: "leave it alone (enter does this too)" },
+        ], { blank: "s" });
 
     if (mode === null || mode === "s") {
       say(`  Skipped ${w.owner}.`);

@@ -193,6 +193,12 @@ claimed is not a plan. The exception is a change so small it touches one file
 Alex has already named — then his instruction is the confirmation and the thread
 claims that file and gets on with it.
 
+**Claiming files no longer raises a permission prompt, so prompt 1 is the only
+place Alex sees the list.** Only `claim db:deploy` and `cleanup <another thread>`
+still interrupt him. He used to get several popups per project and approved them
+without reading, which taught him not to read the one that mattered. Write the
+plan prompt knowing its file list is the real approval, not a preview of one.
+
 ### Alex's commands
 
 The CLI never runs these. A prompt asks Alex to run one and then waits.
@@ -202,7 +208,7 @@ The CLI never runs these. A prompt asks Alex to run one and then waits.
 | `gitnewtree <project-code>` | Starting work that needs its own worktree. Refuses until main is committed and pushed, so `gitpush` main → Push comes first. Say yes to `npm install` when the thread will run tests or a build; skip it for docs-only work. |
 | `gitcom` | A local commit, part-way through. Commits only what this thread has claimed and has changed; asks about anything unclaimed. Releases nothing. |
 | `gitsync` | Inside a worktree, to bring main in. **Always before a database step**, so the thread is looking at everything already live. |
-| `gitpush` | Any terminal — it always acts on the main checkout. For **main**: Push (commit and push, keep the claims) / Finish (and release them) / Skip. For a **worktree**: Checkpoint (merge only named files, worktree carries on) / Finish (merge everything, release claims, remove the worktree) / Skip. |
+| `gitpush` | Any terminal — it always acts on the main checkout. For **main**: Push (commit and push, keep the claims) / Finish (and release them) / Skip. For a **worktree**: Checkpoint (merge only named files, release the `db:` claims, worktree carries on) / Finish (merge everything, release every claim, remove the worktree) / Skip. |
 
 **Before asking for `gitpush` Finish on a worktree, tell him to close that
 worktree's VS Code window and exit its Claude session.** A running session locks
@@ -217,7 +223,9 @@ At the step that needs the database, not before:
 2. Alex runs `gitsync`.
 3. **Drift check.** If the sync brought in a migration or function change
    touching the same tables or function, stop and re-plan that step.
-4. Alex confirms; the thread claims the items.
+4. Alex confirms; the thread claims the items — **at this step, every time.** A
+   `db:` claim is never carried over from an earlier step; if an earlier one
+   released them, as it should have, the prompt says to re-claim here.
 5. **Number the migration now.** New SQL is written under
    `supabase/migrations/_pending_<owner>_<purpose>.sql` and only gets its real
    number here, after the sync, when the folder listing is current. Then the
@@ -227,8 +235,13 @@ At the step that needs the database, not before:
    `supabase functions deploy` and `supabase db push` otherwise.
 7. Verify.
 8. Alex runs `gitpush` → that worktree → **Checkpoint**, naming the migration and
-   function paths, so only those reach main.
-9. The thread releases **only** the `db:` claims.
+   function paths, so only those reach main. **Checkpoint releases the `db:`
+   claims itself, all of them, by default.**
+9. The thread confirms with `claims.mjs status` that they went, and releases any
+   Checkpoint left behind. `db:` claims are the only ones a thread releases.
+   Never write a prompt that carries one into the next step: one held across
+   steps blocked another thread's deploy for thirteen hours, and `status` now
+   warns about any held for more than an hour.
 
 **Why `_pending_`.** Two threads both look at `supabase/migrations/`, both see
 `083`, both write `084`. The filenames differ, so nothing conflicts and no claim
@@ -240,7 +253,7 @@ Numbering last, after a sync, is the only moment the answer is right.
 A file or folder claim is held for the whole life of the thread; `gitpush`
 Finish releases it. Do not write a prompt that asks a thread to release a file
 claim, or to "clean up its claims when done". Database claims are the exception,
-released at step 9 above.
+and `gitpush` Checkpoint releases those itself at step 8 above.
 
 ## Getting the report back
 

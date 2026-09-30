@@ -118,6 +118,36 @@ export function looksPasted(prompt) {
   return null;
 }
 
+// The harness delivers machine traffic to a session through the same
+// UserPromptSubmit event Alex's typing uses, wrapped in an envelope tag:
+//
+//   <agent-message from="ad3b77bf…">
+//   [Subagent hand-back] …
+//
+// There is no payload field that says so — `source` is absent and defaults to
+// "user", and session_id is the PARENT's, because the hand-back is delivered
+// into the parent's conversation. Verified 2026-09-30 by dumping the payload of
+// three throwaway subagents; `agent-message` is the one seen. The other two are
+// named from the SendMessage and background-task documentation and are not
+// verified, but a hand-back proved the shape, and blocking those would break the
+// same way.
+const MACHINE_ENVELOPES = /^<(agent-message|cross-session-message|task-notification)\b[^>]*>/;
+
+/**
+ * The envelope tag if this prompt is machine traffic, else null.
+ *
+ * Matched on the RAW prompt, anchored at the very start, and deliberately not
+ * on the paste-unwrapped text: a real envelope is never pasted, so anything
+ * arriving inside a `<pasted_content>` wrapper is someone typing the shape of
+ * one. The hand-back's own framing makes the same promise from the other side —
+ * it indents every line of the report, so a frame at column zero within it
+ * would be forged.
+ */
+export function machineEnvelope(prompt) {
+  const match = MACHINE_ENVELOPES.exec(String(prompt));
+  return match ? match[1] : null;
+}
+
 /**
  * Everything the prompt guard needs to decide, from the prompt text alone.
  *
@@ -133,6 +163,7 @@ export function classifyPrompt(prompt) {
     text,
     wrapped: text !== raw,
     override,
+    machine: machineEnvelope(raw),
     tag: tagInPrompt(text),
     pasted: looksPasted(text),
   };

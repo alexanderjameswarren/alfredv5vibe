@@ -29,8 +29,9 @@
 // only true when it is the same code.
 
 import { partitionByClaims, readState, resolveRepo } from "./lib/claims-core.mjs";
+import { codeOfCheckout } from "./lib/project-code.mjs";
 import {
-  ask,
+  askMessage,
   changedFiles,
   confirm,
   describeFile,
@@ -57,7 +58,6 @@ function main() {
 
   const parts = partitionByClaims(state, ctx.owner, changed);
   const staging = selectByClaims({ owner: ctx.owner, ...parts });
-  if (staging === null) stop("Cancelled. Nothing staged, nothing committed.", 0);
   if (!staging.length) {
     stop("Nothing selected. Nothing staged, nothing committed.", 0);
   }
@@ -69,8 +69,7 @@ function main() {
   }
 
   if (!message) {
-    message = ask("\nCommit message: ").trim();
-    if (!message) stop("No message. Nothing staged, nothing committed.", 0);
+    message = askMessage(codeOfCheckout(ctx).code, "commit");
   }
   say(`\nMessage: ${message}`);
 

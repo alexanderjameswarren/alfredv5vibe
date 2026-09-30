@@ -168,7 +168,8 @@ export function describeFile(f) {
 /**
  * Show the three buckets and ask about the unclaimed ones.
  *
- * Returns the files to stage, or null if Alex backed out. Shared so that
+ * Returns the files to stage — empty if he picked "none", which the callers
+ * report as nothing selected rather than as a cancel. Shared so that
  * committing in the main checkout through gitpush follows exactly the same
  * rules as gitcom — "same rules" being a promise that is only true if it is
  * literally the same code.
@@ -193,12 +194,14 @@ export function selectByClaims({ owner, mine, others, unclaimed }) {
     say("\nChanged but claimed by nobody:");
     for (const f of unclaimed) say(`  ${describeFile(f)}`);
     say("\nThese are probably your own edits. Include them in this commit?");
+    // No `blank` default: enter re-asks. This used to cancel the whole run,
+    // which is the single most expensive blank answer in these scripts — it
+    // came before the commit message and the final yes/no.
     const pick = choose("  all / none / select", [
       { key: "a", label: "all" },
       { key: "n", label: "none" },
       { key: "s", label: "select" },
     ]);
-    if (pick === null) return null;
     if (pick === "a") extra.push(...unclaimed);
     if (pick === "s") {
       for (const f of unclaimed) {
@@ -243,11 +246,18 @@ export function ask(question) {
   // through every caller for no gain, and these scripts are a straight line
   // from question to git command.
   process.stdout.write(question);
-  return readLineSync().trim();
+  const line = readLineSync();
+  // Several prompts below re-ask on a blank answer instead of cancelling. With
+  // no stdin — a closed pipe, a non-interactive shell — a re-asking loop would
+  // spin forever on the empty string it keeps being handed, so EOF is told
+  // apart from someone pressing enter, and it ends the run rather than the
+  // question.
+  if (line === null) stop("\nstdin closed with nothing typed. Nothing was changed.", 1);
+  return line.trim();
 }
 
 /**
- * Read one line from stdin, synchronously.
+ * Read one line from stdin, synchronously. Null at end of input.
  *
  * Node has no sync readline, so this reads fd 0 a byte at a time to the newline.
  * Fine here: it is a human typing, a handful of characters, a few times a run.
@@ -255,6 +265,7 @@ export function ask(question) {
 function readLineSync() {
   const buf = Buffer.alloc(1);
   let line = "";
+  let read = false;
   for (;;) {
     let n = 0;
     try {
@@ -270,11 +281,149 @@ function readLineSync() {
       throw err;
     }
     if (n === 0) break;
+    read = true;
     const ch = buf.toString("utf8");
     if (ch === "\n") break;
     if (ch !== "\r") line += ch;
   }
-  return line;
+  return read ? line : null;
+}
+
+// ---------------------------------------------------------------------------
+// reading an answer
+// ---------------------------------------------------------------------------
+
+const ALL_WORD = /^(a|all)$/i;
+const NUMERIC = /^\d+(?:-\d+)?$/;
+
+/**
+ * One typed answer to a "which of these?" question.
+ *
+ * Accepts `a`/`all`, single numbers, ranges (`1-4`, and `4-1` the same way),
+ * and anything else as a literal word — a path, or a checkout name. Mixtures
+ * work: `1-3 7 src/x.js`.
+ *
+ *   blank    nothing was typed. Never means "everything" and never means
+ *            "cancel" on its own — the caller asks a second, explicit question.
+ *   indexes  1-based, deduped, in order, every one within `count`.
+ *   words    tokens that are not numbers, for the caller to resolve.
+ *   bad      numbers and ranges outside `count`, kept rather than dropped so a
+ *            typo is answered instead of silently doing something smaller.
+ *
+ * Commas split only when every part is numeric, so `1,2,3` works without
+ * breaking a path that happens to contain one.
+ */
+export function parseSelection(answer, count = 0) {
+  const text = String(answer ?? "").trim();
+  if (!text) return { blank: true, all: false, indexes: [], words: [], bad: [] };
+
+  const tokens = [];
+  for (const raw of text.split(/\s+/).filter(Boolean)) {
+    const parts = raw.split(",").filter(Boolean);
+    if (parts.length > 1 && parts.every((p) => NUMERIC.test(p))) tokens.push(...parts);
+    else tokens.push(raw);
+  }
+
+  let all = false;
+  const indexes = [];
+  const words = [];
+  const bad = [];
+  const inRange = (n) => n >= 1 && n <= count;
+
+  for (const token of tokens) {
+    if (ALL_WORD.test(token)) {
+      all = true;
+      continue;
+    }
+    const range = /^(\d+)-(\d+)$/.exec(token);
+    if (range) {
+      let from = Number(range[1]);
+      let to = Number(range[2]);
+      if (from > to) [from, to] = [to, from];
+      const hits = [];
+      for (let n = from; n <= to; n += 1) if (inRange(n)) hits.push(n);
+      if (hits.length) indexes.push(...hits);
+      else bad.push(token);
+      continue;
+    }
+    if (/^\d+$/.test(token)) {
+      const n = Number(token);
+      if (inRange(n)) indexes.push(n);
+      else bad.push(token);
+      continue;
+    }
+    words.push(token);
+  }
+
+  return {
+    blank: false,
+    all,
+    indexes: [...new Set(indexes)].sort((a, b) => a - b),
+    words,
+    bad,
+  };
+}
+
+/**
+ * Ask which of `items` to act on, and never throw the answer away.
+ *
+ * A blank answer used to cancel the whole run — after every other question had
+ * been answered — which is the trap this step exists to close. Now it asks one
+ * more question, with the consequence spelled out, and cancelling is something
+ * Alex says rather than something that happens to him.
+ *
+ * Returns { all, picked, words, bad }, or null if he chose to cancel.
+ */
+export function askSelection(question, items, blankQuestion) {
+  const everything = () => ({ all: true, picked: [...items], words: [], bad: [] });
+
+  for (;;) {
+    const sel = parseSelection(ask(question), items.length);
+
+    if (sel.blank) {
+      // Nothing to offer, so there is nothing to re-ask about.
+      if (!items.length) return null;
+      say("");
+      return confirm(`  Nothing typed. ${blankQuestion}`) ? everything() : null;
+    }
+    if (sel.all) return everything();
+    if (sel.indexes.length || sel.words.length || sel.bad.length) {
+      return {
+        all: false,
+        picked: sel.indexes.map((n) => items[n - 1]),
+        words: sel.words,
+        bad: sel.bad,
+      };
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// the default commit message
+// ---------------------------------------------------------------------------
+
+/** Today, local. A commit made at 23:00 belongs to that day, not to UTC's. */
+export function today(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** `claims-followup: checkpoint 2026-09-30` */
+export function defaultMessage(code, mode, d = new Date()) {
+  return `${code || "main"}: ${mode} ${today(d)}`;
+}
+
+/**
+ * Ask for a commit message, falling back to the default.
+ *
+ * A blank message used to cancel the run, in three of gitpush's four modes
+ * AFTER the final yes/no had already been answered. A message is the one thing
+ * here with an obvious right default, so blank now means "use it".
+ */
+export function askMessage(code, mode) {
+  const fallback = defaultMessage(code, mode);
+  say(`\n  Enter on its own uses:  ${fallback}`);
+  return ask("Commit message: ") || fallback;
 }
 
 /** Yes or no, defaulting to NO. Anything but y/yes is no. */
@@ -284,13 +433,18 @@ export function confirm(question) {
 }
 
 /**
- * One of `choices` (keyed by first letter), or null if Alex just hits enter.
+ * One of `choices`, keyed by first letter or spelled out in full.
  *
  * A choice can carry a `hint`, and then every option is spelled out on its own
  * line before the prompt. These are decisions about pushing and about releasing
  * claims, taken once in a while — "f/c/s" is not something to have to remember.
+ *
+ * **A blank answer re-asks.** It used to return null, which every caller read as
+ * "cancel the whole run" — so pressing enter at the wrong moment threw away
+ * everything already answered. A caller that genuinely has a sensible default
+ * passes `blank` and says so in the question; nobody gets to cancel by accident.
  */
-export function choose(question, choices) {
+export function choose(question, choices, { blank } = {}) {
   const keys = choices.map((c) => c.key);
   if (choices.some((c) => c.hint)) {
     say(question);
@@ -301,12 +455,16 @@ export function choose(question, choices) {
   }
   for (;;) {
     const answer = ask(`${question} [${keys.join("/")}] `).toLowerCase().trim();
-    if (!answer) return null;
+    if (!answer) {
+      if (blank !== undefined) return blank;
+      say(`  Enter on its own is not an answer here. Pick one of ${keys.join(", ")}.`);
+      continue;
+    }
     const hit = choices.find(
       (c) => c.key.toLowerCase() === answer || c.label.toLowerCase() === answer,
     );
     if (hit) return hit.key;
-    say(`  Not one of ${keys.join(", ")}. Enter on its own cancels.`);
+    say(`  Not one of ${keys.join(", ")}.`);
   }
 }
 

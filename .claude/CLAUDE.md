@@ -104,7 +104,10 @@ see the SQL section below for why.
 3. **Drift check.** After the sync, look at what came in. If any migration or
    function change touches the same tables or the same function, stop and
    re-plan that step — your plan was written against an older schema.
-4. Ask Alex to confirm, then claim the items.
+4. Ask Alex to confirm, then claim the items. **Claim them at this step, every
+   time.** A `db:` claim is not carried over from an earlier step — if a previous
+   step released them, as it should have, re-claim here. Claiming `db:deploy`
+   raises Alex's permission prompt; the rest are silent.
 5. **Number the migration now**, not earlier: list `supabase/migrations/`, take
    the next free number, write the numbered file, delete the `_pending_` one.
    The sync in step 2 is what makes that number trustworthy.
@@ -114,9 +117,13 @@ see the SQL section below for why.
 7. Verify.
 8. Stop and ask Alex to run `gitpush` in **Checkpoint** mode for this worktree,
    naming the migration and function paths. Checkpoint puts only those paths into
-   main, so half-finished front-end work is not pushed with them.
-9. After he confirms it landed, release **only** the `db:` claims. Database
-   claims are the one thing you do release.
+   main, so half-finished front-end work is not pushed with them. **Checkpoint
+   releases the `db:` claims itself**, by default, all of them — so there is
+   normally nothing for you to do here.
+9. Check with `claims.mjs status` that they went. If one is still held, release
+   it — `db:` claims are the one thing you do release. Never carry one into the
+   next step: one held across steps blocked another thread's deploy for thirteen
+   hours, and `status` now warns about any held for more than an hour.
 
 **Finishing.** Stop and ask Alex to run `gitpush` in **Finish** mode — for the
 worktree, or for `main` if the work never used one. That is what releases your
@@ -144,14 +151,24 @@ Then wait. Do not claim in the same turn, and do not treat the guard's block
 message as permission — it shows the command to run *after* he confirms, not
 instead of asking.
 
-**The permission prompt is a backstop, not the confirmation.** `claim`, `reserve`
-and `cleanup` raise Claude Code's prompt, and the guard hook forces it even in
-auto mode. That prompt is there for when this rule is forgotten. Alex approving a
-prompt he did not expect, on a file he has not heard about, is not him agreeing
-to anything — he cannot see from a prompt what you meant to do.
+**Most claims are silent now, which raises the bar on asking, it does not lower
+it.** Claiming files and folders, reserving, and tidying up after yourself all
+run without interrupting Alex. Only two things still raise Claude Code's prompt:
 
-Run the claim on its own, as a single command, never chained onto anything with
-`&&` or `;`. The guard blocks a chained claim.
+- `claim db:deploy` — the one claim that can lead to a Supabase deploy
+- `cleanup <another thread>` — clearing a thread that is not this one
+
+They used to all prompt, and Alex got several per project and approved them
+without reading. That is worse than no prompt: it teaches him these prompts do
+not need reading, so the one that matters goes through the same way. **A silent
+claim is not his approval.** His approval is the plan he confirmed, and the
+paragraphs above are the whole of the rule — there is no longer a popup behind
+them to catch a file he never heard about.
+
+**Run the claim on its own, as a single command**, never chained onto anything
+with `&&` or `;`. The guard blocks a chained claim, and that block now carries
+the weight: chaining is the one way a `db:deploy` claim could reach the machine
+without Alex seeing it.
 
 `status` and `check` need no permission and no asking. Use `check` freely while
 planning — that is what it is for.
@@ -169,17 +186,47 @@ it early and another thread can claim the same file while yours still has
 uncommitted changes to it — which is the collision the whole system exists to
 prevent, arriving by the one route nothing checks for.
 
-**Database claims are the exception** and keep their just-in-time release:
-`db:table:*`, `db:fn:*` and `db:deploy` are claimed at the step that needs them
-and released as soon as Alex has checkpointed that step into main. They are held
-for minutes; file claims are held for the whole job.
+**Database claims are the exception, and they are short-lived.** `db:table:*`,
+`db:fn:*` and `db:deploy` are claimed at the step that deploys and released as
+soon as Alex has checkpointed that step into main — `gitpush` Checkpoint does it
+for you, all of them, by default. They are held for minutes; file claims are held
+for the whole job.
 
-So: `release` is for Alex, for cleaning up, and for the database step. If you
-think you need to release a file claim, you have misread this — say so and stop.
+**Never carry a `db:` claim into the next step.** Re-claim it there instead. One
+was held for thirteen hours across several steps and blocked another thread's
+deploy for all of them, and nothing said so — `claims.mjs status` now flags any
+`db:` claim older than an hour.
+
+So: `release` is for Alex, for cleaning up, and for a database claim Checkpoint
+somehow left behind. If you think you need to release a file claim, you have
+misread this — say so and stop.
 
 **gitpush releases them**, in Finish mode, for a worktree or for `main`. It also
 has a "push only" mode for main that pushes and deliberately keeps the claims,
 for when the project is still going. Either way it is Alex running it, not you.
+
+## When the guard blocks something, stop and ask. Never route around it.
+
+**Being blocked is the answer, not an obstacle.** Whatever the guard refused —
+an edit, a shell write, a deploy, a chained claim — you stop, you tell Alex what
+you were trying to do and what it said, and you wait.
+
+You do not try the same change another way. Not through a different tool, not
+through a different shell, not by writing it somewhere else and moving it in,
+not through a script, not through a subagent, and not by claiming the file so
+the block goes away. Every one of those is the same change with the evidence
+removed.
+
+The guard is deliberately crude and it has false positives; it has had several.
+That is still not a reason to work around one. A false positive costs a sentence
+to Alex and he unblocks it in seconds. A successful workaround costs him the one
+thing this whole system exists to give him — knowing which thread touched what.
+
+This is not theoretical. Every hole found so far was found by noticing a way
+round the guard, not a way through it: a `/tmp` file moved into place on
+2026-09-28, and the PowerShell tool slipping past the hook matcher entirely on
+2026-09-30. If you can see a route around a block, **that is a finding to report,
+not a path to take.**
 
 ## Change files with the Edit and Write tools, never the shell
 
