@@ -135,6 +135,10 @@ DbStrip(claims, nowUtc) {
 
 MainStrip(code) => "main: " (code != "" ? code : "free")
 
+; Main's button names its bound project (from the binding file, not its status file).
+ButtonName(code, mainProject) => code = "main" && mainProject != "" && mainProject != "main"
+    ? "main · " mainProject : code
+
 ; Owners holding claims or reservations that are neither main nor a worktree
 ; folder, then worktrees idle for more than 3 days. `activity` maps a worktree
 ; name to its newest local modified stamp ("" if none).

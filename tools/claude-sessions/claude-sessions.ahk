@@ -44,6 +44,7 @@ blinkOn := false
 lastTaskbar := -1
 needsResize := true
 claimsRaw := "", claimsState := Map("claims", [], "reservations", [])
+mainProject := ""          ; main's bound project code, from BINDING_FILE; "" when free
 ; Swappable so smoke-test.ahk can run without real windows.
 listCodeWindows := ListWindows.Bind("ahk_exe Code.exe")
 listChromeWindows := ListWindows.Bind("ahk_exe chrome.exe")
@@ -292,7 +293,7 @@ PaintStrips() {
     look := db.red ? "cC00000" : "c000000"
     if look != dbStripLook
         dbStripCtl.Opt(look), dbStripLook := look, dbStripCtl.Redraw()
-    mainText := MainStrip(MainCode())
+    mainText := MainStrip(mainProject)
     if mainStripCtl.Text != mainText
         mainStripCtl.Text := mainText
 
@@ -411,9 +412,10 @@ Reopen(s) {
 ; ---------------------------------------------------------------------------
 
 Refresh() {
-    global lastTaskbar, needsResize
+    global lastTaskbar, needsResize, mainProject
     Sync()
     ReadClaims()
+    mainProject := MainCode()
     offset := DateDiff(A_Now, A_NowUTC, "Minutes") * 60
     codeWindows := listCodeWindows()
     kinds := [], tip := "", anyAlert := false
@@ -466,9 +468,7 @@ Refresh() {
 }
 
 Label(s, offset) {
-    name := s.code
-    if s.code = "main" && s.project != "" && s.project != "main"
-        name .= " · " s.project
+    name := ButtonName(s.code, mainProject)
     if s.unread
         name .= "   • new"
     if s.changed != "" && s.changed > 0

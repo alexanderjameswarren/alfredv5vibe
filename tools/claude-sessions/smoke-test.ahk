@@ -131,6 +131,17 @@ Expect("db strip shown", SubStr(dbStripCtl.Text, 1, 4), "db: ")
 Expect("main strip shown", SubStr(mainStripCtl.Text, 1, 6), "main: ")
 Expect("git counted", IsInteger(sessions[order[order.Length]].changed), true)
 
+; --- main's button names the bound project, not the status file's -------------
+BINDING_FILE := dir "\alfred-project-code.json"
+try FileDelete(BINDING_FILE)
+FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"waiting","since":"2026-09-30T10:05:00.000Z","project":"switchboard_icon-k7w","red":false}')
+Refresh()
+Expect("free main ignores stale project", RegExReplace(StrSplit(controls["main"].Text, "`n")[1], " {3}.*"), "main")
+Expect("free main strip", mainStripCtl.Text, "main: free")
+FileOpen(BINDING_FILE, "w", "UTF-8-RAW").Write('{"code":"rem-j7p"}')
+Refresh()
+Expect("bound main shows project", RegExReplace(StrSplit(controls["main"].Text, "`n")[1], " {3}.*"), "main · rem-j7p")
+
 ; --- the panel loads with no warnings -------------------------------------------
 wrapper := dir "\validate.ahk", warnOut := dir "\validate.txt"
 FileOpen(wrapper, "w", "UTF-8").Write("#Include " A_ScriptDir "\`n#Include claude-sessions.ahk`n#Warn All, StdOut`n")
