@@ -8,10 +8,27 @@ main checkout plus each worktree. Spec: `docs/technical-spec-switchboard.md`.
 1. Needs AutoHotkey v2 (`C:\Program Files\AutoHotkey\v2\`). Nothing else to install.
 2. Quit any other copy first: right-click its tray icon, then Exit. A worktree's copy is
    a different file, so it would keep running alongside.
-3. Double-click `C:\Users\Alex\projects\alfred-v5\tools\claude-sessions\claude-sessions.ahk`.
-4. To start it at login: Win+R, `shell:startup`, and put a shortcut to that file there.
+3. Double-click `C:\Users\Alex\projects\alfred-v5\tools\claude-sessions\claude-sessions.ahk`,
+   or use the Switchboard shortcut below.
 
-The X button minimizes the panel; to quit, right-click the tray icon, then Exit.
+The X button minimizes the panel; to quit, right-click the tray icon, then Exit. The
+tray, taskbar and panel use `alfred.ico`; if it is missing they fall back to the green H.
+
+## Shortcuts: Start menu and login
+
+```
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\claude-sessions\install-shortcuts.ps1
+```
+
+Writes a "Switchboard" shortcut to the Start menu Programs folder and to the Startup
+folder, both running this checkout's `claude-sessions.ahk` with `alfred.ico`. Rerunning
+just overwrites them. Add `-Remove` to delete both.
+
+- **Pin to Start:** Start, type `Switchboard`, right-click it, Pin to Start (or Pin to
+  taskbar).
+- **Stop starting at login:** Settings > Apps > Startup and switch Switchboard off, or
+  delete `Switchboard.lnk` from `shell:startup` (Win+R). Rerunning the installer puts it
+  back.
 
 ## What it reads and writes
 

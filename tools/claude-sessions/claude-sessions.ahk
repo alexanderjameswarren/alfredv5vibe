@@ -55,7 +55,11 @@ arrangeAction := Arrange
 ; Panel, taskbar and tray
 ; ---------------------------------------------------------------------------
 
-panel := Gui("-MaximizeBox", "Claude sessions")
+; Set before the Gui exists: new windows take the tray icon. Missing file keeps the green H.
+if FileExist(A_ScriptDir "\alfred.ico")
+    try TraySetIcon(A_ScriptDir "\alfred.ico")
+
+panel := Gui("-MaximizeBox", "Switchboard")
 panel.SetFont("s10")
 ; The X minimizes to the taskbar instead of closing. To quit: tray icon > Exit.
 panel.OnEvent("Close", (gui) => (gui.Minimize(), true))
@@ -399,7 +403,7 @@ Reopen(s) {
             return
         }
     }
-    MsgBox("No VS Code window for " s.folder " appeared within 30 seconds.", "Claude sessions", "Icon!")
+    MsgBox("No VS Code window for " s.folder " appeared within 30 seconds.", "Switchboard", "Icon!")
 }
 
 ; ---------------------------------------------------------------------------
@@ -537,7 +541,7 @@ ButtonClick(code, *) {
     if s.closed {
         Paint(s)
         if MsgBox("No VS Code window is open for " s.folder ".`n`nReopen it and resume its last conversation?"
-            , "Claude sessions", "YesNo Icon?") = "Yes"
+            , "Switchboard", "YesNo Icon?") = "Yes"
             Reopen(s)
         return
     }
@@ -587,7 +591,7 @@ EditChatLink(s) {
         return
     link := Trim(r.Value)
     if link != "" && !IsChatLink(link) {
-        MsgBox("That is not a https://claude.ai/ link, so it was not saved.", "Claude sessions", "Icon!")
+        MsgBox("That is not a https://claude.ai/ link, so it was not saved.", "Switchboard", "Icon!")
         return
     }
     s.chatLink := link
