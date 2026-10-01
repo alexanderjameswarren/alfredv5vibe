@@ -24,6 +24,7 @@ const HOOK = path.join(ROOT, ".claude", "hooks", "prompt-check.mjs");
 const GUARD = path.join(ROOT, ".claude", "hooks", "claims-guard.mjs");
 const REAL_LOG = path.join(ROOT, ".clip", "claims-guard.log");
 const REAL_BINDING = path.join(ROOT, ".git", "alfred-project-code.json");
+const REAL_STATUS = path.join(ROOT, ".clip", "session-status.json");
 
 const snapshot = (file) => (existsSync(file) ? readFileSync(file, "utf8") : null);
 const scratchDir = () => mkdtempSync(path.join(tmpdir(), "hooks-test-"));
@@ -37,27 +38,41 @@ const scratchDir = () => mkdtempSync(path.join(tmpdir(), "hooks-test-"));
  * prompt guard WRITES it on the first tagged prompt of a project, so a test
  * that drives that path would otherwise rebind his window.
  */
-function drive(hook, payload, { binding } = {}) {
-  const before = { log: snapshot(REAL_LOG), binding: snapshot(REAL_BINDING) };
+function drive(hook, payload, { binding, statusFile } = {}) {
+  const before = { log: snapshot(REAL_LOG), binding: snapshot(REAL_BINDING), status: snapshot(REAL_STATUS) };
   const dir = scratchDir();
   const log = path.join(dir, "guard.log");
   const bindingFile = binding ?? path.join(dir, "project-code.json");
+  const status = statusFile ?? path.join(dir, "session-status.json");
 
   const result = spawnSync(process.execPath, [hook], {
     input: JSON.stringify(payload),
-    env: { ...process.env, CLAIMS_GUARD_LOG: log, CLAIMS_PROJECT_FILE: bindingFile },
+    env: {
+      ...process.env,
+      CLAIMS_GUARD_LOG: log,
+      CLAIMS_PROJECT_FILE: bindingFile,
+      SESSION_STATUS_FILE: status,
+    },
     encoding: "utf8",
   });
 
   assert.equal(snapshot(REAL_LOG), before.log, "the real log was written to");
   assert.equal(snapshot(REAL_BINDING), before.binding, "the real binding was written to");
+  assert.equal(snapshot(REAL_STATUS), before.status, "the real status file was written to");
 
+  let parsed = null;
+  try {
+    parsed = JSON.parse(snapshot(status));
+  } catch {
+    /* none written */
+  }
   return {
     code: result.status,
     stderr: result.stderr ?? "",
     line: snapshot(log) ?? "",
     binding: snapshot(bindingFile),
     bindingFile,
+    status: parsed,
   };
 }
 
@@ -175,6 +190,38 @@ test("an underscore tag reaches the window it belongs to", () => {
   assert.equal(wrong.code, 2, "a hyphen is a different project, not the same one");
 });
 
+// ---------------------------------------------------------------------------
+// the Switchboard status file
+// ---------------------------------------------------------------------------
+
+test("an allowed prompt writes processing with the session id", () => {
+  const run = drive(HOOK, {
+    hook_event_name: "UserPromptSubmit",
+    cwd: ROOT,
+    prompt: "yes",
+    session_id: "sid-9",
+    transcript_path: "C:\\t\\sid-9.jsonl",
+  });
+  assert.equal(run.code, 0);
+  assert.equal(run.status.state, "processing");
+  assert.equal(run.status.session_id, "sid-9");
+  assert.equal(run.status.transcript_path, "C:\\t\\sid-9.jsonl");
+  assert.equal(run.status.red, false);
+});
+
+test("a blocked prompt writes blocked, and red", () => {
+  const run = runHook(wrap(TASK_PROMPT));
+  assert.equal(run.code, 2);
+  assert.equal(run.status.state, "blocked");
+  assert.equal(run.status.red, true);
+});
+
+test("an unwritable status file changes no decision", () => {
+  const statusFile = scratchDir(); // a folder, so the write fails
+  assert.equal(runHook("yes", { statusFile }).code, 0);
+  assert.equal(runHook(wrap(TASK_PROMPT), { statusFile }).code, 2);
+});
+
 test("the tool guard writes to the scratch log too", () => {
   const blocked = runGuard("Write", { file_path: "docs/guard-scratch-probe.md" });
   assert.equal(blocked.code, 2);
@@ -189,7 +236,7 @@ test("a full test run leaves the real log and the real binding untouched", {
   // The child runs this same file, so it skips this test rather than recursing.
   skip: process.env.HOOKS_TEST_CHILD === "1" ? "inner run" : false,
 }, () => {
-  const before = { log: snapshot(REAL_LOG), binding: snapshot(REAL_BINDING) };
+  const before = { log: snapshot(REAL_LOG), binding: snapshot(REAL_BINDING), status: snapshot(REAL_STATUS) };
 
   const run = spawnSync(process.execPath, ["--test", "scripts/lib/*.test.mjs"], {
     cwd: ROOT,
@@ -200,4 +247,5 @@ test("a full test run leaves the real log and the real binding untouched", {
   assert.equal(run.status, 0, `the suite failed inside itself:\n${run.stdout}`);
   assert.equal(snapshot(REAL_LOG), before.log, ".clip/claims-guard.log was written to");
   assert.equal(snapshot(REAL_BINDING), before.binding, ".git/alfred-project-code.json was written to");
+  assert.equal(snapshot(REAL_STATUS), before.status, ".clip/session-status.json was written to");
 });

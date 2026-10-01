@@ -31,7 +31,10 @@
       "mcp__claude_ai_Aflred_v5__search_items",
       "mcp__claude_ai_Aflred_v5__get_database_schema",
       "Bash(ls:*)",
-      "Bash(node src/utils/recurrence.test.js)"
+      "Bash(node src/utils/recurrence.test.js)",
+      "Bash(powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/claude-sessions/run-tests.ps1)",
+      "Read(//c/Users/Alex/projects/alfred-v5/.git/alfred-claims.json)",
+      "Read(//c/Users/Alex/projects/alfred-v5/.git/alfred-project-code.json)"
     ]
   },
   "preferredNotifChannel": "terminal_bell",
@@ -60,6 +63,18 @@
         "hooks": [{
           "type": "command",
          "command": "powershell.exe -NoProfile -c \"(New-Object Media.SoundPlayer 'C:\\Windows\\Media\\Windows Ringout.wav').PlaySync()\""
+        }, {
+          "type": "command",
+          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-status.mjs\""
+        }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [{
+          "type": "command",
+          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-status.mjs\""
         }]
       }
     ],
@@ -68,6 +83,9 @@
         "hooks": [{
           "type": "command",
           "command": "powershell.exe -NoProfile -c \"(New-Object Media.SoundPlayer 'C:\\Windows\\Media\\Windows Ringout.wav').PlaySync()\""
+        }, {
+          "type": "command",
+          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-status.mjs\""
         }]
       }
     ]
