@@ -44,6 +44,14 @@ import {
   writeMainCode,
 } from "../../scripts/lib/project-code.mjs";
 
+// The Switchboard status writer, loaded so that a broken one cannot change a decision.
+let writeSessionStatus = () => null;
+try {
+  ({ writeSessionStatus } = await import("../../scripts/lib/session-status.mjs"));
+} catch {
+  /* no status file this time */
+}
+
 const LOG_RELATIVE = ".clip/claims-guard.log";
 const LOG_MAX_BYTES = 256 * 1024;
 
@@ -81,14 +89,29 @@ function log(decision, detail) {
   }
 }
 
+function status(state) {
+  try {
+    const root = entry.root ?? process.env.CLAUDE_PROJECT_DIR ?? entry.cwd ?? process.cwd();
+    writeSessionStatus(root, state, {
+      sessionId: entry.sessionId,
+      transcriptPath: entry.transcriptPath,
+      event: "UserPromptSubmit",
+    });
+  } catch {
+    // Never the reason a prompt fails, or passes.
+  }
+}
+
 function allow(detail, note) {
   log("allow", detail);
+  status("processing");
   if (note) process.stderr.write(`${note}\n`);
   process.exit(ALLOW);
 }
 
 function block(detail, message) {
   log("block", detail);
+  status("blocked");
   process.stderr.write(`${message}\n`);
   process.exit(BLOCK);
 }
@@ -102,6 +125,9 @@ function main() {
   } catch {
     allow("unparseable payload");
   }
+  entry.sessionId = payload?.session_id;
+  entry.transcriptPath = payload?.transcript_path;
+  entry.cwd = payload?.cwd;
 
   // Only interactive prompts. Loop and schedule wake-ups, SDK and system
   // messages are machinery, and blocking those would wedge the session.

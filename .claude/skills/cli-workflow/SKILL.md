@@ -189,6 +189,30 @@ Work in the main checkout when it is the only thing running. Use a worktree when
 two projects are live at once, or when the work is long enough that something
 else will want the repo before it is done.
 
+### Starting a new project
+
+In this order:
+
+1. **Project code and chat name.** Claude picks the project code, and tells Alex
+   what to rename this claude.ai chat to. The name must contain the project
+   code, because that is how Switchboard finds the chat's Chrome window. Alex
+   renames it; Claude cannot.
+2. **Main or a worktree.** For a job that is one prompt, Claude asks whether to
+   do it in the main checkout instead of a worktree, with a recommendation, and
+   only when main is free (`main: free` on Switchboard, or nothing bound in
+   `claims.mjs status`).
+3. **Worktree.** For a worktree project, the `gitnewtree <project-code>` step.
+4. **Files.** Claude names every file it generates with the project code. Alex
+   downloads the zip and drags the files into the new worktree's `docs\` folder
+   in VS Code. Nothing is saved or committed in main first. The plan prompt
+   lists those files and reads them from `docs\`, and the CLI claims them in
+   the confirm step. If the CLI will write the spec and progress files itself,
+   there is nothing to download.
+5. **The read-only plan prompt** (next section).
+
+Keep each project's claude.ai chat as the active tab in its own Chrome window, so
+Switchboard can find it.
+
 ### A new project's first two prompts
 
 **Prompt 1 is the plan, and it is read-only.** It must:
