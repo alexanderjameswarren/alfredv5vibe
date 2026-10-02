@@ -15,10 +15,34 @@ import {
   exclusive,
   parseArgs,
   parseSelection,
+  pathsToAdd,
   resolveUnclaimed,
   today,
   UsageError,
 } from "./git-flow.mjs";
+
+// What changedFiles returns after `git mv old.js new.js`, `git rm gone.js`,
+// one staged edit, one half-staged edit, an unstaged deletion and a new file.
+const STAGED_MV = [
+  { path: "old.js", status: "R ", untracked: false, renamedFrom: true },
+  { path: "new.js", status: "R ", untracked: false },
+  { path: "moved.js", status: "RM", untracked: false },
+  { path: "was.js", status: "RM", untracked: false, renamedFrom: true },
+  { path: "gone.js", status: "D ", untracked: false },
+  { path: "staged.js", status: "M ", untracked: false },
+  { path: "half.js", status: "MM", untracked: false },
+  { path: "deleted.js", status: " D", untracked: false },
+  { path: "fresh.js", status: "??", untracked: true },
+];
+
+test("a staged git mv: neither end needs adding, unless edited since", () => {
+  const all = STAGED_MV.map((f) => f.path);
+  assert.deepEqual(pathsToAdd(STAGED_MV, all), ["moved.js", "half.js", "deleted.js", "fresh.js"]);
+});
+
+test("a path git did not list is left for git to judge", () => {
+  assert.deepEqual(pathsToAdd(STAGED_MV, ["old.js", "elsewhere.js"]), ["elsewhere.js"]);
+});
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FLOW = path.join(HERE, "git-flow.mjs").replace(/\\/g, "/");

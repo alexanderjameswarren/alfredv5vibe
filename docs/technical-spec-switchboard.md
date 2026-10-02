@@ -56,17 +56,18 @@ The requirements come from `switchboard-requirements.md` (outside the repo), and
 - Red means `red` is true. Yellow means waiting. Green means processing. Grey means paused.
 - **No status** means the checkout has never written a status file (outlined grey).
 - **Closed** means no VS Code window is open for that checkout. The panel works this out; no hook writes it. The button shows the last recorded state and time as text, has no running timer, and is left out of the taskbar colour.
-- **Taskbar colour.** Taken across unpaused sessions that are not closed: red beats yellow, and yellow beats green. The panel uses the prototype's taskbar progress-bar tint. When a thread finishes, the panel comes forward without taking focus and flashes. The prototype's blink-until-clicked behaviour is kept for unseen yellow and red.
+- **Free** (main only) means main has no project bound in `.git\alfred-project-code.json`. Its button is grey, its second line reads `free`, it never alerts, and it is left out of the taskbar colour, until a prompt binds a project. Added by switchboard_fixes.
+- **Taskbar colour.** Taken across sessions that are not paused, closed or free: red beats yellow, and yellow beats green. The panel uses the prototype's taskbar progress-bar tint. When a thread finishes, the panel comes forward without taking focus and flashes. An unseen red blinks until clicked. An unseen yellow blinks 5 times and then stays solid yellow until clicked or until its state changes (switchboard_fixes).
 - **Pause.** A small Pause / Resume button sits beside each session button, and the right-click menu has the same item. Pause greys the session out and leaves it out of the taskbar colour. A paused session that starts processing again is unpaused at once.
 - **Interrupted.** An approval or processing session with an interrupt line after `since` shows yellow, not red (see "Interrupts" above).
-- **Alert and blink.** A session alerts, and blinks until its button is clicked, when it turns red or goes from processing to waiting. It does not alert on red turning to waiting, on the panel's first read, or while it is paused.
-- **Button text.** The first line is the project code. For main, when its status file names a project, that is shown as `main · <code>`. The second line is the state and its timer or time, `interrupted <time>` after an interrupt, and a `paused ·` prefix when paused.
+- **Alert and blink.** A session alerts and blinks when it turns red or goes from processing to waiting: red until clicked, yellow 5 times. It does not alert on red turning to waiting, on the panel's first read, or while it is paused, closed or free.
+- **Button text.** The first line is the project code. For main, when `.git\alfred-project-code.json` binds a project, that is shown as `main · <code>`; the status file's `project` is not used. The second line is the state and its timer or time, `interrupted <time>` after an interrupt, a `paused ·` prefix when paused, or `free` for an unbound main.
 - **Timers.** Processing shows the time since `since`. Every other state shows the date and time it was entered.
 
 ### Clicking a button
 - Maximizes VS Code on monitor 1 and the claude.ai Chrome window on monitor 2, found by window title.
   - VS Code: the checkout folder name as a whole title segment.
-  - Chrome: the project code plus "Claude". For main, that is its bound project code.
+  - Chrome: the project code plus "Claude". For main, that is the code bound in `.git\alfred-project-code.json`, or "main" when free; never the status file's `project`, which goes stale.
   - Right-click "VS Code title text…" or "Chrome title text…" replaces either match with hand-typed text, saved in `settings.ini`.
 - **Closed** is decided from the VS Code window list each poll: no matching window for 3 polls in a row.
 - If no Chrome window matches and a chat link is saved (right-click, then "Save chat link"), the click opens the link in a new Chrome window.
@@ -85,6 +86,7 @@ The requirements come from `switchboard-requirements.md` (outside the repo), and
   - For each checkout, `git --no-optional-locks -C <checkout> status --porcelain`, counting the lines. The flag stops `status` from rewriting the index.
   - For main, `git rev-list --count origin/main..main`. This reads local refs only and never fetches.
   - These run through RunWait with Hide and output sent to a file in %TEMP%, on startup, on the refresh button, and when that checkout's status file changes. There is no timer, and the hooks never run git.
+  - They also run when a watched file's modified time changes, checked each poll (switchboard_fixes). For main: the binding file, `.git\logs\HEAD` (commit, merge, reset) and `.git\logs\refs\remotes\origin\main` (push, fetch). For a worktree: `.git\worktrees\<name>\logs\HEAD`. Before this, a gitpush left main's `±n` stale.
 - **Orphans.**
   - A claim whose owner is neither `main` nor an existing worktree folder.
   - A worktree whose last activity is more than **3 days** old. Last activity is the newest modified time of its `.clip\session-status.json`, its `.clip\last-report.md`, and `<repo>\.git\worktrees\<name>\index`.

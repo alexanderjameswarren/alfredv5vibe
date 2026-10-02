@@ -57,6 +57,7 @@ import {
 } from "./lib/claims-core.mjs";
 import { clearMainCode, readMainCode } from "./lib/project-code.mjs";
 import {
+  addPaths,
   ask,
   askMessage,
   askSelection,
@@ -211,7 +212,7 @@ function commitIn(w, paths, message) {
     say("  Nothing to stage — skipping the commit, the branch may already be ready.");
     return true;
   }
-  if (!gitLive(["add", "--", ...paths], w.path)) {
+  if (!addPaths(w.path, paths)) {
     say("  git add failed.");
     return false;
   }

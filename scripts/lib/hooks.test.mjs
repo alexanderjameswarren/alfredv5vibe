@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +30,19 @@ const snapshot = (file) => (existsSync(file) ? readFileSync(file, "utf8") : null
 const scratchDir = () => mkdtempSync(path.join(tmpdir(), "hooks-test-"));
 
 /**
+ * A scratch MAIN checkout: a `.git` folder git accepts, made with fs, no `git
+ * init`. The binding tests need main, and ROOT is a worktree when the suite
+ * runs in one, where the code is the folder name and the binding is ignored.
+ */
+function scratchMain() {
+  const dir = scratchDir();
+  mkdirSync(path.join(dir, ".git", "objects"), { recursive: true });
+  mkdirSync(path.join(dir, ".git", "refs"), { recursive: true });
+  writeFileSync(path.join(dir, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+  return dir;
+}
+
+/**
  * Drive a hook for real, with its log and its binding file pointed at scratch
  * copies, and prove afterwards that neither real one moved.
  *
@@ -38,7 +51,7 @@ const scratchDir = () => mkdtempSync(path.join(tmpdir(), "hooks-test-"));
  * prompt guard WRITES it on the first tagged prompt of a project, so a test
  * that drives that path would otherwise rebind his window.
  */
-function drive(hook, payload, { binding, statusFile } = {}) {
+function drive(hook, payload, { binding, statusFile, env = {} } = {}) {
   const before = { log: snapshot(REAL_LOG), binding: snapshot(REAL_BINDING), status: snapshot(REAL_STATUS) };
   const dir = scratchDir();
   const log = path.join(dir, "guard.log");
@@ -52,6 +65,10 @@ function drive(hook, payload, { binding, statusFile } = {}) {
       CLAIMS_GUARD_LOG: log,
       CLAIMS_PROJECT_FILE: bindingFile,
       SESSION_STATUS_FILE: status,
+      // The hooks prefer the project dir to the cwd, and a suite run from a
+      // Claude session inherits that session's, so pin it to the payload's.
+      CLAUDE_PROJECT_DIR: payload.cwd,
+      ...env,
     },
     encoding: "utf8",
   });
@@ -161,7 +178,7 @@ test("the wrong-window message names bind and unbind", () => {
   const binding = path.join(dir, "project-code.json");
   writeFileSync(binding, JSON.stringify({ code: "other-project" }), "utf8");
 
-  const run = runHook("Run tag: rem-k4q-s1-t6v2\n\nDo the thing.", { binding });
+  const run = runHook("Run tag: rem-k4q-s1-t6v2\n\nDo the thing.", { binding, cwd: scratchMain() });
   assert.equal(run.code, 2);
   assert.match(run.stderr, /WRONG WINDOW/);
   assert.match(run.stderr, /claims\.mjs bind rem-k4q/);
@@ -171,7 +188,7 @@ test("the wrong-window message names bind and unbind", () => {
 test("the binding write lands on the scratch copy, not the real one", () => {
   // No code recorded, so the first tagged prompt sets one — the one path in
   // either hook that writes outside the log.
-  const run = runHook("Run tag: scratch-proj-s1-ab12\n\nDo the thing.");
+  const run = runHook("Run tag: scratch-proj-s1-ab12\n\nDo the thing.", { cwd: scratchMain() });
   assert.equal(run.code, 0);
   assert.match(run.line, /set main project=scratch-proj/);
   assert.match(run.binding ?? "", /"code": "scratch-proj"/);
@@ -182,11 +199,12 @@ test("an underscore tag reaches the window it belongs to", () => {
   const binding = path.join(dir, "project-code.json");
   writeFileSync(binding, JSON.stringify({ code: "parallel_threads" }), "utf8");
 
-  const right = runHook("Run tag: parallel_threads-s5-f2mz\n\nDo the thing.", { binding });
+  const cwd = scratchMain();
+  const right = runHook("Run tag: parallel_threads-s5-f2mz\n\nDo the thing.", { binding, cwd });
   assert.equal(right.code, 0);
   assert.match(right.line, /matches parallel_threads/);
 
-  const wrong = runHook("Run tag: parallel-threads-s5-f2mz\n\nDo the thing.", { binding });
+  const wrong = runHook("Run tag: parallel-threads-s5-f2mz\n\nDo the thing.", { binding, cwd });
   assert.equal(wrong.code, 2, "a hyphen is a different project, not the same one");
 });
 
@@ -232,19 +250,62 @@ test("the tool guard writes to the scratch log too", () => {
   assert.match(allowed.line, /ALLOW/);
 });
 
+test("the guard allows the three switchboard_fixes false positives", () => {
+  const claim = runGuard("Bash", {
+    command: "node scripts/claims.mjs claim tools/claude-sessions/install-shortcuts.ps1 docs/x.md",
+  });
+  assert.equal(claim.code, 0, claim.stderr);
+  assert.equal(runGuard("Bash", { command: "cp -r .git \"$TEMP/git-copy\"" }).code, 0);
+  assert.equal(runGuard("Bash", { command: "cd .clip && rm notification-hook-input.log" }).code, 0);
+});
+
+test("the guard still blocks a copy over an unclaimed file", () => {
+  const run = runGuard("Bash", { command: "cp \"$TEMP/x.js\" src/App.js" });
+  assert.equal(run.code, 2);
+  assert.match(run.line, /BLOCK.*shell write: src\/App\.js/);
+});
+
+test("a cd out of the repo does not get an edit past the guard", () => {
+  const payload = {
+    hook_event_name: "PreToolUse",
+    cwd: tmpdir(),
+    tool_name: "Write",
+    tool_input: { file_path: path.join(ROOT, "src", "guard-scratch-probe.js") },
+  };
+  const run = drive(GUARD, payload, { env: { CLAUDE_PROJECT_DIR: ROOT } });
+  assert.equal(run.code, 2);
+  assert.match(run.line, /BLOCK.*unclaimed: src\/guard-scratch-probe\.js/);
+});
+
+test("a cd out of the repo still leaves the prompt guard in its checkout", () => {
+  const run = drive(
+    HOOK,
+    { hook_event_name: "UserPromptSubmit", cwd: tmpdir(), prompt: "Run tag: scratch-proj-s1-ab12\n\nx" },
+    { env: { CLAUDE_PROJECT_DIR: ROOT } },
+  );
+  // Decided on the tag, whichever checkout ROOT is; never waved through.
+  assert.match(run.line, /tag=scratch-proj-s1-ab12/);
+  assert.doesNotMatch(run.line, /not a git repo/);
+});
+
 test("a full test run leaves the real log and the real binding untouched", {
   // The child runs this same file, so it skips this test rather than recursing.
   skip: process.env.HOOKS_TEST_CHILD === "1" ? "inner run" : false,
 }, () => {
   const before = { log: snapshot(REAL_LOG), binding: snapshot(REAL_BINDING), status: snapshot(REAL_STATUS) };
 
+  // Without dropping NODE_TEST_CONTEXT the child sees itself as a runner's
+  // child, runs nothing and exits 0, so this test could never fail.
+  const env = { ...process.env, HOOKS_TEST_CHILD: "1" };
+  delete env.NODE_TEST_CONTEXT;
   const run = spawnSync(process.execPath, ["--test", "scripts/lib/*.test.mjs"], {
     cwd: ROOT,
-    env: { ...process.env, HOOKS_TEST_CHILD: "1" },
+    env,
     encoding: "utf8",
   });
 
   assert.equal(run.status, 0, `the suite failed inside itself:\n${run.stdout}`);
+  assert.match(run.stdout, /ℹ pass [1-9]/, "the inner suite ran no tests");
   assert.equal(snapshot(REAL_LOG), before.log, ".clip/claims-guard.log was written to");
   assert.equal(snapshot(REAL_BINDING), before.binding, ".git/alfred-project-code.json was written to");
   assert.equal(snapshot(REAL_STATUS), before.status, ".clip/session-status.json was written to");

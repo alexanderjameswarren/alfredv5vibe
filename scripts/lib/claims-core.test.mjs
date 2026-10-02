@@ -1,11 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   claimsCommandApproval,
   DB_CLAIM_STALE_MS,
   isChained,
+  isExempt,
+  isLoneScriptCommand,
   parseClaimsCommand,
+  resolveCheckout,
+  resolveRepo,
   scanRedirects,
   staleDbClaims,
   writeCheck,
@@ -298,4 +303,69 @@ test("the 2026-09-28 breach command is still blocked", () => {
   const result = writeCheck(breach, ROOT);
   assert.equal(result.indicator, "mv/cp");
   assert.ok(result.paths.includes("src/utils/recurrence.js"));
+});
+
+// ---------------------------------------------------------------------------
+// switchboard_fixes: three false positives
+// ---------------------------------------------------------------------------
+
+test("an exempt folder named on its own is exempt", () => {
+  assert.ok(isExempt(".git") && isExempt(".clip") && isExempt(".CLIP"));
+  assert.ok(!isExempt(".github/workflows/x.yml"));
+  assert.ok(!isExempt(".gitignore"));
+  assert.equal(writes("cp -r .git /c/tmp/x"), null);
+  assert.equal(writes("cd .clip && rm notification-hook-input.log"), null);
+  assert.equal(writes("rm -rf .clip"), null);
+});
+
+test("a write word followed by a hyphen is part of a name", () => {
+  assert.equal(writeIndicator("cat tools/claude-sessions/install-shortcuts.ps1"), null);
+  assert.equal(writeIndicator("cat docs/rm-notes.md patch-1.diff tee-off.txt"), null);
+  assert.equal(writeIndicator("install -m 644 a b"), "mv/cp");
+  assert.equal(writeIndicator("/bin/mv a b"), "mv/cp");
+});
+
+test("a lone claims command is judged on redirections only", () => {
+  const claim = run("claim", "tools/claude-sessions/install-shortcuts.ps1 scripts/git-sync.mjs");
+  assert.ok(isLoneScriptCommand(claim));
+  assert.equal(writeCheck(claim, ROOT, "bash", { redirectsOnly: true }), null);
+  assert.ok(isLoneScriptCommand(`${run("check", "tools/mv/")} 2>&1`));
+  assert.deepEqual(
+    writeCheck(`${run("status")} > src/App.js`, ROOT, "bash", { redirectsOnly: true }).paths,
+    ["src/App.js"],
+  );
+});
+
+test("anything more than a lone claims command is judged in full", () => {
+  for (const c of [
+    `node -e "require('fs').writeFileSync('src/App.js','')" scripts/claims.mjs claim x`,
+    `${run("claim", "x")} & mv src/App.js /tmp/a`,
+    `${run("claim", "x")}; cp a src/App.js`,
+    `${run("claim", "$(echo x)")}`,
+    `${run("claim", "x")} | tee src/App.js`,
+    `echo; ${run("claim", "x")}`,
+    `bash -c "rm src/App.js" scripts/clip.mjs`,
+    `cat .clip/last-report.md | node scripts/clip.mjs --title "x"`,
+  ]) {
+    assert.equal(isLoneScriptCommand(c), false, c);
+  }
+});
+
+test("a lone clip.mjs push with cp, mv and rm in its title writes nothing", () => {
+  const push =
+    'node scripts/clip.mjs --tag a-s1-ab12 --title "cp the docs, mv the spec, rm the probe" ' +
+    ".clip/last-report.md";
+  assert.ok(writeCheck(push, ROOT), "judged in full, the title reads as a write");
+  assert.ok(isLoneScriptCommand(push));
+  assert.equal(writeCheck(push, ROOT, "bash", { redirectsOnly: true }), null);
+  // Still a write when it is wrapped in a shell that runs the quoted text.
+  assert.ok(writeCheck('bash -c "rm src/App.js"', ROOT));
+});
+
+test("the checkout comes from the project dir, then the cwd", () => {
+  const outside = tmpdir();
+  assert.equal(resolveCheckout(ROOT, outside).root, resolveRepo(ROOT).root);
+  assert.equal(resolveCheckout(undefined, ROOT).owner, resolveRepo(ROOT).owner);
+  assert.equal(resolveCheckout(outside, ROOT).root, resolveRepo(ROOT).root);
+  assert.throws(() => resolveCheckout(undefined, outside), (e) => e.code === "no-git");
 });

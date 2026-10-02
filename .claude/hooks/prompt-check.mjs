@@ -34,7 +34,7 @@
 
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { ClaimsError, resolveRepo } from "../../scripts/lib/claims-core.mjs";
+import { ClaimsError, resolveCheckout } from "../../scripts/lib/claims-core.mjs";
 import {
   classifyPrompt,
   codeOfCheckout,
@@ -156,9 +156,10 @@ function main() {
     );
   }
 
+  // Project dir first: the cwd moves with every `cd`, the same hole as the guard.
   let ctx;
   try {
-    ctx = resolveRepo(payload?.cwd ?? process.cwd());
+    ctx = resolveCheckout(process.env.CLAUDE_PROJECT_DIR, payload?.cwd ?? process.cwd());
   } catch (err) {
     if (err instanceof ClaimsError) allow("not a git repo");
     throw err;

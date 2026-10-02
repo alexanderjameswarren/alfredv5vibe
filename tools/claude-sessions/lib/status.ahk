@@ -139,6 +139,30 @@ MainStrip(code) => "main: " (code != "" ? code : "free")
 ButtonName(code, mainProject) => code = "main" && mainProject != "" && mainProject != "main"
     ? "main · " mainProject : code
 
+; The text a session's claude.ai chat title carries. Main's follows the binding
+; file, like its label; it used to follow the last status write, which goes stale.
+ChatCode(code, mainProject) => code = "main" && mainProject != "" ? mainProject : code
+
+; Main with no binding is free: grey, "free", no alert, out of the taskbar colour.
+IsFree(code, mainProject) => code = "main" && mainProject = ""
+
+; A yellow button flashes 5 times, then stays solid until clicked or the state
+; changes. Red flashes until clicked.
+YELLOW_FLASHES := 5
+StillFlashing(kind, flashes) => kind != "waiting" || flashes < YELLOW_FLASHES
+
+; Modified times of `files` as one string, "" for a missing one, so a commit,
+; merge, push or a binding change shows up as a different key.
+StampKey(files) {
+    key := ""
+    for f in files {
+        t := ""
+        try t := FileGetTime(f, "M")
+        key .= t "|"
+    }
+    return key
+}
+
 ; Owners holding claims or reservations that are neither main nor a worktree
 ; folder, then worktrees idle for more than 3 days. `activity` maps a worktree
 ; name to its newest local modified stamp ("" if none).

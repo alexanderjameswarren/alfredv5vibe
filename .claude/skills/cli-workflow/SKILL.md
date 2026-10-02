@@ -605,6 +605,41 @@ Press Undo: it's scheduled again."):
 ```
    Expected: state scheduled, and the item is back in the inbox.
    
+### Rule 3b: every literal string gets its own copy box
+
+Anything Alex must type, paste, search for, or replace goes in its own fenced
+code block. This applies everywhere: to-dos, testing, questions, setup. Never
+inline in a sentence, never inside backticks in prose.
+
+A find-and-replace is two blocks, labelled "Find:" and "Replace with:". One
+block per string, so each has its own copy button.
+
+Bad:
+  Go to line 350. Change
+  ctx = resolveCheckout(process.env.CLAUDE_PROJECT_DIR, entry.cwd);
+  to
+  ctx = resolveRepo(entry.cwd);
+
+Good:
+  Open C:\Users\Alex\projects\alfred-v5\.claude\hooks\claims-guard.mjs
+  (Ctrl+P, paste the path). Press Ctrl+H, then:
+
+  Find:
+```
+  ctx = resolveCheckout(process.env.CLAUDE_PROJECT_DIR, entry.cwd);
+```
+  Replace with:
+```
+  ctx = resolveRepo(entry.cwd);
+```
+  Save. No restart needed.
+
+Prefer find-and-replace over "go to line N": line numbers drift, and the
+search box confirms he's in the right place.
+
+Before sending, scan the reply: any code, command, path, prompt, or value
+that is not in a fenced block is a bug.
+
 ### Rule 4: files always get full paths
 
 Any instruction touching a file names the file completely. Never "run the SQL",

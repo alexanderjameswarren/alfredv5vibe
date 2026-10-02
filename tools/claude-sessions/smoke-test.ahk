@@ -17,6 +17,8 @@ dir := A_Temp "\claude-sessions-smoke"
 DirCreate(dir)
 SETTINGS := dir "\settings.ini"   ; from here on, nothing touches the real settings
 try FileDelete(SETTINGS)
+BINDING_FILE := dir "\alfred-project-code.json"   ; nor the real binding
+FileOpen(BINDING_FILE, "w", "UTF-8-RAW").Write('{"code":"smoke-proj"}')
 statusPath := dir "\session-status.json", transcript := dir "\transcript.jsonl", reportPath := dir "\last-report.md"
 FileOpen(transcript, "w", "UTF-8-RAW").Write("")
 try FileDelete(reportPath)
@@ -95,8 +97,7 @@ Refresh()
 Expect("open again at once", ms.closed, false)
 
 ; --- automatic chat link: safeguards ------------------------------------------
-ms.project := "main"
-chromeWindows := [{hwnd: 501, title: "Inbox - Gmail - Google Chrome"}, {hwnd: 502, title: "main build - Claude - Google Chrome"}]
+chromeWindows := [{hwnd: 501, title: "Inbox - Gmail - Google Chrome"}, {hwnd: 502, title: "smoke-proj build - Claude - Google Chrome"}]
 readerResult := "claude.ai/chat/abc-1"
 Arrange(ms)
 Expect("reads the matched window only", readerCalls.Length = 1 ? readerCalls[1] : readerCalls.Length, 502)
@@ -132,15 +133,55 @@ Expect("main strip shown", SubStr(mainStripCtl.Text, 1, 6), "main: ")
 Expect("git counted", IsInteger(sessions[order[order.Length]].changed), true)
 
 ; --- main's button names the bound project, not the status file's -------------
-BINDING_FILE := dir "\alfred-project-code.json"
 try FileDelete(BINDING_FILE)
 FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"waiting","since":"2026-09-30T10:05:00.000Z","project":"switchboard_icon-k7w","red":false}')
 Refresh()
 Expect("free main ignores stale project", RegExReplace(StrSplit(controls["main"].Text, "`n")[1], " {3}.*"), "main")
 Expect("free main strip", mainStripCtl.Text, "main: free")
+Expect("free main reads free", StrSplit(controls["main"].Text, "`n")[2], "free")
+Expect("free main grey", SubStr(ms.painted, 1, 6), FREE_COLOR)
+Expect("free main out of taskbar", InStr(A_IconTip, "main: free") > 0, true)
+FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"processing","since":"2026-09-30T10:06:00.000Z","project":"x","red":false}')
+Refresh()
+FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"waiting","since":"2026-09-30T10:07:00.000Z","project":"x","red":false}')
+Refresh()
+Expect("free main does not alert", ms.unseen, false)
+chromeWindows := [{hwnd: 601, title: "switchboard_icon-k7w - Claude - Google Chrome"}, {hwnd: 602, title: "rem-j7p plan - Claude - Google Chrome"}]
+Expect("free main chat ignores stale project", FindChromeWindow(ms), 0)
 FileOpen(BINDING_FILE, "w", "UTF-8-RAW").Write('{"code":"rem-j7p"}')
 Refresh()
 Expect("bound main shows project", RegExReplace(StrSplit(controls["main"].Text, "`n")[1], " {3}.*"), "main · rem-j7p")
+Expect("bound main not free", ms.free, false)
+Expect("bound main chat follows binding", FindChromeWindow(ms), 602)
+
+; --- yellow flashes five times, then stays solid ---------------------------------
+FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"processing","since":"2026-09-30T10:08:00.000Z","project":"rem-j7p","red":false}')
+Refresh()
+FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"waiting","since":"2026-09-30T10:09:00.000Z","project":"rem-j7p","red":false}')
+Refresh()
+Expect("bound main alerts", ms.unseen, true)
+lit := 0
+blinkOn := false
+Loop 30 {
+    Blink()
+    if SubStr(ms.painted, 1, 6) = BLINK_COLOR
+        lit++
+}
+Expect("yellow lit five times", lit, 5)
+Expect("then solid yellow", SubStr(ms.painted, 1, 6), COLORS["waiting"])
+Expect("still unseen until clicked", ms.unseen, true)
+
+; --- git counts re-run when a watched file changes -----------------------------
+watched := dir "\logs-HEAD"
+FileOpen(watched, "w", "UTF-8-RAW").Write("a")
+ms.gitWatch := [watched]
+Refresh()
+ms.changed := -1          ; a count git never gives
+Refresh()
+Expect("unchanged watch, no recount", ms.changed, -1)
+FileSetTime(DateAdd(A_Now, 120, "Seconds"), watched, "M")
+Refresh()
+Expect("watched file change recounts", ms.changed >= 0, true)
 
 ; --- the panel loads with no warnings -------------------------------------------
 wrapper := dir "\validate.ahk", warnOut := dir "\validate.txt"

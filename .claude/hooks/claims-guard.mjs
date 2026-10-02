@@ -65,8 +65,9 @@ import {
   heldBy,
   isChained,
   isExempt,
+  isLoneScriptCommand,
   readState,
-  resolveRepo,
+  resolveCheckout,
   toRepoRelative,
   writeCheck,
   writeIndicator,
@@ -278,7 +279,8 @@ function stripOwnCd(command, root) {
  * between a chained command and the one claim that can trigger a deploy. So it
  * still refuses all three subcommands, chained, whether or not they would ask.
  *
- * Returns normally when the command is fine to run silently.
+ * Returns the command without its own-checkout `cd`, when it is fine to run
+ * silently.
  */
 function checkClaimsCommand(command, ctx) {
   const bare = stripOwnCd(command, ctx.root);
@@ -297,6 +299,7 @@ function checkClaimsCommand(command, ctx) {
 
   const reason = claimsCommandApproval(bare, ctx.owner);
   if (reason) ask(`ask: ${reason}`, approvalReason(reason));
+  return bare;
 }
 
 function main() {
@@ -338,12 +341,13 @@ function main() {
 
   if (!filePath && !deploying && !indicator && !isClaimsCommand) allow("not a change");
 
-  // Hooks run from the session's directory, which in a worktree is the worktree
-  // root — exactly what decides the owner.
+  // The checkout is the session's project dir, and only then its cwd. The cwd
+  // moves with every `cd`: a session that had cd'd to $TEMP had its edits to
+  // repo files allowed as "not a git repo" (found 2026-10-01).
   let ctx;
   let state;
   try {
-    ctx = resolveRepo(entry.cwd);
+    ctx = resolveCheckout(process.env.CLAUDE_PROJECT_DIR, entry.cwd);
     entry.owner = ctx.owner;
     entry.root = ctx.root;
     state = readState(ctx.file);
@@ -370,6 +374,9 @@ function main() {
     checkClaimsCommand(command, ctx);
     if (!filePath && !deploying && !indicator) allow("claims command, no approval needed");
   }
+  // A lone claims.mjs or clip.mjs is judged on its redirections only: claim
+  // items and report titles are never run, and both were blocked as copies.
+  const redirectsOnly = command !== "" && isLoneScriptCommand(stripOwnCd(command, ctx.root));
 
   if (!state.existed) {
     block(
@@ -403,8 +410,14 @@ function main() {
     // redirection is judged on its destination alone, so writing to $TEMP is
     // not a write to the repo; anything stronger is judged on every repo path
     // the command names. See claims-core for why the two differ.
-    const write = writeCheck(command, ctx.root, shell);
-    if (!write) allow(`writes nothing in the repo (${indicator})`);
+    const write = writeCheck(command, ctx.root, shell, { redirectsOnly });
+    if (!write) {
+      allow(
+        redirectsOnly
+          ? `lone claims command, no redirect into the repo (${indicator})`
+          : `writes nothing in the repo (${indicator})`,
+      );
+    }
 
     const unclaimed = write.paths.filter((rel) => !heldBy(state, rel, ctx.owner));
     if (!unclaimed.length) allow(`shell write ok (${write.indicator})`);

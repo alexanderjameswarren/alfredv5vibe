@@ -92,6 +92,25 @@ export function resolveRepo(cwd = process.cwd()) {
   };
 }
 
+/**
+ * The session's checkout: its project dir first, then its cwd.
+ *
+ * The hooks used the cwd alone, and the cwd moves with every `cd`: a session
+ * that had cd'd to $TEMP had its edits to repo files allowed as "not a git
+ * repo" (found 2026-10-01). CLAUDE_PROJECT_DIR is where the session was opened,
+ * which a `cd` cannot change. Throws ClaimsError("no-git") only if neither is a repo.
+ */
+export function resolveCheckout(projectDir, cwd = process.cwd()) {
+  if (projectDir) {
+    try {
+      return resolveRepo(projectDir);
+    } catch {
+      /* not a repo, or gone: fall back to the cwd */
+    }
+  }
+  return resolveRepo(cwd);
+}
+
 // ---------------------------------------------------------------------------
 // items
 // ---------------------------------------------------------------------------
@@ -175,10 +194,17 @@ export const EXEMPT_PREFIXES = [
   "supabase/.temp/", // machine-local Supabase link state
 ];
 
-/** Is this repo-relative path exempt from claiming? */
+/**
+ * Is this repo-relative path exempt from claiming?
+ *
+ * The folder named on its own counts too: `cp -r .git …` and `cd .clip && rm x`
+ * were blocked as writes to `.git` and `.clip`, which have no trailing slash.
+ */
 export function isExempt(rel) {
   const p = fold(rel);
-  return EXEMPT_PREFIXES.some((prefix) => p.startsWith(fold(prefix)));
+  return EXEMPT_PREFIXES.some(
+    (prefix) => p.startsWith(fold(prefix)) || `${p}/` === fold(prefix),
+  );
 }
 
 /** Does folder `f` contain path `p`? */
@@ -237,6 +263,9 @@ export function heldBy(state, item, owner) {
  * a letter. A write command is a WORD, never the tail of a flag, so a hyphen in
  * front disqualifies it. Same story for `--install`.
  *
+ * `(?!-)` is the same rule from the other side: `install\b` matched the path
+ * `tools/claude-sessions/install-shortcuts.ps1` and blocked a claim as a copy.
+ *
  * `[^|;&\n]*` in the in-place rule stops it reaching across a command
  * separator. `sed -n '1,5p' a.js ; grep -i x b.js` used to read as an in-place
  * sed, because the old `[^|]*` happily crossed the `;` to find `grep`'s `-i`.
@@ -245,12 +274,12 @@ export function heldBy(state, item, owner) {
  * `sh -c "mv a b"` really does move a file.
  */
 const COMMAND_INDICATORS = [
-  [/(?<![-\w])tee\b/, "tee"],
-  [/(?<![-\w])(?:mv|cp|rsync|install|ln)\b/, "mv/cp"],
-  [/(?<![-\w])(?:rm|rmdir|unlink|shred|truncate|touch|mkdir)\b/, "rm/touch/mkdir"],
+  [/(?<![-\w])tee\b(?!-)/, "tee"],
+  [/(?<![-\w])(?:mv|cp|rsync|install|ln)\b(?!-)/, "mv/cp"],
+  [/(?<![-\w])(?:rm|rmdir|unlink|shred|truncate|touch|mkdir)\b(?!-)/, "rm/touch/mkdir"],
   [/(?<![-\w])(?:sed|perl|ruby)\b[^|;&\n]*\s-i\b/, "in-place sed/perl"],
   [/(?<![-\w])dd\b[^|;&\n]*\bof=/, "dd of="],
-  [/(?<![-\w])(?:patch|git\s+apply)\b/, "patch"],
+  [/(?<![-\w])(?:patch|git\s+apply)\b(?!-)/, "patch"],
   [/\bwrite(?:File)?(?:Sync)?\s*\(/i, "writeFileSync"],
   [/\bopen\s*\([^)]*['"][wax]/, "open(...,'w')"],
   // PowerShell cmdlets match in EITHER shell: `bash -c 'powershell -c "Set-Content …"'`
@@ -461,9 +490,14 @@ export function writeIndicator(command, shell = "bash") {
  * above — and then `mv`'d the result over `src/utils/recurrence.js`. The `mv` is
  * what catches it, and the `mv` is why the strict rule cannot be narrowed to
  * destinations too.
+ *
+ * `redirectsOnly` is for a lone claims.mjs or clip.mjs command (see
+ * `isLoneScriptCommand`), whose arguments are never run.
  */
-export function writeCheck(command, root, shell = "bash") {
-  const found = writeIndicators(command, shell);
+export function writeCheck(command, root, shell = "bash", { redirectsOnly = false } = {}) {
+  const found = writeIndicators(command, shell).filter(
+    (f) => !redirectsOnly || f.kind === "redirect",
+  );
   if (!found.length) return null;
 
   const strict = found.find((f) => f.kind === "command");
@@ -620,6 +654,25 @@ export function parseClaimsCommand(command) {
     items.push(token);
   }
   return { sub, items };
+}
+
+/**
+ * Is this exactly one `node scripts/claims.mjs …` or `node scripts/clip.mjs …`,
+ * and nothing else?
+ *
+ * Then its arguments are item names, a title and a file to read, none of them
+ * ever run, so a command word among them (`install-shortcuts.ps1`, a title
+ * saying "cp") writes nothing, and only a redirection can. It must START with
+ * node and the script, so `node -e "<write>" scripts/claims.mjs claim x` does
+ * not qualify, and it may hold no separator, substitution or subshell. A lone
+ * `&` is refused too: isChained does not count it, and `claim x & mv a b` runs
+ * both. Takes the command after the own-checkout `cd` strip.
+ */
+export function isLoneScriptCommand(command) {
+  const c = String(command).trim();
+  if (!/^node\s+(?:\.[\\/])?scripts[\\/](?:claims|clip)\.mjs(?:\s|$)/.test(c)) return false;
+  // `2>&1` and `>&2` are the one harmless use of `&`.
+  return !/[&|;\n`$()<]/.test(c.replace(/\d?>&\d/g, ""));
 }
 
 /**

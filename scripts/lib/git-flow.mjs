@@ -94,11 +94,42 @@ export function changedFiles(cwd) {
       // "R  new" then a separate NUL-terminated "old".
       const old = parts[i + 1];
       i += 1;
-      if (old) files.push({ path: old, status: `${x}${y}`, untracked: false });
+      if (old) files.push({ path: old, status: `${x}${y}`, untracked: false, renamedFrom: true });
     }
     files.push({ path: p, status: `${x}${y}`, untracked: x === "?" });
   }
   return files;
+}
+
+/**
+ * Which of `paths` still need `git add`, given `files` from changedFiles.
+ *
+ * Not a rename's old name, and not a path with nothing unstaged (status column
+ * two a space): after `git mv a b`, `a` is in neither the index nor the tree,
+ * so `git add -- a` fails "pathspec did not match" and gitcom and gitpush
+ * stopped. A staged `git rm` failed the same way. Both are already staged, so
+ * the commit takes them anyway. A path not in `files` is kept, for git to judge.
+ */
+export function pathsToAdd(files, paths) {
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  return paths.filter((p) => {
+    const f = byPath.get(p);
+    if (!f) return true;
+    return !f.renamedFrom && (f.untracked || f.status[1] !== " ");
+  });
+}
+
+/**
+ * `git add` the paths that need it in `cwd`. True on success, including when
+ * everything was already staged.
+ */
+export function addPaths(cwd, paths) {
+  const toAdd = pathsToAdd(changedFiles(cwd), paths);
+  if (toAdd.length < paths.length) {
+    say(`  Already staged, not re-added: ${paths.filter((p) => !toAdd.includes(p)).join(", ")}`);
+  }
+  // Explicit paths after `--`, never `git add .`.
+  return !toAdd.length || gitLive(["add", "--", ...toAdd], cwd);
 }
 
 /** Is this checkout free of uncommitted changes? */
@@ -228,8 +259,7 @@ export function selectByClaims({ owner, mine, others, unclaimed, include }) {
 
 /** Stage named paths and commit them. Returns false to stop. */
 export function stageAndCommit(cwd, paths, message) {
-  // Explicit paths after `--`, never `git add .`.
-  if (!gitLive(["add", "--", ...paths], cwd)) {
+  if (!addPaths(cwd, paths)) {
     say("  git add failed. Nothing was committed.");
     return false;
   }

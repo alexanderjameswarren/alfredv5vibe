@@ -26,6 +26,7 @@ BINDING_FILE := REPO "\.git\alfred-project-code.json"
 COLORS := Map("processing", "70C070", "waiting", "E8C840", "red", "E06060", "none", "F4F4F4")
 PAUSED_COLOR := "C8C8C8"
 CLOSED_COLOR := "E4E4E4"
+FREE_COLOR := "D4D4D4"     ; main with no project bound
 BLINK_COLOR := "FFFFFF"
 TAIL_BYTES := 16384        ; how much of a transcript's end is searched for an interrupt
 BUTTON_W := 280, BUTTON_H := 44, PAUSE_W := 64, GAP := 6, STRIP_H := 20
@@ -168,10 +169,11 @@ NewSession(code, root) {
         raw: "", hasStatus: false,
         state: "", since: "", red: false, project: "", transcript: "", sessionId: "",
         tKey: "", interruptAt: "",
-        kind: "", unseen: false, painted: "",
+        kind: "", unseen: false, flashes: 0, free: false, painted: "",
         misses: CLOSED_AFTER - 1, closed: false,   ; the first poll decides at once
         lastClick: lastClick, unread: false,
         gitDirty: true, changed: "", ahead: "",     ; git runs on the first poll
+        gitWatch: GitWatchFiles(code), gitKey: "",
         paused: IniRead(SETTINGS, "paused", code, 0) = 1,
         vscodeTitle: IniRead(SETTINGS, "vscode", code, ""),
         chromeTitle: IniRead(SETTINGS, "chrome", code, ""),
@@ -268,6 +270,13 @@ GitCounts(s) {
     }
 }
 
+; Files whose change means the counts are stale even though no status file
+; changed: a commit, merge or reset moves logs\HEAD, a push or fetch moves
+; origin/main's log, and gitpush Finish on main clears the binding.
+GitWatchFiles(code) => code = "main"
+    ? [BINDING_FILE, REPO "\.git\logs\HEAD", REPO "\.git\logs\refs\remotes\origin\main"]
+    : [REPO "\.git\worktrees\" code "\logs\HEAD"]
+
 RefreshGit() {
     for code in order
         sessions[code].gitDirty := true
@@ -329,10 +338,7 @@ FindCodeWindow(s, windows := "") {
     return FirstMatch(windows, CodeTitleMatches.Bind(s.folder, s.vscodeTitle))
 }
 
-; Main's chat is named by its bound project code when it has one.
-ChatCode(s) => s.code = "main" && s.project != "" ? s.project : s.code
-
-FindChromeWindow(s) => FirstMatch(listChromeWindows(), ChromeTitleMatches.Bind(ChatCode(s), s.chromeTitle))
+FindChromeWindow(s) => FirstMatch(listChromeWindows(), ChromeTitleMatches.Bind(ChatCode(s.code, mainProject), s.chromeTitle))
 
 ; VS Code maximized on monitor 1, the claude.ai chat on monitor 2. With no
 ; matching Chrome window, a saved chat link opens in a new one.
@@ -425,27 +431,33 @@ Refresh() {
         oldSince := s.since
         if ReadStatus(s)
             s.gitDirty := true
+        gitKey := StampKey(s.gitWatch)
+        if gitKey != s.gitKey
+            s.gitKey := gitKey, s.gitDirty := true
         if s.gitDirty
             GitCounts(s)
         CheckInterrupt(s)
         s.unread := IsUnread(NewestStamp([s.reportFile]), s.lastClick)
         s.misses := FindCodeWindow(s, codeWindows) ? 0 : s.misses + 1
         s.closed := s.misses >= CLOSED_AFTER
+        s.free := IsFree(code, mainProject)
+        if s.free
+            s.unseen := false
         kind := KindOf(s.hasStatus, s.state, s.red, s.interruptAt != "")
         if kind != s.kind {
             if kind = "processing"
                 s.unseen := false
-            if !s.paused && !s.closed && ShouldAlert(s.kind, kind)
-                s.unseen := true, anyAlert := true
+            if !s.paused && !s.closed && !s.free && ShouldAlert(s.kind, kind)
+                s.unseen := true, s.flashes := 0, anyAlert := true
         }
         ; A paused session that starts processing again is unpaused at once.
         if s.paused && kind = "processing" && (s.kind != "processing" || s.since != oldSince) && s.kind != ""
             SetPaused(s, false)
         s.kind := kind
         Paint(s, offset)
-        if !s.paused && !s.closed
+        if !s.paused && !s.closed && !s.free
             kinds.Push(kind)
-        tip .= code ": " (s.closed ? "closed" : s.paused ? "paused" : kind) "`n"
+        tip .= code ": " (s.free ? "free" : s.closed ? "closed" : s.paused ? "paused" : kind) "`n"
     }
     PaintStrips()
 
@@ -475,6 +487,8 @@ Label(s, offset) {
         name .= "   ±" s.changed
     if s.ahead != "" && s.ahead > 0
         name .= "   ↑" s.ahead
+    if s.free
+        return name "`nfree"
     if s.kind = "none"
         line := "no status"
     else if s.interruptAt != ""
@@ -490,11 +504,12 @@ Paint(s, offset := "") {
     if offset = ""
         offset := DateDiff(A_Now, A_NowUTC, "Minutes") * 60
     ctrl := controls[s.code]
-    color := s.unseen && blinkOn && !s.paused && !s.closed ? BLINK_COLOR
+    color := s.free ? FREE_COLOR
+        : s.unseen && blinkOn && !s.paused && !s.closed && StillFlashing(s.kind, s.flashes) ? BLINK_COLOR
         : s.closed ? CLOSED_COLOR
         : s.paused ? PAUSED_COLOR
         : COLORS.Get(s.kind, COLORS["none"])
-    look := color (s.paused || s.closed || s.kind = "none" ? " c707070" : " c000000")
+    look := color (s.paused || s.closed || s.free || s.kind = "none" ? " c707070" : " c000000")
     if look != s.painted {
         ctrl.Opt("Background" look)
         s.painted := look
@@ -510,9 +525,15 @@ Paint(s, offset := "") {
 
 Blink() {
     global blinkOn := !blinkOn
-    for code in order
-        if sessions[code].unseen
-            Paint(sessions[code])
+    for code in order {
+        s := sessions[code]
+        if !s.unseen
+            continue
+        ; A flash is counted as it goes dark, so yellow lights exactly five times.
+        if !blinkOn && StillFlashing(s.kind, s.flashes)
+            s.flashes++
+        Paint(s)
+    }
 }
 
 ; A session finished or needs you: bring the panel forward without taking
@@ -573,7 +594,7 @@ ButtonMenu(code, *) {
 ; Blank clears the override, and matching falls back to the folder or project code.
 EditTitle(s, section, app, prop) {
     r := InputBox("Text that appears in this session's " app " window title.`nLeave blank to match by "
-        . (section = "vscode" ? "folder name (" s.folder ")." : "project code (" ChatCode(s) ")."),
+        . (section = "vscode" ? "folder name (" s.folder ")." : "project code (" ChatCode(s.code, mainProject) ")."),
         s.code " - " app, "w460 h150", s.%prop%)
     if r.Result != "OK"
         return
