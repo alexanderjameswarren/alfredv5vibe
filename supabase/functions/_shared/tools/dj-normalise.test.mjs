@@ -280,6 +280,14 @@ test("Dave Brubeck: the poll's own vocabulary changed, and the direction follows
   );
 });
 
+test("Brad Mehldau: named entry toward the stored Trio form, not a Trio rule", () => {
+  assert.equal(canonicalArtist("Brad Mehldau"), "Brad Mehldau Trio");
+  assert.equal(detectArtistDisagreement("RP9XLElmYK8", "Brad Mehldau Trio", "Brad Mehldau"), null);
+  assert.ok(detectArtistDisagreement("vid", "Brad Mehldau Trio", "Bill Evans Trio"),
+    "a genuinely different act must still fire");
+  assert.equal(canonicalArtist("Bill Evans"), "Bill Evans");
+});
+
 test("the alias map does NOT strip leading articles as a rule", () => {
   // ⚠️ §14.7's trap, and the Brubeck entry is exactly the shape that invites it.
   // "Strip a leading The" would fix Brubeck and BREAK Red Garland, whose
