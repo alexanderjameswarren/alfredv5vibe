@@ -125,6 +125,43 @@ decision, not a side effect of recording these five.
 
 ---
 
+## 4. The nine *Day Is Done* tracks · decided 2026-10-02, migration 086
+
+| | |
+|---|---|
+| stored | `Brad Mehldau Trio` |
+| submitted | `Brad Mehldau` |
+
+| video_id | title | | video_id | title |
+|---|---|---|---|---|
+| `RP9XLElmYK8` | Day Is Done | | `yM7YNJXmY1o` | No Moon at All |
+| `ncM17KVGxX4` | 50 Ways to Leave Your Lover | | `bKFwfvfaSJU` | Granada |
+| `YvMaC63vdao` | She's Leaving Home | | `8XGkgjcU9QM` | Turtle Town |
+| `erg2_NslRgU` | Artis | | `6JKG8_eJVMA` | Martha My Dear |
+| `Hi_seRUIjWs` | Knives Out | | | |
+
+**Decision: leave it. Do NOT add an alias-map entry.**
+
+**Two real billings, not one act spelled twice.** An alias `Brad Mehldau` → `Brad Mehldau
+Trio` was written and withdrawn on 2026-10-02, before it was deployed, after a check found **8 solo and
+duet tracks stored under plain `Brad Mehldau`** (`VMY2rbMh4EI`, `OpRv8d910Vk`,
+`P4E5MHNHLas`, `VxzWDnfqZzY`, `8N-2n8Uf5V8`, `JQ5dVL-OEEI`, `3-WmpchW43o`, `F3BoubSfcO8`).
+
+**Why the alias map is the wrong tool.** `match_key` is frozen at write (spec §4.1.2). An
+entry toward the Trio would key future plays of those 8 as `brad mehldau trio|<title>`
+against stored `brad mehldau|<title>` rows. An entry the other way would do the same to these
+nine. Mehldau solo and the Mehldau Trio are different line-ups, so this is the crediting
+difference from §3 above, not a vocabulary variant.
+
+**Consequence, accepted knowingly:** each of these raises the disagreement whenever played,
+for as long as the rows stand.
+
+⚠️ **Open, as in §3:** the poll keys these recordings `brad mehldau|<title>`, so a poll-first
+upload of one would not group with the stored row. A decision row silences a notification; it
+repairs no identity.
+
+---
+
 ## What is NOT on this list
 
 **Collaborations no longer fire at all.** `Coldplay, BTS` vs `Coldplay` and five others used

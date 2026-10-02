@@ -293,19 +293,6 @@ export const ARTIST_ALIASES: ArtistAlias[] = [
       "Higgins runs the other way on the same shape of name, and Miles Davis " +
       "below is the Quintet case that must NOT merge.",
   },
-  {
-    from: "Brad Mehldau",
-    to: "Brad Mehldau Trio",
-    why:
-      "The Trio is Mehldau's own working band, and 'Day Is Done' is its record, " +
-      "so the two names are one act for familiarity purposes. DIRECTION IS " +
-      "TOWARD WHAT IS ALREADY STORED: the nine plays flagged from that album " +
-      "(yM7YNJXmY1o, ncM17KVGxX4, bKFwfvfaSJU, YvMaC63vdao, 8XGkgjcU9QM, " +
-      "erg2_NslRgU, RP9XLElmYK8, 6JKG8_eJVMA, Hi_seRUIjWs) are stored 'Brad " +
-      "Mehldau Trio' and the poll is sending the bare name, so this needs no " +
-      "backfill (§4.1.2). Same shape as Eddie Higgins, opposite to Ahmad Jamal. " +
-      "NAMED ENTRY ONLY, no Trio rule.",
-  },
 ];
 
 // ⚠️ MILES DAVIS IS DELIBERATELY NOT AN ENTRY, and is the case that shows this
