@@ -66,6 +66,7 @@ import {
   exclusive,
   parseArgs,
   parseSelection,
+  removeEmptyDir,
   commitsAhead,
   confirm,
   describeFile,
@@ -325,7 +326,7 @@ function doMain(w, ctx, release) {
  * it are not obvious.
  */
 function removeWorktree(w, ctx) {
-  if (gitLive(["worktree", "remove", w.path], ctx.root)) return true;
+  if (gitLive(["worktree", "remove", w.path], ctx.root)) return clearLeftover(w);
 
   // A LOCKED worktree is a different problem from a busy one, and git says so
   // rather than saying "permission denied". `claude --worktree` locks the tree
@@ -351,7 +352,15 @@ function removeWorktree(w, ctx) {
   }
 
   say(`\n  Plain removal refused. Trying --force (the work is already in ${BASE}).`);
-  if (gitLive(["worktree", "remove", "--force", w.path], ctx.root)) return true;
+  if (gitLive(["worktree", "remove", "--force", w.path], ctx.root)) return clearLeftover(w);
+
+  // git can fail after emptying the folder, when only the folder itself is held
+  // open. If it is empty or gone now, only git's own record is left to prune.
+  const left = removeEmptyDir(w.path);
+  if (left === "removed" || left === "gone") {
+    say(`\n  The folder is ${left === "gone" ? "gone" : "empty and now removed"}; pruning git's record of it.`);
+    if (gitLive(["worktree", "prune"], ctx.root)) return true;
+  }
 
   say(`\n  Could not remove the worktree. Something still has the folder open —`);
   say(`  a VS Code window or a terminal sitting in it${w.isCurrent ? ", this one included" : ""}.`);
@@ -363,6 +372,21 @@ function removeWorktree(w, ctx) {
   say(``);
   say(`  Then delete the branch:  git branch -d ${w.branch}`);
   return false;
+}
+
+/**
+ * After a successful `git worktree remove`, delete the folder if Windows left it
+ * behind empty (switchboard_stale: it kept a "no status" row in Switchboard).
+ * The worktree itself is gone either way, so this never fails the Finish.
+ */
+function clearLeftover(w) {
+  const left = removeEmptyDir(w.path);
+  if (left === "removed") say(`\n  Removed the empty folder git left behind.`);
+  if (left === "busy" || left === "not-empty") {
+    say(`\n  git removed the worktree but its folder is still there (${left}).`);
+    say(`  Close whatever has it open, then:  Remove-Item -Recurse -Force "${winPath(w.path)}"`);
+  }
+  return true;
 }
 
 const winPath = (p) => p.replace(/\//g, "\\");

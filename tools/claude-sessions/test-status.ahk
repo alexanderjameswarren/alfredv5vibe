@@ -160,6 +160,14 @@ Check("stamp key missing file", StampKey([A_Temp "\no-such-file-xyz.json"]), "|"
 orphanList := Orphans([Map("owner", "zz-orphan"), Map("owner", "k7w"), Map("owner", "main")], [Map("owner", "zz-orphan")]
     , ["k7w", "old-x"], Map("k7w", "20261001090000", "old-x", "20260927090000"), "20261001100000")
 Check("orphans", orphanList.Length = 2 ? orphanList[1] " / " orphanList[2] : orphanList.Length,"zz-orphan (2 held, no worktree) / old-x (idle 4d)")
+wtDir := A_Temp "\claude-sessions-wt-test"
+try DirDelete(wtDir, true)
+DirCreate(wtDir "\live"), DirCreate(wtDir "\left")
+FileAppend("gitdir: x", wtDir "\live\.git")
+Check("worktree with .git", IsWorktreeDir(wtDir "\live"), true)
+Check("leftover folder", IsWorktreeDir(wtDir "\left"), false)
+Check("missing folder", IsWorktreeDir(wtDir "\none"), false)
+DirDelete(wtDir, true)
 Check("unread", IsUnread("20261001100000", "20261001090000"), true)
 Check("read", IsUnread("20261001080000", "20261001090000"), false)
 Check("no report", IsUnread("", "20261001090000"), false)

@@ -356,6 +356,17 @@ FileSetTime(DateAdd(A_Now, 120, "Seconds"), watched, "M")
 Refresh()
 Expect("watched file change recounts", ms.changed >= 0, true)
 
+; --- a worktree folder left behind by gitpush gets no row ----------------------
+realRepo := REPO, REPO := dir "\repo"
+try DirDelete(REPO, true)
+DirCreate(REPO "\.claude\worktrees\live-a1b"), DirCreate(REPO "\.claude\worktrees\gone-c2d")
+FileOpen(REPO "\.claude\worktrees\live-a1b\.git", "w", "UTF-8-RAW").Write("gitdir: x")
+smokeCodes := ""
+for smokePair in Checkouts()    ; not `pair`: Sync() uses a local pair
+    smokeCodes .= smokePair[1] "|"
+Expect("leftover folder has no row", smokeCodes, "main|live-a1b|")
+REPO := realRepo
+
 ; --- the panel loads with no warnings -------------------------------------------
 wrapper := dir "\validate.ahk", warnOut := dir "\validate.txt"
 FileOpen(wrapper, "w", "UTF-8").Write("#Include " A_ScriptDir "\`n#Include claude-sessions.ahk`n#Warn All, StdOut`n")

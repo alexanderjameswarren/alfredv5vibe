@@ -312,6 +312,10 @@ Orphans(claims, reservations, worktrees, activity, now) {
     return out
 }
 
+; A folder in .claude\worktrees is a live worktree only while git's `.git` pointer
+; file is in it. `git worktree remove` can leave the folder behind, empty.
+IsWorktreeDir(dir) => FileExist(dir "\.git") != ""
+
 IsUnread(reportStamp, lastClick) => reportStamp != "" && (lastClick = "" || reportStamp > lastClick)
 
 ; Bring the panel forward and blink when a colour turns into an attention colour.

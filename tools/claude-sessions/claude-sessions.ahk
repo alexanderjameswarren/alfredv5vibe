@@ -116,7 +116,8 @@ Checkouts() {
     list := [["main", REPO]]
     names := ""
     Loop Files REPO "\.claude\worktrees\*", "D"
-        names .= A_LoopFileName "`n"
+        if IsWorktreeDir(A_LoopFileFullPath)
+            names .= A_LoopFileName "`n"
     for name in StrSplit(Sort(Trim(names, "`n")), "`n")
         if name != ""
             list.Push([name, REPO "\.claude\worktrees\" name])

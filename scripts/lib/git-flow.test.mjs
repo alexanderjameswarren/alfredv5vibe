@@ -10,12 +10,15 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import {
   defaultMessage,
   exclusive,
   parseArgs,
   parseSelection,
   pathsToAdd,
+  removeEmptyDir,
   resolveUnclaimed,
   today,
   UsageError,
@@ -231,4 +234,22 @@ test("stdin closing ends the run instead of spinning the re-ask loop", () => {
   assert.equal(r.code, 1);
   assert.doesNotMatch(r.out, /REACHED/);
   assert.match(r.out, /stdin closed/);
+});
+
+test("removeEmptyDir deletes only an empty folder", () => {
+  const base = mkdtempSync(path.join(os.tmpdir(), "gitflow-"));
+  try {
+    const empty = path.join(base, "empty");
+    const full = path.join(base, "full");
+    mkdirSync(empty);
+    mkdirSync(full);
+    writeFileSync(path.join(full, "x.txt"), "x");
+    assert.equal(removeEmptyDir(empty), "removed");
+    assert.equal(existsSync(empty), false);
+    assert.equal(removeEmptyDir(empty), "gone");
+    assert.equal(removeEmptyDir(full), "not-empty");
+    assert.equal(existsSync(path.join(full, "x.txt")), true);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });

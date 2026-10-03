@@ -22,7 +22,7 @@
 // the reason the claims system exists.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { readSync } from "node:fs";
+import { existsSync, readdirSync, readSync, rmdirSync } from "node:fs";
 import path from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -36,6 +36,23 @@ export function git(args, cwd) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
+}
+
+/**
+ * Delete `dir` only if it is empty. Windows can leave a removed worktree's
+ * folder behind, empty, while something holds a handle on it, and Switchboard
+ * shows a row for every folder in .claude\worktrees.
+ * Returns "gone", "removed", "not-empty" or "busy".
+ */
+export function removeEmptyDir(dir) {
+  if (!existsSync(dir)) return "gone";
+  if (readdirSync(dir).length) return "not-empty";
+  try {
+    rmdirSync(dir);
+    return "removed";
+  } catch {
+    return "busy";
+  }
 }
 
 /** Run git and hand back the result without throwing. */
