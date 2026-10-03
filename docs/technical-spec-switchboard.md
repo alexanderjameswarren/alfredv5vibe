@@ -2,6 +2,8 @@
 
 Progress: [progress-switchboard.md](progress-switchboard.md). Thread: `switchboard-k7w`.
 
+Chrome tab bridge (any tab, pairing by chat address, the chats section): [technical-spec-switchboard_bridge.md](technical-spec-switchboard_bridge.md). Its section 5 replaces this spec's colours, labels, alerts, taskbar rule and click behaviour. Where the two differ, the bridge spec wins.
+
 A Windows desktop panel, written in AutoHotkey v2, with one coloured button for every Claude Code session on alfred-v5: the main checkout plus each folder in `.claude\worktrees\`. The repo's Claude Code hooks write each session's state to `.clip\session-status.json` in that session's own checkout, and the panel reads those files. The panel never writes to the repo.
 
 The requirements come from `switchboard-requirements.md` (outside the repo), and the prototype is `claude-sessions.ahk`. Where this spec and the requirements differ, this spec wins.

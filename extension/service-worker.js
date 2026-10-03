@@ -39,6 +39,7 @@ import {
   OVERLAP_MAX_DIFF,
 } from "./lib/plan.js";
 import { startClip, finishClip, uploadSlice } from "./lib/api.js";
+import "./bridge.js";
 
 const LAST_RESULT_KEY = "lastResult";
 

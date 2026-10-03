@@ -165,6 +165,71 @@ no row behind — only some unused upload links, which expire on their own.
 
 ---
 
+## Switchboard bridge (Windows desktop only)
+
+The extension also feeds **Switchboard**, the desktop panel in
+`tools\claude-sessions\`. It sends the panel a list of every open tab, and a
+small status for every open claude.ai chat. The panel can then bring any tab
+forward, pair each CLI session with its chat by exact address, and show what
+needs doing.
+
+This works only on a machine where the bridge's native host is installed (the
+Windows desktop). Everywhere else (the Surface Go, the Chromebook, a new
+machine), the extension tries the host once, finds none, and stops trying until
+Chrome restarts it. **Clipping is unaffected either way.**
+
+Full design: `docs/technical-spec-switchboard_bridge.md`.
+
+### Setting it up on a PC
+
+1. Load the extension as in "Installing it on a machine" above, and fill in the
+   secret.
+2. On `chrome://extensions`, copy the extension's **ID**, the 32 letters under
+   its name.
+3. Register the host. Needs Node (`C:\Program Files\nodejs\`). Run this from
+   the checkout Chrome should use, normally the main one:
+   ```
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\claude-sessions\bridge\install.ps1 -ExtensionId <ID>
+   ```
+   It prints `installed com.alfred.switchboard`. Running it again just
+   overwrites. `-Remove` undoes it.
+4. Click **↻ reload** on the extension's card. It gave up looking for the host
+   when it first loaded.
+5. Check `%LOCALAPPDATA%\claude-sessions\bridge\tabs.json`: it should list every
+   open tab, with `extension_id` = your ID.
+
+### What it reads, and what it never reads
+
+- **Every tab:** id, window, position, title, address (without `?query` or
+  `#fragment`), whether it is active and whether it is asleep. This needs the
+  `tabs` permission.
+- **claude.ai chats only** (the `https://claude.ai/*` permission, and the
+  content script `claude-watch.js`):
+  - whether Claude is writing, finished, or the page can't be read (`unknown`);
+  - the run tag on any `Run tag:` line in Claude's latest reply, and only the tag;
+  - whether the message box is empty, true or false.
+- **Never** any message text, anything you typed, or anything from another site.
+  Nothing leaves the machine. It all goes to a local file through the host,
+  `tools\claude-sessions\bridge\host.mjs`, and that host runs no other program.
+
+### What it does when Switchboard asks
+
+- **Focus:** makes a tab active and its window focused. It can also put the
+  cursor in the chat's message box, typing nothing.
+- **Send cli** (only for an orange Switchboard button), decided on the page as it is at the moment of the click:
+  - empty box, Claude idle: types `cli` and presses Send;
+  - empty box, Claude writing: types `cli` but does not send;
+  - text in the box, or a page it can't read: only focuses.
+
+### Two copies of the extension
+
+When testing a change, a second, unpacked copy from a worktree has a different
+ID. Give `install.ps1` both IDs (`-ExtensionId <daily>,<test>`), and switch
+**one** of them on at a time: two copies would start two hosts writing the same
+files, and their keyboard shortcuts clash.
+
+---
+
 ## Notes for whoever maintains this
 
 - **No fixed extension ID.** Loaded unpacked, the ID differs on every machine.
@@ -177,7 +242,13 @@ no row behind — only some unused upload links, which expire on their own.
   `icons` block plus `action.default_icon` to `manifest.json` is all it would
   take.
 - **`host_permissions` names the Supabase project explicitly.** A different
-  project means editing `manifest.json` as well as the options page.
+  project means editing `manifest.json` as well as the options page. The
+  second entry, `https://claude.ai/*`, is for the Switchboard watcher.
+- **No `key` in the manifest, on purpose.** A key would fix the ID, but it
+  would also change the daily copy's ID and wipe its stored secret.
+  `install.ps1` takes the ID as a parameter instead.
+- **The bridge must never break a clip.** `bridge.js` wraps every Chrome call,
+  and the clip code knows nothing about it beyond the one import line.
 - **The popup is switched on and off, not declared.** Chrome fires
   `action.onClicked` only when there is no `default_popup`, so the manifest
   declares none and clicking clips. A failure turns the popup on for exactly one
@@ -224,8 +295,11 @@ no row behind — only some unused upload links, which expire on their own.
 
 | | |
 |---|---|
-| `manifest.json` | permissions, the shortcut, the entry points |
-| `service-worker.js` | the whole clip, start to finish |
+| `manifest.json` | permissions, the shortcut, the entry points, the claude.ai content script |
+| `service-worker.js` | the whole clip, start to finish, plus one line importing `bridge.js` |
+| `bridge.js` | Switchboard bridge: the native host connection, the tab and chat lists, focus and Send cli |
+| `claude-watch.js` | content script on claude.ai: writing, finished or unknown, the issued run tag, the empty box, Send cli |
+| `lib/bridge-core.js` | the bridge's pure logic (tested: `node extension/lib/bridge-core.test.mjs`) |
 | `lib/plan.js` | scale and slice arithmetic (pure, tested) |
 | `lib/page.js` | what can be clipped; reading text, links and page size; the per-tile CDP screenshot; the abort guard |
 | `lib/visible.js` | the silent visible-screen capture |

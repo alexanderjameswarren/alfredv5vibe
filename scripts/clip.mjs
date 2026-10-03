@@ -25,6 +25,7 @@
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { isCheckoutReport, writeLastReport } from "./lib/last-report.mjs";
 
 const MIN_SECRET_LENGTH = 32;
 
@@ -220,6 +221,7 @@ function gitContext() {
   };
   const top = run(["rev-parse", "--show-toplevel"]);
   return {
+    top,
     repo: top ? path.basename(top) : path.basename(process.cwd()),
     branch: run(["rev-parse", "--abbrev-ref", "HEAD"]),
   };
@@ -251,7 +253,7 @@ async function main() {
     );
   }
 
-  const { repo, branch } = gitContext();
+  const { top, repo, branch } = gitContext();
 
   // "[tag] Title" — visible in the Alfred inbox at a glance, so Alex can tell
   // two concurrent runs apart without opening anything. The tag is also stored
@@ -329,6 +331,14 @@ async function main() {
   console.log(`  size:     ${kb} KB${json.text_truncated ? " (TRUNCATED at 1 MB)" : ""}`);
   console.log(`  clip id:  ${json.clip_id}`);
   console.log(`  inbox id: ${json.inbox_id}`);
+
+  // Switchboard's signal that a report arrived, and for which run. Only for the
+  // checkout's own last-report.md; a failure here never fails the push.
+  const root = top ?? process.cwd();
+  if (isCheckoutReport(root, args.file)) {
+    const local = writeLastReport(root, { runTag: args.tag, title: baseTitle });
+    console.log(`  local:    ${local ? ".clip/last-report.json written" : "could not write .clip/last-report.json"}`);
+  }
 
   if (mismatch) {
     console.error(

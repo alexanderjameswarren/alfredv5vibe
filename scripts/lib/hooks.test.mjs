@@ -234,6 +234,54 @@ test("a blocked prompt writes blocked, and red", () => {
   assert.equal(run.status.red, true);
 });
 
+test("an allowed tagged prompt records run_tag; replies and blocks keep it", () => {
+  const dir = scratchDir();
+  const binding = path.join(dir, "project-code.json");
+  writeFileSync(binding, JSON.stringify({ code: "scratch-proj" }), "utf8");
+  const statusFile = path.join(dir, "session-status.json");
+  const cwd = scratchMain();
+  const tag = "scratch-proj-s3-ab12";
+
+  // The tag repeated as the last line, as the cli-workflow skill asks.
+  const run = runHook(`Run tag: ${tag}\n\nDo the thing.\n\nRun tag: ${tag}`, { binding, cwd, statusFile });
+  assert.equal(run.code, 0);
+  assert.equal(run.status.run_tag, tag);
+
+  assert.equal(runHook("yes", { binding, cwd, statusFile }).status.run_tag, tag);
+  const wrong = runHook("Run tag: other-proj-s1-cd34\n\nDo it.", { binding, cwd, statusFile });
+  assert.equal(wrong.code, 2);
+  assert.equal(wrong.status.run_tag, tag);
+});
+
+test("the first of two different tags wins", () => {
+  const dir = scratchDir();
+  const binding = path.join(dir, "project-code.json");
+  writeFileSync(binding, JSON.stringify({ code: "scratch-proj" }), "utf8");
+  const run = runHook("Run tag: scratch-proj-s4-ab12\n\nx\n\nRun tag: scratch-proj-s5-cd34", { binding, cwd: scratchMain() });
+  assert.equal(run.status.run_tag, "scratch-proj-s4-ab12");
+});
+
+test("IDE context ahead of the text is ignored for the tag", () => {
+  const dir = scratchDir();
+  const binding = path.join(dir, "project-code.json");
+  writeFileSync(binding, JSON.stringify({ code: "scratch-proj" }), "utf8");
+  const cwd = scratchMain();
+  const selection =
+    `<ide_selection>The user selected the lines 40 to 46:\nRun tag: rem-k4q-s1-t6v2\n</ide_selection>` +
+    `<ide_opened_file>The user opened SKILL.md. Run tag: jobs-ax4-s3-p1m9</ide_opened_file>\n`;
+  const tag = "scratch-proj-s5-ab12";
+
+  const run = runHook(`${selection}${wrap(`Run tag: ${tag}\n\nDo it.\n\nRun tag: ${tag}`)}`, { binding, cwd });
+  assert.equal(run.code, 0, run.stderr);
+  assert.equal(run.status.run_tag, tag);
+
+  // Only the selection carries a tag: untagged, so a short reply still passes, with no run_tag.
+  const reply = runHook(`${selection}yes`, { binding, cwd });
+  assert.equal(reply.code, 0);
+  assert.equal(reply.status.run_tag, null);
+  assert.equal(runHook(`${selection}${wrap(TASK_PROMPT)}`, { binding, cwd }).code, 2);
+});
+
 test("an unwritable status file changes no decision", () => {
   const statusFile = scratchDir(); // a folder, so the write fails
   assert.equal(runHook("yes", { statusFile }).code, 0);

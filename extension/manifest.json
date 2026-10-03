@@ -8,10 +8,20 @@
     "scripting",
     "storage",
     "debugger",
-    "contextMenus"
+    "contextMenus",
+    "tabs",
+    "nativeMessaging"
   ],
   "host_permissions": [
-    "https://zuqjyfqnvhddnchhpbcz.supabase.co/*"
+    "https://zuqjyfqnvhddnchhpbcz.supabase.co/*",
+    "https://claude.ai/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["claude-watch.js"],
+      "run_at": "document_idle"
+    }
   ],
   "background": {
     "service_worker": "service-worker.js",

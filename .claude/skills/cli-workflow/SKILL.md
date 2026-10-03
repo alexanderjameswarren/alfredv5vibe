@@ -35,7 +35,10 @@ clipboard, so each thread needs a way to pick up its own report and nobody
 else's. That is the run tag.
 
 **Every CLI prompt this skill generates starts with a run tag line, as its
-very first line. The shape is exact:**
+very first line, and ends with the same line repeated as its last line, inside
+the prompt block.** Nothing follows the block that repeats the tag. Switchboard
+reads the tag from the bottom of Claude's reply, and the prompt guard reads the
+first `Run tag:` line, so the two must be identical. **The shape is exact:**
 
 ```
 Run tag: <project-code>-s<step number>-<4 random lowercase letters or digits>
@@ -118,6 +121,14 @@ parseable step segment, so the alfred-v5 prompt guard blocks it.
 long ones do: alfred-v5 blocks a prompt whose tag belongs to a different window,
 and it can only do that if there is a tag. A bare one-word reply Alex types
 himself is fine; anything this skill *writes* carries a tag.
+
+### One prompt at a time
+
+**Never write a new CLI prompt while a prompt you issued in this thread has a
+report you have not yet read and processed.** Design changes discussed in the
+meantime wait, and go into the prompt written after that report. Two prompts in
+flight means the second is written against a state the first is still changing,
+and Switchboard can only show one tag per project as "to paste".
 
 ### The project code
 
@@ -487,6 +498,9 @@ it**, whether it was fetched from the clipboard or pasted. That is deliberate â€
 the whole point of the pattern is that he does not have to read CLI output.
 Every rule below follows from that one fact.
 
+Switchboard reads the `Run tag:` lines in Claude's replies, so a prompt Claude
+writes but Alex should not paste must not carry a `Run tag:` line.
+
 ### The governing assumption
 
 He has not read the report. He does not know what is in it. He cannot resolve
@@ -780,8 +794,8 @@ round trip. Migrations are always Alex's to run in the Supabase SQL editor.
 This is also the rule in alfred-v5's `CLAUDE.md`, so a prompt that asks for a
 commit will be refused there and simply wastes a round trip.
 
-Every generated CLI prompt, simple or complex, starts with its `Run tag:` line
-(see "Run tags" above) and carries this line so the CLI
+Every generated CLI prompt, simple or complex, starts with its `Run tag:` line,
+ends with the same line repeated (see "Run tags" above), and carries this line so the CLI
 follows Rule 5 when it hands SQL back:
 
 ```
@@ -797,7 +811,7 @@ result cell. Migrations and anything that changes data stay as separate statemen
 Provide a clean, copy-paste ready prompt:
 
 ```
-Run tag: [project]-[thread code]-[step]-[4 random characters]
+Run tag: <project-code>-s<step>-<4 chars>
 Window: [the main checkout | the <project code> worktree]
 
 I need you to [clear description of the change].
@@ -807,6 +821,8 @@ I need you to [clear description of the change].
 [If applicable: Reference any existing patterns or examples to follow]
 
 [The Rule 5 SQL line from above]
+
+Run tag: <project-code>-s<step>-<4 chars>
 ```
 
 Naming the files in the prompt is what lets the thread claim them without
@@ -850,7 +866,7 @@ In alfred-v5 the first prompt of a new project is the **plan**, read-only â€” se
 follows it, once Alex has confirmed the plan and the thread has claimed.
 
 ```
-Run tag: [project]-[thread code]-[step]-[4 random characters]
+Run tag: <project-code>-s<step>-<4 chars>
 Window: [the main checkout | the <project code> worktree]
 
 # Project Context
@@ -887,6 +903,8 @@ Only proceed to the next step after I confirm verification is successful.
   give each a descriptive key inside json_build_object, and tell me to paste
   back the single result cell. Migrations and anything that changes data stay
   as separate statements.
+
+Run tag: <project-code>-s<step>-<4 chars>
 ```
 
 ### Step 4: Present to User
@@ -914,7 +932,8 @@ name the window, because he has several open.
 
 **Output:**
 ```
-Run tag: alfred-q2z-dark-p3w9
+Run tag: dark_mode-q2z-s1-p3w9
+Window: the main checkout
 
 Add a dark mode toggle to the navbar component. The toggle should:
 - Use a sun/moon icon (react-icons preferred)
@@ -923,6 +942,8 @@ Add a dark mode toggle to the navbar component. The toggle should:
 - Follow the existing button styling pattern in the navbar
 
 The navbar is located at src/components/Navbar.jsx
+
+Run tag: dark_mode-q2z-s1-p3w9
 ```
 
 ### Example 2: Complex Change
@@ -970,7 +991,8 @@ Add ability to record MIDI performances and save them for playback
 
 **Initial CLI Prompt**
 ```
-Run tag: sam-m8t-midi1-h7k2
+Run tag: midi_recording-m8t-s3-h7k2
+Window: the midi_recording-m8t worktree
 
 # Project Context
 We're adding MIDI recording capability to the piano learning app. Users need to record their practice sessions and play them back.
@@ -999,6 +1021,8 @@ Wait for my verification before proceeding to the next step.
 - Update the progress file after each step
 - Add notes about implementation decisions
 - Stop and ask if anything is unclear
+
+Run tag: midi_recording-m8t-s3-h7k2
 ```
 
 ## Integration with Existing Work
