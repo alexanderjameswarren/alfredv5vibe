@@ -5,6 +5,7 @@ Persistent
 #Include lib\JSON.ahk
 #Include lib\status.ahk
 #Include lib\chrome-address.ahk
+#Include lib\bridge.ahk
 
 ; Switchboard: one button per Claude Code session on alfred-v5 (main plus each
 ; worktree), coloured from that checkout's .clip\session-status.json, which the
@@ -22,12 +23,19 @@ if !DirExist(SETTINGS_DIR)
 REPO := IniRead(SETTINGS, "panel", "repo", "C:\Users\Alex\projects\alfred-v5")
 CLAIMS_FILE := REPO "\.git\alfred-claims.json"
 BINDING_FILE := REPO "\.git\alfred-project-code.json"
+; Where the Chrome bridge host writes tabs.json (docs\technical-spec-switchboard_bridge.md).
+BRIDGE_DIR := IniRead(SETTINGS, "panel", "bridge", EnvGet("LOCALAPPDATA") "\claude-sessions\bridge")
+POINTER_FOLLOWS := IniRead(SETTINGS, "panel", "pointer", "1") != "0"   ; mouse to the window that gets the keyboard
 
-COLORS := Map("processing", "70C070", "waiting", "E8C840", "red", "E06060", "none", "F4F4F4")
 PAUSED_COLOR := "C8C8C8"
 CLOSED_COLOR := "E4E4E4"
 FREE_COLOR := "D4D4D4"     ; main with no project bound
 BLINK_COLOR := "FFFFFF"
+; Colour says which window to go to; the label says what to do there (bridge spec, section 5).
+COLORS := Map("green", "70C070", "yellow", "E8C840", "red", "E06060", "orange", "F0A040", "purple", "B48CE6"
+    , "grey", "D8D8D8", "none", "F4F4F4", "paused", PAUSED_COLOR, "closed", CLOSED_COLOR, "free", FREE_COLOR)
+DIM_COLORS := "grey|none|paused|closed|free"   ; drawn with grey text
+CHAT_ROWS_MAX := 8, CHAT_ROW_H := 36
 TAIL_BYTES := 16384        ; how much of a transcript's end is searched for an interrupt
 BUTTON_W := 280, BUTTON_H := 44, PAUSE_W := 64, GAP := 6, STRIP_H := 20
 VS_MONITOR := 1, CHROME_MONITOR := 2
@@ -46,11 +54,19 @@ lastTaskbar := -1
 needsResize := true
 claimsRaw := "", claimsState := Map("claims", [], "reservations", [])
 mainProject := ""          ; main's bound project code, from BINDING_FILE; "" when free
+chatRows := []             ; Text controls for unpaired claude.ai chats, reused in order
+rowTabs := []              ; tabId shown in each visible chat row
+rowState := Map()          ; tabId -> {color, unseen, flashes, painted} for unpaired chats
+shownRows := -1            ; chat rows laid out last time
+tipFor := Map()            ; session button hwnd -> project code, for the step tooltip
 ; Swappable so smoke-test.ahk can run without real windows.
 listCodeWindows := ListWindows.Bind("ahk_exe Code.exe")
 listChromeWindows := ListWindows.Bind("ahk_exe chrome.exe")
 chromeAddressReader := ReadChromeAddress
 placeWindow := PutOnMonitor
+focusRequester := SendFocus
+activateWindow := (hwnd) => (WinExist("ahk_id " hwnd) && WinActivate(hwnd))
+pointerMover := MovePointerTo
 arrangeAction := Arrange
 
 ; ---------------------------------------------------------------------------
@@ -83,6 +99,8 @@ A_TrayMenu.ClickCount := 1
 taskbar := ComObject("{56FDF344-FD6D-11d0-958A-006097C9A090}", "{ea1afb91-9e28-4b86-90e9-9e9f8a5eefaf}")
 ComCall(3, taskbar)        ; HrInit
 
+OnMessage(0x200, ShowStepTip)   ; WM_MOUSEMOVE
+
 Refresh()
 panel.Show("AutoSize")
 lastTaskbar := -1
@@ -105,10 +123,10 @@ Checkouts() {
     return list
 }
 
-; Add buttons for new worktrees, hide those whose folder has gone, and put the
-; strips under the last button.
+; Add buttons for new worktrees, hide those whose folder has gone, and lay out
+; the buttons, the chat rows and the strips again when either list changes.
 Sync() {
-    global order, needsResize
+    global order, shownRows
     fresh := [], seen := Map()
     for pair in Checkouts() {
         code := pair[1], seen[code] := true, fresh.Push(code)
@@ -121,21 +139,29 @@ Sync() {
             pauseButtons[code].Visible := false
             sessions.Delete(code)
         }
-    if JoinCodes(fresh) != JoinCodes(order) {
-        order := fresh
-        x := panel.MarginX, y := panel.MarginY
-        for code in order {
-            controls[code].Move(x, y, BUTTON_W, BUTTON_H)
-            pauseButtons[code].Move(x + BUTTON_W + 4, y, PAUSE_W, BUTTON_H)
-            controls[code].Visible := true
-            pauseButtons[code].Visible := true
-            y += BUTTON_H + GAP
-        }
-        dbStripCtl.Move(x, y), y += STRIP_H + 2
-        mainStripCtl.Move(x, y), gitButton.Move(x + STRIP_W - 76, y), y += STRIP_H + 2
-        orphanStripCtl.Move(x, y)
-        needsResize := true
+    if JoinCodes(fresh) != JoinCodes(order)
+        order := fresh, shownRows := -1
+}
+
+Layout(rows) {
+    global shownRows, needsResize
+    x := panel.MarginX, y := panel.MarginY
+    for code in order {
+        controls[code].Move(x, y, BUTTON_W, BUTTON_H)
+        pauseButtons[code].Move(x + BUTTON_W + 4, y, PAUSE_W, BUTTON_H)
+        controls[code].Visible := true
+        pauseButtons[code].Visible := true
+        y += BUTTON_H + GAP
     }
+    for i, row in chatRows {
+        row.Visible := i <= rows
+        if i <= rows
+            row.Move(x, y, STRIP_W, CHAT_ROW_H), y += CHAT_ROW_H + GAP
+    }
+    dbStripCtl.Move(x, y), y += STRIP_H + 2
+    mainStripCtl.Move(x, y), gitButton.Move(x + STRIP_W - 76, y), y += STRIP_H + 2
+    orphanStripCtl.Move(x, y)
+    shownRows := rows, needsResize := true
 }
 
 JoinCodes(list) {
@@ -151,6 +177,7 @@ NewSession(code, root) {
         ctrl.OnEvent("Click", ButtonClick.Bind(code))
         ctrl.OnEvent("ContextMenu", ButtonMenu.Bind(code))
         controls[code] := ctrl
+        tipFor[ctrl.Hwnd] := code
         btn := panel.AddButton("Hidden w" PAUSE_W " h" BUTTON_H, "Pause")
         btn.OnEvent("Click", PauseClick.Bind(code))
         pauseButtons[code] := btn
@@ -166,10 +193,13 @@ NewSession(code, root) {
         code: code, root: root, folder: folder,
         statusFile: root "\.clip\session-status.json",
         reportFile: root "\.clip\last-report.md",
+        reportMetaFile: root "\.clip\last-report.json",
         raw: "", hasStatus: false,
-        state: "", since: "", red: false, project: "", transcript: "", sessionId: "",
+        state: "", since: "", red: false, project: "", transcript: "", sessionId: "", runTag: "",
+        metaRaw: "", reportTag: "", reportAt: "",
         tKey: "", interruptAt: "",
-        kind: "", unseen: false, flashes: 0, free: false, painted: "",
+        kind: "", color: "", label: "", step: "",
+        unseen: false, flashes: 0, free: false, painted: "",
         misses: CLOSED_AFTER - 1, closed: false,   ; the first poll decides at once
         lastClick: lastClick, unread: false,
         gitDirty: true, changed: "", ahead: "",     ; git runs on the first poll
@@ -199,7 +229,24 @@ ReadStatus(s) {
     s.state := data.Get("state", ""), s.since := data.Get("since", "")
     s.red := !!data.Get("red", 0), s.project := data.Get("project", "")
     s.transcript := data.Get("transcript_path", ""), s.sessionId := data.Get("session_id", "")
+    s.runTag := data.Get("run_tag", "")
     return true
+}
+
+; .clip\last-report.json, written by clip.mjs: the last report's run tag and push time.
+ReadReportMeta(s) {
+    try text := FileRead(s.reportMetaFile, "UTF-8")
+    catch {
+        if !FileExist(s.reportMetaFile)
+            s.metaRaw := "", s.reportTag := "", s.reportAt := ""
+        return
+    }
+    if text == s.metaRaw
+        return
+    try data := JSON.parse(text)
+    catch
+        return
+    s.metaRaw := text, s.reportTag := data.Get("run_tag", ""), s.reportAt := data.Get("pushed_at", "")
 }
 
 ; Approval or processing with an interrupt line after `since` shows as waiting.
@@ -340,18 +387,34 @@ FindCodeWindow(s, windows := "") {
 
 FindChromeWindow(s) => FirstMatch(listChromeWindows(), ChromeTitleMatches.Bind(ChatCode(s.code, mainProject), s.chromeTitle))
 
-; VS Code maximized on monitor 1, the claude.ai chat on monitor 2. With no
-; matching Chrome window, a saved chat link opens in a new one.
+; VS Code maximized on monitor 1, the claude.ai chat on monitor 2. The chat's tab
+; is found by its saved address through the bridge when tabs.json is fresh;
+; otherwise by window title, and with no match a saved chat link opens in a new window.
+; The keyboard goes to the window that needs Alex: VS Code for red and a working
+; CLI, otherwise the chat, with the cursor in its message box.
 Arrange(s) {
-    if hwnd := FindCodeWindow(s)
-        placeWindow(hwnd, VS_MONITOR)
+    toCode := FocusTarget(s.color, s.label) = "code"
+    codeHwnd := FindCodeWindow(s)
+    if codeHwnd
+        placeWindow(codeHwnd, VS_MONITOR)
+    ; Only orange types, and the extension decides from the live page (Send cli).
+    chromeHwnd := ArrangeChrome(s, !toCode, s.color = "orange" ? "sendcli" : "focus")
+    if toCode && codeHwnd
+        activateWindow(codeHwnd)
+    PointTo(toCode ? codeHwnd : chromeHwnd)
+}
+
+; Returns the Chrome window it placed, or 0.
+ArrangeChrome(s, composer, action := "focus") {
+    if hwnd := BridgeArrange(s, composer, action)
+        return hwnd
     if hwnd := FindChromeWindow(s) {
         SaveLinkFrom(s, hwnd)
         placeWindow(hwnd, CHROME_MONITOR)
-        return
+        return hwnd
     }
     if s.chatLink = ""
-        return
+        return 0
     before := Map()
     for w in listChromeWindows()
         before[w.hwnd] := true
@@ -362,9 +425,29 @@ Arrange(s) {
         for w in listChromeWindows()
             if !before.Has(w.hwnd) && w.title != "" {
                 placeWindow(w.hwnd, CHROME_MONITOR)
-                return
+                return w.hwnd
             }
     }
+    return 0
+}
+
+; The mouse pointer follows the keyboard, so scrolling works where Alex types.
+; [panel] pointer=0 in settings.ini turns it off.
+PointTo(hwnd) {
+    if hwnd && POINTER_FOLLOWS
+        pointerMover(hwnd)
+}
+
+; Centre of the window, in physical screen pixels on any monitor: both calls run
+; per-monitor DPI aware, so a scaled monitor does not skew the position.
+MovePointerTo(hwnd) {
+    old := DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+    try {
+        WinGetPos(&x, &y, &w, &h, "ahk_id " hwnd)
+        c := WindowCentre(x, y, w, h)
+        DllCall("SetCursorPos", "int", c.x, "int", c.y)
+    }
+    DllCall("SetThreadDpiAwarenessContext", "ptr", old, "ptr")
 }
 
 ; Save the matched window's chat address as this session's link. Only for an
@@ -424,13 +507,16 @@ Refresh() {
     mainProject := MainCode()
     offset := DateDiff(A_Now, A_NowUTC, "Minutes") * 60
     codeWindows := listCodeWindows()
-    kinds := [], tip := "", anyAlert := false
+    ReadTabs(), ReadChats()
+    chatsOk := ChatsFresh()    ; not `chatsFresh` or `colors`: names are case-insensitive
+    liveColors := [], tip := "", anyAlert := false, paired := Map()
 
     for code in order {
         s := sessions[code]
         oldSince := s.since
         if ReadStatus(s)
             s.gitDirty := true
+        ReadReportMeta(s)
         gitKey := StampKey(s.gitWatch)
         if gitKey != s.gitKey
             s.gitKey := gitKey, s.gitDirty := true
@@ -441,29 +527,37 @@ Refresh() {
         s.misses := FindCodeWindow(s, codeWindows) ? 0 : s.misses + 1
         s.closed := s.misses >= CLOSED_AFTER
         s.free := IsFree(code, mainProject)
-        if s.free
-            s.unseen := false
+        project := ChatCode(code, mainProject)
+        LearnChatLink(s, project)
+        if s.chatLink != ""
+            paired[NormaliseUrl(s.chatLink)] := true
+        chat := chatsOk ? FindTabByLink(chatsList, s.chatLink) : ""
         kind := KindOf(s.hasStatus, s.state, s.red, s.interruptAt != "")
-        if kind != s.kind {
-            if kind = "processing"
-                s.unseen := false
-            if !s.paused && !s.closed && !s.free && ShouldAlert(s.kind, kind)
-                s.unseen := true, s.flashes := 0, anyAlert := true
-        }
         ; A paused session that starts processing again is unpaused at once.
         if s.paused && kind = "processing" && (s.kind != "processing" || s.since != oldSince) && s.kind != ""
             SetPaused(s, false)
         s.kind := kind
+        issued := chat ? chat.Get("issuedTag", "") : ""
+        v := ViewOf({free: s.free, closed: s.closed, paused: s.paused, kind: kind, runTag: s.runTag
+            , reportTag: s.reportTag, reportAt: s.reportAt, chatState: chat ? chat.Get("state", "") : ""
+            , chatSince: chat ? chat.Get("since", "") : "", issuedTag: issued, project: project})
+        if v.color != s.color {
+            s.unseen := false
+            if ShouldAlert(s.color, v.color)
+                s.unseen := true, s.flashes := 0, anyAlert := true
+        }
+        s.color := v.color, s.label := v.label, s.step := StepText(s.runTag, issued, project)
         Paint(s, offset)
         if !s.paused && !s.closed && !s.free
-            kinds.Push(kind)
-        tip .= code ": " (s.free ? "free" : s.closed ? "closed" : s.paused ? "paused" : kind) "`n"
+            liveColors.Push(s.color)
+        tip .= code ": " (s.free ? "free" : s.closed ? "closed" : s.paused ? "paused" : s.label) "`n"
     }
+    anyAlert := RefreshChatRows(chatsOk ? chatsList : [], paired, liveColors) || anyAlert
     PaintStrips()
 
     A_IconTip := SubStr(Trim(tip, "`n"), 1, 127)
 
-    flag := TaskbarFlag(kinds)
+    flag := TaskbarFlag(liveColors)
     if flag != lastTaskbar {
         if flag
             ComCall(9, taskbar, "ptr", panel.Hwnd, "int64", 100, "int64", 100)  ; fill the bar
@@ -490,26 +584,24 @@ Label(s, offset) {
     if s.free
         return name "`nfree"
     if s.kind = "none"
-        line := "no status"
-    else if s.interruptAt != ""
-        line := "interrupted " FormatEntered(s.interruptAt, offset)
-    else if s.kind = "processing" && !s.closed
-        line := "processing " FormatElapsed(DateDiff(A_NowUTC, IsoToStamp(s.since), "Seconds"))
-    else
-        line := s.state " " FormatEntered(s.since, offset)
-    return name "`n" (s.closed ? "closed · " : "") (s.paused ? "paused · " : "") line
+        return name "`nno status"
+    processing := s.kind = "processing" && !s.closed
+    time := s.interruptAt != "" ? "interrupted " FormatEntered(s.interruptAt, offset)
+        : processing ? FormatElapsed(DateDiff(A_NowUTC, IsoToStamp(s.since), "Seconds"))
+        : FormatEntered(s.since, offset)
+    if s.closed || s.paused
+        return name "`n" (s.closed ? "closed · " : "") (s.paused ? "paused · " : "")
+            . (s.interruptAt != "" ? "" : s.state " ") time
+    ; "s9 -> s10 · Paste prompt · 10:45": the run-tag step, what to do, and when.
+    return name "`n" (s.step != "" ? s.step " · " : "") s.label " · " time
 }
 
 Paint(s, offset := "") {
     if offset = ""
         offset := DateDiff(A_Now, A_NowUTC, "Minutes") * 60
     ctrl := controls[s.code]
-    color := s.free ? FREE_COLOR
-        : s.unseen && blinkOn && !s.paused && !s.closed && StillFlashing(s.kind, s.flashes) ? BLINK_COLOR
-        : s.closed ? CLOSED_COLOR
-        : s.paused ? PAUSED_COLOR
-        : COLORS.Get(s.kind, COLORS["none"])
-    look := color (s.paused || s.closed || s.free || s.kind = "none" ? " c707070" : " c000000")
+    color := s.unseen && blinkOn && StillFlashing(s.flashes) ? BLINK_COLOR : COLORS.Get(s.color, COLORS["none"])
+    look := color (InStr("|" DIM_COLORS "|", "|" s.color "|") ? " c707070" : " c000000")
     if look != s.painted {
         ctrl.Opt("Background" look)
         s.painted := look
@@ -529,11 +621,120 @@ Blink() {
         s := sessions[code]
         if !s.unseen
             continue
-        ; A flash is counted as it goes dark, so yellow lights exactly five times.
-        if !blinkOn && StillFlashing(s.kind, s.flashes)
+        ; A flash is counted as it goes dark, so a colour lights exactly five times.
+        if !blinkOn && StillFlashing(s.flashes)
             s.flashes++
         Paint(s)
     }
+    for i, tabId in rowTabs {
+        r := rowState[tabId]
+        if !r.unseen
+            continue
+        if !blinkOn && StillFlashing(r.flashes)
+            r.flashes++
+        PaintRow(i, r)
+    }
+}
+
+; ---------------------------------------------------------------------------
+; Unpaired claude.ai chats
+; ---------------------------------------------------------------------------
+
+; One row per chat no session is paired with. Returns true when one turns to an
+; attention colour. Adds the rows' colours to `colors` for the taskbar.
+RefreshChatRows(chats, paired, liveColors) {
+    global rowTabs
+    shown := [], rowAlert := false, live := Map()
+    for c in chats {
+        if !IsObject(c) || paired.Has(NormaliseUrl(c.Get("url", ""))) || shown.Length >= CHAT_ROWS_MAX
+            continue
+        tabId := c.Get("tabId", "")
+        v := ChatRowView(c.Get("state", ""), c.Get("since", ""), c.Get("viewedAt", ""))
+        if !rowState.Has(tabId)
+            rowState[tabId] := {color: "", unseen: false, flashes: 0, painted: "", text: "", row: 0}
+        r := rowState[tabId]
+        if v.color != r.color {
+            r.unseen := false
+            if ShouldAlert(r.color, v.color)
+                r.unseen := true, r.flashes := 0, rowAlert := true
+            r.color := v.color
+        }
+        r.text := ChatRowTitle(c.Get("title", "")) "`n" v.label
+        live[tabId] := true
+        shown.Push(tabId)
+        if r.color != "grey"
+            liveColors.Push(r.color)
+    }
+    for tabId in rowState.Clone()
+        if !live.Has(tabId)
+            rowState.Delete(tabId)
+    while chatRows.Length < shown.Length {
+        row := panel.AddText("Hidden Center Border w" STRIP_W " h" CHAT_ROW_H, "")
+        row.OnEvent("Click", ChatRowClick.Bind(chatRows.Length + 1))
+        chatRows.Push(row)
+    }
+    rowTabs := shown
+    if shown.Length != shownRows
+        Layout(shown.Length)
+    for i, tabId in shown {
+        r := rowState[tabId]
+        if r.row != i                     ; this chat moved to another row
+            r.row := i, r.painted := ""
+        PaintRow(i, r)
+    }
+    return rowAlert
+}
+
+ChatRowTitle(title) {
+    title := RegExReplace(title, "\s+-\s+Claude$")
+    return StrLen(title) > 44 ? SubStr(title, 1, 43) "…" : title
+}
+
+PaintRow(i, r) {
+    row := chatRows[i]
+    color := r.unseen && blinkOn && StillFlashing(r.flashes) ? BLINK_COLOR : COLORS.Get(r.color, COLORS["grey"])
+    look := color (r.color = "grey" ? " c707070" : " c000000")
+    if look != r.painted
+        row.Opt("Background" look), r.painted := look, row.Redraw()
+    if row.Text != r.text
+        row.Text := r.text
+}
+
+ChatRowClick(i, *) {
+    if i > rowTabs.Length
+        return
+    r := rowState[rowTabs[i]]
+    r.unseen := false
+    PaintRow(i, r)
+    PointTo(FocusAndPlace(rowTabs[i], true))
+}
+
+; With no saved link and no typed Chrome title, save the address of a claude.ai
+; chat tab, in any window, whose title carries the project code.
+LearnChatLink(s, project) {
+    if s.chatLink != "" || s.chromeTitle != "" || s.free || !TabsFresh()
+        return
+    link := FindChatLinkByCode(tabsList, project)
+    if link = ""
+        return
+    s.chatLink := link
+    IniWrite(link, SETTINGS, "chatlink", s.code)
+}
+
+; Hovering a session button shows "Step N of M: <name>" from its progress file.
+ShowStepTip(wParam, lParam, msg, hwnd) {
+    static last := 0
+    if hwnd = last
+        return
+    last := hwnd
+    if !tipFor.Has(hwnd) || !sessions.Has(tipFor[hwnd]) {
+        ToolTip()
+        return
+    }
+    s := sessions[tipFor[hwnd]]
+    text := ""
+    try text := ProgressSummary(FileRead(s.root "\docs\progress-" ProjectName(ChatCode(s.code, mainProject)) ".md", "UTF-8"))
+    ToolTip(text = "" ? "" : text)
 }
 
 ; A session finished or needs you: bring the panel forward without taking

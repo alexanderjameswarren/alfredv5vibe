@@ -38,6 +38,7 @@ import { ClaimsError, resolveCheckout } from "../../scripts/lib/claims-core.mjs"
 import {
   classifyPrompt,
   codeOfCheckout,
+  machineEnvelope,
   projectOfTag,
   TAG_EXAMPLE,
   TAG_FORMAT,
@@ -59,6 +60,14 @@ const ALLOW = 0;
 const BLOCK = 2;
 
 const entry = { root: null };
+
+// Context the VS Code panel attaches ahead of Alex's text (<ide_selection>,
+// <ide_opened_file>, …). A selection can hold example run tags, so it must not count.
+const IDE_CONTEXT = /<(ide_[a-z_]+)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
+
+function stripIdeContext(prompt) {
+  return String(prompt).replace(IDE_CONTEXT, "");
+}
 
 function log(decision, detail) {
   try {
@@ -95,6 +104,8 @@ function status(state) {
     writeSessionStatus(root, state, {
       sessionId: entry.sessionId,
       transcriptPath: entry.transcriptPath,
+      // Only an allowed prompt moves the CLI to a new run.
+      runTag: state === "processing" ? entry.tag : undefined,
       event: "UserPromptSubmit",
     });
   } catch {
@@ -136,7 +147,10 @@ function main() {
 
   // The panel's paste wrappers come off first: the run tag and a typed
   // "override:" both sit inside or after them.
-  const prompt = classifyPrompt(payload?.prompt ?? "");
+  const raw = String(payload?.prompt ?? "");
+  const prompt = classifyPrompt(stripIdeContext(raw));
+  // Envelopes are judged on the raw prompt, so stripping cannot uncover a forged one.
+  prompt.machine = machineEnvelope(raw);
   const wrapped = prompt.wrapped ? " unwrapped" : "";
   if (!prompt.text.trim()) allow(`empty prompt${wrapped}`);
 
@@ -173,6 +187,7 @@ function main() {
   const tag = prompt.tag;
 
   if (tag) {
+    entry.tag = tag;
     const wanted = projectOfTag(tag);
     if (!wanted) {
       // A tag that cannot be read is a tag that cannot be checked. This used to

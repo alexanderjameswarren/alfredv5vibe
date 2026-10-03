@@ -59,6 +59,16 @@ test("since holds while the state holds; session_id carries over", () => {
   assert.equal(again.session_id, "abc");
 });
 
+test("run_tag is set by a tagged write and carried over", () => {
+  const { root, file } = checkout({ worktree: true, name: "k7w" });
+  assert.equal(writeSessionStatus(root, "processing").run_tag, null);
+  assert.equal(writeSessionStatus(root, "processing", { runTag: "k7w-s2-ab12" }).run_tag, "k7w-s2-ab12");
+  assert.equal(writeSessionStatus(root, "waiting").run_tag, "k7w-s2-ab12");
+  runHook(JSON.stringify({ hook_event_name: "Notification", notification_type: "permission_prompt" }), root);
+  assert.equal(readStatus(file).run_tag, "k7w-s2-ab12");
+  assert.equal(writeSessionStatus(root, "processing", { runTag: "k7w-s3-cd34" }).run_tag, "k7w-s3-cd34");
+});
+
 test("atomic write leaves no temp file", () => {
   const { root, file } = checkout();
   writeSessionStatus(root, "processing");

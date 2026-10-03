@@ -33,15 +33,78 @@ Check("kind red latch", KindOf(true, "waiting", true, false), "red")
 Check("kind interrupted", KindOf(true, "approval", true, true), "waiting")
 Check("kind processing", KindOf(true, "processing", false, false), "processing")
 
-Check("taskbar red", TaskbarFlag(["processing", "red", "waiting"]), 4)
-Check("taskbar yellow", TaskbarFlag(["processing", "waiting"]), 8)
-Check("taskbar green", TaskbarFlag(["none", "processing"]), 2)
-Check("taskbar none", TaskbarFlag([]), 0)
+Check("taskbar red", TaskbarFlag(["green", "red", "yellow"]), 4)
+Check("taskbar purple is yellow", TaskbarFlag(["green", "purple"]), 8)
+Check("taskbar orange is yellow", TaskbarFlag(["orange", "green"]), 8)
+Check("taskbar green", TaskbarFlag(["grey", "green"]), 2)
+Check("taskbar none", TaskbarFlag(["grey"]), 0)
 
-Check("alert red", ShouldAlert("processing", "red"), true)
-Check("alert finish", ShouldAlert("processing", "waiting"), true)
-Check("no alert red to waiting", ShouldAlert("red", "waiting"), false)
+Check("alert red", ShouldAlert("green", "red"), true)
+Check("alert finish", ShouldAlert("green", "yellow"), true)
+Check("alert purple", ShouldAlert("orange", "purple"), true)
+Check("no alert to green", ShouldAlert("yellow", "green"), false)
+Check("no alert to grey", ShouldAlert("green", "grey"), false)
 Check("no alert first read", ShouldAlert("", "red"), false)
+
+; --- the state model (bridge spec, section 5) ---
+P(kind, chatState := "finished", opts := "") {
+    fields := {free: false, closed: false, paused: false, kind: kind, runTag: "proj-abc-s9-aaaa", reportTag: "proj-abc-s9-aaaa"
+        , reportAt: "2026-10-03T10:00:00.000Z", chatState: chatState, chatSince: "2026-10-03T10:05:00.000Z"
+        , issuedTag: "", project: "proj-abc"}
+    if IsObject(opts)
+        for key, val in opts.OwnProps()
+            fields.%key% := val
+    return ViewOf(fields)
+}
+V(view) => view.color " / " view.label
+Check("view approve", V(P("red")), "red / Approve")
+Check("view check cli", V(P("waiting", , {reportTag: "proj-abc-s8-zzzz"})), "red / Check CLI")
+Check("view no tag, no check", V(P("waiting", , {runTag: "", reportTag: ""})), "yellow / Your turn")
+Check("view cli working", V(P("processing", "finished")), "green / CLI working")
+Check("view claude writing", V(P("waiting", "responding")), "green / Claude writing")
+Check("view both", V(P("processing", "responding")), "green / Both working")
+Check("view send cli", V(P("waiting", , {chatSince: "2026-10-03T09:59:00.000Z"})), "orange / Send cli")
+Check("view paste prompt", V(P("waiting", , {issuedTag: "proj-abc-s10-bbbb"})), "purple / Paste prompt")
+Check("view other project's tag", V(P("waiting", , {issuedTag: "other-xyz-s10-bbbb"})), "yellow / Your turn")
+Check("view your turn", V(P("waiting")), "yellow / Your turn")
+Check("view chat unknown", V(P("waiting", "unknown")), "grey / chat unknown")
+Check("view unpaired", V(P("waiting", "")), "grey / chat unknown")
+Check("view paused", V(P("processing", , {paused: true})), "paused / paused")
+Check("view no status", V(P("none")), "none / no status")
+
+centre := WindowCentre(-8, -8, 1936, 1056)
+Check("centre, monitor 1", centre.x "," centre.y, "960,520")
+centre := WindowCentre(1912, -8, 1296, 2072)
+Check("centre, monitor 2", centre.x "," centre.y, "2560,1028")
+centre := WindowCentre(-1288, 200, 1280, 800)
+Check("centre, monitor left of the main one", centre.x "," centre.y, "-648,600")
+Check("keyboard: red to VS Code", FocusTarget("red", "Check CLI"), "code")
+Check("keyboard: CLI working to VS Code", FocusTarget("green", "CLI working"), "code")
+Check("keyboard: both working to VS Code", FocusTarget("green", "Both working"), "code")
+Check("keyboard: Claude writing to Chrome", FocusTarget("green", "Claude writing"), "chrome")
+Check("keyboard: purple to Chrome", FocusTarget("purple", "Paste prompt"), "chrome")
+Check("keyboard: orange to Chrome", FocusTarget("orange", "Send cli"), "chrome")
+Check("keyboard: grey to Chrome", FocusTarget("grey", "chat unknown"), "chrome")
+
+Check("step", StepOf("proj-abc-s9b-x1y2"), "s9b")
+Check("tag project", ProjectOfTag("switchboard_bridge-p8v-s10-g5wy"), "switchboard_bridge-p8v")
+Check("step text", StepText("proj-abc-s9-aaaa", "", "proj-abc"), "s9")
+Check("step text newer", StepText("proj-abc-s9-aaaa", "proj-abc-s10-bbbb", "proj-abc"), "s9 -> s10")
+Check("step text same", StepText("proj-abc-s9-aaaa", "proj-abc-s9-aaaa", "proj-abc"), "s9")
+
+Check("row writing", V(ChatRowView("responding", "", "")), "green / Claude writing")
+Check("row finished unseen", V(ChatRowView("finished", "2026-10-03T10:05:00Z", "2026-10-03T10:00:00Z")), "yellow / finished")
+Check("row finished seen", V(ChatRowView("finished", "2026-10-03T10:05:00Z", "2026-10-03T10:06:00Z")), "grey / seen")
+Check("row unknown", V(ChatRowView("unknown", "", "")), "grey / unknown")
+
+progressText := "# P`n- [x] **1. Plan.** done`n  - [ ] nested, not a step`n- [ ] **2. Host and install.** Written`n- [ ] **3. Third.**`n"
+Check("progress summary", ProgressSummary(progressText), "Step 2 of 3: Host and install")
+Check("progress all done", ProgressSummary("- [x] a`n- [x] b"), "Step 2 of 2: done")
+Check("progress none", ProgressSummary("no steps"), "")
+Check("project name", ProjectName("switchboard_bridge-p8v"), "switchboard_bridge")
+learnTabs := [Map("url", "https://claude.ai/chat/z?x", "title", "proj-abc plan - Claude"), Map("url", "https://x/", "title", "proj-abc - Claude")]
+Check("learn link", FindChatLinkByCode(learnTabs, "proj-abc"), "https://claude.ai/chat/z")
+Check("learn nothing", FindChatLinkByCode(learnTabs, "other"), "")
 
 Check("code title", CodeTitleMatches("switchboard-k7w", "", "claude-sessions.ahk - switchboard-k7w - Visual Studio Code"), true)
 Check("code title, folder only", CodeTitleMatches("alfred-v5", "", "alfred-v5 - Visual Studio Code"), true)
@@ -91,9 +154,8 @@ Check("chat code worktree", ChatCode("k7w", "rem-j7p"), "k7w")
 Check("main free", IsFree("main", ""), true)
 Check("main bound not free", IsFree("main", "rem-j7p"), false)
 Check("worktree never free", IsFree("k7w", ""), false)
-Check("yellow flashes 5", StillFlashing("waiting", 4), true)
-Check("yellow then solid", StillFlashing("waiting", 5), false)
-Check("red keeps flashing", StillFlashing("red", 50), true)
+Check("flashes 5", StillFlashing(4), true)
+Check("then solid", StillFlashing(5), false)
 Check("stamp key missing file", StampKey([A_Temp "\no-such-file-xyz.json"]), "|")
 orphanList := Orphans([Map("owner", "zz-orphan"), Map("owner", "k7w"), Map("owner", "main")], [Map("owner", "zz-orphan")]
     , ["k7w", "old-x"], Map("k7w", "20261001090000", "old-x", "20260927090000"), "20261001100000")
@@ -101,6 +163,18 @@ Check("orphans", orphanList.Length = 2 ? orphanList[1] " / " orphanList[2] : orp
 Check("unread", IsUnread("20261001100000", "20261001090000"), true)
 Check("read", IsUnread("20261001080000", "20261001090000"), false)
 Check("no report", IsUnread("", "20261001090000"), false)
+
+Check("url query and fragment dropped", NormaliseUrl("https://claude.ai/chat/a?x=1#y"), "https://claude.ai/chat/a")
+Check("fresh at 45 s", IsFresh("2026-10-02T10:00:00.000Z", "20261002100045"), true)
+Check("stale at 46 s", IsFresh("2026-10-02T10:00:00.000Z", "20261002100046"), false)
+Check("no at is stale", IsFresh("", "20261002100000"), false)
+tabList := [Map("tabId", 1, "url", "https://claude.ai/chat/a"), Map("tabId", 2, "url", "https://claude.ai/chat/b")]
+Check("tab by link", FindTabByLink(tabList, "https://claude.ai/chat/b?x").Get("tabId"), 2)
+Check("no tab for link", FindTabByLink(tabList, "https://claude.ai/chat/c"), "")
+Check("no link, no tab", FindTabByLink(tabList, ""), "")
+Check("window title prefix", WindowTitleStarts("Plan - Claude", "Plan - Claude - Google Chrome"), true)
+Check("window title other", WindowTitleStarts("Plan - Claude", "Other - Google Chrome"), false)
+Check("empty title never matches", WindowTitleStarts("", "Anything"), false)
 
 ; #Warn only prints, so load this file again with /validate and fail on any warning.
 warnOut := A_Temp "\claude-sessions-test-warnings.txt"

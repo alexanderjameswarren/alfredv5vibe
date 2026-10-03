@@ -65,7 +65,7 @@ export function projectFor(root, prev) {
 }
 
 /** The next record: red latches on approval/blocked and clears only on processing. */
-export function nextStatus(prev, state, { root, sessionId, transcriptPath, event, now = new Date() }) {
+export function nextStatus(prev, state, { root, sessionId, transcriptPath, runTag, event, now = new Date() }) {
   const red = state === "approval" || state === "blocked" ? true : state === "processing" ? false : !!prev?.red;
   return {
     state,
@@ -74,6 +74,8 @@ export function nextStatus(prev, state, { root, sessionId, transcriptPath, event
     session_id: sessionId || prev?.session_id || null,
     // The panel tails it for the interrupt line, which no hook reports.
     transcript_path: transcriptPath || prev?.transcript_path || null,
+    // The CLI's current run: set by a tagged prompt, carried over by every other write.
+    run_tag: runTag || prev?.run_tag || null,
     red,
     event: event ?? null,
   };
@@ -108,13 +110,13 @@ export function writeAtomic(file, text) {
  * Record `state` for the checkout at `root`. Returns the record written, or
  * null if nothing was written. Never throws.
  */
-export function writeSessionStatus(root, state, { sessionId, transcriptPath, event, file, onlyIf } = {}) {
+export function writeSessionStatus(root, state, { sessionId, transcriptPath, runTag, event, file, onlyIf } = {}) {
   try {
     if (!STATES.includes(state)) return null;
     const target = file ?? statusFile(root);
     const prev = readStatus(target);
     if (onlyIf && !onlyIf(prev)) return null;
-    const record = nextStatus(prev, state, { root, sessionId, transcriptPath, event });
+    const record = nextStatus(prev, state, { root, sessionId, transcriptPath, runTag, event });
     writeAtomic(target, `${JSON.stringify(record, null, 2)}\n`);
     return record;
   } catch {

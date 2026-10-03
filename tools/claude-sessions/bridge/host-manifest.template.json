@@ -1,0 +1,7 @@
+{
+  "name": "com.alfred.switchboard",
+  "description": "Switchboard bridge for Alfred's Clipboard",
+  "path": "__HOST_BAT__",
+  "type": "stdio",
+  "allowed_origins": []
+}

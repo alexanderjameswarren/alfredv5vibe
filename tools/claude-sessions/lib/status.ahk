@@ -48,19 +48,120 @@ KindOf(hasStatus, state, red, interrupted) {
     return state = "processing" ? "processing" : "waiting"
 }
 
-; Taskbar progress state for the kinds of the unpaused sessions:
-; 4 red beats 8 yellow beats 2 green; 0 clears it.
-TaskbarFlag(kinds) {
+; Taskbar progress state for the colours of the active buttons and chat rows:
+; 4 red beats 8 (purple, orange and yellow: the bar has no other colours) beats 2 green.
+TaskbarFlag(colors) {
     flag := 0
-    for k in kinds {
-        if k = "red"
+    for c in colors {
+        if c = "red"
             return 4
-        if k = "waiting"
+        if c = "purple" || c = "orange" || c = "yellow"
             flag := 8
-        else if k = "processing" && !flag
+        else if c = "green" && !flag
             flag := 2
     }
     return flag
+}
+
+IsAttention(color) => color = "red" || color = "purple" || color = "orange" || color = "yellow"
+
+; "s9b" from "proj-abc-s9b-x1y2", or "".
+StepOf(tag) {
+    return RegExMatch(tag, "-(s\d+[a-z]?)-[a-z0-9]{4}$", &m) ? m[1] : ""
+}
+
+; "proj-abc" from "proj-abc-s9b-x1y2", or "".
+ProjectOfTag(tag) {
+    return RegExMatch(tag, "^(.+)-s\d+[a-z]?-[a-z0-9]{4}$", &m) ? m[1] : ""
+}
+
+; Claude has issued a tag for this project that the CLI has not received.
+NewerTag(runTag, issuedTag, project) => issuedTag != "" && issuedTag != runTag && ProjectOfTag(issuedTag) = project
+
+; "s9", or "s9 -> s10" when Claude has issued a newer tag.
+StepText(runTag, issuedTag, project) {
+    s := StepOf(runTag)
+    return NewerTag(runTag, issuedTag, project) ? (s = "" ? "?" : s) " -> " StepOf(issuedTag) : s
+}
+
+; A session's colour and label (spec section 5). p: free, closed, paused, kind
+; (the CLI: none, red, waiting, processing), runTag, reportTag, reportAt, chatState
+; ("" when unpaired or stale), chatSince, issuedTag, project. Times are ISO UTC.
+ViewOf(p) {
+    if p.free
+        return {color: "free", label: "free"}
+    if p.closed
+        return {color: "closed", label: "closed"}
+    if p.paused
+        return {color: "paused", label: "paused"}
+    if p.kind = "none"
+        return {color: "none", label: "no status"}
+    if p.kind = "red"
+        return {color: "red", label: "Approve"}
+    cliIdle := p.kind = "waiting"
+    if cliIdle && p.runTag != "" && p.reportTag != p.runTag
+        return {color: "red", label: "Check CLI"}
+    writing := p.chatState = "responding"
+    if !cliIdle || writing
+        return {color: "green", label: !cliIdle && writing ? "Both working" : writing ? "Claude writing" : "CLI working"}
+    if p.chatState != "finished"
+        return {color: "grey", label: "chat unknown"}
+    if p.reportAt != "" && StrCompare(p.chatSince, p.reportAt) <= 0
+        return {color: "orange", label: "Send cli"}
+    if NewerTag(p.runTag, p.issuedTag, p.project)
+        return {color: "purple", label: "Paste prompt"}
+    return {color: "yellow", label: "Your turn"}
+}
+
+; The centre of a window from WinGetPos, as {x, y} screen coordinates.
+WindowCentre(x, y, w, h) => {x: x + w // 2, y: y + h // 2}
+
+; Which window a click leaves the keyboard in: "code" for red and while the CLI
+; works, otherwise "chrome" (the chat's message box).
+FocusTarget(color, label) => color = "red" || (color = "green" && label != "Claude writing") ? "code" : "chrome"
+
+; An unpaired chat row: green writing, yellow finished and not viewed since, grey otherwise.
+ChatRowView(state, since, viewedAt) {
+    if state = "responding"
+        return {color: "green", label: "Claude writing"}
+    if state = "finished"
+        return viewedAt = "" || StrCompare(viewedAt, since) < 0
+            ? {color: "yellow", label: "finished"} : {color: "grey", label: "seen"}
+    return {color: "grey", label: "unknown"}
+}
+
+; "Step N of M: <name>" from a progress file: top-level "- [ ]" lines are steps,
+; N is the first unticked one. "" when the file has none.
+ProgressSummary(text) {
+    total := 0, cur := 0, name := ""
+    Loop Parse text, "`n", "`r" {
+        if !RegExMatch(A_LoopField, "^- \[([ xX])\]\s*(.*)$", &m)
+            continue
+        total++
+        if !cur && m[1] = " " {
+            cur := total
+            name := RegExMatch(m[2], "\*\*(.+?)\*\*", &b) ? b[1] : SubStr(m[2], 1, 60)
+            name := RegExReplace(RegExReplace(name, "^\d+[a-z]?\.\s*"), "\.\s*$")
+        }
+    }
+    if !total
+        return ""
+    return cur ? "Step " cur " of " total ": " name : "Step " total " of " total ": done"
+}
+
+; The project's progress file name: the code without its thread suffix.
+ProjectName(code) => RegExReplace(code, "-[a-z0-9]+$")
+
+; With no saved link: a claude.ai chat tab whose title carries the code, as an address, or "".
+FindChatLinkByCode(tabs, code) {
+    for t in tabs {
+        if !IsObject(t)
+            continue
+        url := NormaliseUrl(t.Get("url", ""))
+        if RegExMatch(url, "^https://claude\.ai/chat/\S+$") && ChromeTitleMatches(code, "", t.Get("title", ""))
+            return url
+    }
+    return ""
 }
 
 ; VS Code's default title is "<file> - <folder> - Visual Studio Code": match the
@@ -108,6 +209,31 @@ ChatLinkFromAddress(address) {
 ; text the matched window could be any chat, so nothing is saved.
 AutoSaveLink(override, address) => override != "" ? "" : ChatLinkFromAddress(address)
 
+; An address without its query or fragment, as the extension sends it.
+NormaliseUrl(url) => RegExReplace(url, "[?#].*$")
+
+; tabs.json's `at` (ISO UTC) is no older than `maxSeconds` at `nowUtc`.
+IsFresh(at, nowUtc, maxSeconds := 45) {
+    if at = ""
+        return false
+    try return DateDiff(nowUtc, IsoToStamp(at), "Seconds") <= maxSeconds
+    return false
+}
+
+; The tab (a Map from tabs.json) whose address is the saved chat link, or "".
+FindTabByLink(tabs, link) {
+    if link = ""
+        return ""
+    want := NormaliseUrl(link)
+    for t in tabs
+        if IsObject(t) && NormaliseUrl(t.Get("url", "")) == want
+            return t
+    return ""
+}
+
+; Chrome's window title is the active tab's title plus " - Google Chrome".
+WindowTitleStarts(prefix, title) => prefix != "" && SubStr(title, 1, StrLen(prefix)) == prefix
+
 CountLines(text) {
     n := 0
     Loop Parse text, "`n", "`r"
@@ -146,10 +272,9 @@ ChatCode(code, mainProject) => code = "main" && mainProject != "" ? mainProject 
 ; Main with no binding is free: grey, "free", no alert, out of the taskbar colour.
 IsFree(code, mainProject) => code = "main" && mainProject = ""
 
-; A yellow button flashes 5 times, then stays solid until clicked or the state
-; changes. Red flashes until clicked.
-YELLOW_FLASHES := 5
-StillFlashing(kind, flashes) => kind != "waiting" || flashes < YELLOW_FLASHES
+; An attention colour flashes 5 times, then stays solid until clicked or it changes.
+ATTENTION_FLASHES := 5
+StillFlashing(flashes) => flashes < ATTENTION_FLASHES
 
 ; Modified times of `files` as one string, "" for a missing one, so a commit,
 ; merge, push or a binding change shows up as a different key.
@@ -189,5 +314,6 @@ Orphans(claims, reservations, worktrees, activity, now) {
 
 IsUnread(reportStamp, lastClick) => reportStamp != "" && (lastClick = "" || reportStamp > lastClick)
 
-; Bring the panel forward and blink: on turning red, or on finishing a turn.
-ShouldAlert(old, new) => old != "" && old != new && (new = "red" || (new = "waiting" && old = "processing"))
+; Bring the panel forward and blink when a colour turns into an attention colour.
+; Never on the first read.
+ShouldAlert(old, new) => old != "" && old != new && IsAttention(new)
