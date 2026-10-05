@@ -29,7 +29,8 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
 - [x] Step 8: layer (c) detail views — Context, Intention, Item, Execution
   (Alfred.jsx 7,904 → 6,346 lines; app 2030/2030, CLI 142/142, same as before)
 - [ ] Step 9: layer (d) per-feature screens and actions
-  - [ ] 9a home/schedule
+  - [x] 9a home/schedule (Alfred.jsx 6,346 → 6,108 lines; app 2030/2030,
+    CLI 142/142, same as before)
   - [ ] 9b intentions
   - [ ] 9c items
   - [ ] 9d executions
@@ -156,6 +157,24 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
   Check, Copy, ChevronDown, Timer, Pencil, getRecurrenceDisplayString,
   DetailMeta, SchedulePopover, ContextForm). The 7 pre-existing unused-prop
   warnings moved into the three views. Alfred.jsx itself now lints clean.
+- Step 9a: src/schedule/useEventActions.js (updateEvent; triggerRecurrence
+  with its comment, two verbatim blocks; no state), HomeScreen.jsx and
+  ScheduleScreen.jsx (view JSX, verbatim, re-indented 6). Alfred calls
+  useEventActions after useContextActions; closeExecution, still in Alfred
+  until 9d, takes triggerRecurrence from it. `activate` stays for 9d, and the
+  derived event lists stay in Alfred (intentions use validEvents too). Imports
+  that left Alfred: Pause, Activity, Sun (with the lucide comment that described
+  Sun and Scissors, both now gone), calculateNextEventDate, toLocalDateString,
+  ContextCard, EventCard, ExecutionBadge. The step-4 note about that comment is
+  resolved.
+- Remaining steps, sized after 9a: 9b (intentions: moveToPlanner,
+  updateIntent, archiveIntention, Intentions and add screens) and 9c (items:
+  updateItem, deepCloneItem, Memories and add screens) are each about 250
+  lines and could be done as one step. 9d (executions, about 520 lines,
+  notification chains), 9e (inbox, about 600 lines plus 7 existing files and
+  a guard slice) and 9f (collections, about 1,800 lines) should stay on their
+  own. 9g (settings JSX plus the reminder and push effects, about 120 lines)
+  could fold into step 10.
 - Old step numbers in notes above, after the reorder: old step 12 (shell) is
   now step 10; the inbox step is 9e; old steps 7, 8 and 11 named in the step-5
   note are now IntentionCard/ItemCard in step 7 and CollectionCard in step 6.

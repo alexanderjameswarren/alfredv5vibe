@@ -81,7 +81,6 @@ import {
 } from "./utils/ingredientMatch";
 import {
   Plus,
-  Pause,
   X,
   Trash2,
   ArrowLeft,
@@ -90,24 +89,20 @@ import {
   Tag,
   Settings,
   Archive,
-  Activity,
   Wifi,
   WifiOff,
   RefreshCw,
   ArchiveRestore,
   Send,
-  // Clipboard Step 22: the last two tab glyphs, chosen rather than reused.
-  // `Sun` is Today; `Scissors` is a SAM snippet — see the tab rows for why.
-  Sun,
 } from "lucide-react";
 // `supabaseUrl` used to be imported alongside this: it built the ai-enrich
 // endpoint by hand. Step 14 removed the only two callers and left the import
 // behind as a lint warning; dropped here.
 import { supabase } from "./supabaseClient";
-import { calculateNextEventDate, getRecurrenceConfig } from "./utils/recurrence";
+import { getRecurrenceConfig } from "./utils/recurrence";
 import { storage } from "./utils/storage";
 import { uid, flattenElements } from "./utils/flattenElements";
-import { toLocalDateString, getTodayDate, formatEventDate } from "./utils/eventDates";
+import { getTodayDate, formatEventDate } from "./utils/eventDates";
 import {
   EVENT_SORT_OPTIONS,
   INBOX_SORT_OPTIONS,
@@ -129,9 +124,6 @@ import { useRecycleBin } from "./recycle/useRecycleBin";
 import RecycleScreen from "./recycle/RecycleScreen";
 import { useContextActions } from "./contexts/useContextActions";
 import ContextsScreen from "./contexts/ContextsScreen";
-import ContextCard from "./contexts/ContextCard";
-import EventCard from "./schedule/EventCard";
-import ExecutionBadge from "./executions/ExecutionBadge";
 import ItemNameLabel from "./items/ItemNameLabel";
 import CollectionCard from "./collections/CollectionCard";
 import ItemCard from "./items/ItemCard";
@@ -140,6 +132,9 @@ import ContextDetailView from "./contexts/ContextDetailView";
 import IntentionDetailView from "./intentions/IntentionDetailView";
 import ItemDetailView from "./items/ItemDetailView";
 import ExecutionDetailView from "./executions/ExecutionDetailView";
+import { useEventActions } from "./schedule/useEventActions";
+import HomeScreen from "./schedule/HomeScreen";
+import ScheduleScreen from "./schedule/ScheduleScreen";
 import {
   loadMembers,
   loadRemovals,
@@ -967,6 +962,14 @@ export default function Alfred() {
     editingContext,
     setEditingContext,
     setShowContextForm,
+    withLoading,
+    offerUndoFor,
+  });
+  const { updateEvent, triggerRecurrence } = useEventActions({
+    user,
+    events,
+    setEvents,
+    intents,
     withLoading,
     offerUndoFor,
   });
@@ -2754,39 +2757,6 @@ export default function Alfred() {
     });
   }
 
-  async function updateEvent(eventId, updates) {
-    const event = events.find((e) => e.id === eventId);
-    if (!event) return;
-    return withLoading('Saving...', async () => {
-      const updated = { ...event, ...updates };
-      const savedEvent = await storage.set(`event:${event.id}`, updated);
-      setEvents(events.map((e) => (e.id === eventId ? savedEvent || updated : e)));
-
-      // If archiving a recurring event, trigger recurrence to create next event
-      let successor = null;
-      if (updates.archived === true && event.intentId) {
-        successor = await triggerRecurrence(event.intentId, event);
-      }
-
-      if (updates.archived === true) {
-        const intent = intents.find((i) => i.id === event.intentId);
-        const label = event.text || intent?.text || "event";
-        offerUndoFor(`Archived "${label}".`, async () => {
-          await storage.set(`event:${event.id}`, event);
-          setEvents((prev) => prev.map((e) => (e.id === eventId ? event : e)));
-          // The successor only exists because of the archive being undone, so
-          // it goes with it. Deleting rather than archiving: it was never a
-          // real event the user saw, and an archived ghost would surface in the
-          // recycle bin as something they never scheduled.
-          if (successor) {
-            await storage.delete(`event:${successor.id}`);
-            setEvents((prev) => prev.filter((e) => e.id !== successor.id));
-          }
-        });
-      }
-    });
-  }
-
   async function activate(eventId) {
     const event = events.find((e) => e.id === eventId);
     if (!event) return;
@@ -2864,48 +2834,6 @@ export default function Alfred() {
       setPreviousView(view);
       goToExecution(execution);
     });
-  }
-
-  /**
-   * Creates the next recurring event for an intent after an event is archived.
-   * Shared by closeExecution (completion) and manual event archive (skip).
-   */
-  // Returns the successor event it created, or null when it created none — so
-  // an undo of the archive that triggered it can take that successor back out.
-  // Without this, undoing left the successor behind and the intention ended up
-  // with two live events.
-  async function triggerRecurrence(intentId, archivedEvent) {
-    const intent = intents.find((i) => i.id === intentId);
-    if (!intent) return null;
-
-    const config = getRecurrenceConfig(intent);
-    if (config.type === "once") return null;
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const nextDate = calculateNextEventDate(config, today);
-
-    if (nextDate && (!intent.endDate || nextDate <= new Date(intent.endDate + "T23:59:59"))) {
-      const newEvent = {
-        id: uid(),
-        user_id: user.id,
-        intentId: intent.id,
-        // Local fields, not toISOString: calculateNextEventDate returns a
-        // LOCAL-midnight Date (it normalises with setHours and parses via
-        // parseLocalDate), and converting that to UTC moves it back a day in
-        // any zone east of Greenwich.
-        time: toLocalDateString(nextDate),
-        itemIds: archivedEvent?.itemIds || [],
-        contextId: intent.contextId,
-        collectionId: intent.collectionId || null,
-        archived: false,
-        createdAt: new Date().toISOString(),
-      };
-      const savedEvent = await storage.set(`event:${newEvent.id}`, newEvent);
-      setEvents((prev) => [...prev, savedEvent || newEvent]);
-      return newEvent;
-    }
-    return null;
   }
 
   // --- Notification chain (Phase 4) -----------------------------------------
@@ -4685,173 +4613,36 @@ export default function Alfred() {
       <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 pb-28 sm:pb-32">
         {/* Home View */}
         {view === "home" && (
-          <div>
-            {/* Executions & Today Tabs */}
-            <div className="mb-8">
-              {/* The same component the Recycle Bin and the Inbox use. Paused keeps its
-                  rule: no tab while nothing is paused.
-
-                  EVERY TAB CARRIES AN ICON — Clipboard Step 22. Not decoration: below
-                  `lg` a tab compresses to its icon and its count, and a tab without one
-                  cannot, so a row of three would behave differently from the row of
-                  seven next door. Two of the three are reused rather than chosen:
-
-                    Active   `Activity`, which is OBJECT_ICONS.execution — the same pulse
-                             the cards in this tab already carry.
-                    Paused   `Pause`, which ALREADY means "this is paused" in Alfred: an
-                             execution badge writes `Pause` beside the word "Paused". The
-                             Pause BUTTON is the same glyph, and that is the one reuse
-                             here that is a verb next to a noun — accepted because the
-                             noun is the state the verb produces, and no other glyph says
-                             "set aside" without inventing a meaning.
-                    Today    `Sun`, chosen. Nothing else in the app uses it, and `Calendar`
-                             is already the Schedule while `CalendarClock` is an event —
-                             so the two glyphs that mean "time" both mean something else. */}
-              <UnderlineTabs
-                ariaLabel="Executions and today"
-                activeKey={executionTab}
-                onSelect={setExecutionTab}
-                tabs={[
-                  { key: "active", label: "Active", count: activeExecutions.length, icon: Activity },
-                  ...(pausedExecutions.length > 0
-                    ? [{ key: "paused", label: "Paused", count: pausedExecutions.length, icon: Pause }]
-                    : []),
-                  { key: "today", label: "Today", count: todayEvents.length, icon: Sun },
-                ]}
-              />
-
-              {executionTab === "active" && (
-                <div className="space-y-2">
-                  {activeExecutions.length > 0 ? (
-                    activeExecutions.map((exec) => (
-                      <ExecutionBadge
-                        key={exec.id}
-                        exec={exec}
-                        intents={intents}
-                        contexts={contexts}
-                        getIntentDisplay={getIntentDisplay}
-                        onOpen={openExecution}
-                      />
-                    ))
-                  ) : (
-                    <p className="text-muted-foreground text-sm">No active executions.</p>
-                  )}
-                </div>
-              )}
-
-              {executionTab === "paused" && (
-                <div className="space-y-2">
-                  {pausedExecutions.length > 0 ? (
-                    pausedExecutions.map((exec) => (
-                      <ExecutionBadge
-                        key={exec.id}
-                        exec={exec}
-                        intents={intents}
-                        contexts={contexts}
-                        getIntentDisplay={getIntentDisplay}
-                        onOpen={openExecution}
-                      />
-                    ))
-                  ) : (
-                    <p className="text-muted-foreground text-sm">No paused executions.</p>
-                  )}
-                </div>
-              )}
-
-              {executionTab === "today" && (
-                <div className="space-y-2">
-                  {/* Inside the Today panel, not above the tab bar — Active and
-                      Paused are execution lists ordered by started_at and this
-                      does not govern them. */}
-                  {todayEvents.length > 0 && (
-                    <ListToolbar
-                      query={searchFor("home")}
-                      onQueryChange={setSearchFor("home")}
-                      searchLabel="Search today's events"
-                      sortId="home-sort"
-                      sortOptions={EVENT_SORT_OPTIONS}
-                      sort={homeSort}
-                      className="mb-3"
-                    />
-                  )}
-                  {visibleTodayEvents.length > 0 ? (
-                    visibleTodayEvents.map((event) => {
-                      const intent = intents.find((i) => i.id === event.intentId);
-                      if (!intent) return null;
-                      return (
-                        <EventCard
-                          key={event.id}
-                          event={event}
-                          intent={intent}
-                          contexts={contexts}
-                          onUpdate={updateEvent}
-                          onActivate={activate}
-                          getIntentDisplay={getIntentDisplay}
-                          executions={allLiveExecutions}
-                          onOpenExecution={openExecution}
-                          onCancelExecution={cancelExecutionForEvent}
-                          items={items}
-                          onViewIntention={(id) => viewIntentionDetail(id, "home")}
-                          onViewItem={(id) => viewItemDetail(id, "home")}
-                          onViewContextDetail={viewContextDetail}
-                        />
-                      );
-                    })
-                  ) : (
-                    todayEvents.length > 0 ? (
-                      <NoMatches noun="events" query={searchFor("home")} />
-                    ) : (
-                      <p className="text-muted-foreground text-sm">No events scheduled for today.</p>
-                    )
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Pinned Collections Section */}
-            {pinnedCollections.length > 0 && (
-              <div>
-                <h3 className="text-lg font-medium mb-3 text-foreground">Pinned Collections</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {pinnedCollections.map((coll) => (
-                    <CollectionCard
-                      key={coll.id}
-                      collection={coll}
-                      contexts={contexts}
-                      memberCount={membersOf(coll.id).length}
-                      onOpen={() => {
-                        setPreviousView("home");
-                        setSelectedCollectionId(coll.id);
-                        setView("collection-detail");
-                      }}
-                      onArchive={archiveCollection}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Pinned Contexts Section */}
-            <div className="mt-6">
-              <h3 className="text-lg font-medium mb-3 text-foreground">Pinned Contexts</h3>
-              {pinnedContexts.length === 0 ? (
-                <p className="text-muted-foreground text-sm">
-                  No pinned contexts. Pin contexts to see them here.
-                </p>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {pinnedContexts.map((context) => (
-                    <ContextCard
-                      key={context.id}
-                      context={context}
-                      onClick={() => viewContextDetail(context.id)}
-                      showSettings={false}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+          <HomeScreen
+            executionTab={executionTab}
+            setExecutionTab={setExecutionTab}
+            activeExecutions={activeExecutions}
+            pausedExecutions={pausedExecutions}
+            allLiveExecutions={allLiveExecutions}
+            todayEvents={todayEvents}
+            visibleTodayEvents={visibleTodayEvents}
+            pinnedCollections={pinnedCollections}
+            pinnedContexts={pinnedContexts}
+            intents={intents}
+            contexts={contexts}
+            items={items}
+            getIntentDisplay={getIntentDisplay}
+            searchFor={searchFor}
+            setSearchFor={setSearchFor}
+            homeSort={homeSort}
+            updateEvent={updateEvent}
+            activate={activate}
+            openExecution={openExecution}
+            cancelExecutionForEvent={cancelExecutionForEvent}
+            viewIntentionDetail={viewIntentionDetail}
+            viewItemDetail={viewItemDetail}
+            viewContextDetail={viewContextDetail}
+            membersOf={membersOf}
+            setPreviousView={setPreviousView}
+            setSelectedCollectionId={setSelectedCollectionId}
+            setView={setView}
+            archiveCollection={archiveCollection}
+          />
         )}
 
         {/* Inbox View */}
@@ -5251,54 +5042,25 @@ export default function Alfred() {
 
         {/* Schedule View */}
         {view === "schedule" && (
-          <div>
-            <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Schedule</h2>
-            {allNonArchivedEvents.length > 0 && (
-              <ListToolbar
-                query={searchFor("schedule")}
-                onQueryChange={setSearchFor("schedule")}
-                searchLabel="Search scheduled events"
-                sortId="schedule-sort"
-                sortOptions={EVENT_SORT_OPTIONS}
-                sort={scheduleSort}
-                className="mb-3"
-              />
-            )}
-            {allNonArchivedEvents.length === 0 ? (
-              <div className="text-center py-12 text-muted-foreground">
-                <p>No scheduled events.</p>
-                <p className="text-sm mt-2">This is a valid state.</p>
-              </div>
-            ) : visibleScheduleEvents.length === 0 ? (
-              <NoMatches noun="events" query={searchFor("schedule")} />
-            ) : (
-              <div className="space-y-3">
-                {visibleScheduleEvents.map((event) => {
-                  const intent = intents.find((i) => i.id === event.intentId);
-                  if (!intent) return null;
-
-                  return (
-                    <EventCard
-                      key={event.id}
-                      event={event}
-                      intent={intent}
-                      contexts={contexts}
-                      onUpdate={updateEvent}
-                      onActivate={activate}
-                      getIntentDisplay={getIntentDisplay}
-                      executions={allLiveExecutions}
-                      onOpenExecution={openExecution}
-                      onCancelExecution={cancelExecutionForEvent}
-                      items={items}
-                      onViewIntention={(id) => viewIntentionDetail(id, "schedule")}
-                      onViewItem={(id) => viewItemDetail(id, "schedule")}
-                      onViewContextDetail={viewContextDetail}
-                    />
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <ScheduleScreen
+            allNonArchivedEvents={allNonArchivedEvents}
+            visibleScheduleEvents={visibleScheduleEvents}
+            allLiveExecutions={allLiveExecutions}
+            intents={intents}
+            contexts={contexts}
+            items={items}
+            getIntentDisplay={getIntentDisplay}
+            searchFor={searchFor}
+            setSearchFor={setSearchFor}
+            scheduleSort={scheduleSort}
+            updateEvent={updateEvent}
+            activate={activate}
+            openExecution={openExecution}
+            cancelExecutionForEvent={cancelExecutionForEvent}
+            viewIntentionDetail={viewIntentionDetail}
+            viewItemDetail={viewItemDetail}
+            viewContextDetail={viewContextDetail}
+          />
         )}
 
         {/* Intentions View */}
