@@ -26,7 +26,8 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
   (Alfred.jsx 9,750 → 9,117 lines; app 2030/2030, CLI 142/142, same as before)
 - [x] Step 7: layer (b) IntentionCard and ItemCard, with their twins
   (Alfred.jsx 9,117 → 7,904 lines; app 2030/2030, CLI 142/142, same as before)
-- [ ] Step 8: layer (c) detail views — Context, Intention, Item, Execution
+- [x] Step 8: layer (c) detail views — Context, Intention, Item, Execution
+  (Alfred.jsx 7,904 → 6,346 lines; app 2030/2030, CLI 142/142, same as before)
 - [ ] Step 9: layer (d) per-feature screens and actions
   - [ ] 9a home/schedule
   - [ ] 9b intentions
@@ -39,10 +40,12 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
 - [ ] Finish: Alex runs gitpush Finish
 
 ### Notes
-- Known bug, for after the split: ItemCard handleCancel resets elements with
-  `{ ...el }` instead of the normaliser used by the useState init and the dirty
-  twin. After Cancel, re-entering edit can report unsaved changes with nothing
-  typed. Plausible, unverified. Not fixed here (pure move).
+- Suspected bug — tested on desktop, not reproduced (Alex, step 7 check):
+  ItemCard handleCancel resets elements with `{ ...el }` instead of the
+  normaliser used by the useState init and the dirty twin. The worry was that
+  after Cancel, re-entering edit would report unsaved changes with nothing
+  typed. On desktop, Cancel → Edit → leave with nothing typed gave no prompt.
+  The code is unchanged (pure move).
 - Testing is a desktop click-through in the local dev server.
 - Step 1: the plan said 9 guard tests; it is 8 files (two of them hold the two
   readdirSync guards). `alfredSource()` = Alfred.jsx + every file under the
@@ -127,7 +130,7 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
 - Step 7: src/items/ItemCard.jsx and src/intentions/IntentionCard.jsx.
   Twins sit together. ItemCard: element normaliser in useState lines 38–52,
   dirty twin `originalElements` 69–81, simplified copy in handleCancel 125–131
-  (the known Cancel bug, `{ ...el }`, kept as is). IntentionCard: field defaults
+  (the `{ ...el }` copy, suspected Cancel bug, not reproduced; kept as is). IntentionCard: field defaults
   45–56, dirty-check effect 76–87, reset in handleCancel 120–129.
   IntentionCard is verbatim (517 lines). ItemCard is verbatim except two lines
   (file lines 451 and 456): whitespace-only lines inside the JSX comment
@@ -144,6 +147,15 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
   Imports used only by the two cards left Alfred.jsx: EditCard,
   InsertRowButton, RepeatBlockDialog, PickedItem, offsetPatch, isFirstStep,
   detailsForStorage.
+- Step 8: src/contexts/ContextDetailView.jsx (325 lines),
+  src/intentions/IntentionDetailView.jsx (276), src/items/ItemDetailView.jsx
+  (516), src/executions/ExecutionDetailView.jsx (424) — all verbatim. No
+  whitespace-only lines were involved, so Edit cut them; no script was needed.
+  Nothing they use remains inside Alfred.jsx. Fifteen imports left Alfred.jsx
+  with them (OriginalCapture, the four NotificationChainInline exports, Play,
+  Check, Copy, ChevronDown, Timer, Pencil, getRecurrenceDisplayString,
+  DetailMeta, SchedulePopover, ContextForm). The 7 pre-existing unused-prop
+  warnings moved into the three views. Alfred.jsx itself now lints clean.
 - Old step numbers in notes above, after the reorder: old step 12 (shell) is
   now step 10; the inbox step is 9e; old steps 7, 8 and 11 named in the step-5
   note are now IntentionCard/ItemCard in step 7 and CollectionCard in step 6.
