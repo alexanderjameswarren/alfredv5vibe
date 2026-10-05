@@ -24,7 +24,8 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
 - [x] Step 6: layer (a) leaf cards — EventCard + EventMetaLink, ExecutionBadge,
   ItemNameLabel, CollectionCard
   (Alfred.jsx 9,750 → 9,117 lines; app 2030/2030, CLI 142/142, same as before)
-- [ ] Step 7: layer (b) IntentionCard and ItemCard, with their twins
+- [x] Step 7: layer (b) IntentionCard and ItemCard, with their twins
+  (Alfred.jsx 9,117 → 7,904 lines; app 2030/2030, CLI 142/142, same as before)
 - [ ] Step 8: layer (c) detail views — Context, Intention, Item, Execution
 - [ ] Step 9: layer (d) per-feature screens and actions
   - [ ] 9a home/schedule
@@ -123,6 +124,26 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
   check moved with it, verbatim. `Share2` and `Pin` left Alfred's lucide imports
   with CollectionCard, their last user there. The orphan comment "// Helper functions for
   the inbox screens" stays in Alfred above CLEARED_ENRICHMENT.
+- Step 7: src/items/ItemCard.jsx and src/intentions/IntentionCard.jsx.
+  Twins sit together. ItemCard: element normaliser in useState lines 38–52,
+  dirty twin `originalElements` 69–81, simplified copy in handleCancel 125–131
+  (the known Cancel bug, `{ ...el }`, kept as is). IntentionCard: field defaults
+  45–56, dirty-check effect 76–87, reset in handleCancel 120–129.
+  IntentionCard is verbatim (517 lines). ItemCard is verbatim except two lines
+  (file lines 451 and 456): whitespace-only lines inside the JSX comment
+  "Inline flow, deliberately NOT a nested flex row…" that held 24 spaces in
+  Alfred.jsx and are empty here. The Edit and Write tools strip trailing
+  whitespace, so they cannot be written; they have no effect. Alex chose to
+  leave them empty rather than restore them with a script.
+  The same stripping meant ItemCard could not be cut out of Alfred.jsx with
+  Edit (its old text must match those lines). With Alex's OK, a one-off
+  `node -e` deleted Alfred.jsx lines 7907–9117 (the blank line, ItemCard,
+  IntentionCard to end of file) after checking that the file was 9,117 lines,
+  line 7908 started "function ItemCard(" and line 8601 started
+  "function IntentionCard(". git diff showed 1,211 deletions and nothing else.
+  Imports used only by the two cards left Alfred.jsx: EditCard,
+  InsertRowButton, RepeatBlockDialog, PickedItem, offsetPatch, isFirstStep,
+  detailsForStorage.
 - Old step numbers in notes above, after the reorder: old step 12 (shell) is
   now step 10; the inbox step is 9e; old steps 7, 8 and 11 named in the step-5
   note are now IntentionCard/ItemCard in step 7 and CollectionCard in step 6.
