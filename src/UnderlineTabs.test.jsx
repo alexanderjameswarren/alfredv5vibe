@@ -1,10 +1,9 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import fs from "fs";
-import path from "path";
 import { Send, Inbox } from "lucide-react";
 import UnderlineTabs from "./UnderlineTabs";
+import { alfredSource, sourceOf } from "./testing/alfredSources";
 
 // The accessible name of a tab is its LABEL ALONE — `aria-label`, not the text content.
 // That is the point of it: below `lg` the visible label is hidden and only the icon and
@@ -143,7 +142,7 @@ describe("the row itself", () => {
 
 // ── The guards ───────────────────────────────────────────────────────────────
 describe("every underline tab row goes through this component", () => {
-  const alfred = fs.readFileSync(path.join(__dirname, "Alfred.jsx"), "utf8");
+  const alfred = alfredSource();
 
   it("has all three call sites", () => {
     expect(alfred.split("<UnderlineTabs").length - 1).toBe(3);
@@ -171,7 +170,7 @@ describe("every underline tab row goes through this component", () => {
   it("uses the same breakpoint the top navigation hides its labels at", () => {
     // The whole point of reusing it rather than choosing one. If the nav's changes, this
     // fails and both should move together.
-    const source = fs.readFileSync(path.join(__dirname, "UnderlineTabs.jsx"), "utf8");
+    const source = sourceOf("UnderlineTabs.jsx");
     expect(alfred).toContain('<span className="hidden lg:inline">{item.label}</span>');
     expect(source).toContain('"hidden lg:inline"');
   });

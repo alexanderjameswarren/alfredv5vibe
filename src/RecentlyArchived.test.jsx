@@ -1,9 +1,9 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import fs from "fs";
 import path from "path";
 import RecentlyArchived from "./RecentlyArchived";
+import { alfredSource, screenFiles, sourceOf } from "./testing/alfredSources";
 import { archiveOutcome } from "./utils/inboxArchive";
 
 const ROWS = [
@@ -177,9 +177,7 @@ describe("it is wired into the inbox screen", () => {
   // checks it out CRLF on Windows, so a "\n" in a pattern below matches nothing
   // there and the guard fails for a reason that has nothing to do with the JSX.
   // That is exactly how this suite broke.
-  const alfred = fs
-    .readFileSync(path.join(__dirname, "Alfred.jsx"), "utf8")
-    .replace(/\r\n/g, "\n");
+  const alfred = alfredSource().replace(/\r\n/g, "\n");
 
   it("renders OUTSIDE the empty-inbox branch", () => {
     // 🛑 An empty inbox is when this matters most: you have just processed the last
@@ -215,12 +213,8 @@ describe("it is wired into the inbox screen", () => {
 });
 
 describe("the archived row is not rebuilt elsewhere", () => {
-  const read = (f) => fs.readFileSync(path.join(__dirname, f), "utf8");
-  const self = read("RecentlyArchived.jsx");
-  const others = fs
-    .readdirSync(__dirname)
-    .filter((f) => /\.jsx$/.test(f) && !/\.test\.jsx$/.test(f) && f !== "RecentlyArchived.jsx")
-    .map((f) => [f, read(f)]);
+  const self = sourceOf("RecentlyArchived.jsx");
+  const others = screenFiles().filter(([f]) => path.basename(f) !== "RecentlyArchived.jsx");
 
   it("owns the row", () => {
     const row = "flex items-start gap-3 px-3 py-2 rounded-lg hover:bg-secondary/60";

@@ -1,15 +1,12 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import fs from "fs";
-import path from "path";
 import EditCard, {
   EDIT_CARD_CLASS,
   EDIT_CARD_INSET,
   EDIT_CARD_FOOTER_RADIUS,
 } from "./EditCard";
-
-const read = (...parts) => fs.readFileSync(path.join(__dirname, ...parts), "utf8");
+import { alfredSource, sourceOf } from "./testing/alfredSources";
 
 /** Tailwind's default spacing scale, for the steps this card uses. */
 const SPACING_PX = { 1: 4, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24, 7: 28, 8: 32 };
@@ -73,8 +70,8 @@ describe("the two numbers the footer depends on", () => {
 // starts drifting again — and the drift is invisible until somebody looks at two
 // screens side by side, or scrolls to the bottom of the one that broke.
 describe("every full-screen edit form uses the shared card", () => {
-  const alfred = read("Alfred.jsx");
-  const inbox = read("InboxDetailView.jsx");
+  const alfred = alfredSource();
+  const inbox = sourceOf("InboxDetailView.jsx");
 
   it("has exactly the four call sites", () => {
     // ItemCard, IntentionCard and ContextForm in Alfred.jsx; the inbox detail page in

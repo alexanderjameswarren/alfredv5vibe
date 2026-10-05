@@ -1,9 +1,9 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import fs from "fs";
 import path from "path";
 import InboxListCard from "./InboxListCard";
+import { alfredSource, screenFiles, sourceOf } from "./testing/alfredSources";
 
 const CONTEXTS = [
   { id: "ctx-alfred", name: "Alfred" },
@@ -84,7 +84,7 @@ describe("what every card shows", () => {
   it("matches the Schedule card's title weight, read from the source", () => {
     // 🛑 If `EventCard`'s title weight ever changes, this fails and says so, rather than
     // leaving the inbox quietly out of step with the screen it was styled after.
-    const alfred = fs.readFileSync(path.join(__dirname, "Alfred.jsx"), "utf8");
+    const alfred = alfredSource();
     expect(alfred).toContain(
       'className="flex items-start gap-1.5 font-medium text-foreground hover:text-primary"',
     );
@@ -241,16 +241,12 @@ describe("what the taps do", () => {
 });
 
 describe("the shared pieces are not rebuilt elsewhere", () => {
-  const read = (f) => fs.readFileSync(path.join(__dirname, f), "utf8");
-  const self = read("InboxListCard.jsx");
+  const self = sourceOf("InboxListCard.jsx");
   // Every Alfred screen file. sam/ and games/ are separate surfaces with their own lists.
-  const others = fs
-    .readdirSync(__dirname)
-    .filter((f) => /\.jsx$/.test(f) && !/\.test\.jsx$/.test(f) && f !== "InboxListCard.jsx")
-    .map((f) => [f, read(f)]);
+  const others = screenFiles().filter(([f]) => path.basename(f) !== "InboxListCard.jsx");
 
   it("has one call site", () => {
-    expect(read("Alfred.jsx").split("<InboxListCard").length - 1).toBe(1);
+    expect(alfredSource().split("<InboxListCard").length - 1).toBe(1);
   });
 
   it("owns the row shell", () => {

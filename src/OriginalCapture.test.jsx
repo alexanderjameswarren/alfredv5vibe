@@ -1,9 +1,8 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import fs from "fs";
-import path from "path";
 import OriginalCapture from "./OriginalCapture";
+import { alfredSource } from "./testing/alfredSources";
 import { COLLAPSE_LINES } from "./utils/capturedClip";
 
 const LONG = Array.from({ length: COLLAPSE_LINES + 4 }, (_, i) => `line ${i + 1}`).join("\n");
@@ -51,7 +50,7 @@ describe("OriginalCapture", () => {
 });
 
 describe("both detail views show it", () => {
-  const alfred = fs.readFileSync(path.join(__dirname, "Alfred.jsx"), "utf8");
+  const alfred = alfredSource();
 
   it("renders on the item view and the intention view, and nowhere else", () => {
     expect(alfred.split("<OriginalCapture").length - 1).toBe(2);

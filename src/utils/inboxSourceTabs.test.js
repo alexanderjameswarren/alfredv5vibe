@@ -5,9 +5,8 @@ import {
   effectiveSource,
   matchesSource,
 } from "./inboxSourceTabs";
-import fs from "fs";
-import path from "path";
 import { Inbox } from "lucide-react";
+import { alfredSource } from "../testing/alfredSources";
 import { sourceLabel, SOURCE_GLYPHS } from "../CaptureMeta";
 
 const rows = (...types) => types.map((sourceType, i) => ({ id: `i${i}`, sourceType }));
@@ -76,7 +75,7 @@ describe("which tabs are drawn", () => {
     expect(sourceTabsFor([], sourceLabel)[0].icon).toBe(Inbox);
     // Asserted against Alfred.jsx too, because the nav reads OBJECT_ICONS rather than
     // this import and the two could otherwise drift apart silently.
-    const alfred = fs.readFileSync(path.join(__dirname, "..", "Alfred.jsx"), "utf8");
+    const alfred = alfredSource();
     expect(alfred).toContain("  inbox: Inbox,");
   });
 
