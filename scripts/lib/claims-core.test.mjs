@@ -1,13 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   claimsCommandApproval,
+  covers,
   DB_CLAIM_STALE_MS,
+  heldBy,
+  holderOf,
+  holdersOf,
   isChained,
   isExempt,
   isLoneScriptCommand,
+  normaliseItem,
+  overlaps,
   parseClaimsCommand,
   resolveCheckout,
   resolveRepo,
@@ -16,9 +23,76 @@ import {
   staleDbClaims,
   writeCheck,
   writeIndicator,
+  worktreeOf,
 } from "./claims-core.mjs";
 
 const run = (sub, rest = "") => `node scripts/claims.mjs ${sub} ${rest}`.trim();
+
+// ---------------------------------------------------------------------------
+// folder claims
+// ---------------------------------------------------------------------------
+
+const claimsOf = (...pairs) => ({
+  claims: pairs.map(([owner, item]) => ({ owner, item })),
+  reservations: [],
+});
+
+test("a folder covers itself without its slash, and everything under it", () => {
+  assert.ok(covers("src/items/", "src/items/a.jsx"));
+  assert.ok(covers("src/items/", "src/items/sub/deep.jsx"));
+  assert.ok(covers("src/items/", "src/items"));
+  assert.ok(!covers("src/items/", "src/items-old/a.jsx"));
+  assert.ok(!covers("src/items/", "src/items-old"));
+  assert.ok(!covers("src/items", "src/items/a.jsx"));
+});
+
+test("overlap runs both ways", () => {
+  assert.ok(overlaps("src/items/foo.jsx", "src/items/"));
+  assert.ok(overlaps("src/inbox/", "src/inbox/x.jsx"));
+  assert.ok(overlaps("src/inbox", "src/inbox/"));
+  assert.ok(!overlaps("src/items/", "src/items-old/"));
+});
+
+test("heldBy and holdersOf share one rule", () => {
+  const state = claimsOf(["A", "src/items/"], ["B", "src/inbox/x.jsx"]);
+  assert.ok(heldBy(state, "src/items/sub/deep.jsx", "A"));
+  assert.ok(heldBy(state, "src/items", "A"));
+  assert.ok(!heldBy(state, "src/items/foo.jsx", "B"));
+  assert.ok(!heldBy(state, "src/items-old/a.jsx", "A"));
+  assert.deepEqual(holdersOf(state, "src/items/foo.jsx").map((c) => c.owner), ["A"]);
+  assert.equal(holderOf(state, "src/inbox/x.jsx"), "B");
+  assert.deepEqual(holdersOf(state, "src/items-old/a.jsx"), []);
+});
+
+test("case folds on Windows", { skip: process.platform !== "win32" }, () => {
+  const state = claimsOf(["A", "src/items/"]);
+  assert.ok(heldBy(state, "SRC/Items/foo.jsx", "A"));
+  assert.equal(holdersOf(state, "Src/ITEMS/x.jsx").length, 1);
+});
+
+test("nothing holds a path inside a worktree", () => {
+  assert.equal(worktreeOf(".claude/worktrees/wtB/src/a.js"), "wtB");
+  assert.equal(worktreeOf(".claude/worktrees"), "");
+  assert.equal(worktreeOf("src/a.js"), null);
+  assert.ok(!heldBy(claimsOf(["main", ".claude/"]), ".claude/worktrees/wtB/src/a.js", "main"));
+});
+
+test("normaliseItem: slashes, folders, ambiguity and worktrees", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "claims-norm-"));
+  mkdirSync(path.join(root, "src", "items"), { recursive: true });
+  writeFileSync(path.join(root, "Makefile"), "");
+  assert.equal(normaliseItem("src/items/", root), "src/items/");
+  assert.equal(normaliseItem("src/items", root), "src/items/");
+  assert.equal(normaliseItem("src\\items\\", root), "src/items/");
+  assert.equal(normaliseItem(path.join(root, "src", "items"), root), "src/items/");
+  assert.equal(normaliseItem("src/new/", root), "src/new/");
+  assert.equal(normaliseItem("src/items/new.jsx", root), "src/items/new.jsx");
+  assert.equal(normaliseItem("Makefile", root), "Makefile");
+  assert.equal(normaliseItem("db:deploy", root), "db:deploy");
+  assert.throws(() => normaliseItem("src/new", root), /add a trailing slash: src\/new\//);
+  assert.throws(() => normaliseItem(".claude/worktrees/wtB/src/a.js", root), /another thread's worktree/);
+  assert.throws(() => normaliseItem(".claude/worktrees/", root), /another thread's worktree/);
+});
 
 // ---------------------------------------------------------------------------
 // reading a claims.mjs command

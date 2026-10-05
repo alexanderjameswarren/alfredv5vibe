@@ -63,6 +63,8 @@ import {
   claimsCommandApproval,
   fold,
   heldBy,
+  holdersOf,
+  holds,
   isChained,
   isExempt,
   isLoneScriptCommand,
@@ -71,6 +73,7 @@ import {
   toRepoRelative,
   writeCheck,
   writeIndicator,
+  worktreeOf,
 } from "../../scripts/lib/claims-core.mjs";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -439,12 +442,19 @@ function main() {
   const rel = toRepoRelative(filePath, ctx.root);
   if (rel === null) allow("outside the repo");
   if (isExempt(rel)) allow(`exempt: ${rel}`);
+  const wt = worktreeOf(rel);
+  if (wt !== null) {
+    block(
+      `inside worktree: ${rel}`,
+      `Claims guard is blocking this edit: ${rel} is inside ${wt ? `the ${wt} worktree` : "the worktrees folder"},\n` +
+        `which belongs to another thread. No claim from ${ctx.owner} can cover it.\n\n` +
+        `STOP. Do not edit it and do not work around this. Tell Alex what you were about to change.`,
+    );
+  }
   if (heldBy(state, rel, ctx.owner)) allow(`claimed: ${rel}`);
 
-  const holders = state.claims.filter(
-    (c) => c.item === rel || (c.item.endsWith("/") && rel.startsWith(c.item)),
-  );
-  const reserved = state.reservations.filter((r) => r.item === rel);
+  const holders = holdersOf(state, rel);
+  const reserved = state.reservations.filter((r) => holds(r.item, rel));
 
   block(
     `unclaimed: ${rel}`,

@@ -41,6 +41,7 @@ import {
   covers,
   DB_CLAIM_STALE_MS,
   fold,
+  holds,
   inspect,
   isDbItem,
   isExempt,
@@ -298,7 +299,7 @@ function cmdClaim(ctx, items, flags) {
           continue;
         }
         const { mine } = inspect(state, item, ctx.owner);
-        if (mine.some((c) => fold(c.item) === fold(item) || covers(c.item, item))) {
+        if (mine.some((c) => holds(c.item, item))) {
           console.log(`already   ${item}`);
           continue;
         }
@@ -507,7 +508,9 @@ decides whose prompts the guard lets into that window. They touch no claim, and
 they refuse inside a worktree, where the code is the folder name.
 
 Items are repo-relative paths, folders ending in /, or db:table:<name>,
-db:fn:<name>, db:deploy. --owner <name> overrides the detected worktree name
+db:fn:<name>, db:deploy. A folder that exists is a folder claim with or without
+the /; one that does not exist yet needs the /. A folder claim covers every file
+under it, at any depth. Paths inside .claude/worktrees/ are refused. --owner <name> overrides the detected worktree name
 for status, check, claim and reserve; release never takes it.
 
 Most of these run without interrupting Alex — status, check, release, reserve,

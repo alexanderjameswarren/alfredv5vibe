@@ -122,11 +122,30 @@ export const isFolderItem = (item) => item.endsWith("/");
 export const fold = (s) => (IGNORE_CASE ? s.toLowerCase() : s);
 
 /**
+ * The worktree a repo-relative path reaches into, or null.
+ *
+ * From the main checkout, `.claude/worktrees/x/src/a.js` is thread x's copy of
+ * `src/a.js`. As a path string it overlaps nothing x holds, so it could be
+ * claimed and edited from main with no conflict (folder_claims, 2026-10-05).
+ */
+const WORKTREES = ".claude/worktrees/";
+export function worktreeOf(rel) {
+  const p = fold(rel);
+  if (`${p}/` === WORKTREES) return "";
+  if (!p.startsWith(WORKTREES)) return null;
+  return rel.slice(WORKTREES.length).split("/")[0];
+}
+
+/**
  * Normalise one item into its stored form, or throw ClaimsError("bad-item").
  *
  * Database items pass through as written. Everything else is a path: absolute
  * paths are made repo-relative, backslashes become slashes, and a trailing
  * slash is kept because that is what makes it a folder claim.
+ *
+ * A folder named without its slash used to be stored as a FILE claim, which
+ * covered nothing inside it. Now an existing folder gets its slash, and a path
+ * that does not exist and has no extension is refused as ambiguous.
  */
 export function normaliseItem(raw, root) {
   const item = String(raw).trim();
@@ -152,7 +171,33 @@ export function normaliseItem(raw, root) {
   if (rel.startsWith("../")) {
     throw new ClaimsError("bad-item", `outside the repo: ${item}`);
   }
-  if (isFolder) rel += "/";
+  const wt = worktreeOf(rel);
+  if (wt !== null) {
+    throw new ClaimsError(
+      "bad-item",
+      `inside another thread's worktree: ${item}\n` +
+        (wt ? `Claim it from the ${wt} worktree, as a path relative to that worktree.` : ""),
+    );
+  }
+  if (isFolder) return `${rel}/`;
+
+  let isDir = false;
+  let exists = false;
+  try {
+    const st = statSync(abs);
+    exists = true;
+    isDir = st.isDirectory();
+  } catch {
+    /* does not exist yet */
+  }
+  if (isDir) return `${rel}/`;
+  if (!exists && !/\.[^./]+$/.test(rel.split("/").pop())) {
+    throw new ClaimsError(
+      "bad-item",
+      `${item} does not exist and has no file extension, so it is unclear whether it is a file or a folder.\n` +
+        `If it is meant as a folder, add a trailing slash: ${rel}/`,
+    );
+  }
   return rel;
 }
 
@@ -207,11 +252,19 @@ export function isExempt(rel) {
   );
 }
 
-/** Does folder `f` contain path `p`? */
+/**
+ * Does folder `f` contain path `p`? The folder itself, named without its slash,
+ * counts: a shell write gives `cp x src/items/` as `src/items`, and that was
+ * blocked under a claim on `src/items/`.
+ */
 export function covers(f, p) {
   if (!isFolderItem(f)) return false;
-  return fold(p).startsWith(fold(f));
+  const pf = fold(p);
+  return pf.startsWith(fold(f)) || `${pf}/` === fold(f);
 }
+
+/** Does a claim on `item` hold `p`: the same item, or a folder containing it? */
+export const holds = (item, p) => fold(item) === fold(p) || covers(item, p);
 
 /** Two items overlap if they are the same, or one folder contains the other. */
 export function overlaps(a, b) {
@@ -232,12 +285,14 @@ export function inspect(state, item, owner) {
   };
 }
 
-/** Does `owner` hold `item`, directly or through a folder claim? */
+/**
+ * Does `owner` hold `item`, directly or through a folder claim? Never for a
+ * path inside a worktree: a claim on `.claude/` must not reach another thread's
+ * files.
+ */
 export function heldBy(state, item, owner) {
-  return state.claims.some(
-    (c) =>
-      c.owner === owner && (fold(c.item) === fold(item) || covers(c.item, item)),
-  );
+  if (worktreeOf(item) !== null) return false;
+  return state.claims.some((c) => c.owner === owner && holds(c.item, item));
 }
 
 // ---------------------------------------------------------------------------
@@ -862,13 +917,14 @@ export function staleDbClaims(state, now = Date.now()) {
   );
 }
 
+/** Every claim on this repo-relative path, directly or through a folder. */
+export function holdersOf(state, rel) {
+  return state.claims.filter((c) => !isDbItem(c.item) && holds(c.item, rel));
+}
+
 /** Who holds this repo-relative path, if anyone: an owner name or null. */
 export function holderOf(state, rel) {
-  const hit = state.claims.find(
-    (c) =>
-      !isDbItem(c.item) && (fold(c.item) === fold(rel) || covers(c.item, rel)),
-  );
-  return hit ? hit.owner : null;
+  return holdersOf(state, rel)[0]?.owner ?? null;
 }
 
 /**
