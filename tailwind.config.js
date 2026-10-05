@@ -47,6 +47,12 @@ module.exports = {
           hover: 'var(--destructive-hover)',
           light: 'var(--destructive-light)',
         },
+        done: {
+          DEFAULT: 'var(--done)',
+          foreground: 'var(--done-foreground)',
+          strong: 'var(--done-strong)',
+          light: 'var(--done-light)',
+        },
         warning: {
           DEFAULT: 'var(--warning)',
           foreground: 'var(--warning-foreground)',

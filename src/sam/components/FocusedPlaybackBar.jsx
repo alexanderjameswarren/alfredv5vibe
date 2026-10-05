@@ -2,7 +2,7 @@ import React from "react";
 import { Pause, Flame, Check, ArrowDown, OctagonX } from "lucide-react";
 import LiveSessionCounter from "./LiveSessionCounter";
 import WarmupStrip from "./WarmupStrip";
-import ConsecutiveStrip from "./ConsecutiveStrip";
+import PlanGoalLine from "./PlanGoalLine";
 import { formatAccuracy, goalState } from "../lib/practiceScoring";
 
 // Collapsed top chrome during `playbackState === "playing"`. Everything the
@@ -12,8 +12,14 @@ import { formatAccuracy, goalState } from "../lib/practiceScoring";
 //
 // Row 1  → Pause | Warm up again | Session badge + Playthrough badge + Completed Passes + live Today
 // Row 2  → Loop / Hits / Misses / Session accuracy (muted, secondary)
-// Row 3  → the warm-up ladder strip, while a ladder is running
-// Row 4  → the in-a-row strip, on a consecutive plan item
+// Row 3  → the warm-up ladder strip, while a ladder is running; on a warm-up
+//          plan item it ends with "Warm-up · rung n of m"
+// Row 4  → the plan goal line (PlanGoalLine), on any other plan item; it
+//          carries Plan n/m, which used to sit in row 1 (2026-10-05)
+//
+// THE REST BAR IS WHEN HE LOOKS (2026-10-05). The playthrough figure shows the
+// finished pass, green or amber, from the end of the music until the next pass
+// starts, and then the em dash — never the last pass carried into the next.
 //
 // THE WARM-UP STRIP LIVES HERE, NOT BESIDE THE PLAN LINE (warm-up spec §7.2).
 // The spec asks for it "near the plan line", but the plan line is part of the
@@ -31,7 +37,7 @@ import { formatAccuracy, goalState } from "../lib/practiceScoring";
 // clear. A bare 88% says nothing about whether the pass counted, and at the
 // keyboard that is the only question.
 //
-// COLOUR IS NEVER THE ONLY SIGNAL. Green and red carry it for anyone who sees
+// COLOUR IS NEVER THE ONLY SIGNAL. Green and amber carry it for anyone who sees
 // them, and for anyone who does not there is a WORD in the badge label — MET,
 // SHORT, or CAN'T REACH — and a shape beside the figure: a tick, a down arrow,
 // or a stop sign. Any one of the three is enough on its own.
@@ -50,13 +56,23 @@ export default function FocusedPlaybackBar({
   accuracyPercent,
   playthroughPercent,
   hasPlaythrough,
-  // { text: "Plan 2/4" | "Plan ✓", state: "open" | "amber" | "done" } when the
+  // False once the next pass has started: the readout then falls back to the
+  // last pass, which is not what the top row should show.
+  playthroughIsCurrent = true,
+  // Between the end of the music and the next pass: the pass is over, so its
+  // result is final and the §6 "can't reach" warning no longer applies.
+  resting = false,
+  // { text: "Plan 2/4" | "Plan ✓" | "Warm-up · rung 1 of 2", state } when the
   // loaded range is a plan item (practice plans §7.4); null otherwise.
   planBadge = null,
   // The live ladder (warm-up spec §7.2), or null when none is running.
   warmupView = null,
-  // The live run on a consecutive item (practice plans §5.3), or null.
-  consecutiveView = null,
+  // PlanGoalLine's view for a non-warm-up plan item, or null.
+  goalView = null,
+  // { kind: "qualified" | "broke", seq } — the last pass event, for the pulse.
+  passFlash = null,
+  // True on a warm-up plan item, whose badge ends the warm-up strip instead.
+  warmupItem = false,
   // The accuracy a pass must reach right now: the running rung's, else the plan
   // item's. Null off plan with no ladder, where there is no target to show.
   accuracyGoal = null,
@@ -67,11 +83,16 @@ export default function FocusedPlaybackBar({
   onWarmUp = null,
 }) {
   // Null accuracy means nothing was measured; formatAccuracy shows "—".
-  const playthroughPct = hasPlaythrough ? playthroughPercent : null;
+  const playthroughPct = hasPlaythrough && playthroughIsCurrent ? playthroughPercent : null;
   const goal = Number.isFinite(accuracyGoal) ? accuracyGoal : null;
   // "met" | "short" | null (no target, or nothing measured yet).
   const met = goalState(playthroughPct, goal);
-  const state = playthroughImpossible ? "impossible" : met;
+  const state = playthroughImpossible && !resting ? "impossible" : met;
+  const warmupBadge = warmupItem && planBadge ? (
+    <span className="text-sm font-medium text-foreground shrink-0" data-state={planBadge.state} data-testid="warmup-plan">
+      {planBadge.text}
+    </span>
+  ) : null;
   const word = state === "impossible" ? "can't reach" : state === "met" ? "met" : state === "short" ? "short" : null;
   const ICON = "w-5 h-5 shrink-0";
 
@@ -102,18 +123,6 @@ export default function FocusedPlaybackBar({
           playbackState="playing"
           todayMinutes={todayMinutes}
           passesToday={passesToday}
-          afterPasses={planBadge && (
-            <span
-              className={`text-sm font-medium ${
-                planBadge.state === "amber" ? "text-amber-700"
-                  : planBadge.state === "done" ? "text-muted-foreground"
-                  : "text-dark"
-              }`}
-              data-state={planBadge.state}
-            >
-              {planBadge.text}
-            </span>
-          )}
         >
           <div
             data-goal={state || "none"}
@@ -131,14 +140,14 @@ export default function FocusedPlaybackBar({
             {state === "impossible" ? (
               <OctagonX className={`${ICON} text-destructive-foreground`} role="img" aria-label="Target out of reach" />
             ) : state === "met" ? (
-              <Check className={`${ICON} text-success`} role="img" aria-label="Target met" />
+              <Check className={`${ICON} text-done-strong`} role="img" aria-label="Target met" />
             ) : state === "short" ? (
-              <ArrowDown className={`${ICON} text-destructive`} role="img" aria-label="Below target" />
+              <ArrowDown className={`${ICON} text-amber-700`} role="img" aria-label="Below target" />
             ) : null}
             <span className={`text-2xl font-mono font-bold tabular-nums leading-none ${
               state === "impossible" ? "text-destructive-foreground"
-                : state === "met" ? "text-success"
-                : state === "short" ? "text-destructive"
+                : state === "met" ? "text-done-strong"
+                : state === "short" ? "text-amber-700"
                 : playthroughPct === 100 ? "text-success"
                 : "text-primary"
             }`}>
@@ -163,8 +172,15 @@ export default function FocusedPlaybackBar({
         <span>Session Accuracy: <strong className="text-dark">{formatAccuracy(accuracyPercent)}</strong></span>
       </div>
 
-      <WarmupStrip view={warmupView} />
-      <ConsecutiveStrip view={consecutiveView} />
+      {warmupView ? (
+        <div className="flex items-start gap-2">
+          <div className="flex-1 min-w-0"><WarmupStrip view={warmupView} /></div>
+          {warmupBadge && <div className="px-1">{warmupBadge}</div>}
+        </div>
+      ) : warmupBadge && (
+        <div className="mb-2 px-1">{warmupBadge}</div>
+      )}
+      <PlanGoalLine view={goalView} flash={passFlash} />
     </>
   );
 }

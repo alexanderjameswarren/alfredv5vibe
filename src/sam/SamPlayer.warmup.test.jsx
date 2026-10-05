@@ -249,7 +249,7 @@ const strip = () => screen.queryByLabelText("Warm-up ladder");
 const warmupLine = () => screen.queryByTestId("warmup-line");
 // The in-a-row strip, and the live run it draws: the item is 3 in a row at 60
 // BPM and 90%.
-const inARow = () => screen.queryByLabelText("Passes in a row");
+const inARow = () => screen.queryByLabelText("Plan goal");
 const runLabel = (filled, of = 3) =>
   `current run: 90 percent accuracy, at 60 BPM, ${filled} of ${of} passes`;
 // The playthrough badge, which carries the target and the §6 warning.
@@ -846,11 +846,128 @@ describe("the in-a-row strip: the CURRENT run, beside the day's best", () => {
     expect(screen.getByLabelText(runLabel(0))).toBeInTheDocument();
   });
 
-  test("an item that is not consecutive has no strip at all", async () => {
+  test("an item that is not consecutive gets the goal line without best-of-today", async () => {
     seed({ snippetLadder: [] });
     await openPlanItem();
     await pressPlay();
+    expect(inARow()).toHaveTextContent("Goal");
+    expect(inARow()).toHaveTextContent("90% (60)");
+    expect(inARow()).toHaveTextContent("Plan 0/4");
+    expect(screen.queryByTestId("consecutive-best")).not.toBeInTheDocument();
+  });
+});
+
+// --- The glance line (sam_glance, 2026-10-05) --------------------------------
+//
+// Everything is asserted after onContentEnd and BEFORE onLoopCount: that gap is
+// the rest bar, the only moment he can read the screen. The database is left
+// saying what it said before, so anything that moved got there live.
+
+async function endMusic(n, result = "hit") {
+  mockNextResult = result;
+  await act(async () => { mockOnChord([60]); });
+  await act(async () => { mockScrollProps.onContentEnd(n); });
+}
+async function nextPass(n) {
+  await act(async () => { mockScrollProps.onLoopCount(n); });
+  await drain();
+}
+// eslint-disable-next-line testing-library/no-node-access
+const dots = () => screen.getByTestId("goal-dots").querySelectorAll("[data-mark=filled]").length;
+const goalPlan = () => screen.getByTestId("goal-plan");
+
+describe("at pass end, before the rest bar is over", () => {
+  test("a qualifying pass on a plain item: dot, Plan n/m, pulse and a green figure, all before the database", async () => {
+    seed({ snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    await endMusic(1);
+    expect(dots()).toBe(1);
+    expect(goalPlan()).toHaveTextContent("Plan 1/4");
+    expect(inARow()).toHaveAttribute("data-pulse", "qualified");
+    expect(badge()).toHaveAttribute("data-goal", "met");
+    expect(badge()).toHaveTextContent("100%");
+    expect(within(badge()).getByText("100%")).toHaveClass("text-done-strong");
+
+    // The next pass starts: the figure goes back to the dash.
+    await nextPass(1);
+    expect(badge()).toHaveAttribute("data-goal", "none");
+    expect(badge()).toHaveTextContent("—");
+    // The refetch still says 0, and the count does not flicker back.
+    expect(goalPlan()).toHaveTextContent("Plan 1/4");
+    expect(dots()).toBe(1);
+  });
+
+  test("the database catching up moves the count on, never back", async () => {
+    seed({ snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    // This pass plus two from another device, as the refetch will see it.
+    mockDb.progressRows = [{ plan_item_id: "item-snip", attempts: 3, qualifying: 3,
+      longest_qualifying_streak: 1, ladder_completions: 0 }];
+    await endMusic(1);
+    await nextPass(1);
+    await waitFor(() => expect(goalPlan()).toHaveTextContent("Plan 3/4"));
+  });
+
+  test("a pass that misses: amber figure, no dot, no pulse", async () => {
+    seed({ snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    await endMusic(1, "miss");
+    expect(dots()).toBe(0);
+    expect(inARow()).toHaveAttribute("data-pulse", "none");
+    expect(badge()).toHaveAttribute("data-goal", "short");
+    expect(within(badge()).getByText("0%")).toHaveClass("text-amber-700");
+  });
+
+  test("a pass that became impossible shows its final figure amber in the rest, not the red warning", async () => {
+    seed({ snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    emitBeats(4);
+    await playChord("miss");
+    expect(badge()).toHaveAttribute("data-goal", "impossible");
+    await act(async () => { mockScrollProps.onContentEnd(1); });
+    expect(badge()).toHaveAttribute("data-goal", "short");
+  });
+
+  test("in a row: a broken run flashes amber and best-of-today holds", async () => {
+    seed({ consecutive: true, targetPasses: 3, snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    await endMusic(1);
+    await nextPass(1);
+    await endMusic(2, "miss");
+    expect(inARow()).toHaveAttribute("data-pulse", "broke");
+    expect(screen.getByLabelText(runLabel(0))).toBeInTheDocument();
+    expect(screen.getByTestId("consecutive-best")).toHaveTextContent("best 1 of 3 today");
+    expect(goalPlan()).toHaveTextContent("Plan 1/3");
+  });
+
+  test("in a row: the pass that completes it turns the line green with a check, before the database", async () => {
+    seed({ consecutive: true, targetPasses: 2, snippetLadder: [] });
+    await openPlanItem();
+    await pressPlay();
+    await endMusic(1);
+    await nextPass(1);
+    await endMusic(2);
+    expect(inARow()).toHaveAttribute("data-done", "true");
+    expect(inARow()).toHaveClass("bg-done");
+    expect(screen.getByLabelText("Plan item done")).toBeInTheDocument();
+    expect(goalPlan()).toHaveTextContent("Plan ✓");
+    expect(screen.getByTestId("consecutive-best")).toHaveTextContent("best 2 of 2 today");
+    await nextPass(2);
+    expect(inARow()).toHaveAttribute("data-done", "true");
+  });
+
+  test("a warm-up item: no goal line, and its plan readout ends the warm-up strip", async () => {
+    seed({ goalIsWarmup: true });
+    await openPlanItem();
+    await pressWarmUp();
     expect(inARow()).not.toBeInTheDocument();
+    expect(screen.getByTestId("warmup-plan")).toHaveTextContent(/^Warm-up · /);
+    expect(screen.getByText(/Completed Passes:/).parentElement).not.toHaveTextContent(/Warm-up ·/); // eslint-disable-line testing-library/no-node-access
   });
 });
 

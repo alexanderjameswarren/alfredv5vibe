@@ -56,6 +56,30 @@ const EMPTY_ANCHORS = [];
 // re-run on every render before a score has been laid out.
 const EMPTY_SCOREABLE = { both: 0, rh: 0, lh: 0 };
 
+// This page's passes on one plan item, counted at the credit instant.
+// `baseline` is the database's qualifying count when the first was credited.
+const EMPTY_LIVE_CREDIT = { itemId: null, run: 0, bestRun: 0, qualifying: 0, baseline: 0 };
+
+// `itemState` with the live passes folded in. Each live figure is a lower bound
+// of what the database will return once the rows land, so taking the larger
+// moves the display forward early and never back when the refetch arrives.
+export function liveItemState(item, state, live) {
+  if (!item || !state || state.warmup || !live) return state;
+  const counted = item.consecutive
+    ? Math.max(state.streak, live.bestRun)
+    : Math.max(state.qualifying, live.baseline + live.qualifying);
+  const target = state.target;
+  const done = target > 0 && counted >= target;
+  return {
+    ...state,
+    ...(item.consecutive ? { streak: counted } : { qualifying: counted }),
+    shown: Math.min(counted, target),
+    done,
+    // A pass has been credited, so it has been attempted.
+    amber: !done,
+  };
+}
+
 function AudioMsCounter({ audioElement }) {
   const [ms, setMs] = useState(0);
   const rafRef = useRef(null);
@@ -265,12 +289,24 @@ export default function SamPlayer({ onBack }) {
   // A ref mirrored into state, for the reason every counter in this file is:
   // it is written from ScrollEngine's rAF frame through a captured callback,
   // where a state value would be a stale capture.
-  const consecutiveRunRef = useRef(0);
-  const [consecutiveRun, setConsecutiveRun] = useState(0);
+  //
+  // LIVE CREDIT (2026-10-05, sam_glance). The same instant also feeds the goal
+  // line's Plan n/m, best-of-today and done state, which otherwise wait for the
+  // pass write and a progress refetch — often past the rest bar, the one moment
+  // he can read the screen. `bestRun` and `qualifying` are lower bounds of what
+  // the database will say, so the display takes the larger of the two and the
+  // database can only ever move it forward. They live for the page, per item;
+  // only `run` belongs to one sitting.
+  const liveCreditRef = useRef(EMPTY_LIVE_CREDIT);
+  const [liveCredit, setLiveCredit] = useState(EMPTY_LIVE_CREDIT);
+  // The last pass event, for the goal line's pulse: { kind, seq }.
+  const [passFlash, setPassFlash] = useState(null);
   const resetConsecutiveRun = useCallback(() => {
-    consecutiveRunRef.current = 0;
-    setConsecutiveRun(0);
+    liveCreditRef.current = { ...liveCreditRef.current, run: 0 };
+    setLiveCredit(liveCreditRef.current);
   }, []);
+  // From the end of the music to the next pass: the rest bar, when present.
+  const [resting, setResting] = useState(false);
   const planSongNote = planSongFor(activePlan.plan, songDbId)?.song_note || null;
   // Where to go next, for the plan line's Next button. Null while nothing is
   // left to do — or while there is no plan at all — which is what hides the
@@ -290,19 +326,29 @@ export default function SamPlayer({ onBack }) {
   const warmupRungText = warmup.view
     ? rungProgressText({ rung: warmup.view.rung, ladder: warmup.view.ladder, complete: warmup.view.complete })
     : null;
+  // The playing bar reads the database's state with this sitting's passes
+  // folded in; everything stopped or paused reads the database alone.
+  const livePlanState = liveItemState(
+    planItem, planItemState, liveCredit.itemId === planItem?.id ? liveCredit : null,
+  );
   const planBadge = planItem
-    ? { text: planBadgeText(planItemState, warmupRungText), state: planTone(planItemState) }
+    ? { text: planBadgeText(livePlanState, warmupRungText), state: planTone(livePlanState) }
     : null;
-  // The in-a-row strip, for a consecutive item only. `filled` is the live run;
-  // `best` is the day's longest, from the database — the two are shown together
-  // and labelled, because they are different numbers and both are right.
-  const consecutiveView = planItem?.consecutive
+  // The goal line, for every plan item but a warm-up one. On an in-a-row item
+  // `filled` is the live run and `best` the day's longest — different numbers,
+  // both right, both labelled. Otherwise the dots are the day's count.
+  const goalView = planItem && !planItem.goal_is_warmup
     ? {
+        consecutive: !!planItem.consecutive,
         accuracy: planItem.is_free_play ? null : planItem.accuracy_target,
         effectiveBpm: planItem.target_effective_bpm,
         target: planItem.target_passes,
-        filled: Math.min(consecutiveRun, planItem.target_passes),
-        best: Math.min(planItemState?.streak ?? 0, planItem.target_passes),
+        filled: planItem.consecutive
+          ? Math.min(liveCredit.itemId === planItem.id ? liveCredit.run : 0, planItem.target_passes)
+          : livePlanState.shown,
+        best: planItem.consecutive ? livePlanState.shown : null,
+        done: livePlanState.done,
+        planText: planBadge.text,
       }
     : null;
   // Snippet rows in the panel: a planned snippet of this song gets a tag.
@@ -954,8 +1000,10 @@ export default function SamPlayer({ onBack }) {
     // Read here for the same reason as bpm: both can change mid-run, and the
     // pass must record what was true at the finish line.
     playbackSpeed: playbackSpeed.value,
-    // For the live in-a-row run, which is judged against the item's own targets.
+    // For the live plan credit, which is judged against the item's own targets.
     planItem,
+    // The database's count now, the base the live count is added to.
+    planQualifying: planItemState?.qualifying ?? 0,
   };
 
   // One completed pass, against the loaded item's targets, for the in-a-row
@@ -967,18 +1015,35 @@ export default function SamPlayer({ onBack }) {
   // below the item's target does not count, so the circles stay empty during the
   // ramp; and a playthrough with no MIDI notes is not an attempt at all, so it
   // neither counts nor breaks the run — the same rows the database filters out.
-  const creditConsecutivePass = useCallback((playthrough, tempo) => {
-    const item = passContextRef.current.planItem;
-    if (!item?.consecutive) return;
+  //
+  // Every non-warm-up item is credited here now, not only in-a-row ones: the
+  // same instant fills the goal line's dots, Plan n/m and done state, and fires
+  // its pulse. Practice mode writes no row, so it credits nothing.
+  const creditPlanPass = useCallback((playthrough, tempo) => {
+    const { planItem: item, planQualifying } = passContextRef.current;
+    if (!item || item.goal_is_warmup || practiceModeRef.current) return;
     if (!(playthrough?.notesPlayed > 0)) return;
     const qualifies = passQualifies({
       notesPlayed: playthrough.notesPlayed,
       accuracyPercent: accuracyOf(playthrough),
       effectiveBpm: heardTempo(tempo?.bpm, tempo?.playbackSpeed),
     }, item);
-    consecutiveRunRef.current = qualifies ? consecutiveRunRef.current + 1 : 0;
-    setConsecutiveRun(consecutiveRunRef.current);
-  }, []);
+    const prev = liveCreditRef.current.itemId === item.id
+      ? liveCreditRef.current
+      : { ...EMPTY_LIVE_CREDIT, itemId: item.id, baseline: planQualifying ?? 0 };
+    const run = qualifies ? prev.run + 1 : 0;
+    liveCreditRef.current = {
+      ...prev,
+      run,
+      bestRun: Math.max(prev.bestRun, run),
+      qualifying: prev.qualifying + (qualifies ? 1 : 0),
+    };
+    setLiveCredit(liveCreditRef.current);
+    const broke = !qualifies && item.consecutive && prev.run > 0;
+    if (qualifies || broke) {
+      setPassFlash((f) => ({ kind: qualifies ? "qualified" : "broke", seq: (f?.seq ?? 0) + 1 }));
+    }
+  }, [practiceModeRef]);
 
   // Credit one completed playthrough of the loaded range.
   //
@@ -1035,6 +1100,8 @@ export default function SamPlayer({ onBack }) {
 
   const handleLoopCount = useCallback((n) => {
     setLoopCount(n);
+    // The next pass starts here, so the rest is over.
+    setResting(false);
     // Credit BEFORE advancing the loop. `setLoopIteration` rotates the
     // per-playthrough counters, and the pass needs the ones belonging to the
     // playthrough that just finished. Neither call depends on the other, so the
@@ -1090,9 +1157,10 @@ export default function SamPlayer({ onBack }) {
     const warmupPass = creditWarmupPass(playthrough);
     // Same instant, same counters, same tempo — so the circles and the row can
     // never disagree about whether this pass counted.
-    creditConsecutivePass(playthrough, tempo);
+    creditPlanPass(playthrough, tempo);
+    setResting(true);
     setTimeout(() => creditPass(playthrough, warmupPass, tempo), 0);
-  }, [creditPass, getCurrentPlaythrough, creditWarmupPass, creditConsecutivePass]);
+  }, [creditPass, getCurrentPlaythrough, creditWarmupPass, creditPlanPass]);
 
   // `handleStop` is a plain function declared further down the component, so it
   // is re-created every render. Reaching it through a ref keeps
@@ -1364,6 +1432,7 @@ export default function SamPlayer({ onBack }) {
     // ends the sitting. The day's best is untouched: that is the database's
     // number and it is still on screen beside these circles.
     resetConsecutiveRun();
+    setResting(false);
   }
 
   // Shared tail of Play and Restart: both enter at the first measure of the
@@ -1381,6 +1450,7 @@ export default function SamPlayer({ onBack }) {
   function startFromTopOfRange(activeSnippet, { practice = false } = {}) {
     resetCounters();
     resetConsecutiveRun(); // Play and Restart both begin a new sitting.
+    setResting(false);
     clearStuckBeat();
     resetHeldKeys();
     setPausedMeasure(null);
@@ -1878,9 +1948,15 @@ export default function SamPlayer({ onBack }) {
                 accuracyPercent={sessionStats.accuracyPercent}
                 playthroughPercent={sessionStats.playthroughAccuracyPercent}
                 hasPlaythrough={sessionStats.hasPlaythrough}
+                // The readout falls back to the previous pass until the new one
+                // scores a beat; mid-play that reads as this pass, so it is not.
+                playthroughIsCurrent={sessionStats.playthroughLoop === loopCount}
+                resting={resting}
                 planBadge={planBadge}
                 warmupView={warmup.view}
-                consecutiveView={consecutiveView}
+                warmupItem={!!planItem?.goal_is_warmup}
+                goalView={goalView}
+                passFlash={passFlash}
                 accuracyGoal={accuracyGoal}
                 playthroughImpossible={sessionStats.playthroughImpossible}
                 onWarmUp={handleWarmUp}

@@ -32,6 +32,13 @@
   --warning-foreground: #ffffff;
   --warning-hover: #7F6B5C;
   --warning-light: #E4D2C3;
+  /* SAM "plan item done / pass counted". --success is a grey-teal that does not
+     read as green at a glance, so this is a real green. Dark text on --done is
+     ~11:1; --done-strong is the green for text and dots on the page (~5:1). */
+  --done: #4ADE80;
+  --done-foreground: #052E16;
+  --done-strong: #15803D;
+  --done-light: #DCFCE7;
   --border: #E0D6CC;
   --input: transparent;
   --input-background: #ffffff;

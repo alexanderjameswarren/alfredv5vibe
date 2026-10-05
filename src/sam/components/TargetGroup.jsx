@@ -28,10 +28,23 @@ export default function TargetGroup({
   filled = 0,
   state = "current",
   label = null,
+  // "large": the plan goal line's dots — bigger, and filled green as passes
+  // count, so they can be read at a glance from the keyboard.
+  marksStyle = "glyph",
 }) {
-  const marks = Array.from({ length: target }, (_, n) =>
-    state === "done" ? "✓" : n < filled ? "●" : "○"
-  ).join("");
+  const marks = marksStyle === "large"
+    ? Array.from({ length: target }, (_, n) => (
+        <span
+          key={n}
+          data-mark={n < filled ? "filled" : "empty"}
+          className={`inline-block w-4 h-4 rounded-full border-2 align-middle ml-1 ${
+            n < filled ? "bg-done-strong border-done-strong" : "border-current opacity-60"
+          }`}
+        />
+      ))
+    : Array.from({ length: target }, (_, n) =>
+        state === "done" ? "✓" : n < filled ? "●" : "○"
+      ).join("");
 
   // A free-play item has no accuracy target, so the tempo is all there is and it
   // carries the group on its own rather than sitting in brackets after nothing.
@@ -58,7 +71,7 @@ export default function TargetGroup({
       ) : (
         tempoText && <span>{tempoText} BPM</span>
       )}{" "}
-      <span aria-hidden="true">{marks}</span>
+      <span aria-hidden="true" data-testid={marksStyle === "large" ? "goal-dots" : undefined}>{marks}</span>
     </span>
   );
 }

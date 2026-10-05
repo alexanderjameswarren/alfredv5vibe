@@ -354,20 +354,22 @@ test("song note under the plan line, and alone when the loaded range has no item
   expect(screen.queryByText(/^Plan ·/)).not.toBeInTheDocument();
 });
 
-test("while playing: a compact plan count next to Completed Passes, amber, then ✓ after the pass that finishes it", async () => {
+test("while playing: the plan count ends the goal line, not the top row, and turns ✓ when the database says done", async () => {
   mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 2, qualifying: 3 }];
   await openItem("m.1–1 · RH · Opening bar");
   expect(screen.getByText("Plan · m.1–1 · RH · 60 BPM · 90% · 3/4 today · Count out loud.")).toHaveClass("text-amber-800");
   await pressPlay();
-  const badge = await screen.findByText("Plan 3/4");
-  expect(badge).toHaveAttribute("data-state", "amber");
-  expect(screen.getByText(/Completed Passes:/)).toBeInTheDocument();
+  const line = await screen.findByLabelText("Plan goal");
+  expect(within(line).getByTestId("goal-plan")).toHaveTextContent("Plan 3/4");
+  expect(line).toHaveTextContent("90% (60)");
+  expect(screen.getByText(/Completed Passes:/).parentElement).not.toHaveTextContent(/Plan/); // eslint-disable-line testing-library/no-node-access
 
-  // The pass that makes it four: the progress refetch turns the badge into ✓.
+  // A pass from elsewhere (no MIDI here): the refetch alone finishes it.
   mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 3, qualifying: 4 }];
   await act(async () => { completePass(1); });
-  const done = await screen.findByText("Plan ✓");
-  expect(done).toHaveAttribute("data-state", "done");
+  await waitFor(() => expect(screen.getByLabelText("Plan goal")).toHaveAttribute("data-done", "true"));
+  expect(screen.getByTestId("goal-plan")).toHaveTextContent("Plan ✓");
+  expect(screen.getByLabelText("Plan item done")).toBeInTheDocument();
 });
 
 test("no plan badge while playing a range outside the plan", async () => {
@@ -377,6 +379,7 @@ test("no plan badge while playing a range outside the plan", async () => {
   await pressPlay();
   expect(screen.getByText(/Completed Passes:/)).toBeInTheDocument();
   expect(screen.queryByText(/^Plan /)).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Plan goal")).not.toBeInTheDocument();
 });
 
 test("the planned snippet's row in the Snippet panel carries a plan tag", async () => {
