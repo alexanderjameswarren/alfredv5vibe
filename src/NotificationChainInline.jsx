@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Bell, BellOff, Clock } from "lucide-react";
-import AppLink from "./AppLink";
+import AppLink from "./shared/AppLink";
 import {
   getNotificationSteps,
   cancelPendingSteps,

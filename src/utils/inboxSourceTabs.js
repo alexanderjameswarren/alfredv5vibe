@@ -13,7 +13,7 @@
  */
 
 import { Inbox } from "lucide-react";
-import { SOURCE_GLYPHS } from "../CaptureMeta";
+import { SOURCE_GLYPHS } from "../inbox/CaptureMeta";
 
 export const ALL_SOURCES = "all";
 

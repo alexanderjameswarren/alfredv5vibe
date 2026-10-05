@@ -5,6 +5,7 @@ import {
   offsetPatch,
   isFirstStep,
 } from "./elementOffsets";
+import { alfredSource, sourceOf } from "../testing/alfredSources";
 
 // ── The files these source-scanning tests read ───────────────────────────────
 //
@@ -20,7 +21,7 @@ import {
 const read = (...parts) =>
   fs.readFileSync(path.join(__dirname, "..", ...parts), "utf8");
 
-const ELEMENT_EDITOR_SOURCES = [read("Alfred.jsx"), read("InboxDetailView.jsx")].join("\n");
+const ELEMENT_EDITOR_SOURCES = [alfredSource(), sourceOf("InboxDetailView.jsx")].join("\n");
 
 // Plus the extracted normaliser, which is a normaliser site like any other and
 // must obey the same rule about carrying an offset patch.

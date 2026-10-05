@@ -1,5 +1,4 @@
-import fs from "fs";
-import path from "path";
+import { alfredSource } from "../testing/alfredSources";
 import {
   archivedAt,
   archiveOutcome,
@@ -218,7 +217,7 @@ describe("warning before an Undo that cannot undo everything", () => {
 
 // ── The guard ────────────────────────────────────────────────────────────────
 describe("archived rows reach state at all", () => {
-  const alfred = fs.readFileSync(path.join(__dirname, "..", "Alfred.jsx"), "utf8");
+  const alfred = alfredSource();
 
   it("neither loader throws archived rows away any more", () => {
     // 🛑 This is what the whole section depends on. Both loaders used to do
