@@ -17,7 +17,8 @@ Persistent
 ; Settings (kept outside the repo)
 ; ---------------------------------------------------------------------------
 
-SETTINGS_DIR := EnvGet("APPDATA") "\claude-sessions"
+; SWITCHBOARD_SETTINGS_DIR moves it: smoke-test.ahk sets it before including this file.
+SETTINGS_DIR := EnvGet("SWITCHBOARD_SETTINGS_DIR") || EnvGet("APPDATA") "\claude-sessions"
 SETTINGS_INI := SETTINGS_DIR "\settings.ini"   ; not `SETTINGS`: WebView2.ahk has a local `settings`
 if !DirExist(SETTINGS_DIR)
     DirCreate(SETTINGS_DIR)

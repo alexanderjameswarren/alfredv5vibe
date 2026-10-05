@@ -12,6 +12,7 @@ import {
   resolveCheckout,
   resolveRepo,
   scanRedirects,
+  splitCommand,
   staleDbClaims,
   writeCheck,
   writeIndicator,
@@ -360,6 +361,82 @@ test("a lone clip.mjs push with cp, mv and rm in its title writes nothing", () =
   assert.equal(writeCheck(push, ROOT, "bash", { redirectsOnly: true }), null);
   // Still a write when it is wrapped in a shell that runs the quoted text.
   assert.ok(writeCheck('bash -c "rm src/App.js"', ROOT));
+});
+
+// ---------------------------------------------------------------------------
+// switchboard_smoke: only the parts that write are judged
+// ---------------------------------------------------------------------------
+
+const SCRATCH = "C:/Users/Alex/AppData/Local/Temp/claude/x/scratchpad/sb";
+
+test("commands split at ; && || and newlines, outside quotes and groups", () => {
+  assert.deepEqual(splitCommand("a; b && c || d\ne"), ["a", "b", "c", "d", "e"]);
+  assert.deepEqual(splitCommand("a | b"), ["a | b"]);
+  assert.deepEqual(splitCommand('echo "x; y" && z'), ['echo "x; y"', "z"]);
+  assert.deepEqual(splitCommand("{ a; b; } > f && c"), ["{ a; b; } > f", "c"]);
+  assert.deepEqual(splitCommand("& 'C:/x.exe' a; b", "powershell"), ["& 'C:/x.exe' a", "b"]);
+});
+
+test("this morning's command: a write outside the repo, a read inside it", () => {
+  const command =
+    `S="${SCRATCH}"; rm -rf "$S"; mkdir -p "$S"; ` +
+    `git archive HEAD tools/claude-sessions | tar -x -C "$S"; ` +
+    `cd "$S/tools/claude-sessions" && "/c/Program Files/AutoHotkey/v2/AutoHotkey64.exe" ` +
+    `//ErrorStdOut smoke-test.ahk 2>&1 | cat; echo "exit \${PIPESTATUS[0]}"`;
+  assert.equal(writes(command), null);
+});
+
+test("a pipeline stays whole, so xargs still sees the path", () => {
+  assert.deepEqual(writes("echo src/App.js | xargs rm"), ["src/App.js"]);
+});
+
+test("a write in one part still names its own repo paths", () => {
+  assert.deepEqual(writes("git status; rm src/App.js"), ["src/App.js"]);
+  assert.deepEqual(writes("git log scripts/clip.mjs; rm -rf /tmp/x"), null);
+});
+
+test("a variable set earlier in the command is expanded", () => {
+  assert.deepEqual(writes("F=src/App.js; rm $F"), ["src/App.js"]);
+  assert.deepEqual(writes('F="src/App.js" && echo hi > "$F"'), ["src/App.js"]);
+});
+
+test("unreadable writing parts fall back to the whole command", () => {
+  for (const command of [
+    "cat scripts/clip.mjs; cd /tmp && rm x", // after a cd
+    "git log scripts/clip.mjs; rm $NOT_SET_ANYWHERE_X", // an unresolved variable
+    "git log scripts/clip.mjs; rm $(cat /tmp/list)", // a substitution
+    "git log scripts/clip.mjs; rm `cat /tmp/list`", // backticks
+    "echo scripts/clip.mjs > /tmp/list; xargs rm < /tmp/list", // arguments from stdin
+    "cat <<EOF > /tmp/x\nscripts/clip.mjs\nEOF\nrm /tmp/y", // a heredoc
+  ]) {
+    assert.ok(writes(command)?.includes("scripts/clip.mjs"), command);
+  }
+  assert.deepEqual(psWrites("Get-Content scripts\\clip.mjs; Set-Location src; Remove-Item App.js"), [
+    "scripts/clip.mjs",
+  ]);
+});
+
+test("tar -x, unzip and find -delete are writes", () => {
+  assert.equal(writeIndicator("tar -xzf /tmp/a.tgz"), "tar -x");
+  assert.equal(writeIndicator("tar xzf /tmp/a.tgz"), "tar -x");
+  assert.equal(writeIndicator("tar --extract -f /tmp/a.tar"), "tar -x");
+  assert.equal(writeIndicator("unzip /tmp/a.zip"), "unzip");
+  assert.equal(writeIndicator("find src -name '*.bak' -delete"), "find -delete");
+  // Reads.
+  assert.equal(writeIndicator("tar -tf /tmp/a.tar"), null);
+  assert.equal(writeIndicator("tar -czf /tmp/a.tgz --exclude=x src"), null);
+  assert.equal(writeIndicator("unzip -l /tmp/a.zip"), null);
+  assert.equal(writeIndicator("find src -name '*.bak'"), null);
+});
+
+test("tar -x and unzip are judged on their destination when they name one", () => {
+  assert.equal(writes(`git archive HEAD scripts | tar -x -C "${SCRATCH}"`), null);
+  assert.deepEqual(writes("git archive HEAD scripts | tar -x -C src"), ["src"]);
+  assert.deepEqual(writes(`unzip ${SCRATCH}/a.zip -d src`), ["src"]);
+  assert.equal(writes(`unzip src.zip -d ${SCRATCH}`), null);
+  // No destination: strict, every repo path in the part.
+  assert.deepEqual(writes("tar -xf /tmp/a.tar src/App.js"), ["src/App.js"]);
+  assert.deepEqual(writes("find src/sam -name '*.bak' -delete"), ["src/sam"]);
 });
 
 test("the checkout comes from the project dir, then the cwd", () => {

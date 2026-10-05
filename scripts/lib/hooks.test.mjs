@@ -307,6 +307,21 @@ test("the guard allows the three switchboard_fixes false positives", () => {
   assert.equal(runGuard("Bash", { command: "cd .clip && rm notification-hook-input.log" }).code, 0);
 });
 
+test("the guard allows this morning's scratch copy of tools/claude-sessions", () => {
+  const command =
+    `S="${tmpdir().replaceAll("\\", "/")}/sb"; rm -rf "$S"; mkdir -p "$S"; ` +
+    `git archive HEAD tools/claude-sessions | tar -x -C "$S"; ` +
+    `cd "$S/tools/claude-sessions" && echo ran`;
+  const run = runGuard("Bash", { command });
+  assert.equal(run.code, 0, run.stderr);
+});
+
+test("the guard blocks xargs rm fed a repo path", () => {
+  const run = runGuard("Bash", { command: "echo src/App.js | xargs rm" });
+  assert.equal(run.code, 2);
+  assert.match(run.line, /BLOCK.*shell write: src\/App\.js/);
+});
+
 test("the guard still blocks a copy over an unclaimed file", () => {
   const run = runGuard("Bash", { command: "cp \"$TEMP/x.js\" src/App.js" });
   assert.equal(run.code, 2);

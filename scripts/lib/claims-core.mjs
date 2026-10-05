@@ -280,6 +280,7 @@ const COMMAND_INDICATORS = [
   [/(?<![-\w])(?:sed|perl|ruby)\b[^|;&\n]*\s-i\b/, "in-place sed/perl"],
   [/(?<![-\w])dd\b[^|;&\n]*\bof=/, "dd of="],
   [/(?<![-\w])(?:patch|git\s+apply)\b(?!-)/, "patch"],
+  [/(?<![-\w])find\b[^|;&\n]*\s-delete\b/, "find -delete"],
   [/\bwrite(?:File)?(?:Sync)?\s*\(/i, "writeFileSync"],
   [/\bopen\s*\([^)]*['"][wax]/, "open(...,'w')"],
   // PowerShell cmdlets match in EITHER shell: `bash -c 'powershell -c "Set-Content …"'`
@@ -289,6 +290,25 @@ const COMMAND_INDICATORS = [
   [/\b(?:Out-File|Tee-Object|Export-(?:Csv|Clixml))\b/i, "Out-File"],
   [/\b(?:New|Copy|Move|Remove|Rename)-Item\b/i, "New/Copy/Move/Remove-Item"],
   [/\bSet-Item(?:Property)?\b/i, "Set-ItemProperty"],
+];
+
+/**
+ * Commands that unpack into a folder they name, as [regex, label, destination].
+ * With the destination given, only it counts; without one, they are strict.
+ * `unzip -l/-v/-t/-p/-Z` only list or print, so they are not writes.
+ */
+const DEST = String.raw`\s*("[^"]*"|'[^']*'|[^\s|;&<>()]+)`;
+const EXTRACT_INDICATORS = [
+  [
+    /(?<![-\w])tar\b(?!-)(?:\s+[A-Za-z]*x[A-Za-z]*\s|[^|;&\n]*\s(?:-[A-Za-z]*x[A-Za-z]*\b|--extract\b|--get\b))/,
+    "tar -x",
+    new RegExp(String.raw`(?<![-\w])tar\b[^|;&\n]*\s(?:-C|--directory=?)` + DEST),
+  ],
+  [
+    /(?<![-\w])unzip\b(?!-)(?![^|;&\n]*\s-[lvtpZ]\b)/,
+    "unzip",
+    new RegExp(String.raw`(?<![-\w])unzip\b[^|;&\n]*\s-d` + DEST),
+  ],
 ];
 
 /**
@@ -463,6 +483,9 @@ export function writeIndicators(command, shell = "bash") {
   for (const [re, label] of indicators) {
     if (re.test(c)) found.push({ label, kind: "command" });
   }
+  for (const [re, label, destRe] of EXTRACT_INDICATORS) {
+    if (re.test(c)) found.push({ label, kind: "extract", destRe });
+  }
   return found;
 }
 
@@ -491,33 +514,152 @@ export function writeIndicator(command, shell = "bash") {
  * what catches it, and the `mv` is why the strict rule cannot be narrowed to
  * destinations too.
  *
+ * **Both rules apply per part, not per command** (switchboard_smoke, 2026-10-05):
+ * `rm -rf "$S"; git archive HEAD tools/claude-sessions | tar -x -C "$S"` was
+ * blocked because the `rm` made the `git archive` argument count. The command is
+ * split at `;`, `&&`, `||` and newlines (see `splitCommand`) and only the parts
+ * that write are judged, with `NAME=value` from earlier parts expanded. A writing
+ * part that cannot be read on its own falls back to the whole command: after a
+ * `cd`, with an unresolved variable, `$(…)` or backticks, or arguments from
+ * `xargs`/`read`. A heredoc anywhere does too.
+ *
  * `redirectsOnly` is for a lone claims.mjs or clip.mjs command (see
  * `isLoneScriptCommand`), whose arguments are never run.
  */
 export function writeCheck(command, root, shell = "bash", { redirectsOnly = false } = {}) {
-  const found = writeIndicators(command, shell).filter(
-    (f) => !redirectsOnly || f.kind === "redirect",
-  );
-  if (!found.length) return null;
+  const kinds = (c) =>
+    writeIndicators(c, shell).filter((f) => !redirectsOnly || f.kind === "redirect");
+  if (!kinds(command).length) return null;
 
-  const strict = found.find((f) => f.kind === "command");
-  if (strict) {
-    const paths = repoPathsIn(command, root);
-    return paths.length ? { indicator: strict.label, paths } : null;
-  }
-
-  const redirect = found[0];
   const paths = new Set();
-  for (const target of redirect.targets) {
+  const add = (p) => {
     let rel = null;
     try {
-      rel = toRepoRelative(expandVars(target), root);
+      rel = toRepoRelative(p, root);
     } catch {
-      continue;
+      return;
     }
     if (rel && !isExempt(rel)) paths.add(rel);
+  };
+  const vars = new Map();
+  let strictLabel = null;
+  let redirectLabel = null;
+  let whole = /<</.test(command);
+  let afterCd = false;
+
+  for (const raw of whole ? [] : splitCommand(command, shell)) {
+    const assigned = parseAssignment(raw, shell);
+    if (assigned) {
+      const value = assigned.literal ? assigned.value : expandVars(expandLocal(assigned.value, vars));
+      if (unreadable(value)) vars.delete(assigned.name);
+      else vars.set(assigned.name, value);
+      continue;
+    }
+    if (CHANGES_DIR.test(raw)) afterCd = true;
+    const local = expandLocal(raw, vars);
+    const found = kinds(local);
+    if (!found.length) continue;
+    const part = expandVars(local);
+
+    const strong = found.find((f) => f.kind === "command") ?? found.find((f) => f.kind === "extract");
+    if (!strong) {
+      redirectLabel ??= found[0].label;
+      for (const target of found[0].targets) add(expandVars(target));
+      continue;
+    }
+    strictLabel ??= strong.label;
+    if (afterCd || FROM_INPUT.test(part) || unreadable(part)) {
+      whole = true;
+      break;
+    }
+    const dest = strong.kind === "extract" ? strong.destRe.exec(part)?.[1].replace(/^["']|["']$/g, "") : null;
+    if (dest && path.resolve(root, dest) !== path.resolve(root)) {
+      add(dest);
+      for (const r of found.filter((f) => f.kind === "redirect"))
+        for (const target of r.targets) add(expandVars(target));
+    } else {
+      for (const rel of repoPathsIn(part, root)) paths.add(rel);
+    }
   }
-  return paths.size ? { indicator: redirect.label, paths: [...paths] } : null;
+
+  if (whole) {
+    const all = kinds(command);
+    strictLabel ??= all.find((f) => f.kind !== "redirect")?.label;
+    if (strictLabel) for (const rel of repoPathsIn(command, root)) paths.add(rel);
+    else for (const target of all[0].targets) add(expandVars(target));
+  }
+  return paths.size ? { indicator: strictLabel ?? redirectLabel, paths: [...paths] } : null;
+}
+
+/** `cd` and its kin: relative paths in later parts no longer mean what they say. */
+const CHANGES_DIR = /(?<![-\w])(?:cd|pushd|popd|chdir)\b(?!-)|\b(?:Set|Push|Pop)-Location\b|^\s*sl\b/i;
+/** Parts whose real arguments arrive on stdin. */
+const FROM_INPUT = /(?<![-\w])(?:xargs|read|parallel)\b(?!-)/;
+
+/** A variable left unexpanded, or a substitution, so its paths cannot be read. */
+function unreadable(text) {
+  const t = String(text).replace(/\$(?:null|true|false)\b/gi, "");
+  return /\$\(|`|\$[\w{]|%[A-Za-z_]\w*%/.test(t);
+}
+
+/** `NAME=value` (bash) or `$NAME = value` (PowerShell) as a whole part, or null. */
+function parseAssignment(part, shell) {
+  const re =
+    shell === "powershell"
+      ? /^\$([A-Za-z_]\w*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'`;&|]*))$/
+      : /^(?:export\s+)?([A-Za-z_]\w*)=(?:"([^"]*)"|'([^']*)'|([^\s"'`;&|]*))$/;
+  const m = re.exec(part.trim());
+  if (!m) return null;
+  return { name: m[1], value: m[2] ?? m[3] ?? m[4], literal: m[3] !== undefined };
+}
+
+/** Replace `$NAME` and `${NAME}` set earlier in the same command. */
+function expandLocal(text, vars) {
+  return String(text)
+    .replace(/\$\{([A-Za-z_]\w*)\}/g, (m, n) => vars.get(n) ?? m)
+    .replace(/\$([A-Za-z_]\w*)(?![\w:])/g, (m, n) => vars.get(n) ?? m);
+}
+
+/**
+ * Split a command at `;`, `&&`, `||` and newlines that sit outside quotes,
+ * brackets and braces. Pipelines stay whole: in `echo x | xargs rm` the path
+ * and the write are one part. A single `&` is not a separator, because it is
+ * PowerShell's call operator.
+ */
+export function splitCommand(command, shell = "bash") {
+  const s = String(command);
+  const escape = shell === "powershell" ? "`" : "\\";
+  const parts = [];
+  let start = 0;
+  let i = 0;
+  let quote = null;
+  let depth = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === escape && quote === '"') i += 1;
+      else if (ch === quote) quote = null;
+      i += 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === escape) i += 1;
+    else if (ch === "(" || ch === "{") depth += 1;
+    else if (ch === ")" || ch === "}") depth = Math.max(0, depth - 1);
+    else if (depth === 0) {
+      const two = s.slice(i, i + 2);
+      const cut = two === "&&" || two === "||" ? 2 : ch === ";" || ch === "\n" ? 1 : 0;
+      if (cut) {
+        parts.push(s.slice(start, i));
+        i += cut;
+        start = i;
+        continue;
+      }
+    }
+    i += 1;
+  }
+  parts.push(s.slice(start));
+  return parts.map((p) => p.trim()).filter(Boolean);
 }
 
 /**

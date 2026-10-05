@@ -87,6 +87,7 @@ Full rules: `docs/technical-spec-switchboard_bridge.md`, section 5.
   - `touchui=0` brings back the old panel instead of the touch window (below), which is the default;
   - `touchmode=` is that window's remembered mode, `touch` or `main`.
 - The touch window's WebView2 profile lives in `%APPDATA%\claude-sessions\webview2\`.
+- `SWITCHBOARD_SETTINGS_DIR`, when set, replaces `%APPDATA%\claude-sessions` for both; the smoke test points it at `%TEMP%\claude-sessions-smoke`.
 - Writes the bridge's `command.json` when you click. It never writes to the repo.
 
 ## Which screen gets which window

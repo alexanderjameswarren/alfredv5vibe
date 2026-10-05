@@ -9,15 +9,19 @@
 ; loaded on its own (checked at the end with /validate).
 #Requires AutoHotkey v2.0
 OnError(Trap)
+; Before the include: the panel's startup reads and writes settings.ini.
+dir := A_Temp "\claude-sessions-smoke"
+DirCreate(dir)
+try FileDelete(dir "\settings.ini")
+EnvSet("SWITCHBOARD_SETTINGS_DIR", dir)
+realIni := EnvGet("APPDATA") "\claude-sessions\settings.ini"
+realIniTime := FileExist(realIni) ? FileGetTime(realIni, "M") : ""
 #Include claude-sessions.ahk
 #Warn All, StdOut
 
 SetTimer(Refresh, 0), SetTimer(Blink, 0)
 fails := 0
-dir := A_Temp "\claude-sessions-smoke"
-DirCreate(dir)
-SETTINGS_INI := dir "\settings.ini"   ; from here on, nothing touches the real settings
-try FileDelete(SETTINGS_INI)
+Expect("scratch settings from the start", SETTINGS_INI, dir "\settings.ini")
 BINDING_FILE := dir "\alfred-project-code.json"   ; nor the real binding
 BRIDGE_DIR := dir "\bridge"                        ; nor the real bridge folder
 DirCreate(BRIDGE_DIR)
@@ -451,6 +455,8 @@ wrapper := dir "\validate.ahk", warnOut := dir "\validate.txt"
 FileOpen(wrapper, "w", "UTF-8").Write("#Include " A_ScriptDir "\`n#Include claude-sessions.ahk`n#Warn All, StdOut`n")
 RunWait(A_ComSpec ' /c ""' A_AhkPath '" /ErrorStdOut /validate "' wrapper '" > "' warnOut '" 2>&1"', , "Hide")
 Expect("panel loads with no warnings", Trim(FileRead(warnOut), " `r`n"), "")
+
+Expect("real settings.ini untouched", FileExist(realIni) ? FileGetTime(realIni, "M") : "", realIniTime)
 
 FileAppend(fails ? fails " failed`n" : "smoke passed`n", "*")
 ExitApp(fails ? 1 : 0)
