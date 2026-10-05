@@ -184,6 +184,82 @@ Check("window title prefix", WindowTitleStarts("Plan - Claude", "Plan - Claude -
 Check("window title other", WindowTitleStarts("Plan - Claude", "Other - Google Chrome"), false)
 Check("empty title never matches", WindowTitleStarts("", "Anything"), false)
 
+left := {l: 0, t: 0, r: 1920, b: 1080}, right := {l: 1920, t: 0, r: 3840, b: 1080}
+touchMon := {l: -974, t: 1080, r: 50, b: 1680}
+Check("touch found", TouchMonitor([left, right, touchMon]), 3)
+Check("no touch", TouchMonitor([left, right]), 0)
+fb := FenceBox([left, touchMon, right])
+Check("fence skips touch", fb.l "," fb.t "," fb.r "," fb.b, "0,0,3840,1080")
+Check("no fence without touch", FenceBox([left, right]), "")
+Check("no fence, touch only", FenceBox([touchMon]), "")
+
+Check("tile colour kept", TileColor("purple"), "purple")
+Check("tile colour grey", TileColor("paused"), "grey")
+Ids(list) {
+    s := ""
+    for t in list
+        s .= t.id
+    return s
+}
+Tl(id, group, color) => {id: id, group: group, color: color}
+mixed := [Tl("a", 0, "green"), Tl("b", 0, "red"), Tl("c", 1, "yellow"), Tl("d", 2, "grey"), Tl("e", 0, "grey"), Tl("f", 0, "purple"), Tl("g", 3, "grey"), Tl("h", 0, "orange"), Tl("i", 0, "yellow")]
+Check("sort: group, then colour", Ids(TileSort(mixed, Map())), "bhfiaecdg")
+Check("sort: ties keep previous order", Ids(TileSort([Tl("x", 0, "yellow"), Tl("y", 0, "yellow")], Map("y", 1, "x", 2))), "yx")
+Check("sort: new tiles after known", Ids(TileSort([Tl("n", 0, "yellow"), Tl("k", 0, "yellow")], Map("k", 1))), "kn")
+Check("tile name worktree", TileName("switchboard_touch-t4n", ""), "switchboard_touch")
+Check("tile name free main", TileName("main", ""), "main")
+Check("tile name bound main", TileName("main", "rem-j7p"), "main · rem")
+Check("tile step plain", TileStep("s9"), "s9")
+Check("tile step handover", TileStep("s10 -> s11") "|" TileStep("? -> s2"), "→s11|→s2")
+Cmd(type, id) => (c := TouchCommand(type, id)).do ":" c.key
+Check("tap cli", Cmd("tap", "cli:switchboard_touch-t4n"), "click:switchboard_touch-t4n")
+Check("tap chat", Cmd("tap", "chat:1477446406"), "chat:1477446406")
+Check("hold cli pauses", Cmd("hold", "cli:main"), "pause:main")
+Check("hold chat ignored", Cmd("hold", "chat:9"), "none:")
+Check("tap orphan ignored", Cmd("tap", "orphan:gone-x1y"), "none:")
+Check("refresh git", Cmd("git", ""), "git:")
+Check("unknown ignored", Cmd("jump", ""), "none:")
+Check("top bar moves", Cmd("move", ""), "move:")
+Check("right-click cli", Cmd("menu", "cli:main"), "menu:main")
+Check("right-click chat ignored", Cmd("menu", "chat:9"), "none:")
+Place(p) => p.mode " " p.noTouch " " p.x "," p.y " " p.w "x" p.h " " p.zoom
+primaryMon := {l: 0, t: 0, r: 1920, b: 1080}, otherMon := {l: 1920, t: 0, r: 3840, b: 1080}, touchScreen := {l: -1024, t: 470, r: 0, b: 1070}
+Check("docked", Place(TouchPlacement([primaryMon, otherMon, touchScreen], "touch", 1)), "touch 0 -1024,470 1024x600 1")
+Check("main mode, centred", Place(TouchPlacement([primaryMon, otherMon, touchScreen], "main", 1)), "main 0 320,165 1280x750 1.25")
+Check("main mode, 150% scale fits", Place(TouchPlacement([primaryMon, otherMon, touchScreen], "main", 1, 1.5)), "main 0 130,54 1659x972 1.08")
+Check("no touch screen", Place(TouchPlacement([primaryMon, otherMon], "touch", 1)), "main 1 320,165 1280x750 1.25")
+Check("primary is the touch screen", Place(TouchPlacement([touchScreen, primaryMon], "main", 1)), "main 0 320,165 1280x750 1.25")
+Apps(list) => (a := AppMonitors(list)).code "," a.chrome
+Check("apps: today's layout", Apps([primaryMon, otherMon, touchScreen]), "1,2")
+Check("apps: renumbered after replug", Apps([touchScreen, otherMon, primaryMon]), "3,2")
+Check("apps: right monitor numbered first", Apps([otherMon, primaryMon]), "2,1")
+Check("apps: one main monitor", Apps([touchScreen, primaryMon]), "2,2")
+Check("apps: three main monitors", Apps([otherMon, {l: -1920, t: 0, r: 0, b: 1080}, primaryMon]), "2,1")
+Check("apps: touch screen only", Apps([touchScreen]), "1,1")
+Check("next mode", NextTouchMode("touch", true) "|" NextTouchMode("main", true) "|" NextTouchMode("main", false), "main|touch|main")
+Check("icons", TileIcon("cli", false) "|" TileIcon("cli", true) "|" TileIcon("chat", false) "|" TileIcon("orphan", false), "cli|both|chat|")
+Check("short age", ShortAge(5) "|" ShortAge(130) "|" ShortAge(3000), "5m|2h|2d")
+ActionArgs(label, more := "") {
+    fields := {color: "", label: label, kind: "waiting", free: false, closed: false, paused: false, elapsed: 221, age: 130}
+    if more != ""
+        fields.%more% := true
+    return fields
+}
+Check("action working", CliAction(ActionArgs("CLI working")), "Working 3:41")
+Check("action approve", CliAction(ActionArgs("Approve")), "Approve")
+Check("action chat writing", CliAction(ActionArgs("Claude writing")), "Chat writing")
+Check("action paused", CliAction(ActionArgs("Your turn", "paused")), "Paused 2h")
+Check("action closed", CliAction(ActionArgs("Your turn", "closed")), "Closed, tap to reopen")
+Check("action free", CliAction(ActionArgs("free", "free")), "Free")
+Check("chat action ready", ChatAction("finished") "|" ChatAction("Claude writing") "|" ChatAction("seen"), "Reply ready|Writing|Seen")
+oo := OrphanOwners([Map("owner", "gone-x1y"), Map("owner", "main"), Map("owner", "live-a1b")], [Map("owner", "gone-x1y")], ["live-a1b"])
+Check("orphan owners", oo.Length = 1 ? oo[1].owner " " oo[1].n : oo.Length, "gone-x1y 2")
+Check("idle under 3 days", IdleDays("20261001000000", "20261003000000"), 0)
+Check("idle over 3 days", IdleDays("20261001000000", "20261005120000"), 4)
+Check("json", ToJson(Map("a", 1, "b", ["q", 2], "c", 'say "hi"`n'))
+    , '{"a":1,"b":["q",2],"c":"say \"hi\"\n"}')
+Check("json control char", ToJson("x`ay"), '"x\u0007y"')
+
 ; #Warn only prints, so load this file again with /validate and fail on any warning.
 warnOut := A_Temp "\claude-sessions-test-warnings.txt"
 RunWait(A_ComSpec ' /c ""' A_AhkPath '" /ErrorStdOut /validate "' A_ScriptFullPath '" > "' warnOut '" 2>&1"', , "Hide")

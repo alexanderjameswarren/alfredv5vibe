@@ -1,6 +1,7 @@
 ; Drives the real panel through processing, waiting (the alert path), approval,
-; an interrupt, the pause button, auto-unpause, the closed state, the chat-link
-; safeguards, the unread badge and the strips. It uses scratch files in %TEMP%,
+; an interrupt, pause, auto-unpause, the closed state, the chat-link safeguards,
+; unread reports and git counts. What is drawn is checked in the touch page's state
+; JSON (TouchState); only the flashing still reads the old panel. It uses scratch files in %TEMP%,
 ; a scratch settings.ini, fake window lists and a fake address reader; nothing
 ; real is moved. The panel shows and flashes for a moment.
 ; Run: AutoHotkey64.exe /ErrorStdOut smoke-test.ahk   (exit code 0 = passed)
@@ -15,8 +16,8 @@ SetTimer(Refresh, 0), SetTimer(Blink, 0)
 fails := 0
 dir := A_Temp "\claude-sessions-smoke"
 DirCreate(dir)
-SETTINGS := dir "\settings.ini"   ; from here on, nothing touches the real settings
-try FileDelete(SETTINGS)
+SETTINGS_INI := dir "\settings.ini"   ; from here on, nothing touches the real settings
+try FileDelete(SETTINGS_INI)
 BINDING_FILE := dir "\alfred-project-code.json"   ; nor the real binding
 BRIDGE_DIR := dir "\bridge"                        ; nor the real bridge folder
 DirCreate(BRIDGE_DIR)
@@ -49,6 +50,10 @@ readerCalls := [], readerResult := ""
 chromeAddressReader := FakeReader
 arranged := []
 arrangeAction := (t) => arranged.Push(t.code)
+; A fixed layout, so the monitor numbers below do not depend on this PC's screens.
+fakeMonitors := [{l: 0, t: 0, r: 1920, b: 1080}, {l: 1920, t: 0, r: 3840, b: 1080}, {l: -1024, t: 470, r: 0, b: 1070}]
+listMonitors := () => fakeMonitors
+UpdateAppMonitors()
 
 FakeReader(hwnd) {
     readerCalls.Push(hwnd)
@@ -79,6 +84,15 @@ Expect(name, got, want) {
     if (got !== want)
         fails++, FileAppend("FAIL " name ": got [" got "] want [" want "]`n", "*")
 }
+; The touch page's state, read back the way the page gets it: as JSON.
+PageState() => JSON.parse(ToJson(TouchState()))
+TileOf(id) {
+    for t in PageState()["tiles"]
+        if t["id"] = id
+            return t
+    return Map()
+}
+TileField(id, field) => TileOf(id).Get(field, "(no tile)")
 
 ; --- states -----------------------------------------------------------------
 Step("processing", "2026-09-30T10:00:00.000Z", false)
@@ -94,17 +108,35 @@ Expect("approval is red", ms.kind, "red")
 FileOpen(transcript, "a", "UTF-8-RAW").Write('{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]},"timestamp":"2026-09-30T10:02:30.000Z"}`n')
 Refresh()
 Expect("denial shows waiting", ms.kind, "waiting")
-Expect("denial label", InStr(controls["main"].Text, "interrupted") > 0, true)
+Expect("denial recorded", ms.interruptAt != "", true)
+Expect("denial tile not red", TileField("cli:main", "color") != "red", true)
 
 ; --- pause ------------------------------------------------------------------
 PauseClick("main")
 Expect("pause button pauses", ms.paused, true)
-Expect("pause button says resume", pauseButtons["main"].Text, "Resume")
+Expect("paused tile in paused group", TileField("cli:main", "group"), 2)
+Expect("paused tile has its own darker colour", TileField("cli:main", "color"), "paused")
+Expect("paused tile wording", SubStr(TileField("cli:main", "action"), 1, 7), "Paused ")
 Refresh()
 Expect("paused left out of taskbar", InStr(A_IconTip, "main: paused") > 0, true)
 Step("processing", "2026-09-30T10:03:00.000Z", false)
 Expect("auto-unpause", ms.paused, false)
-Expect("pause button says pause", pauseButtons["main"].Text, "Pause")
+Expect("unpaused tile back in active group", TileField("cli:main", "group"), 0)
+
+; --- touch page: long-press pauses and unpauses, tap clicks, orphans do nothing ----
+TouchDo("hold", "cli:main")
+Expect("long-press pauses", ms.paused, true)
+Expect("paused age counts from the pause", TileField("cli:main", "action"), "Paused 0m")
+TouchDo("hold", "cli:main")
+Expect("long-press again unpauses", ms.paused, false)
+arranged := []
+TouchDo("tap", "cli:main")
+Expect("tap arranges like a click", JoinCodes(arranged), "main|")
+TouchDo("tap", "orphan:gone-x1y"), TouchDo("tap", "cli:no-such-code")
+Expect("orphan and unknown taps do nothing", JoinCodes(arranged), "main|")
+ms.changed := -1
+TouchDo("git", "")
+Expect("Refresh git recounts", ms.changed >= 0, true)
 
 ; --- closed -----------------------------------------------------------------
 fakeWindows.RemoveAt(1)   ; main's VS Code window closes
@@ -112,7 +144,8 @@ Refresh(), Refresh()
 Expect("not closed after 2 polls", ms.closed, false)
 Refresh()
 Expect("closed after 3 polls", ms.closed, true)
-Expect("closed label, no timer", RegExMatch(controls["main"].Text, "closed · processing (\d+ \w+ )?\d\d:\d\d$") > 0, true)
+Expect("closed tile wording", TileField("cli:main", "action"), "Closed, tap to reopen")
+Expect("closed tile in active group", TileField("cli:main", "group") " " TileField("cli:main", "color"), "0 grey")
 Expect("closed left out of taskbar", InStr(A_IconTip, "main: closed") > 0, true)
 Step("waiting", "2026-09-30T10:04:00.000Z", false)
 Expect("closed does not alert", ms.unseen, false)
@@ -126,7 +159,7 @@ readerResult := "claude.ai/chat/abc-1"
 Arrange(ms)
 Expect("reads the matched window only", readerCalls.Length = 1 ? readerCalls[1] : readerCalls.Length, 502)
 Expect("saves a chat address", ms.chatLink, "https://claude.ai/chat/abc-1")
-Expect("saved to settings", IniRead(SETTINGS, "chatlink", "main", ""), "https://claude.ai/chat/abc-1")
+Expect("saved to settings", IniRead(SETTINGS_INI, "chatlink", "main", ""), "https://claude.ai/chat/abc-1")
 readerResult := "claude.ai/new"
 Arrange(ms)
 Expect("non-chat address saves nothing", ms.chatLink, "https://claude.ai/chat/abc-1")
@@ -139,6 +172,17 @@ Arrange(ms)
 Expect("typed title never reads", readerCalls.Length, 0)
 Expect("typed title never saves", ms.chatLink, "https://claude.ai/chat/abc-1")
 Expect("typed title still arranges", JoinCodes(placed), "99@1|501@2|")
+; Monitors renumbered (touch screen first after a replug): still VS Code left, Chrome right.
+fakeMonitors := [{l: -1024, t: 470, r: 0, b: 1070}, {l: 1920, t: 0, r: 3840, b: 1080}, {l: 0, t: 0, r: 1920, b: 1080}]
+placed := []
+Arrange(ms)
+Expect("renumbered: VS Code left, Chrome right", JoinCodes(placed), "99@3|501@2|")
+fakeMonitors := [{l: -1024, t: 470, r: 0, b: 1070}, {l: 0, t: 0, r: 1920, b: 1080}]
+placed := []
+Arrange(ms)
+Expect("one main monitor: both on it", JoinCodes(placed), "99@2|501@2|")
+fakeMonitors := [{l: 0, t: 0, r: 1920, b: 1080}, {l: 1920, t: 0, r: 3840, b: 1080}, {l: -1024, t: 470, r: 0, b: 1070}]
+UpdateAppMonitors()
 ms.chromeTitle := ""
 
 ; --- bridge: pair by exact address, fall back when stale or unmatched ----------
@@ -174,29 +218,37 @@ Arrange(ms)
 Expect("no reply: title fallback", JoinCodes(placed), "99@1|502@2|")
 FileDelete(BRIDGE_DIR "\tabs.json")
 
-; --- unread badge -------------------------------------------------------------
+; --- unread report (the touch page has no badge; the state still tracks it) -------
 FileOpen(reportPath, "w", "UTF-8").Write("report")
 FileSetTime(DateAdd(ms.lastClick, 60, "Seconds"), reportPath, "M")
 Refresh()
-Expect("new report shows badge", InStr(controls["main"].Text, "• new") > 0, true)
+Expect("new report is unread", ms.unread, true)
 ButtonClick("main")
 FileSetTime(DateAdd(ms.lastClick, -60, "Seconds"), reportPath, "M")
 Refresh()
-Expect("click clears badge", InStr(controls["main"].Text, "• new"), 0)
+Expect("click marks it read", ms.unread, false)
 
-; --- strips -------------------------------------------------------------------
-Expect("db strip shown", SubStr(dbStripCtl.Text, 1, 4), "db: ")
-Expect("main strip shown", SubStr(mainStripCtl.Text, 1, 6), "main: ")
+; --- top bar and git counts ------------------------------------------------------
+Expect("db status sent", SubStr(PageState()["db"], 1, 4), "db: ")
+Expect("no window: docked mode reported", PageState()["mode"] " " PageState()["noTouch"], "touch 0")
+Expect("no touch window: the old panel owns the taskbar button", TaskbarGui() = panel, true)
+TouchDo("move", ""), TouchDo("menu", "cli:main")
+Expect("move and menu are safe with no window", TOUCH_MODE, IniRead(SETTINGS_INI, "panel", "touchmode", "touch"))
+Expect("main status sent", SubStr(PageState()["main"], 1, 6), "main: ")
 Expect("git counted", IsInteger(sessions[order[order.Length]].changed), true)
+ms.changed := 3, ms.ahead := 2
+Expect("git counts on the tile", TileField("cli:main", "git"), "±3 ↑2")
+ms.changed := 0, ms.ahead := 0
+Expect("no git counts when clean", TileField("cli:main", "git"), "")
 
 ; --- main's button names the bound project, not the status file's -------------
 try FileDelete(BINDING_FILE)
 FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"waiting","since":"2026-09-30T10:05:00.000Z","project":"switchboard_icon-k7w","red":false}')
 Refresh()
-Expect("free main ignores stale project", RegExReplace(StrSplit(controls["main"].Text, "`n")[1], " {3}.*"), "main")
-Expect("free main strip", mainStripCtl.Text, "main: free")
-Expect("free main reads free", StrSplit(controls["main"].Text, "`n")[2], "free")
-Expect("free main grey", SubStr(ms.painted, 1, 6), FREE_COLOR)
+Expect("free main ignores stale project", TileField("cli:main", "name"), "main")
+Expect("free main status", PageState()["main"], "main: free")
+Expect("free main reads free", TileField("cli:main", "action"), "Free")
+Expect("free main grey", TileField("cli:main", "color"), "grey")
 Expect("free main out of taskbar", InStr(A_IconTip, "main: free") > 0, true)
 FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"processing","since":"2026-09-30T10:06:00.000Z","project":"x","red":false}')
 Refresh()
@@ -207,7 +259,7 @@ chromeWindows := [{hwnd: 601, title: "switchboard_icon-k7w - Claude - Google Chr
 Expect("free main chat ignores stale project", FindChromeWindow(ms), 0)
 FileOpen(BINDING_FILE, "w", "UTF-8-RAW").Write('{"code":"rem-j7p"}')
 Refresh()
-Expect("bound main shows project", RegExReplace(StrSplit(controls["main"].Text, "`n")[1], " {3}.*"), "main · rem-j7p")
+Expect("bound main shows project", TileField("cli:main", "name"), "main · rem")
 Expect("bound main not free", ms.free, false)
 Expect("bound main chat follows binding", FindChromeWindow(ms), 602)
 
@@ -232,10 +284,10 @@ Expect("still unseen until clicked", ms.unseen, true)
 
 ; --- state model: one project through every colour ------------------------------
 T9 := "rem-j7p-s9-aaaa", T10 := "rem-j7p-s10-bbbb"
-Line2() => StrSplit(controls["main"].Text, "`n")[2]
 Step("processing", IsoAgo(30), false, T9)
 Expect("green CLI working", ms.color " / " ms.label, "green / CLI working")
-Expect("label shows the step", SubStr(Line2(), 1, 17), "s9 · CLI working ")
+Expect("tile shows the step", TileField("cli:main", "step"), "s9")
+Expect("tile shows the timer", TileField("cli:main", "action") ~= "^Working 0:3\d$", 1)
 Step("waiting", IsoAgo(20), false, T9)
 Expect("no report for the run: Check CLI", ms.color " / " ms.label, "red / Check CLI")
 Expect("Check CLI alerts", ms.unseen, true)
@@ -245,13 +297,15 @@ Expect("report not read: Send cli", ms.color " / " ms.label, "orange / Send cli"
 WriteChats("https://claude.ai/chat/abc-1|finished|5|" T10 "|1|1|abc")
 Refresh()
 Expect("newer tag: Paste prompt", ms.color " / " ms.label, "purple / Paste prompt")
-Expect("label shows both steps", SubStr(Line2(), 1, 25), "s9 -> s10 · Paste prompt ")
+Expect("handover tile shows the new step only", TileField("cli:main", "step"), "→s10")
+Expect("purple tile", TileField("cli:main", "color") " / " TileField("cli:main", "action"), "purple / Paste prompt")
 arranged := []
 ButtonClick("main")
 Expect("purple click arranges, nothing more", JoinCodes(arranged), "main|")
 WriteChats("https://claude.ai/chat/abc-1|finished|4|" T9 "|1|1|abc")
 Refresh()
 Expect("no newer tag: Your turn", ms.color " / " ms.label, "yellow / Your turn")
+Expect("paired chat: both icons", TileField("cli:main", "icon"), "both")
 
 ; --- where the keyboard lands after a click ----------------------------------------
 WriteTabs(1, "https://claude.ai/chat/abc-1")
@@ -313,16 +367,20 @@ Expect("Claude writing is green", ms.color " / " ms.label, "green / Claude writi
 FileDelete(BRIDGE_DIR "\chats.json")
 Refresh()
 Expect("no chat file: grey", ms.color " / " ms.label, "grey / chat unknown")
+Expect("no chat: terminal icon only", TileField("cli:main", "icon"), "cli")
 
 ; --- unpaired chats get their own rows --------------------------------------------
 WriteChats("https://claude.ai/chat/abc-1|finished|4|" T9 "|1|1|abc", "https://claude.ai/chat/loose|responding|2||1|900|Loose chat - Claude")
 Refresh()
 Expect("one row, paired chat left out", rowTabs.Length = 1 ? rowTabs[1] : rowTabs.Length, 900)
-Expect("row visible", chatRows[1].Visible, true)
-Expect("row text", chatRows[1].Text, "Loose chat`nClaude writing")
+loose := TileOf("chat:900")
+Expect("chat tile", loose.Get("kind", "") " " loose.Get("group", "") " " loose.Get("name", "") " / " loose.Get("action", ""), "chat 1 Loose chat / Writing")
+Expect("chat tile after CLI tiles", PageState()["tiles"][1]["kind"], "cli")
+Expect("chat tile: bubble icon", loose.Get("icon", ""), "chat")
 WriteChats("https://claude.ai/chat/abc-1|finished|4|" T9 "|1|1|abc", "https://claude.ai/chat/loose|finished|1||30|900|Loose chat - Claude")
 Refresh()
 Expect("finished, not viewed: yellow", rowState[900].color, "yellow")
+Expect("chat tile reply ready", TileField("chat:900", "color") " / " TileField("chat:900", "action"), "yellow / Reply ready")
 Expect("row alerts", rowState[900].unseen, true)
 focusCalls := [], composerCalls := [], pointed := []
 focusReply := Map("ok", true, "windowTitle", "Loose chat - Claude")
@@ -332,16 +390,25 @@ Expect("row click: pointer to its Chrome window", JoinCodes(pointed), "801|")
 Expect("row click focuses its tab", focusCalls.Length = 1 ? focusCalls[1] : focusCalls.Length, 900)
 Expect("row click: cursor to the message box", composerCalls.Length = 1 ? composerCalls[1] : composerCalls.Length, true)
 Expect("row click marks seen", rowState[900].unseen, false)
+rowState[900].unseen := true, focusCalls := [], composerCalls := [], pointed := []
+TouchDo("tap", "chat:900")
+Expect("chat tap: pointer to its Chrome window", JoinCodes(pointed), "801|")
+Expect("chat tap focuses its tab", focusCalls.Length = 1 ? focusCalls[1] : focusCalls.Length, 900)
+Expect("chat tap: cursor to the message box", composerCalls.Length = 1 ? composerCalls[1] : composerCalls.Length, true)
+Expect("chat tap marks seen", rowState[900].unseen, false)
+pausedBefore := ms.paused
+TouchDo("hold", "chat:900")
+Expect("chat long-press ignored", ms.paused, pausedBefore)
 WriteChats("https://claude.ai/chat/abc-1|finished|4|" T9 "|1|1|abc")
 Refresh()
-Expect("row gone with its chat", chatRows[1].Visible, false)
+Expect("chat tile gone with its chat", TileOf("chat:900").Count, 0)
 
 ; --- no saved link: learn one from any tab whose title has the code ---------------
 ms.chatLink := ""
 FileOpen(BRIDGE_DIR "\tabs.json", "w", "UTF-8-RAW").Write('{"at":"' IsoAgo(0) '","tabs":[{"tabId":3,"url":"https://claude.ai/chat/learned?x","title":"rem-j7p plan - Claude","active":false}]}')
 Refresh()
 Expect("link learned from a background tab", ms.chatLink, "https://claude.ai/chat/learned")
-Expect("learned link saved", IniRead(SETTINGS, "chatlink", "main", ""), "https://claude.ai/chat/learned")
+Expect("learned link saved", IniRead(SETTINGS_INI, "chatlink", "main", ""), "https://claude.ai/chat/learned")
 FileDelete(BRIDGE_DIR "\tabs.json")
 
 ; --- git counts re-run when a watched file changes -----------------------------

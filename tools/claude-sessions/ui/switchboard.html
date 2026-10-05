@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Switchboard</title>
+<!-- Switchboard on the 1024x600 touch screen (docs/history/technical-spec-switchboard_touch-t4n.md).
+     AutoHotkey posts the whole state as one message; this page only draws it and keeps
+     nothing but its scroll position. Built from docs/history/switchboard_touch-t4n-mockup.html. -->
+<style>
+@font-face{font-family:"AtkinsonLocal";src:url("fonts/AtkinsonHyperlegible-Regular.ttf") format("truetype");font-weight:400}
+@font-face{font-family:"AtkinsonLocal";src:url("fonts/AtkinsonHyperlegible-Bold.ttf") format("truetype");font-weight:700}
+:root{
+  --bg:#E4E7EC; --rail:#CDD2DA; --railBtn:#F7F8FA; --railText:#1F2633; --line:#B4BBC6;
+  --red:#C62828; --onRed:#FFFFFF; --orange:#F57C00; --onOrange:#1A1200;
+  --purple:#7E57C2; --onPurple:#FFFFFF;
+  --yellow:#FBC02D; --onYellow:#1A1600; --green:#2E7D32; --onGreen:#FFFFFF;
+  --grey:#7A8494; --onGrey:#FFFFFF; --dbRed:#C62828;
+  --paused:#3F4652; --onPaused:#FFFFFF;   /* darker than chat grey; white text about 10:1 */
+  --gap:10px; --railW:120px; --barH:90px;
+  --nameSize:30px; --actSize:26px; --metaSize:26px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){--bg:#1C222C;--rail:#262E3A;--railBtn:#34404F;--railText:#EEF1F5;--line:#3D4858;--grey:#4E5868;--onGrey:#DDE2EA;--dbRed:#FF8A80;--paused:#2B323D;--onPaused:#E6EAF0}
+}
+:root[data-theme="dark"]{--bg:#1C222C;--rail:#262E3A;--railBtn:#34404F;--railText:#EEF1F5;--line:#3D4858;--grey:#4E5868;--onGrey:#DDE2EA;--dbRed:#FF8A80;--paused:#2B323D;--onPaused:#E6EAF0}
+*,*::before,*::after{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verdana,"Segoe UI",sans-serif;
+  -webkit-user-select:none;user-select:none;overflow:hidden;-webkit-touch-callout:none}
+.shell{display:flex;flex-direction:column;height:100%}
+
+/* top bar: Alfred's brown, from src/index.css (--primary #7A4E37, --primary-hover #5E3A28).
+   White on it is about 7:1, and about 10:1 on the darker refresh button. Same in both themes. */
+.bar{height:var(--barH);flex:none;display:flex;align-items:stretch;gap:8px;padding:10px var(--gap) 0;
+  --brown:#7A4E37; --brownDark:#5E3A28}
+.move{flex:1;min-width:0;border:0;border-radius:12px;background:var(--brown);color:#fff;font:inherit;
+  font-weight:700;display:flex;align-items:center;gap:18px;padding:0 16px;text-align:left;overflow:hidden}
+.bar svg{display:block;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.move .plug{height:34px;width:auto;flex:none}
+.move .stat{font-size:28px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.move #main{flex:none}   /* short and important: a long db: line takes the "…" instead */
+/* a db: claim over an hour old: red on a white chip (red would vanish on brown; yellow means "your turn") */
+.move .stat.red{background:#fff;color:#C62828;border-radius:8px;padding:2px 10px}
+.move .hint{margin-left:auto;flex:none;display:flex;align-items:center}
+.move .hint svg{height:52px;width:auto;stroke-width:2.6}
+.barBtn{border:0;border-radius:12px;background:var(--brownDark);color:#fff;font:inherit;font-weight:700;
+  font-size:17px;line-height:1.1;padding:0 10px;width:110px;flex:none;display:flex;align-items:center;justify-content:center}
+.barBtn svg{height:40px;width:auto}
+.move:active,.barBtn:active{filter:brightness(1.2)}
+
+.app{flex:1;min-height:0;display:flex}
+/* scroll-padding: without it a snap lands the first row on the edge and the next row peeks in */
+.tiles{flex:1;min-width:0;height:100%;overflow-y:auto;padding:var(--gap);scroll-padding:var(--gap);
+  scroll-snap-type:y mandatory;scrollbar-width:none;touch-action:pan-y}
+.tiles::-webkit-scrollbar{display:none}
+.grid{display:grid;gap:var(--gap);grid-template-columns:repeat(3,minmax(0,1fr))}
+.tile{scroll-snap-align:start;border:0;border-radius:14px;padding:10px 14px;display:flex;flex-direction:column;
+  justify-content:space-between;text-align:left;font:inherit;position:relative;overflow:hidden;min-height:0;touch-action:pan-y}
+.t-red{background:var(--red);color:var(--onRed)} .t-orange{background:var(--orange);color:var(--onOrange)}
+.t-purple{background:var(--purple);color:var(--onPurple)}
+.t-yellow{background:var(--yellow);color:var(--onYellow)} .t-green{background:var(--green);color:var(--onGreen)}
+.t-grey{background:var(--grey);color:var(--onGrey)}
+.t-paused{background:var(--paused);color:var(--onPaused);font-style:italic}
+.action svg{height:.85em;width:auto;margin-right:.3em;vertical-align:-.05em;fill:currentColor}
+.tile.chat{box-shadow:inset 0 0 0 6px rgba(255,255,255,.55)}
+/* tap feedback, and the long-press bar filling over 600 ms */
+.tile.pressed,.barBtn.pressed{filter:brightness(1.25)}
+.tile.pressed{transform:scale(.97)}
+.tile>*{position:relative}
+.tile>.fill{position:absolute;inset:0;background:rgba(0,0,0,.3);transform:scaleX(0);transform-origin:left;pointer-events:none}
+.tile.holding>.fill{transform:scaleX(1);transition:transform var(--hold) linear}
+.name{font-weight:700;line-height:1.05;font-size:var(--nameSize);overflow-wrap:anywhere;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.action{font-weight:700;line-height:1.1;font-size:var(--actSize)}
+.meta{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:var(--metaSize);font-weight:700;opacity:.9}
+.meta .info{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.kind{flex:none;display:flex;align-items:center;gap:4px;height:var(--metaSize)}
+.kind svg{height:100%;width:auto;display:block;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+.rail{width:var(--railW);flex:none;display:flex;flex-direction:column;gap:var(--gap);padding:var(--gap) var(--gap) var(--gap) 0}
+.rb{flex:1;border:0;border-radius:12px;background:var(--railBtn);color:var(--railText);font:inherit;font-weight:700;font-size:20px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px}
+.rb .big{font-size:48px;line-height:1}
+.rb:active{filter:brightness(1.2)}
+.rb.off{opacity:.3} .rb.more{background:var(--yellow);color:var(--onYellow)}
+.empty{grid-column:1/-1;font-size:26px;font-weight:700;opacity:.6;padding:20px}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="bar">
+    <button class="move" id="move">
+      <svg class="plug" viewBox="0 0 24 24" aria-label="Switchboard"><path d="M9 2v5M15 2v5M6 7h12v3a6 6 0 0 1-12 0zM12 16v6"/></svg>
+      <span class="stat" id="main">main: …</span>
+      <span class="stat" id="db">db: …</span>
+      <span class="hint" id="hint"></span>
+    </button>
+    <button class="barBtn" id="git" aria-label="Refresh git"></button>
+  </header>
+  <div class="app">
+    <main class="tiles" id="tiles"><div class="grid" id="grid"></div></main>
+    <nav class="rail" aria-label="Scroll">
+      <button class="rb" id="up"><span class="big">▲</span><span id="upCount"></span></button>
+      <button class="rb" id="down"><span class="big">▼</span><span id="downCount"></span></button>
+    </nav>
+  </div>
+</div>
+<script>
+const ROWS = 3, GAP = 10, HOLD = 600, SLOP = 12;
+document.documentElement.style.setProperty("--hold", HOLD + "ms");
+const $ = id => document.getElementById(id);
+const grid = $("grid"), tiles = $("tiles");
+const els = new Map();     // tile id -> its element, reused so the grid never jumps
+const host = window.chrome && chrome.webview;
+const post = msg => host && chrome.webview.postMessage(JSON.stringify(msg));
+
+document.addEventListener("contextmenu", e => e.preventDefault());
+
+function flash(el) {
+  el.classList.add("pressed");
+  setTimeout(() => el.classList.remove("pressed"), 160);
+}
+
+function tileEl(id) {
+  let b = els.get(id);
+  if (!b) {
+    b = document.createElement("button");
+    b.innerHTML = '<div class="name"></div><div class="action"></div>' +
+      '<div class="meta"><span class="kind"></span><span class="info"></span></div><span class="fill"></span>';
+    wire(b, id);
+    els.set(id, b);
+  }
+  return b;
+}
+
+// Tap sends "tap"; holding a CLI tile 600 ms sends "hold" (pause or unpause).
+// Moving more than 12 px cancels, so a swipe never pauses anything. Chat tiles have no long-press.
+function wire(b, id) {
+  let timer = null, fired = false, sx = 0, sy = 0;
+  const holdable = () => id.startsWith("cli:");
+  const cancel = () => { clearTimeout(timer); timer = null; b.classList.remove("holding"); };
+  b.addEventListener("pointerdown", e => {
+    fired = false;
+    if (!holdable() || e.button !== 0) return;   // a right-click must never pause
+    sx = e.clientX; sy = e.clientY; b.classList.add("holding");
+    timer = setTimeout(() => { fired = true; cancel(); flash(b); post({type: "hold", id}); }, HOLD);
+  });
+  b.addEventListener("pointermove", e => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > SLOP) cancel(); });
+  ["pointerup", "pointerleave", "pointercancel"].forEach(ev => b.addEventListener(ev, cancel));
+  // Main screen mode: right-click opens the old panel's menu for this session.
+  b.addEventListener("contextmenu", e => {
+    if (mode === "main" && e.button === 2 && id.startsWith("cli:")) { cancel(); post({type: "menu", id}); }
+  });
+  b.addEventListener("click", () => {
+    if (fired) { fired = false; return; }
+    flash(b);
+    post({type: "tap", id});
+  });
+}
+
+function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
+
+// Single-colour icons in the tile's text colour: a ">_" terminal, a speech bubble, or both.
+const TERMINAL = '<svg viewBox="0 0 28 22" aria-label="CLI"><rect x="1" y="1" width="26" height="20" rx="4"/><path d="M7 7l4 4-4 4M14 15h7"/></svg>';
+const BUBBLE = '<svg viewBox="0 0 26 22" aria-label="Chat"><path d="M5 1h16a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4H11l-5 4v-4H5a4 4 0 0 1-4-4V5a4 4 0 0 1 4-4z"/></svg>';
+const ICONS = {cli: TERMINAL, both: TERMINAL + BUBBLE, chat: BUBBLE, "": "Claims"};
+const PAUSE = '<svg viewBox="0 0 16 20" aria-label="Paused"><rect x="1" y="1" width="5" height="18" rx="1.5"/><rect x="10" y="1" width="5" height="18" rx="1.5"/></svg>';
+// The action line; a paused tile gets the two-bar icon before "Paused Nm".
+function setAction(el, text, paused) {
+  const key = (paused ? "p|" : "|") + text;
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.innerHTML = paused ? PAUSE : "";
+  el.append(text);
+}
+function setIcon(el, icon) {
+  if (el.dataset.icon === icon) return;
+  el.dataset.icon = icon;
+  el.innerHTML = ICONS[icon] ?? "";
+}
+
+let mode = "touch";       // from the latest state: right-click only does anything in main screen mode
+// The whole bar is the tap target; the arrow alone says which way it goes.
+const UP = '<svg viewBox="0 0 24 24" aria-label="Move to main screen"><path d="M12 20V4M5 11l7-7 7 7"/></svg>';
+const DOWN = '<svg viewBox="0 0 24 24" aria-label="Move back to touch screen"><path d="M12 4v16M5 13l7 7 7-7"/></svg>';
+const HINTS = {touch: UP, main: DOWN, none: '<span style="font-size:20px">Touch screen not connected</span>'};
+function setHint(which) {
+  const el = $("hint");
+  if (el.dataset.which === which) return;
+  el.dataset.which = which;
+  el.innerHTML = HINTS[which];
+}
+
+// Refresh git: the icon, or "Refreshing git" until AutoHotkey says it finished (at least 600 ms, at most 20 s).
+const REFRESH = '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>';
+let gitStarted = 0, gitTimer = null;
+function gitIdle() { clearTimeout(gitTimer); gitStarted = 0; $("git").innerHTML = REFRESH; }
+function gitBusy() {
+  gitStarted = Date.now(); $("git").innerHTML = "Refreshing<br>git";
+  gitTimer = setTimeout(gitIdle, 20000);
+}
+function gitDone() { if (gitStarted) setTimeout(gitIdle, Math.max(0, 600 - (Date.now() - gitStarted))); }
+gitIdle();
+
+function render(st) {
+  mode = st.mode;
+  setHint(st.noTouch ? "none" : st.mode);
+  setText($("main"), st.main);
+  setText($("db"), st.db);
+  $("db").classList.toggle("red", !!st.dbRed);
+  const seen = new Set();
+  st.tiles.forEach((t, i) => {
+    const b = tileEl(t.id);
+    const cls = "tile t-" + t.color + (t.kind === "chat" ? " chat" : "");
+    if (b.dataset.cls !== cls) {   // keep a press or hold in progress across an update
+      const live = ["pressed", "holding"].filter(c => b.classList.contains(c));
+      b.className = [cls, ...live].join(" ");
+      b.dataset.cls = cls;
+    }
+    const [name, action, meta] = b.children;
+    setText(name, t.name.replace(/_/g, " "));
+    setAction(action, t.action, t.color === "paused");
+    setIcon(meta.children[0], t.icon);
+    // En spaces, not " · ", so step and git counts fit at 26px.
+    setText(meta.children[1], [t.step, t.git, t.note].filter(Boolean).join(" "));
+    if (grid.children[i] !== b) grid.insertBefore(b, grid.children[i] || null);
+    seen.add(t.id);
+  });
+  for (const [id, b] of els) if (!seen.has(id)) { b.remove(); els.delete(id); }
+  let empty = grid.querySelector(".empty");
+  if (!st.tiles.length && !empty) {
+    empty = document.createElement("div"); empty.className = "empty"; empty.textContent = "No sessions";
+    grid.appendChild(empty);
+  } else if (st.tiles.length && empty) empty.remove();
+  sizeRows(); counts();
+}
+
+let rowH = 0;
+function sizeRows() {
+  const h = tiles.clientHeight - GAP * 2;
+  rowH = (h - GAP * (ROWS - 1)) / ROWS;
+  grid.style.gridAutoRows = rowH + "px";
+}
+function counts() {
+  const r0 = tiles.getBoundingClientRect(); let above = 0, below = 0;
+  grid.querySelectorAll(".tile").forEach(t => {
+    const r = t.getBoundingClientRect();
+    if (r.bottom <= r0.top + 2) above++; else if (r.top >= r0.bottom - 2) below++;
+  });
+  setText($("upCount"), above ? above + " more" : "");
+  setText($("downCount"), below ? below + " more" : "");
+  $("up").classList.toggle("off", !above);
+  $("down").classList.toggle("off", !below);
+  $("down").classList.toggle("more", !!below);
+}
+const page = dir => tiles.scrollBy({top: dir * (rowH + GAP) * ROWS, behavior: "smooth"});
+$("up").onclick = () => page(-1);
+$("down").onclick = () => page(1);
+$("git").onclick = () => { if (gitStarted) return; flash($("git")); gitBusy(); post({type: "git"}); };
+$("move").onclick = () => { flash($("move")); post({type: "move"}); };
+tiles.addEventListener("scroll", counts, {passive: true});
+window.addEventListener("resize", () => { sizeRows(); counts(); });
+
+if (host) chrome.webview.addEventListener("message", e => {
+  if (e.data && e.data.type === "state") render(e.data);
+  else if (e.data && e.data.type === "gitDone") gitDone();
+});
+sizeRows();
+post({type: "ready"});
+</script>
+</body>
+</html>
