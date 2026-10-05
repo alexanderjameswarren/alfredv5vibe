@@ -78,7 +78,8 @@ Full rules: `docs/technical-spec-switchboard_bridge.md`, section 5.
 - Reads each checkout's `.clip\last-report.json` (written by `scripts/clip.mjs`) and
   `docs\progress-*.md`, and the bridge's `tabs.json`, `chats.json` and `result.json`.
 - Writes `%APPDATA%\claude-sessions\settings.ini`: pause state, title overrides, chat
-  links, last-click times. Under `[panel]`:
+  links, last-click times. `[chatlinkcode]` records the project code each chat link
+  was learned for; when main is rebound the link is dropped and relearned. Under `[panel]`:
   - `repo=` points it at another clone;
   - `bridge=` points it at another bridge folder;
   - `pointer=0` stops the mouse following the keyboard;

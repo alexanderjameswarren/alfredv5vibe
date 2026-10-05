@@ -1,19 +1,6 @@
 ---
 name: cli-workflow
-description: >-
-  Runs both halves of the CLI loop for Alex's personal projects. Use it to write
-  CLI prompts (each starts with a "Run tag:" line and a "Window:" line) whenever
-  he asks for CLI instructions or a code CLI prompt, or is ready to implement,
-  in React or Python projects, including parallel work in worktrees (gitnewtree,
-  gitcom, gitsync, gitpush, file and database claims). Also use it, more often,
-  whenever CLI output comes back: when he sends just "cli", says the CLI
-  responded in any wording (fetch the report from the Alfred clipboard with
-  get_recent_clips by run tag or project code), pastes CLI output with or
-  without comment, or asks only for a TLDR or to flag questions. Assume he has
-  not read the CLI output. Use it whenever CLI work is involved, even if he does
-  not ask for formatted instructions, and whenever he asks how to commit, sync,
-  push, checkpoint or finish — every git instruction is a short table then a
-  one-line command.
+description: 'Runs both halves of the CLI loop for Alex''s personal projects. Use it to write CLI prompts (each starts with a "Run tag:" line and a "Window:" line) whenever he asks for CLI instructions or a code CLI prompt, or is ready to implement, in React or Python projects, including parallel work in worktrees (gitnewtree, gitcom, gitsync, gitpush, file and database claims). Also use it, more often, whenever CLI output comes back: when he sends just "cli", says the CLI responded in any wording (fetch the report from the Alfred clipboard with get_recent_clips by run tag or project code), pastes CLI output with or without comment, or asks only for a TLDR or to flag questions. Assume he has not read the CLI output. Use it whenever CLI work is involved, even if he does not ask for formatted instructions, and whenever he asks how to commit, sync, push, checkpoint or finish — every git instruction is a short table then a one-line command.'
 ---
 
 # CLI Workflow
@@ -129,6 +116,41 @@ report you have not yet read and processed.** Design changes discussed in the
 meantime wait, and go into the prompt written after that report. Two prompts in
 flight means the second is written against a state the first is still changing,
 and Switchboard can only show one tag per project as "to paste".
+
+### A prompt is always the last thing in the reply
+
+**A reply that contains a CLI prompt ends with that prompt.** Nothing comes
+after it: no git commands, no "once it reports back, run...", no closeout
+steps. Anything Alex needs to know or do before pasting goes above the prompt.
+
+Why: the CLI's report might flag a problem, and instructions written before
+the report would have him push or finish over it. It also leaves the report
+sitting unread in the Alfred inbox, because the thread never asked for it.
+
+### Closing out a project
+
+Closeout comes only **after the final CLI report has been fetched, read and
+its inbox item archived**, in its own reply with no prompt in it. That reply
+gives, in this order:
+
+1. the `gitpush` Finish table and command (for a worktree, first: close its
+   VS Code window and exit its Claude session),
+2. what to rename this claude.ai chat to: the same name with "Not done"
+   removed,
+3. a check that Switchboard is clear: the project's tile is gone, and for
+   main, the bar reads `main: free`, with no claims left under the project
+   code.
+
+If the last report raised anything, deal with it first. Closeout waits.
+
+### Changing a skill
+
+Skills live in the repo at `.claude/skills/<name>/SKILL.md`. To change one,
+have the CLI edit that file, or give Alex the text to paste into it. Never hand
+him a zip.
+
+Once the change has landed, Alex copies the repo file into claude.ai himself:
+Settings, Skills, the skill, Content, Edit.
 
 ### The project code
 

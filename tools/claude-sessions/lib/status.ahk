@@ -269,6 +269,10 @@ ButtonName(code, mainProject) => code = "main" && mainProject != "" && mainProje
 ; file, like its label; it used to follow the last status write, which goes stale.
 ChatCode(code, mainProject) => code = "main" && mainProject != "" ? mainProject : code
 
+; A saved chat link belongs to the project code it was learned for; when main is
+; rebound, or the link predates recording one, it no longer points at this chat.
+StaleChatLink(link, learnedFor, project) => link != "" && learnedFor != project
+
 ; Main with no binding is free: grey, "free", no alert, out of the taskbar colour.
 IsFree(code, mainProject) => code = "main" && mainProject = ""
 

@@ -37,7 +37,7 @@ ms.reportMetaFile := dir "\last-report.json"
 try FileDelete(ms.reportMetaFile)
 try FileDelete(BRIDGE_DIR "\chats.json")
 ; Paired with a finished chat, so a CLI that stops waiting shows yellow (bridge spec, section 5).
-ms.paused := false, ms.chromeTitle := "", ms.chatLink := "https://claude.ai/chat/smoke-start"
+ms.paused := false, ms.chromeTitle := "", ms.chatLink := "https://claude.ai/chat/smoke-start", ms.chatLinkFor := "smoke-proj"
 fakeWindows := []
 for smokeCode in order    ; not `code`: the panel's functions use a local code
     fakeWindows.Push({hwnd: A_Index, title: "x.md - " sessions[smokeCode].folder " - Visual Studio Code"})
@@ -160,6 +160,7 @@ Arrange(ms)
 Expect("reads the matched window only", readerCalls.Length = 1 ? readerCalls[1] : readerCalls.Length, 502)
 Expect("saves a chat address", ms.chatLink, "https://claude.ai/chat/abc-1")
 Expect("saved to settings", IniRead(SETTINGS_INI, "chatlink", "main", ""), "https://claude.ai/chat/abc-1")
+Expect("saved with its project code", IniRead(SETTINGS_INI, "chatlinkcode", "main", ""), "smoke-proj")
 readerResult := "claude.ai/new"
 Arrange(ms)
 Expect("non-chat address saves nothing", ms.chatLink, "https://claude.ai/chat/abc-1")
@@ -264,7 +265,7 @@ Expect("bound main not free", ms.free, false)
 Expect("bound main chat follows binding", FindChromeWindow(ms), 602)
 
 ; --- yellow flashes five times, then stays solid ---------------------------------
-ms.chatLink := "https://claude.ai/chat/abc-1"   ; the bridge fallbacks above saved the reader's zzz
+ms.chatLink := "https://claude.ai/chat/abc-1", ms.chatLinkFor := "rem-j7p"   ; unbinding above dropped the link
 WriteChats("https://claude.ai/chat/abc-1|finished|9999||1|1|abc")
 FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"processing","since":"2026-09-30T10:08:00.000Z","project":"rem-j7p","red":false}')
 Refresh()
@@ -409,7 +410,18 @@ FileOpen(BRIDGE_DIR "\tabs.json", "w", "UTF-8-RAW").Write('{"at":"' IsoAgo(0) '"
 Refresh()
 Expect("link learned from a background tab", ms.chatLink, "https://claude.ai/chat/learned")
 Expect("learned link saved", IniRead(SETTINGS_INI, "chatlink", "main", ""), "https://claude.ai/chat/learned")
+
+; --- main rebound: the old project's link is dropped and the new chat learned ------
+FileOpen(BINDING_FILE, "w", "UTF-8-RAW").Write('{"code":"next-q2z"}')
+FileOpen(BRIDGE_DIR "\tabs.json", "w", "UTF-8-RAW").Write('{"at":"' IsoAgo(0) '","tabs":[{"tabId":3,"url":"https://claude.ai/chat/learned","title":"rem-j7p plan - Claude"},{"tabId":4,"url":"https://claude.ai/chat/next","title":"Not done next-q2z - Claude"}]}')
+Refresh()
+Expect("rebind relearns the link", ms.chatLink, "https://claude.ai/chat/next")
+Expect("rebind saves the new code", IniRead(SETTINGS_INI, "chatlinkcode", "main", ""), "next-q2z")
 FileDelete(BRIDGE_DIR "\tabs.json")
+try FileDelete(BINDING_FILE)
+Refresh()
+Expect("unbind drops the link", ms.chatLink " / " IniRead(SETTINGS_INI, "chatlink", "main", ""), " / ")
+FileOpen(BINDING_FILE, "w", "UTF-8-RAW").Write('{"code":"rem-j7p"}')
 
 ; --- git counts re-run when a watched file changes -----------------------------
 watched := dir "\logs-HEAD"

@@ -240,6 +240,7 @@ NewSession(code, root) {
         vscodeTitle: IniRead(SETTINGS_INI, "vscode", code, ""),
         chromeTitle: IniRead(SETTINGS_INI, "chrome", code, ""),
         chatLink: IniRead(SETTINGS_INI, "chatlink", code, ""),
+        chatLinkFor: IniRead(SETTINGS_INI, "chatlinkcode", code, ""),
     }
 }
 
@@ -491,10 +492,20 @@ SaveLinkFrom(s, hwnd) {
         return
     try {
         link := AutoSaveLink(s.chromeTitle, chromeAddressReader(hwnd))
-        if link != "" && link != s.chatLink {
-            s.chatLink := link
-            IniWrite(link, SETTINGS_INI, "chatlink", s.code)
-        }
+        if link != "" && link != s.chatLink
+            SaveChatLink(s, link, ChatCode(s.code, mainProject))
+    }
+}
+
+; Save a chat link with the project code it belongs to; "" removes both.
+SaveChatLink(s, link, project) {
+    s.chatLink := link, s.chatLinkFor := link = "" ? "" : project
+    if link = "" {
+        IniDelete(SETTINGS_INI, "chatlink", s.code)
+        IniDelete(SETTINGS_INI, "chatlinkcode", s.code)
+    } else {
+        IniWrite(link, SETTINGS_INI, "chatlink", s.code)
+        IniWrite(project, SETTINGS_INI, "chatlinkcode", s.code)
     }
 }
 
@@ -582,6 +593,8 @@ Refresh() {
         s.closed := s.misses >= CLOSED_AFTER
         s.free := IsFree(code, mainProject)
         project := ChatCode(code, mainProject)
+        if StaleChatLink(s.chatLink, s.chatLinkFor, project)
+            SaveChatLink(s, "", project)
         LearnChatLink(s, project)
         if s.chatLink != ""
             paired[NormaliseUrl(s.chatLink)] := true
@@ -772,10 +785,8 @@ LearnChatLink(s, project) {
     if s.chatLink != "" || s.chromeTitle != "" || s.free || !TabsFresh()
         return
     link := FindChatLinkByCode(tabsList, project)
-    if link = ""
-        return
-    s.chatLink := link
-    IniWrite(link, SETTINGS_INI, "chatlink", s.code)
+    if link != ""
+        SaveChatLink(s, link, project)
 }
 
 ; Hovering a session button shows "Step N of M: <name>" from its progress file.
@@ -1110,11 +1121,7 @@ EditChatLink(s) {
         MsgBox("That is not a https://claude.ai/ link, so it was not saved.", "Switchboard", "Icon!")
         return
     }
-    s.chatLink := link
-    if link = ""
-        IniDelete(SETTINGS_INI, "chatlink", s.code)
-    else
-        IniWrite(link, SETTINGS_INI, "chatlink", s.code)
+    SaveChatLink(s, link, ChatCode(s.code, mainProject))
 }
 
 SetPaused(s, paused) {
