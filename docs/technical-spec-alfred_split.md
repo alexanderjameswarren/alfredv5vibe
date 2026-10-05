@@ -63,15 +63,32 @@ useCollections, useExecutionActions.
    LoadingOverlay, AddPageChrome, recurrence pickers).
 3. Existing flat shared UI files into src/shared, with their tests.
 4. Recycle bin into src/recycle.
-5. Contexts.
-6. Home and schedule (EventCard).
-7. Intentions.
-8. Items.
-9. Executions.
-10. Inbox, including the existing inbox files.
-11. Collections.
-12. Reminders/settings, then the shell: useAlfredData, useRealtime,
-    useAlfredNavigation, useListPreferences, AppChrome, BottomDock.
+5. Contexts: ContextForm, ContextCard, ContextsScreen, useContextActions.
+   (ContextDetailView moves in step 8.)
+
+Reordered at step 5 (Alex, 2026-10-05). The detail views render cards that
+were still inside Alfred.jsx, so the rest goes in dependency layers, leaves
+first. Target locations are unchanged from the layout above.
+
+6. Layer (a), leaf cards: EventCard + EventMetaLink → schedule/,
+   ExecutionBadge → executions/, ItemNameLabel → items/,
+   CollectionCard → collections/.
+7. Layer (b), twin cards: IntentionCard → intentions/, ItemCard → items/,
+   each with its normaliser/dirty-check twins.
+8. Layer (c), detail views: ContextDetailView → contexts/,
+   IntentionDetailView → intentions/, ItemDetailView → items/,
+   ExecutionDetailView → executions/.
+9. Layer (d), per-feature screens and actions, one feature per sub-step:
+   9a home/schedule (HomeScreen, ScheduleScreen, useEventActions);
+   9b intentions (IntentionsScreen, IntentionAddScreen, useIntentionActions);
+   9c items (MemoriesScreen, ItemAddScreen, useItemActions);
+   9d executions (ExecutionDetailScreen, useExecutionActions);
+   9e inbox (InboxScreen, InboxDetailScreen, useInboxActions, and the
+   existing inbox files); 9f collections (CollectionAddItems,
+   ItemAddToCollection, CollectionsScreen, CollectionDetailScreen,
+   CollectionHistoryScreen, useCollections); 9g reminders/settings.
+10. Layer (e), the shell: useAlfredData, useRealtime, useAlfredNavigation,
+    useListPreferences, AppChrome, BottomDock.
 
 Each step: `npm run build`, `CI=true npx react-scripts test --watchAll=false`,
 `node --test "scripts/lib/*.test.mjs"`, test counts equal before and after,

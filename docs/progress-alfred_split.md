@@ -16,16 +16,25 @@ docs/technical-spec-alfred_split.md.
   app 2030/2030, CLI 142/142, same as before)
 - [x] Step 4: recycle bin
   (Alfred.jsx 10,749 → 10,195 lines; app 2030/2030, CLI 142/142, same as before)
-- [~] Step 5: contexts — ContextForm, ContextCard, ContextsScreen,
-  useContextActions done; ContextDetailView deferred (see Notes)
+- [x] Step 5: contexts — ContextForm, ContextCard, ContextsScreen,
+  useContextActions (ContextDetailView moves in step 8)
   (Alfred.jsx 10,195 → 9,750 lines; app 2030/2030, CLI 142/142, same as before)
-- [ ] Step 6: home and schedule
-- [ ] Step 7: intentions
-- [ ] Step 8: items
-- [ ] Step 9: executions
-- [ ] Step 10: inbox
-- [ ] Step 11: collections
-- [ ] Step 12: reminders/settings and shell cleanup
+
+Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
+- [x] Step 6: layer (a) leaf cards — EventCard + EventMetaLink, ExecutionBadge,
+  ItemNameLabel, CollectionCard
+  (Alfred.jsx 9,750 → 9,117 lines; app 2030/2030, CLI 142/142, same as before)
+- [ ] Step 7: layer (b) IntentionCard and ItemCard, with their twins
+- [ ] Step 8: layer (c) detail views — Context, Intention, Item, Execution
+- [ ] Step 9: layer (d) per-feature screens and actions
+  - [ ] 9a home/schedule
+  - [ ] 9b intentions
+  - [ ] 9c items
+  - [ ] 9d executions
+  - [ ] 9e inbox
+  - [ ] 9f collections
+  - [ ] 9g reminders/settings
+- [ ] Step 10: layer (e) the shell
 - [ ] Finish: Alex runs gitpush Finish
 
 ### Notes
@@ -108,7 +117,16 @@ docs/technical-spec-alfred_split.md.
   the real log and the real binding untouched") then fail, and the file-level
   failure shows as a 143rd test. Not a code fault. Run the CLI suite in the
   foreground with nothing alongside.
-- **Step 12 must also** update the file list in PROJECT.md (lines 90–93, and
+- Step 6: src/schedule/EventCard.jsx and EventMetaLink.jsx,
+  src/executions/ExecutionBadge.jsx, src/items/ItemNameLabel.jsx,
+  src/collections/CollectionCard.jsx — all verbatim. EventCard's inline isDirty
+  check moved with it, verbatim. `Share2` and `Pin` left Alfred's lucide imports
+  with CollectionCard, their last user there. The orphan comment "// Helper functions for
+  the inbox screens" stays in Alfred above CLEARED_ENRICHMENT.
+- Old step numbers in notes above, after the reorder: old step 12 (shell) is
+  now step 10; the inbox step is 9e; old steps 7, 8 and 11 named in the step-5
+  note are now IntentionCard/ItemCard in step 7 and CollectionCard in step 6.
+- **Step 10 (the shell, was step 12) must also** update the file list in PROJECT.md (lines 90–93, and
   anything else listing old paths) and the TagFilter comment in
   src/utils/tags.js (lines 161–172) to match the final layout. Neither was
   claimed or edited in step 3, on Alex's instruction.
