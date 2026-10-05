@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import InboxDetailView from "./InboxDetailView";
-import { triageDataForOneTap } from "./utils/inboxSuggestions";
+import { triageDataForOneTap } from "../utils/inboxSuggestions";
 
 // ── The guarantee this file exists for ───────────────────────────────────────
 //

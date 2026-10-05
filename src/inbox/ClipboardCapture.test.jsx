@@ -9,7 +9,7 @@ import "@testing-library/jest-dom";
 const mockMaybeSingle = jest.fn();
 const mockCreateSignedUrls = jest.fn();
 
-jest.mock("./supabaseClient", () => ({
+jest.mock("../supabaseClient", () => ({
   supabase: {
     from: () => ({
       select: () => ({

@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import path from "path";
 import InboxListCard from "./InboxListCard";
-import { alfredSource, screenFiles, sourceOf } from "./testing/alfredSources";
+import { alfredSource, screenFiles, sourceOf } from "../testing/alfredSources";
 
 const CONTEXTS = [
   { id: "ctx-alfred", name: "Alfred" },

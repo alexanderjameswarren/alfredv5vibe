@@ -17,7 +17,7 @@
 
 import { useState } from "react";
 import { AlignLeft, ChevronDown, ChevronUp } from "lucide-react";
-import { COLLAPSE_LINES, needsShowAll } from "./utils/capturedClip";
+import { COLLAPSE_LINES, needsShowAll } from "../utils/capturedClip";
 
 /** @param {string} capturedText The archived inbox row's text. Nothing renders without it. */
 export default function OriginalCapture({ capturedText }) {

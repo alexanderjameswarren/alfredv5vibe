@@ -35,7 +35,7 @@
 
 import { Calendar, Check, Copy, File, FolderOpen, Navigation2, Trash2 } from "lucide-react";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
-import { canProcessInOneTap, isEnriched, listTitleFor } from "./utils/inboxSuggestions";
+import { canProcessInOneTap, isEnriched, listTitleFor } from "../utils/inboxSuggestions";
 
 /** A YYYY-MM-DD date, written short ("Thu, Oct 1"). */
 function shortDate(value) {

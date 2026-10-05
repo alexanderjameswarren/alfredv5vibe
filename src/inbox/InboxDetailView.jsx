@@ -67,15 +67,15 @@ import {
   AlignLeft,
   Pencil,
 } from "lucide-react";
-import ItemPicker, { PickedItem } from "./shared/ItemPicker";
-import TagPicker from "./shared/TagPicker";
-import PinnedFooter, { FooterSpacer } from "./shared/PinnedFooter";
-import EditCard from "./shared/EditCard";
-import InsertRowButton from "./shared/InsertRowButton";
+import ItemPicker, { PickedItem } from "../shared/ItemPicker";
+import TagPicker from "../shared/TagPicker";
+import PinnedFooter, { FooterSpacer } from "../shared/PinnedFooter";
+import EditCard from "../shared/EditCard";
+import InsertRowButton from "../shared/InsertRowButton";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
-import { computeBaseline } from "./utils/inboxSuggestions";
-import { isFirstStep } from "./utils/elementOffsets";
-import { getRecurrenceDisplayString } from "./utils/recurrenceDisplay";
+import { computeBaseline } from "../utils/inboxSuggestions";
+import { isFirstStep } from "../utils/elementOffsets";
+import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
 
 /**
  * A YYYY-MM-DD date, written the way the design shows it ("Sat, Sep 26").

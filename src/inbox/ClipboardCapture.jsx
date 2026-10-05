@@ -30,13 +30,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, ExternalLink, ImageOff, Link2 } from "lucide-react";
-import { supabase } from "./supabaseClient";
+import { supabase } from "../supabaseClient";
 import {
   COLLAPSE_LINES,
   displayLinks,
   needsShowAll,
   screenshotCaveat,
-} from "./utils/capturedClip";
+} from "../utils/capturedClip";
 
 const BUCKET = "clipboard";
 

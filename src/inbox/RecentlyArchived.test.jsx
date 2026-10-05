@@ -3,8 +3,8 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import path from "path";
 import RecentlyArchived from "./RecentlyArchived";
-import { alfredSource, screenFiles, sourceOf } from "./testing/alfredSources";
-import { archiveOutcome } from "./utils/inboxArchive";
+import { alfredSource, screenFiles, sourceOf } from "../testing/alfredSources";
+import { archiveOutcome } from "../utils/inboxArchive";
 
 const ROWS = [
   {
@@ -184,10 +184,8 @@ describe("it is wired into the inbox screen", () => {
     // capture, and "Empty inbox — this is success, not failure" with no way back would
     // make a mistaken tap unrecoverable on the one screen that celebrates it. So the
     // section must not sit inside the `visibleInboxItems.length` branches.
-    const inboxView = alfred.slice(
-      alfred.indexOf("{/* Inbox View */}"),
-      alfred.indexOf("{/* Inbox Detail View"),
-    );
+    // The inbox view is its own file since alfred_split step 9e.
+    const inboxView = sourceOf("InboxScreen.jsx").replace(/\r\n/g, "\n");
     expect(inboxView).toContain("<RecentlyArchived");
     const emptyBranch = inboxView.indexOf("Empty inbox.");
     const section = inboxView.indexOf("<RecentlyArchived");

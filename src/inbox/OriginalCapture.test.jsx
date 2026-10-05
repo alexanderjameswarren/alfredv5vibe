@@ -2,8 +2,8 @@ import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import OriginalCapture from "./OriginalCapture";
-import { alfredSource } from "./testing/alfredSources";
-import { COLLAPSE_LINES } from "./utils/capturedClip";
+import { alfredSource } from "../testing/alfredSources";
+import { COLLAPSE_LINES } from "../utils/capturedClip";
 
 const LONG = Array.from({ length: COLLAPSE_LINES + 4 }, (_, i) => `line ${i + 1}`).join("\n");
 const showAll = () => screen.queryByRole("button", { name: /Show all/ });

@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { Bell } from "lucide-react";
-import { formatPacific, getReminderSummary } from "./utils/remindersApi";
+import { formatPacific, getReminderSummary } from "../utils/remindersApi";
 
 export default function PendingReminder({ inboxId = null, intentId = null }) {
   const [summary, setSummary] = useState({ scheduled: [], lastSent: null });

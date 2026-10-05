@@ -34,12 +34,18 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
   - [x] 9b–9d, one step (agreed after 9a): intentions, then items, then
     executions, with a build and app tests after each part (Alfred.jsx
     6,108 → 5,250 lines; app 2030/2030 after each part, CLI 142/142)
-  - [ ] 9e inbox
+  - [x] 9e inbox (Alfred.jsx 5,250 → 4,681 lines; app 2030/2030, CLI
+    142/142, same as before)
   - [ ] 9f collections
 - [ ] Step 10: layer (e) the shell, including 9g (reminders/settings)
 - [ ] Finish: Alex runs gitpush Finish
 
 ### Notes
+- Standing permission (Alex, step 9e, 2026-10-05): if a file outside this
+  thread's claims needs ONLY an import path changed because of a move, and
+  `claims.mjs check` says it is free, claim it and change that path without
+  stopping, and list it in the report. Anything beyond an import path, or a
+  file someone else holds, still means stop and ask.
 - Suspected bug — tested on desktop, not reproduced (Alex, step 7 check):
   ItemCard handleCancel resets elements with `{ ...el }` instead of the
   normaliser used by the useState init and the dirty twin. The worry was that
@@ -195,6 +201,23 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
   Alfred around it, so those two condition lines lost that prefix; nothing else
   changed (39 lines compared). All four hooks are called in order after
   useEventActions, after every state they read. Alfred.jsx lints clean.
+- Step 9e. Moved into src/inbox with their tests, identical apart from import
+  paths: InboxDetailView, InboxListCard, RecentlyArchived, OriginalCapture,
+  ClipboardCapture, CaptureMeta, PendingReminder, and
+  oneTapMatchesDetailPage.test. New: useInboxActions.js (handleCapture,
+  discardInboxItem, restoreDiscardedReminders, updateInboxCaptureText,
+  processInboxItemFromList, copyTaskInboxItem, handleInboxSave,
+  unarchiveInboxItem, verbatim, plus CLEARED_ENRICHMENT with its comment at the
+  end); addItemsToCollection (collections) and refreshReminderIndex
+  (reminders) come in as arguments. InboxScreen.jsx and InboxDetailScreen.jsx
+  hold the two branches (JSX verbatim, re-indented 6). The `view ===` tests
+  and the "Inbox View" / "Inbox Detail View" comments stay in Alfred. Only
+  guard edit: RecentlyArchived.test now reads InboxScreen.jsx instead of
+  slicing Alfred between those two comments. Import-path-only edits:
+  intentions/IntentionDetailView.jsx, items/ItemDetailView.jsx,
+  utils/inboxSourceTabs.js and its test. Stale but left alone (pure move): the
+  comment in InboxDetailScreen saying RecurrenceQuickSelect "lives in this
+  file", and InboxDetailView's header saying "Alfred.jsx is 12,900 lines".
 - Old step numbers in notes above, after the reorder: old step 12 (shell) is
   now step 10; the inbox step is 9e; old steps 7, 8 and 11 named in the step-5
   note are now IntentionCard/ItemCard in step 7 and CollectionCard in step 6.

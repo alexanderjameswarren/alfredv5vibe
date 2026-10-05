@@ -7,7 +7,7 @@ import {
 } from "./inboxSourceTabs";
 import { Inbox } from "lucide-react";
 import { alfredSource } from "../testing/alfredSources";
-import { sourceLabel, SOURCE_GLYPHS } from "../CaptureMeta";
+import { sourceLabel, SOURCE_GLYPHS } from "../inbox/CaptureMeta";
 
 const rows = (...types) => types.map((sourceType, i) => ({ id: `i${i}`, sourceType }));
 const keys = (tabs) => tabs.map((t) => t.key);

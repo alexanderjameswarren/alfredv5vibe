@@ -2,13 +2,13 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import PendingReminder from "./PendingReminder";
-import { getReminderSummary } from "./utils/remindersApi";
+import { getReminderSummary } from "../utils/remindersApi";
 
-jest.mock("./utils/remindersApi", () => ({
-  ...jest.requireActual("./utils/remindersApi"),
+jest.mock("../utils/remindersApi", () => ({
+  ...jest.requireActual("../utils/remindersApi"),
   getReminderSummary: jest.fn(),
 }));
-jest.mock("./supabaseClient", () => ({ supabase: {} }));
+jest.mock("../supabaseClient", () => ({ supabase: {} }));
 
 it("shows each scheduled reminder in Pacific time, ahead of any sent one", async () => {
   getReminderSummary.mockResolvedValue({

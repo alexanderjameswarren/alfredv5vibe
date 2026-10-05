@@ -34,8 +34,8 @@
 
 import { ChevronDown, Undo2 } from "lucide-react";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
-import { listTitleFor } from "./utils/inboxSuggestions";
-import { archivedAt, RECENT_ARCHIVE_DAYS } from "./utils/inboxArchive";
+import { listTitleFor } from "../utils/inboxSuggestions";
+import { archivedAt, RECENT_ARCHIVE_DAYS } from "../utils/inboxArchive";
 
 /**
  * @param {Array}    rows        The archived captures to show, already windowed and
