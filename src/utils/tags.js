@@ -158,18 +158,18 @@ export function normaliseTags(rawList) {
  *
  * This is the suggestion pool the tag picker offers. Derived client-side from
  * rows already loaded — the same thing `TagFilter` does with its counts (in
- * src/TagFilter.jsx), and for the same reason: there is no query worth adding
+ * src/shared/TagFilter.jsx), and for the same reason: there is no query worth adding
  * for a dozen strings that are already sitting in state.
  *
  * Frequency order, ties broken alphabetically. The tags you reach for most are
  * the ones worth putting under your thumb.
  *
- * DELIBERATELY DIFFERENT from `TagFilter` (src/TagFilter.jsx), which went
+ * DELIBERATELY DIFFERENT from `TagFilter` (src/shared/TagFilter.jsx), which went
  * alphabetical on 2026-09-21. The two lists answer different questions: this
  * one offers a tag you have not named yet, where the common ones should come
  * first; that one helps you find a tag you already have in mind, where only
  * alphabetical lets you aim. If you are here to make them agree, read the note
- * in src/TagFilter.jsx first — the difference is the point.
+ * in src/shared/TagFilter.jsx first — the difference is the point.
  *
  * Items and intentions share one pool. Collections get their own in Phase 6 —
  * per-trip tags like "tjs" have no business being suggested on a recipe.

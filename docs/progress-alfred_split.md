@@ -39,8 +39,12 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
   - [x] 9f collections, in three parts with a build and app tests after each
     (Alfred.jsx 4,681 → 4,126 → 3,494 → 2,788 lines; app 2030/2030 after
     each part, CLI 142/142)
-- [ ] Step 10: layer (e) the shell, including 9g (reminders/settings)
-- [ ] Finish: Alex runs gitpush Finish
+- [x] Step 10: layer (e) the shell, including 9g (reminders/settings), in six
+  parts with a build and app tests after each (Alfred.jsx 2,788 → 2,675 →
+  2,617 → 2,364 → 1,920 → 1,606 lines; app 2030/2030 after each part, CLI
+  142/142). As built: see the spec's "As built" section.
+- [ ] Finish: Alex runs gitpush Finish. **Ready to finish** once step 10 is
+  verified and committed.
 
 ### Notes
 - Standing permission (Alex, step 9e, 2026-10-05): if a file outside this
@@ -239,6 +243,24 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
   three IIFE branches became component bodies (re-indented 8, compared whole);
   CollectionsScreen is JSX re-indented 6. The `view ===` tests and the view
   comments stay in Alfred. No guard needed editing.
+- Step 10. Moved word for word: reminders/ (SettingsScreen, useReminderIndex
+  + useReminderListRefresh, useNotificationEffects), alfred/
+  (useListPreferences, useAlfredNavigation + useDetailNavigation,
+  useAlfredData + useCollectionPoll, useRealtime), shared/ (AppChrome with
+  NAV_ITEMS and navCount, BottomDock). Effect order checked against HEAD and
+  unchanged. Wiring that is new, not moved: `filterTag` declared above the
+  navigation hook; the deferred `loadCollectionMembers` call into
+  useAlfredData; three eslint-disable comments for stable values now crossing
+  a hook boundary (the build reported them as warnings otherwise). `menuOpen`
+  stays Alfred state so it survives the Sam/Timer pages as before. PROJECT.md
+  and the utils/tags.js TagFilter comment now point at the new paths (docs
+  only). The claims guard blocked a helper script written to $TEMP by heredoc
+  (it read a comment as a path); verification ran inline instead.
+- For future threads: Alfred.jsx (1,606) is still the busiest file — the
+  route switch, derived lists and hook order live there, and any new screen
+  touches it. Hook call order in Alfred.jsx is effect order: add a hook where
+  its effects should run, not where it reads nicely. Other hotspots and the
+  files over 500 lines are listed in the spec.
 - Old step numbers in notes above, after the reorder: old step 12 (shell) is
   now step 10; the inbox step is 9e; old steps 7, 8 and 11 named in the step-5
   note are now IntentionCard/ItemCard in step 7 and CollectionCard in step 6.

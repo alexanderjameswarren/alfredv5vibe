@@ -98,6 +98,48 @@ Each step: `npm run build`, `CI=true npx react-scripts test --watchAll=false`,
 `node --test "scripts/lib/*.test.mjs"`, test counts equal before and after,
 then the desktop click-through in the progress file.
 
+## As built (step 10, 2026-10-05)
+
+Alfred.jsx ends at 1,606 lines, not 700–900. What stays is the shell's own
+work: the auth/load/realtime-start effect and the visibility refresh, the
+three collection-view effects (filter reset, loads on open, tag-editor
+dismissal), the cold-load redirect effect and the route lookups that feed it,
+the beforeunload guard, withLoading and offerUndoFor, the derived list views,
+and the route switch (~500 lines of screen calls).
+
+Differences from the layout above, all to keep effects in their original order
+or to break a circular dependency without changing behaviour:
+
+- Hook call order IS effect order. Every effect runs in the same sequence as
+  before step 10; anything that would have moved one was split instead.
+- reminders/useReminderIndex.js exports two hooks: `useReminderIndex` (state +
+  refresher, called with the record state) and `useReminderListRefresh` (the
+  list-view effect, called where it was).
+- alfred/useAlfredNavigation.js exports `useAlfredNavigation` (routing, nav
+  state, selected ids, back stacks, unsaved-changes guard; called first, because
+  the action hooks need `setView`) and `useDetailNavigation` (view*Detail,
+  editItemFromExecution, openExecution, add-page helpers, Back handlers; called
+  after the action hooks and list preferences it uses). Neither has effects.
+  `filterTag` state is declared above them because `setView` clears it.
+- alfred/useAlfredData.js exports `useAlfredData` (record state, refs,
+  loadData/refreshData/manualRefresh; no effects) and `useCollectionPoll` (the
+  pause-guard and poll effects, called where they were). It takes
+  `loadCollectionMembers` as a deferred call `(...args) =>
+  loadCollectionMembers(...args)`, because useCollections needs `refreshData`
+  from it first.
+- Three `eslint-disable-next-line react-hooks/exhaustive-deps` comments were
+  added where a stable setter or ref now crosses a hook boundary and the
+  linter can no longer see that it is stable.
+- useExecutionRoute.js and the three Notification*.jsx files stay at src/ top
+  level; they were not moved.
+
+Files over 500 lines in the split code: Alfred.jsx 1,606, inbox/InboxDetailView
+1,213 (pre-existing), collections/useCollections 728, items/ItemCard 704,
+executions/useExecutionActions 604, collections/CollectionDetailScreen 563,
+inbox/useInboxActions 560, intentions/IntentionCard 532, items/ItemDetailView
+526. Outside it, unchanged: sam/ and games/ files, NotificationDiagnostics,
+utils/collectionMembers, utils/ingredientMatch, utils/recurrence.manual-check.
+
 ## Normalisers and twins (line numbers as of the start)
 
 - ItemCard element normaliser: useState init (9812–9827), dirty twin
@@ -122,11 +164,15 @@ then the desktop click-through in the progress file.
   or navigation hook; `storage` → utils/storage.js.
 - listSearch, listTagsCollapsed, filterTag, sort preferences →
   alfred/useListPreferences.
-- pollPausedRef and memberWriteInFlight: written by collection writers, read by
-  the polling effect. Owned by useAlfredData and passed into useCollections.
+- pollPausedRef and memberWriteInFlight: owned by useAlfredData.
+  memberWriteInFlight is written by the collection writers (passed into
+  useCollections); pollPausedRef is written by the pause-guard effect; both
+  are read by the poll, all in useCollectionPoll.
 
 Where parallel threads will still collide after the split:
-- the shell's route switch and viewPaths.js, for any new view or route;
+- Alfred.jsx itself: the route switch, the derived list views, and the hook
+  call order — and viewPaths.js, for any new view or route;
+- alfred/useAlfredNavigation.js, for any new detail page or Back behaviour;
 - useAlfredData and useRealtime, for any new table or loaded field;
 - items/ItemDetailView.jsx and items/ItemCard.jsx (status, notes and links all
   land there);

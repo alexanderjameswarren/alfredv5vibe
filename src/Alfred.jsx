@@ -1,25 +1,18 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import React, { useState, useEffect, useRef } from "react";
 import {
-  pathToView,
   viewToPath,
-  normalizePath,
   isKnownPath,
   parentPath,
   DEFAULT_PATH,
-  executionPath,
-  addPath,
   addRouteFromPath,
-  inboxDetailPath,
   inboxIdFromPath,
   intentionIdFromPath,
   intentionDetailPath,
 } from "./viewPaths";
-import {
-  getListReminders,
-  indexReminders,
-  archivedCaptureTarget,
-} from "./utils/remindersApi";
+import { archivedCaptureTarget } from "./utils/remindersApi";
+import { useReminderIndex, useReminderListRefresh } from "./reminders/useReminderIndex";
+import { useNotificationEffects } from "./reminders/useNotificationEffects";
+import SettingsScreen from "./reminders/SettingsScreen";
 import { useExecutionRoute } from "./useExecutionRoute";
 import { useInboxActions } from "./inbox/useInboxActions";
 import InboxScreen from "./inbox/InboxScreen";
@@ -35,28 +28,16 @@ import {
   sourceTabsFor,
 } from "./utils/inboxSourceTabs";
 import { sourceLabel } from "./inbox/CaptureMeta";
-import { reconcilePushSubscription } from "./utils/pushSubscriptions";
-import { takePendingNavigation } from "./utils/pushRotation";
-import NotificationSettings from "./NotificationSettings";
-import NotificationDiagnostics from "./NotificationDiagnostics";
-import AppLink from "./shared/AppLink";
-import UndoMessage, { useUndo } from "./shared/UndoMessage";
-import { useSortPreference } from "./shared/SortControl";
-import { collapseOnSearch } from "./shared/TagFilter";
-import { tagPoolForRecords } from "./utils/tags";
+import { useUndo } from "./shared/UndoMessage";
+import { useListPreferences } from "./alfred/useListPreferences";
+import { useAlfredNavigation, useDetailNavigation } from "./alfred/useAlfredNavigation";
+import { useAlfredData, useCollectionPoll } from "./alfred/useAlfredData";
+import { useRealtime } from "./alfred/useRealtime";
+import AppChrome from "./shared/AppChrome";
+import BottomDock from "./shared/BottomDock";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
 import { matchesQuery } from "./utils/search";
-import {
-  X,
-  Trash2,
-  Menu,
-  Settings,
-  Wifi,
-  WifiOff,
-  RefreshCw,
-  Send,
-} from "lucide-react";
 // `supabaseUrl` used to be imported alongside this: it built the ai-enrich
 // endpoint by hand. Step 14 removed the only two callers and left the import
 // behind as a lint warning; dropped here.
@@ -64,17 +45,12 @@ import { supabase } from "./supabaseClient";
 import { storage } from "./utils/storage";
 import { getTodayDate } from "./utils/eventDates";
 import {
-  EVENT_SORT_OPTIONS,
-  INBOX_SORT_OPTIONS,
-  NAMED_RECORD_SORT_OPTIONS,
   NAMED_RECORD_ACCESSORS,
   itemSearchFields,
-  INTENTION_SORT_OPTIONS,
   INTENTION_ACCESSORS,
   INBOX_ACCESSORS,
 } from "./utils/listSortOptions";
-import { TAG_TOGGLE_ATTR, TAG_FILTERED_VIEWS } from "./utils/tagFilterViews";
-import ObjectIcon from "./shared/ObjectIcon";
+import { TAG_TOGGLE_ATTR } from "./utils/tagFilterViews";
 import LoginScreen from "./shared/LoginScreen";
 import LoadingOverlay from "./shared/LoadingOverlay";
 import { useRecycleBin } from "./recycle/useRecycleBin";
@@ -104,157 +80,103 @@ import ExecutionDetailScreen from "./executions/ExecutionDetailScreen";
 import SamPlayer from "./sam/SamPlayer";
 import TimerPage from "./timer/TimerPage";
 
-// The nav, as data. Rendered twice — a row of tabs on desktop, a list in the
-// mobile drawer — from this one array, so the two cannot drift again.
-//
-// `count` names which counter decorates the label. `remembersReturn` marks the
-// two destinations that record where you came from, so their own Back works;
-// it was previously spelled as a `key === "sam" || key === "timer"` test in
-// the drawer and as two hand-written onNavigate bodies on desktop.
-const NAV_ITEMS = [
-  { key: "home", label: "Home", icon: "home" },
-  { key: "inbox", label: "Inbox", icon: "inbox", count: "inbox" },
-  { key: "contexts", label: "Contexts", icon: "context" },
-  { key: "schedule", label: "Schedule", icon: "schedule", count: "schedule" },
-  { key: "intentions", label: "Intentions", icon: "intention" },
-  { key: "memories", label: "Memories", icon: "item" },
-  { key: "collections", label: "Collections", icon: "collection" },
-  { key: "timer", label: "Timer", icon: "timer", remembersReturn: true },
-  { key: "sam", label: "Sam", icon: "sam", remembersReturn: true },
-  { key: "games", label: "Games", icon: "games" },
-];
-
 export default function Alfred() {
-  // --- Navigation bridge (Step 4, docs/technical-spec-navigation-urls.md) ---
-  // `view` used to be `useState("home")`. It is now derived from the URL, and
-  // `setView` is a thin wrapper around the router's navigate(). The point of
-  // doing it this way round is that all 39 existing call sites keep working
-  // with no edits — the URL simply becomes the thing that backs them.
-  // See src/viewPaths.js for the 18-entry map.
-  //
-  // (Deliberately no literal call syntax in this comment: the call sites get
-  // counted by grep at every step, and a comment would inflate the count.)
-  const location = useLocation();
-  const navigate = useNavigate();
-  const currentPath = normalizePath(location.pathname);
-  const view = pathToView(location.pathname);
-  const setView = useCallback(
-    (nextView) => {
-      const path = viewToPath(nextView);
-      // §A5. Arriving at one of the three tag-filtered screens from a DIFFERENT
-      // screen drops the filter, so it cannot follow you across. See
-      // TAG_FILTERED_VIEWS for what it was costing.
-      //
-      // Two conditions, and both earn their place:
-      //
-      //   `nextView !== view` — otherwise re-selecting the screen you are on
-      //   would clear a filter you just set on it.
-      //
-      //   the target is filtered — otherwise opening a record from a filtered
-      //   list would clear it, and browser Back would return you to a list that
-      //   had silently forgotten. Opening a record and coming back keeps the
-      //   filter, exactly as it keeps the search text: Back never comes through
-      //   here at all, because `view` is derived from the URL.
-      if (TAG_FILTERED_VIEWS.includes(nextView) && nextView !== view) {
-        setFilterTag(null);
-      }
-      // Re-selecting the screen you are already on used to be an inert
-      // re-render. Pushing an identical entry would make the next Back press
-      // look broken, so same-path navigations replace instead of push.
-      navigate(path, { replace: path === currentPath });
-    },
-    [navigate, currentPath, view]
-  );
-  // Opening an execution goes through here rather than setView, because
-  // setView can only reach the id-less /schedule/execution — it is handed a
-  // view name and has no way to know which execution is meant. Every
-  // navigation to an execution carries its id so the address stays meaningful
-  // after a refresh, a paste, or a notification tap.
-  const goToExecution = useCallback(
-    (exec) => {
-      if (!exec || !exec.id) return;
-      const path = executionPath(exec.id);
-      navigate(path, { replace: path === currentPath });
-    },
-    [navigate, currentPath]
-  );
-  // Opening a capture for triage, for the same reason as the line above: setView
-  // is handed a view name and has no way to know WHICH capture. Not guarded by
-  // confirmDiscardIfDirty — the only route in is a tap on an inbox row, and a
-  // list has nothing unsaved on it.
-  const openInboxDetail = useCallback(
-    (inboxItemId) => {
-      if (!inboxItemId) return;
-      const path = inboxDetailPath(inboxItemId);
-      navigate(path, { replace: path === currentPath });
-    },
-    [navigate, currentPath]
-  );
+  // Declared before navigation because `setView` clears it.
+  const [filterTag, setFilterTag] = useState(null);
+  // Routing, navigation state and the unsaved-changes guard. No effects.
+  const {
+    location,
+    navigate,
+    currentPath,
+    view,
+    setView,
+    goToExecution,
+    openInboxDetail,
+    selectedCollectionId,
+    setSelectedCollectionId,
+    selectedContextId,
+    setSelectedContextId,
+    selectedIntentionId,
+    setSelectedIntentionId,
+    selectedItemId,
+    setSelectedItemId,
+    previousView,
+    setPreviousView,
+    executionEditReturn,
+    setExecutionEditReturn,
+    intentionReturnView,
+    setIntentionReturnView,
+    itemHistoryStack,
+    setItemHistoryStack,
+    unsavedChangesRef,
+    unsavedChangesLabelRef,
+    setUnsavedChanges,
+    confirmDiscardIfDirty,
+    guardedSetView,
+  } = useAlfredNavigation({ setFilterTag });
   const [menuOpen, setMenuOpen] = useState(false);
-  const [contexts, setContexts] = useState([]);
-  const [items, setItems] = useState([]);
-  const [intents, setIntents] = useState([]);
-  // Suggestions for every tag picker on an item or an intention. Recomputed
-  // when either list changes, so a tag invented on one record is offered on the
-  // next one without a reload.
-  //
-  // ARCHIVED ROWS ARE EXCLUDED (§A6, 2026-09-21), and the rule now lives in
-  // `tagPoolForRecords` (src/utils/tags.js) rather than here — it used to be an
-  // inline `.filter((i) => !i.archived)` on each argument, which nothing could
-  // import and so nothing tested. Both it and the frequency-then-alphabetical
-  // ordering are covered by src/utils/tags.pool.test.js.
-  //
-  // `tagPoolForRecords` is still a thin wrapper over `tagPoolFrom`, which stays
-  // a pure "count the tags in these lists" helper with no opinion about what
-  // belongs in them. Read both docblocks, and TagFilter's, before making this
-  // list agree with the filter bar's — the difference is the point.
-  const tagPool = useMemo(
-    () => tagPoolForRecords(items, intents),
-    [items, intents]
-  );
-  const [events, setEvents] = useState([]);
-  const [activeExecution, setActiveExecution] = useState(null); // currently viewed
-  const [activeExecutions, setActiveExecutions] = useState([]);
-  const [pausedExecutions, setPausedExecutions] = useState([]);
-  /**
-   * EVERY capture, archived or not — Clipboard Step 22.
-   *
-   * ⚠️ ONE LIST, TWO VIEWS. This used to be `inboxItems`, holding the LIVE captures
-   * only: both loaders dropped archived rows and the realtime handler had to drop them
-   * again to agree. "Recently archived" needs them, and the alternative — a second
-   * `archivedInboxItems` slice — would have meant every one of the eight writers below
-   * keeping two lists in step by hand, with an archive moving a row from one to the
-   * other. That is precisely the shape of bug the pinned footer took four rounds to fix:
-   * a value two things depend on, stored twice.
-   *
-   * So the state is the whole table and the two views are DERIVED. `inboxItems` below is
-   * the live inbox and every existing reader of it is unchanged; the writers now UPDATE
-   * a row's `archived` flag where they used to remove the row from the array, which is
-   * also what makes the archived section live rather than correct-until-you-refresh.
-   *
-   * It costs nothing at the network. Both loaders already fetched every row —
-   * `select("*")`, no filter — and threw the archived ones away in JavaScript.
-   */
-  const [allInboxItems, setAllInboxItems] = useState([]);
-  /** The live inbox: what the Inbox screen, the nav count and the detail route all mean. */
-  const inboxItems = useMemo(() => allInboxItems.filter((i) => !i.archived), [allInboxItems]);
-  // Per inbox row and per intention: the soonest scheduled reminder, else the latest
-  // sent one, for the list cards. One query for the whole list; refreshed on list
-  // views and after reminder-changing actions.
-  const [reminderIndex, setReminderIndex] = useState({ byInbox: {}, byIntent: {} });
-  const refreshReminderIndex = useCallback(async () => {
-    try {
-      setReminderIndex(indexReminders(await getListReminders()));
-    } catch (err) {
-      console.error("[Reminders] list read failed:", err);
-    }
-  }, []);
-  const [collections, setCollections] = useState([]);
-  // Step 3b: collection membership is READ from the collection_items table,
-  // keyed by collection id. Writes still land in the item_collections.items
-  // jsonb until Step 3c, so the two sources can diverge in between.
-  const [collectionMembers, setCollectionMembers] = useState({});
-  const [collectionMembersError, setCollectionMembersError] = useState(null);
+  // Record state and its loaders. No effects. `loadCollectionMembers` comes from
+  // useCollections below, which needs `refreshData` from here, so it is deferred.
+  const {
+    contexts,
+    setContexts,
+    items,
+    setItems,
+    intents,
+    setIntents,
+    tagPool,
+    events,
+    setEvents,
+    activeExecution,
+    setActiveExecution,
+    activeExecutions,
+    setActiveExecutions,
+    pausedExecutions,
+    setPausedExecutions,
+    allInboxItems,
+    setAllInboxItems,
+    inboxItems,
+    collections,
+    setCollections,
+    collectionMembers,
+    setCollectionMembers,
+    collectionMembersError,
+    setCollectionMembersError,
+    editingQuantityItemId,
+    setEditingQuantityItemId,
+    pollPausedRef,
+    memberWriteInFlight,
+    user,
+    setUser,
+    authLoading,
+    setAuthLoading,
+    dataLoaded,
+    setDataLoaded,
+    isLoading,
+    setIsLoading,
+    loadingMessage,
+    setLoadingMessage,
+    realtimeStatus,
+    setRealtimeStatus,
+    loadData,
+    refreshData,
+    manualRefresh,
+  } = useAlfredData({
+    withLoading,
+    loadCollectionMembers: (...args) => loadCollectionMembers(...args),
+  });
+  // Realtime subscriptions and change handlers. No effects; the auth effect calls it.
+  const { setupRealtimeSubscriptions } = useRealtime({
+    setRealtimeStatus,
+    setAllInboxItems,
+    setContexts,
+    setItems,
+    setIntents,
+    setEvents,
+    setActiveExecutions,
+    setPausedExecutions,
+  });
+  const { reminderIndex, refreshReminderIndex } = useReminderIndex();
   // Manual removal history, keyed by collection id — feeds the recently-removed
   // panel on the collection detail view.
   const [collectionRemovals, setCollectionRemovals] = useState({});
@@ -263,14 +185,6 @@ export default function Alfred() {
   // Full removal history — both kinds, unfiltered — for the history view.
   const [collectionHistory, setCollectionHistory] = useState({});
   const [collectionHistoryError, setCollectionHistoryError] = useState(null);
-  // Live-refresh support for the collection detail view. The poll must never
-  // land on top of an edit in progress, so these track what is being touched.
-  // Refs rather than state: the interval callback closes over the render that
-  // created it, and reading stale values here would defeat the guard.
-  const [editingQuantityItemId, setEditingQuantityItemId] = useState(null);
-  const pollPausedRef = useRef(false);
-  const memberWriteInFlight = useRef(0);
-  const [filterTag, setFilterTag] = useState(null);
   // Which source tab the user last chose — Clipboard Step 21b.
   //
   // What is STORED is the choice; what is USED is `effectiveSource` below, which falls
@@ -306,7 +220,6 @@ export default function Alfred() {
   // that is, so the dismissal effect below can ask whether a tap landed inside
   // it. One ref rather than one per row: only ever one is open.
   const editingTagsRowRef = useRef(null);
-  const [selectedCollectionId, setSelectedCollectionId] = useState(null);
   const [collDragIdx, setCollDragIdx] = useState(null);
   const [collectionContextFilter, setCollectionContextFilter] = useState("");
 
@@ -315,32 +228,6 @@ export default function Alfred() {
   const [captureText, setCaptureText] = useState("");
   const [showContextForm, setShowContextForm] = useState(false);
   const [editingContext, setEditingContext] = useState(null);
-  const [selectedContextId, setSelectedContextId] = useState(null);
-  const [selectedIntentionId, setSelectedIntentionId] = useState(null);
-  const [selectedItemId, setSelectedItemId] = useState(null);
-  const [previousView, setPreviousView] = useState("home");
-
-  // Step 12.2: the execution -> item-edit round trip.
-  //
-  // A DEDICATED slot, not `previousView`. That one is shared by every detail
-  // view and any intervening navigation clobbers it — the same reason
-  // `viewIntentionDetail` grew `intentionReturnView`. This one is written on the
-  // way out and read once on the way back.
-  //
-  // Holds { executionId, itemId } — an ID, never the execution object. The URL
-  // carries the id and `useExecutionRoute` can refetch from it, so an id is
-  // sufficient, cannot go stale, and cannot resurrect an execution that has since
-  // been closed elsewhere. `itemId` is what makes the return fire on the right
-  // item when the user has tapped through several.
-  const [executionEditReturn, setExecutionEditReturn] = useState(null);
-  const [intentionReturnView, setIntentionReturnView] = useState("home");
-  const [itemHistoryStack, setItemHistoryStack] = useState([]);
-  const [user, setUser] = useState(null);
-  const [authLoading, setAuthLoading] = useState(true);
-  const [dataLoaded, setDataLoaded] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState('');
-  const [realtimeStatus, setRealtimeStatus] = useState('disconnected'); // 'connected', 'connecting', 'disconnected'
   // Called here, after `user` and every state it reads. `withLoading` and
   // `offerUndoFor` are function declarations below, hoisted.
   const {
@@ -507,86 +394,8 @@ export default function Alfred() {
   // `refreshData` is a function declaration below, hoisted.
   const recycleBin = useRecycleBin({ view, refreshData, contextArchiveBlockers });
 
-  // --- Notification landing (deep link, closed app) -------------------------
-  //
-  // Tapping a chain notification with Alfred CLOSED launched the installed PWA
-  // on the home page. Everything upstream was correct — the payload carried the
-  // URL, notification.data carried it into the click handler, and the same URL
-  // pasted into a browser opened the right screen. It is lost inside
-  // clients.openWindow(): on Android an installed PWA is launched by the OS at
-  // the manifest's start_url, and the requested URL is advisory.
-  //
-  // So the worker records where it meant to go and this applies it on boot.
-  // Runs BEFORE auth resolves on purpose: the Phase 1 guard already suppresses
-  // its redirect while a session is being restored, so navigating early costs
-  // nothing and gets the address right before anything can look at it.
-  //
-  // Deliberately not gated on `user` and deliberately not in the dependency
-  // list of anything: it must run exactly once per launch.
-  useEffect(() => {
-    let cancelled = false;
-    takePendingNavigation().then((path) => {
-      if (cancelled || !path) return;
-      // If openWindow DID land correctly — it does on some versions — the app
-      // is already here and navigating again would push a pointless history
-      // entry.
-      if (normalizePath(path) === normalizePath(window.location.pathname)) return;
-      console.log(`[Push] Notification asked for ${path}; applying it on launch.`);
-      navigate(path, { replace: true });
-    });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // --- Push subscription self-healing (Phase 5c) ----------------------------
-  //
-  // A push subscription can die while its stored row still looks healthy. In
-  // the field an endpoint returned 201 from FCM and delivered nothing, for
-  // three consecutive sends. There is no delivery receipt in Web Push, so a
-  // 201 means "the push service accepted it" and never "the phone showed it" —
-  // and a dead FCM registration can answer 201 forever rather than the 404/410
-  // that would have pruned the row.
-  //
-  // So the table cannot be trusted to correct itself. The browser's own
-  // getSubscription() is the authority, and this reconciles against it once per
-  // load. It never registers a worker or creates a subscription: a user who has
-  // not enabled push sees no change at all.
-  useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-    (async () => {
-      const outcome = await reconcilePushSubscription();
-      if (cancelled || !outcome.ran) return;
-      if (outcome.inserted || outcome.deleted > 0) {
-        console.log(
-          `[Push] Subscription reconciled — ${outcome.reason} ` +
-            `(inserted: ${outcome.inserted}, removed: ${outcome.deleted})`
-        );
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
-
-  // The worker postMessages a rotation when Alfred is open, so it is repaired
-  // immediately rather than waiting for the next load.
-  useEffect(() => {
-    if (!user || typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
-      return undefined;
-    }
-    const onMessage = (event) => {
-      if (!event.data || event.data.type !== "push-subscription-changed") return;
-      console.log("[Push] Service worker reported a subscription rotation; repairing.");
-      reconcilePushSubscription().then((outcome) => {
-        console.log(`[Push] Rotation repair: ${outcome.reason}`);
-      });
-    };
-    navigator.serviceWorker.addEventListener("message", onMessage);
-    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
-  }, [user]);
+  // Notification landing and push self-healing. Same place in the effect order.
+  useNotificationEffects({ navigate, user });
 
   // --- Execution deep link (notification chains, Phase 1) -------------------
   //
@@ -650,12 +459,7 @@ export default function Alfred() {
     Boolean(routeIntentionId) &&
     !intents.some((i) => i.id === routeIntentionId);
 
-  // Reminders are also created by Claude, outside this app, so a list view re-reads them.
-  useEffect(() => {
-    if (dataLoaded && (view === "inbox" || view === "intentions" || view === "memories")) {
-      refreshReminderIndex();
-    }
-  }, [dataLoaded, view, refreshReminderIndex]);
+  useReminderListRefresh({ dataLoaded, view, refreshReminderIndex });
 
   // --- Cold-load redirects (Step 9, docs/technical-spec-navigation-urls.md) --
   //
@@ -773,74 +577,67 @@ export default function Alfred() {
     // a history entry the Back button can return the user to.
   }, [currentPath, detailStateMissing, addTargetMissing, inboxDetailMissing, intentionDetailMissing, archivedInboxTarget, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // --- List sort preferences (Step 9b) --------------------------------------
-  //
-  // One key per page, each persisting independently — changing the Inbox order
-  // must not reorder Schedule. Called unconditionally at the top level: Alfred
-  // renders every screen from one component, so these are not conditional even
-  // though only one list is on screen at a time.
-  //
-  // Home's is named for the page but governs its **Today tab only**. Active and
-  // Paused render ExecutionBadge, are ordered by `started_at` descending from
-  // the database, and have none of these fields; the control is rendered inside
-  // the Today panel rather than above the tab bar so it cannot imply otherwise.
-  // Same reasoning that excluded those two tabs from the row strips in Step 8a.
-  const homeSort = useSortPreference("alfred.sort.home", EVENT_SORT_OPTIONS, "time");
-  const scheduleSort = useSortPreference("alfred.sort.schedule", EVENT_SORT_OPTIONS, "time");
-  const inboxSort = useSortPreference("alfred.sort.inbox", INBOX_SORT_OPTIONS, "created");
-  const contextsSort = useSortPreference("alfred.sort.contexts", NAMED_RECORD_SORT_OPTIONS, "title");
-  const collectionsSort = useSortPreference("alfred.sort.collections", NAMED_RECORD_SORT_OPTIONS, "title");
-  // Step 12.8. Own keys, independent of the other five — changing the Intentions
-  // order must not reorder Memories.
-  //
-  // Both default to "Last modified, newest first". For Intentions that is Alex's
-  // call. For Memories it is a judgement: it is a list of ITEMS, and the only
-  // other list of items in the app — Context detail's Items — has always been
-  // ordered that way. 12.3 also established that a newly touched record is
-  // expected at the top, which is the same instinct. Name was the alternative,
-  // for consistency with Contexts and Collections, which share this option set;
-  // it lost because those two are things you look up and this is a holding pen
-  // for what has not been filed yet.
-  const intentionsSort = useSortPreference("alfred.sort.intentions", INTENTION_SORT_OPTIONS, "updated");
-  const memoriesSort = useSortPreference("alfred.sort.memories", NAMED_RECORD_SORT_OPTIONS, "updated");
-  // Context detail: ONE control for all three of its lists. Items and
-  // Intentions offer identical choices — only what "Name" reads differs — so a
-  // single row drives Items, Intentions and Collections alike. The default is
-  // the order Items always had here; Intentions and Collections had none.
-  const contextDetailSort = useSortPreference("alfred.sort.context-detail", NAMED_RECORD_SORT_OPTIONS, "updated");
-
-  // Per-page search text, keyed by page. In memory only, unlike the sort
-  // preference: it survives opening a record and pressing Back — the text is
-  // still visible in the box, so nothing is filtered invisibly — and a reload
-  // clears it.
-  const [listSearch, setListSearch] = useState({});
-  const searchFor = (page) => listSearch[page] || "";
-  const setSearchFor = (page) => (value) => {
-    setListSearch((prev) => ({ ...prev, [page]: value }));
-    // Typing collapses that page's tag bar, so the results are visible while
-    // you type — the whole point of the change. The rule itself lives in
-    // TagFilter.jsx so the tests can import it rather than reproduce it; it is
-    // the one that knows an empty value must change nothing.
-    setListTagsCollapsed((prev) => collapseOnSearch(prev, page, value));
-  };
-
-  // Which pages have their tag bar collapsed. A sibling of `listSearch` in every
-  // respect — same keys, same top-level owner, same lifetime: it survives
-  // opening a record and pressing Back, and a reload clears it. Absent means
-  // EXPANDED, so `{}` is the state a fresh load starts in.
-  //
-  // Matches search rather than sort on purpose. A collapsed tag bar is a fact
-  // about the sitting you are in, like the text in the box above it — not a
-  // preference about how you like Alfred to look, which is what the localStorage
-  // sort keys are for. `/contexts/detail` also carries no context id in its URL,
-  // so a reload does not land you back on the page anyway.
-  //
-  // `collection-detail` is a key here but NOT in `listSearch`: that view has no
-  // search box, so its bar only ever collapses by hand.
-  const [listTagsCollapsed, setListTagsCollapsed] = useState({});
-  const tagsCollapsedFor = (page) => !!listTagsCollapsed[page];
-  const toggleTagsFor = (page) => () =>
-    setListTagsCollapsed((prev) => ({ ...prev, [page]: !prev[page] }));
+  // Sort, search and tag-bar state per list page. Same place in the effect order.
+  const {
+    homeSort,
+    scheduleSort,
+    inboxSort,
+    contextsSort,
+    collectionsSort,
+    intentionsSort,
+    memoriesSort,
+    contextDetailSort,
+    searchFor,
+    setSearchFor,
+    tagsCollapsedFor,
+    toggleTagsFor,
+  } = useListPreferences();
+  // Detail-page openers, add-page helpers and Back handlers. No effects.
+  const {
+    viewContextDetail,
+    viewIntentionDetail,
+    handleBackFromIntentionDetail,
+    viewItemDetail,
+    editItemFromExecution,
+    openAddPage,
+    closeAddPage,
+    saveNewItemFromAddPage,
+    saveNewIntentionFromAddPage,
+    handleBackFromItemDetail,
+    openExecution,
+  } = useDetailNavigation({
+    view,
+    setView,
+    navigate,
+    location,
+    currentPath,
+    goToExecution,
+    selectedContextId,
+    setSelectedContextId,
+    setSelectedIntentionId,
+    intentionReturnView,
+    setIntentionReturnView,
+    selectedItemId,
+    setSelectedItemId,
+    itemHistoryStack,
+    setItemHistoryStack,
+    previousView,
+    setPreviousView,
+    executionEditReturn,
+    setExecutionEditReturn,
+    unsavedChangesRef,
+    unsavedChangesLabelRef,
+    confirmDiscardIfDirty,
+    setSearchFor,
+    setFilterTag,
+    activeExecution,
+    setActiveExecution,
+    addTargetContext,
+    addTargetItem,
+    handleAddItemToContext,
+    handleAddIntentionToContext,
+    moveToPlanner,
+  });
 
   // --- Undo (Step 2, docs/technical-spec-ui-standardization.md) -------------
   //
@@ -859,58 +656,6 @@ export default function Alfred() {
     offerUndo(message, () => withLoading("Restoring...", restore));
   }
 
-  // Unsaved changes guard
-  const unsavedChangesRef = useRef(false);
-  const unsavedChangesLabelRef = useRef("");
-
-  function setUnsavedChanges(dirty, label = "") {
-    unsavedChangesRef.current = dirty;
-    unsavedChangesLabelRef.current = label;
-  }
-
-  // The single unsaved-changes guard (Step 5, docs/technical-spec-navigation-urls.md).
-  //
-  // This block used to be written out four times: here, plus hand-inlined
-  // copies in the Sam tab, the Timer tab, and the mobile drawer. Those three
-  // could not call `guardedSetView` because each needs to run its own side
-  // effects (setPreviousView, setMenuOpen) *after* the confirm passes but
-  // *before* navigating — so the reusable part is the question, not the
-  // navigation.
-  //
-  // Returns true if it is safe to navigate. Clears the dirty flag as a side
-  // effect when the user chooses to discard, exactly as the inline copies did.
-  function confirmDiscardIfDirty() {
-    if (!unsavedChangesRef.current) return true;
-    const label = unsavedChangesLabelRef.current || "this form";
-    if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) {
-      return false;
-    }
-    unsavedChangesRef.current = false;
-    unsavedChangesLabelRef.current = "";
-    return true;
-  }
-
-  function guardedSetView(newView) {
-    if (!confirmDiscardIfDirty()) return;
-    setView(newView);
-  }
-
-  // The counter for one NAV_ITEMS entry — Step 12.11.
-  //
-  // Returns the NUMBER, not a formatted label, because the desktop tabs drop
-  // their text below xl and the count has to survive that. A tab reading just
-  // an inbox glyph tells you nothing about whether there is anything in it.
-  //
-  // Zero renders nothing rather than "0": an empty inbox is the goal, and the
-  // tab should look calm when you get there.
-  function navCount(item) {
-    const counts = {
-      inbox: inboxItems.length,
-      schedule: allNonArchivedEvents.length,
-    };
-    return item.count ? counts[item.count] || 0 : 0;
-  }
-
   useEffect(() => {
     function handleBeforeUnload(e) {
       if (unsavedChangesRef.current) {
@@ -920,6 +665,8 @@ export default function Alfred() {
     }
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+    // unsavedChangesRef is a ref from useAlfredNavigation: stable, as when it was local.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function withLoading(message, operation) {
@@ -1119,465 +866,23 @@ export default function Alfred() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingTagsItemId]);
 
-  // Keep the poll's guard current. Read from a ref, not state, because the
-  // interval callback below closes over the render that created it.
-  useEffect(() => {
-    pollPausedRef.current =
-      collDragIdx !== null ||
-      editingQuantityItemId !== null ||
-      // An open tag editor is the same hazard as an open quantity field: a
-      // five-second tick would replace `members` underneath the picker and
-      // throw away chips added since the last write.
-      editingTagsItemId !== null ||
-      isLoading;
-  }, [collDragIdx, editingQuantityItemId, editingTagsItemId, isLoading]);
-
-  /**
-   * Live refresh for the open collection: a five-second poll, the same cadence
-   * and shape as the execution view's. Deliberately a poll and not a realtime
-   * channel.
-   *
-   * Runs only while the collection detail view is open, and only for the
-   * collection being viewed — the interval is torn down on navigate away, so no
-   * other collection is ever polled.
-   *
-   * Membership and the manual-removal panel refresh; the full history does not.
-   * Seeing the other person's removal land in "Recently removed" is the point of
-   * that panel — without it an item would vanish from the list with no
-   * explanation and no way to put it back. The history view is a record rather
-   * than a live surface, costs a third query per tick, and reloads on entry
-   * anyway.
-   */
-  useEffect(() => {
-    if (view !== "collection-detail" || !selectedCollectionId) return;
-
-    const interval = setInterval(() => {
-      // Never land on top of an edit in progress. A skipped tick costs five
-      // seconds; overwriting a half-typed quantity or a drag mid-flight costs
-      // the user their work.
-      if (pollPausedRef.current || memberWriteInFlight.current > 0) return;
-      loadCollectionMembers([selectedCollectionId], { quiet: true });
-      loadCollectionRemovals(selectedCollectionId, { quiet: true });
-    }, 5000);
-
-    return () => clearInterval(interval);
-    // The loaders are recreated every render; depending on them would tear down
-    // and restart the interval continuously.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, selectedCollectionId]);
+  // The collection detail poll and its pause guard. Same place in the effect order.
+  useCollectionPoll({
+    view,
+    selectedCollectionId,
+    pollPausedRef,
+    memberWriteInFlight,
+    collDragIdx,
+    editingQuantityItemId,
+    editingTagsItemId,
+    isLoading,
+    loadCollectionMembers,
+    loadCollectionRemovals,
+  });
 
   async function handleSignOut() {
     await supabase.auth.signOut();
     setUser(null);
-  }
-
-  async function loadData() {
-    return withLoading('Loading your data...', async () => {
-      const [
-        { data: contextsData },
-        { data: itemsData },
-        { data: intentsData },
-        { data: eventsData },
-        { data: inboxData },
-        { data: collectionsData },
-        { data: activeExecData },
-        { data: pausedExecData },
-      ] = await Promise.all([
-        supabase.from("contexts").select("*"),
-        supabase.from("items").select("*"),
-        supabase.from("intents").select("*"),
-        supabase.from("events").select("*"),
-        supabase.from("inbox").select("*"),
-        supabase.from("item_collections").select("*"),
-        supabase.from("executions").select("*").eq("status", "active").order("started_at", { ascending: false }),
-        supabase.from("executions").select("*").eq("status", "paused").order("started_at", { ascending: false }),
-      ]);
-
-      setContexts((contextsData || []).map(d => storage.toCamelCase(d)));
-      setItems((itemsData || []).map(d => storage.toCamelCase(d)));
-      setIntents((intentsData || []).map(d => storage.toCamelCase(d)));
-      setEvents((eventsData || []).map(d => storage.toCamelCase(d)));
-      // ARCHIVED ROWS ARE KEPT — Step 22. The filter that used to drop them here has
-      // moved into the `inboxItems` derivation, so the live inbox is unchanged and
-      // "Recently archived" has something to read. The query never filtered them out
-      // anyway; this only stops throwing away rows already on the wire.
-      // (A guard in utils/inboxArchive.test.js fails if that filter comes back.)
-      setAllInboxItems(
-        (inboxData || [])
-          .map(d => storage.toCamelCase(d))
-          .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
-      );
-      setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
-      await loadCollectionMembers((collectionsData || []).map(d => d.id));
-      setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
-      setPausedExecutions((pausedExecData || []).map(d => storage.toCamelCase(d)));
-
-      // Sync activeExecution if one is currently being viewed
-      setActiveExecution(prev => {
-        if (!prev) return prev;
-        const allRefreshed = [
-          ...(activeExecData || []).map(d => storage.toCamelCase(d)),
-          ...(pausedExecData || []).map(d => storage.toCamelCase(d)),
-        ];
-        const refreshed = allRefreshed.find(e => e.id === prev.id);
-        return refreshed || prev;
-      });
-    });
-  }
-
-  async function refreshData() {
-    try {
-      console.log('[Refresh] Silent background refresh...');
-      const [
-        { data: contextsData },
-        { data: itemsData },
-        { data: intentsData },
-        { data: eventsData },
-        { data: inboxData },
-        { data: collectionsData },
-        { data: activeExecData },
-        { data: pausedExecData },
-      ] = await Promise.all([
-        supabase.from("contexts").select("*"),
-        supabase.from("items").select("*"),
-        supabase.from("intents").select("*"),
-        supabase.from("events").select("*"),
-        supabase.from("inbox").select("*"),
-        supabase.from("item_collections").select("*"),
-        supabase.from("executions").select("*").eq("status", "active").order("started_at", { ascending: false }),
-        supabase.from("executions").select("*").eq("status", "paused").order("started_at", { ascending: false }),
-      ]);
-
-      setContexts((contextsData || []).map(d => storage.toCamelCase(d)));
-      setItems((itemsData || []).map(d => storage.toCamelCase(d)));
-      setIntents((intentsData || []).map(d => storage.toCamelCase(d)));
-      setEvents((eventsData || []).map(d => storage.toCamelCase(d)));
-      // ARCHIVED ROWS ARE KEPT — Step 22. The filter that used to drop them here has
-      // moved into the `inboxItems` derivation, so the live inbox is unchanged and
-      // "Recently archived" has something to read. The query never filtered them out
-      // anyway; this only stops throwing away rows already on the wire.
-      // (A guard in utils/inboxArchive.test.js fails if that filter comes back.)
-      setAllInboxItems(
-        (inboxData || [])
-          .map(d => storage.toCamelCase(d))
-          .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
-      );
-      setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
-      await loadCollectionMembers((collectionsData || []).map(d => d.id));
-      setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
-      setPausedExecutions((pausedExecData || []).map(d => storage.toCamelCase(d)));
-
-      // Sync activeExecution if one is currently being viewed
-      setActiveExecution(prev => {
-        if (!prev) return prev;
-        const allRefreshed = [
-          ...(activeExecData || []).map(d => storage.toCamelCase(d)),
-          ...(pausedExecData || []).map(d => storage.toCamelCase(d)),
-        ];
-        const refreshed = allRefreshed.find(e => e.id === prev.id);
-        return refreshed || prev;
-      });
-
-      console.log('[Refresh] Done');
-    } catch (e) {
-      console.error('[Refresh] Failed:', e);
-    }
-  }
-
-  async function manualRefresh() {
-    return withLoading('Refreshing...', refreshData);
-  }
-
-  async function setupRealtimeSubscriptions(currentUser) {
-    if (!currentUser) return null;
-
-    console.log('[Realtime] Setting up subscriptions for user:', currentUser.id);
-    setRealtimeStatus('connecting');
-
-    // Use the recursive converter so JSONB columns (elements, tags, etc.) get camelCased too
-    const toCamelCase = (obj) => storage.toCamelCase(obj);
-
-    // Subscribe to inbox changes
-    const inboxChannel = supabase
-      .channel('inbox-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'inbox',
-          filter: `user_id=eq.${currentUser.id}`
-        },
-        (payload) => {
-          console.log('[Realtime] Inbox change:', payload.eventType, payload);
-          handleInboxChange(payload, toCamelCase);
-        }
-      )
-      .subscribe((status) => {
-        console.log('[Realtime] Inbox subscription status:', status);
-        if (status === 'SUBSCRIBED') {
-          setRealtimeStatus('connected');
-        }
-      });
-
-    // Subscribe to contexts changes
-    const contextsChannel = supabase
-      .channel('contexts-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'contexts'
-        },
-        (payload) => {
-          console.log('[Realtime] Context change:', payload.eventType);
-          handleContextChange(payload, toCamelCase);
-        }
-      )
-      .subscribe();
-
-    // Subscribe to items changes
-    const itemsChannel = supabase
-      .channel('items-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'items'
-        },
-        (payload) => {
-          console.log('[Realtime] Item change:', payload.eventType);
-          handleItemChange(payload, toCamelCase);
-        }
-      )
-      .subscribe();
-
-    // Subscribe to intents changes
-    const intentsChannel = supabase
-      .channel('intents-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'intents'
-        },
-        (payload) => {
-          console.log('[Realtime] Intent change:', payload.eventType);
-          handleIntentChange(payload, toCamelCase);
-        }
-      )
-      .subscribe();
-
-    // Subscribe to events changes
-    const eventsChannel = supabase
-      .channel('events-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'events'
-        },
-        (payload) => {
-          console.log('[Realtime] Event change:', payload.eventType);
-          handleEventChange(payload, toCamelCase);
-        }
-      )
-      .subscribe();
-
-    // Subscribe to executions changes
-    const executionsChannel = supabase
-      .channel('executions-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'executions'
-        },
-        (payload) => {
-          console.log('[Realtime] Execution change:', payload.eventType);
-          handleExecutionChange(payload, toCamelCase);
-        }
-      )
-      .subscribe();
-
-    // Return cleanup function
-    return () => {
-      console.log('[Realtime] Unsubscribing all channels');
-      setRealtimeStatus('disconnected');
-      inboxChannel.unsubscribe();
-      contextsChannel.unsubscribe();
-      itemsChannel.unsubscribe();
-      intentsChannel.unsubscribe();
-      eventsChannel.unsubscribe();
-      executionsChannel.unsubscribe();
-    };
-  }
-
-  /**
-   * Keep `allInboxItems` in step with the table, live.
-   *
-   * ── This handler got SMALLER in Step 22, and that is the news ────────────────
-   *
-   * It used to know about `archived`: it dropped archived rows on INSERT, removed them
-   * from the list on UPDATE, and put un-archived ones back — because the list it
-   * maintained was the LIVE inbox and the loaders filtered the same way. Three copies of
-   * one rule, in two loaders and here, which had to be changed together or the screen
-   * disagreed with itself depending on when you last refreshed.
-   *
-   * Now the state is the whole table and `inboxItems` is derived from it, so this handler
-   * mirrors the table and holds no opinion at all: a row arrives, a row changes, a row
-   * goes. An archive is an ordinary UPDATE and both views follow from it — which is also
-   * how the archived section became live for free.
-   *
-   * The one thing it still owns is the ORDER, `createdAt` ascending, matching both
-   * loaders. Do not "add to top": the live inbox is a queue worked from the front, and
-   * the sort is what enforces that rather than array order. ("Recently archived" sorts
-   * itself, the other way round, in `recentlyArchived`.)
-   */
-  function handleInboxChange(payload, toCamelCase) {
-    const { eventType, new: newRecord, old: oldRecord } = payload;
-
-    const upsertSorted = (prev, record) =>
-      [...prev.filter(item => item.id !== record.id), record]
-        .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
-
-    if (eventType === 'INSERT') {
-      const record = toCamelCase(newRecord);
-      setAllInboxItems(prev => (
-        prev.find(item => item.id === record.id) ? prev : upsertSorted(prev, record)
-      ));
-    } else if (eventType === 'UPDATE') {
-      // Upsert rather than map: a row can arrive here without ever having been in `prev`
-      // (another device captured and enriched it between refreshes), and a plain `map`
-      // would silently do nothing.
-      setAllInboxItems(prev => upsertSorted(prev, toCamelCase(newRecord)));
-    } else if (eventType === 'DELETE') {
-      setAllInboxItems(prev =>
-        prev.filter(item => item.id !== oldRecord.id)
-      );
-    }
-  }
-
-  function handleContextChange(payload, toCamelCase) {
-    const { eventType, new: newRecord, old: oldRecord } = payload;
-
-    if (eventType === 'INSERT') {
-      const record = toCamelCase(newRecord);
-      setContexts(prev => {
-        if (prev.find(ctx => ctx.id === record.id)) return prev;
-        return [...prev, record];
-      });
-    } else if (eventType === 'UPDATE') {
-      const record = toCamelCase(newRecord);
-      setContexts(prev =>
-        prev.map(ctx => ctx.id === record.id ? record : ctx)
-      );
-    } else if (eventType === 'DELETE') {
-      setContexts(prev =>
-        prev.filter(ctx => ctx.id !== oldRecord.id)
-      );
-    }
-  }
-
-  function handleItemChange(payload, toCamelCase) {
-    const { eventType, new: newRecord, old: oldRecord } = payload;
-
-    if (eventType === 'INSERT') {
-      const record = toCamelCase(newRecord);
-      setItems(prev => {
-        if (prev.find(item => item.id === record.id)) return prev;
-        return [...prev, record];
-      });
-    } else if (eventType === 'UPDATE') {
-      const record = toCamelCase(newRecord);
-      setItems(prev =>
-        prev.map(item => item.id === record.id ? record : item)
-      );
-    } else if (eventType === 'DELETE') {
-      setItems(prev =>
-        prev.filter(item => item.id !== oldRecord.id)
-      );
-    }
-  }
-
-  function handleIntentChange(payload, toCamelCase) {
-    const { eventType, new: newRecord, old: oldRecord } = payload;
-
-    if (eventType === 'INSERT') {
-      const record = toCamelCase(newRecord);
-      setIntents(prev => {
-        if (prev.find(intent => intent.id === record.id)) return prev;
-        return [...prev, record];
-      });
-    } else if (eventType === 'UPDATE') {
-      const record = toCamelCase(newRecord);
-      setIntents(prev =>
-        prev.map(intent => intent.id === record.id ? record : intent)
-      );
-    } else if (eventType === 'DELETE') {
-      setIntents(prev =>
-        prev.filter(intent => intent.id !== oldRecord.id)
-      );
-    }
-  }
-
-  function handleEventChange(payload, toCamelCase) {
-    const { eventType, new: newRecord, old: oldRecord } = payload;
-
-    if (eventType === 'INSERT') {
-      const record = toCamelCase(newRecord);
-      setEvents(prev => {
-        if (prev.find(event => event.id === record.id)) return prev;
-        return [...prev, record];
-      });
-    } else if (eventType === 'UPDATE') {
-      const record = toCamelCase(newRecord);
-      setEvents(prev =>
-        prev.map(event => event.id === record.id ? record : event)
-      );
-    } else if (eventType === 'DELETE') {
-      setEvents(prev =>
-        prev.filter(event => event.id !== oldRecord.id)
-      );
-    }
-  }
-
-  function handleExecutionChange(payload, toCamelCase) {
-    const { eventType, new: newRecord, old: oldRecord } = payload;
-
-    if (eventType === 'INSERT') {
-      const record = toCamelCase(newRecord);
-      if (record.status === 'active') {
-        setActiveExecutions(prev => {
-          if (prev.find(exec => exec.id === record.id)) return prev;
-          return [...prev, record];
-        });
-      } else if (record.status === 'paused') {
-        setPausedExecutions(prev => {
-          if (prev.find(exec => exec.id === record.id)) return prev;
-          return [...prev, record];
-        });
-      }
-    } else if (eventType === 'UPDATE') {
-      const record = toCamelCase(newRecord);
-      // Remove from both lists first
-      setActiveExecutions(prev => prev.filter(exec => exec.id !== record.id));
-      setPausedExecutions(prev => prev.filter(exec => exec.id !== record.id));
-      // Add to appropriate list based on status
-      if (record.status === 'active') {
-        setActiveExecutions(prev => [...prev, record]);
-      } else if (record.status === 'paused') {
-        setPausedExecutions(prev => [...prev, record]);
-      }
-    } else if (eventType === 'DELETE') {
-      setActiveExecutions(prev => prev.filter(exec => exec.id !== oldRecord.id));
-      setPausedExecutions(prev => prev.filter(exec => exec.id !== oldRecord.id));
-    }
   }
 
   function getIntentDisplay(intent) {
@@ -1587,206 +892,6 @@ export default function Alfred() {
       return item?.name || "Untitled";
     }
     return intent.text || "Untitled";
-  }
-
-  function viewContextDetail(contextId) {
-    // A different context starts with an empty search AND no tag filter. Coming
-    // back to the same one — Back from a record opened on it — does not come
-    // through here.
-    //
-    // The tag clear is belt and braces: reaching a context from anywhere but
-    // another context already passes the `nextView !== view` test in setView.
-    // This is the one route that does not — context to context, where the view
-    // name never changes but the vocabulary underneath it does, which is
-    // precisely the case the search clear beside it was added for.
-    if (contextId !== selectedContextId) {
-      setSearchFor("context-detail")("");
-      setFilterTag(null);
-    }
-    setPreviousView(view);
-    setSelectedContextId(contextId);
-    setView("context-detail");
-  }
-
-  function viewIntentionDetail(intentionId, fromView) {
-    setSelectedIntentionId(intentionId);
-    setIntentionReturnView(fromView || view);
-    setView("intention-detail");
-  }
-
-  function handleBackFromIntentionDetail() {
-    if (unsavedChangesRef.current) {
-      const label = unsavedChangesLabelRef.current || "this form";
-      if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) return;
-      unsavedChangesRef.current = false;
-      unsavedChangesLabelRef.current = "";
-    }
-    setSelectedIntentionId(null);
-    setView(intentionReturnView);
-  }
-
-  function viewItemDetail(itemId, fromView) {
-    // If already on item-detail, push current item onto stack
-    if (view === "item-detail" && selectedItemId) {
-      setItemHistoryStack((prev) => [...prev, selectedItemId]);
-    } else {
-      setPreviousView(fromView || view);
-      setItemHistoryStack([]);
-      // A fresh visit from anywhere else drops any stale return address, so a
-      // later Back off this item cannot bounce into an execution the user was
-      // not in. `editItemFromExecution` writes the slot after calling this.
-      setExecutionEditReturn(null);
-    }
-    setSelectedItemId(itemId);
-    setView("item-detail");
-  }
-
-  // Step 12.2. The link on the execution screen: open the underlying item
-  // already in edit mode, skipping the extra tap on "Edit Item".
-  //
-  // Order matters — `viewItemDetail` clears this slot when it starts a fresh
-  // visit, so the slot is written after it. Both land in one batch, so the
-  // render that mounts ItemDetailView already sees it.
-  function editItemFromExecution(itemId) {
-    const executionId = activeExecution?.id;
-    if (!executionId || !itemId) return;
-    viewItemDetail(itemId, "execution-detail");
-    setExecutionEditReturn({ executionId, itemId });
-  }
-
-  // --- Add pages: open, leave, save (Step 12.6) -----------------------------
-  //
-  // NO return-address slot. The routing thread asked for exactly this: "if a new
-  // screen needs a return address after slice 2 lands, it should use
-  // `navigate(-1)`". These are new screens, so they use it now rather than
-  // adding a fifth thing for slice 3 to unpick.
-  //
-  // `state.fromApp` is the one piece of bookkeeping, and it exists because
-  // `navigate(-1)` steps OUT of the app when there is nothing to go back to —
-  // the caveat the routing thread recorded for cold-loaded deep links and
-  // middle-clicked tabs. An add page reached from inside Alfred carries the flag
-  // and goes back; one reached by pasting a URL has no flag and goes to the
-  // parent list instead. Router state, not app state: it lives on the history
-  // entry, so it cannot go stale and there is nothing to clear.
-  function openAddPage(view, target = null) {
-    if (!confirmDiscardIfDirty()) return;
-    navigate(addPath(view, target), { state: { fromApp: true } });
-  }
-
-  // Leave without asking. Used after a save, where the card has already cleared
-  // the dirty flag — asking again would prompt about changes that were just
-  // committed.
-  //
-  // Two paths, and the second one is cold-load only.
-  //
-  // IN-APP: `navigate(-1)`, which returns to the actual previous history entry
-  // with its scroll position. Unchanged.
-  //
-  // COLD LOAD: there is no history to pop, so the destination is reconstructed —
-  // and **the address already says where the link conceptually came from**. A
-  // pasted `/intentions/new/context/:id` almost certainly arrived from someone
-  // pointing at that context, so Back goes to the CONTEXT, not to the Intentions
-  // list. Only the bare form, which names no target, falls back to the record
-  // type's list.
-  //
-  // Deliberately NOT via `viewContextDetail` / `viewItemDetail`: both write
-  // `previousView`, and from here they would write "intention-add" — so Back off
-  // the context would try to return to a form the user has just left. Setting the
-  // id and navigating directly avoids that, and avoids adding a `setPreviousView`
-  // writer the routing thread has asked us not to add. The consequence is that
-  // `previousView` keeps its cold-load default of "home", so Back off the target
-  // page goes Home. That is correct for a session that started on a pasted link:
-  // there is genuinely nowhere else it came from.
-  //
-  // `replace` throughout: the add page is being LEFT, not navigated from, so it
-  // should not sit in history as somewhere Back returns to — it would render an
-  // empty form, the draft having already been discarded or saved.
-  function leaveAddPage() {
-    if (location.state?.fromApp) {
-      navigate(-1);
-      return;
-    }
-
-    if (addTargetContext) {
-      setSelectedContextId(addTargetContext.id);
-      navigate(viewToPath("context-detail"), { replace: true });
-      return;
-    }
-
-    if (addTargetItem) {
-      setSelectedItemId(addTargetItem.id);
-      navigate(viewToPath("item-detail"), { replace: true });
-      return;
-    }
-
-    navigate(parentPath(currentPath), { replace: true });
-  }
-
-  function closeAddPage() {
-    if (!confirmDiscardIfDirty()) return;
-    leaveAddPage();
-  }
-
-  async function saveNewItemFromAddPage(_itemId, updates) {
-    await handleAddItemToContext(
-      updates.name,
-      updates.elements,
-      updates.contextId || null,
-      updates.description,
-      updates.isCaptureTarget,
-    );
-    leaveAddPage();
-  }
-
-  async function saveNewIntentionFromAddPage(_intentId, updates, scheduledDate) {
-    const newIntentId = await handleAddIntentionToContext(
-      updates.text,
-      updates.contextId || null,
-      updates.itemId || null,
-      updates.collectionId || null,
-      updates.recurrenceConfig || null,
-    );
-    if (scheduledDate && newIntentId) {
-      await moveToPlanner(newIntentId, scheduledDate);
-    }
-    leaveAddPage();
-  }
-
-  function handleBackFromItemDetail() {
-    if (unsavedChangesRef.current) {
-      const label = unsavedChangesLabelRef.current || "this form";
-      if (!window.confirm(`You have unsaved changes to ${label}. Discard and navigate away?`)) return;
-      unsavedChangesRef.current = false;
-      unsavedChangesLabelRef.current = "";
-    }
-    if (itemHistoryStack.length > 0) {
-      // Pop back to previous item
-      const stack = [...itemHistoryStack];
-      const prevItemId = stack.pop();
-      setItemHistoryStack(stack);
-      setSelectedItemId(prevItemId);
-      return;
-    }
-
-    // Step 12.2 return trip. Checked against `selectedItemId` so that tapping
-    // through to other items and back only lands on the execution once the user
-    // is actually back on the item they left it for.
-    //
-    // `goToExecution`, NOT `setView("execution-detail")`. The view map is a
-    // bijection and `viewToPath("execution-detail")` is always the bare,
-    // ID-LESS "/schedule/execution" — so setView would render the right screen
-    // under an address that has silently lost the id, and a refresh from there
-    // redirects to /schedule. goToExecution puts the id back in the URL.
-    if (executionEditReturn && executionEditReturn.itemId === selectedItemId) {
-      const { executionId } = executionEditReturn;
-      setExecutionEditReturn(null);
-      setSelectedItemId(null);
-      goToExecution({ id: executionId });
-      return;
-    }
-
-    setSelectedItemId(null);
-    setView(previousView);
   }
 
   // Filter events to only show those with valid, non-archived intents
@@ -1855,12 +960,6 @@ export default function Alfred() {
   const activeCollections = collections.filter((c) => !c.archived);
   const pinnedCollections = activeCollections.filter((c) => c.pinned);
   const allLiveExecutions = [...activeExecutions, ...pausedExecutions];
-
-  function openExecution(exec) {
-    setPreviousView(view);
-    setActiveExecution(exec);
-    goToExecution(exec);
-  }
 
   // Intentions: Marked as intentions, not archived, no active event
   const intentionsWithoutActiveEvent = intents.filter((i) => {
@@ -1973,251 +1072,20 @@ export default function Alfred() {
     <div className="min-h-screen bg-background">
       {isLoading && <LoadingOverlay message={loadingMessage} />}
 
-      {/* Mobile header with hamburger */}
-      <header className="sm:hidden sticky top-0 z-10 bg-white border-b border-border shadow-sm">
-        <div className="px-3 py-3 flex items-center justify-between">
-          <button
-            onClick={() => setMenuOpen(!menuOpen)}
-            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-foreground"
-          >
-            <Menu className="w-6 h-6" />
-          </button>
-          {/* Was a raw <a href="/">, so a plain click did a full page reload and
-              never reached confirmDiscardIfDirty. AppLink keeps the same href
-              and the same middle-click behaviour, and routes the plain click
-              through the guard like the nav tabs. */}
-          <AppLink
-            view="home"
-            onNavigate={() => guardedSetView("home")}
-            className="text-lg font-bold text-foreground hover:text-foreground"
-          >
-            Alfred v5
-          </AppLink>
-          <div className="flex gap-1 items-center">
-            <button
-              onClick={manualRefresh}
-              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
-              title="Refresh data"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-            {/* Connection status indicator */}
-            <div
-              className="flex items-center gap-1"
-              title={realtimeStatus === 'connected' ? 'Connected' : realtimeStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
-            >
-              {realtimeStatus === 'connected' ? (
-                <Wifi className="w-4 h-4 text-success" />
-              ) : realtimeStatus === 'connecting' ? (
-                <Wifi className="w-4 h-4 text-warning animate-pulse" />
-              ) : (
-                <WifiOff className="w-4 h-4 text-muted-foreground" />
-              )}
-            </div>
-            <button
-              onClick={() => guardedSetView("settings")}
-              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
-              title="Settings"
-            >
-              <Settings className="w-5 h-5" />
-            </button>
-            <button
-              onClick={() => guardedSetView("recycle")}
-              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
-              title="Recycle Bin"
-            >
-              <Trash2 className="w-5 h-5" />
-            </button>
-            <button
-              onClick={handleSignOut}
-              className="text-sm px-3 py-1 text-muted-foreground hover:text-destructive transition-colors"
-              title="Sign out"
-            >
-              Sign out
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Mobile slide-out menu */}
-      {menuOpen && (
-        <>
-          <div
-            className="sm:hidden fixed inset-0 bg-black bg-opacity-50 z-30"
-            onClick={() => setMenuOpen(false)}
-          />
-          <nav className="sm:hidden fixed top-0 left-0 bottom-0 w-64 bg-white shadow-xl z-40">
-            <div className="p-4 border-b border-border">
-              <div className="flex items-center justify-between">
-                <h2 className="font-bold text-foreground">Menu</h2>
-                <button
-                  onClick={() => setMenuOpen(false)}
-                  className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-            <div className="p-2">
-              {NAV_ITEMS.map((item) => (
-                <button
-                  key={item.key}
-                  onClick={() => {
-                    if (!confirmDiscardIfDirty()) return;
-                    if (item.remembersReturn) setPreviousView(view);
-                    setView(item.key);
-                    setMenuOpen(false);
-                  }}
-                  className={`w-full text-left px-4 py-3 rounded-lg mb-1 ${
-                    view === item.key
-                      ? "bg-primary-light text-foreground font-medium"
-                      : "text-foreground hover:bg-secondary/50"
-                  }`}
-                >
-                  <span className="flex items-center gap-2">
-                    <ObjectIcon type={item.icon} />
-                    {item.label}
-                    {navCount(item) > 0 && (
-                      <span className="text-xs tabular-nums opacity-75">
-                        {navCount(item)}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </nav>
-        </>
-      )}
-
-      {/* Desktop header with tabs */}
-      <div className="hidden sm:block sticky top-0 z-10 bg-white border-b border-border shadow-sm">
-        <div className="max-w-4xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              {/* See the mobile logo above — same reason. */}
-              <AppLink
-                view="home"
-                onNavigate={() => guardedSetView("home")}
-                className="text-2xl font-bold text-foreground hover:text-foreground"
-              >
-                Alfred v5
-              </AppLink>
-              <p className="text-sm text-muted-foreground mt-1">
-                Capture decisions. Hold intent. Execute with focus.
-              </p>
-            </div>
-            <div className="flex gap-2 items-center">
-              <button
-                onClick={manualRefresh}
-                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
-                title="Refresh data"
-              >
-                <RefreshCw className="w-4 h-4" />
-              </button>
-              {/* Connection status indicator */}
-              <div
-                className="flex items-center gap-1"
-                title={realtimeStatus === 'connected' ? 'Connected' : realtimeStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
-              >
-                {realtimeStatus === 'connected' ? (
-                  <Wifi className="w-4 h-4 text-success" />
-                ) : realtimeStatus === 'connecting' ? (
-                  <Wifi className="w-4 h-4 text-warning animate-pulse" />
-                ) : (
-                  <WifiOff className="w-4 h-4 text-muted-foreground" />
-                )}
-              </div>
-              <button
-                onClick={() => guardedSetView("settings")}
-                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
-                title="Settings"
-              >
-                <Settings className="w-5 h-5" />
-              </button>
-              <button
-                onClick={() => guardedSetView("recycle")}
-                className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
-                title="Recycle Bin"
-              >
-                <Trash2 className="w-5 h-5" />
-              </button>
-              <button
-                onClick={handleSignOut}
-                className="text-sm px-3 py-1 text-muted-foreground hover:text-destructive transition-colors"
-                title="Sign out"
-              >
-                Sign out
-              </button>
-            </div>
-          </div>
-
-          {/* Desktop navigation tabs — Step 12.10.
-
-              Was ten hand-written AppLinks, each repeating the same class
-              string and its own copy of the active-state ternary. They are now
-              one map over NAV_ITEMS, which is the same array the mobile drawer
-              renders.
-
-              The icons are the reason for the merge, not a side effect of it:
-              adding a glyph to each of two independent lists is precisely how
-              the drawer's icons drifted from everything else in the first
-              place. One array, one vocabulary, no way to update half of it. */}
-          {/* Step 12.11. This bar has to hold ten destinations from 640px —
-              where the mobile drawer stops — up to a wide desktop, and every
-              one of them has to stay ONE tap away. That rules out an overflow
-              menu: burying Sam behind a chevron is the one outcome worth
-              avoiding.
-
-              So the tabs compact instead of collapsing, in three tiers:
-
-                640–1023   icon only, ~44px each — all ten fit in ~480px
-                1024–1279  icon + label, tighter padding and text-sm
-                1280+      icon + label, full padding
-
-              `flex-wrap` is the safety net under all three. If a label ever
-              runs longer than the arithmetic above assumes, the bar takes a
-              second row rather than clipping Games off the end — a wrapped tab
-              is still one tap, a clipped one is unreachable.
-
-              The count survives the label: an inbox glyph on its own says
-              nothing about whether there is anything in it, so the number
-              renders separately and stays at every width. */}
-          <nav className="flex flex-wrap gap-2 mt-3 pb-1">
-            {NAV_ITEMS.map((item) => {
-              const count = navCount(item);
-              return (
-                <AppLink
-                  key={item.key}
-                  view={item.key}
-                  onNavigate={() => {
-                    if (!confirmDiscardIfDirty()) return;
-                    if (item.remembersReturn) setPreviousView(view);
-                    setView(item.key);
-                  }}
-                  // The label is hidden at narrow widths, not removed, so the
-                  // accessible name has to come from somewhere that survives.
-                  title={item.label}
-                  aria-label={item.label}
-                  className={`inline-flex items-center justify-center gap-2 px-3 xl:px-4 py-2 rounded whitespace-nowrap min-h-[44px] min-w-[44px] text-sm xl:text-base ${
-                    view === item.key
-                      ? "bg-primary text-white shadow-sm"
-                      : "bg-white text-foreground border border-border hover:border-primary"
-                  }`}
-                >
-                  <ObjectIcon type={item.icon} />
-                  <span className="hidden lg:inline">{item.label}</span>
-                  {count > 0 && (
-                    <span className="text-xs tabular-nums opacity-75">
-                      {count}
-                    </span>
-                  )}
-                </AppLink>
-              );
-            })}
-          </nav>
-        </div>
-      </div>
+      <AppChrome
+        view={view}
+        setView={setView}
+        setPreviousView={setPreviousView}
+        guardedSetView={guardedSetView}
+        confirmDiscardIfDirty={confirmDiscardIfDirty}
+        menuOpen={menuOpen}
+        setMenuOpen={setMenuOpen}
+        manualRefresh={manualRefresh}
+        realtimeStatus={realtimeStatus}
+        handleSignOut={handleSignOut}
+        inboxItems={inboxItems}
+        allNonArchivedEvents={allNonArchivedEvents}
+      />
 
       {/* Main content */}
       <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 pb-28 sm:pb-32">
@@ -2711,22 +1579,7 @@ export default function Alfred() {
         {view === "games" && <GamesPage />}
 
         {/* Settings View */}
-        {view === "settings" && (
-          <div>
-            <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Settings</h2>
-            <NotificationSettings />
-            <NotificationDiagnostics />
-            <div className="mt-4 p-4 sm:p-6 bg-card border border-border rounded-lg">
-              <p className="text-muted-foreground">More settings coming soon...</p>
-            </div>
-            {process.env.REACT_APP_BUILD_TIMESTAMP && (
-              <div className="mt-6 text-xs text-muted-foreground/60">
-                <p>Last deployed: {new Date(process.env.REACT_APP_BUILD_TIMESTAMP).toLocaleString()}</p>
-                <p>Commit: {(process.env.REACT_APP_COMMIT_SHA || 'local').slice(0, 7)}</p>
-              </div>
-            )}
-          </div>
-        )}
+        {view === "settings" && <SettingsScreen />}
 
         {/* Recycle Bin View */}
         {view === "recycle" && (
@@ -2739,50 +1592,15 @@ export default function Alfred() {
           above the bar by document order instead of by a hard-coded offset —
           the bar's height changes as its textarea grows, and any offset would
           be wrong the moment somebody types a long capture. */}
-      <div className="fixed bottom-0 left-0 right-0 z-20">
-        <UndoMessage
-          pendingUndo={pendingUndo}
-          onUndo={runUndo}
-          onDismiss={dismissUndo}
-        />
-
-        {/* Capture bar */}
-        <div className="bg-white border-t border-border shadow-lg">
-          <div className="max-w-4xl mx-auto px-3 sm:px-4 py-2 sm:py-4">
-            <div className="flex gap-2 items-end">
-              <textarea
-                ref={captureRef}
-                value={captureText}
-                onChange={(e) => {
-                  setCaptureText(e.target.value);
-                  e.target.style.height = "auto";
-                  e.target.style.height = Math.min(e.target.scrollHeight, window.innerHeight * 0.5) + "px";
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleCapture();
-                  }
-                }}
-                placeholder="Capture anything..."
-                rows={1}
-                className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none overflow-hidden min-h-[44px] max-h-[50vh] text-base"
-              />
-              {/* The icon matches the Capture SOURCE tab in the inbox — Step 21b, and
-                  the glyph changed in 21c. This button is what creates a 'manual'
-                  capture, so the two must stay recognisably the same thing; if one moves,
-                  both move. See SOURCE_GLYPHS for why it is a paper aeroplane. */}
-              <button
-                onClick={handleCapture}
-                className="inline-flex items-center gap-2 px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-              >
-                <Send className="w-4 h-4 shrink-0" aria-hidden="true" />
-                Capture
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+      <BottomDock
+        pendingUndo={pendingUndo}
+        runUndo={runUndo}
+        dismissUndo={dismissUndo}
+        captureRef={captureRef}
+        captureText={captureText}
+        setCaptureText={setCaptureText}
+        handleCapture={handleCapture}
+      />
     </div>
   );
 }
