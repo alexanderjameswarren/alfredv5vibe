@@ -1,11 +1,33 @@
 ---
 name: cli-workflow
-description: 'Runs both halves of the CLI loop for Alex''s personal projects. Use it to write CLI prompts (each starts with a "Run tag:" line and a "Window:" line) whenever he asks for CLI instructions or a code CLI prompt, or is ready to implement, in React or Python projects, including parallel work in worktrees (gitnewtree, gitcom, gitsync, gitpush, file and database claims). Also use it, more often, whenever CLI output comes back: when he sends just "cli", says the CLI responded in any wording (fetch the report from the Alfred clipboard with get_recent_clips by run tag or project code), pastes CLI output with or without comment, or asks only for a TLDR or to flag questions. Assume he has not read the CLI output. Use it whenever CLI work is involved, even if he does not ask for formatted instructions, and whenever he asks how to commit, sync, push, checkpoint or finish — every git instruction is a short table then a one-line command.'
+description: 'Runs both halves of the CLI loop for Alex''s personal projects. Use it to write CLI prompts (each starts with a "Run tag:" line and a "Window:" line) whenever he asks for CLI instructions or is ready to implement, in React or Python projects, including worktree work (gitnewtree, gitcom, gitsync, gitpush, file and database claims). Use it, more often, whenever CLI output comes back: he sends just "cli", says the CLI responded in any wording (fetch the report with get_recent_clips by run tag or project code), or pastes CLI output. Assume he has not read it. Use it whenever he asks how to commit, sync, push, checkpoint or finish — every git instruction is a short table then a one-line command. Every command, path, setting value and paste-in prompt in to-dos and testing goes in its own copy box, never inline.'
 ---
 
 # CLI Workflow
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
+
+## The copy-box rule (applies to every reply this skill produces)
+
+Alex copies with a mouse. Text inside a sentence, or inside backticks in a
+sentence, is hard to select cleanly. So **anything he has to type, paste, run,
+open, search for, or set goes in its own fenced code block**, one string per
+block, so each one gets its own copy button. That includes:
+
+- shell commands (PowerShell, bash, git, npm)
+- file and folder paths, including ones with `%APPDATA%` or `~`
+- setting lines and values he types into a file (for example a line like
+  `touchmode=main`)
+- text he pastes into a CLI session or a new Claude thread — including "ask it
+  to run X", which becomes a paste-ready block
+- SQL, URLs, environment variables, find-and-replace strings
+- recovery or undo commands ("if this goes wrong, run …")
+
+This holds in the to-dos, the testing steps, setup and manual prerequisites,
+answers to questions, and anywhere else. The prose around a block says what to
+do with it; the block holds only the literal text. Expected results go on a
+separate line after the block, never inside it. See Rule 3b and the
+before-sending check for the details.
 
 ## When to Use This Skill
 
@@ -539,19 +561,44 @@ left open that needs a decision. Each one gets: the question restated in full,
 what is actually being asked, the recommendation, and one line of why.
 
 **3. Your to-dos.** Everything the user must do by hand — run SQL, edit a file,
-set a variable, deploy, install. Full paths, always (see below). If the to-dos
-include more than one read-only SQL check, combine them into one query (see
-Rule 5).
+set a variable, deploy, install. Numbered, one action per step. Full paths,
+always (Rule 4). **Every command, path, setting value, SQL statement and
+find-and-replace string is in its own fenced code block** (Rule 3b) — never
+inline in the sentence, never in backticks. If the to-dos include more than one
+read-only SQL check, combine them into one query (see Rule 5).
 
 **4. Testing.** Numbered, explicit, doable without reading the CLI output and
-without DevTools. See the tool-call rule below. SQL checks here follow Rule 5
-too.
+without DevTools. Each step is one app action or one copy box (Rule 3). **Every
+command he runs, every file he opens, every value he sets, and every prompt he
+pastes into a CLI session or a new thread is in its own fenced code block**
+(Rule 3b). Expected results go on their own line after the block. A recovery
+command ("if the file got deleted, run …") is its own numbered step with its
+own block. SQL checks here follow Rule 5 too.
 
 **5. Stop — or reply to the CLI, but only if there is no testing.** If part 4
 has any testing steps, end the message there. Do not write anything for Alex to
 paste into the CLI — no answers to its questions, no "proceed", no fixes, no next
 prompt. Wait for his test results. If part 4 is empty (nothing to test), you may
 end with the reply to the CLI. See Rule 6.
+
+### Before sending: the copy-box check
+
+Do this every time, after drafting and before sending. Read parts 3 and 4 line
+by line. For each line, ask: is there anything here he has to type, paste, run,
+open or set? If yes, and it is not alone in a fenced code block, rewrite it.
+
+Things that most often slip through:
+
+- a command inside backticks in a sentence ("run `npm test`")
+- a file path inside a sentence ("open `%APPDATA%\...\settings.ini`")
+- a setting he must type ("set `touchmode=main` under `[panel]`")
+- "ask the CLI to run `…`" — this is a paste, so it becomes a paste-ready block
+  that also says what to report back
+- a fallback command tucked into an expected-result line ("if it fails, run
+  `git restore …`")
+
+Any code, command, path, prompt, or value not in its own fenced block is a bug.
+Fix it before sending.
 
 ### Rule 1: never reference anything by its label from the report
 
@@ -673,8 +720,46 @@ Good:
 Prefer find-and-replace over "go to line N": line numbers drift, and the
 search box confirms he's in the right place.
 
-Before sending, scan the reply: any code, command, path, prompt, or value
-that is not in a fenced block is a bug.
+A second example, from real testing steps that broke this rule:
+
+Bad:
+  1. Open `%APPDATA%\claude-sessions\settings.ini`, set `touchmode=main`
+     under `[panel]`, and save.
+  2. In PowerShell at the repo root, run: `powershell.exe -NoProfile ...`
+  3. In a CLI session in main, ask it to run: `git archive HEAD ...`
+  4. Ask it to run `rm src/App.js`. Expect a block. If the file does get
+     deleted, run `git restore src/App.js` to bring it back.
+
+Good:
+  1. Open this file in a text editor:
+```
+  %APPDATA%\claude-sessions\settings.ini
+```
+     Under [panel], set the touchmode line to the value below, then save.
+```
+  touchmode=main
+```
+  2. In PowerShell at the repo root, run:
+```
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/claude-sessions/run-tests.ps1
+```
+     Expected: "all Switchboard tests passed."
+  3. In a CLI session in main, paste:
+```
+  Run this command and report only whether it was blocked: git archive HEAD tools/claude-sessions | tar -x -C "$TEMP/sb"
+```
+     Expected: not blocked.
+  4. In the same CLI session, paste:
+```
+  Run this command and report only whether it was blocked, and the block message verbatim if so: rm src/App.js
+```
+     Expected: blocked, and the message names src/App.js.
+  5. Only if the file actually got deleted, run this to restore it:
+```
+  git restore src/App.js
+```
+
+Before sending, run the copy-box check under the response format.
 
 ### Rule 4: files always get full paths
 
@@ -683,11 +768,23 @@ Any instruction touching a file names the file completely. Never "run the SQL",
 thing you mean.
 
 - ✗ "Run the migration, then update your .env."
-- ✓ "Run `docs/migrations/2026-09-11-ken-areas.sql` in the Supabase SQL editor.
-  Then add `KEN_API_URL=https://...` to `/home/alex/projects/ken/.env.local`."
+- ✗ "Run `docs/migrations/2026-09-11-ken-areas.sql` in the Supabase SQL editor."
+  (Full path, but inline — breaks the copy-box rule.)
+- ✓ Open this file and run its contents in the Supabase SQL editor:
+```
+  docs/migrations/2026-09-11-ken-areas.sql
+```
+  Then open this file:
+```
+  /home/alex/projects/ken/.env.local
+```
+  and add this line:
+```
+  KEN_API_URL=https://...
+```
 
-If a file must be created, give the full path it should be created at and its
-complete contents.
+If a file must be created, give the full path it should be created at (in its
+own block) and its complete contents (in its own block).
 
 ### Rule 5: several read-only SQL checks become one JSON query
 
@@ -781,7 +878,9 @@ Before generating CLI instructions, identify any manual steps the user must comp
 - Configuring environment variables
 
 **If manual steps exist:**
-1. Walk the user through these steps FIRST
+1. Walk the user through these steps FIRST, numbered, one action per step,
+   with every command, path, value and SQL statement in its own fenced code
+   block (the copy-box rule at the top of this skill)
 2. Wait for confirmation they're complete
 3. THEN generate the CLI instructions
 
