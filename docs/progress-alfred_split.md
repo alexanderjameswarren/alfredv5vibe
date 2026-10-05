@@ -14,7 +14,8 @@ docs/technical-spec-alfred_split.md.
 - [x] Step 3: existing flat shared UI into src/shared
   (24 files moved; Alfred.jsx unchanged at 10,749 lines apart from import paths;
   app 2030/2030, CLI 142/142, same as before)
-- [ ] Step 4: recycle bin
+- [x] Step 4: recycle bin
+  (Alfred.jsx 10,749 → 10,195 lines; app 2030/2030, CLI 142/142, same as before)
 - [ ] Step 5: contexts
 - [ ] Step 6: home and schedule
 - [ ] Step 7: intentions
@@ -63,6 +64,21 @@ docs/technical-spec-alfred_split.md.
   sam/components/WarmupLadderEditor.jsx (the two sam/ files claimed with
   Alex's confirmation, import paths only). Both readdirSync guards confirmed
   to list all 23 shared/ screen files, including shared/recurrence/.
+- Step 4: src/recycle/useRecycleBin.js (the five recycle states, the page
+  size, both message helpers, loader, single and bulk restore/delete, select
+  handlers, and the load-on-view effect, verbatim) and src/recycle/RecycleScreen.jsx
+  (the JSX, verbatim but 6 spaces less indented). Alfred calls
+  `useRecycleBin({ view, refreshData, contextArchiveBlockers })` where the
+  state used to be declared, and renders
+  `<RecycleScreen contexts intents {...recycleBin} />`. Both functions it
+  passes are hoisted declarations, so they exist at that point. `Scissors` and
+  `OBJECT_ICONS` left Alfred's imports with the tabs.
+- Step 4, for step 12: the lucide import comment in Alfred.jsx ("the last two
+  tab glyphs … `Scissors` is a SAM snippet") now describes an import that
+  lives in RecycleScreen. It was left as is because it is a pure move.
+- Step 4: one CLI baseline run reported 143 tests / 2 failing before any
+  change was made; eight reruns all gave 142/142 and the failure could not be
+  reproduced or named. Recorded as a flake in scripts/lib, not this project.
 - **Step 12 must also** update the file list in PROJECT.md (lines 90–93, and
   anything else listing old paths) and the TagFilter comment in
   src/utils/tags.js (lines 161–172) to match the final layout. Neither was
