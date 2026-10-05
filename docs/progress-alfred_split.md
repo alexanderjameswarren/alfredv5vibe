@@ -36,7 +36,9 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
     6,108 → 5,250 lines; app 2030/2030 after each part, CLI 142/142)
   - [x] 9e inbox (Alfred.jsx 5,250 → 4,681 lines; app 2030/2030, CLI
     142/142, same as before)
-  - [ ] 9f collections
+  - [x] 9f collections, in three parts with a build and app tests after each
+    (Alfred.jsx 4,681 → 4,126 → 3,494 → 2,788 lines; app 2030/2030 after
+    each part, CLI 142/142)
 - [ ] Step 10: layer (e) the shell, including 9g (reminders/settings)
 - [ ] Finish: Alex runs gitpush Finish
 
@@ -218,6 +220,25 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
   utils/inboxSourceTabs.js and its test. Stale but left alone (pure move): the
   comment in InboxDetailScreen saying RecurrenceQuickSelect "lives in this
   file", and InboxDetailView's header saying "Alfred.jsx is 12,900 lines".
+- Step 9f. Part 1: CollectionAddItems.jsx and ItemAddToCollection.jsx,
+  verbatim plus `export default`; ItemAddToCollection's local `typeOf` moved
+  as is, not merged into utils/blockRepeat.js. Part 2: useCollections.js
+  holds loadCollectionMembers through refreshCollection (one block, with the
+  tag-editor open/close helpers) and the collection CRUD block (addCollection,
+  updateCollection, archiveCollection), both verbatim. It owns no state or
+  refs: memberWriteInFlight comes in as an argument. pollPausedRef is NOT an
+  argument because no moved function touches it; its only writer is the
+  pause effect and its only reader the poll, both still in Alfred for step 10.
+  useCollections is called before useExecutionActions and useInboxActions,
+  which take clearCompletedFromCollection and addItemsToCollection from it;
+  reportMembershipError and openTagEditor stay internal. Part 3: five screens,
+  not four — "the add-to-collection screen" was two view branches, so
+  ItemAddToCollectionScreen (item-add-to-collection) and
+  CollectionAddItemsScreen (collection-add-items) are separate files beside
+  CollectionsScreen, CollectionDetailScreen and CollectionHistoryScreen. The
+  three IIFE branches became component bodies (re-indented 8, compared whole);
+  CollectionsScreen is JSX re-indented 6. The `view ===` tests and the view
+  comments stay in Alfred. No guard needed editing.
 - Old step numbers in notes above, after the reorder: old step 12 (shell) is
   now step 10; the inbox step is 9e; old steps 7, 8 and 11 named in the step-5
   note are now IntentionCard/ItemCard in step 7 and CollectionCard in step 6.

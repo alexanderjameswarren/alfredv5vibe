@@ -21,7 +21,6 @@ import {
   archivedCaptureTarget,
 } from "./utils/remindersApi";
 import { useExecutionRoute } from "./useExecutionRoute";
-import PinnedFooter from "./shared/PinnedFooter";
 import { useInboxActions } from "./inbox/useInboxActions";
 import InboxScreen from "./inbox/InboxScreen";
 import InboxDetailScreen from "./inbox/InboxDetailScreen";
@@ -35,7 +34,7 @@ import {
   matchesSource,
   sourceTabsFor,
 } from "./utils/inboxSourceTabs";
-import { friendlyDate, sourceLabel } from "./inbox/CaptureMeta";
+import { sourceLabel } from "./inbox/CaptureMeta";
 import { reconcilePushSubscription } from "./utils/pushSubscriptions";
 import { takePendingNavigation } from "./utils/pushRotation";
 import NotificationSettings from "./NotificationSettings";
@@ -43,35 +42,19 @@ import NotificationDiagnostics from "./NotificationDiagnostics";
 import AppLink from "./shared/AppLink";
 import UndoMessage, { useUndo } from "./shared/UndoMessage";
 import { useSortPreference } from "./shared/SortControl";
-import ListToolbar, { NoMatches } from "./shared/ListToolbar";
-import ItemPicker from "./shared/ItemPicker";
-import TagFilter, { collapseOnSearch } from "./shared/TagFilter";
-import TagPicker from "./shared/TagPicker";
-import RemovalMeta from "./shared/RemovalMeta";
-import { startOfPacificDay } from "./utils/localDay";
+import { collapseOnSearch } from "./shared/TagFilter";
 import { tagPoolForRecords } from "./utils/tags";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
 import { matchesQuery } from "./utils/search";
 import {
-  parseIngredient,
-  matchProduct,
-  findNearMisses,
-} from "./utils/ingredientMatch";
-import {
-  Plus,
   X,
   Trash2,
-  ArrowLeft,
   Menu,
-  GripVertical,
-  Tag,
   Settings,
-  Archive,
   Wifi,
   WifiOff,
   RefreshCw,
-  ArchiveRestore,
   Send,
 } from "lucide-react";
 // `supabaseUrl` used to be imported alongside this: it built the ai-enrich
@@ -79,7 +62,6 @@ import {
 // behind as a lint warning; dropped here.
 import { supabase } from "./supabaseClient";
 import { storage } from "./utils/storage";
-import { uid } from "./utils/flattenElements";
 import { getTodayDate } from "./utils/eventDates";
 import {
   EVENT_SORT_OPTIONS,
@@ -92,7 +74,6 @@ import {
   INBOX_ACCESSORS,
 } from "./utils/listSortOptions";
 import { TAG_TOGGLE_ATTR, TAG_FILTERED_VIEWS } from "./utils/tagFilterViews";
-import { removalReasonLabel, groupRemovalsByAction } from "./utils/removalLabels";
 import ObjectIcon from "./shared/ObjectIcon";
 import LoginScreen from "./shared/LoginScreen";
 import LoadingOverlay from "./shared/LoadingOverlay";
@@ -100,8 +81,12 @@ import { useRecycleBin } from "./recycle/useRecycleBin";
 import RecycleScreen from "./recycle/RecycleScreen";
 import { useContextActions } from "./contexts/useContextActions";
 import ContextsScreen from "./contexts/ContextsScreen";
-import ItemNameLabel from "./items/ItemNameLabel";
-import CollectionCard from "./collections/CollectionCard";
+import { useCollections } from "./collections/useCollections";
+import CollectionsScreen from "./collections/CollectionsScreen";
+import CollectionDetailScreen from "./collections/CollectionDetailScreen";
+import CollectionHistoryScreen from "./collections/CollectionHistoryScreen";
+import ItemAddToCollectionScreen from "./collections/ItemAddToCollectionScreen";
+import CollectionAddItemsScreen from "./collections/CollectionAddItemsScreen";
 import ContextDetailView from "./contexts/ContextDetailView";
 import IntentionDetailView from "./intentions/IntentionDetailView";
 import ItemDetailView from "./items/ItemDetailView";
@@ -116,21 +101,6 @@ import MemoriesScreen from "./items/MemoriesScreen";
 import ItemAddScreen from "./items/ItemAddScreen";
 import { useExecutionActions } from "./executions/useExecutionActions";
 import ExecutionDetailScreen from "./executions/ExecutionDetailScreen";
-import {
-  loadMembers,
-  loadRemovals,
-  addMembers,
-  addOrMergeMembers,
-  removeMember,
-  removeMembers,
-  reAddRemoval,
-  updateMemberQuantity,
-  updateMemberTags,
-  loadCollectionTagPool,
-  reorderMembers,
-  REMOVAL_MANUAL,
-  REMOVAL_COMPLETED,
-} from "./utils/collectionMembers";
 import SamPlayer from "./sam/SamPlayer";
 import TimerPage from "./timer/TimerPage";
 
@@ -153,556 +123,6 @@ const NAV_ITEMS = [
   { key: "sam", label: "Sam", icon: "sam", remembersReturn: true },
   { key: "games", label: "Games", icon: "games" },
 ];
-
-function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItems, collection, onCreateItem }) {
-  const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState({});
-
-  const filtered = availableItems.filter((item) =>
-    matchesQuery(search, item.name, ...(Array.isArray(item.tags) ? item.tags : [])),
-  );
-
-  function toggleItem(itemId) {
-    setSelected((prev) => {
-      if (prev[itemId]) {
-        const next = { ...prev };
-        delete next[itemId];
-        return next;
-      }
-      if (Object.keys(prev).length >= maxItems) return prev;
-      return { ...prev, [itemId]: { itemId, quantity: "" } };
-    });
-  }
-
-  function setQuantity(itemId, quantity) {
-    setSelected((prev) => ({
-      ...prev,
-      [itemId]: { ...prev[itemId], quantity },
-    }));
-  }
-
-  return (
-    <div>
-      <button
-        onClick={onCancel}
-        className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
-      >
-        <ArrowLeft className="w-4 h-4" />
-        Back to Collection
-      </button>
-
-      <h2 className="text-lg font-medium mb-3">Add Items to Collection</h2>
-
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search items by name or tag..."
-        className="w-full px-3 py-2 border border-border rounded-lg text-base mb-3"
-        autoFocus
-      />
-
-      <div className="space-y-2 mb-4" style={{ maxHeight: "50vh", overflowY: "auto" }}>
-        {filtered.length === 0 && search.trim() ? (
-          <div className="py-2">
-            <button
-              onClick={() => onCreateItem(search.trim())}
-              className="w-full flex items-center gap-3 px-4 py-3 border-2 border-dashed border-primary rounded-lg hover:bg-primary/5 transition-colors"
-            >
-              <Plus className="w-5 h-5 text-primary flex-shrink-0" />
-              <div className="text-left flex-1 min-w-0">
-                <div className="font-medium text-primary">Create "{search.trim()}"</div>
-                <div className="text-sm text-muted-foreground">
-                  Add as new item{collection?.contextId && contexts ? ` in ${contexts.find(c => c.id === collection.contextId)?.name || 'this context'}` : ''}
-                </div>
-              </div>
-            </button>
-          </div>
-        ) : filtered.length === 0 ? (
-          <p className="text-muted-foreground text-sm py-4 text-center">No matching items</p>
-        ) : (
-          filtered.map((item) => {
-            const isSelected = !!selected[item.id];
-            const contextName = item.contextId && contexts
-              ? contexts.find((c) => c.id === item.contextId)?.name
-              : null;
-            return (
-              <div
-                key={item.id}
-                className={`flex items-center gap-2 p-3 border rounded cursor-pointer ${
-                  isSelected ? "border-primary bg-background" : "border-border bg-white hover:border-primary"
-                }`}
-                onClick={() => toggleItem(item.id)}
-              >
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={(e) => e.stopPropagation()}
-                  onClick={(e) => e.stopPropagation()}
-                  className="rounded accent-primary pointer-events-none"
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-sm truncate">{item.name}</p>
-                  {contextName && (
-                    <span className="text-xs text-muted-foreground">{contextName}</span>
-                  )}
-                </div>
-                {isSelected && (
-                  <input
-                    type="text"
-                    value={selected[item.id]?.quantity || ""}
-                    onChange={(e) => {
-                      e.stopPropagation();
-                      setQuantity(item.id, e.target.value);
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    placeholder="Qty"
-                    className="w-20 sm:w-24 px-2 py-2 border border-border rounded text-base"
-                  />
-                )}
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      {/* Same offsets as ContextForm's. Note this one will rarely engage: the
-          item list above is capped at 50vh with its own scrollbar, so the page
-          as a whole does not usually exceed the viewport. It is here for the
-          cases that do — a very short window, or if that cap is ever lifted —
-          rather than because it changes anything today. */}
-      <PinnedFooter className="bg-background">
-        <button
-          onClick={() => onAdd(Object.values(selected))}
-          disabled={Object.keys(selected).length === 0}
-          className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm disabled:opacity-50 text-sm"
-        >
-          Add {Object.keys(selected).length > 0 ? `(${Object.keys(selected).length})` : ""} to Collection
-        </button>
-        <button
-          onClick={onCancel}
-          className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg text-sm"
-        >
-          Cancel
-        </button>
-      </PinnedFooter>
-    </div>
-  );
-}
-
-/**
- * Add to Collection — resolve an item's collectable elements to items in a
- * target collection's context, and pick which to add.
- *
- * Step 6 is read-only: it resolves, displays and lets the user adjust, but
- * writes nothing. The footer is inert.
- *
- * Measured on the real corpus, 55% of rows resolve to nothing and must create a
- * new item, so create-new is the common path and costs exactly one tap: the row
- * checkbox itself commits to it. There is no dialog and no detour. Rows that
- * failed to match but have plausible alternatives show them as chips, each of
- * which retargets and checks the row in one tap — that is what stops the
- * Shopping context growing "Salt", "kosher salt" and "Sea salt" separately.
- */
-function ItemAddToCollection({ item, items, collections, contexts, onBack, onAdd }) {
-  const available = useMemo(
-    () => (collections || []).filter((c) => !c.archived),
-    [collections],
-  );
-
-  // Preselect: the item context's default collection, then a capture target in
-  // that context, then any capture target, then the first collection.
-  //
-  // The third rule is not in the spec. Without it the driving case never fires:
-  // Groceries is the capture target but lives in Shopping, while recipes live
-  // in Recipes, so rule two cannot match and an arbitrary "first collection"
-  // wins. Preferring a capture target anywhere over an arbitrary one is
-  // strictly better; flagged for review.
-  const defaultCollectionId = useMemo(() => {
-    const ctx = (contexts || []).find((c) => c.id === item.contextId);
-    const pinned =
-      ctx && ctx.defaultCollectionId
-        ? available.find((c) => c.id === ctx.defaultCollectionId)
-        : null;
-    if (pinned) return pinned.id;
-    const captureHere = available.find(
-      (c) => c.isCaptureTarget && c.contextId === item.contextId,
-    );
-    if (captureHere) return captureHere.id;
-    const captureAnywhere = available.find((c) => c.isCaptureTarget);
-    if (captureAnywhere) return captureAnywhere.id;
-    return available[0] ? available[0].id : "";
-  }, [available, contexts, item.contextId]);
-
-  const [collectionId, setCollectionId] = useState(defaultCollectionId);
-  const [overrides, setOverrides] = useState({});
-  const [pickerRow, setPickerRow] = useState(null);
-  const [pickerSearch, setPickerSearch] = useState("");
-
-  const collection = available.find((c) => c.id === collectionId) || null;
-  const targetContextId = collection ? collection.contextId ?? null : null;
-
-  // Targets are context-specific, so a change of collection invalidates every
-  // resolved row. Reset rather than carry stale targets across.
-  useEffect(() => {
-    setOverrides({});
-  }, [collectionId]);
-
-  /**
-   * Resolve once per (item, collection). Ordering is computed here and frozen:
-   * unmatched first, then matched in recipe order. It deliberately does not
-   * depend on `overrides`, because re-sorting as the user accepts a suggestion
-   * would move rows out from under a thumb mid-tap.
-   */
-  const rows = useMemo(() => {
-    const elements = Array.isArray(item.elements) ? item.elements : [];
-    const typeOf = (el) => el.displayType || el.display_type || "step";
-    // Carry the index into item.elements, not into the filtered list: Step 7
-    // stamps collectable/collectableItemId back onto the original array.
-    const indexed = elements.map((el, idx) => ({ el, idx }));
-    const flagged = indexed.filter(({ el }) => el.collectable === true);
-    // Fallback: an un-annotated item still works, on its bullets.
-    const source = flagged.length
-      ? flagged
-      : indexed.filter(({ el }) => typeOf(el) === "bullet");
-
-    const resolved = source.map(({ el, idx }) => {
-      const text = el.name || "";
-      const { quantity, product } = parseIngredient(text);
-      const pinnedId = el.collectableItemId || el.collectable_item_id || null;
-      // Already resolved on a previous visit: skip matching entirely.
-      const pinned = pinnedId
-        ? (items || []).find((i) => i.id === pinnedId && !i.archived)
-        : null;
-      const match =
-        pinned ||
-        matchProduct(product, items || [], { contextId: targetContextId });
-      const near = match
-        ? []
-        : findNearMisses(product, items || [], { contextId: targetContextId });
-      return { key: `${idx}-${text}`, elementIndex: idx, text, quantity, product, match, near };
-    });
-
-    const unmatched = resolved.filter((r) => !r.match);
-    const matched = resolved.filter((r) => r.match);
-    return [...unmatched, ...matched];
-  }, [item.elements, items, targetContextId]);
-
-  const stateFor = (row) => {
-    const o = overrides[row.key] || {};
-    return {
-      checked: o.checked === true,
-      quantity: o.quantity !== undefined ? o.quantity : row.quantity,
-      targetId:
-        o.targetId !== undefined ? o.targetId : row.match ? row.match.id : null,
-    };
-  };
-
-  const patch = (key, next) =>
-    setOverrides((prev) => ({ ...prev, [key]: { ...prev[key], ...next } }));
-
-  const selectedCount = rows.filter((r) => stateFor(r).checked).length;
-
-  const [busy, setBusy] = useState(false);
-
-  // "Existing" means the row currently resolves to an item that already lives
-  // in the target context — either matched automatically or via an accepted
-  // suggestion. Deliberately NOT create-new rows: each of those mints a new
-  // item in the catalogue, and fifteen uninspected new items in one tap is how
-  // a shopping catalogue fills with junk. Creating stays one deliberate tap.
-  const existingRows = rows.filter((r) => stateFor(r).targetId);
-  const allExistingSelected =
-    existingRows.length > 0 && existingRows.every((r) => stateFor(r).checked);
-
-  function selectExisting() {
-    const keys = existingRows.map((r) => r.key);
-    setOverrides((prev) => {
-      const next = { ...prev };
-      for (const k of keys) next[k] = { ...next[k], checked: true };
-      return next;
-    });
-  }
-
-  function clearSelection() {
-    const keys = rows.map((r) => r.key);
-    setOverrides((prev) => {
-      const next = { ...prev };
-      for (const k of keys) next[k] = { ...next[k], checked: false };
-      return next;
-    });
-  }
-
-  async function handleAdd() {
-    if (busy || !collection) return;
-    const picks = rows
-      .filter((r) => stateFor(r).checked)
-      .map((r) => {
-        const st = stateFor(r);
-        return {
-          elementIndex: r.elementIndex,
-          targetItemId: st.targetId,
-          productName: r.product,
-          quantity: st.quantity,
-        };
-      });
-    if (picks.length === 0) return;
-    setBusy(true);
-    const ok = await onAdd(collection.id, picks);
-    setBusy(false);
-    // Stay put on failure so the selection is not lost.
-    if (ok) onBack();
-  }
-
-  const pickerRowData = pickerRow ? rows.find((r) => r.key === pickerRow) : null;
-  return (
-    <div>
-      <button
-        onClick={onBack}
-        className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
-      >
-        <ArrowLeft className="w-4 h-4" />
-        Back
-      </button>
-
-      <h2 className="text-lg sm:text-xl font-medium text-foreground mb-1">
-        Add to Collection
-      </h2>
-      <p className="text-sm text-muted-foreground mb-3">{item.name}</p>
-
-      {available.length === 0 ? (
-        <p className="text-sm text-muted-foreground py-4">
-          No collections yet. Create one first.
-        </p>
-      ) : (
-        <>
-          <label className="block text-sm font-medium text-foreground mb-1">
-            Collection
-          </label>
-          <select
-            value={collectionId}
-            onChange={(e) => setCollectionId(e.target.value)}
-            className="w-full px-3 py-2 min-h-[44px] border border-border rounded-lg text-base mb-3"
-          >
-            {available.map((c) => {
-              const ctx = (contexts || []).find((x) => x.id === c.contextId);
-              return (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                  {ctx ? ` — ${ctx.name}` : ""}
-                </option>
-              );
-            })}
-          </select>
-
-          {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4">
-              Nothing to add — this item has no collectable elements and no
-              bullets.
-            </p>
-          ) : (
-            <>
-            {/* Select-all covers only rows that already resolve to an existing
-                item. A create-new row mints a new catalogue entry, so it stays
-                one deliberate tap. The label carries the count and the word
-                "existing" for exactly that reason: a plain "Select all" here
-                would claim to do something it deliberately does not. */}
-            <div className="flex items-center justify-between gap-2 mb-2">
-              <span className="text-sm text-muted-foreground">
-                {selectedCount} of {rows.length} selected
-              </span>
-              {existingRows.length > 0 && (
-                <button
-                  onClick={allExistingSelected ? clearSelection : selectExisting}
-                  className="px-3 py-2 min-h-[44px] shrink-0 rounded-lg border border-border text-sm text-primary hover:border-primary"
-                >
-                  {allExistingSelected
-                    ? "Select none"
-                    : `Select ${existingRows.length} existing`}
-                </button>
-              )}
-            </div>
-            {existingRows.length < rows.length && (
-              <p className="text-xs text-muted-foreground mb-2">
-                Rows that create a new item are not included — tap those
-                individually.
-              </p>
-            )}
-
-            {/* No interior scroll. An inner scroller nested in the page
-                scroller is unusable on a phone — a 32-row recipe in a
-                half-screen box is the case that breaks it. The page scrolls
-                once and the sticky footer now genuinely engages, which is
-                what it was always there for. */}
-            <div className="space-y-2 mb-4">
-              {rows.map((row) => {
-                const st = stateFor(row);
-                const target = st.targetId
-                  ? (items || []).find((i) => i.id === st.targetId)
-                  : null;
-                return (
-                  <div
-                    key={row.key}
-                    onClick={() => patch(row.key, { checked: !st.checked })}
-                    className={`flex gap-3 p-3 border rounded-lg cursor-pointer ${
-                      st.checked
-                        ? "border-primary bg-background"
-                        : "border-border bg-white hover:border-primary"
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={st.checked}
-                      readOnly
-                      className="mt-1 rounded accent-primary pointer-events-none shrink-0"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-foreground break-words">
-                        {row.text}
-                      </p>
-
-                      <div className="flex items-center gap-2 mt-2">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setPickerSearch("");
-                            setPickerRow(row.key);
-                          }}
-                          className={`flex-1 min-w-0 text-left truncate px-2 py-2 min-h-[44px] rounded text-sm ${
-                            target
-                              ? "border border-border text-foreground"
-                              : "border-2 border-dashed border-primary text-primary"
-                          }`}
-                        >
-                          {target ? (
-                            <span className="truncate">{target.name}</span>
-                          ) : (
-                            <span className="truncate">
-                              Create &quot;{row.product}&quot;
-                            </span>
-                          )}
-                        </button>
-                        <input
-                          type="text"
-                          value={st.quantity}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            patch(row.key, { quantity: e.target.value });
-                          }}
-                          placeholder="Qty"
-                          className="w-20 sm:w-24 shrink-0 px-2 py-2 min-h-[44px] border border-border rounded text-base"
-                        />
-                      </div>
-
-                      {!target && row.near.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                          <span className="text-xs text-muted-foreground">
-                            or use
-                          </span>
-                          {row.near.map((n) => (
-                            <button
-                              key={n.id}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                patch(row.key, { targetId: n.id, checked: true });
-                              }}
-                              className="px-2 py-1 min-h-[32px] rounded-full border border-border bg-secondary text-xs text-foreground hover:border-primary"
-                            >
-                              {n.name}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            </>
-          )}
-
-          {/* Same offsets as CollectionAddItems. Now that the list no longer
-              scrolls internally this genuinely engages on a long recipe. */}
-          <PinnedFooter className="bg-background">
-            <button
-              onClick={handleAdd}
-              disabled={busy || selectedCount === 0 || !collection}
-              className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm disabled:opacity-50 text-sm"
-            >
-              {busy
-                ? "Adding..."
-                : `Add ${selectedCount > 0 ? `(${selectedCount})` : ""} to Collection`}
-            </button>
-            <button
-              onClick={onBack}
-              className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg text-sm"
-            >
-              Cancel
-            </button>
-          </PinnedFooter>
-        </>
-      )}
-
-      {pickerRowData && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-          onClick={() => setPickerRow(null)}
-        >
-          <div
-            className="bg-card p-4 sm:p-6 rounded-lg max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-medium text-foreground">Change target</h3>
-              <button
-                onClick={() => setPickerRow(null)}
-                aria-label="Close"
-                className="flex items-center justify-center min-h-[44px] min-w-[44px] -mr-2 text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <p className="text-sm text-muted-foreground mb-3 break-words">
-              {pickerRowData.text}
-            </p>
-
-            <button
-              onClick={() => {
-                patch(pickerRowData.key, { targetId: null, checked: true });
-                setPickerRow(null);
-              }}
-              className="w-full flex items-center gap-2 px-3 py-2 min-h-[44px] mb-3 border-2 border-dashed border-primary rounded-lg text-primary text-sm"
-            >
-              <Plus className="w-4 h-4 shrink-0" />
-              <span className="truncate">
-                Create &quot;{pickerRowData.product}&quot;
-              </span>
-            </button>
-
-            {/* No context name on rows: every candidate is already in the
-                target collection's context. */}
-            <ItemPicker
-              variant="popup"
-              items={items}
-              showContext={false}
-              exclude={(i) => targetContextId != null && i.contextId !== targetContextId}
-              query={pickerSearch}
-              onQueryChange={setPickerSearch}
-              onPick={(cand) => {
-                patch(pickerRowData.key, { targetId: cand.id, checked: true });
-                setPickerRow(null);
-              }}
-              placeholder="Search items..."
-              autoFocus
-            />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 
 export default function Alfred() {
   // --- Navigation bridge (Step 4, docs/technical-spec-navigation-urls.md) ---
@@ -975,7 +395,52 @@ export default function Alfred() {
     withLoading,
     offerUndoFor,
   });
-  // `clearCompletedFromCollection` is a function declaration below, hoisted.
+  // Before useExecutionActions and useInboxActions, which take two of its
+  // writers. The poll refs stay owned here; the poll effect below reads them.
+  const {
+    loadCollectionMembers,
+    membersOf,
+    setMembersFor,
+    addItemsToCollection,
+    addElementsToCollection,
+    removeItemFromCollection,
+    loadCollectionRemovals,
+    loadCollectionHistory,
+    putBackRemoval,
+    closeTagEditor,
+    toggleTagEditor,
+    loadCollectionTags,
+    saveMemberTags,
+    saveMemberQuantity,
+    clearCompletedFromCollection,
+    saveMemberOrder,
+    refreshCollection,
+    addCollection,
+    updateCollection,
+    archiveCollection,
+  } = useCollections({
+    user,
+    collections,
+    setCollections,
+    contexts,
+    setItems,
+    collectionMembers,
+    setCollectionMembers,
+    setCollectionMembersError,
+    setCollectionRemovals,
+    setCollectionRemovalsError,
+    reAddingRemovalId,
+    setReAddingRemovalId,
+    setCollectionHistory,
+    setCollectionHistoryError,
+    setCollectionTagPool,
+    editingTagsItemId,
+    setEditingTagsItemId,
+    memberWriteInFlight,
+    refreshData,
+    withLoading,
+    offerUndoFor,
+  });
   const {
     activate,
     closeExecution,
@@ -1010,7 +475,6 @@ export default function Alfred() {
     clearCompletedFromCollection,
     withLoading,
   });
-  // `addItemsToCollection` is a function declaration below, hoisted.
   const {
     handleCapture,
     discardInboxItem,
@@ -2116,552 +1580,6 @@ export default function Alfred() {
     }
   }
 
-  /**
-   * Load membership rows for the given collections from collection_items.
-   *
-   * loadMembers reports failure by returning an error rather than throwing,
-   * because withLoading swallows exceptions. A read failure must not look like
-   * an empty collection, so it is surfaced in the UI rather than logged only.
-   */
-  async function loadCollectionMembers(collectionIds, options = {}) {
-    const ids = (collectionIds || []).filter(Boolean);
-    if (ids.length === 0) return;
-
-    const results = await Promise.all(
-      ids.map(async (id) => ({ id, ...(await loadMembers(id)) })),
-    );
-
-    const failed = results.filter((r) => r.error);
-    if (failed.length > 0) {
-      console.error("[collections] failed to load members:", failed[0].error);
-      // `quiet` is for the five-second poll. A failed tick means what is on
-      // screen is five seconds old, not that it is wrong, and a banner that
-      // flickers every five seconds would be worse than the staleness. A
-      // foreground load still raises it, and a later success still clears it.
-      if (!options.quiet) {
-        setCollectionMembersError(`Could not load collection contents: ${failed[0].error}`);
-      }
-    } else {
-      setCollectionMembersError(null);
-    }
-
-    setCollectionMembers((prev) => {
-      const next = { ...prev };
-      for (const r of results) {
-        if (!r.error) next[r.id] = r.data;
-      }
-      return next;
-    });
-  }
-
-  function membersOf(collectionId) {
-    return collectionMembers[collectionId] || [];
-  }
-
-  function setMembersFor(collectionId, updater) {
-    setCollectionMembers((prev) => ({
-      ...prev,
-      [collectionId]: updater(prev[collectionId] || []),
-    }));
-  }
-
-  // ─── Collection membership writes ──────────────────────────────────────────
-  //
-  // These target collection_items. The item_collections.items jsonb is no longer
-  // written by any of them and is now a frozen rollback snapshot.
-  //
-  // The data layer reports failure by returning { data, error } rather than
-  // throwing, because withLoading catches and never rethrows — a thrown error
-  // would be swallowed and the person would believe their edit had saved. Every
-  // helper below inspects error and puts it in front of the user.
-
-  function reportMembershipError(action, message) {
-    console.error(`[collections] failed to ${action}:`, message);
-    window.alert(`Could not ${action}: ${message}`);
-  }
-
-  async function addItemsToCollection(collectionId, entries) {
-    const result = await addMembers(collectionId, entries, { userId: user.id });
-    if (result.error) {
-      reportMembershipError("add to this collection", result.error);
-      return false;
-    }
-    await loadCollectionMembers([collectionId]);
-    if (result.skipped.length > 0) {
-      window.alert(
-        result.skipped.length === 1
-          ? "That item is already in this collection."
-          : `${result.skipped.length} of those items were already in this collection.`,
-      );
-    }
-    return true;
-  }
-
-  /**
-   * Step 7 write path for Add to Collection.
-   *
-   * Three things happen, in this order:
-   *   1. create any items the user chose to create
-   *   2. ONE save of the source item's elements, stamping collectable and
-   *      collectableItemId onto every row that was added
-   *   3. add-or-merge the membership rows
-   *
-   * Returns true only if all three succeeded. The caller stays on the page on
-   * false so the selection is not lost.
-   *
-   * Deliberately does NOT call updateItem: that helper ends with
-   * `setItems(items.map(...))` over a closed-over snapshot, which would drop
-   * the items created moments earlier in this same handler. State is updated
-   * once here, functionally.
-   */
-  async function addElementsToCollection(collectionId, sourceItem, picks) {
-    if (!collectionId || !sourceItem || !picks || picks.length === 0) return false;
-    const coll = collections.find((c) => c.id === collectionId);
-    if (!coll) return false;
-
-    return withLoading("Adding...", async () => {
-      const targetContext = contexts.find((c) => c.id === coll.contextId);
-      const targetShared = targetContext?.shared || false;
-
-      const created = [];
-      const entries = [];
-      const stamp = new Map();
-      // One recipe can yield two create-new rows for the same product —
-      // "Salt for the bean water" and "1/4 tsp salt" both reduce to salt.
-      // Creating two items would be the catalogue pollution this feature
-      // exists to prevent, so the first creation wins and the second reuses it.
-      const createdByName = new Map();
-
-      try {
-        for (const pick of picks) {
-          let itemId = pick.targetItemId;
-          const nameKey = (pick.productName || "").trim().toLowerCase();
-          if (!itemId && createdByName.has(nameKey)) {
-            itemId = createdByName.get(nameKey);
-          }
-          if (!itemId) {
-            // Same on-the-fly shape as CollectionAddItems.
-            const newItem = {
-              id: uid(),
-              user_id: user.id,
-              name: pick.productName,
-              description: "",
-              contextId: coll.contextId,
-              elements: [],
-              tags: [],
-              isCaptureTarget: false,
-              createdAt: new Date().toISOString(),
-            };
-            await storage.set(`item:${newItem.id}`, newItem, targetShared);
-            created.push(newItem);
-            itemId = newItem.id;
-            createdByName.set(nameKey, itemId);
-          }
-          entries.push({ itemId, quantity: pick.quantity });
-          if (Number.isInteger(pick.elementIndex)) stamp.set(pick.elementIndex, itemId);
-        }
-
-        // One save of the elements array, not one per row.
-        const nextElements = (sourceItem.elements || []).map((el, idx) =>
-          stamp.has(idx)
-            ? { ...el, collectable: true, collectableItemId: stamp.get(idx) }
-            : el,
-        );
-        const updatedSource = { ...sourceItem, elements: nextElements };
-        const sourceContext = contexts.find((c) => c.id === updatedSource.contextId);
-        await storage.set(
-          `item:${updatedSource.id}`,
-          updatedSource,
-          sourceContext?.shared || false,
-        );
-
-        // One functional update covering both writes above.
-        setItems((prev) => [
-          ...prev.map((i) => (i.id === updatedSource.id ? updatedSource : i)),
-          ...created,
-        ]);
-      } catch (error) {
-        // storage.set throws; the module contract does not apply to it.
-        console.error("[addElementsToCollection]", error);
-        window.alert(
-          "Could not save: " + (error?.message || "Unknown error") +
-            ". Nothing was added to the collection.",
-        );
-        return false;
-      }
-
-      const result = await addOrMergeMembers(collectionId, entries, {
-        userId: user.id,
-      });
-      await loadCollectionMembers([collectionId]);
-      if (result.error) {
-        reportMembershipError("add to this collection", result.error);
-        return false;
-      }
-      return true;
-    });
-  }
-
-  // OPTIMISTIC as of Step 12.4b — the row leaves the list on the tap, not on the
-  // round trip. Same shape as toggleExecutionElement, which is why ticking items
-  // off in an execution always felt instant and this did not.
-  //
-  // Step 12.4 removed the overlay but the wait stayed, because the row was still
-  // gated on a write plus three reloads. Taking a spinner off a slow action makes
-  // it feel broken rather than fast; the two halves only work together.
-  //
-  // ORDER MATTERS, and it is the whole correctness argument:
-  //
-  //   1. `memberWriteInFlight` is raised FIRST, before the optimistic update, not
-  //      around the write. The five-second poll refetches membership; a tick
-  //      landing between "row dropped from state" and "row deleted in Postgres"
-  //      would read the pre-delete rows and put the row back under the user's
-  //      thumb. That window is precisely what going optimistic creates.
-  //   2. It is a COUNTER, not a flag, which is what makes three quick taps safe:
-  //      they raise it to 3 and it returns to 0 only when the last settles. A
-  //      boolean would let the second removal's completion clear the first's
-  //      guard while the first was still in flight.
-  //   3. The state update is FUNCTIONAL, so overlapping removals compose rather
-  //      than clobber. Each filter runs against what the previous one left, not
-  //      against a snapshot captured when this handler was created.
-  //
-  // On failure the row comes back by RELOADING rather than by re-inserting a
-  // snapshot. The server owns the order; a partial failure (row deleted, removal
-  // log not written) is real; and a reload is correct in every case where a
-  // spliced snapshot would be correct in most. One round trip on a rare path, in
-  // exchange for never showing a removal that did not happen.
-  async function removeItemFromCollection(collectionId, itemId) {
-    memberWriteInFlight.current += 1;
-    setMembersFor(collectionId, (prev) => prev.filter((m) => m.itemId !== itemId));
-
-    try {
-      const result = await removeMember(collectionId, itemId, {
-        reason: REMOVAL_MANUAL,
-        userId: user.id,
-      });
-
-      if (result.error) {
-        reportMembershipError("remove that item", result.error);
-        await loadCollectionMembers([collectionId]);
-        return false;
-      }
-
-      // Membership is deliberately NOT reloaded on success: state already holds
-      // the right answer, and a refetch would be a round trip whose only visible
-      // effect is confirming what the user can already see. These two feed the
-      // "Recently removed" panel and the history view, neither of which anyone is
-      // waiting on.
-      await loadCollectionRemovals(collectionId);
-      await loadCollectionHistory(collectionId);
-      return true;
-    } finally {
-      memberWriteInFlight.current -= 1;
-    }
-  }
-
-  /**
-   * Load manual removal history for the recently-removed panel.
-   *
-   * Only reason='manual'. A single execution completion can clear a dozen items
-   * at once, and mixing those in would bury the accidental removal this panel
-   * exists to catch; they show up in the full history view instead.
-   *
-   * Fetches a wider window than the panel displays, because entries whose item
-   * is back in the collection are filtered out at render — fetching exactly five
-   * could leave the panel showing fewer than it could.
-   */
-  async function loadCollectionRemovals(collectionId, options = {}) {
-    const result = await loadRemovals(collectionId, {
-      reason: REMOVAL_MANUAL,
-      // Everything removed since midnight, uncapped. It used to be the most
-      // recent 25, trimmed to 5 on render — which meant a shopping trip that
-      // took more than five things off the list could not show you the sixth,
-      // and one that took off more than 25 had already lost them before the
-      // render ever saw them.
-      //
-      // PACIFIC midnight, not the browser's. `removed_at` is a server
-      // timestamp and the boundary comes from an IANA rule, so the device's
-      // TIMEZONE is consulted for nothing: a phone in Tokyo and a phone at home
-      // show the same list, at the same moment, for the same collection.
-      //
-      // The device clock is not entirely out of it, and the comment here used
-      // to overclaim that. `startOfPacificDay()` reads `new Date()` to decide
-      // WHICH Pacific day is current — unavoidable for a window meaning
-      // "today". A clock wrong by minutes or hours lands on the same day and
-      // changes nothing; only one wrong enough to cross a Pacific day boundary
-      // would pick the wrong day. That is also what makes this testable without
-      // waiting: set the phone a day forward and the panel should empty.
-      since: startOfPacificDay(),
-      limit: null,
-    });
-    if (result.error) {
-      // Surfaced in the panel rather than as an alert: this is a background read
-      // on view open, and an alert on every visit would be intolerable. Poll
-      // ticks pass `quiet` and do not raise the banner at all — see
-      // loadCollectionMembers.
-      console.error("[collections] failed to load removal history:", result.error);
-      if (!options.quiet) {
-        setCollectionRemovalsError(`Could not load removal history: ${result.error}`);
-      }
-      return false;
-    }
-    setCollectionRemovalsError(null);
-    setCollectionRemovals((prev) => ({ ...prev, [collectionId]: result.data }));
-    return true;
-  }
-
-  /**
-   * Load the full removal history for the history view: both kinds, nothing
-   * filtered out, newest first, capped at 50.
-   *
-   * Kept as a separate fetch from loadCollectionRemovals rather than deriving
-   * both from one query. The panel wants the most recent *manual* removals, and
-   * a collection with heavy completion churn could push every manual row out of
-   * a mixed 50-row window while manual removals still exist.
-   */
-  async function loadCollectionHistory(collectionId) {
-    const result = await loadRemovals(collectionId, { limit: 50 });
-    if (result.error) {
-      console.error("[collections] failed to load full history:", result.error);
-      setCollectionHistoryError(`Could not load removal history: ${result.error}`);
-      return false;
-    }
-    setCollectionHistoryError(null);
-    setCollectionHistory((prev) => ({ ...prev, [collectionId]: result.data }));
-    return true;
-  }
-
-  /**
-   * Put a removed item back. The removal record is left in place — the table is
-   * append-only and the item genuinely was removed at that time. The entry drops
-   * out of the panel because the item is a member again, not because the history
-   * was rewritten.
-   */
-  // Optimistic too, for consistency as much as speed: this sits a few inches
-  // below the remove button on the same screen, in the same aisle. One instant
-  // and one laggy would read as a bug in whichever felt slower.
-  //
-  // The provisional row carries only what the member list renders — `id`,
-  // `itemId`, `quantity` — and is swapped for the real row the insert returns.
-  // Its `id` is namespaced so it can never collide with a database id if
-  // something goes wrong before the swap.
-  //
-  // Adding the member row is all that is needed to clear the entry from the
-  // "Recently removed" panel: `recentRemovals` filters out removals whose item is
-  // back in the collection, so the panel row disappears as a consequence rather
-  // than needing its own optimistic update. One write, both halves of the
-  // feedback.
-  async function putBackRemoval(removal) {
-    if (reAddingRemovalId) return false;
-    setReAddingRemovalId(removal.id);
-    memberWriteInFlight.current += 1;
-
-    const provisional = {
-      id: `pending:${removal.id}`,
-      itemId: removal.itemId,
-      quantity: removal.quantity,
-    };
-    setMembersFor(removal.collectionId, (prev) =>
-      prev.some((m) => m.itemId === removal.itemId) ? prev : [...prev, provisional],
-    );
-
-    try {
-      const result = await reAddRemoval(removal, { userId: user.id });
-
-      if (result.error) {
-        reportMembershipError("put that item back", result.error);
-        setMembersFor(removal.collectionId, (prev) =>
-          prev.filter((m) => m.id !== provisional.id),
-        );
-        return false;
-      }
-
-      // alreadyPresent means a double tap, or the other person restored it first.
-      // That is the desired end state, so it is a quiet success, not a warning —
-      // but it also means `result.data` is null, so the provisional row has no
-      // real row to become and a reload is the only way to learn the true one.
-      if (result.data) {
-        setMembersFor(removal.collectionId, (prev) =>
-          prev.map((m) => (m.id === provisional.id ? result.data : m)),
-        );
-      } else {
-        await loadCollectionMembers([removal.collectionId]);
-      }
-
-      await loadCollectionRemovals(removal.collectionId);
-      return true;
-    } finally {
-      memberWriteInFlight.current -= 1;
-      setReAddingRemovalId(null);
-    }
-  }
-
-  // saveMemberQuantity and saveMemberOrder are not wrapped in withLoading, so
-  // nothing else stops a poll tick landing in the middle of one and reverting the
-  // change until the next tick. They hold the poll off for their own duration.
-  //
-  // As of Step 12.4 removeItemFromCollection and putBackRemoval are in this set
-  // too — every write on the shopping path now holds the poll off explicitly
-  // rather than as a side effect of raising a full-screen overlay.
-  /**
-   * Load the tag vocabulary for one collection's picker.
-   *
-   * Non-fatal by design: a picker with no suggestions still lets you create a
-   * tag, so a failure here logs and leaves the pool empty rather than blocking
-   * the control or raising an alert mid-shop.
-   */
-  /**
-   * Close whichever collection tag editor is open.
-   *
-   * THE single close path. Tapping Done, tapping the open row's own Tag button,
-   * switching to a different row, and leaving the view all route through here,
-   * so none of them can drift from the others as this grows. Right now the
-   * cleanup is one state write; the point is that when it stops being one, it
-   * stops being one everywhere at once.
-   *
-   * Uncommitted text in the picker is discarded rather than committed, which is
-   * the Phase 4 rule holding: a tag is created only by an explicit act. The
-   * picker unmounts with the row, taking its query state with it.
-   *
-   * Clearing this also un-pauses the collection poll, via the effect that reads
-   * `editingTagsItemId`.
-   */
-  function closeTagEditor() {
-    setEditingTagsItemId(null);
-  }
-
-  /**
-   * Open the tag editor on one member row, closing any other first.
-   *
-   * The close goes through `closeTagEditor` rather than being implied by
-   * overwriting the id, so switching rows and closing a row share a path. React
-   * batches the two writes, so the outgoing picker unmounts and the incoming
-   * one mounts in a single commit — no flicker, and no window where the poll
-   * sees "nothing open" and resumes mid-switch.
-   */
-  function openTagEditor(itemId) {
-    closeTagEditor();
-    setEditingTagsItemId(itemId);
-  }
-
-  /** Tapping a row's Tag button: close it if it is the open one, else switch. */
-  function toggleTagEditor(itemId) {
-    if (editingTagsItemId === itemId) closeTagEditor();
-    else openTagEditor(itemId);
-  }
-
-  async function loadCollectionTags(collectionId) {
-    const result = await loadCollectionTagPool(collectionId);
-    if (result.error) {
-      console.error("[collections] failed to load the tag pool:", result.error);
-      return;
-    }
-    setCollectionTagPool((prev) => ({ ...prev, [collectionId]: result.data }));
-  }
-
-  /**
-   * Write a member row's tags.
-   *
-   * Optimistic, like the quantity save: the chips change on the tap and the
-   * write follows. A failure reloads membership so the row snaps back to what
-   * the database actually holds rather than lying about it.
-   *
-   * The new tag is folded into the pool immediately so it is offered on the
-   * next row without waiting for a refetch — tagging three items for the same
-   * store in a row is the normal case, and only the first should cost a
-   * "Create".
-   */
-  async function saveMemberTags(collectionId, itemId, tags) {
-    memberWriteInFlight.current += 1;
-    try {
-      setCollectionTagPool((prev) => {
-        const pool = prev[collectionId] || [];
-        const added = tags.filter((tag) => !pool.includes(tag));
-        return added.length === 0
-          ? prev
-          : { ...prev, [collectionId]: [...pool, ...added] };
-      });
-
-      const result = await updateMemberTags(collectionId, itemId, tags);
-      if (result.error) {
-        reportMembershipError("save those tags", result.error);
-        await loadCollectionMembers([collectionId]);
-        return false;
-      }
-      setMembersFor(collectionId, (prev) =>
-        prev.map((m) => (m.itemId === itemId ? result.data : m)),
-      );
-      return true;
-    } finally {
-      memberWriteInFlight.current -= 1;
-    }
-  }
-
-  async function saveMemberQuantity(collectionId, itemId, quantity) {
-    memberWriteInFlight.current += 1;
-    try {
-      const result = await updateMemberQuantity(collectionId, itemId, quantity);
-      if (result.error) {
-        reportMembershipError("save that quantity", result.error);
-        await loadCollectionMembers([collectionId]);
-        return false;
-      }
-      setMembersFor(collectionId, (prev) =>
-        prev.map((m) => (m.itemId === itemId ? result.data : m)),
-      );
-      return true;
-    } finally {
-      memberWriteInFlight.current -= 1;
-    }
-  }
-
-  /**
-   * Clear the items checked off during an execution, recording each as a
-   * 'completed' removal.
-   *
-   * One removeMembers call rather than a loop over singular removals: every row
-   * must land in a single INSERT so they share the server's transaction
-   * timestamp exactly, which is what lets the history view group a bulk
-   * clear-out under one heading.
-   */
-  async function clearCompletedFromCollection(collectionId, itemIds) {
-    const result = await removeMembers(collectionId, itemIds, {
-      reason: REMOVAL_COMPLETED,
-      userId: user.id,
-    });
-    await loadCollectionMembers([collectionId]);
-    if (result.error) {
-      reportMembershipError("clear the completed items", result.error);
-      return false;
-    }
-    return true;
-  }
-
-  async function saveMemberOrder(collectionId, orderedMembers) {
-    memberWriteInFlight.current += 1;
-    try {
-      const result = await reorderMembers(collectionId, orderedMembers);
-      if (result.error) {
-        reportMembershipError("save the new order", result.error);
-        await loadCollectionMembers([collectionId]);
-        return false;
-      }
-      return true;
-    } finally {
-      memberWriteInFlight.current -= 1;
-    }
-  }
-
-  async function refreshCollection(collectionId) {
-    const coll = await storage.get(`item_collections:${collectionId}`);
-    if (coll) {
-      setCollections((prev) =>
-        prev.map((c) => (c.id === collectionId ? coll : c))
-      );
-    }
-    await loadCollectionMembers([collectionId]);
-  }
-
   function getIntentDisplay(intent) {
     if (intent.text) return intent.text;
     if (intent.itemId) {
@@ -2869,121 +1787,6 @@ export default function Alfred() {
 
     setSelectedItemId(null);
     setView(previousView);
-  }
-
-
-  // Collection CRUD
-  async function addCollection(name, contextId = null) {
-    return withLoading('Creating collection...', async () => {
-      const newColl = {
-        id: uid(),
-        userId: user.id,
-        name: name || "New Collection",
-        contextId: contextId || null,
-        shared: false,
-        isCaptureTarget: false,
-        // Explicit rather than leaning on the column default, so the object in
-        // local state has the same shape as one read back from the database —
-        // `updateCollection` spreads the whole row, and `activeCollections`
-        // filters on this field.
-        archived: false,
-        // No items seed: membership lives in collection_items now. The jsonb
-        // column keeps its own '[]' default and is never written again.
-        createdAt: new Date().toISOString(),
-      };
-      const savedColl = await storage.set(`item_collections:${newColl.id}`, newColl);
-      // Collections have NO realtime channel, so this is the only chance to
-      // learn the database's `updated_at` short of a manual refresh.
-      setCollections((prev) => [...prev, savedColl || newColl]);
-      return newColl.id;
-    });
-  }
-
-  // Collection metadata only — name, context, shared, pinned. Membership goes
-  // through the collection_items helpers above.
-  //
-  // The `silent` flag STAYS. Step 12.4 briefly removed it and made every field
-  // here quiet; that was the wrong target. These four settings — Context,
-  // Shared, Pinned, Capture-target — are configuration, changed rarely and at a
-  // desk, not the per-item taps done one-handed in a supermarket aisle. The
-  // overlay was never the complaint here, so it goes back rather than leaving an
-  // unrequested change behind. The shopping-path writes are the ones that lost
-  // it: see removeItemFromCollection and putBackRemoval.
-  //
-  // What 12.4 DID leave behind is the error handling, and that was a real bug
-  // independent of any screen. `storage.set` returns false rather than throwing,
-  // so the silent branch's `catch` never fired for the failure that actually
-  // happens: a failed save left the control showing a value the database did not
-  // have, with nothing on screen and nothing in the console. Both branches now
-  // report it and re-read the truth.
-  async function updateCollection(collId, updates, silent = false) {
-    const coll = collections.find((c) => c.id === collId);
-    if (!coll) return;
-
-    const reportFailure = async () => {
-      window.alert("That change could not be saved. Reloading this collection.");
-      await refreshData();
-    };
-
-    const doSave = async () => {
-      const savedColl = await storage.set(`item_collections:${coll.id}`, { ...coll, ...updates });
-
-      if (savedColl === false) {
-        await reportFailure();
-        return;
-      }
-
-      // Functional updater: apply the patch to the freshest state rather than
-      // replacing the row with a snapshot captured at render time, which is an
-      // independent cause of lost concurrent edits.
-      //
-      // `savedColl` sits in the MIDDLE of the spread as of Step 12.3, not at the
-      // end: it carries the columns the database assigns — `updated_at` above
-      // all — while `updates` stays the winner for the fields the user just
-      // edited. Replacing the row with `savedColl` outright would take the
-      // server's copy of every field and reintroduce exactly the clobber this
-      // functional updater exists to prevent.
-      setCollections((prev) =>
-        prev.map((c) => (c.id === collId ? { ...c, ...savedColl, ...updates } : c)),
-      );
-    };
-
-    if (silent) {
-      try {
-        await doSave();
-      } catch (e) {
-        console.error("Collection save error:", e);
-        await reportFailure();
-      }
-    } else {
-      return withLoading("Saving...", doSave);
-    }
-  }
-
-  // Archive, not delete. Hard-deleting a collection cascades to
-  // `collection_items` AND `collection_item_removals` — and the latter is an
-  // append-only log of what was taken out of the collection and when, which is
-  // the recovery path for accidental removals during shopping. Destroying that
-  // behind a 5-second Undo was not acceptable, so collections became
-  // soft-deletable like every other Alfred entity. See the spec's Undo section,
-  // exception 2. The only hard delete left is the Recycle Bin's terminal one.
-  //
-  // Membership is deliberately left in `collectionMembers`: a soft delete does
-  // not touch `collection_items`, so the cached rows stay correct and Undo has
-  // nothing to rebuild.
-  async function archiveCollection(collId) {
-    const coll = collections.find((c) => c.id === collId);
-    if (!coll) return;
-    return withLoading('Archiving...', async () => {
-      const archived = { ...coll, archived: true };
-      await storage.set(`item_collections:${collId}`, archived);
-      setCollections((prev) => prev.map((c) => (c.id === collId ? archived : c)));
-
-      offerUndoFor(`Archived "${coll.name}".`, async () => {
-        await storage.set(`item_collections:${collId}`, coll);
-        setCollections((prev) => prev.map((c) => (c.id === collId ? coll : c)));
-      });
-    });
   }
 
   // Filter events to only show those with valid, non-archived intents
@@ -3803,720 +2606,73 @@ export default function Alfred() {
 
         {/* Collections View */}
         {view === "collections" && (
-          <div>
-            <div className="flex items-center justify-between mb-3 sm:mb-4">
-              <h2 className="text-lg sm:text-xl font-medium">Collections</h2>
-              <button
-                onClick={async () => {
-                  const id = await addCollection("New Collection");
-                  if (id) {
-                    setPreviousView("collections");
-                    setSelectedCollectionId(id);
-                    setView("collection-detail");
-                  }
-                }}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-              >
-                <Plus className="w-4 h-4" />
-                New Collection
-              </button>
-            </div>
-
-            {contexts.length > 0 && (
-              <div className="mb-3">
-                <select
-                  value={collectionContextFilter}
-                  onChange={(e) => setCollectionContextFilter(e.target.value)}
-                  className="px-3 py-2 min-h-[44px] border border-border rounded text-base"
-                >
-                  <option value="">All Contexts</option>
-                  <option value="__none__">No Context</option>
-                  {contexts.filter((c) => !c.archived).map((ctx) => (
-                    <option key={ctx.id} value={ctx.id}>{ctx.name}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {(() => {
-              const filtered = activeCollections.filter((coll) => {
-                if (!collectionContextFilter) return true;
-                if (collectionContextFilter === "__none__") return !coll.contextId;
-                return coll.contextId === collectionContextFilter;
-              });
-
-              if (filtered.length === 0) return (
-                <div className="text-center py-12 text-muted-foreground">
-                  <p>No collections{collectionContextFilter ? " in this context" : " yet"}.</p>
-                  <p className="text-sm mt-2">Create a collection to group items together.</p>
-                </div>
-              );
-
-              // Searched AFTER the empty check above, so a search that matches
-              // nothing leaves the toolbar in place instead of replacing the
-              // whole page with "No collections yet".
-              const visible = sortRows(
-                filtered, collectionsSort.sortKey, NAMED_RECORD_ACCESSORS, collectionsSort.sortDir,
-              ).filter((coll) => matchesQuery(searchFor("collections"), coll.name));
-
-              return (
-              <div className="space-y-2">
-                <ListToolbar
-                  query={searchFor("collections")}
-                  onQueryChange={setSearchFor("collections")}
-                  searchLabel="Search collections"
-                  sortId="collections-sort"
-                  sortOptions={NAMED_RECORD_SORT_OPTIONS}
-                  sort={collectionsSort}
-                  className="mb-1"
-                />
-                {visible.length === 0 ? (
-                  <NoMatches noun="collections" query={searchFor("collections")} />
-                ) : (
-                  visible.map((coll) => (
-                    <CollectionCard
-                      key={coll.id}
-                      collection={coll}
-                      contexts={contexts}
-                      memberCount={membersOf(coll.id).length}
-                      onOpen={() => {
-                        setPreviousView("collections");
-                        setSelectedCollectionId(coll.id);
-                        setView("collection-detail");
-                      }}
-                      onArchive={archiveCollection}
-                    />
-                  ))
-                )}
-              </div>
-              );
-            })()}
-          </div>
+          <CollectionsScreen
+            activeCollections={activeCollections}
+            contexts={contexts}
+            collectionContextFilter={collectionContextFilter}
+            setCollectionContextFilter={setCollectionContextFilter}
+            collectionsSort={collectionsSort}
+            searchFor={searchFor}
+            setSearchFor={setSearchFor}
+            membersOf={membersOf}
+            addCollection={addCollection}
+            archiveCollection={archiveCollection}
+            setPreviousView={setPreviousView}
+            setSelectedCollectionId={setSelectedCollectionId}
+            setView={setView}
+          />
         )}
 
         {/* Collection Detail View */}
-        {view === "collection-detail" && (() => {
-          const coll = collections.find((c) => c.id === selectedCollectionId);
-          if (!coll) return <p className="text-muted-foreground">Collection not found</p>;
-          const members = membersOf(coll.id);
-          // An item that has been put back is a resolved problem, so it drops out
-          // of a panel meant for unresolved ones. The removal record itself stays
-          // in the table — the history stays honest.
-          const memberItemIds = new Set(members.map((m) => m.itemId));
-          // Filtered for display only. Drag-to-reorder still works against the
-          // full `members` list — reordering a filtered subset would write
-          // positions that mean nothing once the filter is cleared, so the
-          // handles are hidden while a filter is on.
-          const visibleMembers = collectionFilterTag
-            ? members.filter((m) => (m.tags || []).includes(collectionFilterTag))
-            : members;
-          const tagPoolForCollection = collectionTagPool[coll.id] || [];
-          // No .slice() any more — the fetch is already bounded to today, and
-          // capping a time window by count as well is what hid the older half
-          // of a heavy shopping day.
-          //
-          // The still-a-member filter STAYS. It is how "Put back" clears a row
-          // without needing its own optimistic update: re-adding the member is
-          // enough to drop its removal out of the panel.
-          const recentRemovals = (collectionRemovals[coll.id] || []).filter(
-            (r) => !memberItemIds.has(r.itemId),
-          );
-          const history = collectionHistory[coll.id] || [];
-          return (
-            <div>
-              <button
-                onClick={() => {
-                  setSelectedCollectionId(null);
-                  setView(previousView || "collections");
-                }}
-                className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                Back
-              </button>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">Name</label>
-                  <input
-                    type="text"
-                    value={coll.name}
-                    onChange={(e) => {
-                      const updated = { ...coll, name: e.target.value };
-                      setCollections(collections.map((c) => (c.id === coll.id ? updated : c)));
-                    }}
-                    onBlur={() => updateCollection(coll.id, { name: coll.name }, true)}
-                    className="w-full px-3 py-2 border border-border rounded text-base"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-1">Context</label>
-                  <select
-                    value={coll.contextId || ""}
-                    onChange={(e) => updateCollection(coll.id, { contextId: e.target.value || null })}
-                    className="w-full px-3 py-2 border border-border rounded text-base"
-                  >
-                    <option value="">No context</option>
-                    {/* Filtered inline rather than by swapping the prop: this
-                        component also looks context names up by id for badges,
-                        and an archived context must still resolve there. */}
-                    {contexts.filter((c) => !c.archived).map((ctx) => (
-                      <option key={ctx.id} value={ctx.id}>{ctx.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={coll.shared || false}
-                    onChange={(e) => updateCollection(coll.id, { shared: e.target.checked })}
-                    className="rounded accent-primary"
-                  />
-                  <span className="text-sm">Shared collection</span>
-                </label>
-
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={coll.pinned || false}
-                    onChange={(e) => updateCollection(coll.id, { pinned: e.target.checked })}
-                    className="rounded accent-primary"
-                  />
-                  <span className="text-sm">Pin to home</span>
-                </label>
-
-                {/* The column has existed since the collections migration and
-                    enrichment has been reading it to decide where a capture
-                    should go, but there was no UI — the only way to set it was
-                    raw SQL, which is how Groceries got its flag. (That reader is
-                    the alfred-enrich skill in claude.ai now, not the ai-enrich
-                    function — Clipboard Step 14.) */}
-                <label className="flex items-start gap-2">
-                  <input
-                    type="checkbox"
-                    checked={coll.isCaptureTarget || false}
-                    onChange={(e) =>
-                      updateCollection(coll.id, { isCaptureTarget: e.target.checked })
-                    }
-                    className="mt-1 rounded accent-primary"
-                  />
-                  <span className="text-sm">
-                    Capture target
-                    <span className="block text-xs text-muted-foreground">
-                      Alfred files new captures here by default, and it is
-                      preselected when adding an item's ingredients to a
-                      collection.
-                    </span>
-                  </span>
-                </label>
-
-                <div>
-                  {/* Membership — reads and writes both go to collection_items. */}
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-base font-medium">
-                      Items ({members.length})
-                    </h3>
-                    <button
-                      onClick={() => setView("collection-add-items")}
-                      className="flex items-center gap-2 px-3 py-2 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Add Items
-                    </button>
-                  </div>
-
-                  {collectionMembersError && (
-                    <p className="text-xs text-destructive mb-2">{collectionMembersError}</p>
-                  )}
-
-                  {members.length >= 50 && members.length < 200 && (
-                    <p className="text-xs text-warning mb-2">Warning: {members.length} items. Performance may degrade above 200.</p>
-                  )}
-                  {members.length >= 200 && (
-                    <p className="text-xs text-destructive mb-2">Maximum 200 items reached.</p>
-                  )}
-
-                  {/* Store filter. Same component the item and intention lists
-                      use, handed the members so it counts this collection's
-                      tags — but wired to `collectionFilterTag`, which is NOT
-                      the `filterTag` those lists share. See the state
-                      declaration for why they must stay apart. */}
-                  {/* This view has no search box, so nothing ever collapses
-                      this bar for you — the toggle is the only way, and it is
-                      here so the control exists on every bar rather than on
-                      three of the four. Its own collapse key for the same
-                      reason `collectionFilterTag` is its own filter. */}
-                  <TagFilter
-                    entities={members}
-                    activeTag={collectionFilterTag}
-                    onFilter={setCollectionFilterTag}
-                    collapsed={tagsCollapsedFor("collection-detail")}
-                    onToggleCollapsed={toggleTagsFor("collection-detail")}
-                  />
-
-                  {members.length === 0 ? (
-                    <p className="text-muted-foreground text-sm py-4 text-center">No items in this collection</p>
-                  ) : visibleMembers.length === 0 ? (
-                    <p className="text-muted-foreground text-sm py-4 text-center">
-                      No items tagged &quot;{collectionFilterTag}&quot;
-                    </p>
-                  ) : (
-                    <div className="space-y-2">
-                      {visibleMembers.map((member, index) => {
-                        const linkedItem = items.find((i) => i.id === member.itemId);
-                        const memberTags = member.tags || [];
-                        const tagsOpen = editingTagsItemId === member.itemId;
-                        return (
-                          <div
-                            key={member.id || member.itemId || index}
-                            ref={tagsOpen ? editingTagsRowRef : undefined}
-                            className={`p-3 bg-card border border-border rounded-lg ${collDragIdx === index ? "opacity-50" : ""}`}
-                            draggable={!collectionFilterTag && !tagsOpen}
-                            onDragStart={(e) => { setCollDragIdx(index); e.dataTransfer.effectAllowed = "move"; }}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              if (collDragIdx === null || collDragIdx === index) return;
-                              setMembersFor(coll.id, (prev) => {
-                                const next = [...prev];
-                                const [dragged] = next.splice(collDragIdx, 1);
-                                next.splice(index, 0, dragged);
-                                return next;
-                              });
-                              setCollDragIdx(index);
-                            }}
-                            onDragEnd={() => {
-                              setCollDragIdx(null);
-                              saveMemberOrder(coll.id, members);
-                            }}
-                          >
-                          <div className="flex items-center gap-2">
-                            {/* Hidden while filtering: the visible rows are a
-                                subset, so a drop position would be a lie. */}
-                            {!collectionFilterTag && (
-                              <GripVertical className="w-4 h-4 text-muted-foreground cursor-move flex-shrink-0" title="Drag to reorder" />
-                            )}
-                            <div className="flex-1 min-w-0">
-                              <p className="font-medium text-sm truncate">
-                                <ItemNameLabel name={linkedItem?.name} />
-                              </p>
-                              {/* Tag chips, under the name rather than beside
-                                  it. At 360px the row has no spare width — name,
-                                  quantity and the two buttons already fill it —
-                                  and the tag has to be readable at a glance in
-                                  an aisle, which a count badge or an icon is not.
-                                  A second line only appears when a row actually
-                                  has tags, so an untagged list is exactly as
-                                  compact as it was before this phase.
-
-                                  Each chip removes itself. Removing a tag used
-                                  to mean opening the editor to reach a second
-                                  copy of the same chips; now it is one tap on
-                                  the chip you are already looking at, and the
-                                  editor is only for ADDING.
-
-                                  The × is a 32px target inside a ~30px chip, not
-                                  the usual 44px. 44 would make a chip taller than
-                                  the item name it sits under and would crowd the
-                                  row it is meant to annotate. 32 is a
-                                  comfortable deliberate tap, and mis-taps while
-                                  scrolling are not the risk they look like —
-                                  a browser cancels the click once the finger
-                                  moves, so a scroll never fires one. gap-1.5
-                                  keeps two ×s from sitting shoulder to shoulder,
-                                  which is the mis-tap that could happen. */}
-                              {memberTags.length > 0 && (
-                                <div className="flex flex-wrap gap-1.5 mt-1">
-                                  {memberTags.map((tag) => (
-                                    <span
-                                      key={tag}
-                                      className="inline-flex items-center gap-0.5 pl-2.5 pr-0.5 bg-warning-light text-accent-foreground text-xs rounded-full"
-                                    >
-                                      {tag}
-                                      <button
-                                        onClick={() =>
-                                          saveMemberTags(
-                                            coll.id,
-                                            member.itemId,
-                                            memberTags.filter((t) => t !== tag),
-                                          )
-                                        }
-                                        aria-label={`Remove tag ${tag}`}
-                                        title={`Remove tag ${tag}`}
-                                        className="min-h-[32px] min-w-[32px] flex items-center justify-center rounded-full hover:text-destructive"
-                                      >
-                                        <X className="w-3 h-3" />
-                                      </button>
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                            {/* Quantity is disabled when the item cannot be shown:
-                                setting an amount on something you cannot identify
-                                is a guess, and it would be a silent edit to data
-                                the owner can see and you cannot. Removing the row
-                                stays available — a member you cannot see is exactly
-                                the one you may need to get rid of. */}
-                            <input
-                              type="text"
-                              value={member.quantity || ""}
-                              disabled={!linkedItem}
-                              title={linkedItem ? undefined : "This item cannot be shown, so its quantity cannot be edited"}
-                              onChange={(e) => {
-                                const quantity = e.target.value;
-                                setMembersFor(coll.id, (prev) =>
-                                  prev.map((m) => (m.itemId === member.itemId ? { ...m, quantity } : m)),
-                                );
-                              }}
-                              // The typed value lives in collectionMembers until
-                              // blur, which is exactly what the poll overwrites.
-                              // Focus pauses the poll; the pause is not lifted
-                              // until the save has settled, so a tick cannot land
-                              // between blur and the write completing.
-                              onFocus={() => setEditingQuantityItemId(member.itemId)}
-                              onBlur={async () => {
-                                await saveMemberQuantity(coll.id, member.itemId, member.quantity);
-                                setEditingQuantityItemId(null);
-                              }}
-                              placeholder="Qty"
-                              className="w-20 sm:w-24 px-2 py-2 border border-border rounded text-base disabled:opacity-50 disabled:cursor-not-allowed"
-                            />
-                            {/* Opens the picker below this row, one at a time.
-                                Disabled for an unreadable item for the same
-                                reason quantity is: tagging something you cannot
-                                identify is a guess. */}
-                            <button
-                              {...{ [TAG_TOGGLE_ATTR]: "" }}
-                              // Switches on the PRESS, not the click, and this
-                              // is load-bearing rather than stylistic.
-                              //
-                              // An open editor makes its row taller, so every
-                              // row below it sits lower. Closing one on
-                              // mousedown moved those rows back UP between the
-                              // press and the release, so the button that was
-                              // under the finger on press was somewhere else on
-                              // release and the click never completed on it.
-                              // Tapping a row BELOW the open one did nothing;
-                              // tapping one ABOVE worked, because rows above
-                              // never move. Doing the whole switch on the press
-                              // means no click has to land anywhere.
-                              //
-                              // preventDefault keeps focus off the button, so
-                              // the phone keyboard does not flicker on the way
-                              // from one editor to the next.
-                              onMouseDown={(e) => {
-                                e.preventDefault();
-                                toggleTagEditor(member.itemId);
-                              }}
-                              // Keyboard only. A click from Enter or Space
-                              // carries detail 0; a pointer click carries 1 or
-                              // more and was already handled above. The guard
-                              // also absorbs a stray click that reflow lands on
-                              // the wrong button.
-                              onClick={(e) => {
-                                if (e.detail === 0) toggleTagEditor(member.itemId);
-                              }}
-                              disabled={!linkedItem}
-                              aria-label={tagsOpen ? "Done tagging" : "Tag this item"}
-                              title={
-                                linkedItem
-                                  ? tagsOpen
-                                    ? "Done tagging"
-                                    : "Tag this item"
-                                  : "This item cannot be shown, so it cannot be tagged"
-                              }
-                              className={`p-1 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg disabled:opacity-50 disabled:cursor-not-allowed ${
-                                tagsOpen
-                                  ? "bg-primary text-white"
-                                  : "text-muted-foreground hover:text-primary"
-                              }`}
-                            >
-                              <Tag className="w-4 h-4" />
-                            </button>
-                            <button
-                              // No overlay — Step 12.4. This is THE shopping
-                              // action: one-handed, in an aisle, once per item.
-                              // A full-screen scrim per tick was the complaint.
-                              // The row disappearing is the confirmation, and
-                              // removeItemFromCollection reports its own failures
-                              // through reportMembershipError.
-                              onClick={() =>
-                                removeItemFromCollection(coll.id, member.itemId)
-                              }
-                              className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-destructive"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-
-                          {/* The editor, expanded under its own row. One at a
-                              time — two of them open at once would push the list
-                              off a phone screen.
-
-                              Input and dropdown ONLY. It used to carry its own
-                              copy of the chips and a Done button; the chips are
-                              now removable in the row directly above, which
-                              makes both redundant. What is left is the one thing
-                              the editor is for: adding. The row's chips stay
-                              visible while it is open, so a tag landing is still
-                              confirmed on screen.
-
-                              No Done button either — tapping anywhere outside
-                              the row closes it. See the dismissal effect.
-
-                              Its pool is the COLLECTION pool: this collection's
-                              members plus its removal history. It never mixes
-                              with the item/intent pool — "tjs" has no business
-                              on a recipe and "vegetarian" none on a shopping
-                              row. */}
-                          {tagsOpen && (
-                            <div className="mt-3 pt-3 border-t border-border">
-                              <TagPicker
-                                value={memberTags}
-                                pool={tagPoolForCollection}
-                                onChange={(next) =>
-                                  saveMemberTags(coll.id, member.itemId, next)
-                                }
-                                // Not "a store": a collection's tags are
-                                // whatever splits the list usefully, and that is
-                                // not always a shop.
-                                placeholder="Search or add"
-                                label="Search or add a tag"
-                                // Opened by tapping the Tag button, so it is
-                                // ready to type into. Raises the keyboard
-                                // immediately, which is the intent. The four
-                                // item/intention pickers do NOT pass this —
-                                // they sit in a form you may be scrolling past.
-                                autoFocus
-                                // The row above already shows these, removably.
-                                showChips={false}
-                              />
-                            </div>
-                          )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Recently removed — manual removals only, most recent first,
-                    plus the entry point to the full history. The whole region
-                    disappears when there is neither history nor an error to
-                    report; an empty panel on a fresh collection is noise. */}
-                {(recentRemovals.length > 0 ||
-                  collectionRemovalsError ||
-                  history.length > 0 ||
-                  collectionHistoryError) && (
-                  <div className="pt-4 border-t border-border">
-                    {(recentRemovals.length > 0 || collectionRemovalsError) && (
-                      <>
-                        <div className="flex items-center justify-between mb-2">
-                          <h3 className="text-base font-medium">Recently removed</h3>
-                          {/* Also shown when the panel has rows but `history` is
-                              stale: the poll refreshes removals, not history, so
-                              a removal polled in from the other person would
-                              otherwise have no way through to the full view.
-                              The history view reloads on entry regardless. */}
-                          {(history.length > 0 || recentRemovals.length > 0) && (
-                            <button
-                              onClick={() => setView("collection-history")}
-                              className="min-h-[44px] text-sm text-primary hover:text-primary-hover"
-                            >
-                              View all
-                            </button>
-                          )}
-                        </div>
-
-                        {collectionRemovalsError && (
-                          <p className="text-xs text-destructive mb-2">{collectionRemovalsError}</p>
-                        )}
-
-                        <div className="space-y-2">
-                          {recentRemovals.map((removal) => (
-                            <div
-                              key={removal.id}
-                              className="flex items-center gap-2 p-3 bg-card border border-border rounded-lg"
-                            >
-                              <div className="flex-1 min-w-0">
-                                <p className="font-medium text-sm truncate">
-                                  <ItemNameLabel name={removal.itemName} />
-                                </p>
-                                <RemovalMeta
-                                  quantity={removal.quantity}
-                                  tags={removal.tags}
-                                />
-                                <p className="text-xs text-muted-foreground mt-1">
-                                  {friendlyDate(removal.removedAt)}
-                                </p>
-                              </div>
-                              <button
-                                // No overlay — Step 12.4, same aisle, same hand.
-                                // The button disables via reAddingRemovalId while
-                                // the write runs, which is feedback enough for a
-                                // single row, and putBackRemoval reports its own
-                                // failures.
-                                onClick={() => putBackRemoval(removal)}
-                                disabled={reAddingRemovalId !== null}
-                                className="flex items-center gap-2 px-3 py-2 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm shrink-0 disabled:opacity-50"
-                              >
-                                <ArchiveRestore className="w-4 h-4" />
-                                Put back
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-
-                    {/* A collection can have history worth reading while the panel
-                        itself is empty — every removal was a completion, or every
-                        manual one has been put back. Keep the history reachable. */}
-                    {recentRemovals.length === 0 && !collectionRemovalsError && history.length > 0 && (
-                      <button
-                        onClick={() => setView("collection-history")}
-                        className="flex items-center gap-2 min-h-[44px] text-sm text-primary hover:text-primary-hover"
-                      >
-                        <Archive className="w-4 h-4" />
-                        View removal history
-                      </button>
-                    )}
-
-                    {collectionHistoryError && (
-                      <p className="text-xs text-destructive mt-2">{collectionHistoryError}</p>
-                    )}
-                  </div>
-                )}
-
-                <div className="pt-4 border-t border-border">
-                  {/* Relabelled with the behaviour: this archives now, and the
-                      row is recoverable from the Recycle Bin. The confirm is
-                      gone — safety is the 5-second Undo, per governing rule 3.
-                      Navigating away is unconditional because this page is
-                      showing the record being archived. */}
-                  <button
-                    onClick={() => {
-                      archiveCollection(coll.id);
-                      setSelectedCollectionId(null);
-                      setView("collections");
-                    }}
-                    className="px-4 py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg text-sm"
-                  >
-                    Archive Collection
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+        {view === "collection-detail" && (
+          <CollectionDetailScreen
+            collections={collections}
+            setCollections={setCollections}
+            selectedCollectionId={selectedCollectionId}
+            setSelectedCollectionId={setSelectedCollectionId}
+            items={items}
+            contexts={contexts}
+            previousView={previousView}
+            setView={setView}
+            membersOf={membersOf}
+            setMembersFor={setMembersFor}
+            collectionMembersError={collectionMembersError}
+            collectionFilterTag={collectionFilterTag}
+            setCollectionFilterTag={setCollectionFilterTag}
+            collectionTagPool={collectionTagPool}
+            collectionRemovals={collectionRemovals}
+            collectionRemovalsError={collectionRemovalsError}
+            collectionHistory={collectionHistory}
+            collectionHistoryError={collectionHistoryError}
+            reAddingRemovalId={reAddingRemovalId}
+            editingTagsItemId={editingTagsItemId}
+            editingTagsRowRef={editingTagsRowRef}
+            collDragIdx={collDragIdx}
+            setCollDragIdx={setCollDragIdx}
+            setEditingQuantityItemId={setEditingQuantityItemId}
+            tagsCollapsedFor={tagsCollapsedFor}
+            toggleTagsFor={toggleTagsFor}
+            updateCollection={updateCollection}
+            archiveCollection={archiveCollection}
+            saveMemberOrder={saveMemberOrder}
+            saveMemberTags={saveMemberTags}
+            saveMemberQuantity={saveMemberQuantity}
+            toggleTagEditor={toggleTagEditor}
+            removeItemFromCollection={removeItemFromCollection}
+            putBackRemoval={putBackRemoval}
+          />
+        )}
 
         {/* Collection Removal History View */}
-        {view === "collection-history" && (() => {
-          const coll = collections.find((c) => c.id === selectedCollectionId);
-          if (!coll) return <p className="text-muted-foreground">Collection not found</p>;
-          const history = collectionHistory[coll.id] || [];
-          const groups = groupRemovalsByAction(history);
-
-          return (
-            <div>
-              <button
-                onClick={() => setView("collection-detail")}
-                className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                Back to Collection
-              </button>
-
-              <h2 className="text-lg font-medium mb-1">Removal history</h2>
-              <p className="text-sm text-muted-foreground mb-3">
-                {coll.name.trim()} — newest first
-                {history.length >= 50 ? ", most recent 50" : ""}
-              </p>
-
-              {collectionHistoryError && (
-                <p className="text-xs text-destructive mb-2">{collectionHistoryError}</p>
-              )}
-
-              {groups.length === 0 ? (
-                !collectionHistoryError && (
-                  <p className="text-muted-foreground text-sm py-4 text-center">
-                    Nothing has been removed from this collection.
-                  </p>
-                )
-              ) : (
-                <div className="space-y-3">
-                  {groups.map((group, groupIndex) =>
-                    // A single removal carries its own timestamp inline, the same
-                    // shape as the panel row. A heading over one item would be
-                    // ceremony for nothing. Bulk actions get the heading, so the
-                    // timestamp is stated once instead of on every row.
-                    group.rows.length === 1 ? (
-                      <div
-                        key={group.rows[0].id}
-                        className="flex items-start gap-2 p-3 bg-card border border-border rounded-lg"
-                      >
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm truncate">
-                            <ItemNameLabel name={group.rows[0].itemName} />
-                          </p>
-                          <RemovalMeta
-                            quantity={group.rows[0].quantity}
-                            tags={group.rows[0].tags}
-                          />
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {friendlyDate(group.removedAt)}
-                          </p>
-                        </div>
-                        <span className="text-xs text-muted-foreground shrink-0">
-                          {removalReasonLabel(group.reason)}
-                        </span>
-                      </div>
-                    ) : (
-                      <div
-                        key={`${group.removedAt}-${group.reason}-${groupIndex}`}
-                        className="p-3 bg-card border border-border rounded-lg"
-                      >
-                        {/* Same header shape as a single entry — count in the slot
-                            a lone item's name occupies, timestamp beneath, reason
-                            label on the right — so the two read as two shapes of
-                            one thing rather than two components. */}
-                        <div className="flex items-start gap-2 pb-2 mb-2 border-b border-border">
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium text-sm">{group.rows.length} items</p>
-                            <p className="text-xs text-muted-foreground">
-                              {friendlyDate(group.removedAt)}
-                            </p>
-                          </div>
-                          <span className="text-xs text-muted-foreground shrink-0">
-                            {removalReasonLabel(group.reason)}
-                          </span>
-                        </div>
-                        <div className="space-y-1">
-                          {group.rows.map((removal) => (
-                            <div key={removal.id} className="min-w-0">
-                              <p className="text-sm truncate">
-                                <ItemNameLabel name={removal.itemName} />
-                              </p>
-                              {/* The group heading already states the time and
-                                  the reason once; what a row still needs to say
-                                  for itself is what it was. */}
-                              <RemovalMeta
-                                quantity={removal.quantity}
-                                tags={removal.tags}
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ),
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })()}
+        {view === "collection-history" && (
+          <CollectionHistoryScreen
+            collections={collections}
+            selectedCollectionId={selectedCollectionId}
+            collectionHistory={collectionHistory}
+            collectionHistoryError={collectionHistoryError}
+            setView={setView}
+          />
+        )}
 
         {/* Collection Add Items View */}
         {/* The picker. Back is a bare setView("item-detail"): it touches
@@ -4525,80 +2681,31 @@ export default function Alfred() {
             item-to-item navigation). selectedItemId is untouched by this
             navigation and this view is keyed on it in DETAIL_VIEW_STATE, so
             no return address is needed. Same as collection-add-items. */}
-        {view === "item-add-to-collection" && (() => {
-          const target = items.find((i) => i.id === selectedItemId);
-          if (!target) return <p className="text-muted-foreground">Item not found</p>;
-          return (
-            <ItemAddToCollection
-              item={target}
-              items={items}
-              collections={collections}
-              contexts={contexts}
-              onBack={() => setView("item-detail")}
-              onAdd={(collectionId, picks) =>
-                addElementsToCollection(collectionId, target, picks)
-              }
-            />
-          );
-        })()}
+        {view === "item-add-to-collection" && (
+          <ItemAddToCollectionScreen
+            items={items}
+            selectedItemId={selectedItemId}
+            collections={collections}
+            contexts={contexts}
+            setView={setView}
+            addElementsToCollection={addElementsToCollection}
+          />
+        )}
 
-        {view === "collection-add-items" && (() => {
-          const coll = collections.find((c) => c.id === selectedCollectionId);
-          if (!coll) return <p className="text-muted-foreground">Collection not found</p>;
-          const members = membersOf(coll.id);
-          const existingItemIds = new Set(members.map((m) => m.itemId));
-          const availableItems = items.filter((i) => !i.archived && !existingItemIds.has(i.id) && (!coll.contextId || i.contextId === coll.contextId));
-
-          return (
-            <CollectionAddItems
-              availableItems={availableItems}
-              contexts={contexts}
-              collection={coll}
-              onAdd={async (selectedItems) => {
-                const added = await withLoading('Saving...', () =>
-                  addItemsToCollection(
-                    coll.id,
-                    selectedItems.map((s) => ({ itemId: s.itemId, quantity: s.quantity })),
-                  ),
-                );
-                // Stay on this screen if it failed, so the selection is not lost.
-                if (added) setView("collection-detail");
-              }}
-              onCreateItem={async (itemName) => {
-                // Create new item
-                const newItem = {
-                  id: uid(),
-                  user_id: user.id,
-                  name: itemName,
-                  description: '',
-                  contextId: coll.contextId,
-                  elements: [],
-                  tags: [],
-                  isCaptureTarget: false,
-                  createdAt: new Date().toISOString(),
-                };
-
-                // Save to database
-                const context = contexts.find((c) => c.id === newItem.contextId);
-                const isShared = context?.shared || false;
-                const savedItem = await storage.set(`item:${newItem.id}`, newItem, isShared);
-
-                // Add to local items state
-                setItems((prev) => [...prev, savedItem || newItem]);
-
-                // Add to collection
-                const added = await addItemsToCollection(coll.id, [
-                  { itemId: newItem.id, quantity: '' },
-                ]);
-
-                // Close dialog
-                if (added) setView("collection-detail");
-              }}
-              onCancel={() => setView("collection-detail")}
-              maxItems={200 - members.length}
-            />
-          );
-        })()}
+        {view === "collection-add-items" && (
+          <CollectionAddItemsScreen
+            user={user}
+            collections={collections}
+            selectedCollectionId={selectedCollectionId}
+            items={items}
+            setItems={setItems}
+            contexts={contexts}
+            membersOf={membersOf}
+            addItemsToCollection={addItemsToCollection}
+            withLoading={withLoading}
+            setView={setView}
+          />
+        )}
 
         {/* Games View */}
         {view === "games" && <GamesPage />}
