@@ -9,7 +9,8 @@ docs/technical-spec-alfred_split.md.
 - [x] Step 0: plan (read-only), docs, claims
 - [x] Step 1: test helper + guards repointed; pure helpers into src/utils
   (Alfred.jsx 12,052 → 11,575 lines; app 2030/2030, CLI 142/142, same as before)
-- [ ] Step 2: new shared pieces into src/shared
+- [x] Step 2: new shared pieces into src/shared
+  (Alfred.jsx 11,575 → 10,749 lines; app 2030/2030, CLI 142/142, same as before)
 - [ ] Step 3: existing flat shared UI into src/shared
 - [ ] Step 4: recycle bin
 - [ ] Step 5: contexts
@@ -38,3 +39,15 @@ docs/technical-spec-alfred_split.md.
   the slice.
 - Step 1 also moved the `./utils/caseConvert` import out of Alfred.jsx: only
   `storage` used it.
+- Step 2: src/shared/ObjectIcon.jsx (OBJECT_ICONS + ObjectIcon), LoginScreen,
+  LoadingOverlay, DetailMeta, AddPageChrome, and src/shared/recurrence/
+  (CustomRecurrenceDialog, IntervalRecurrenceDialog, SchedulePopover,
+  RecurrenceQuickSelect). NAV_ITEMS stays in Alfred.jsx until AppChrome
+  (step 12). Ten lucide imports used only by OBJECT_ICONS moved with it.
+- Verbatim check: each moved file's body, minus imports and `export`, is
+  compared as a substring of the previous Alfred.jsx (piped from `git show`).
+  Steps 1 and 2 all pass.
+- Guard finding (step 2): a read-only check that wrote scratch files to
+  `$S/...` (the session scratchpad, outside the repo) was blocked as an
+  unclaimed repo write because `$S` was set in the same command after a `cd`.
+  Not routed around; the check was redone with stdin and no files written.
