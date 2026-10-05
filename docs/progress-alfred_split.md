@@ -16,7 +16,9 @@ docs/technical-spec-alfred_split.md.
   app 2030/2030, CLI 142/142, same as before)
 - [x] Step 4: recycle bin
   (Alfred.jsx 10,749 → 10,195 lines; app 2030/2030, CLI 142/142, same as before)
-- [ ] Step 5: contexts
+- [~] Step 5: contexts — ContextForm, ContextCard, ContextsScreen,
+  useContextActions done; ContextDetailView deferred (see Notes)
+  (Alfred.jsx 10,195 → 9,750 lines; app 2030/2030, CLI 142/142, same as before)
 - [ ] Step 6: home and schedule
 - [ ] Step 7: intentions
 - [ ] Step 8: items
@@ -79,6 +81,33 @@ docs/technical-spec-alfred_split.md.
 - Step 4: one CLI baseline run reported 143 tests / 2 failing before any
   change was made; eight reruns all gave 142/142 and the failure could not be
   reproduced or named. Recorded as a flake in scripts/lib, not this project.
+- Step 5: src/contexts/ContextForm.jsx and ContextCard.jsx (verbatim),
+  ContextsScreen.jsx (the Contexts view JSX, verbatim, re-indented 6), and
+  useContextActions.js (saveContextRecord, saveContext, the two add-to-context
+  writers, contextChildCounts, contextArchiveBlockers, archiveContext, in three
+  verbatim blocks). It holds no state. Alfred calls it just before
+  useRecycleBin, which takes `contextArchiveBlockers` from it, and after `user`
+  and every state it reads. Twin rule: ContextForm's useState defaults and their
+  dirty-check effect sit together in ContextForm.jsx, both verbatim.
+- Step 5, ContextDetailView NOT moved: it renders ItemCard, IntentionCard and
+  CollectionCard, which are still inside Alfred.jsx (steps 8, 7 and 11). Moving
+  it now would mean importing back from Alfred.jsx (a circular import) or
+  passing components in as props (a change of shape, not a move). The same
+  shape blocks other detail views. From the code: ContextDetailView →
+  ContextForm, ItemCard, IntentionCard, CollectionCard; IntentionDetailView →
+  IntentionCard, ItemCard, EventCard; ItemDetailView → ItemCard,
+  ExecutionBadge, IntentionCard; ItemCard → ExecutionBadge; IntentionCard →
+  EventCard; EventCard → EventMetaLink. Proposed reorder for Alex: leaf cards
+  first (EventCard+EventMetaLink, ExecutionBadge, ItemNameLabel,
+  CollectionCard), then IntentionCard and ItemCard with their twins, then the
+  four detail views, then the per-feature screens and actions, then the shell.
+- CLI flake, identified: running `node --test "scripts/lib/*.test.mjs"` in the
+  background while other tool calls run makes the session's claims-guard hook
+  append to the real guard log mid-run. claims-folders.test.mjs:77 ("the real
+  guard log was written to") and hooks.test.mjs:354 ("a full test run leaves
+  the real log and the real binding untouched") then fail, and the file-level
+  failure shows as a 143rd test. Not a code fault. Run the CLI suite in the
+  foreground with nothing alongside.
 - **Step 12 must also** update the file list in PROJECT.md (lines 90–93, and
   anything else listing old paths) and the TagFilter comment in
   src/utils/tags.js (lines 161–172) to match the final layout. Neither was

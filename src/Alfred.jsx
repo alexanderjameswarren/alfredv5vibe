@@ -149,6 +149,10 @@ import SchedulePopover from "./shared/recurrence/SchedulePopover";
 import RecurrenceQuickSelect from "./shared/recurrence/RecurrenceQuickSelect";
 import { useRecycleBin } from "./recycle/useRecycleBin";
 import RecycleScreen from "./recycle/RecycleScreen";
+import { useContextActions } from "./contexts/useContextActions";
+import ContextsScreen from "./contexts/ContextsScreen";
+import ContextForm from "./contexts/ContextForm";
+import ContextCard from "./contexts/ContextCard";
 import {
   loadMembers,
   loadRemovals,
@@ -954,7 +958,32 @@ export default function Alfred() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [realtimeStatus, setRealtimeStatus] = useState('disconnected'); // 'connected', 'connecting', 'disconnected'
-  // `refreshData` and `contextArchiveBlockers` are function declarations below, hoisted.
+  // Called here, after `user` and every state it reads. `withLoading` and
+  // `offerUndoFor` are function declarations below, hoisted.
+  const {
+    saveContextRecord,
+    saveContext,
+    handleAddItemToContext,
+    handleAddIntentionToContext,
+    contextArchiveBlockers,
+    archiveContext,
+  } = useContextActions({
+    user,
+    contexts,
+    setContexts,
+    items,
+    setItems,
+    intents,
+    setIntents,
+    events,
+    collections,
+    editingContext,
+    setEditingContext,
+    setShowContextForm,
+    withLoading,
+    offerUndoFor,
+  });
+  // `refreshData` is a function declaration below, hoisted.
   const recycleBin = useRecycleBin({ view, refreshData, contextArchiveBlockers });
 
   // --- Notification landing (deep link, closed app) -------------------------
@@ -3740,101 +3769,6 @@ export default function Alfred() {
     await loadCollectionMembers([collectionId]);
   }
 
-  // The core save, with the target passed in rather than read from
-  // `editingContext`. Context detail edits in place now (Step 5) and has its own
-  // notion of what it is editing; making it set Alfred's modal state first would
-  // have meant two sources of truth for the same question.
-  async function saveContextRecord(
-    existing,
-    name,
-    shared = false,
-    keywords = "",
-    description = "",
-    pinned = false,
-    defaultCollectionId = null,
-  ) {
-    return withLoading('Saving context...', async () => {
-      // The <select> uses "" for "none", but default_collection_id is a FK to
-      // item_collections.id — an empty string would violate it. Normalise here,
-      // at the single point every caller funnels through.
-      const defaultCollection = defaultCollectionId || null;
-
-      // `tags` is stripped, deliberately. Contexts carried a jsonb tags column
-      // with a GIN index and no user interface; the tags project's Migration A
-      // drops it.
-      //
-      // This matters because `existing` comes from `select("*")` and
-      // `storage.set` UPSERTS THE WHOLE OBJECT — so a spread would send a
-      // `tags` key to a table that no longer has that column, and PostgREST
-      // rejects the write outright (PGRST204). The window is narrow but real:
-      // a tab that loaded contexts before the migration and saves one after it.
-      // Costs nothing to be safe, and a context edit failing is not a failure
-      // anyone would connect back to a dropped column.
-      const { tags: _droppedContextTags, ...existingWithoutTags } =
-        existing || {};
-
-      const context = existing
-        ? {
-            ...existingWithoutTags,
-            name,
-            shared,
-            keywords,
-            description,
-            pinned,
-            defaultCollectionId: defaultCollection,
-          }
-        : {
-            id: uid(),
-            user_id: user.id,
-            name,
-            shared,
-            keywords,
-            description,
-            pinned,
-            defaultCollectionId: defaultCollection,
-            createdAt: new Date().toISOString(),
-          };
-
-      const savedContext = (await storage.set(`context:${context.id}`, context, shared)) || context;
-
-      // Both branches take the saved row. On the edit branch that matters as
-      // much as on the create branch: the `set_updated_at` trigger stamps a new
-      // `updated_at` that the object we sent does not have, so without this an
-      // edited context kept its old "Last modified" until a reload.
-      if (existing) {
-        setContexts((prev) =>
-          prev.map((c) => (c.id === context.id ? savedContext : c)),
-        );
-      } else {
-        setContexts((prev) => [...prev, savedContext]);
-      }
-    });
-  }
-
-  // The Contexts page's form, which is driven by the `editingContext` modal
-  // slot. Clearing that slot is a page concern, so it stays here rather than in
-  // the shared core.
-  async function saveContext(
-    name,
-    shared = false,
-    keywords = "",
-    description = "",
-    pinned = false,
-    defaultCollectionId = null,
-  ) {
-    await saveContextRecord(
-      editingContext,
-      name,
-      shared,
-      keywords,
-      description,
-      pinned,
-      defaultCollectionId,
-    );
-    setShowContextForm(false);
-    setEditingContext(null);
-  }
-
   function getIntentDisplay(intent) {
     if (intent.text) return intent.text;
     if (intent.itemId) {
@@ -4044,61 +3978,6 @@ export default function Alfred() {
     setView(previousView);
   }
 
-  async function handleAddItemToContext(
-    name,
-    elements,
-    contextId,
-    description = "",
-    isCaptureTarget = false,
-  ) {
-    return withLoading('Saving...', async () => {
-      const newItem = {
-        id: uid(),
-        user_id: user.id,
-        name: name || "New Item",
-        description: description || "",
-        contextId: contextId,
-        elements: elements || [],
-        isCaptureTarget: isCaptureTarget || false,
-        createdAt: new Date().toISOString(),
-      };
-
-      const context = contexts.find((c) => c.id === contextId);
-      const isShared = context?.shared || false;
-
-      const savedItem = await storage.set(`item:${newItem.id}`, newItem, isShared);
-      setItems([...items, savedItem || newItem]);
-    });
-  }
-
-  async function handleAddIntentionToContext(
-    text,
-    contextId,
-    itemId = null,
-    collectionId = null,
-    recurrenceConfig = null,
-  ) {
-    return withLoading('Saving...', async () => {
-      const newIntent = {
-        id: uid(),
-        user_id: user.id,
-        text: text || "New Intention",
-        createdAt: new Date().toISOString(),
-        isIntention: true,
-        isItem: false,
-        archived: false,
-        itemId: itemId,
-        contextId: contextId,
-        recurrenceConfig: recurrenceConfig,
-        collectionId: collectionId,
-      };
-
-      const savedIntent = await storage.set(`intent:${newIntent.id}`, newIntent);
-      setIntents([...intents, savedIntent || newIntent]);
-      return newIntent.id; // Return the ID so it can be scheduled
-    });
-  }
-
 
   // Collection CRUD
   async function addCollection(name, contextId = null) {
@@ -4233,66 +4112,6 @@ export default function Alfred() {
   // on a Recycle Bin row, an execution badge, and every item that was in it.
   const activeContexts = contexts.filter((c) => !c.archived);
   const pinnedContexts = activeContexts.filter((c) => c.pinned);
-
-  // Contexts are taxonomy, not content, so archiving one is only safe while it
-  // holds nothing — nothing cascades, and nothing is left pointing at a parent
-  // the UI has stopped showing.
-  //
-  // ARCHIVED CHILDREN COUNT. An archived item still belongs to its context, and
-  // there is a concrete reason beyond principle: the Recycle Bin labels each
-  // archived row with its context name, and restoring an item whose context is
-  // archived would put it somewhere with no page to reach. Emptiness means "no
-  // children at all", not "no live children".
-  //
-  // All four counts come from state already loaded — `loadData` selects every
-  // row of each table without a filter — so this needs no query.
-  function contextChildCounts(contextId) {
-    return {
-      items: items.filter((i) => i.contextId === contextId).length,
-      intentions: intents.filter((i) => i.contextId === contextId).length,
-      events: events.filter((e) => e.contextId === contextId).length,
-      collections: collections.filter((c) => c.contextId === contextId).length,
-    };
-  }
-
-  /** Human list of what is stopping a context being archived; empty when clear. */
-  function contextArchiveBlockers(contextId) {
-    const counts = contextChildCounts(contextId);
-    const label = (n, one, many) => (n === 1 ? `1 ${one}` : `${n} ${many}`);
-    const parts = [];
-    if (counts.items) parts.push(label(counts.items, "item", "items"));
-    if (counts.intentions)
-      parts.push(label(counts.intentions, "intention", "intentions"));
-    if (counts.events) parts.push(label(counts.events, "event", "events"));
-    if (counts.collections)
-      parts.push(label(counts.collections, "collection", "collections"));
-    return parts;
-  }
-
-  async function archiveContext(contextId) {
-    const context = contexts.find((c) => c.id === contextId);
-    if (!context) return;
-    // Belt and braces: the button is disabled when this is non-empty, but the
-    // counts come from state that a realtime insert can change between render
-    // and click.
-    const blockers = contextArchiveBlockers(contextId);
-    if (blockers.length > 0) {
-      window.alert(
-        `Cannot archive "${context.name}": it still holds ${blockers.join(", ")}.`,
-      );
-      return;
-    }
-    return withLoading("Archiving...", async () => {
-      const archived = { ...context, archived: true };
-      await storage.set(`context:${contextId}`, archived, context.shared);
-      setContexts((prev) => prev.map((c) => (c.id === contextId ? archived : c)));
-
-      offerUndoFor(`Archived "${context.name}".`, async () => {
-        await storage.set(`context:${contextId}`, context, context.shared);
-        setContexts((prev) => prev.map((c) => (c.id === contextId ? context : c)));
-      });
-    });
-  }
 
   // Collections are soft-deleted from Step 4b, so `collections` now holds
   // archived rows too — the Recycle Bin reads them from there. Everything else
@@ -5171,75 +4990,21 @@ export default function Alfred() {
 
         {/* Contexts View */}
         {view === "contexts" && (
-          <div>
-            <div className="flex items-center justify-between mb-3 sm:mb-4">
-              <h2 className="text-lg sm:text-xl font-medium">Contexts</h2>
-              <button
-                onClick={() => {
-                  setEditingContext(null);
-                  setShowContextForm(true);
-                }}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-              >
-                <Plus className="w-4 h-4" />
-                Add Context
-              </button>
-            </div>
-
-            {showContextForm ? (
-              <ContextForm
-                editing={editingContext}
-                stickyFooter
-                collections={collections}
-                onSave={saveContext}
-                onCancel={() => {
-                  setShowContextForm(false);
-                  setEditingContext(null);
-                }}
-                onDirtyChange={setUnsavedChanges}
-              />
-            ) : activeContexts.length === 0 ? (
-              <div className="text-center py-12 text-muted-foreground">
-                <p>No contexts yet.</p>
-                <p className="text-sm mt-2">
-                  Add a context to define how things get done.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <ListToolbar
-                  query={searchFor("contexts")}
-                  onQueryChange={setSearchFor("contexts")}
-                  searchLabel="Search contexts"
-                  sortId="contexts-sort"
-                  sortOptions={NAMED_RECORD_SORT_OPTIONS}
-                  sort={contextsSort}
-                  className="mb-1"
-                />
-                {/* Was a hardcoded `.sort(a.name.localeCompare(b.name))`. That
-                    order is now this page's DEFAULT rather than its only option.
-
-                    Context DETAIL has its own control as of the search work —
-                    one row for all three of its lists; see `contextDetailSort`. */}
-                {visibleContexts.length === 0 ? (
-                  <NoMatches noun="contexts" query={searchFor("contexts")} />
-                ) : (
-                  visibleContexts.map((context) => (
-                    <ContextCard
-                      key={context.id}
-                      context={context}
-                      onClick={() => viewContextDetail(context.id)}
-                      onEdit={() => {
-                        setEditingContext(context);
-                        setShowContextForm(true);
-                      }}
-                      showSettings={true}
-                    />
-                  ))
-                )}
-              </div>
-            )}
-          </div>
+          <ContextsScreen
+            activeContexts={activeContexts}
+            visibleContexts={visibleContexts}
+            collections={collections}
+            showContextForm={showContextForm}
+            setShowContextForm={setShowContextForm}
+            editingContext={editingContext}
+            setEditingContext={setEditingContext}
+            saveContext={saveContext}
+            setUnsavedChanges={setUnsavedChanges}
+            searchFor={searchFor}
+            setSearchFor={setSearchFor}
+            contextsSort={contextsSort}
+            viewContextDetail={viewContextDetail}
+          />
         )}
 
         {/* Context Detail View */}
@@ -6612,216 +6377,6 @@ const CLEARED_ENRICHMENT = {
   suggestedTags: [],
   suggestedCollectionId: null,
 };
-
-function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = false, collections = [] }) {
-  const [name, setName] = useState(editing?.name || "");
-  const [shared, setShared] = useState(editing?.shared || false);
-  const [keywords, setKeywords] = useState(editing?.keywords || "");
-  const [description, setDescription] = useState(editing?.description || "");
-  const [pinned, setPinned] = useState(editing?.pinned || false);
-  const [defaultCollectionId, setDefaultCollectionId] = useState(
-    editing?.defaultCollectionId || "",
-  );
-
-  useEffect(() => {
-    if (!onDirtyChange) return;
-    const isDirty =
-      name !== (editing?.name || "") ||
-      shared !== (editing?.shared || false) ||
-      keywords !== (editing?.keywords || "") ||
-      description !== (editing?.description || "") ||
-      pinned !== (editing?.pinned || false) ||
-      defaultCollectionId !== (editing?.defaultCollectionId || "");
-    onDirtyChange(isDirty, "this context");
-  }, [name, shared, keywords, description, pinned, defaultCollectionId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    return () => { if (onDirtyChange) onDirtyChange(false); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  return (
-    <EditCard className="mb-4 sm:mb-6">
-      <h3 className="font-medium text-lg mb-4">
-        {editing ? "Edit Context" : "New Context"}
-      </h3>
-
-      <div className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-foreground mb-1">
-            Name
-          </label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Context name"
-            className="w-full px-3 py-2 border border-border rounded text-base"
-            autoFocus
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-foreground mb-1">
-            Keywords
-          </label>
-          <input
-            type="text"
-            value={keywords}
-            onChange={(e) => setKeywords(e.target.value)}
-            placeholder="Keywords (comma separated)"
-            className="w-full px-3 py-2 border border-border rounded text-base"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-foreground mb-1">
-            Description
-          </label>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Description"
-            rows={3}
-            className="w-full px-3 py-2 border border-border rounded text-base"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-foreground mb-1">
-            Default collection
-          </label>
-          {/* Every non-archived collection, deliberately unfiltered by context.
-              A default collection names where this context's items GO, which is
-              normally a *different* context: a recipe lives in Recipes and its
-              ingredients belong in Shopping alongside the other products. An
-              earlier same-context filter here broke the feature's own driving
-              case, because Recipes could not point at Groceries. */}
-          <select
-            value={defaultCollectionId}
-            onChange={(e) => setDefaultCollectionId(e.target.value)}
-            className="w-full px-3 py-2 min-h-[44px] border border-border rounded text-base"
-          >
-            <option value="">None</option>
-            {(collections || [])
-              .filter((c) => !c.archived)
-              .map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-          </select>
-          <p className="text-xs text-muted-foreground mt-1">
-            Preselected when adding an item's ingredients to a collection.
-          </p>
-        </div>
-
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={shared}
-            onChange={(e) => setShared(e.target.checked)}
-            className="rounded accent-primary"
-          />
-          <span className="text-sm">Share this context</span>
-        </label>
-
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={pinned}
-            onChange={(e) => setPinned(e.target.checked)}
-            className="rounded accent-primary"
-          />
-          <span className="text-sm">Pin to home</span>
-        </label>
-
-        {/* Everything about how this footer sits — the sticky offset, the inset
-            that makes it finish on the card's border when it releases, and equal
-            space above and below the buttons — belongs to PinnedFooter. All six of
-            Alfred's pinned footers share it, which is the point: this took three
-            rounds to get right and the third round fixed only one of the six. */}
-        <PinnedFooter pinned={stickyFooter} unpinnedClassName="pt-2">
-          <button
-            onClick={() => {
-              if (name.trim()) {
-                if (onDirtyChange) onDirtyChange(false);
-                onSave(name, shared, keywords, description, pinned, defaultCollectionId);
-              }
-            }}
-            className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
-          >
-            Save
-          </button>
-          <button
-            onClick={() => { if (onDirtyChange) onDirtyChange(false); onCancel(); }}
-            className="px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
-          >
-            Cancel
-          </button>
-        </PinnedFooter>
-      </div>
-    </EditCard>
-  );
-}
-
-function ContextCard({ context, onClick, onEdit, showSettings = false }) {
-  return (
-    // The handler sits on the root, not on the title block. The card already
-    // advertised itself as clickable with cursor-pointer and hover:border-primary,
-    // but only the left column responded — so the right half, the padding, and
-    // the gap beside the gear were all dead. Matches ItemCard and IntentionCard.
-    <div
-      onClick={onClick}
-      className="p-3 sm:p-4 bg-card border border-border rounded-lg cursor-pointer hover:border-primary shadow-sm hover:shadow-md transition-shadow duration-200"
-    >
-      {/* See CollectionCard — same shape, same collapse. Not a strip 8b added,
-          but leaving it at 0 while the other three sit at 12 would recreate the
-          inconsistency this step exists to remove. */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          {/* Step 12.10. The type glyph LEADS and the pin trails: one is what
-              this record is, the other is a flag on it, and identity should not
-              queue behind status. The pin stays because the Contexts list mixes
-              pinned and unpinned rows and is the only place that says which is
-              which — in the Pinned section above it is merely redundant. */}
-          <div className="flex items-center gap-2">
-            <ObjectIcon type="context" className="w-4 h-4 text-primary" />
-            <h3 className="font-medium text-foreground">{context.name}</h3>
-            {context.pinned && <Pin className="w-3.5 h-3.5 text-muted-foreground" />}
-          </div>
-          {context.description && (
-            <p className="text-sm text-muted-foreground mt-1">{context.description}</p>
-          )}
-          <div className="flex items-center gap-2 mt-1">
-            {context.shared && (
-              <span className="text-xs text-primary flex items-center gap-1">
-                <Share2 className="w-3 h-3" />
-                Shared
-              </span>
-            )}
-          </div>
-        </div>
-        {showSettings && onEdit && (
-          // KEPT, and now load-bearing. The spec asked for this stopPropagation
-          // to go because the gear was a SIBLING of the clickable region and had
-          // nothing to stop. Moving the handler to the root above makes the gear
-          // a descendant of it, so without this a click here would open the
-          // context AND the edit form — defect 0.3 all over again. The premise
-          // for removing it was true only before this step's other half.
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onEdit();
-            }}
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-foreground"
-          >
-            <Settings className="w-5 h-5" />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
 
 /**
  * One collection row. Step 4a of docs/technical-spec-ui-standardization.md.
