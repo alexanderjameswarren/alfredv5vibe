@@ -31,13 +31,12 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
 - [ ] Step 9: layer (d) per-feature screens and actions
   - [x] 9a home/schedule (Alfred.jsx 6,346 → 6,108 lines; app 2030/2030,
     CLI 142/142, same as before)
-  - [ ] 9b intentions
-  - [ ] 9c items
-  - [ ] 9d executions
+  - [x] 9b–9d, one step (agreed after 9a): intentions, then items, then
+    executions, with a build and app tests after each part (Alfred.jsx
+    6,108 → 5,250 lines; app 2030/2030 after each part, CLI 142/142)
   - [ ] 9e inbox
   - [ ] 9f collections
-  - [ ] 9g reminders/settings
-- [ ] Step 10: layer (e) the shell
+- [ ] Step 10: layer (e) the shell, including 9g (reminders/settings)
 - [ ] Finish: Alex runs gitpush Finish
 
 ### Notes
@@ -175,6 +174,27 @@ Reordered into dependency layers after step 5 (Alex, 2026-10-05); see the spec.
   a guard slice) and 9f (collections, about 1,800 lines) should stay on their
   own. 9g (settings JSX plus the reminder and push effects, about 120 lines)
   could fold into step 10.
+- Step 9b–9d. Intentions: src/intentions/useIntentionActions.js
+  (moveToPlanner, updateIntent, archiveIntention, verbatim, 122 lines),
+  IntentionsScreen.jsx and IntentionAddScreen.jsx (JSX verbatim, re-indented
+  6). Items: src/items/useItemActions.js (updateItem, deepCloneItem, verbatim,
+  102 lines), MemoriesScreen.jsx and ItemAddScreen.jsx (verbatim,
+  re-indented 6). Executions: src/executions/useExecutionActions.js — block A
+  (activate, the five notification-chain functions with their comment,
+  closeExecution, cancelExecutionForEvent, pause, make active, element toggle
+  and update, notes, toggleCollectionItem; 380 lines) and block B
+  (startNowFromItem, startNowFromIntention; 170 lines), both verbatim. Twin
+  rule: the three string-to-element mappers (activate, startNowFromItem,
+  startNowFromIntention) are all in that file, verbatim and not merged.
+  toggleCollectionItem moved with the execution writers because it only writes
+  the active execution. closeExecution still calls
+  clearCompletedFromCollection, which stays in Alfred until 9f; it is a hoisted
+  declaration passed in as an argument. openExecution and editItemFromExecution
+  are navigation and stay for step 10. ExecutionDetailScreen.jsx holds the two
+  execution-route branches. The `view === "execution-detail"` test stays in
+  Alfred around it, so those two condition lines lost that prefix; nothing else
+  changed (39 lines compared). All four hooks are called in order after
+  useEventActions, after every state they read. Alfred.jsx lints clean.
 - Old step numbers in notes above, after the reorder: old step 12 (shell) is
   now step 10; the inbox step is 9e; old steps 7, 8 and 11 named in the step-5
   note are now IntentionCard/ItemCard in step 7 and CollectionCard in step 6.

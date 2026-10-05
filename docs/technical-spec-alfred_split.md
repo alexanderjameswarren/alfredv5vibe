@@ -90,6 +90,10 @@ first. Target locations are unchanged from the layout above.
 10. Layer (e), the shell: useAlfredData, useRealtime, useAlfredNavigation,
     useListPreferences, AppChrome, BottomDock.
 
+Amended after 9a (Alex, 2026-10-05): 9b, 9c and 9d are done as one step, in
+that order, with a build and app-test run after each part. 9e (inbox) and 9f
+(collections) stay separate. 9g (reminders/settings) folds into step 10.
+
 Each step: `npm run build`, `CI=true npx react-scripts test --watchAll=false`,
 `node --test "scripts/lib/*.test.mjs"`, test counts equal before and after,
 then the desktop click-through in the progress file.
