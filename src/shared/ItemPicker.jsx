@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import SearchInput from "./SearchInput";
-import { matchesQuery } from "./utils/search";
+import { matchesQuery } from "../utils/search";
 
 // The shared "pick an item" search: every place you search for ONE item to
 // link, attach or target. (Add Items to Collection is deliberately not one of

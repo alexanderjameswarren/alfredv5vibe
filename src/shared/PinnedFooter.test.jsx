@@ -93,7 +93,7 @@ describe("what it takes from the card", () => {
 });
 
 describe("the cancelling margins", () => {
-  const css = fs.readFileSync(path.join(__dirname, "index.css"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "..", "index.css"), "utf8");
   const rule = css.slice(css.indexOf(".pinned-footer {"), css.indexOf("@media (min-width: 640px)"));
 
   it("cancel the inset on all three sides, from one value", () => {

@@ -1,6 +1,6 @@
 import React from "react";
 import { ChevronDown, ChevronRight, Flame, Trash2 } from "lucide-react";
-import InsertRowButton from "../../InsertRowButton";
+import InsertRowButton from "../../shared/InsertRowButton";
 import { sourceLabel } from "../lib/warmupLadder";
 import {
   MAX_RUNGS, canRemoveRung, draftSummary, toDraft, validateMode, withRungAt,

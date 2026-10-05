@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { X, Plus } from "lucide-react";
 import SearchInput from "./SearchInput";
-import { matchesLoosely } from "./utils/search";
-import { normaliseTag, MAX_TAGS, MAX_TAG_LENGTH } from "./utils/tags";
+import { matchesLoosely } from "../utils/search";
+import { normaliseTag, MAX_TAGS, MAX_TAG_LENGTH } from "../utils/tags";
 
 // The shared tag control: type to search tags already in use, pick one, or
 // create a new one. Replaces the old comma-separated `TagInput`.

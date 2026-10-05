@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Send, Inbox } from "lucide-react";
 import UnderlineTabs from "./UnderlineTabs";
-import { alfredSource, sourceOf } from "./testing/alfredSources";
+import { alfredSource, sourceOf } from "../testing/alfredSources";
 
 // The accessible name of a tab is its LABEL ALONE — `aria-label`, not the text content.
 // That is the point of it: below `lg` the visible label is hidden and only the icon and

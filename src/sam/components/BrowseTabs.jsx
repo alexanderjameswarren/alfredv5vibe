@@ -7,7 +7,7 @@ import {
   formatLastPracticed,
   formatCreated,
 } from "../lib/samFormat";
-import SortControl, { useSortPreference } from "../../SortControl";
+import SortControl, { useSortPreference } from "../../shared/SortControl";
 import {
   SORT_OPTIONS,
   DEFAULT_SORT,

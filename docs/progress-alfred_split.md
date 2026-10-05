@@ -11,7 +11,9 @@ docs/technical-spec-alfred_split.md.
   (Alfred.jsx 12,052 → 11,575 lines; app 2030/2030, CLI 142/142, same as before)
 - [x] Step 2: new shared pieces into src/shared
   (Alfred.jsx 11,575 → 10,749 lines; app 2030/2030, CLI 142/142, same as before)
-- [ ] Step 3: existing flat shared UI into src/shared
+- [x] Step 3: existing flat shared UI into src/shared
+  (24 files moved; Alfred.jsx unchanged at 10,749 lines apart from import paths;
+  app 2030/2030, CLI 142/142, same as before)
 - [ ] Step 4: recycle bin
 - [ ] Step 5: contexts
 - [ ] Step 6: home and schedule
@@ -51,3 +53,17 @@ docs/technical-spec-alfred_split.md.
   `$S/...` (the session scratchpad, outside the repo) was blocked as an
   unclaimed repo write because `$S` was set in the same command after a `cd`.
   Not routed around; the check was redone with stdin and no files written.
+- Step 3: AppLink, PinnedFooter, EditCard, InsertRowButton, ItemPicker,
+  TagPicker, TagFilter, ListToolbar, SearchInput, SortControl, UnderlineTabs,
+  UndoMessage, RemovalMeta, RepeatBlockDialog and their 10 tests moved to
+  src/shared/. Byte-identical to HEAD except `./utils/`, `./viewPaths`,
+  `./testing/` → `../…`, and PinnedFooter.test's index.css path gaining `".."`.
+  Importers updated: Alfred.jsx, InboxDetailView.jsx,
+  NotificationChainInline.jsx, sam/components/BrowseTabs.jsx and
+  sam/components/WarmupLadderEditor.jsx (the two sam/ files claimed with
+  Alex's confirmation, import paths only). Both readdirSync guards confirmed
+  to list all 23 shared/ screen files, including shared/recurrence/.
+- **Step 12 must also** update the file list in PROJECT.md (lines 90–93, and
+  anything else listing old paths) and the TagFilter comment in
+  src/utils/tags.js (lines 161–172) to match the final layout. Neither was
+  claimed or edited in step 3, on Alex's instruction.

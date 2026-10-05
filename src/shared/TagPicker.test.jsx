@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import TagPicker, { TAG_PICKER_CAP } from "./TagPicker";
-import { MAX_TAGS } from "./utils/tags";
+import { MAX_TAGS } from "../utils/tags";
 
 const POOL = ["breadcrumbs", "whole foods", "tjs", "stir fry", "middle eastern"];
 

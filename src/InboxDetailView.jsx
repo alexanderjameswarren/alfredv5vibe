@@ -67,11 +67,11 @@ import {
   AlignLeft,
   Pencil,
 } from "lucide-react";
-import ItemPicker, { PickedItem } from "./ItemPicker";
-import TagPicker from "./TagPicker";
-import PinnedFooter, { FooterSpacer } from "./PinnedFooter";
-import EditCard from "./EditCard";
-import InsertRowButton from "./InsertRowButton";
+import ItemPicker, { PickedItem } from "./shared/ItemPicker";
+import TagPicker from "./shared/TagPicker";
+import PinnedFooter, { FooterSpacer } from "./shared/PinnedFooter";
+import EditCard from "./shared/EditCard";
+import InsertRowButton from "./shared/InsertRowButton";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
 import { computeBaseline } from "./utils/inboxSuggestions";
 import { isFirstStep } from "./utils/elementOffsets";

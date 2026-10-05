@@ -6,7 +6,7 @@ import EditCard, {
   EDIT_CARD_INSET,
   EDIT_CARD_FOOTER_RADIUS,
 } from "./EditCard";
-import { alfredSource, sourceOf } from "./testing/alfredSources";
+import { alfredSource, sourceOf } from "../testing/alfredSources";
 
 /** Tailwind's default spacing scale, for the steps this card uses. */
 const SPACING_PX = { 1: 4, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24, 7: 28, 8: 32 };

@@ -7,7 +7,7 @@ import {
   splitMinutes,
   describeBlock,
   repeatBlock,
-} from "./utils/blockRepeat";
+} from "../utils/blockRepeat";
 
 const DEFAULT_BLOCK_LENGTH = 1;
 const DEFAULT_TIMES = 3;

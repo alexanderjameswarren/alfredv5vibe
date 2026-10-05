@@ -29,13 +29,13 @@ import {
 import { useExecutionRoute } from "./useExecutionRoute";
 import InboxDetailView from "./InboxDetailView";
 import ClipboardCapture from "./ClipboardCapture";
-import PinnedFooter from "./PinnedFooter";
-import EditCard from "./EditCard";
-import InsertRowButton from "./InsertRowButton";
+import PinnedFooter from "./shared/PinnedFooter";
+import EditCard from "./shared/EditCard";
+import InsertRowButton from "./shared/InsertRowButton";
 import InboxListCard from "./InboxListCard";
 import RecentlyArchived from "./RecentlyArchived";
 import OriginalCapture from "./OriginalCapture";
-import UnderlineTabs from "./UnderlineTabs";
+import UnderlineTabs from "./shared/UnderlineTabs";
 import {
   archiveOutcome,
   olderArchivedCount,
@@ -56,21 +56,21 @@ import { reconcilePushSubscription } from "./utils/pushSubscriptions";
 import { takePendingNavigation } from "./utils/pushRotation";
 import NotificationSettings from "./NotificationSettings";
 import NotificationDiagnostics from "./NotificationDiagnostics";
-import RepeatBlockDialog from "./RepeatBlockDialog";
+import RepeatBlockDialog from "./shared/RepeatBlockDialog";
 import {
   useNotificationChain,
   ChainUnreachableNotice,
   ElementNotification,
   ChainRemainingToggle,
 } from "./NotificationChainInline";
-import AppLink from "./AppLink";
-import UndoMessage, { useUndo } from "./UndoMessage";
-import { useSortPreference } from "./SortControl";
-import ListToolbar, { NoMatches } from "./ListToolbar";
-import ItemPicker, { PickedItem } from "./ItemPicker";
-import TagFilter, { collapseOnSearch } from "./TagFilter";
-import TagPicker from "./TagPicker";
-import RemovalMeta from "./RemovalMeta";
+import AppLink from "./shared/AppLink";
+import UndoMessage, { useUndo } from "./shared/UndoMessage";
+import { useSortPreference } from "./shared/SortControl";
+import ListToolbar, { NoMatches } from "./shared/ListToolbar";
+import ItemPicker, { PickedItem } from "./shared/ItemPicker";
+import TagFilter, { collapseOnSearch } from "./shared/TagFilter";
+import TagPicker from "./shared/TagPicker";
+import RemovalMeta from "./shared/RemovalMeta";
 import { startOfPacificDay } from "./utils/localDay";
 import { tagPoolForRecords } from "./utils/tags";
 import GamesPage from "./games/GamesPage";

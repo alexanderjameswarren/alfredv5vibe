@@ -1,5 +1,5 @@
 import React from "react";
-import { viewToPath } from "./viewPaths";
+import { viewToPath } from "../viewPaths";
 
 // A navigation link that behaves like a link.
 //

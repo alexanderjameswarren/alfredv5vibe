@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import AppLink from "./AppLink";
-import { VIEW_TO_PATH } from "./viewPaths";
+import { VIEW_TO_PATH } from "../viewPaths";
 
 // The whole point of AppLink is what it does NOT do on a modified click.
 // That is invisible in the UI until someone loses a form, so it is pinned

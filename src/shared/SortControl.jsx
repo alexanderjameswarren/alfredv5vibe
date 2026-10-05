@@ -4,7 +4,7 @@ import {
   defaultDirectionFor,
   readStoredSort,
   writeStoredSort,
-} from "./utils/sortOrders";
+} from "../utils/sortOrders";
 
 // The shared sort control. Step 9a of
 // docs/technical-spec-ui-standardization.md.
