@@ -321,3 +321,201 @@ IsUnread(reportStamp, lastClick) => reportStamp != "" && (lastClick = "" || repo
 ; Bring the panel forward and blink when a colour turns into an attention colour.
 ; Never on the first read.
 ShouldAlert(old, new) => old != "" && old != new && IsAttention(new)
+
+; Mouse lock. `monitors`: [{l, t, r, b}, ...] in physical pixels.
+; The touch screen's index (the 1024x600 one), or 0 when none is connected.
+TouchMonitor(monitors) {
+    for m in monitors
+        if m.r - m.l = 1024 && m.b - m.t = 600
+            return A_Index
+    return 0
+}
+
+; The box around every monitor but the touch screen, or "" when there is nothing
+; to fence: no touch screen, or no other monitor.
+FenceBox(monitors) {
+    touch := TouchMonitor(monitors), box := ""
+    if !touch
+        return ""
+    for m in monitors
+        if A_Index != touch
+            box := box = "" ? {l: m.l, t: m.t, r: m.r, b: m.b}
+                : {l: Min(box.l, m.l), t: Min(box.t, m.t), r: Max(box.r, m.r), b: Max(box.b, m.b)}
+    return box
+}
+
+; --- Touch page state (docs\history\technical-spec-switchboard_touch-t4n.md, "Layout") ---
+
+; Colours the page draws; everything else is grey.
+TileColor(c) => c ~= "^(red|orange|purple|yellow|green)$" ? c : "grey"
+TileColorRank(c) {
+    static ranks := Map("red", 0, "orange", 1, "purple", 2, "yellow", 3, "green", 4)
+    return ranks.Get(c, 5)
+}
+
+; Sorted by group (0 active CLI, 1 chats, 2 paused CLI, 3 orphans), then colour.
+; Ties keep the previous order (`prev`: id -> position); new tiles follow, in input order.
+TileSort(tiles, prev) {
+    keyed := []
+    for t in tiles
+        keyed.Push({t: t, k: Format("{}{}{:06}{:06}", t.group, TileColorRank(t.color), prev.Get(t.id, 999999), A_Index)})
+    out := []
+    for e in keyed {           ; insertion sort: a dozen tiles
+        i := out.Length + 1
+        while i > 1 && StrCompare(out[i - 1].k, e.k) > 0
+            i--
+        out.InsertAt(i, e)
+    }
+    for i, e in out
+        out[i] := e.t
+    return out
+}
+
+; "Switchboard touch" from "switchboard_touch-t4n"; main shows its bound project.
+TileName(code, mainProject) => code = "main"
+    ? (mainProject != "" && mainProject != "main" ? "main · " ProjectName(mainProject) : "main")
+    : ProjectName(code)
+
+; The tile's step: "s9", or only the new one, "→s10", during a handover ("Paste prompt" says the rest).
+TileStep(stepText) => InStr(stepText, " -> ") ? "→" SubStr(stepText, InStr(stepText, " -> ") + 4) : stepText
+
+; What a tap or long-press on the touch page does: {do, key}. do is "click" (a CLI
+; tile, key = code), "chat" (key = tabId), "pause" (long-press on a CLI tile), "git" or "none".
+TouchCommand(type, id) {
+    kind := RegExReplace(id, ":.*"), key := SubStr(id, StrLen(kind) + 2)
+    if type = "git"
+        return {do: "git", key: ""}
+    if type = "move"
+        return {do: "move", key: ""}
+    if type = "menu" && kind = "cli"
+        return {do: "menu", key: key}
+    if type = "tap" && kind = "cli"
+        return {do: "click", key: key}
+    if type = "tap" && kind = "chat"
+        return {do: "chat", key: key}
+    if type = "hold" && kind = "cli"
+        return {do: "pause", key: key}
+    return {do: "none", key: ""}
+}
+
+; Main screen mode shows the 1024x600 page this much larger, so it reads at desk distance.
+TOUCH_MAIN_ZOOM := 1.25
+
+; Where the touch window goes. mode: the remembered "touch" or "main". primary: the
+; primary monitor's index; scale: that monitor's DPI scale (1 at 96 dpi). With no touch
+; screen it opens on the main screen, noTouch 1. Returns {mode, noTouch, x, y, w, h, zoom}.
+TouchPlacement(monitors, mode, primary, scale := 1) {
+    touch := TouchMonitor(monitors)
+    if touch && mode != "main" {
+        m := monitors[touch]
+        return {mode: "touch", noTouch: 0, x: m.l, y: m.t, w: m.r - m.l, h: m.b - m.t, zoom: 1}
+    }
+    main := primary != touch ? primary : (touch = 1 ? 2 : 1)    ; never the touch screen
+    m := monitors[Min(main, monitors.Length)]
+    ; At most 90% of the monitor either way; the zoom shrinks with it.
+    fit := Min(1, 0.9 * (m.r - m.l) / (1024 * TOUCH_MAIN_ZOOM * scale), 0.9 * (m.b - m.t) / (600 * TOUCH_MAIN_ZOOM * scale))
+    zoom := Round(TOUCH_MAIN_ZOOM * fit, 2)
+    w := Round(1024 * zoom * scale), h := Round(600 * zoom * scale)
+    return {mode: "main", noTouch: touch ? 0 : 1, x: m.l + (m.r - m.l - w) // 2, y: m.t + (m.b - m.t - h) // 2
+        , w: w, h: h, zoom: zoom}
+}
+
+; The mode a top-bar tap switches to. With no touch screen there is nothing to dock to.
+NextTouchMode(shown, touchPresent) => shown = "main" ? (touchPresent ? "touch" : "main") : "main"
+
+; Bottom-left icon: "cli" (no chat connected), "both" (CLI with its chat), "chat" (standalone tab).
+TileIcon(kind, hasChat) => kind = "chat" ? "chat" : kind = "cli" ? (hasChat ? "both" : "cli") : ""
+
+ShortAge(minutes) => minutes < 60 ? Max(0, minutes) "m" : minutes < 1440 ? minutes // 60 "h" : minutes // 1440 "d"
+
+; A CLI tile's action line. p: color, label, kind, free, closed, paused, elapsed
+; (seconds in the current state) and age (minutes since it changed).
+CliAction(p) {
+    if p.free
+        return "Free"
+    if p.closed
+        return "Closed, tap to reopen"
+    if p.paused
+        return "Paused " ShortAge(p.age)
+    if p.kind = "none"
+        return "No status"
+    switch p.label {
+        case "CLI working": return "Working " FormatElapsed(p.elapsed)
+        case "Both working": return "Both working " FormatElapsed(p.elapsed)
+        case "Claude writing": return "Chat writing"
+        case "chat unknown": return "Chat unknown"
+    }
+    return p.label
+}
+
+; A standalone chat tile's action line, from ChatRowView's label. No timer.
+ChatAction(label) => label = "Claude writing" ? "Writing" : label = "finished" ? "Reply ready"
+    : label = "seen" ? "Seen" : "Unknown"
+
+; Owners of claims or reservations with no checkout, as [{owner, n}].
+OrphanOwners(claims, reservations, worktrees) {
+    known := Map("main", true), counts := Map(), out := []
+    for w in worktrees
+        known[w] := true
+    for list in [claims, reservations]
+        for c in list
+            if !known.Has(owner := c.Get("owner", ""))
+                counts[owner] := counts.Get(owner, 0) + 1
+    for owner, n in counts
+        out.Push({owner: owner, n: n})
+    return out
+}
+
+; Whole days idle when over the 3-day orphan threshold, else 0.
+IdleDays(stamp, now) => stamp != "" && DateDiff(now, stamp, "Hours") > 72 ? DateDiff(now, stamp, "Days") : 0
+
+; Compact JSON for the page: Arrays, Maps and Objects; numbers stay numbers.
+ToJson(v) {
+    if v is Array {
+        s := ""
+        for x in v
+            s .= (A_Index > 1 ? "," : "") ToJson(x)
+        return "[" s "]"
+    }
+    if IsObject(v) {
+        s := ""
+        for k, x in (v is Map ? v : v.OwnProps())
+            s .= (A_Index > 1 ? "," : "") ToJson(String(k)) ":" ToJson(x)
+        return "{" s "}"
+    }
+    if v is Number
+        return String(v)
+    s := StrReplace(StrReplace(v, "\", "\\"), '"', '\"')
+    s := StrReplace(StrReplace(StrReplace(s, "`n", "\n"), "`r", "\r"), "`t", "\t")
+    while RegExMatch(s, "[\x00-\x1F]", &m)
+        s := StrReplace(s, m[0], Format("\u{:04x}", Ord(m[0])))
+    return '"' s '"'
+}
+
+; Which monitor VS Code and Chrome go to, as AutoHotkey monitor numbers: the leftmost
+; and rightmost of those that are not the touch screen, which is today's assignment
+; (VS Code on the left, Chrome on the right). One left: both on it. Returns {code, chrome}.
+AppMonitors(monitors) {
+    touch := TouchMonitor(monitors), leftmost := 0, rightmost := 0
+    for m in monitors {
+        if A_Index = touch
+            continue
+        if !leftmost || m.l < monitors[leftmost].l
+            leftmost := A_Index
+        if !rightmost || m.l > monitors[rightmost].l
+            rightmost := A_Index
+    }
+    if !leftmost               ; only the touch screen
+        leftmost := rightmost := 1
+    return {code: leftmost, chrome: rightmost}
+}
+
+; Every monitor as {l, t, r, b}. Physical pixels when the caller is per-monitor DPI aware.
+MonitorRects() {
+    list := []
+    Loop MonitorGetCount() {
+        MonitorGet(A_Index, &l, &t, &r, &b)
+        list.Push({l: l, t: t, r: r, b: b})
+    }
+    return list
+}

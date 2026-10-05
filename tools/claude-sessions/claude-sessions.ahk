@@ -6,6 +6,7 @@ Persistent
 #Include lib\status.ahk
 #Include lib\chrome-address.ahk
 #Include lib\bridge.ahk
+#Include lib\webview2\WebView2\WebView2.ahk
 
 ; Switchboard: one button per Claude Code session on alfred-v5 (main plus each
 ; worktree), coloured from that checkout's .clip\session-status.json, which the
@@ -17,15 +18,21 @@ Persistent
 ; ---------------------------------------------------------------------------
 
 SETTINGS_DIR := EnvGet("APPDATA") "\claude-sessions"
-SETTINGS := SETTINGS_DIR "\settings.ini"
+SETTINGS_INI := SETTINGS_DIR "\settings.ini"   ; not `SETTINGS`: WebView2.ahk has a local `settings`
 if !DirExist(SETTINGS_DIR)
     DirCreate(SETTINGS_DIR)
-REPO := IniRead(SETTINGS, "panel", "repo", "C:\Users\Alex\projects\alfred-v5")
+REPO := IniRead(SETTINGS_INI, "panel", "repo", "C:\Users\Alex\projects\alfred-v5")
 CLAIMS_FILE := REPO "\.git\alfred-claims.json"
 BINDING_FILE := REPO "\.git\alfred-project-code.json"
 ; Where the Chrome bridge host writes tabs.json (docs\technical-spec-switchboard_bridge.md).
-BRIDGE_DIR := IniRead(SETTINGS, "panel", "bridge", EnvGet("LOCALAPPDATA") "\claude-sessions\bridge")
-POINTER_FOLLOWS := IniRead(SETTINGS, "panel", "pointer", "1") != "0"   ; mouse to the window that gets the keyboard
+BRIDGE_DIR := IniRead(SETTINGS_INI, "panel", "bridge", EnvGet("LOCALAPPDATA") "\claude-sessions\bridge")
+POINTER_FOLLOWS := IniRead(SETTINGS_INI, "panel", "pointer", "1") != "0"   ; mouse to the window that gets the keyboard
+mouseLockOn := IniRead(SETTINGS_INI, "panel", "mouselock", "1") != "0"     ; keep the pointer off the touch screen
+LOCK_ITEM := "Mouse lock (hold Ctrl to cross)"
+TOUCH_UI := IniRead(SETTINGS_INI, "panel", "touchui", "1") != "0"           ; the touch page (default); touchui=0 brings back the old panel
+TOUCH_MODE := IniRead(SETTINGS_INI, "panel", "touchmode", "touch")          ; "touch" (docked) or "main", remembered
+TOUCH_DATA_DIR := SETTINGS_DIR "\webview2"                              ; WebView2's profile, never in the repo
+SplitPath(A_LineFile, , &PANEL_DIR)   ; this file's folder, even when a test script includes it
 
 PAUSED_COLOR := "C8C8C8"
 CLOSED_COLOR := "E4E4E4"
@@ -38,6 +45,8 @@ DIM_COLORS := "grey|none|paused|closed|free"   ; drawn with grey text
 CHAT_ROWS_MAX := 8, CHAT_ROW_H := 36
 TAIL_BYTES := 16384        ; how much of a transcript's end is searched for an interrupt
 BUTTON_W := 280, BUTTON_H := 44, PAUSE_W := 64, GAP := 6, STRIP_H := 20
+; Monitor numbers for VS Code and Chrome, chosen by position (AppMonitors): set by
+; UpdateAppMonitors whenever the layout changes. lib\bridge.ahk reads CHROME_MONITOR too.
 VS_MONITOR := 1, CHROME_MONITOR := 2
 CLOSED_AFTER := 3          ; polls with no VS Code window before a session counts as closed
 
@@ -68,6 +77,14 @@ focusRequester := SendFocus
 activateWindow := (hwnd) => (WinExist("ahk_id " hwnd) && WinActivate(hwnd))
 pointerMover := MovePointerTo
 arrangeAction := Arrange
+listMonitors := PhysicalMonitors
+appMonitorsFor := ""       ; the layout VS_MONITOR and CHROME_MONITOR were chosen for
+lockPid := 0               ; the running lib\mouse-lock.ahk, or 0
+touchGui := "", touchCtrl := "", touchCore := "", touchMsgToken := 0, touchLast := ""
+touchSent := ""            ; the last state JSON posted to the page
+touchPlace := ""           ; TouchPlacement() the window is at now
+touchMonitors := ""        ; the monitor layout it was placed for, to notice a plug or unplug
+touchOrder := Map()        ; tile id -> position last shown, so ties keep their place
 
 ; ---------------------------------------------------------------------------
 ; Panel, taskbar and tray
@@ -91,18 +108,32 @@ gitButton := panel.AddButton("w76 h" STRIP_H, "Refresh git")
 gitButton.OnEvent("Click", (*) => RefreshGit())
 orphanStripCtl := panel.AddText("w" STRIP_W " h" (STRIP_H * 2), "")
 
-A_TrayMenu.Insert("1&", "Show panel", (*) => panel.Show())
+A_TrayMenu.Insert("1&", "Show panel", (*) => ShowSwitchboard())
 A_TrayMenu.Default := "Show panel"
 A_TrayMenu.ClickCount := 1
+A_TrayMenu.Insert("2&", LOCK_ITEM, (*) => SetMouseLock(!mouseLockOn))
+A_TrayMenu.Insert("3&")
+; Only when the panel is the script being run, so smoke-test.ahk never fences the real pointer.
+if A_LineFile = A_ScriptFullPath {
+    OnExit((*) => StopLock())
+    SetMouseLock(mouseLockOn)
+}
 
 ; The taskbar "progress bar" tints the panel's taskbar button: 4 red, 8 yellow, 2 green.
 taskbar := ComObject("{56FDF344-FD6D-11d0-958A-006097C9A090}", "{ea1afb91-9e28-4b86-90e9-9e9f8a5eefaf}")
 ComCall(3, taskbar)        ; HrInit
 
 OnMessage(0x200, ShowStepTip)   ; WM_MOUSEMOVE
+; A new taskbar button (Explorer restarted, or the window was recreated) has no colour: re-apply it.
+OnMessage(DllCall("RegisterWindowMessage", "str", "TaskbarButtonCreated", "uint"), TaskbarButtonCreated)
 
 Refresh()
-panel.Show("AutoSize")
+; One taskbar button: the touch window's, or the old panel's with touchui=0. Test
+; scripts that include this file always get the old panel.
+if A_LineFile = A_ScriptFullPath && TOUCH_UI
+    OpenTouchWindow()
+else
+    panel.Show("AutoSize")
 lastTaskbar := -1
 Refresh()                  ; again, now the taskbar button exists
 SetTimer(Refresh, 1000)
@@ -184,11 +215,11 @@ NewSession(code, root) {
         pauseButtons[code] := btn
     }
     SplitPath(root, &folder)
-    lastClick := IniRead(SETTINGS, "lastclick", code, "")
+    lastClick := IniRead(SETTINGS_INI, "lastclick", code, "")
     if lastClick = "" {
         ; First sight: reports written before the panel knew this session count as read.
         lastClick := A_Now
-        IniWrite(lastClick, SETTINGS, "lastclick", code)
+        IniWrite(lastClick, SETTINGS_INI, "lastclick", code)
     }
     return {
         code: code, root: root, folder: folder,
@@ -200,15 +231,15 @@ NewSession(code, root) {
         metaRaw: "", reportTag: "", reportAt: "",
         tKey: "", interruptAt: "",
         kind: "", color: "", label: "", step: "",
-        unseen: false, flashes: 0, free: false, painted: "",
+        unseen: false, flashes: 0, free: false, painted: "", hasChat: false, pausedAt: "",
         misses: CLOSED_AFTER - 1, closed: false,   ; the first poll decides at once
         lastClick: lastClick, unread: false,
         gitDirty: true, changed: "", ahead: "",     ; git runs on the first poll
         gitWatch: GitWatchFiles(code), gitKey: "",
-        paused: IniRead(SETTINGS, "paused", code, 0) = 1,
-        vscodeTitle: IniRead(SETTINGS, "vscode", code, ""),
-        chromeTitle: IniRead(SETTINGS, "chrome", code, ""),
-        chatLink: IniRead(SETTINGS, "chatlink", code, ""),
+        paused: IniRead(SETTINGS_INI, "paused", code, 0) = 1,
+        vscodeTitle: IniRead(SETTINGS_INI, "vscode", code, ""),
+        chromeTitle: IniRead(SETTINGS_INI, "chrome", code, ""),
+        chatLink: IniRead(SETTINGS_INI, "chatlink", code, ""),
     }
 }
 
@@ -394,6 +425,7 @@ FindChromeWindow(s) => FirstMatch(listChromeWindows(), ChromeTitleMatches.Bind(C
 ; The keyboard goes to the window that needs Alex: VS Code for red and a working
 ; CLI, otherwise the chat, with the cursor in its message box.
 Arrange(s) {
+    UpdateAppMonitors()
     toCode := FocusTarget(s.color, s.label) = "code"
     codeHwnd := FindCodeWindow(s)
     if codeHwnd
@@ -461,9 +493,29 @@ SaveLinkFrom(s, hwnd) {
         link := AutoSaveLink(s.chromeTitle, chromeAddressReader(hwnd))
         if link != "" && link != s.chatLink {
             s.chatLink := link
-            IniWrite(link, SETTINGS, "chatlink", s.code)
+            IniWrite(link, SETTINGS_INI, "chatlink", s.code)
         }
     }
+}
+
+; Monitors in physical pixels, so the touch screen reads as 1024x600 on any scaling.
+PhysicalMonitors() {
+    old := DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+    list := MonitorRects()
+    DllCall("SetThreadDpiAwarenessContext", "ptr", old, "ptr")
+    return list
+}
+
+; VS Code on the leftmost monitor that is not the touch screen, Chrome on the rightmost:
+; re-chosen when monitors are plugged in or out, which can renumber them.
+UpdateAppMonitors() {
+    global VS_MONITOR, CHROME_MONITOR, appMonitorsFor
+    mons := listMonitors()
+    shape := ToJson(mons)     ; not `layout`: Layout() is the old panel's
+    if shape == appMonitorsFor
+        return
+    apps := AppMonitors(mons)
+    VS_MONITOR := apps.code, CHROME_MONITOR := apps.chrome, appMonitorsFor := shape
 }
 
 PutOnMonitor(hwnd, monitor) {
@@ -503,6 +555,7 @@ Reopen(s) {
 
 Refresh() {
     global lastTaskbar, needsResize, mainProject
+    UpdateAppMonitors()
     Sync()
     ReadClaims()
     mainProject := MainCode()
@@ -533,6 +586,7 @@ Refresh() {
         if s.chatLink != ""
             paired[NormaliseUrl(s.chatLink)] := true
         chat := chatsOk ? FindTabByLink(chatsList, s.chatLink) : ""
+        s.hasChat := chat != ""
         kind := KindOf(s.hasStatus, s.state, s.red, s.interruptAt != "")
         ; A paused session that starts processing again is unpaused at once.
         if s.paused && kind = "processing" && (s.kind != "processing" || s.since != oldSince) && s.kind != ""
@@ -561,8 +615,8 @@ Refresh() {
     flag := TaskbarFlag(liveColors)
     if flag != lastTaskbar {
         if flag
-            ComCall(9, taskbar, "ptr", panel.Hwnd, "int64", 100, "int64", 100)  ; fill the bar
-        ComCall(10, taskbar, "ptr", panel.Hwnd, "int", flag)                    ; set its colour
+            ComCall(9, taskbar, "ptr", TaskbarGui().Hwnd, "int64", 100, "int64", 100)  ; fill the bar
+        ComCall(10, taskbar, "ptr", TaskbarGui().Hwnd, "int", flag)                    ; set its colour
         lastTaskbar := flag
     }
 
@@ -572,6 +626,7 @@ Refresh() {
     }
     if anyAlert
         Alert()
+    TouchSend()
 }
 
 Label(s, offset) {
@@ -652,7 +707,7 @@ RefreshChatRows(chats, paired, liveColors) {
         tabId := c.Get("tabId", "")
         v := ChatRowView(c.Get("state", ""), c.Get("since", ""), c.Get("viewedAt", ""))
         if !rowState.Has(tabId)
-            rowState[tabId] := {color: "", unseen: false, flashes: 0, painted: "", text: "", row: 0}
+            rowState[tabId] := {color: "", unseen: false, flashes: 0, painted: "", text: "", row: 0, title: "", label: ""}
         r := rowState[tabId]
         if v.color != r.color {
             r.unseen := false
@@ -660,7 +715,8 @@ RefreshChatRows(chats, paired, liveColors) {
                 r.unseen := true, r.flashes := 0, rowAlert := true
             r.color := v.color
         }
-        r.text := ChatRowTitle(c.Get("title", "")) "`n" v.label
+        r.title := ChatRowTitle(c.Get("title", "")), r.label := v.label
+        r.text := r.title "`n" v.label
         live[tabId] := true
         shown.Push(tabId)
         if r.color != "grey"
@@ -719,7 +775,7 @@ LearnChatLink(s, project) {
     if link = ""
         return
     s.chatLink := link
-    IniWrite(link, SETTINGS, "chatlink", s.code)
+    IniWrite(link, SETTINGS_INI, "chatlink", s.code)
 }
 
 ; Hovering a session button shows "Step N of M: <name>" from its progress file.
@@ -738,15 +794,32 @@ ShowStepTip(wParam, lParam, msg, hwnd) {
     ToolTip(text = "" ? "" : text)
 }
 
-; A session finished or needs you: bring the panel forward without taking
-; focus, and flash its taskbar button until the panel comes to the front.
+; The window that owns Switchboard's one taskbar button: the touch window when it
+; exists, otherwise the old panel.
+TaskbarGui() => touchGui != "" ? touchGui : panel
+
+; Not SetTimer(Refresh, -10): that would turn the 1 s timer into a one-shot.
+TaskbarButtonCreated(*) {
+    global lastTaskbar := -1    ; the next Refresh sets the colour again
+}
+
+; Tray > Show panel: bring whichever window is in use to the front.
+ShowSwitchboard() {
+    g := TaskbarGui()
+    g.Show(g = panel ? "" : "NoActivate")
+    try WinActivate(g.Hwnd)
+}
+
+; A session finished or needs you: bring the window forward without taking
+; focus, and flash its taskbar button until it comes to the front.
 Alert() {
-    DllCall("ShowWindow", "ptr", panel.Hwnd, "int", 4)   ; SW_SHOWNOACTIVATE
-    panel.Opt("+AlwaysOnTop")
-    panel.Opt("-AlwaysOnTop")
+    g := TaskbarGui()
+    DllCall("ShowWindow", "ptr", g.Hwnd, "int", 4)   ; SW_SHOWNOACTIVATE
+    g.Opt("+AlwaysOnTop")
+    g.Opt("-AlwaysOnTop")
     fi := Buffer(A_PtrSize = 8 ? 32 : 20, 0)
     NumPut("uint", fi.Size, fi, 0)
-    NumPut("ptr", panel.Hwnd, fi, A_PtrSize)
+    NumPut("ptr", g.Hwnd, fi, A_PtrSize)
     NumPut("uint", 0x2 | 0xC, "uint", 0, "uint", 0, fi, A_PtrSize * 2)
     DllCall("FlashWindowEx", "ptr", fi)
 }
@@ -760,7 +833,7 @@ ButtonClick(code, *) {
         return
     s := sessions[code]
     s.lastClick := A_Now, s.unread := false
-    IniWrite(s.lastClick, SETTINGS, "lastclick", code)
+    IniWrite(s.lastClick, SETTINGS_INI, "lastclick", code)
     if s.closed {
         Paint(s)
         if MsgBox("No VS Code window is open for " s.folder ".`n`nReopen it and resume its last conversation?"
@@ -790,7 +863,227 @@ ButtonMenu(code, *) {
     m.Add("VS Code title text…", (*) => EditTitle(s, "vscode", "VS Code", "vscodeTitle"))
     m.Add("Chrome title text…", (*) => EditTitle(s, "chrome", "Chrome", "chromeTitle"))
     m.Add("Save chat link…", (*) => EditChatLink(s))
+    m.Add()
+    m.Add(LOCK_ITEM, (*) => SetMouseLock(!mouseLockOn))
+    if mouseLockOn
+        m.Check(LOCK_ITEM)
     m.Show()
+}
+
+; ---------------------------------------------------------------------------
+; Mouse lock: lib\mouse-lock.ahk runs as its own process (spec, "Mouse lock")
+; ---------------------------------------------------------------------------
+
+SetMouseLock(on) {
+    global mouseLockOn := on
+    IniWrite(on ? 1 : 0, SETTINGS_INI, "panel", "mouselock")
+    on ? StartLock() : StopLock()
+    on ? A_TrayMenu.Check(LOCK_ITEM) : A_TrayMenu.Uncheck(LOCK_ITEM)
+}
+
+; Passes this process's ID, so the lock exits if the panel dies without closing it.
+StartLock() {
+    global lockPid
+    if lockPid && ProcessExist(lockPid)
+        return
+    try Run('"' A_AhkPath '" "' A_ScriptDir '\lib\mouse-lock.ahk" ' ProcessExist(), , , &pid)
+    catch
+        pid := 0
+    lockPid := pid
+}
+
+; WM_CLOSE lets the lock run its OnExit and release the clip; killing it is the fallback.
+StopLock() {
+    global lockPid
+    if !lockPid
+        return
+    DetectHiddenWindows(true)
+    try WinClose("ahk_pid " lockPid " ahk_class AutoHotkey")
+    if ProcessWaitClose(lockPid, 2)
+        ProcessClose(lockPid)
+    lockPid := 0
+}
+
+; ---------------------------------------------------------------------------
+; Touch window ([panel] touchui=1): a borderless WebView2 window showing
+; ui\switchboard.html, docked on the touch screen or centred on the main screen
+; ([panel] touchmode=touch|main, remembered). The old panel is untouched.
+; ---------------------------------------------------------------------------
+
+OpenTouchWindow() {
+    global touchGui
+    ; Created per-monitor DPI aware, so its size and position are physical pixels.
+    old := DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+    ; -Caption: no title bar or border. WS_EX_APPWINDOW (0x40000) keeps a taskbar button.
+    touchGui := Gui("-Caption -DPIScale +E0x40000", "Switchboard touch")
+    touchGui.BackColor := "1C222C"
+    DllCall("SetThreadDpiAwarenessContext", "ptr", old, "ptr")
+    PlaceTouchWindow()
+    WebView2.CreateControllerAsync(touchGui.Hwnd, 0, TOUCH_DATA_DIR, "", PANEL_DIR "\lib\webview2\WebView2\64bit\WebView2Loader.dll")
+        .then(TouchReady, TouchFailed)
+}
+
+; Docked or centred on the main screen, per the remembered mode and what is plugged in.
+PlaceTouchWindow() {
+    global touchPlace, touchMonitors
+    old := DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+    try {
+        mons := MonitorRects(), primary := MonitorGetPrimary()
+        touchMonitors := ToJson(mons)
+        touchPlace := TouchPlacement(mons, TOUCH_MODE, primary, MonitorScale(mons[primary]))
+        pos := "NoActivate x" touchPlace.x " y" touchPlace.y " w" touchPlace.w " h" touchPlace.h
+        ; Twice: crossing to a monitor with another DPI can resize it on the first move.
+        touchGui.Show(pos), touchGui.Show(pos)
+    }
+    DllCall("SetThreadDpiAwarenessContext", "ptr", old, "ptr")
+    if touchCtrl != "" {
+        try touchCtrl.Fill(), touchCtrl.ZoomFactor := touchPlace.zoom
+    }
+    TouchSend()
+}
+
+; DPI scale of the monitor with this rect: 1 at 96 dpi. Call per-monitor aware.
+MonitorScale(m) {
+    hmon := DllCall("MonitorFromPoint", "int64", ((m.t + 1) << 32) | ((m.l + 1) & 0xFFFFFFFF), "uint", 2, "ptr")
+    dpi := 96, dpiY := 96
+    try DllCall("shcore\GetDpiForMonitor", "ptr", hmon, "int", 0, "uint*", &dpi, "uint*", &dpiY)
+    return dpi / 96
+}
+
+; The top bar: to the main screen and back. Undocking puts the pointer in its middle.
+TouchMove() {
+    global TOUCH_MODE
+    if touchGui = ""
+        return
+    present := TouchMonitor(MonitorRects()) != 0
+    next := NextTouchMode(touchPlace = "" ? TOUCH_MODE : touchPlace.mode, present)
+    TOUCH_MODE := next
+    IniWrite(next, SETTINGS_INI, "panel", "touchmode")
+    PlaceTouchWindow()
+    if touchPlace.mode = "main" {
+        WinActivate(touchGui.Hwnd)
+        pointerMover(touchGui.Hwnd)
+    }
+}
+
+TouchReady(ctrl) {
+    global touchCtrl := ctrl, touchCore := ctrl.CoreWebView2, touchMsgToken
+    s := touchCore.Settings
+    for name in ["AreDefaultContextMenusEnabled", "IsZoomControlEnabled", "IsStatusBarEnabled", "IsPinchZoomEnabled", "IsSwipeNavigationEnabled"]
+        try s.%name% := false
+    touchMsgToken := touchCore.add_WebMessageReceived(TouchMessage)
+    ; ui\ served as https://switchboard.ui/, so the page and its font load with no internet.
+    touchCore.SetVirtualHostNameToFolderMapping("switchboard.ui", PANEL_DIR "\ui", 1)
+    touchCore.Navigate("https://switchboard.ui/switchboard.html")
+    try ctrl.ZoomFactor := touchPlace.zoom
+}
+
+; Falls back to the old panel, so there is always one Switchboard window and taskbar button.
+TouchFailed(err) {
+    global touchGui, lastTaskbar
+    try touchGui.Destroy()
+    touchGui := "", lastTaskbar := -1
+    panel.Show("AutoSize")
+    MsgBox("The touch window's WebView2 did not start, so Switchboard is using the old panel.`n`n"
+        . (err is Error ? err.Message : String(err)), "Switchboard", "Icon! T60")
+}
+
+; Page -> AutoHotkey: {"type": "ready"|"tap"|"hold"|"git"|"move"|"menu", "id": tile id}.
+TouchMessage(core, args) {
+    global touchLast, touchSent
+    try msg := JSON.parse(args.TryGetWebMessageAsString())
+    catch
+        return
+    touchLast := msg.Get("type", "")
+    if touchLast = "ready"
+        touchSent := "", TouchSend()
+    else    ; on its own thread: Arrange can wait seconds or show a dialog, never inside WebView2's callback
+        SetTimer(TouchDo.Bind(touchLast, msg.Get("id", "")), -1)
+}
+
+; Exactly what the old panel's controls do: the button, its chat row, Pause/Resume, Refresh git.
+TouchDo(type, id) {
+    c := TouchCommand(type, id)
+    switch c.do {
+        case "click":
+            if sessions.Has(c.key)
+                ButtonClick(c.key)
+        case "chat":
+            for i, tabId in rowTabs
+                if tabId = c.key {
+                    ChatRowClick(i)
+                    break
+                }
+        case "pause": PauseClick(c.key)
+        case "git":
+            RefreshGit()
+            try touchCore.PostWebMessageAsJson('{"type":"gitDone"}')   ; the button goes back to its icon
+        case "move": TouchMove()
+        case "menu":       ; right-click: main screen mode only, the old button's menu
+            if touchPlace != "" && touchPlace.mode = "main" && sessions.Has(c.key)
+                ButtonMenu(c.key)
+    }
+    TouchSend()
+}
+
+; AutoHotkey -> page: the whole state, posted only when it differs from the last one.
+; Also re-places the window when a monitor is plugged in or out.
+TouchSend() {
+    global touchSent
+    if touchGui != "" && touchMonitors != "" {
+        old := DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+        changed := ToJson(MonitorRects()) != touchMonitors
+        DllCall("SetThreadDpiAwarenessContext", "ptr", old, "ptr")
+        if changed
+            return PlaceTouchWindow()     ; which sends
+    }
+    if touchCore = ""
+        return
+    text := ToJson(TouchState())
+    if text == touchSent
+        return
+    try touchCore.PostWebMessageAsJson(text), touchSent := text
+}
+
+; Everything the page draws, already sorted. The page keeps no state but its scroll.
+TouchState() {
+    global touchOrder
+    tiles := [], now := A_Now, nowUtc := A_NowUTC
+    worktrees := []
+    for code in order {
+        s := sessions[code]
+        stamp := s.since != "" ? IsoToStamp(s.since) : nowUtc
+        action := CliAction({color: s.color, label: s.label, kind: s.kind, free: s.free, closed: s.closed
+            , paused: s.paused, elapsed: DateDiff(nowUtc, stamp, "Seconds")
+            , age: DateDiff(nowUtc, s.paused && s.pausedAt != "" ? s.pausedAt : stamp, "Minutes")})
+        git := (s.changed != "" && s.changed > 0 ? "±" s.changed : "")
+        git .= (s.ahead != "" && s.ahead > 0 ? (git = "" ? "" : " ") "↑" s.ahead : "")
+        idle := 0
+        if code != "main" {
+            worktrees.Push(code)
+            idle := IdleDays(NewestStamp([s.statusFile, s.reportFile, REPO "\.git\worktrees\" code "\index"]), now)
+        }
+        ; Paused is grey at once; s.color only catches up on the next Refresh.
+        if idle                ; on the action line, so the bottom line keeps the git counts
+            action .= " · idle " idle "d"
+        tiles.Push({id: "cli:" code, kind: "cli", icon: TileIcon("cli", s.hasChat), group: s.paused ? 2 : 0, color: s.paused ? "paused" : TileColor(s.color)
+            , name: TileName(code, mainProject), action: action, step: TileStep(s.step), git: git, note: ""})
+    }
+    for tabId in rowTabs {
+        r := rowState[tabId]
+        tiles.Push({id: "chat:" tabId, kind: "chat", icon: TileIcon("chat", false), group: 1, color: TileColor(r.color), name: r.title
+            , action: ChatAction(r.label), step: "", git: "", note: ""})
+    }
+    for o in OrphanOwners(claimsState["claims"], claimsState["reservations"], worktrees)
+        tiles.Push({id: "orphan:" o.owner, kind: "orphan", icon: TileIcon("orphan", false), group: 3, color: "grey", name: o.owner
+            , action: "No worktree", step: "", git: "", note: o.n " held"})
+    tiles := TileSort(tiles, touchOrder)
+    touchOrder := Map()
+    for i, t in tiles
+        touchOrder[t.id] := i
+    db := DbStrip(claimsState["claims"], nowUtc)
+    return {type: "state", main: MainStrip(mainProject), db: db.text, dbRed: db.red ? 1 : 0, tiles: tiles
+        , mode: touchPlace = "" ? "touch" : touchPlace.mode, noTouch: touchPlace = "" ? 0 : touchPlace.noTouch}
 }
 
 ; Blank clears the override, and matching falls back to the folder or project code.
@@ -802,9 +1095,9 @@ EditTitle(s, section, app, prop) {
         return
     s.%prop% := Trim(r.Value)
     if s.%prop% = ""
-        IniDelete(SETTINGS, section, s.code)
+        IniDelete(SETTINGS_INI, section, s.code)
     else
-        IniWrite(s.%prop%, SETTINGS, section, s.code)
+        IniWrite(s.%prop%, SETTINGS_INI, section, s.code)
 }
 
 EditChatLink(s) {
@@ -819,15 +1112,16 @@ EditChatLink(s) {
     }
     s.chatLink := link
     if link = ""
-        IniDelete(SETTINGS, "chatlink", s.code)
+        IniDelete(SETTINGS_INI, "chatlink", s.code)
     else
-        IniWrite(link, SETTINGS, "chatlink", s.code)
+        IniWrite(link, SETTINGS_INI, "chatlink", s.code)
 }
 
 SetPaused(s, paused) {
     s.paused := paused
+    s.pausedAt := paused ? A_NowUTC : ""   ; "Paused 0m" counts from here; after a restart, from the state time
     if paused
         s.unseen := false
-    IniWrite(paused ? 1 : 0, SETTINGS, "paused", s.code)
+    IniWrite(paused ? 1 : 0, SETTINGS_INI, "paused", s.code)
     Paint(s)
 }
