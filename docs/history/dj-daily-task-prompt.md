@@ -26,7 +26,10 @@ cold reader needs.
 >
 > **So the prompt now carries a version, and the task must echo it.**
 >
-> ### `PROMPT VERSION: 2026-09-01c`
+> ### `PROMPT VERSION: 2026-10-06a`
+>
+> 2026-10-06a: artist disagreements are logged and counted only, never raised as an inbox
+> item; `notified_video_ids` is always `[]`. Only failed or partial runs raise items.
 >
 > Step 8 prints this string. If the report shows an older version — or none — **the task is
 > running stale text and its output cannot be trusted to reflect these rules.** That makes a
@@ -39,7 +42,7 @@ cold reader needs.
 | | when | where |
 |---|---|---|
 | **Record** | **every run**, success or failure | `platform_runs` — the durable log the staleness check reads |
-| **Notification** | **only** failure, `partial`, or a non-empty `artist_disagreements` | one Alfred **inbox item** |
+| **Notification** | **only** failure or `partial` — never artist disagreements (logged in the run, not raised) | one Alfred **inbox item** |
 
 A repeat of an unfixed condition is re-raised **once a week**, worded as ongoing — see
 Step 7. **A clean run raises nothing.** A signal that fires on the normal case teaches its reader
@@ -120,12 +123,8 @@ Two calls, and they answer different questions:
    and its `covered_to`. **This is a claim.**
    Also keep the last few runs from this call — Step 7 needs them, and **not for
    judgement: for LOOKUP.** From every run with `notified_at` set in the last 7 days,
-   collect two things:
-   - its `details.failure_kind` — the failure de-dup key
-   - its `details.notified_video_ids` — the disagreement de-dup key
-
-   That second list is what stops a decided-but-not-yet-recorded disagreement being
-   re-reported daily. **Read it; do not reason about what you probably reported.**
+   collect its `details.failure_kind` — the failure de-dup key. **Read it; do not reason
+   about what you probably reported.**
 
 **Where they disagree, THE DATA WINS.** The run log asserts coverage and nothing can check
 that assertion — there is no link from a run to the rows it produced. Note any disagreement
@@ -277,11 +276,8 @@ Carry these **from the tool's response, not from memory**:
   - `known_disagreements` — **copy it too, even when empty.** These were suppressed
     deliberately, and recording the count is what makes a silent run distinguishable from a
     broken one.
-  - `notified_video_ids` — the `video_id`s you are about to raise in Step 7, i.e. those in
-    `artist_disagreements` that survive the 7-day check below.
-    ⚠️ **Work this out BEFORE closing the run.** `details` can only be written while
-    closing, so the decision has to be made here and acted on in Step 7 — not the other way
-    round. The next run reads this list instead of guessing what you told the human.
+  - `notified_video_ids` — **always `[]`.** Disagreements are never raised (2026-10-06a);
+    the key stays so older and newer runs have the same shape.
   - Any disagreement found in Step 2 between the data and the previous `covered_to`.
   - `failure_kind` on any failure, one of `wrong_host`, `workshop_unreachable`,
     `youtube_auth`, `supabase_write`, `unknown` — Step 7 uses it to tell a still-broken
@@ -304,7 +300,9 @@ Carry these **from the tool's response, not from memory**:
     *"is the data current?"* — without it, a manual run masks a dead scheduler.
 
 > **On `artist_disagreements`:** a non-empty array means two vocabularies disagree about
-> one act, and a new alias-map entry may be owed.
+> one act, and a new alias-map entry may be owed. **Log and count it; never raise it.**
+> Leader-vs-band variants (`Bill Evans` / `Bill Evans Trio`, a leading `The`) are already
+> folded away by the tool (spec §4.1.4, amended 2026-10-06).
 >
 > ⚠️ **DECIDED disagreements are already filtered out by the tool** — they arrive in
 > `known_disagreements` instead, each with the reason it was decided. `AbbzAPXvNZ8` (a
@@ -334,31 +332,14 @@ Raise an inbox item if and only if one of these is true:
 |---|---|
 | The run **failed** | Title names the failure kind. Body: the verbatim error, then the **ACTION** from the step that stopped. |
 | The run is **`partial`** (3+ day gap) | Names the lost date range. Body: *"These days are permanently unreachable from the live API. Google Takeout is the only recovery path."* |
-| `artist_disagreements` is **non-empty** *after the video-id check below* | Lists each `video_id` with its stored and submitted artist. Body: *"Two vocabularies disagree about one act. A new alias-map entry may be owed — see spec §4.1.4."* |
 
-⚠️ **`known_disagreements` NEVER raises an item, however long it is.** Those are decided.
-Report the count in Step 8 and nothing else.
+⚠️ **Neither `artist_disagreements` nor `known_disagreements` EVER raises an item, however
+long they are** (2026-10-06a). They are copied into `details` in Step 6 and counted in Step 8,
+and nothing else.
 
 **Every item carries a specific remedy, never a generic alert.** Use the exact ACTION
 wording from the step that stopped. *"The sync failed"* is an item that will be ignored;
 *"Run the reauth tile on the Surface"* is one that gets acted on.
-
-**DISAGREEMENT ITEMS DE-DUP BY `video_id`, NOT BY `failure_kind`.** An
-`artist_disagreements` item appears on an `ok` run, which has no `failure_kind` at all, so
-the failure rule below does not reach it. Use the video ids:
-
-> **Drop any `video_id` that appears in `details.notified_video_ids` of a run with
-> `notified_at` set in the last 7 days.** If nothing survives, raise no item. If something
-> does, raise an item listing only the survivors.
-
-**This is a lookup against the run log, not a judgement.** A previous version of this prompt
-had no rule here at all, and the task correctly reasoned "same video, reported 17 minutes
-ago, do not duplicate" — the right answer, arrived at by improvising, which is what rule 1
-exists to prevent. The list is written to the log in Step 6 precisely so the next run can
-read it instead of reasoning.
-
-The same **7-day floor** applies and for the same reason: a genuinely unresolved
-disagreement should resurface weekly, not vanish after one mention.
 
 ---
 
@@ -416,7 +397,7 @@ and comparable:
 
 ```
 DJ daily sync — <today_utc>
-  prompt version: 2026-09-01c
+  prompt version: 2026-10-06a
   host: surface           run id: <id>
   held through:  <newest played_on from get_dj_plays>
   log claimed:   <covered_to from the previous ok run>   [AGREES | DISAGREES]
@@ -426,7 +407,7 @@ DJ daily sync — <today_utc>
     Today      submitted <n>  inserted <n>  already_held <n>
     Yesterday  submitted <n>  inserted <n>  already_held <n>
 
-  artist disagreements: <n> new   <list them if any>
+  artist disagreements (logged, not raised): <n>   <list them if any>
   known disagreements (decided, not raised): <n>
   page_full: <bool>   oldest_bucket_is_partial: <bool>
   orphaned running rows: <none | <ids>>
@@ -439,7 +420,7 @@ Every number above comes from a tool response. If you do not have one, write `un
 never a guess, and never a number you expected.
 
 ⚠️ **Print `prompt version` exactly as written at the top of this prompt.** It is how a
-forgotten paste becomes visible. If you are reading this, the version is `2026-09-01c`.
+forgotten paste becomes visible. If you are reading this, the version is `2026-10-06a`.
 
 ⚠️ **The `known disagreements` line is not decoration — it is what makes a silent run
 verifiable.** A run that raises nothing because everything was decided and a run that raises
