@@ -139,6 +139,15 @@ meantime wait, and go into the prompt written after that report. Two prompts in
 flight means the second is written against a state the first is still changing,
 and Switchboard can only show one tag per project as "to paste".
 
+**Never write a CLI prompt in a reply that is waiting on something from Alex** —
+SQL results, a test outcome, a git command's result, an answer to a question.
+Ask for the thing, end the reply, and write the prompt only after the answer
+comes back. A prompt written before the answer assumes the answer, and he will
+paste it whatever the answer turns out to be.
+
+**Never put more than one CLI prompt in a reply.** One reply, at most one
+prompt, and it is the last thing in the reply (next section).
+
 ### A prompt is always the last thing in the reply
 
 **A reply that contains a CLI prompt ends with that prompt.** Nothing comes
@@ -302,12 +311,34 @@ The CLI never runs these. A prompt asks Alex to run one and then waits.
 | `gitnewtree <project-code>` | Starting work that needs its own worktree. Refuses until main is committed and pushed, so `gitpush` main → Push comes first. Say yes to `npm install` when the thread will run tests or a build; skip it for docs-only work. |
 | `gitcom` | A local commit, part-way through. Commits only what this thread has claimed and has changed; asks about anything unclaimed. Releases nothing. |
 | `gitsync` | Inside a worktree, to bring main in. **Always before a database step**, so the thread is looking at everything already live. |
-| `gitpush` | Any terminal — it always acts on the main checkout. For **main**: Push (commit and push, keep the claims) / Finish (and release them) / Skip. For a **worktree**: Checkpoint (merge only named files, release the `db:` claims, worktree carries on) / Finish (merge everything, release every claim, remove the worktree) / Skip. |
+| `gitpush` | From the main checkout's terminal (it always acts on the main checkout; Finish on a worktree must not run from inside it). Modes by checkout are in the next section. For **main**: Push (commit and push, keep the claims) / Finish (and release them) / Skip. For a **worktree**: Checkpoint (merge only named files, release the `db:` claims, worktree carries on) / Finish (merge everything, release every claim, remove the worktree) / Skip. |
 
-**Before asking for `gitpush` Finish on a worktree, tell him to close that
-worktree's VS Code window and exit its Claude session.** A running session locks
-the worktree and the removal fails — the merge and push still succeed, but he is
-left running recovery commands.
+### Which gitpush mode belongs to which checkout
+
+**The mode is set by the checkout, not by the kind of work.** Getting this wrong
+cost three sessions of work in one day.
+
+| checkout | modes it takes | run it from |
+|---|---|---|
+| main | **Push** (commit and push, keep the claims) or Finish (and release them) | the main checkout's terminal |
+| a worktree | **Checkpoint** (commit the named paths, merge them into main and push; the worktree stays open) or **Finish** (merge everything into main, push, release every claim, remove the worktree) | Checkpoint: any terminal. Finish: **the main checkout's terminal**, with the worktree's VS Code window already closed |
+
+- **Push on a worktree is refused.** `gitpush <worktree code> push` prints
+  "Push is for the main checkout. <code> takes checkpoint or finish. Nothing was
+  changed." and does nothing. The refusal is quiet and easy to miss — Alex can
+  read it as a push that happened. Never write that command.
+- **Checkpoint on main is refused** the same way: main takes Push or Finish.
+- **Checkpoint has nothing to do with database work.** It is simply how a
+  worktree commits mid-project. The database step uses it because that is the
+  mid-project moment that most needs a commit, not because it is a database mode.
+- **Finish on a worktree runs from main, with that worktree's VS Code window
+  closed and its Claude session exited first.** It cannot remove a worktree that
+  a terminal, window or session is still inside — the merge and push succeed,
+  the removal fails, and he is left running recovery commands.
+
+gitpush always acts on the main checkout whichever terminal it starts in, so
+"run it from" is about not sitting inside a worktree that Finish is removing.
+Saying main's terminal for every gitpush is the simple, always-safe answer.
 
 **Two more, for the main checkout's project code.** `claims.mjs bind <code>`
 points main's window at a project and `claims.mjs unbind` clears it. Neither
@@ -336,6 +367,14 @@ Rules for the table: four columns, always in that order, and a cell that does
 not apply is `—`. "Why" is one line under it, not a paragraph. **Say whether
 claims are kept or released and why**, because that is the part he cannot see
 from the command and the part that bites weeks later.
+
+**The mode must match the checkout** (see "Which gitpush mode belongs to which
+checkout" above). A worktree row can only say Checkpoint or Finish. A main row
+can only say Push, or Finish when main's project is done. **Check the checkout
+and mode cells against each other before writing the command**, and check the
+command says the same: a worktree code followed by `push` is refused by gitpush
+and does nothing. For a gitpush row, the "Why" line also says which terminal to
+run it in.
 
 Rules for the command: **one line, every answer given as a parameter**, so there
 is nothing to type. A parameter answers a question the command would have asked;
@@ -417,6 +456,9 @@ not, and a `db:` claim belongs to one step.
 gitpush rem-j7p checkpoint --paths supabase/migrations/084_reminders.sql supabase/functions/mcp/index.ts --release-db
 ```
 
+The same mode, without a migration in `--paths`, is how a worktree commits any
+other mid-project work; Checkpoint is not a database mode.
+
 `--keep-db` instead, only when the very next step deploys again and he has said
 so. `--all` commits every uncommitted path, which is rarely what Checkpoint is
 for.
@@ -433,7 +475,8 @@ Why: the work is done, so the claims, the branch and the worktree all go.
 gitpush rem-j7p finish --message "rem-j7p: reminders"
 ```
 
-Close that worktree's VS Code window first.
+Close that worktree's VS Code window and exit its Claude session first, then run
+it from the main checkout's terminal.
 
 For main, `gitpush main finish` is the same ending for work that never used a
 worktree: it pushes, releases every claim main holds, and clears main's project
