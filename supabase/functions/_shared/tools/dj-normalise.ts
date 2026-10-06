@@ -147,6 +147,8 @@ export function isVariantCut(title: string | null | undefined): boolean {
 // Trio/Quartet" cannot be validated and would merge genuinely distinct acts.
 // Every entry here is a human decision about a real act, which is the only
 // thing that makes the map checkable — see the note on Miles Davis below.
+// (That holds for GROUPING. The disagreement COMPARISON does strip a trailing
+// Trio/Quartet since 2026-10-06 — foldArtistName, which feeds nothing stored.)
 //
 // DIRECTION: canonicalise to the POLL's vocabulary (YouTube Music's artist
 // metadata), NOT the Takeout channel name — even though the export is the
@@ -305,6 +307,11 @@ export const ARTIST_ALIASES: ArtistAlias[] = [
 // heard Bitches Brew. Whether to merge them is a JUDGMENT CALL about how this
 // user thinks about that catalogue, and it has not arisen — no such split
 // exists in the data today. If it ever does, it needs deciding, not inferring.
+//
+// 2026-10-06: decided FOR THE DISAGREEMENT CHECK ONLY. "Miles Davis" / "The
+// Miles Davis Quintet" no longer reports (foldArtistName), and nor does Brad
+// Mehldau / Brad Mehldau Trio, decided 2026-10-02 as two billings. Both still
+// key separately here: grouping and stored artists are unchanged.
 
 // ---------------------------------------------------------------------------
 // Placeholder bylines — NOT aliases, and deliberately beside them
@@ -562,6 +569,45 @@ export function primaryArtistOfDisplay(display: string | null | undefined): stri
   return normalisePart(canonicalArtist(first)) || null;
 }
 
+// ---------------------------------------------------------------------------
+// Leader-vs-band fold — COMPARISON ONLY (decided 2026-10-06)
+// ---------------------------------------------------------------------------
+//
+// A leader and the leader's band are one artist for DJ's purposes. Read-time
+// only: never call this from buildMatchKey or any write, or it becomes the
+// automatic Trio rule the alias map exists to avoid (§4.1.2).
+const ENSEMBLE_TAIL_RES: RegExp[] = [
+  /\s+and\s+(?:his|her)\s+orchestra$/,
+  /\s+and\s+the\s+.+$/,
+  /\s+(?:trio|quartet|quintet|sextet|septet|octet|nonet|big band|orchestra|band)$/,
+];
+
+/** Fold an ALREADY-NORMALISED name: drop a leading "the" and a trailing
+ *  ensemble word. A step that would leave nothing is skipped ("The Band"). */
+export function foldArtistName(normalised: string): string {
+  let s = normalised;
+  if (s.startsWith("the ") && s.length > 4) s = s.slice(4);
+  for (const re of ENSEMBLE_TAIL_RES) {
+    const t = s.replace(re, "");
+    if (t) s = t;
+  }
+  return s;
+}
+
+/** Every act in a byline, aliased, normalised and folded, as a set. */
+export function foldedArtistSet(display: string | null | undefined): Set<string> {
+  return new Set(
+    splitArtistByline(display)
+      .map((n) => normalisePart(canonicalArtist(n)))
+      .filter((n) => n.length > 0)
+      .map(foldArtistName),
+  );
+}
+
+function sameSet(a: Set<string>, b: Set<string>): boolean {
+  return a.size > 0 && a.size === b.size && [...a].every((x) => b.has(x));
+}
+
 export interface ArtistDisagreement {
   video_id: string;
   /** Human-readable, for the report: the full joined strings. */
@@ -572,7 +618,8 @@ export interface ArtistDisagreement {
   submitted_primary: string;
 }
 
-/** Returns a disagreement only when the NORMALISED PRIMARY artists differ.
+/** Returns a disagreement only when the NORMALISED PRIMARY artists differ AND
+ *  the folded artist sets differ (foldedArtistSet, since 2026-10-06).
  *  Null when they agree, or when either side cannot be determined.
  *
  *  BOTH primaries come from primaryArtistOfDisplay, so both have been through
@@ -594,6 +641,11 @@ export function detectArtistDisagreement(
   // conflict with. See PLACEHOLDER_ARTISTS - it suppresses, it does not alias.
   if (isPlaceholderArtist(storedPrimary) || isPlaceholderArtist(submittedPrimary)) return null;
   if (storedPrimary === submittedPrimary) return null;
+  // Folded SETS, not folded primaries: a primary fold would hide "Oscar
+  // Peterson" vs "Oscar Peterson Trio, Clark Terry", a real collaboration.
+  if (sameSet(foldedArtistSet(storedArtistDisplay), foldedArtistSet(submittedArtistDisplay))) {
+    return null;
+  }
   return {
     video_id: videoId,
     stored: storedArtistDisplay,

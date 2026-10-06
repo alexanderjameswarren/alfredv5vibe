@@ -437,6 +437,33 @@ two known entries across all 1,241 export artists. ⚠️ That scan must be run 
 alias targets seeded as a **positive control**: both known splits are cross-source, so a scan
 of export artists alone returns 0 whether or not it works.
 
+#### ⚠️ AMENDED 2026-10-06 — leader and band fold together in the COMPARISON
+
+**Decision (Alex):** a leader and the leader's band are the same artist for DJ's purposes.
+Five weeks of reports were almost all naming variation: `John Coltrane` / `John Coltrane
+Quartet`, `Miles Davis` / `The Miles Davis Quintet`, `The Smashing Pumpkins` / `Smashing
+Pumpkins`, `Wynton Kelly Trio, Wes Montgomery` / the same two reversed.
+
+**Rule (`detectArtistDisagreement`):** two bylines agree if the normalised primaries match
+(as before), **or** their *folded sets* are equal. `foldedArtistSet` splits the byline,
+aliases and normalises each name, then `foldArtistName` drops a leading `the` and a trailing
+`trio`/`quartet`/`quintet`/`sextet`/`septet`/`octet`/`nonet`/`big band`/`orchestra`/`band`,
+`and his|her orchestra`, or `and the …` (`&` is already `and`). A step that would leave
+nothing is skipped, so `The Band`, `Trio` and `Live` keep their names.
+
+- **Sets, not folded primaries.** A primary fold would hide `Oscar Peterson` vs `Oscar
+  Peterson Trio, Clark Terry` (AbbzAPXvNZ8), a real collaboration. Primary-or-set keeps
+  `Coldplay, BTS` vs `Coldplay` agreeing and still reports Clark Terry.
+- **Comparison only.** `match_key`, `ARTIST_ALIASES` and every stored artist are untouched,
+  so this is a deploy, not a backfill (§4.1.2). The "no automatic Trio rule" argument above
+  still governs grouping.
+- **Unchanged:** placeholders (`Various Artists`) stay suppressed; `Release` still reports and
+  stays decided in `dj_known_disagreements`. No row of that table changes.
+- **Consequence:** Brad Mehldau / Brad Mehldau Trio (decided 2026-10-02 as two billings) and
+  Miles Davis / Quintet no longer report at all, not even as `known_disagreements`.
+- **Notification:** from task prompt 2026-10-06a, disagreements are logged in the run's
+  `details` and counted in the report only. They never raise an inbox item.
+
 #### 4.1.2 Consequence of write-once: a normaliser change is a migration
 
 `dj_tracks` writes are insert-only (`ON CONFLICT (user_id, video_id) DO NOTHING`), and

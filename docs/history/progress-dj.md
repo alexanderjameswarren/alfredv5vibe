@@ -3016,6 +3016,26 @@ built into an insert-only table.
 
 ---
 
+## 2026-10-06 — leader/band fold in the artist-disagreement check (dj_artist_fold-q7m)
+
+Decision (Alex): a leader and the leader's band are one artist for DJ's purposes. Spec
+§4.1.4, amended 2026-10-06.
+
+- [x] `foldArtistName` / `foldedArtistSet` in `dj-normalise.ts`. Agree if the primaries match
+      as before OR the folded sets are equal. Comparison only: match_key, aliases and stored
+      artists are unchanged, no migration.
+- [x] Tests: the 10 reported pairs fold in both directions; Clark Terry, `Release`,
+      Eddie Higgins Trio vs Bill Evans Trio still fire; `Various Artists` stays suppressed;
+      `Live`, `The Band` and `Trio` never fold to nothing.
+- [x] Daily task prompt 2026-10-06a (`dj-daily-task-prompt.md`): disagreements are logged
+      and counted, never raised; `notified_video_ids` is always `[]`.
+- [x] Deployed `mcp` 2026-10-06 12:16 PDT (version 136, `--no-verify-jwt`; `verify_jwt`
+      confirmed false afterwards).
+- [ ] Live verification: next Daily DJ run (2026-10-07 10:00 PT) should log 0
+      leader-vs-band disagreements.
+
+---
+
 ## Phase 9 — Alfred surfaces
 
 - [ ] Staleness query (newest `ok` run per app vs. `platform_schedules` cadence)

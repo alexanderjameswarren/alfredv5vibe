@@ -23,6 +23,7 @@ import {
   buildMatchKey,
   canonicalArtist,
   detectArtistDisagreement,
+  foldArtistName,
   primaryArtistOfMatchKey,
   primaryArtistOfDisplay,
   PLACEHOLDER_ARTISTS,
@@ -492,6 +493,50 @@ test("the alias map is applied on BOTH sides, so an alias is not a disagreement"
     assert.equal(detectArtistDisagreement("vid", stored, submitted), null, `${submitted}`);
     assert.equal(detectArtistDisagreement("vid", submitted, stored), null, `reversed: ${submitted}`);
   }
+});
+
+test("leader vs band folds to a match — 2026-10-06", () => {
+  const pairs = [
+    ["John Coltrane", "John Coltrane Quartet"],
+    ["Bill Evans", "Bill Evans Trio"],
+    ["Cannonball Adderley", "Cannonball Adderley Quintet"],
+    ["Brad Mehldau Trio", "Brad Mehldau"],
+    ["Ahmad Jamal", "Ahmad Jamal Trio"],
+    ["Art Blakey", "Art Blakey & The Jazz Messengers"],
+    ["Miles Davis", "The Miles Davis Quintet"],
+    ["Dave Brubeck Quartet", "The Dave Brubeck Quartet"],
+    ["The Smashing Pumpkins", "Smashing Pumpkins"],
+    ["Wynton Kelly Trio, Wes Montgomery", "Wes Montgomery, Wynton Kelly Trio"],
+    ["Duke Ellington", "Duke Ellington & His Orchestra"],
+    ["Count Basie", "Count Basie Big Band"],
+  ];
+  for (const [a, b] of pairs) {
+    assert.equal(detectArtistDisagreement("vid", a, b), null, `${a} / ${b}`);
+    assert.equal(detectArtistDisagreement("vid", b, a), null, `${b} / ${a}`);
+  }
+});
+
+test("the fold still lets real differences through", () => {
+  // A collaboration is not a band: folded sets differ.
+  assert.ok(detectArtistDisagreement("vid", "Oscar Peterson", "Oscar Peterson Trio, Clark Terry"));
+  assert.ok(detectArtistDisagreement("vid", "Release", "Oscar Peterson"));
+  assert.ok(detectArtistDisagreement("vid", "Live", "Bush"));
+  // Report fields stay unfolded.
+  const d = detectArtistDisagreement("vid", "Eddie Higgins Trio", "Bill Evans Trio");
+  assert.equal(d.stored_primary, "eddie higgins trio");
+});
+
+test("foldArtistName never folds a name to nothing", () => {
+  assert.equal(foldArtistName("live"), "live");
+  assert.equal(foldArtistName("the band"), "band");
+  assert.equal(foldArtistName("trio"), "trio");
+  assert.equal(foldArtistName("the"), "the");
+  assert.equal(foldArtistName("the miles davis quintet"), "miles davis");
+});
+
+test("the fold does not touch match_key", () => {
+  assert.equal(buildMatchKey(["Bill Evans Trio"], "Peri's Scope"), "bill evans trio|peris scope");
+  assert.equal(buildMatchKey(["The Smashing Pumpkins"], "1979"), "the smashing pumpkins|1979");
 });
 
 test("no alias `from` contains a comma — the split would reach it first", () => {
