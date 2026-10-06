@@ -783,9 +783,12 @@ ChatRowClick(i, *) {
 ; With no saved link and no typed Chrome title, save the address of a claude.ai
 ; chat tab, in any window, whose title carries the project code.
 LearnChatLink(s, project) {
-    if s.chatLink != "" || s.chromeTitle != "" || s.free || !TabsFresh()
+    if s.chatLink != "" || s.chromeTitle != "" || s.free
         return
-    link := FindChatLinkByCode(tabsList, project)
+    ; The issued run tag first: after a rebind the new chat's title rarely has the code.
+    link := ChatsFresh() ? FindChatLinkByTag(chatsList, s.runTag, project) : ""
+    if link = "" && TabsFresh()
+        link := FindChatLinkByCode(tabsList, project)
     if link != ""
         SaveChatLink(s, link, project)
 }

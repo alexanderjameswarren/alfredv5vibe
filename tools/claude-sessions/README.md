@@ -150,3 +150,7 @@ fake windows, a scratch settings file and a scratch bridge folder) and
 `bridge\host.test.mjs` (the host). The AHK tests fail on any `#Warn` warning. The
 panel briefly shows and flashes during the smoke test. Run the AHK files through this
 script or PowerShell, not Git Bash, which mangles `/ErrorStdOut`.
+
+An AHK test passes only if it exits 0 and its last line ends in "passed". Exit 0
+without that line is reported "did not finish". `-Tests a.ahk,b.ahk` runs only those
+files, without the host tests.

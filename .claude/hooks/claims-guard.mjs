@@ -62,6 +62,8 @@ import {
   ClaimsError,
   claimsCommandApproval,
   fold,
+  foreignPath,
+  foreignWhere,
   heldBy,
   holdersOf,
   holds,
@@ -305,6 +307,22 @@ function checkClaimsCommand(command, ctx) {
   return bare;
 }
 
+/**
+ * A worktree session reaching into main or another worktree. Its own claims say
+ * nothing about those files, so no claim from here can make it right.
+ */
+function blockForeign(detail, paths, ctx, via) {
+  block(
+    detail,
+    `Claims guard is blocking this ${via ? "command" : "edit"}: ${ctx.owner} is a worktree, and this\n` +
+      `would change files outside it:\n` +
+      paths.map((p) => `  ${p}  (in ${foreignWhere(p)})`).join("\n") +
+      `\n\n${via ? `  writes via: ${via}\n\n` : ""}` +
+      `A worktree changes only its own files. No claim from ${ctx.owner} can cover these.\n\n` +
+      `STOP. Do not work around this. Tell Alex what you were about to change.`,
+  );
+}
+
 function main() {
   if (process.env.CLAIMS_GUARD === "off") {
     allow(
@@ -413,7 +431,10 @@ function main() {
     // redirection is judged on its destination alone, so writing to $TEMP is
     // not a write to the repo; anything stronger is judged on every repo path
     // the command names. See claims-core for why the two differ.
-    const write = writeCheck(command, ctx.root, shell, { redirectsOnly });
+    const write = writeCheck(command, ctx.root, shell, { redirectsOnly, checkout: ctx });
+    if (write?.foreign.length) {
+      blockForeign(`shell write: ${write.foreign.join(", ")}`, write.foreign, ctx, write.indicator);
+    }
     if (!write) {
       allow(
         redirectsOnly
@@ -440,6 +461,8 @@ function main() {
 
   // --- an edit tool ---------------------------------------------------------
   const rel = toRepoRelative(filePath, ctx.root);
+  const foreign = rel === null ? foreignPath(filePath, ctx) : null;
+  if (foreign) blockForeign(`foreign: ${foreign}`, [foreign], ctx);
   if (rel === null) allow("outside the repo");
   if (isExempt(rel)) allow(`exempt: ${rel}`);
   const wt = worktreeOf(rel);

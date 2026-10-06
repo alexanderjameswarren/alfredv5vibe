@@ -351,6 +351,107 @@ test("a cd out of the repo still leaves the prompt guard in its checkout", () =>
   assert.doesNotMatch(run.line, /not a git repo/);
 });
 
+// ---------------------------------------------------------------------------
+// switchboard_guard bug 3: a worktree writes only inside itself
+// ---------------------------------------------------------------------------
+
+/** A scratch main with linked worktrees wt-a and wt-b, made with fs; each claims its own src/a.js. */
+function scratchWorktrees() {
+  const main = scratchMain();
+  const wt = (name) => path.join(main, ".claude", "worktrees", name);
+  for (const name of ["wt-a", "wt-b"]) {
+    const gitdir = path.join(main, ".git", "worktrees", name);
+    mkdirSync(gitdir, { recursive: true });
+    mkdirSync(path.join(wt(name), "src"), { recursive: true });
+    writeFileSync(path.join(gitdir, "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(path.join(gitdir, "commondir"), "../..\n");
+    writeFileSync(path.join(gitdir, "gitdir"), `${path.join(wt(name), ".git")}\n`);
+    writeFileSync(path.join(wt(name), ".git"), `gitdir: ${gitdir}\n`);
+    writeFileSync(path.join(wt(name), "src", "a.js"), "");
+  }
+  mkdirSync(path.join(main, "src"));
+  writeFileSync(path.join(main, "src", "a.js"), "");
+  const claims = ["main", "wt-a", "wt-b"].map((owner) => ({ owner, item: "src/a.js" }));
+  writeFileSync(path.join(main, ".git", "alfred-claims.json"), JSON.stringify({ claims, reservations: [] }));
+  return { main, wtA: wt("wt-a"), wtB: wt("wt-b") };
+}
+
+/** C:\x\y as Git Bash writes it: /c/x/y. */
+const gitBash = (p) => p.replace(/^([A-Za-z]):[\\/]/, "/$1/").replace(/\\/g, "/");
+
+const guardIn = (cwd, tool_name, tool_input) =>
+  drive(GUARD, { hook_event_name: "PreToolUse", cwd, tool_name, tool_input });
+
+test("a worktree still edits its own claimed files", () => {
+  const { wtA } = scratchWorktrees();
+  const run = guardIn(wtA, "Write", { file_path: path.join(wtA, "src", "a.js") });
+  assert.equal(run.code, 0, run.stderr);
+  assert.match(run.line, /owner=wt-a\s+claimed: src\/a\.js/);
+  assert.equal(guardIn(wtA, "Bash", { command: "rm src/a.js" }).code, 0);
+  assert.equal(guardIn(wtA, "Write", { file_path: path.join(tmpdir(), "x.txt") }).code, 0);
+});
+
+test("a worktree cannot edit the main checkout", () => {
+  const { main, wtA } = scratchWorktrees();
+  const run = guardIn(wtA, "Edit", { file_path: path.join(main, "src", "a.js") });
+  assert.equal(run.code, 2);
+  assert.match(run.line, /BLOCK.*foreign: src\/a\.js/);
+  assert.match(run.stderr, /in the main checkout/);
+});
+
+test("a worktree cannot edit a sibling worktree", () => {
+  const { wtA, wtB } = scratchWorktrees();
+  const run = guardIn(wtA, "Write", { file_path: path.join(wtB, "src", "a.js") });
+  assert.equal(run.code, 2);
+  assert.match(run.stderr, /in the wt-b worktree/);
+});
+
+test("a worktree's shell cannot write into main, however the path is spelt", () => {
+  const { main, wtA } = scratchWorktrees();
+  const abs = path.join(main, "src", "a.js");
+  const commands = [
+    ["Bash", `rm "${abs}"`],
+    ["Bash", "cp src/a.js ../../../src/a.js"],
+    ["Bash", `echo x > "${abs}"`],
+    ["PowerShell", `Remove-Item "${abs}"`],
+  ];
+  if (process.platform === "win32") commands.push(["Bash", `rm ${gitBash(abs)}`]);
+  for (const [tool, command] of commands) {
+    const run = guardIn(wtA, tool, { command });
+    assert.equal(run.code, 2, command);
+    assert.match(run.line, /BLOCK.*shell write: src\/a\.js/, command);
+  }
+});
+
+test("a worktree may read main, and write main's exempt folders", () => {
+  const { main, wtA } = scratchWorktrees();
+  const out = path.join(tmpdir(), "guard-read.txt");
+  assert.equal(guardIn(wtA, "Bash", { command: `cat "${path.join(main, "src", "a.js")}" > "${out}"` }).code, 0);
+  assert.equal(guardIn(wtA, "Write", { file_path: path.join(main, ".git", "x.json") }).code, 0);
+});
+
+test("main is unchanged: its own claim works, a worktree stays off limits", () => {
+  const { main, wtA } = scratchWorktrees();
+  assert.equal(guardIn(main, "Write", { file_path: path.join(main, "src", "a.js") }).code, 0);
+  const run = guardIn(main, "Write", { file_path: path.join(wtA, "src", "a.js") });
+  assert.equal(run.code, 2);
+  assert.match(run.line, /inside worktree/);
+});
+
+test("main reads Git Bash /c/ paths as repo paths", { skip: process.platform !== "win32" }, () => {
+  const { main } = scratchWorktrees();
+  writeFileSync(path.join(main, "src", "b.js"), "");
+  const unclaimed = guardIn(main, "Bash", { command: `rm ${gitBash(path.join(main, "src", "b.js"))}` });
+  assert.equal(unclaimed.code, 2);
+  assert.match(unclaimed.line, /BLOCK.*shell write: src\/b\.js/);
+  const claimed = guardIn(main, "Bash", { command: `rm ${gitBash(path.join(main, "src", "a.js"))}` });
+  assert.equal(claimed.code, 0, claimed.stderr);
+  assert.match(claimed.line, /shell write ok/);
+  const outside = scratchDir();
+  writeFileSync(path.join(outside, "x.txt"), "");
+  assert.equal(guardIn(main, "Bash", { command: `rm ${gitBash(path.join(outside, "x.txt"))}` }).code, 0);
+});
+
 test("a full test run leaves the real log and the real binding untouched", {
   // The child runs this same file, so it skips this test rather than recursing.
   skip: process.env.HOOKS_TEST_CHILD === "1" ? "inner run" : false,

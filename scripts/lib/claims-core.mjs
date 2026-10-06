@@ -89,8 +89,32 @@ export function resolveRepo(cwd = process.cwd()) {
     file: path.join(commonDir, CLAIMS_FILE),
     owner: isWorktree ? path.basename(root) : "main",
     isWorktree,
+    // The main checkout holds the common .git; null for a bare repo.
+    mainRoot: path.basename(commonDir) === ".git" ? path.dirname(commonDir) : null,
   };
 }
+
+/**
+ * From a worktree, the main-relative form of a path in the main checkout or in
+ * another worktree, or null. Those were "outside the repo" and allowed, so a
+ * worktree session could write main's files (switchboard_guard, bug 3).
+ * Exempt paths (`.git/`, `.clip/`, …) are not foreign.
+ */
+export function foreignPath(p, ctx) {
+  if (!ctx.isWorktree || !ctx.mainRoot) return null;
+  const abs = path.resolve(ctx.root, nativePath(p));
+  if (fold(abs) === fold(path.resolve(ctx.root)) || toRepoRelative(abs, ctx.root) !== null) return null;
+  const rel = toRepoRelative(abs, ctx.mainRoot);
+  if (rel === null || isExempt(rel)) return null;
+  // Same debris rule as repoPathsIn: a real target's folder exists.
+  return existsSync(abs) || existsSync(path.dirname(abs)) ? rel : null;
+}
+
+/** "main" or "the <name> worktree", for a path foreignPath returned. */
+export const foreignWhere = (rel) => {
+  const wt = worktreeOf(rel);
+  return wt === null ? "the main checkout" : wt ? `the ${wt} worktree` : "the worktrees folder";
+};
 
 /**
  * The session's checkout: its project dir first, then its cwd.
@@ -202,12 +226,19 @@ export function normaliseItem(raw, root) {
 }
 
 /**
+ * Git Bash spells C:\x as /c/x. Read literally on Windows, that is C:\c\x, outside
+ * every checkout, so a shell write by that spelling went unchecked (switchboard_guard).
+ */
+export const nativePath = (p) =>
+  IGNORE_CASE ? String(p).replace(/^\/([A-Za-z])\//, "$1:/") : String(p);
+
+/**
  * Repo-relative form of an absolute path, or null if it is outside the repo.
  * The guard uses this rather than normaliseItem because "outside the repo" is
  * an ordinary, allowed answer there, not an error.
  */
 export function toRepoRelative(p, root) {
-  const rel = path.relative(root, path.resolve(root, p)).split(path.sep).join("/");
+  const rel = path.relative(root, path.resolve(root, nativePath(p))).split(path.sep).join("/");
   if (rel === "" || rel === "." || rel.startsWith("../")) return null;
   return rel;
 }
@@ -328,13 +359,18 @@ export function heldBy(state, item, owner) {
  * Quotes are NOT stripped before these are matched, deliberately:
  * `sh -c "mv a b"` really does move a file.
  */
+// A write word inside a path is not the command either: `d.patch`, `ui/touch/`,
+// `touch.js` (switchboard_guard). `rm.exe` still counts.
+const word = (alternatives) =>
+  new RegExp(String.raw`(?<![-\w.])(?:${alternatives})\b(?!-|/|\.(?!exe\b)\w)`);
+
 const COMMAND_INDICATORS = [
-  [/(?<![-\w])tee\b(?!-)/, "tee"],
-  [/(?<![-\w])(?:mv|cp|rsync|install|ln)\b(?!-)/, "mv/cp"],
-  [/(?<![-\w])(?:rm|rmdir|unlink|shred|truncate|touch|mkdir)\b(?!-)/, "rm/touch/mkdir"],
+  [word("tee"), "tee"],
+  [word("mv|cp|rsync|install|ln"), "mv/cp"],
+  [word("rm|rmdir|unlink|shred|truncate|touch|mkdir"), "rm/touch/mkdir"],
   [/(?<![-\w])(?:sed|perl|ruby)\b[^|;&\n]*\s-i\b/, "in-place sed/perl"],
   [/(?<![-\w])dd\b[^|;&\n]*\bof=/, "dd of="],
-  [/(?<![-\w])(?:patch|git\s+apply)\b(?!-)/, "patch"],
+  [word(String.raw`patch|git\s+apply`), "patch"],
   [/(?<![-\w])find\b[^|;&\n]*\s-delete\b/, "find -delete"],
   [/\bwrite(?:File)?(?:Sync)?\s*\(/i, "writeFileSync"],
   [/\bopen\s*\([^)]*['"][wax]/, "open(...,'w')"],
@@ -364,7 +400,73 @@ const EXTRACT_INDICATORS = [
     "unzip",
     new RegExp(String.raw`(?<![-\w])unzip\b[^|;&\n]*\s-d` + DEST),
   ],
+  // `git diff --output=<file>` writes the diff to that file.
+  [
+    /(?<![-\w])git\b[^|;&\n]*\s(?:diff|log|show)\b[^|;&\n]*\s--output\b/,
+    "git --output",
+    new RegExp(String.raw`(?<![-\w])--output(?:=|\s)` + DEST),
+  ],
 ];
+
+/**
+ * Programs that only read, so words in their arguments are search text, not
+ * commands: `grep -n "rmdir"` and `git status -- '*touch*'` were both blocked as
+ * writes (switchboard_guard, 2026-10-06). Lower case, without `.exe`.
+ */
+const READ_ONLY = new Set([
+  "grep", "egrep", "fgrep", "rg", "cat", "head", "tail", "wc", "ls",
+  "select-string", "sls", "get-content", "gc", "type", "get-childitem", "gci", "dir",
+]);
+const READ_ONLY_GIT = new Set(["grep", "log", "diff", "show", "status", "blame"]);
+/** Flags that make one of those run a program (`rg --pre`, `git grep -O`) or write (`--output`). */
+const UNSAFE_FLAG = /^(?:--pre\b|-O|--open-files-in-pager\b|--output\b)/;
+
+/** `$(…)`, backticks or an unquoted `(` outside single quotes: something else runs. */
+function runsSomething(element, shell) {
+  const escape = shell === "powershell" ? "`" : "\\";
+  let quote = null;
+  for (let i = 0; i < element.length; i += 1) {
+    const ch = element[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (ch === "$" && element[i + 1] === "(") return true;
+    if (ch === "`" && shell !== "powershell") return true;
+    if (ch === escape) {
+      i += 1;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === "(") return true;
+  }
+  return false;
+}
+
+/** Is this pipeline element a read-only program with nothing in it that runs or writes? */
+function isReadOnly(element, shell) {
+  if (runsSomething(element, shell)) return false;
+  const tokens = element.trim().split(/\s+/).map((t) => t.replace(/^["']|["']$/g, ""));
+  if (tokens.some((t) => UNSAFE_FLAG.test(t))) return false;
+  const program = tokens[0].split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, "");
+  if (program !== "git") return READ_ONLY.has(program);
+  for (let i = 1; i < tokens.length; i += 1) {
+    const t = tokens[i];
+    if (t === "-C") i += 1;
+    else if (t === "-c") return false; // config can name a program to run
+    else if (!t.startsWith("-")) return READ_ONLY_GIT.has(t.toLowerCase());
+  }
+  return false;
+}
+
+/** The command with its read-only pipeline elements left out, one element per line. */
+function writableText(command, shell) {
+  return splitCommand(command, shell, { pipes: true })
+    .filter((element) => !isReadOnly(element, shell))
+    .join("\n");
+}
 
 /**
  * PowerShell's short aliases for the cmdlets above — `mi`, `ci`, `ni`, `sc`, and
@@ -530,7 +632,9 @@ export function writeIndicators(command, shell = "bash") {
       targets: redirects.map((r) => r.target),
     });
   }
-  const c = String(command);
+  // Redirections above are read from the whole command; write words only from
+  // the elements that are not read-only programs.
+  const c = writableText(command, shell);
   const indicators =
     shell === "powershell"
       ? [...COMMAND_INDICATORS, PS_ALIAS_INDICATOR]
@@ -580,17 +684,26 @@ export function writeIndicator(command, shell = "bash") {
  *
  * `redirectsOnly` is for a lone claims.mjs or clip.mjs command (see
  * `isLoneScriptCommand`), whose arguments are never run.
+ *
+ * `checkout` (a resolveRepo result) also collects `foreign`: the paths, relative
+ * to main, that a worktree's command would write in main or another worktree.
  */
-export function writeCheck(command, root, shell = "bash", { redirectsOnly = false } = {}) {
+export function writeCheck(command, root, shell = "bash", { redirectsOnly = false, checkout = null } = {}) {
   const kinds = (c) =>
     writeIndicators(c, shell).filter((f) => !redirectsOnly || f.kind === "redirect");
   if (!kinds(command).length) return null;
 
   const paths = new Set();
+  const foreign = new Set();
+  const outside = (p) => {
+    const rel = checkout ? foreignPath(p, checkout) : null;
+    if (rel) foreign.add(rel);
+  };
   const add = (p) => {
     let rel = null;
     try {
       rel = toRepoRelative(p, root);
+      if (rel === null) outside(p);
     } catch {
       return;
     }
@@ -633,17 +746,19 @@ export function writeCheck(command, root, shell = "bash", { redirectsOnly = fals
       for (const r of found.filter((f) => f.kind === "redirect"))
         for (const target of r.targets) add(expandVars(target));
     } else {
-      for (const rel of repoPathsIn(part, root)) paths.add(rel);
+      for (const rel of repoPathsIn(part, root, outside)) paths.add(rel);
     }
   }
 
   if (whole) {
     const all = kinds(command);
     strictLabel ??= all.find((f) => f.kind !== "redirect")?.label;
-    if (strictLabel) for (const rel of repoPathsIn(command, root)) paths.add(rel);
+    if (strictLabel) for (const rel of repoPathsIn(command, root, outside)) paths.add(rel);
     else for (const target of all[0].targets) add(expandVars(target));
   }
-  return paths.size ? { indicator: strictLabel ?? redirectLabel, paths: [...paths] } : null;
+  return paths.size || foreign.size
+    ? { indicator: strictLabel ?? redirectLabel, paths: [...paths], foreign: [...foreign] }
+    : null;
 }
 
 /** `cd` and its kin: relative paths in later parts no longer mean what they say. */
@@ -679,9 +794,9 @@ function expandLocal(text, vars) {
  * Split a command at `;`, `&&`, `||` and newlines that sit outside quotes,
  * brackets and braces. Pipelines stay whole: in `echo x | xargs rm` the path
  * and the write are one part. A single `&` is not a separator, because it is
- * PowerShell's call operator.
+ * PowerShell's call operator. `pipes` also splits at `|`, into pipeline elements.
  */
-export function splitCommand(command, shell = "bash") {
+export function splitCommand(command, shell = "bash", { pipes = false } = {}) {
   const s = String(command);
   const escape = shell === "powershell" ? "`" : "\\";
   const parts = [];
@@ -703,7 +818,8 @@ export function splitCommand(command, shell = "bash") {
     else if (ch === ")" || ch === "}") depth = Math.max(0, depth - 1);
     else if (depth === 0) {
       const two = s.slice(i, i + 2);
-      const cut = two === "&&" || two === "||" ? 2 : ch === ";" || ch === "\n" ? 1 : 0;
+      const cut =
+        two === "&&" || two === "||" ? 2 : ch === ";" || ch === "\n" || (pipes && ch === "|") ? 1 : 0;
       if (cut) {
         parts.push(s.slice(start, i));
         i += cut;
@@ -732,7 +848,7 @@ export function splitCommand(command, shell = "bash") {
  * the trade we want: the answer is to claim the file, which is the habit the
  * system is asking for anyway, and CLAIMS_GUARD=off is there for the rest.
  */
-export function repoPathsIn(command, root) {
+export function repoPathsIn(command, root, onOutside = null) {
   // `,` is in there for PowerShell, whose path parameters take arrays:
   // `Remove-Item -Path src\a.js,src\b.js` is two paths in one token otherwise.
   const tokens = String(command).split(/[\s"'`|&;,()<>{}]+/);
@@ -762,6 +878,8 @@ export function repoPathsIn(command, root) {
     } catch {
       continue;
     }
+    // Outside this checkout: the caller decides whether it is someone else's.
+    if (rel === null && onOutside && looksLikePath) onOutside(token);
     if (!rel || isExempt(rel)) continue;
 
     // Drop the debris that survives tokenising. A path with a slash needs its

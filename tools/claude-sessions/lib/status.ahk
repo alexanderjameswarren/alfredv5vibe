@@ -75,6 +75,26 @@ ProjectOfTag(tag) {
     return RegExMatch(tag, "^(.+)-s\d+[a-z]?-[a-z0-9]{4}$", &m) ? m[1] : ""
 }
 
+; From chats.json, among chats whose issued tag belongs to `project`: the one that
+; issued `runTag`, else the first; its address without query, or "". A new chat's
+; title rarely carries the code, but the run tag it issued always does.
+FindChatLinkByTag(chats, runTag, project) {
+    fallback := ""
+    for c in chats {
+        if !IsObject(c)
+            continue
+        url := NormaliseUrl(c.Get("url", "")), tag := c.Get("issuedTag", "")
+        ; The run tag can still be the old project's just after a rebind.
+        if tag = "" || project = "" || ProjectOfTag(tag) != project || !RegExMatch(url, "^https://claude\.ai/chat/\S+$")
+            continue
+        if tag == runTag
+            return url
+        if fallback = ""
+            fallback := url
+    }
+    return fallback
+}
+
 ; Claude has issued a tag for this project that the CLI has not received.
 NewerTag(runTag, issuedTag, project) => issuedTag != "" && issuedTag != runTag && ProjectOfTag(issuedTag) = project
 

@@ -20,8 +20,13 @@ realIniTime := FileExist(realIni) ? FileGetTime(realIni, "M") : ""
 #Warn All, StdOut
 
 SetTimer(Refresh, 0), SetTimer(Blink, 0)
+; A real click on the panel's chat row focused a tab mid-run (switchboard_guard s6b).
+; The tests call the handlers directly, so the window takes no input. A test script
+; never opens the touch window (claude-sessions.ahk, before the first SetTimer).
+panel.Opt("+Disabled")
 fails := 0
 Expect("scratch settings from the start", SETTINGS_INI, dir "\settings.ini")
+Expect("panel takes no real input", (WinGetStyle(panel.Hwnd) & 0x08000000) != 0, true)   ; WS_DISABLED
 BINDING_FILE := dir "\alfred-project-code.json"   ; nor the real binding
 BRIDGE_DIR := dir "\bridge"                        ; nor the real bridge folder
 DirCreate(BRIDGE_DIR)
@@ -200,7 +205,7 @@ focusReply := Map("ok", true, "windowTitle", "abc chat - Claude")
 WriteTabs(5, "https://claude.ai/chat/abc-1")
 placed := [], readerCalls := []
 Arrange(ms)
-Expect("bridge focuses the linked tab", focusCalls.Length = 1 ? focusCalls[1] : focusCalls.Length, 77)
+Expect("bridge focuses the linked tab", JoinCodes(focusCalls) " " JoinCodes(composerCalls) " " JoinCodes(actionCalls), "77| 1| focus|")
 Expect("bridge places the window by title", JoinCodes(placed), "99@1|701@2|")
 Expect("bridge skips the address reader", readerCalls.Length, 0)
 WriteTabs(60, "https://claude.ai/chat/abc-1")
@@ -410,6 +415,7 @@ Expect("chat tile gone with its chat", TileOf("chat:900").Count, 0)
 
 ; --- no saved link: learn one from any tab whose title has the code ---------------
 ms.chatLink := ""
+FileDelete(BRIDGE_DIR "\chats.json")    ; abc-1 issued a rem-j7p tag, and that would win
 FileOpen(BRIDGE_DIR "\tabs.json", "w", "UTF-8-RAW").Write('{"at":"' IsoAgo(0) '","tabs":[{"tabId":3,"url":"https://claude.ai/chat/learned?x","title":"rem-j7p plan - Claude","active":false}]}')
 Refresh()
 Expect("link learned from a background tab", ms.chatLink, "https://claude.ai/chat/learned")
@@ -421,6 +427,18 @@ FileOpen(BRIDGE_DIR "\tabs.json", "w", "UTF-8-RAW").Write('{"at":"' IsoAgo(0) '"
 Refresh()
 Expect("rebind relearns the link", ms.chatLink, "https://claude.ai/chat/next")
 Expect("rebind saves the new code", IniRead(SETTINGS_INI, "chatlinkcode", "main", ""), "next-q2z")
+
+; --- rebound again: the new chat's title has no code, but it issued the run tag ------
+FileOpen(BINDING_FILE, "w", "UTF-8-RAW").Write('{"code":"rem-j7p"}')
+Refresh()
+FileOpen(BINDING_FILE, "w", "UTF-8-RAW").Write('{"code":"next-q2z"}')
+FileOpen(BRIDGE_DIR "\tabs.json", "w", "UTF-8-RAW").Write('{"at":"' IsoAgo(0) '","tabs":[{"tabId":3,"url":"https://claude.ai/chat/learned","title":"rem-j7p plan - Claude"},{"tabId":5,"url":"https://claude.ai/chat/untitled","title":"Claude"}]}')
+WriteChats("https://claude.ai/chat/abc-1|finished|4|" T9 "|1|1|abc", "https://claude.ai/chat/untitled|finished|1|next-q2z-s1-ab12|1|5|")
+Refresh()
+Expect("rebind pairs with the chat that issued the tag", ms.chatLink, "https://claude.ai/chat/untitled")
+Expect("tag-learned link saved for the new code", IniRead(SETTINGS_INI, "chatlinkcode", "main", ""), "next-q2z")
+Expect("paired chat has no tile of its own", TileOf("chat:5").Count, 0)
+FileDelete(BRIDGE_DIR "\chats.json")
 FileDelete(BRIDGE_DIR "\tabs.json")
 try FileDelete(BINDING_FILE)
 Refresh()

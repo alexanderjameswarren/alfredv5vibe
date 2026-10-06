@@ -21,6 +21,7 @@ import {
   scanRedirects,
   splitCommand,
   staleDbClaims,
+  toRepoRelative,
   writeCheck,
   writeIndicator,
   worktreeOf,
@@ -511,6 +512,70 @@ test("tar -x and unzip are judged on their destination when they name one", () =
   // No destination: strict, every repo path in the part.
   assert.deepEqual(writes("tar -xf /tmp/a.tar src/App.js"), ["src/App.js"]);
   assert.deepEqual(writes("find src/sam -name '*.bak' -delete"), ["src/sam"]);
+});
+
+// ---------------------------------------------------------------------------
+// switchboard_guard: a read-only program's arguments are not commands
+// ---------------------------------------------------------------------------
+
+test("searching for a write word is not a write", () => {
+  // Blocked live on 2026-10-06 while planning this fix.
+  assert.equal(
+    writeIndicator('cd docs/history; grep -n -i "never finished\\|rmdir\\|touch" a.md b.md | head -60'),
+    null,
+  );
+  assert.equal(writeIndicator('rg -n "rm -rf|mkdir" scripts'), null);
+  assert.equal(writeIndicator('git grep -n "rmdir" -- scripts/lib/claims-core.mjs'), null);
+  assert.equal(writeIndicator("git log --oneline -S\"unlink\" | head"), null);
+  assert.equal(psIndicator('Select-String -Pattern "Remove-Item" -Path scripts\\lib\\*.mjs'), null);
+  assert.equal(psIndicator('Get-Content x.md | Select-String "touch"'), null);
+});
+
+test("touch inside a path or glob is not the command", () => {
+  assert.equal(writeIndicator("git status --short -- 'docs/*touch*'"), null);
+  assert.equal(writeIndicator("ls ui/touch/ docs/history/switchboard_touch-t4n-mockup.html"), null);
+  assert.equal(writeIndicator("cat tools/touch.js"), null);
+  // Not a read-only program, so only the word rule protects these.
+  assert.equal(writeIndicator("node tools/touch.js docs/touch/x.md out.patch"), null);
+  assert.equal(writeIndicator("touch src/x.js"), "rm/touch/mkdir");
+  assert.equal(writeIndicator("/usr/bin/rm src/x.js"), "rm/touch/mkdir");
+  assert.equal(writeIndicator("rm.exe src/x.js"), "rm/touch/mkdir");
+});
+
+test("read-only programs that can run or write stay strict", () => {
+  for (const command of [
+    "grep -l x src/App.js | xargs rm",
+    "rg --pre 'rm -rf' x src",
+    "git grep -O'rm -rf' x",
+    "find src -exec rm {} ;",
+    'sh -c "grep x src/App.js; rm src/App.js"',
+    "cat $(rm src/App.js)",
+    "git -c core.pager='rm -rf x' log",
+  ]) {
+    assert.notEqual(writeIndicator(command), null, command);
+  }
+  assert.deepEqual(writes("grep -l x src/App.js | xargs rm"), ["src/App.js"]);
+  assert.deepEqual(writes("grep x src/App.js > docs/out.md"), ["docs/out.md"]);
+  assert.equal(psIndicator("Get-Content src\\App.js | Set-Content src\\b.js"), "Set-Content");
+});
+
+test("git diff --output is a write, judged on its file", () => {
+  assert.equal(writeIndicator("git diff --output=docs/d.patch"), "git --output");
+  assert.deepEqual(writes("git diff HEAD~1 --output=docs/d.patch"), ["docs/d.patch"]);
+  assert.equal(writes(`git diff --output=${SCRATCH}/d.patch scripts/clip.mjs`), null);
+});
+
+test("git log --output is a write, judged on its file", () => {
+  assert.equal(writeIndicator("git log -p --output docs/l.txt"), "git --output");
+  assert.deepEqual(writes("git log -p --output=docs/l.txt"), ["docs/l.txt"]);
+  assert.equal(writes(`git log -p --output=${SCRATCH}/l.txt`), null);
+});
+
+test("a Git Bash /c/ path is the same repo path", { skip: process.platform !== "win32" }, () => {
+  const slashC = ROOT.replace(/^([A-Za-z]):[\\/]/, "/$1/").replace(/\\/g, "/");
+  assert.equal(toRepoRelative(`${slashC}/src/App.js`, ROOT), "src/App.js");
+  assert.deepEqual(writes(`rm ${slashC}/src/App.js`), ["src/App.js"]);
+  assert.equal(toRepoRelative("/c/Windows/x.txt", ROOT), null);
 });
 
 test("the checkout comes from the project dir, then the cwd", () => {

@@ -105,6 +105,16 @@ Check("project name", ProjectName("switchboard_bridge-p8v"), "switchboard_bridge
 learnTabs := [Map("url", "https://claude.ai/chat/z?x", "title", "proj-abc plan - Claude"), Map("url", "https://x/", "title", "proj-abc - Claude")]
 Check("learn link", FindChatLinkByCode(learnTabs, "proj-abc"), "https://claude.ai/chat/z")
 Check("learn nothing", FindChatLinkByCode(learnTabs, "other"), "")
+tagChats := [Map("url", "https://claude.ai/chat/old", "issuedTag", "proj-abc-s1-aaaa")
+    , Map("url", "https://claude.ai/chat/new?x", "issuedTag", "proj-abc-s2-bbbb")
+    , Map("url", "https://claude.ai/chat/none", "issuedTag", "")
+    , Map("url", "https://x/", "issuedTag", "other-xyz-s1-cccc")]
+Check("tag: exact run tag wins", FindChatLinkByTag(tagChats, "proj-abc-s2-bbbb", "proj-abc"), "https://claude.ai/chat/new")
+Check("tag: else the project's", FindChatLinkByTag(tagChats, "", "proj-abc"), "https://claude.ai/chat/old")
+Check("tag: other project", FindChatLinkByTag(tagChats, "", "next-q2z"), "")
+Check("tag: old project's run tag ignored", FindChatLinkByTag(tagChats, "proj-abc-s2-bbbb", "next-q2z"), "")
+Check("tag: not a chat address", FindChatLinkByTag(tagChats, "other-xyz-s1-cccc", "other-xyz"), "")
+Check("tag: no project, no run tag", FindChatLinkByTag(tagChats, "", ""), "")
 
 Check("code title", CodeTitleMatches("switchboard-k7w", "", "claude-sessions.ahk - switchboard-k7w - Visual Studio Code"), true)
 Check("code title, folder only", CodeTitleMatches("alfred-v5", "", "alfred-v5 - Visual Studio Code"), true)
