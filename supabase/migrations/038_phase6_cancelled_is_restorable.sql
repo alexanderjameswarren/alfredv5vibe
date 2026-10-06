@@ -2,7 +2,7 @@
 -- Originally written 2026-09-06. Content unchanged below this header.
 -- Purpose: Phase 6: correct the column comment saying 'cancelled' is terminal. No schema change.
 -- Kind: comment-only change
--- Applied: unknown
+-- Applied: YES — confirmed 2026-10-06: the notification_steps.state comment carries this wording
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
 -- the order files were ADDED here, not the order they were run; the original

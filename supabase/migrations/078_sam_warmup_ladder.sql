@@ -1,6 +1,6 @@
 -- Purpose: Warm-up ladder Milestone 1: the ladder column on snippets, songs and plan items, goal_is_warmup and consecutive on plan items, the two rung columns on sam_passes, the ladder validator, ladder resolution, and the sam_plan_item_progress rewrite.
 -- Kind: schema change (columns, constraints, three new functions, one function replaced)
--- Applied: NO
+-- Applied: YES — confirmed 2026-10-06: the warm-up ladder constraints exist
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
 -- the order files were ADDED here. Alex runs every file himself.

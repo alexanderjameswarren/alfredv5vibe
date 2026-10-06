@@ -182,28 +182,6 @@ export default function ItemCard({
   }
 
   function handleItemNameChange(newName) {
-    const OVERFLOW_THRESHOLD = 50;
-    if (description && description.trim().length > 0) {
-      setName(newName);
-      return;
-    }
-    if (newName.length > OVERFLOW_THRESHOLD) {
-      const textUpToThreshold = newName.substring(0, OVERFLOW_THRESHOLD);
-      const lastSpaceIndex = textUpToThreshold.lastIndexOf(' ');
-      if (lastSpaceIndex > 0) {
-        const nameText = newName.substring(0, lastSpaceIndex).trim();
-        const overflowText = newName.substring(lastSpaceIndex + 1).trim();
-        setName(nameText);
-        setDescription(overflowText);
-        setTimeout(() => {
-          if (itemDescRef.current) {
-            itemDescRef.current.focus();
-            itemDescRef.current.setSelectionRange(overflowText.length, overflowText.length);
-          }
-        }, 0);
-        return;
-      }
-    }
     setName(newName);
   }
 
@@ -294,11 +272,6 @@ export default function ItemCard({
                 className="block w-full px-3 py-2 border border-border rounded text-base resize-none overflow-hidden"
                 autoFocus
               />
-              {name.length > 45 && name.length <= 50 && (!description || !description.trim()) && (
-                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-warning">
-                  {50 - name.length}
-                </span>
-              )}
             </div>
           </div>
 

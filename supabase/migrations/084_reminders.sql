@@ -1,6 +1,6 @@
 -- Purpose: Standalone reminders, step 1. Create public.reminders (a one-off push at a fixed time, always backed by an inbox item or an intention) and public.create_reminder, which creates the backing inbox row and the reminder in one transaction.
 -- Kind: schema change (new table, new function)
--- Applied: NO
+-- Applied: YES — confirmed 2026-10-06: public.reminders and create_reminder exist
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
 -- the order files were ADDED here. Alex runs every file himself.

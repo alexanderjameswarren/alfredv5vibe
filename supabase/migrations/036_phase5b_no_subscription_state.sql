@@ -2,7 +2,7 @@
 -- Originally written 2026-09-04. Content unchanged below this header.
 -- Purpose: Phase 5b: add the no_subscription step state, so a user with no push subscription stops being retried forever.
 -- Kind: schema change (new step state)
--- Applied: unknown
+-- Applied: YES — confirmed 2026-10-06: notification_steps_state_check allows 'no_subscription'
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
 -- the order files were ADDED here, not the order they were run; the original
