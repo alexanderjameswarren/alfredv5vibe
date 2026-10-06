@@ -84,6 +84,20 @@ describe("computeBaseline", () => {
   it("leaves Details empty when none was suggested, never the captured text", () => {
     expect(computeBaseline(row()).intentDescription).toBe("");
   });
+
+  it("splits a long capture: name gets the first line, description the rest", () => {
+    const b = computeBaseline(row({ aiStatus: "not_started", capturedText: "Fix the gutter\nLeft side, above the porch." }));
+    expect(b.itemName).toBe("Fix the gutter");
+    expect(b.itemDescription).toBe("Left side, above the porch.");
+    expect(b.intentText).toBe("Fix the gutter");
+    expect(b.intentDescription).toBe("Left side, above the porch.");
+  });
+
+  it("a suggested description wins over the split leftover", () => {
+    const b = computeBaseline(row({ capturedText: "Fix the gutter\nLeft side.", suggestedItemDescription: "Ladder in shed." }));
+    expect(b.itemName).toBe("Fix the gutter");
+    expect(b.itemDescription).toBe("Ladder in shed.");
+  });
 });
 
 describe("triageDataForOneTap", () => {

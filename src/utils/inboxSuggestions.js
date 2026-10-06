@@ -16,6 +16,7 @@
  */
 
 import { normaliseSuggestedElements } from "./suggestedElements";
+import { splitCaptureName } from "./captureName";
 
 /**
  * What a capture proposes, read off the row once.
@@ -27,20 +28,23 @@ import { normaliseSuggestedElements } from "./suggestedElements";
  */
 export function computeBaseline(inboxItem) {
   const capturedText = inboxItem.capturedText || "";
+  // A name is a first line or sentence, never a paragraph (splitCaptureName); what
+  // it leaves over goes to the description, but only into an empty one.
+  const item = splitCaptureName(inboxItem.suggestedItemText || capturedText);
+  const intent = splitCaptureName(inboxItem.suggestedIntentText || capturedText);
   return {
     capturedText,
     contextId: inboxItem.suggestedContextId || "",
     tags: inboxItem.suggestedTags || [],
     itemOn: !!inboxItem.suggestItem,
     intentionOn: !!inboxItem.suggestIntent,
-    itemName: inboxItem.suggestedItemText || capturedText,
-    itemDescription: inboxItem.suggestedItemDescription || "",
+    itemName: item.name,
+    itemDescription: inboxItem.suggestedItemDescription || item.rest,
     elements: normaliseSuggestedElements(inboxItem.suggestedItemElements),
-    intentText: inboxItem.suggestedIntentText || capturedText,
-    // Migration 070's column. Unlike the name, it does NOT fall back to the captured
-    // text: the name has to say something, and Details repeating the whole capture
-    // under a name taken from it is noise rather than a detail.
-    intentDescription: inboxItem.suggestedIntentDescription || "",
+    intentText: intent.name,
+    // Migration 070's column. It never takes the whole capture — only what the name
+    // left over — since Details repeating the capture under a name taken from it is noise.
+    intentDescription: inboxItem.suggestedIntentDescription || intent.rest,
     linkedItemId: inboxItem.suggestedItemId || "",
     eventDate: inboxItem.suggestedEventDate || "",
   };

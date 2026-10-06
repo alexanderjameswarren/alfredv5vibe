@@ -2,6 +2,7 @@ import { storage } from "../utils/storage";
 import { uid, flattenElements } from "../utils/flattenElements";
 import { getTodayDate } from "../utils/eventDates";
 import { getRecurrenceConfig } from "../utils/recurrence";
+import { runNowTargetForItem, isDueBy } from "../utils/runNow";
 import {
   createNotificationSteps,
   completeNotificationStep,
@@ -420,6 +421,26 @@ export function useExecutionActions({
   async function startNowFromItem(itemId) {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
+
+    // Attach to a live intention for this item rather than minting a one-off
+    // beside it — a one-off left the recurring intention behind and its
+    // recurrence silently died.
+    const target = runNowTargetForItem(item.id, intents, events);
+    if (target) {
+      if (isDueBy(target.event, getTodayDate())) {
+        const running = [...activeExecutions, ...pausedExecutions].find(
+          (e) => e.eventId === target.event.id,
+        );
+        if (running) {
+          setPreviousView(view);
+          goToExecution(running);
+          return;
+        }
+        return activate(target.event.id);
+      }
+      return startNowFromIntention(target.intent.id);
+    }
+
     return withLoading('Starting execution...', async () => {
       // Create intention linked to this item
       const newIntent = {

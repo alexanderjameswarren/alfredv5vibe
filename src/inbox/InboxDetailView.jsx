@@ -74,6 +74,7 @@ import EditCard from "../shared/EditCard";
 import InsertRowButton from "../shared/InsertRowButton";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
 import { computeBaseline } from "../utils/inboxSuggestions";
+import { splitCaptureName } from "../utils/captureName";
 import { isFirstStep } from "../utils/elementOffsets";
 import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
 
@@ -335,8 +336,9 @@ export default function InboxDetailView({
   //
   // Ported unchanged from the card's copy, down to the `.inbox-element-input`
   // class the focus helpers query: the README asks for the EXISTING editor, and
-  // "existing" includes the overflow-to-description behaviour and the Enter key
-  // inserting a row below. Step 18 deletes the copy this came from.
+  // "existing" includes the Enter key inserting a row below. Step 18 deletes the
+  // copy this came from. (Restructure P0 dropped the 30-character overflow-to-
+  // description rule from both copies: element text is whole sentences.)
 
   function addElement() {
     setElements([...elements, { name: "", displayType: "step", quantity: "", description: "" }]);
@@ -408,39 +410,28 @@ export default function InboxDetailView({
     setItemName(newName);
   }
 
-  function handleElementNameChange(index, newName, currentDescription) {
-    const OVERFLOW_THRESHOLD = 30;
-    if (currentDescription && currentDescription.trim().length > 0) {
-      updateElement(index, "name", newName);
-      return;
-    }
-    if (newName.length > OVERFLOW_THRESHOLD) {
-      const lastSpaceIndex = newName.substring(0, OVERFLOW_THRESHOLD).lastIndexOf(" ");
-      if (lastSpaceIndex > 0) {
-        const nameText = newName.substring(0, lastSpaceIndex).trim();
-        const overflowText = newName.substring(lastSpaceIndex + 1).trim();
-        const next = [...elements];
-        next[index] = { ...next[index], name: nameText, description: overflowText };
-        setElements(next);
-        setTimeout(() => {
-          const descField = elementDescRefs.current[index];
-          if (descField) {
-            descField.focus();
-            descField.setSelectionRange(overflowText.length, overflowText.length);
-          }
-        }, 0);
-        return;
-      }
-    }
-    updateElement(index, "name", newName);
+  // Names and element text are one line where they render; a pasted newline becomes a space.
+  const oneLine = (s) => s.replace(/\s*[\r\n]+\s*/g, " ");
+
+  function handleElementNameChange(index, newName) {
+    updateElement(index, "name", oneLine(newName));
+  }
+
+  function autoGrow(el) {
+    if (!el) return;
+    el.style.height = "auto";
+    // 0 while not laid out (hidden); leave it at its two-row height then.
+    if (el.scrollHeight > 0) el.style.height = `${el.scrollHeight}px`;
   }
 
   function deleteElement(index) {
     setElements(elements.filter((_, i) => i !== index));
   }
 
+  // keydown, not keypress: in a textarea some phone keyboards never fire keypress
+  // for Enter, and it would insert a newline instead of a new row.
   function handleElementKeyPress(e, index) {
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && !e.nativeEvent?.isComposing) {
       e.preventDefault();
       insertElementAbove(index + 1);
       setTimeout(() => {
@@ -555,15 +546,30 @@ export default function InboxDetailView({
     // rather than closing over an edit that did not land.
     if (!ok) return false;
 
-    const wasVerbatim = baseline.capturedText;
-    if (itemName === wasVerbatim) setItemName(next);
-    if (intentText === wasVerbatim) setIntentText(next);
-    setBaseline((prev) => ({
-      ...prev,
-      capturedText: next,
-      itemName: prev.itemName === wasVerbatim ? next : prev.itemName,
-      intentText: prev.intentText === wasVerbatim ? next : prev.intentText,
-    }));
+    // A name still showing the split of the OLD capture follows the correction, and
+    // so does its description while that is still the old leftover (or empty).
+    const was = splitCaptureName(baseline.capturedText);
+    const now = splitCaptureName(next);
+    const reseed = (name, desc) =>
+      name === was.name ? { name: now.name, desc: desc === was.rest ? now.rest : desc } : { name, desc };
+    const item = reseed(itemName, itemDescription);
+    const intent = reseed(intentText, intentDescription);
+    setItemName(item.name);
+    setItemDescription(item.desc);
+    setIntentText(intent.name);
+    setIntentDescription(intent.desc);
+    setBaseline((prev) => {
+      const bi = reseed(prev.itemName, prev.itemDescription);
+      const bn = reseed(prev.intentText, prev.intentDescription);
+      return {
+        ...prev,
+        capturedText: next,
+        itemName: bi.name,
+        itemDescription: bi.desc,
+        intentText: bn.name,
+        intentDescription: bn.desc,
+      };
+    });
     setEditingCapture(false);
     return true;
   }
@@ -732,12 +738,19 @@ export default function InboxDetailView({
                   Name
                 </label>
                 <div className="relative">
-                  <input
+                  <textarea
                     id="inbox-detail-item-name"
-                    type="text"
+                    ref={autoGrow}
+                    rows={2}
                     value={itemName}
-                    onChange={(e) => handleItemNameChange(e.target.value)}
-                    className={FIELD}
+                    onChange={(e) => {
+                      handleItemNameChange(oneLine(e.target.value));
+                      autoGrow(e.target);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.nativeEvent?.isComposing) e.preventDefault();
+                    }}
+                    className={`${FIELD} block resize-none overflow-hidden`}
                   />
                   {itemName.length > 45 &&
                     itemName.length <= 50 &&
@@ -783,23 +796,18 @@ export default function InboxDetailView({
                             title="Drag to reorder"
                           />
                           <div className="relative flex-1 min-w-0">
-                            <input
-                              type="text"
+                            <textarea
+                              ref={autoGrow}
+                              rows={2}
                               value={element.name}
-                              onChange={(e) =>
-                                handleElementNameChange(index, e.target.value, element.description)
-                              }
-                              onKeyPress={(e) => handleElementKeyPress(e, index)}
+                              onChange={(e) => {
+                                handleElementNameChange(index, e.target.value);
+                                autoGrow(e.target);
+                              }}
+                              onKeyDown={(e) => handleElementKeyPress(e, index)}
                               placeholder="Element name"
-                              className="inbox-element-input w-full px-3 py-2 border border-border rounded"
+                              className="inbox-element-input block w-full px-3 py-2 border border-border rounded resize-none overflow-hidden"
                             />
-                            {element.name.length > 25 &&
-                              element.name.length <= 30 &&
-                              (!element.description || !element.description.trim()) && (
-                                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-warning">
-                                  {30 - element.name.length}
-                                </span>
-                              )}
                           </div>
                           <button
                             onClick={() => deleteElement(index)}
