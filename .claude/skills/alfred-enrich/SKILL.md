@@ -145,6 +145,17 @@ that suggests either one without `suggested_context_id` is saved as
 
 **Recurrence**: For intents, set the recurrence pattern — `once` for one-time tasks, or `daily`/`weekly`/`monthly`/`yearly` for recurring ones.
 
+**Status** (`suggested_status`): one value for both the item and the intention.
+Default `someday`. Set `active` only for:
+- a deadline: "client report due Friday"
+- a named date: "make chicken tikka next weekend"
+- an explicit commitment: "apply to this job"
+- a health or money urgency signal: "call the doctor about arm pain"
+
+Everything else stays `someday`. When unsure, choose `someday`: getting it wrong
+is cheap, one tap at triage. Scheduling an event makes the intention active
+anyway, so a suggested date and `active` agree.
+
 **Never suggest a collection.** Do not set `suggested_collection_id`, and do not
 call `get_collections`. The inbox page no longer shows collections, so a suggested
 collection cannot be reviewed, accepted or rejected — it is written and then
@@ -239,7 +250,7 @@ If you suggested a tag that doesn't already exist, say so in the reasoning and n
 
 ### Step 6: Write Suggestions
 
-Call `update_inbox_item` with the inbox item's ID and all suggestion fields. Set `ai_status` to:
+Call `update_inbox_item` with the inbox item's ID and all suggestion fields, `suggested_status` included. Set `ai_status` to:
 - `"enriched"` for initial enrichment
 - `"re_enriched"` for re-enrichment
 
