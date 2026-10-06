@@ -1,8 +1,22 @@
 import { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 
+const EXPIRED_MESSAGE =
+  'This connection request has expired or was already used. Go back to Claude and click Connect again.';
+
+// getAuthorizationDetails returns either details (consent needed) or
+// { redirect_url } when this client was already approved and Supabase auto-approved.
+function alreadyConsentedUrl(data) {
+  return data && !('authorization_id' in data) && data.redirect_url ? data.redirect_url : null;
+}
+
+function isNoLongerPending(err) {
+  return /no longer pending/i.test(err?.message || '');
+}
+
 export default function OAuthConsent() {
   const [loading, setLoading] = useState(true);
+  const [redirecting, setRedirecting] = useState(false);
   const [error, setError] = useState(null);
   const [authDetails, setAuthDetails] = useState(null);
   const [user, setUser] = useState(null);
@@ -10,6 +24,11 @@ export default function OAuthConsent() {
 
   const params = new URLSearchParams(window.location.search);
   const authorizationId = params.get('authorization_id');
+
+  function redirect(url) {
+    setRedirecting(true);
+    window.location.replace(url);
+  }
 
   useEffect(() => {
     async function init() {
@@ -39,6 +58,9 @@ export default function OAuthConsent() {
         const { data, error: fetchError } = await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
         if (fetchError) {
           setError(fetchError.message || 'Failed to load authorization details.');
+        } else if (alreadyConsentedUrl(data)) {
+          redirect(alreadyConsentedUrl(data));
+          return;
         } else {
           setAuthDetails(data);
         }
@@ -52,49 +74,57 @@ export default function OAuthConsent() {
     init();
   }, [authorizationId]);
 
-  async function handleApprove() {
-    setSubmitting(true);
+  // The request was approved elsewhere (or auto-approved); follow its redirect if Supabase still has one.
+  async function recoverFromNoLongerPending() {
     try {
-      const { data, error: approveError } = await supabase.auth.oauth.approveAuthorization(authorizationId);
-      if (approveError) {
-        setError(approveError.message || 'Failed to approve authorization.');
+      const { data } = await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
+      const url = alreadyConsentedUrl(data);
+      if (url) {
+        redirect(url);
+        return;
+      }
+    } catch (e) {
+      // fall through to the expired card
+    }
+    setError(EXPIRED_MESSAGE);
+    setSubmitting(false);
+  }
+
+  async function decide(action) {
+    setSubmitting(true);
+    const method = action === 'approve' ? 'approveAuthorization' : 'denyAuthorization';
+    try {
+      const { data, error: decideError } = await supabase.auth.oauth[method](authorizationId, { skipBrowserRedirect: true });
+      if (decideError) {
+        if (isNoLongerPending(decideError)) {
+          await recoverFromNoLongerPending();
+          return;
+        }
+        setError(decideError.message || `Failed to ${action} authorization.`);
         setSubmitting(false);
         return;
       }
-      if (data?.redirect_to) {
-        window.location.href = data.redirect_to;
+      if (data?.redirect_url) {
+        redirect(data.redirect_url);
+      } else {
+        setError(`No redirect returned after ${action}.`);
+        setSubmitting(false);
       }
     } catch (e) {
-      setError('Failed to approve: ' + String(e));
+      setError(`Failed to ${action}: ` + String(e));
       setSubmitting(false);
     }
   }
 
-  async function handleDeny() {
-    setSubmitting(true);
-    try {
-      const { data, error: denyError } = await supabase.auth.oauth.denyAuthorization(authorizationId);
-      if (denyError) {
-        setError(denyError.message || 'Failed to deny authorization.');
-        setSubmitting(false);
-        return;
-      }
-      if (data?.redirect_to) {
-        window.location.href = data.redirect_to;
-      }
-    } catch (e) {
-      setError('Failed to deny: ' + String(e));
-      setSubmitting(false);
-    }
-  }
-
-  // Loading state
-  if (loading) {
+  // Loading / redirecting state
+  if (loading || redirecting) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-primary-bg">
         <div className="w-full max-w-md p-8 bg-white rounded-lg shadow-md text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-dark font-medium">Loading authorization details...</p>
+          <p className="text-dark font-medium">
+            {redirecting ? 'Redirecting…' : 'Loading authorization details...'}
+          </p>
         </div>
       </div>
     );
@@ -121,6 +151,8 @@ export default function OAuthConsent() {
     );
   }
 
+  const scopes = (authDetails?.scope || '').split(/\s+/).filter(Boolean);
+
   // Consent form
   return (
     <div className="flex items-center justify-center min-h-screen bg-primary-bg">
@@ -130,19 +162,19 @@ export default function OAuthConsent() {
 
         <div className="mb-6 p-4 bg-primary-bg rounded-lg border border-primary-light">
           <p className="text-dark font-medium mb-2">
-            {authDetails?.application?.name || 'An application'} wants to access your Alfred data.
+            {authDetails?.client?.name || 'An application'} wants to access your Alfred data.
           </p>
-          {authDetails?.application?.redirect_uri && (
+          {authDetails?.redirect_uri && (
             <p className="text-xs text-muted break-all">
-              Redirect: {authDetails.application.redirect_uri}
+              Redirect: {authDetails.redirect_uri}
             </p>
           )}
-          {authDetails?.scopes && authDetails.scopes.length > 0 && (
+          {scopes.length > 0 && (
             <div className="mt-3">
               <p className="text-sm text-muted mb-1">Requested permissions:</p>
               <ul className="list-disc list-inside text-sm text-dark">
-                {authDetails.scopes.map((scope, i) => (
-                  <li key={i}>{scope}</li>
+                {scopes.map((scope) => (
+                  <li key={scope}>{scope}</li>
                 ))}
               </ul>
             </div>
@@ -155,14 +187,14 @@ export default function OAuthConsent() {
 
         <div className="flex gap-3">
           <button
-            onClick={handleDeny}
+            onClick={() => decide('deny')}
             disabled={submitting}
             className="flex-1 px-4 py-3 bg-gray-200 text-dark rounded-lg hover:bg-gray-300 transition-colors disabled:opacity-50"
           >
             Deny
           </button>
           <button
-            onClick={handleApprove}
+            onClick={() => decide('approve')}
             disabled={submitting}
             className="flex-1 px-4 py-3 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50"
           >
