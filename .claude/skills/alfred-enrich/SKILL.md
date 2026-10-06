@@ -130,6 +130,17 @@ Three rules, and they are the whole of it:
 
 Leave it empty only when the capture is genuinely nothing but the name.
 
+**A name is one short line — never the capture.** `suggested_item_text` and
+`suggested_intent_text` are what every list shows, so keep them to a few words,
+well under 80 characters, with no line breaks. Everything else goes in the
+description. The server enforces this anyway: a longer name is cut at its first
+line or sentence and the rest moved into an empty description — but a name you
+chose reads better than one that was cut.
+
+**Always give a context when you suggest an item or an intention.** A capture
+that suggests either one without `suggested_context_id` is saved as
+`not_started`, not `enriched`, so it comes back for enrichment.
+
 **Event**: If there's a specific date mentioned (or implied by "tomorrow", "next Tuesday", etc.), set `suggest_event: true` and resolve the date to `YYYY-MM-DD` format. Use today's date for reference.
 
 **Recurrence**: For intents, set the recurrence pattern — `once` for one-time tasks, or `daily`/`weekly`/`monthly`/`yearly` for recurring ones.

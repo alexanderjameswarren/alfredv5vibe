@@ -2,6 +2,7 @@ import { storage } from "../utils/storage";
 import { uid } from "../utils/flattenElements";
 import { toLocalDateString } from "../utils/eventDates";
 import { calculateNextEventDate, getRecurrenceConfig } from "../utils/recurrence";
+import { hasFutureLiveEvent } from "../utils/runNow";
 
 // Event writers, moved out of Alfred.jsx unchanged. Holds no state: everything it
 // reads or sets is Alfred's, passed in.
@@ -60,6 +61,12 @@ export function useEventActions({
 
     const config = getRecurrenceConfig(intent);
     if (config.type === "once") return null;
+
+    // A later live event already carries the recurrence (e.g. a Run Now beside a
+    // scheduled one); a successor here would put two events on the same day.
+    if (hasFutureLiveEvent(intent.id, events, archivedEvent?.id, toLocalDateString(new Date()))) {
+      return null;
+    }
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);

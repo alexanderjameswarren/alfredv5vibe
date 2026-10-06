@@ -8,6 +8,7 @@ import { z } from "zod";
 
 import { clampLimit, defineTool, envelope } from "../_shared/platform.ts";
 import { normaliseTags } from "../_shared/tags.ts";
+import { splitCaptureName } from "../_shared/captureName.ts";
 import {
   createSamSongTool,
   appendSamMeasuresTool,
@@ -178,6 +179,17 @@ const getPlatformContractTool = defineTool({
   },
 });
 
+// A suggested name is a first line or sentence, never a paragraph. What the split
+// leaves over goes to the description only when that is empty (Restructure P0 fix 2).
+function splitSuggestedName(
+  text: string | null,
+  description: string | null,
+): { text: string | null; description: string | null } {
+  if (text === null) return { text, description };
+  const { name, rest } = splitCaptureName(text);
+  return { text: name || text, description: description || rest || null };
+}
+
 const createInboxItemTool = defineTool({
   name: "create_inbox_item",
   // Tier 1: the inbox IS the human-approval gateway. This write appends to
@@ -238,13 +250,22 @@ const createInboxItemTool = defineTool({
     // the decision is now about whether any of them is actually present.
     const suggestedContextId = (args.suggested_context_id as string) || null;
     const suggestItem = (args.suggest_item as boolean) || false;
-    const suggestedItemText = (args.suggested_item_text as string) || null;
-    const suggestedItemDescription = (args.suggested_item_description as string) || null;
+    // Names are split server-side whatever the model sends — see splitSuggestedName.
+    const item = splitSuggestedName(
+      (args.suggested_item_text as string) || null,
+      (args.suggested_item_description as string) || null,
+    );
+    const suggestedItemText = item.text;
+    const suggestedItemDescription = item.description;
     const suggestedItemElements = (args.suggested_item_elements as unknown[]) || null;
     const suggestedItemId = (args.suggested_item_id as string) || null;
     const suggestIntent = (args.suggest_intent as boolean) || false;
-    const suggestedIntentText = (args.suggested_intent_text as string) || null;
-    const suggestedIntentDescription = (args.suggested_intent_description as string) || null;
+    const intent = splitSuggestedName(
+      (args.suggested_intent_text as string) || null,
+      (args.suggested_intent_description as string) || null,
+    );
+    const suggestedIntentText = intent.text;
+    const suggestedIntentDescription = intent.description;
     const suggestedIntentRecurrence = (args.suggested_intent_recurrence as string) || null;
     const suggestEvent = (args.suggest_event as boolean) || false;
     const suggestedEventDate = (args.suggested_event_date as string) || null;
@@ -309,7 +330,14 @@ const createInboxItemTool = defineTool({
       // This used to say "enriched" unconditionally, so a bare text capture arrived
       // looking researched: Process would have filed nothing, and the badge said
       // there was nothing left to think about. See `hasSuggestion` above.
-      ai_status: isTask || !hasSuggestion ? "not_started" : "enriched",
+      //
+      // A THIRD way, Restructure P0 fix 4: an item or intention suggested with NO
+      // context. Marked enriched, enrichment never revisited it, and it stayed
+      // context-less. Left not_started so normal enrichment picks it up.
+      ai_status:
+        isTask || !hasSuggestion || ((suggestItem || suggestIntent) && suggestedContextId === null)
+          ? "not_started"
+          : "enriched",
       suggested_context_id: suggestedContextId,
       suggest_item: suggestItem,
       suggested_item_text: suggestedItemText,
@@ -546,6 +574,31 @@ const updateInboxItemTool = defineTool({
   // through platform.rollback_audit_entry() if a bad enrichment lands.
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
+    // Split long names here too. The leftover may only fill a description that is
+    // empty both in this call and on the stored row, so the row is read when needed.
+    let stored: Record<string, unknown> | null | undefined;
+    const split = async (textKey: string, descKey: string) => {
+      const text = args[textKey];
+      let desc = args[descKey] as string | undefined;
+      if (typeof text !== "string") return { text: text as string | undefined, desc };
+      const { name, rest } = splitCaptureName(text);
+      if (rest && !desc) {
+        if (stored === undefined) {
+          const { data, error } = await ctx.db
+            .from("inbox")
+            .select("suggested_item_description, suggested_intent_description")
+            .eq("id", args.inbox_id as string)
+            .maybeSingle();
+          stored = error ? null : data;
+        }
+        // An unreadable row is treated as filled: never overwrite what we cannot see.
+        if (stored && !stored[descKey]) desc = rest;
+      }
+      return { text: name || text, desc };
+    };
+    const itemName = await split("suggested_item_text", "suggested_item_description");
+    const intentName = await split("suggested_intent_text", "suggested_intent_description");
+
     const result = await updateInboxItem(ctx.db, {
       inbox_id: args.inbox_id as string,
       ai_confidence: args.ai_confidence as number,
@@ -553,13 +606,13 @@ const updateInboxItemTool = defineTool({
       ai_status: args.ai_status as "enriched" | "re_enriched" | undefined,
       suggested_context_id: args.suggested_context_id as string | undefined,
       suggest_item: args.suggest_item as boolean | undefined,
-      suggested_item_text: args.suggested_item_text as string | undefined,
-      suggested_item_description: args.suggested_item_description as string | undefined,
+      suggested_item_text: itemName.text,
+      suggested_item_description: itemName.desc,
       suggested_item_elements: args.suggested_item_elements as unknown[] | undefined,
       suggested_item_id: args.suggested_item_id as string | undefined,
       suggest_intent: args.suggest_intent as boolean | undefined,
-      suggested_intent_text: args.suggested_intent_text as string | undefined,
-      suggested_intent_description: args.suggested_intent_description as string | undefined,
+      suggested_intent_text: intentName.text,
+      suggested_intent_description: intentName.desc,
       suggested_intent_recurrence: args.suggested_intent_recurrence as
         | "once" | "daily" | "weekly" | "monthly" | "yearly" | undefined,
       suggest_event: args.suggest_event as boolean | undefined,

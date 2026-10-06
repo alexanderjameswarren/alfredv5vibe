@@ -207,32 +207,18 @@ export default function ItemCard({
     setName(newName);
   }
 
-  function handleElementNameChange(index, newName, currentDescription) {
-    const OVERFLOW_THRESHOLD = 30;
-    if (currentDescription && currentDescription.trim().length > 0) {
-      updateElement(index, 'name', newName);
-      return;
-    }
-    if (newName.length > OVERFLOW_THRESHOLD) {
-      const textUpToThreshold = newName.substring(0, OVERFLOW_THRESHOLD);
-      const lastSpaceIndex = textUpToThreshold.lastIndexOf(' ');
-      if (lastSpaceIndex > 0) {
-        const nameText = newName.substring(0, lastSpaceIndex).trim();
-        const overflowText = newName.substring(lastSpaceIndex + 1).trim();
-        const updatedElements = [...elements];
-        updatedElements[index] = { ...updatedElements[index], name: nameText, description: overflowText };
-        setElements(updatedElements);
-        setTimeout(() => {
-          const descField = elementDescRefs.current[index];
-          if (descField) {
-            descField.focus();
-            descField.setSelectionRange(overflowText.length, overflowText.length);
-          }
-        }, 0);
-        return;
-      }
-    }
-    updateElement(index, 'name', newName);
+  // Names and element text are one line where they render; a pasted newline becomes a space.
+  const oneLine = (s) => s.replace(/\s*[\r\n]+\s*/g, ' ');
+
+  function handleElementNameChange(index, newName) {
+    updateElement(index, 'name', oneLine(newName));
+  }
+
+  function autoGrow(el) {
+    if (!el) return;
+    el.style.height = 'auto';
+    // 0 while not laid out (hidden); leave it at its two-row height then.
+    if (el.scrollHeight > 0) el.style.height = `${el.scrollHeight}px`;
   }
 
   function copyElementToClipboard(el, itemsList) {
@@ -248,8 +234,10 @@ export default function ItemCard({
     setElements(elements.filter((_, i) => i !== index));
   }
 
+  // keydown, not keypress: in a textarea some phone keyboards never fire keypress
+  // for Enter, and it would insert a newline instead of a new row.
   function handleKeyPress(e, index) {
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && !e.nativeEvent?.isComposing) {
       e.preventDefault();
       insertElementAbove(index + 1);
       setTimeout(() => {
@@ -292,11 +280,18 @@ export default function ItemCard({
               Name
             </label>
             <div className="relative">
-              <input
-                type="text"
+              <textarea
+                ref={autoGrow}
+                rows={2}
                 value={name}
-                onChange={(e) => handleItemNameChange(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded text-base"
+                onChange={(e) => {
+                  handleItemNameChange(oneLine(e.target.value));
+                  autoGrow(e.target);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent?.isComposing) e.preventDefault();
+                }}
+                className="block w-full px-3 py-2 border border-border rounded text-base resize-none overflow-hidden"
                 autoFocus
               />
               {name.length > 45 && name.length <= 50 && (!description || !description.trim()) && (
@@ -378,21 +373,18 @@ export default function ItemCard({
                         title="Drag to reorder"
                       />
                       <div className="relative flex-1 min-w-0">
-                        <input
-                          type="text"
+                        <textarea
+                          ref={autoGrow}
+                          rows={2}
                           value={element.name}
-                          onChange={(e) =>
-                            handleElementNameChange(index, e.target.value, element.description)
-                          }
-                          onKeyPress={(e) => handleKeyPress(e, index)}
+                          onChange={(e) => {
+                            handleElementNameChange(index, e.target.value);
+                            autoGrow(e.target);
+                          }}
+                          onKeyDown={(e) => handleKeyPress(e, index)}
                           placeholder="Element name"
-                          className="element-input w-full px-3 py-2 border border-border rounded"
+                          className="element-input block w-full px-3 py-2 border border-border rounded resize-none overflow-hidden"
                         />
-                        {element.name.length > 25 && element.name.length <= 30 && (!element.description || !element.description.trim()) && (
-                          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-warning">
-                            {30 - element.name.length}
-                          </span>
-                        )}
                       </div>
                       <button
                         onClick={() => copyElementToClipboard(element, allItems)}
