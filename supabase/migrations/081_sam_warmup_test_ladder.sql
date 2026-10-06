@@ -1,6 +1,6 @@
 -- Purpose: Put a warm-up ladder on one snippet by hand, so Milestone 2 can be tested at the piano before the editors exist.
 -- Kind: one-off data write (one UPDATE), plus the read-only queries around it
--- Applied: NO
+-- Applied: YES — confirmed 2026-10-06 against the database (Restructure P0 header audit)
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
 -- the order files were ADDED here. Alex runs every file himself.

@@ -378,35 +378,9 @@ export default function InboxDetailView({
     setElements(next);
   }
 
-  /**
-   * Typing past the name field's comfortable length spills into the description.
-   *
-   * The threshold is on the NAME because a name is what lists render; the
-   * overflow lands in the field below with the caret following it, so a long
-   * sentence typed into the wrong box ends up in the right two.
-   */
+  // The 50-character overflow into the description was removed in Restructure P0:
+  // it cut names mid-sentence while typing and fought splitCaptureName's 80.
   function handleItemNameChange(newName) {
-    const OVERFLOW_THRESHOLD = 50;
-    if (itemDescription && itemDescription.trim().length > 0) {
-      setItemName(newName);
-      return;
-    }
-    if (newName.length > OVERFLOW_THRESHOLD) {
-      const lastSpaceIndex = newName.substring(0, OVERFLOW_THRESHOLD).lastIndexOf(" ");
-      if (lastSpaceIndex > 0) {
-        const nameText = newName.substring(0, lastSpaceIndex).trim();
-        const overflowText = newName.substring(lastSpaceIndex + 1).trim();
-        setItemName(nameText);
-        setItemDescription(overflowText);
-        setTimeout(() => {
-          if (itemDescRef.current) {
-            itemDescRef.current.focus();
-            itemDescRef.current.setSelectionRange(overflowText.length, overflowText.length);
-          }
-        }, 0);
-        return;
-      }
-    }
     setItemName(newName);
   }
 
@@ -752,13 +726,6 @@ export default function InboxDetailView({
                     }}
                     className={`${FIELD} block resize-none overflow-hidden`}
                   />
-                  {itemName.length > 45 &&
-                    itemName.length <= 50 &&
-                    (!itemDescription || !itemDescription.trim()) && (
-                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-warning">
-                        {50 - itemName.length}
-                      </span>
-                    )}
                 </div>
               </div>
 

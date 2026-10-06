@@ -2,7 +2,7 @@
 -- Originally written 2026-09-04. Content unchanged below this header.
 -- Purpose: Phase 5: schedule the notify-dispatch Edge Function with pg_cron.
 -- Kind: schema/scheduling change
--- Applied: unknown — the notification dispatcher does run, so almost certainly yes
+-- Applied: YES — confirmed 2026-10-06: its cron job is the only one in cron.job
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
 -- the order files were ADDED here, not the order they were run; the original

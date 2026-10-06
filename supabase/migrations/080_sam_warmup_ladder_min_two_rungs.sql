@@ -1,6 +1,6 @@
 -- Purpose: A warm-up ladder needs 2 to 6 rungs, not 1 to 6. Replaces sam_warmup_ladder_is_valid and re-adds the three check constraints so existing rows are re-checked.
 -- Kind: schema change (function body + three constraints dropped and re-added)
--- Applied: NO
+-- Applied: YES — confirmed 2026-10-06: sam_warmup_ladder_is_valid has the two-to-six-rung body
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md). Numbering is
 -- the order files were ADDED here. Alex runs every file himself.
