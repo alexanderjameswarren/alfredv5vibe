@@ -1,20 +1,20 @@
 # Progress: switchboard_guard
 
-Spec: `docs/technical-spec-switchboard_guard.md`.
+**Status: complete (2026-10-06).**
+
+Spec: `docs/history/technical-spec-switchboard_guard.md`.
 
 - [x] s1 Plan (2026-10-06)
 - [x] s2 Claim the 12 files; write the spec and this file
 - [x] s3 Bugs 1+2: read-only commands do not raise write indicators from their
       arguments; `git diff`/`git log --output` count as writes. Unit tests, then a
-      live re-run of the grep blocked on 2026-10-06. Awaiting Alex's confirmation.
+      live re-run of the grep blocked on 2026-10-06.
 - [x] s4 Bug 3: from a worktree, block writes into main and sibling worktrees.
       Hook tests on a scratch main plus a linked worktree, built with fs.
-      Awaiting Alex's confirmation.
 - [x] s5 Bug 4: `run-tests.ps1` requires the final line; scratch early-exit test.
-      Awaiting Alex's confirmation.
 - [x] s6 Bug 5: learn main's chat link from `chats.json` `issuedTag`;
-      test-status + smoke. Awaiting Alex's confirmation.
-- [x] s7 Full suites. Alex's hand tests are pending.
+      test-status + smoke.
+- [x] s7 Full suites and Alex's hand tests, both passed.
 
 ## Log
 
@@ -53,7 +53,7 @@ Spec: `docs/technical-spec-switchboard_guard.md`.
       its own claimed `src/a.js` is allowed; a `/c/` path outside the repo is
       allowed.
     - core: `/c/` `toRepoRelative` and `writeCheck` cases.
-  - CLI suite 155/155, none skipped. Awaiting Alex's confirmation.
+  - CLI suite 155/155, none skipped.
 - 2026-10-06 s5:
   - `tools/claude-sessions/run-tests.ps1`: an AHK test passes only on exit 0
     and a last non-empty line ending in "passed". Exit 0 without that line is
@@ -113,5 +113,9 @@ Spec: `docs/technical-spec-switchboard_guard.md`.
     check that the panel carries WS_DISABLED. The detailed focus message stays.
   - Smoke 10/10 in a row. `run-tests.ps1` passes. CLI suite 155/155. App suite
     2051/2051.
-  - Hand tests given to Alex: a worktree Edit into main is blocked; main's tile
-    pairs with the new chat after a rebind.
+  - Hand tests, both passed (Alex):
+    - From a new worktree, an Edit into main's progress file was blocked, with
+      the expected message.
+    - After a rebind, main's tile paired with the new chat, whose title had no
+      code, and that chat's own tile disappeared.
+- 2026-10-06 s8: closed. This file and the spec moved to `docs/history/`.
