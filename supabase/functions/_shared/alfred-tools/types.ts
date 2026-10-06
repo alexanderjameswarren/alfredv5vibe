@@ -10,6 +10,8 @@ export interface Context {
   tags: string[];
 }
 
+export type Status = "someday" | "active" | "background" | "closed";
+
 export interface Item {
   id: string;
   name: string;
@@ -19,6 +21,8 @@ export interface Item {
   is_capture_target: boolean;
   created_at: number;
   archived: boolean;
+  status: Status;
+  status_changed_at: string;
   user_id: string | null;
   tags: string[];
 }
@@ -30,6 +34,8 @@ export interface Intent {
   is_intention: boolean;
   is_item: boolean;
   archived: boolean;
+  status: Status;
+  status_changed_at: string;
   item_id: string | null;
   context_id: string | null;
   recurrence: string;
@@ -86,6 +92,7 @@ export interface InboxItem {
   suggested_intent_recurrence: string | null;
   suggest_event: boolean;
   suggested_event_date: string | null;
+  suggested_status: "someday" | "active";
   user_id: string | null;
 }
 

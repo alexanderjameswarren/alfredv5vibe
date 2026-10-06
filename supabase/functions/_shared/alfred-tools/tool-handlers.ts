@@ -163,6 +163,7 @@ export async function getIntents(
     tags?: string[];
     include_archived?: boolean;
     recurring_only?: boolean;
+    status?: string[];
     limit?: number;
   }
 ): Promise<ToolResult> {
@@ -172,7 +173,7 @@ export async function getIntents(
     let query = client
       .from("intents")
       .select(
-        "id, text, is_intention, is_item, item_id, context_id, tags, collection_id, recurrence_config, target_start_date, end_date, created_at, updated_at",
+        "id, text, is_intention, is_item, item_id, context_id, tags, collection_id, recurrence_config, target_start_date, end_date, status, status_changed_at, created_at, updated_at",
         // Counted, so truncation is measured rather than inferred from
         // "we got exactly `limit` rows back".
         { count: "exact" }
@@ -192,6 +193,9 @@ export async function getIntents(
     }
     if (params.recurring_only) {
       query = query.not("recurrence_config", "is", null);
+    }
+    if (params.status && params.status.length > 0) {
+      query = query.in("status", params.status);
     }
     // Tags are filtered in Postgres, BEFORE the limit. `overlaps` is `&&` on a
     // text[] column (`intents.tags` since migration 039), which is "has any of
@@ -601,6 +605,7 @@ export async function updateInboxItem(
     suggested_event_date?: string;
     suggested_tags?: string[];
     suggested_collection_id?: string;
+    suggested_status?: "someday" | "active";
     ai_status?: string;
   }
 ): Promise<ToolResult> {
@@ -647,6 +652,7 @@ export async function updateInboxItem(
     // covers the MCP update_inbox_item tool, which delegates here.
     if (params.suggested_tags !== undefined) updates.suggested_tags = normaliseTags(params.suggested_tags);
     if (params.suggested_collection_id !== undefined) updates.suggested_collection_id = params.suggested_collection_id;
+    if (params.suggested_status !== undefined) updates.suggested_status = params.suggested_status;
 
     const { data, error } = await client
       .from("inbox")

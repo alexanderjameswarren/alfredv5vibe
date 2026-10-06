@@ -7,7 +7,7 @@ Worktree / owner: `restructure_p1-h4nz`
 |---|---|---|
 | 1 | Read-only plan | done 2026-10-06 |
 | 2 | Migration: status, status_changed_at, is_reference, suggested_status, guard, activation triggers, platform_search_items | done: 088 applied 2026-10-06, verified, CONFORMANT (45 tables) |
-| 3 | MCP and alfred-enrich skill | — |
+| 3 | MCP and alfred-enrich skill | mcp deployed 2026-10-06; status fields live in get_inbox / get_items / get_intents; write and filter tests pending; skill re-upload pending |
 | 4 | Inbox status | — |
 | 5 | Status control, events sheet, recurrence and close changes, toast | — |
 | 6 | Filter chips with counts | — |

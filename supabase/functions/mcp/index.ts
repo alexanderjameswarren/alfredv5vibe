@@ -190,6 +190,19 @@ function splitSuggestedName(
   return { text: name || text, description: description || rest || null };
 }
 
+// inbox.suggested_status has a check constraint (088); this turns a bad value
+// into an error the model can read. Undefined passes through as "not given".
+const SUGGESTED_STATUSES = ["someday", "active"];
+function checkSuggestedStatus(tool: string, value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || !SUGGESTED_STATUSES.includes(value)) {
+    throw new Error(
+      `${tool}: suggested_status must be "someday" or "active". Got ${JSON.stringify(value)}.`,
+    );
+  }
+  return value;
+}
+
 const createInboxItemTool = defineTool({
   name: "create_inbox_item",
   // Tier 1: the inbox IS the human-approval gateway. This write appends to
@@ -274,6 +287,7 @@ const createInboxItemTool = defineTool({
     // tag box. See _shared/tags.ts.
     const suggestedTags = normaliseTags(args.suggested_tags);
     const suggestedCollectionId = (args.suggested_collection_id as string) || null;
+    const suggestedStatus = checkSuggestedStatus("create_inbox_item", args.suggested_status) ?? "someday";
 
     /**
      * Did anything actually get suggested?
@@ -352,6 +366,7 @@ const createInboxItemTool = defineTool({
       suggested_event_date: suggestedEventDate,
       suggested_tags: suggestedTags,
       suggested_collection_id: suggestedCollectionId,
+      suggested_status: suggestedStatus,
       ai_confidence: (args.ai_confidence as number) ?? null,
       ai_reasoning: (args.ai_reasoning as string) || null,
     };
@@ -386,6 +401,7 @@ const getItemsTool = defineTool({
     const contextId  = args.context_id  as string   | undefined;
     const searchText = args.search_text as string   | undefined;
     const tags       = args.tags        as string[] | undefined;
+    const status     = args.status      as string[] | undefined;
     const LIMIT      = clampLimit(args.limit as number | undefined);
 
     const { data, error } = await ctx.db.rpc("platform_search_items", {
@@ -393,6 +409,7 @@ const getItemsTool = defineTool({
       p_search_text: searchText ?? null,
       p_tags:        tags && tags.length > 0 ? tags : null,
       p_limit:       LIMIT,
+      p_status:      status && status.length > 0 ? status : null,
     });
     if (error) throw new Error(`get_items: ${error.message}`);
 
@@ -453,6 +470,7 @@ const getIntentsTool = defineTool({
       tags: args.tags as string[] | undefined,
       include_archived: args.include_archived as boolean | undefined,
       recurring_only: args.recurring_only as boolean | undefined,
+      status: args.status as string[] | undefined,
       limit: LIMIT,
     });
     if (result.error) throw new Error(`get_intents: ${result.error}`);
@@ -516,7 +534,7 @@ const getInboxTool = defineTool({
     // not.
     let q = ctx.db.from("inbox")
       .select(
-        "id, captured_text, source_type, source_metadata, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_description, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id, ai_status, ai_confidence, ai_reasoning, created_at"
+        "id, captured_text, source_type, source_metadata, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_description, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id, suggested_status, ai_status, ai_confidence, ai_reasoning, created_at"
       )
       .eq("archived", false)
       .is("triaged_at", null)
@@ -619,6 +637,8 @@ const updateInboxItemTool = defineTool({
       suggested_event_date: args.suggested_event_date as string | undefined,
       suggested_tags: args.suggested_tags as string[] | undefined,
       suggested_collection_id: args.suggested_collection_id as string | undefined,
+      suggested_status: checkSuggestedStatus("update_inbox_item", args.suggested_status) as
+        | "someday" | "active" | undefined,
     });
     if (result.error) throw new Error(`update_inbox_item: ${result.error}`);
     return result.data;
@@ -978,11 +998,12 @@ export function createMcpServer(token: string) {
     {
       title: "Get Items",
       description:
-        "Get items (reusable reference material like recipes, checklists, project notes). Can filter by context and tags. Items have elements (steps, ingredients, etc.). Results are capped (default 20, max 50) — the response NOTE tells you when there's more. [v22]",
+        "Get items (reusable reference material like recipes, checklists, project notes). Can filter by context, tags and status. Each row carries its status. Items have elements (steps, ingredients, etc.). Results are capped (default 20, max 50) — the response NOTE tells you when there's more. [v22]",
       inputSchema: {
         context_id: z.string().optional().describe("Filter by context ID"),
         tags: z.array(z.string()).optional().describe("Filter by tags (items matching ANY of these tags)"),
         search_text: z.string().optional().describe("Search item names and descriptions"),
+        status: z.array(z.enum(["someday", "active", "background", "closed"])).optional().describe("Filter by status (items matching ANY of these). someday = never live; active = live now; background = was active, not now; closed = done for good."),
         limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
       },
     },
@@ -1024,13 +1045,14 @@ export function createMcpServer(token: string) {
     {
       title: "Get Intents",
       description:
-        "List intentions and item-intents (GTD tasks/reusable actions). Use to see active intents for briefings, recurrence review, or context planning. Returns intent rows with resolved context name.",
+        "List intentions and item-intents (GTD tasks/reusable actions). Use to see active intents for briefings, recurrence review, or context planning. Returns intent rows with their status and resolved context name.",
       inputSchema: {
         context_id: z.string().optional().describe("Filter by context ID"),
         search_text: z.string().optional().describe("Search text to match against intent text (ILIKE)"),
         tags: z.array(z.string()).optional().describe("Filter intents that have ANY of these tags"),
         include_archived: z.boolean().optional().describe("Include archived intents (default false)"),
         recurring_only: z.boolean().optional().describe("Only return intents with a recurrence_config (default false)"),
+        status: z.array(z.enum(["someday", "active", "background", "closed"])).optional().describe("Filter by status (intents matching ANY of these). someday = never live; active = live now; background = was active, not now; closed = done for good. Status is independent of archived."),
         limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
       },
     },
@@ -1142,6 +1164,7 @@ export function createMcpServer(token: string) {
         suggested_event_date: z.string().optional().describe("Suggested date in YYYY-MM-DD format. Resolve relative dates like 'tomorrow', 'next Tuesday' to absolute dates."),
         suggested_tags: z.array(z.string()).optional().describe("Suggested tags — use get_tags first to match existing taxonomy. Lowercase, spaces between words, no punctuation (e.g. \"whole foods\"). Normalised on save."),
         suggested_collection_id: z.string().optional().describe("ID of an existing collection to add to (use get_collections to find it). E.g., grocery list."),
+        suggested_status: z.enum(["someday", "active"]).optional().describe("Status for the item and/or intention this becomes. Default 'someday'. 'active' only for a deadline, a named date, an explicit commitment, or a health or money urgency signal."),
         ai_confidence: z.number().optional().describe("Your confidence in these suggestions, 0.0 to 1.0"),
         ai_reasoning: z.string().optional().describe("Brief explanation of why you made these suggestions"),
       },
@@ -1174,6 +1197,7 @@ export function createMcpServer(token: string) {
         suggested_event_date: z.string().optional().describe("Date in YYYY-MM-DD format"),
         suggested_tags: z.array(z.string()).optional().describe("Suggested tags: lowercase, spaces between words, no punctuation (e.g. \"whole foods\"). Normalised on save. Use get_tags to match existing taxonomy."),
         suggested_collection_id: z.string().optional().describe("ID of an existing collection (use get_collections to find it)"),
+        suggested_status: z.enum(["someday", "active"]).optional().describe("Status for the item and/or intention this becomes. 'someday' unless there is a deadline, a named date, an explicit commitment, or a health or money urgency signal."),
       },
     },
     async (args) => runToolForMcp(updateInboxItemTool, args, token),
