@@ -115,3 +115,18 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/clip-capture/deno.json"
 entrypoint = "./functions/clip-capture/index.ts"
+
+[functions.wb-sync]
+enabled = true
+# 🛑 JWT verification OFF. Called by pg_cron via pg_net (Warren Buffet Step 4)
+# and by hand for testing; neither has a user token. WB_SYNC_SECRET in the
+# x-wb-sync-secret header stands in front of it instead, checked with a length
+# check plus timingSafeEqual before any work — the notify-dispatch pattern.
+#
+# ⚠️ Declared BEFORE THE FIRST DEPLOY, because the CLI defaults verify_jwt to
+# TRUE when nothing declares it, and the flag has reset silently on redeploy in
+# this project. Re-check after every deploy: an unauthenticated POST must come
+# back 401 with this function's own body (`{"ok":false,"error":"Unauthorized"}`).
+verify_jwt = false
+import_map = "./functions/wb-sync/deno.json"
+entrypoint = "./functions/wb-sync/index.ts"

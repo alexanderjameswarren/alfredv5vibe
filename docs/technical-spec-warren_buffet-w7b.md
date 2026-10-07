@@ -205,7 +205,7 @@ Unique `(account_id, as_of, external_id)`.
 
 Unique `(account_id, external_id)`. Index on `(account_id, posted_at desc)`.
 
-**Pending handling:** a pending transaction often reappears with a new id once posted. If a later fetch covers a pending row's date and does not return it, the sync deletes that pending row. Posted rows are never deleted by the sync.
+**Pending handling:** a pending transaction often reappears with a new id once posted. If a later fetch covers a pending row's date and does not return it, the sync deletes that pending row. Posted rows are never deleted by the sync. Only accounts present in the response are considered, and a run with any blocking SimpleFIN error deletes no pending rows at all (errors are not per account, and a broken bank can still list its account with no transactions).
 
 ### 6.5 Phase 1 views (`security_invoker = true`)
 
@@ -237,15 +237,17 @@ Unique `(account_id, external_id)`. Index on `(account_id, posted_at desc)`.
 
 **Each run:**
 1. Open a `platform_runs` row: `app = 'warren_buffet'`, `job = 'wb-sync'`, `executor = 'alfred'`, `status = 'running'`, `user_id` set explicitly (service role).
-2. Choose the window: start = later of (today − 89 days) and (last successful run − 10 days). The overlap catches late-posting and changed transactions; 89 avoids SimpleFIN's 90-day cap message.
+2. Choose the window: start = later of (today − 89 days) and (start of the last `ok` run − 10 days). Only `ok` counts: a `partial` or `failed` run does not shorten the next window. The overlap catches late-posting and changed transactions. Recorded on the run as `covered_from` / `covered_to` (Pacific dates).
 3. `GET {access}/accounts?start-date=<unix>&pending=1` using the credentials embedded in the access URL as basic auth. One request per run; SimpleFIN rate-limits heavy use.
 4. Upsert `wb_accounts` by `(source='simplefin', external_id)`. New accounts arrive with role `unassigned`. Never overwrite human columns (`display_name`, `owner`, `role`, `credit_limit`, reward fields, `is_hidden`, `notes`).
 5. Upsert today's `wb_balance_snapshots` row per account (`source = sync`), after the pre-read in §6.2 removes accounts whose row for today is `manual` or `import`.
 6. Upsert today's `wb_holding_snapshots` rows.
 7. Upsert `wb_transactions` by `(account_id, external_id)`, updating `last_seen_at`; apply the pending rule in §6.4.
-8. Close the run with counts (accounts, new transactions, updated transactions, holdings) and any SimpleFIN `errors` strings.
+8. Close the run with counts in `details`: `accounts`, `snapshots_written`, `snapshots_skipped_manual`, `holdings`, `transactions_new`, `transactions_updated` (a stored field actually changed: posted/transacted time, amount, description, payee, memo, mcc, pending or `raw`, compared by value), `transactions_unchanged`, `pending_deleted`; plus `simplefin_errors` (blocking) and `simplefin_notices`.
 
-**Errors:** SimpleFIN returns an `errors` array. The 90-day-cap message is informational. Any other message (usually a bank connection needing re-login) marks the run as partial and creates one Alfred inbox item for Alex, following whatever convention Step 1 finds for system-created inbox items. Never more than one open inbox item per distinct error.
+Env values are trimmed before use. A failure before the run row exists returns and logs a `stage` (`config`, `context`, `last_run`, `open_run`); after it, the run closes `failed` or `auth_expired` with `details.failure_kind`. Logs carry counts, stages and lengths only.
+
+**Errors:** SimpleFIN returns an `errors` array (newer servers add `errlist`). Date-range messages are notices, matched by pattern: a "date range" mention, or a day count together with a range/limit word (range, exceed, cap, limit, recommended, requested) — e.g. "Requested date range exceeds recommended range of 45 days" and the 90-day cap text. Notices go to `simplefin_notices` and leave the run `ok`. Any other message (usually a bank connection needing re-login) marks the run as partial and creates one Alfred inbox item for Alex, following whatever convention Step 1 finds for system-created inbox items. Never more than one open inbox item per distinct error.
 
 **Schedule:** pg_cron + pg_net, mirroring `notify-dispatch-every-minute` (migration 033), at `0 13 * * *` UTC — 5 AM PST / 6 AM PDT (pg_cron runs in UTC with no DST). The cron command sends `x-wb-sync-secret`; the value is pasted in by Alex in the SQL editor, never committed. Plus a `platform_schedules` row (`app = 'warren_buffet'`, `job = 'wb-sync'`, `executor = 'alfred'`, `cadence = 'daily'`) so staleness is visible.
 
