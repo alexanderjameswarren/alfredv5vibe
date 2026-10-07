@@ -262,6 +262,9 @@ Deno.serve(async (req) => {
     return json({ ok: false, error: "Unauthorized" }, 401);
   }
   if (req.method !== "POST") return json({ ok: false, error: "Method not allowed" }, 405);
+  // Test switch, read only after the secret gate: no SimpleFIN call, no wb_ writes,
+  // one fake blocking error through the real alert path. Cron never sends it.
+  const simulate = req.headers.get(core.SIMULATE_HEADER)?.trim() === core.SIMULATE_VALUE;
 
   const contextId = env("WB_CONTEXT_ID");
   if (!contextId) return early("config", 503, "WB_CONTEXT_ID is not set.");
@@ -339,11 +342,24 @@ Deno.serve(async (req) => {
     if (error) console.error("[wb-sync] Could not close the run.");
   };
 
+  // Alerts never fail the run: an inbox problem is logged and reported, not thrown.
+  const alert = async (inputs: core.AlertInput[], extraInstitutions: string[]) => {
+    try {
+      return await raiseAlerts(db, owner, runId, coveredTo, inputs, extraInstitutions);
+    } catch {
+      console.error("[wb-sync] stage=alert: could not raise the inbox alert.");
+      return { created: 0, already_open: 0, alert_failed: true };
+    }
+  };
+
   // ── 5. Work. ─────────────────────────────────────────────────────────────
   try {
-    if (!accessUrl) throw new RunFailure("SIMPLEFIN_ACCESS_URL is not set.", "failed", "config");
+    if (!accessUrl && !simulate) throw new RunFailure("SIMPLEFIN_ACCESS_URL is not set.", "failed", "config");
 
-    const body = await fetchSimplefin(accessUrl, windowStart);
+    // A simulated run skips SimpleFIN entirely and writes no wb_ data.
+    const body: Obj = simulate
+      ? { errors: [core.SIMULATED_MESSAGE], accounts: [] }
+      : await fetchSimplefin(accessUrl!, windowStart);
     const { informational, blocking } = core.classifyErrors(core.errorMessages(body));
     const counts = await sync(db, body, owner, now, windowStart, blocking.length > 0);
     const status = core.runStatus(blocking);
@@ -351,31 +367,118 @@ Deno.serve(async (req) => {
 
     await close({
       status,
-      covered_from: coveredFrom,
-      covered_to: coveredTo,
+      ...(simulate ? {} : { covered_from: coveredFrom, covered_to: coveredTo }),
       details: {
         ...counts,
         simplefin_errors: blockingSafe,
         simplefin_notices: informational.map((m) => core.redact(m, secrets)),
         ...(status === "partial" ? { failure_kind: "simplefin_errors" } : {}),
+        ...(simulate ? { simulated: true } : {}),
       },
       error_message: status === "partial" ? blockingSafe.join(" | ") : null,
     });
+    const orgNames = ((body.accounts ?? []) as Obj[]).map((a) => ((a.org ?? {}) as Obj).name as string);
+    const alerts = blockingSafe.length
+      ? await alert(blockingSafe.map((message) => ({ message, failureKind: null })), orgNames)
+      : { created: 0, already_open: 0 };
     console.log(
-      `[wb-sync] ${status}: accounts=${counts.accounts} snapshots=${counts.snapshots_written} ` +
+      `[wb-sync] ${status}${simulate ? " (simulated)" : ""}: accounts=${counts.accounts} snapshots=${counts.snapshots_written} ` +
         `skipped_manual=${counts.snapshots_skipped_manual} holdings=${counts.holdings} ` +
         `txn_new=${counts.transactions_new} txn_updated=${counts.transactions_updated} ` +
         `txn_unchanged=${counts.transactions_unchanged} notices=${informational.length} ` +
-        `pending_deleted=${counts.pending_deleted} errors=${blocking.length}`,
+        `pending_deleted=${counts.pending_deleted} errors=${blocking.length} ` +
+        `alerts_created=${alerts.created} alerts_open=${alerts.already_open}`,
     );
-    return json({ ok: true, run_id: runId, status, ...counts, simplefin_errors: blocking.length });
+    return json({
+      ok: true,
+      run_id: runId,
+      status,
+      ...counts,
+      simplefin_errors: blocking.length,
+      alerts,
+      ...(simulate ? { simulated: true } : {}),
+    });
   } catch (err) {
     const failure = err instanceof RunFailure ? err : null;
     const status = failure?.status ?? "failed";
     const kind = failure?.kind ?? "db";
     const message = core.redact(err instanceof Error ? err.message : String(err), secrets);
     await close({ status, error_message: message, details: { failure_kind: kind } });
-    console.error(`[wb-sync] ${status}: failure_kind=${kind}`);
-    return json({ ok: false, run_id: runId, status, failure_kind: kind, error: message }, 500);
+    const alerts = await alert([{ message, failureKind: kind }], []);
+    console.error(`[wb-sync] ${status}: failure_kind=${kind} alerts_created=${alerts.created} alerts_open=${alerts.already_open}`);
+    return json({ ok: false, run_id: runId, status, failure_kind: kind, error: message, alerts }, 500);
   }
 });
+
+/**
+ * One inbox item per distinct blocking error, never a second while one with the
+ * same error_key is still open (not archived). Then stamps notified_at.
+ */
+async function raiseAlerts(
+  db: SupabaseClient,
+  owner: core.Owner,
+  runId: string,
+  runDate: string,
+  inputs: core.AlertInput[],
+  extraInstitutions: string[],
+): Promise<{ created: number; already_open: number }> {
+  const { data: instRows, error: instErr } = await db
+    .from("wb_accounts")
+    .select("institution")
+    .eq("context_id", owner.context_id);
+  if (instErr) throw new Error(instErr.message);
+  const institutions = [
+    ...new Set([...(instRows ?? []).map((r) => r.institution as string), ...extraInstitutions].filter(Boolean)),
+  ];
+
+  const alerts = inputs.map((i) => core.alertFor(i, institutions, runId, runDate));
+  const keys = [...new Set(alerts.map((a) => a.key))];
+  const { data: openRows, error: openErr } = await db
+    .from("inbox")
+    .select("source_metadata")
+    .eq("user_id", owner.user_id)
+    .eq("source_type", "task")
+    .or("archived.is.null,archived.eq.false")
+    .in("source_metadata->>error_key", keys);
+  if (openErr) throw new Error(openErr.message);
+  const openKeys = new Set(
+    (openRows ?? []).map((r) => ((r.source_metadata ?? {}) as Obj).error_key as string).filter(Boolean),
+  );
+  const toCreate = core.planAlerts(alerts, openKeys);
+
+  if (toCreate.length) {
+    // Every field explicit, matching clip-capture: no auth.uid() under the service role.
+    const { error } = await db.from("inbox").insert(
+      toCreate.map((a) => ({
+        id: crypto.randomUUID(),
+        user_id: owner.user_id,
+        archived: false,
+        triaged_at: null,
+        captured_text: a.text,
+        source_type: "task",
+        source_metadata: {
+          task_name: "wb-sync",
+          run_date: runDate,
+          app: core.APP,
+          job: core.JOB,
+          run_id: runId,
+          error_key: a.key,
+          failure_kind: a.failureKind ?? "simplefin_errors",
+        },
+        ai_status: "not_started",
+        suggest_item: false,
+        suggest_intent: false,
+        suggest_event: false,
+        suggested_tags: [],
+        suggested_status: "active",
+      })),
+    );
+    if (error) throw new Error(error.message);
+  }
+
+  const alreadyOpen = keys.filter((k) => openKeys.has(k)).length;
+  if (toCreate.length + alreadyOpen > 0) {
+    await db.from("platform_runs").update({ notified_at: new Date().toISOString() }).eq("id", runId);
+  }
+  return { created: toCreate.length, already_open: alreadyOpen };
+}
