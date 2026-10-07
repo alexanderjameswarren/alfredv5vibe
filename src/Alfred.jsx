@@ -8,7 +8,10 @@ import {
   inboxIdFromPath,
   intentionIdFromPath,
   intentionDetailPath,
+  recordIdFromPath,
+  RECORD_VIEW,
 } from "./viewPaths";
+import RecordLinkScreen from "./records/RecordLinkScreen";
 import { archivedCaptureTarget } from "./utils/remindersApi";
 import { useReminderIndex, useReminderListRefresh } from "./reminders/useReminderIndex";
 import { useNotificationEffects } from "./reminders/useNotificationEffects";
@@ -576,6 +579,39 @@ export default function Alfred() {
     // `replace` in every case: a path the app cannot render should not become
     // a history entry the Back button can return the user to.
   }, [currentPath, detailStateMissing, addTargetMissing, inboxDetailMissing, intentionDetailMissing, archivedInboxTarget, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- Record links (/<id>) -------------------------------------------------
+  // `replace` throughout, so Back skips the /<id> address. State-opened detail
+  // views mirror the archived-inbox redirect above. The lookup lets the map
+  // pick only screens whose row is loaded; see records/recordRoutes.js.
+  const recordLookup = {
+    inbox: (id) => allInboxItems.find((i) => i.id === id) || null,
+    item: (id) => items.some((i) => i.id === id),
+    intention: (id) => intents.some((i) => i.id === id),
+    context: (id) => contexts.some((c) => c.id === id),
+    collection: (id) => collections.some((c) => c.id === id),
+    archivedTarget: (id) => archivedCaptureTarget(id, { items, intents, events }),
+  };
+
+  function openRecordDestination(dest) {
+    if (dest.kind === "path") {
+      navigate(dest.path, { replace: true });
+      return;
+    }
+    setPreviousView("home");
+    if (dest.kind === "item") {
+      setItemHistoryStack([]);
+      setExecutionEditReturn(null);
+      setSelectedItemId(dest.id);
+      navigate(viewToPath("item-detail"), { replace: true });
+    } else if (dest.kind === "context") {
+      setSelectedContextId(dest.id);
+      navigate(viewToPath("context-detail"), { replace: true });
+    } else if (dest.kind === "collection") {
+      setSelectedCollectionId(dest.id);
+      navigate(viewToPath("collection-detail"), { replace: true });
+    }
+  }
 
   // Sort, search and tag-bar state per list page. Same place in the effect order.
   const {
@@ -1572,6 +1608,15 @@ export default function Alfred() {
             addItemsToCollection={addItemsToCollection}
             withLoading={withLoading}
             setView={setView}
+          />
+        )}
+
+        {/* Record link: /<id> */}
+        {view === RECORD_VIEW && (
+          <RecordLinkScreen
+            recordId={recordIdFromPath(currentPath)}
+            onOpen={openRecordDestination}
+            lookup={recordLookup}
           />
         )}
 

@@ -73,6 +73,8 @@ export function normalizePath(pathname) {
 // Note this only *renders* home; it does not rewrite the URL. Redirecting
 // unknown paths is Step 9.
 export function pathToView(pathname) {
+  // /<record id> — see the record-link section at the bottom.
+  if (recordIdFromPath(pathname)) return RECORD_VIEW;
   // Everything under /sam is the SAM view; see the SAM section below.
   if (isSamPath(pathname)) return "sam";
   // /schedule/execution/:id is the same view as the bare /schedule/execution.
@@ -99,6 +101,7 @@ export function viewToPath(view) {
 // Is this a path the app actually serves? Unknown paths render home today;
 // Step 9 uses this to redirect them to "/" so the address bar stops lying.
 export function isKnownPath(pathname) {
+  if (recordIdFromPath(pathname)) return true;
   if (isSamPath(pathname)) return true;
   // Deliberately executionIdFromPath, not isExecutionPath: a malformed
   // /schedule/execution/a/b has no extractable id and stays unknown, so it is
@@ -339,4 +342,32 @@ export function isSamStatsPath(pathname) {
 export function isSamPath(pathname) {
   const path = normalizePath(pathname);
   return path === SAM_PATH || path.startsWith(`${SAM_PATH}/`);
+}
+
+// --- Record links (record_links-r7k) -----------------------------------------
+//
+// `/<id>` opens whatever record has that id, resolved by the resolve_record RPC.
+// Deliberately NOT in VIEW_TO_PATH: there is no bare form to navigate to, and
+// the resolver screen always replaces this address with the record's own.
+//
+// Two id shapes: a UUID, or a uid() from utils/flattenElements.js — 15–24 chars
+// of [0-9a-z] with at least one digit. No word path has a digit, so none matches.
+
+export const RECORD_VIEW = "record";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const APP_ID_RE = /^(?=[0-9a-z]*[0-9])[0-9a-z]{15,24}$/;
+
+export function isRecordId(id) {
+  return typeof id === "string" && (UUID_RE.test(id) || APP_ID_RE.test(id));
+}
+
+export function recordPath(id) {
+  return `/${encodeURIComponent(id)}`;
+}
+
+// The id from /<id>, or null for any other path.
+export function recordIdFromPath(pathname) {
+  const path = normalizePath(pathname);
+  const id = path.slice(1);
+  return isRecordId(id) ? id : null;
 }
