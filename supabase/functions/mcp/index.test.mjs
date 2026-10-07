@@ -285,11 +285,14 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_2026_09_23 = ["get_recent_clips", "get_clip_slices", "archive_inbox_item"];
   // 2026-09-30, +3 for standalone reminders, all additions, ONE deploy.
   const EXPECTED_ADDED_2026_09_30 = ["create_reminder", "get_reminders", "update_reminder"];
-  for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30]) {
+  // 2026-10-07, +8 for Warren Buffet Phase 1, all additions, ONE deploy.
+  const EXPECTED_ADDED_2026_10_07 = ["get_wb_accounts", "get_wb_balance_history", "get_wb_net_worth",
+    "get_wb_transactions", "get_wb_holdings", "update_wb_account", "create_wb_manual_account", "record_wb_balance"];
+  for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 78,
-    `expected 78 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 86,
+    `expected 86 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -327,6 +330,32 @@ test("reminder schemas advertise exactly the args their handlers read", () => {
     assert.ok(t, `${name} not registered`);
     assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
   }
+});
+
+test("Warren Buffet schemas advertise exactly the args their handlers read", () => {
+  const src = readFileSync(join(TOOLS, "warren-buffet.ts"), "utf-8");
+  const blocks = src.split("defineTool({").slice(1);
+  assert.equal(blocks.length, 8, `expected 8 tools in warren-buffet.ts, found ${blocks.length}`);
+  const tiers = {};
+  for (const b of blocks) {
+    const name = /name:\s*"([^"]+)"/.exec(b)[1];
+    tiers[name] = Number(/tier:\s*(\d)/.exec(b)[1]);
+    const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
+  }
+  assert.deepEqual(tiers, {
+    get_wb_accounts: 1, get_wb_balance_history: 1, get_wb_net_worth: 1, get_wb_transactions: 1,
+    get_wb_holdings: 1, update_wb_account: 2, create_wb_manual_account: 1, record_wb_balance: 2,
+  });
+});
+
+test("the platform app enums accept warren_buffet", () => {
+  const src = readFileSync(join(HERE, "index.ts"), "utf-8");
+  const enums = src.match(/app: z\.enum\(\[[^\]]*\]\)/g);
+  assert.equal(enums.length, 4);
+  for (const e of enums) assert.ok(e.includes('"warren_buffet"'), e);
 });
 
 test("create_job_application stays UNGATED", () => {

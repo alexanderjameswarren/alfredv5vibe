@@ -76,6 +76,16 @@ import {
   updateReminderTool,
 } from "../_shared/tools/reminders.ts";
 import {
+  getWbAccountsTool,
+  getWbBalanceHistoryTool,
+  getWbNetWorthTool,
+  getWbTransactionsTool,
+  getWbHoldingsTool,
+  updateWbAccountTool,
+  createWbManualAccountTool,
+  recordWbBalanceTool,
+} from "../_shared/tools/warren-buffet.ts";
+import {
   getKenQuizBatchTool,
   recordKenAttemptsTool,
   createKenAreaTool,
@@ -1843,7 +1853,7 @@ export function createMcpServer(token: string) {
       description:
         "Stamp one attempted job run — scheduled or on-demand — in platform_runs. Append-only. Call this on EVERY run including failures: a poll that could not reach YouTube still writes status 'failed' or 'auth_expired', and that row is what staleness detection and the phase-6 failure tests read. Absence of a row is the only signal for both 'the task never fired' and 'it fired but could not reach Supabase', so a missing stamp is indistinguishable from a missing run. Tier 1.",
       inputSchema: {
-        app: z.enum(["dj", "sam", "alfred", "workshop", "ken"]).describe("Which app this job belongs to."),
+        app: z.enum(["dj", "sam", "alfred", "workshop", "ken", "warren_buffet"]).describe("Which app this job belongs to."),
         job: z.string().describe("Job name, e.g. 'daily_history_sync'. Stable across runs — staleness queries group on it."),
         executor: z.enum(["workshop", "claude", "alfred"]).describe("Who actually ran it. Different executors fail in different ways."),
         status: RUN_STATUS
@@ -1868,7 +1878,7 @@ export function createMcpServer(token: string) {
       description:
         "Read the job run log, most recent first. The gap-detection read: call with app, job and status 'ok', limit 1 to get the newest successful run, then backfill anything between its covered_to and today. Also the staleness and failure-triage read. Tier 1.",
       inputSchema: {
-        app: z.enum(["dj", "sam", "alfred", "workshop", "ken"]).optional().describe("Filter to one app."),
+        app: z.enum(["dj", "sam", "alfred", "workshop", "ken", "warren_buffet"]).optional().describe("Filter to one app."),
         job: z.string().optional().describe("Filter to one job name."),
         status: RUN_STATUS.optional().describe("Filter by outcome. Use 'ok' for gap detection; use 'running' to find ORPHANS - runs that opened and never closed because the task died mid-flight. Nothing closes those automatically."),
         unnotified_only: z.boolean().optional().describe("Only runs whose failure has not yet been surfaced (notified_at is null)."),
@@ -2213,7 +2223,7 @@ export function createMcpServer(token: string) {
         "Re-seeding the same (app, job) UPDATES its definition rather than duplicating: a schedule is a definition, unlike platform_runs which is an append-only log. " +
         "⚠️ `day_of_week` uses the POSTGRES convention where 0 = SUNDAY — not ISO, where 1 = Monday. Required for weekly, rejected for daily. Tier 2.",
       inputSchema: {
-        app: z.enum(["dj", "sam", "alfred", "workshop", "ken"]).describe("Which app this job belongs to."),
+        app: z.enum(["dj", "sam", "alfred", "workshop", "ken", "warren_buffet"]).describe("Which app this job belongs to."),
         job: z.string().describe("Job name, matching the `job` used in create_platform_run — staleness queries join on it."),
         executor: z.enum(["workshop", "claude", "alfred"]).describe("Who is supposed to run it."),
         cadence: z.enum(["daily", "weekly"]).describe("How often."),
@@ -2235,7 +2245,7 @@ export function createMcpServer(token: string) {
         "Read the cadence definitions — what is supposed to run. These are DEFINITIONS, not occurrences (spec §4.5). `day_of_week` uses the Postgres convention where 0 = SUNDAY. " +
         "⚠️ Staleness is deliberately NOT computed here: it needs the newest matching run from get_platform_runs AND a timezone to resolve `expected_by` against, and it must be reconciled against dj_plays rather than trusting the run log, which asserts coverage and cannot be audited against the data (spec §11.4). Tier 1, read-only.",
       inputSchema: {
-        app: z.enum(["dj", "sam", "alfred", "workshop", "ken"]).optional().describe("Filter to one app."),
+        app: z.enum(["dj", "sam", "alfred", "workshop", "ken", "warren_buffet"]).optional().describe("Filter to one app."),
         job: z.string().optional().describe("Filter to one job name."),
         enabled: z.boolean().optional().describe("Filter to enabled or suspended definitions."),
         limit: z.number().optional().describe("Max rows (default 20, cap 50)."),
@@ -2727,6 +2737,174 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(updateReminderTool, args, token),
+  );
+
+  // --- Warren Buffet, Phase 1 (docs/technical-spec-warren_buffet-w7b.md §8) ---
+  const WB_SIGN =
+    "Sign rule for every amount: money in is positive, money out is negative, on every account — a card charge is negative, a card payment positive, and a balance owed on a card or loan is negative. ";
+  const WB_ROLE_NOTE =
+    "An account's role decides which net-worth group it counts in; an unassigned account is shown but kept out of net worth, so assigning a role is how an account enters the net worth math. ";
+  const wbRole = z.enum(["unassigned", "spending_cash", "reserve_cash", "credit_card", "emergency_credit",
+    "loan", "retirement", "taxable_investment", "rewards", "history_rollup", "closed"]);
+  const wbDate = (what: string) => z.string().optional().describe(`${what}, YYYY-MM-DD (Pacific date).`);
+
+  server.registerTool(
+    "get_wb_accounts",
+    {
+      title: "Get Money Accounts",
+      description:
+        "List the household money accounts (Warren Buffet), each with its latest balance (balance, available_balance, as_of), staleness_days since that snapshot, role, owner, label (display_name, else the bank's name), source (simplefin or manual), and notes. Read notes before any analysis. Hidden accounts are left out unless include_hidden is true. " +
+        WB_ROLE_NOTE + WB_SIGN + "Sorted by role, then label. Tier 1.",
+      inputSchema: {
+        role: wbRole.optional().describe("Only accounts with this role."),
+        owner: z.enum(["alex", "elise", "joint", "none"]).optional().describe("Only this owner; 'none' = no owner assigned yet."),
+        include_hidden: z.boolean().optional().describe("Include hidden accounts. Default false."),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbAccountsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_balance_history",
+    {
+      title: "Get Money Balance History",
+      description:
+        "Balance over time, newest first. Pass exactly one of: account_id, for that account's recorded snapshots (as_of, balance, available_balance, source sync/manual/import, notes); or role, for that role group's daily total from the net worth view, which carries each account's last balance forward on days with no snapshot (credit_card and emergency_credit share one total, credit_owed; rewards are converted to dollars only where a value per unit is set). " +
+        WB_SIGN + "Tier 1.",
+      inputSchema: {
+        account_id: z.string().optional().describe("One account's id (get_wb_accounts, field account_id)."),
+        role: wbRole.optional().describe("A role whose group total you want, instead of account_id."),
+        from: wbDate("Earliest date"),
+        to: wbDate("Latest date"),
+        limit: z.number().optional().describe("Max rows (days), default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbBalanceHistoryTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_net_worth",
+    {
+      title: "Get Net Worth",
+      description:
+        "Daily net worth, newest first: one row per date with totals by group (spending_cash, reserve_cash, credit_owed, loans, retirement, taxable_investments, rewards, history_rollup, closed, unassigned) and net_worth. Each account carries its last known balance forward on days with no snapshot. net_worth includes every group except unassigned. " +
+        WB_ROLE_NOTE + WB_SIGN + "Tier 1.",
+      inputSchema: {
+        from: wbDate("Earliest date"),
+        to: wbDate("Latest date"),
+        limit: z.number().optional().describe("Max rows (days), default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbNetWorthTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_transactions",
+    {
+      title: "Get Money Transactions",
+      description:
+        "Raw bank transactions as SimpleFIN reported them, newest first (pending ones without a posted date come first): amount, posted_at, transacted_at, description, payee, memo, mcc, pending, and the account's name. Not categorized yet. " +
+        WB_SIGN + "from/to filter the posted date in Pacific time, so a pending charge with no posted date only appears when no date range is given. Tier 1.",
+      inputSchema: {
+        account_id: z.string().optional().describe("Only this account (get_wb_accounts, field account_id)."),
+        from: wbDate("Posted on or after"),
+        to: wbDate("Posted on or before"),
+        search: z.string().optional().describe("Text to find in the description or payee, case-insensitive."),
+        min_amount: z.number().optional().describe("Lowest amount, signed. To find deposits of 100 or more, pass min_amount 100."),
+        max_amount: z.number().optional().describe("Highest amount, signed. To find spending over 100, pass max_amount -100."),
+        pending: z.boolean().optional().describe("true = only pending, false = only posted."),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbTransactionsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_holdings",
+    {
+      title: "Get Investment Holdings",
+      description:
+        "Investment positions (symbol, description, shares, market_value, cost_basis, purchase_price) for one day, largest market value first, with the account's name. Without as_of: the most recent day holdings were recorded (for one account, that account's most recent day). Tier 1.",
+      inputSchema: {
+        account_id: z.string().optional().describe("Only this account (get_wb_accounts, field account_id)."),
+        as_of: wbDate("The day to read"),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbHoldingsTool, args, token),
+  );
+
+  server.registerTool(
+    "update_wb_account",
+    {
+      title: "Update Money Account",
+      description:
+        "Edit the human columns of one account, by id: display_name, owner, role, credit_limit, reward_unit, reward_value_per_unit, expires_on, active_from, active_until, is_hidden, notes. Pass null to clear a field (except role and is_hidden). What the sync owns (name, institution, last4, currency, source) cannot be edited. " +
+        WB_ROLE_NOTE + "history_rollup accounts count only from active_from to active_until, and never without active_until; active_from may not be after active_until. Returns the updated account. Audited and reversible. Tier 2.",
+      inputSchema: {
+        id: z.string().describe("The account's id (get_wb_accounts, field account_id)."),
+        display_name: z.string().nullable().optional().describe("Label shown instead of the bank's name."),
+        owner: z.enum(["alex", "elise", "joint"]).nullable().optional().describe("Whose account it is."),
+        role: wbRole.optional().describe("Which net-worth group it counts in. 'unassigned' takes it out of net worth."),
+        credit_limit: z.number().nullable().optional().describe("Credit line in dollars, e.g. a HELOC limit SimpleFIN reports as 0."),
+        reward_unit: z.string().nullable().optional().describe("e.g. 'points' or 'miles' (rewards accounts)."),
+        reward_value_per_unit: z.number().nullable().optional().describe("Dollars per unit; null leaves a rewards balance out of net worth."),
+        expires_on: z.string().nullable().optional().describe("Rewards expiry or CD maturity, YYYY-MM-DD."),
+        active_from: z.string().nullable().optional().describe("history_rollup: first date it counts, YYYY-MM-DD."),
+        active_until: z.string().nullable().optional().describe("history_rollup: last date it counts (the day before synced history starts), YYYY-MM-DD."),
+        is_hidden: z.boolean().optional().describe("Hide from lists. Display only; does not change totals."),
+        notes: z.string().nullable().optional().describe("Free-text context Claude reads before analysis."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateWbAccountTool, args, token),
+  );
+
+  server.registerTool(
+    "create_wb_manual_account",
+    {
+      title: "Create Manual Money Account",
+      description:
+        "Create an account that SimpleFIN does not sync — a 401k, a HELOC limit holder, a rewards balance, or a history_rollup line from the old spreadsheet. Always created in the shared Money context, with source 'manual'. Refuses a second manual account with the same name (case-insensitive). Record its balances with record_wb_balance. " +
+        WB_ROLE_NOTE + "A history_rollup counts only from active_from to active_until, and never without active_until. Returns the new account. Tier 1.",
+      inputSchema: {
+        name: z.string().describe("The account's name, e.g. 'Employer 401k'."),
+        role: wbRole.optional().describe("Net-worth group. Default 'unassigned' (kept out of net worth)."),
+        owner: z.enum(["alex", "elise", "joint"]).optional().describe("Whose account it is."),
+        institution: z.string().optional().describe("Bank or provider."),
+        display_name: z.string().optional().describe("Label shown instead of name."),
+        last4: z.string().optional().describe("Last four digits only, if useful. Never more."),
+        currency: z.string().optional().describe("Three-letter code. Default USD."),
+        credit_limit: z.number().optional().describe("Credit line in dollars."),
+        reward_unit: z.string().optional().describe("e.g. 'points'."),
+        reward_value_per_unit: z.number().optional().describe("Dollars per unit."),
+        expires_on: z.string().optional().describe("YYYY-MM-DD."),
+        active_from: z.string().optional().describe("history_rollup: first date it counts, YYYY-MM-DD."),
+        active_until: z.string().optional().describe("history_rollup: last date it counts, YYYY-MM-DD."),
+        is_hidden: z.boolean().optional().describe("Default false."),
+        notes: z.string().optional().describe("Free-text context."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createWbManualAccountTool, args, token),
+  );
+
+  server.registerTool(
+    "record_wb_balance",
+    {
+      title: "Record Money Balance",
+      description:
+        "Record one balance for a MANUAL account on a date. Refused for a synced account, whose balances come from the sync, and never touches a row the sync wrote. If the date already has a manual or import row it is replaced in full (fields not passed become empty); the result's `replaced` says which source was replaced, or null for a new date. " +
+        WB_SIGN + "Tier 2.",
+      inputSchema: {
+        account_id: z.string().describe("A manual account's id (get_wb_accounts, field account_id, source 'manual')."),
+        balance: z.number().describe("Dollars, signed: a debt is negative."),
+        as_of: wbDate("The balance date; default today, never in the future"),
+        available_balance: z.number().optional().describe("Available balance in dollars, if different."),
+        source: z.enum(["manual", "import"]).optional().describe("'import' for spreadsheet history, else 'manual' (default)."),
+        notes: z.string().optional().describe("Where the number came from."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(recordWbBalanceTool, args, token),
   );
 
   return server;
