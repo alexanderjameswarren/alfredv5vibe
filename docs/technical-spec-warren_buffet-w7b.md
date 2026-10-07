@@ -253,9 +253,11 @@ Env values are trimmed before use. A failure before the run row exists returns a
 
 **App value:** `warren_buffet`. The step 2 migration adds it to `platform_runs_app_check` and `platform_schedules_app_check`; the MCP enums (`VALID_APP` in `_shared/tools/dj-courier.ts` and the four zod enums in `mcp/index.ts`) follow in Step 5.
 
-**Error inbox item:** inserted directly with the service role (pattern: `clip-capture`): `source_type = 'task'`, `source_metadata = {task_name: 'wb-sync', run_date, app, job, run_id, error_key}`, `ai_status = 'not_started'`. Before inserting, the sync looks for an unarchived inbox row with the same `error_key` and skips if one exists; then it stamps `platform_runs.notified_at`.
+**Error inbox item:** raised on a `partial` run (one per distinct blocking SimpleFIN error) and on a `failed` / `auth_expired` run (one for the failure). Inserted directly with the service role (pattern: `clip-capture`): `source_type = 'task'` (lands on the inbox Task tab), `source_metadata = {task_name: 'wb-sync', run_date, app, job, run_id, error_key, failure_kind}`, `ai_status = 'not_started'`, `suggested_status = 'active'`, no tags yet. `error_key` is a hash of the message with case, spacing and numbers ignored. Before inserting, the sync looks for an unarchived inbox row with the same `error_key` and skips if one exists; then it stamps `platform_runs.notified_at`. Text: a plain-language title ("<Institution> connection needs attention in SimpleFIN", institution matched from `wb_accounts`, else "A bank connection…"; failed runs get a sync-level title), then the redacted message with any URL removed. An alert problem never fails the run. Later, when the $$ inbox tab exists: add a `money` tag and `suggested_context_id` = Money.
 
-**Manual run:** the function can be invoked on demand for testing.
+**Manual run:** the function can be invoked on demand for testing, with the `x-wb-sync-secret` header.
+
+**Simulated error (test switch):** header `x-wb-sync-simulate: blocking-error`, honoured only after the secret gate. It makes no SimpleFIN call and writes no `wb_` rows; it records one `partial` run with `details.simulated = true` and no coverage, and raises the alert through the real path. Being `partial`, it never shortens the sync window. Cron never sends it.
 
 ---
 

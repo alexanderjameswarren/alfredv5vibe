@@ -303,3 +303,86 @@ export function pendingRowsToDelete(
   }
   return ids;
 }
+
+// ---------------------------------------------------------------------------
+// Inbox alerts (Step 4)
+// ---------------------------------------------------------------------------
+
+/** Header that turns a run into a simulated blocking error. Honoured only after the secret gate. */
+export const SIMULATE_HEADER = "x-wb-sync-simulate";
+export const SIMULATE_VALUE = "blocking-error";
+export const SIMULATED_MESSAGE = "SIMULATED: Example Bank connection needs attention (wb-sync test).";
+
+/** Remove anything that looks like a link. Alerts carry no URLs at all. */
+export function stripUrls(message: string): string {
+  return message.replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[link removed]");
+}
+
+/**
+ * Stable identity for "the same problem": case, spacing and numbers ignored,
+ * so "not updated in 3 days" and "in 4 days" stay one open alert.
+ */
+export function errorKey(message: string): string {
+  const norm = message.toLowerCase().replace(/\d+/g, "#").replace(/\s+/g, " ").trim();
+  // FNV-1a, 32-bit: short, deterministic, no crypto needed.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < norm.length; i++) {
+    h ^= norm.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `wb-sync:${h.toString(16).padStart(8, "0")}`;
+}
+
+export interface AlertInput {
+  /** Already redacted. */
+  message: string;
+  /** null for a SimpleFIN `errors` entry on a partial run. */
+  failureKind: string | null;
+}
+
+export interface Alert {
+  key: string;
+  title: string;
+  text: string;
+  failureKind: string | null;
+}
+
+/** One plain-language line, then what SimpleFIN or the sync actually said. */
+export function alertFor(input: AlertInput, institutions: string[], runId: string, runDate: string): Alert {
+  const said = stripUrls(input.message).trim();
+  let title: string;
+  if (input.failureKind === null) {
+    const lower = said.toLowerCase();
+    const inst = institutions
+      .filter((n) => n && n.trim().length >= 3)
+      .sort((a, b) => b.length - a.length)
+      .find((n) => lower.includes(n.trim().toLowerCase()));
+    title = inst
+      ? `${inst.trim()} connection needs attention in SimpleFIN`
+      : "A bank connection needs attention in SimpleFIN";
+  } else if (input.failureKind === "auth") {
+    title = "SimpleFIN refused the money sync's access — the access URL may need renewing";
+  } else if (input.failureKind === "config") {
+    title = "The money sync is missing a setting";
+  } else {
+    title = "The daily money sync failed";
+  }
+  const source = input.failureKind === null ? "SimpleFIN said" : "The sync said";
+  const text =
+    `${title}\n\n${source}: "${said}"\n\n` +
+    `wb-sync run ${runId} on ${runDate}. This item stays the only alert for this problem while it is open; ` +
+    `archive it once the connection is fixed.`;
+  return { key: errorKey(input.message), title, text, failureKind: input.failureKind };
+}
+
+/** Alerts to create: one per distinct key, none whose key already has an open item. */
+export function planAlerts(alerts: Alert[], openKeys: Set<string>): Alert[] {
+  const seen = new Set(openKeys);
+  const out: Alert[] = [];
+  for (const a of alerts) {
+    if (seen.has(a.key)) continue;
+    seen.add(a.key);
+    out.push(a);
+  }
+  return out;
+}

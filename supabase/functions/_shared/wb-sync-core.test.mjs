@@ -215,6 +215,56 @@ test("transactionChanged: amount or description change → changed", () => {
   assert.equal(core.transactionChanged(STORED, core.mapTransaction({ ...T1, description: "OTHER" }, "acct1", OWNER, "x")), true);
 });
 
+const RUN = "00000000-0000-0000-0000-000000000001";
+
+test("alert: names the institution when the message mentions it", () => {
+  const a = core.alertFor(
+    { message: "Connection to Example Bank may need attention", failureKind: null },
+    ["Example Bank", "Other Credit Union"], RUN, "2026-10-07",
+  );
+  assert.equal(a.title, "Example Bank connection needs attention in SimpleFIN");
+  assert.ok(a.text.startsWith(a.title));
+  assert.ok(a.text.includes('SimpleFIN said: "Connection to Example Bank may need attention"'));
+  assert.ok(a.text.includes(RUN));
+});
+
+test("alert: generic title when no institution matches", () => {
+  const a = core.alertFor({ message: "Something odd", failureKind: null }, ["Example Bank"], RUN, "2026-10-07");
+  assert.equal(a.title, "A bank connection needs attention in SimpleFIN");
+});
+
+test("alert: failed runs get a sync-level title", () => {
+  assert.match(core.alertFor({ message: "HTTP 403", failureKind: "auth" }, [], RUN, "d").title, /access URL may need renewing/);
+  assert.equal(core.alertFor({ message: "x", failureKind: "network" }, [], RUN, "d").title, "The daily money sync failed");
+});
+
+test("alert: no URLs survive into the item", () => {
+  const a = core.alertFor(
+    { message: "Fix it at https://bridge.example.test/connections/42 now", failureKind: null }, [], RUN, "d",
+  );
+  assert.ok(!/https?:\/\//.test(a.text));
+  assert.ok(a.text.includes("[link removed]"));
+});
+
+test("errorKey: ignores case, spacing and numbers; differs for different problems", () => {
+  assert.equal(core.errorKey("Not updated in 3 days"), core.errorKey("not  updated in 14 DAYS"));
+  assert.notEqual(core.errorKey("Login required for Example Bank"), core.errorKey("Login required for Other Bank"));
+  assert.match(core.errorKey("x"), /^wb-sync:[0-9a-f]{8}$/);
+});
+
+test("planAlerts: one per distinct error, none while one is open", () => {
+  const a = core.alertFor({ message: "Login required for Example Bank", failureKind: null }, [], RUN, "d");
+  const b = core.alertFor({ message: "Login required for Other Bank", failureKind: null }, [], RUN, "d");
+  const a2 = core.alertFor({ message: "login required for example bank", failureKind: null }, [], RUN, "d");
+  assert.deepEqual(core.planAlerts([a, b, a2], new Set()).map((x) => x.key), [a.key, b.key]);
+  assert.deepEqual(core.planAlerts([a, b], new Set([a.key])).map((x) => x.key), [b.key]);
+  assert.deepEqual(core.planAlerts([a], new Set([a.key])), []);
+});
+
+test("simulated message classifies as blocking", () => {
+  assert.deepEqual(core.classifyErrors([core.SIMULATED_MESSAGE]).blocking, [core.SIMULATED_MESSAGE]);
+});
+
 test("mapAccount sets only sync-owned columns", () => {
   const row = core.mapAccount(
     { id: "ACT-1", name: "Example Card (4321)", currency: "USD", org: { name: "Example Bank" } },
