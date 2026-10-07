@@ -3,14 +3,14 @@
 Project code: `drive_mix-v7r`
 Spec: docs/technical-spec-drive_mix-v7r.md
 
-## Status: In Progress — Step 4 deployed (mcp v141), awaiting fresh-thread test
+## Status: In Progress — Step 5 built, awaiting Checkpoint and Surface refresh
 
 ### Development Steps
 - [x] Step 1: Read-only plan — files, database items, claims check (s1)
 - [x] Step 2: Confirm and claim (s2)
 - [x] Step 3: Database — tables, picker, simulator and sweep functions; register_table; CONFORMANT (just-in-time database step, Checkpoint) — migration 095 applied 2026-10-07; CONFORMANT (51 tables); drive_mix_pick on the empty pool returns []
 - [ ] Step 4: Alfred MCP tools (section 5 of the spec); deploy; verify in a fresh thread — 8 tools in dj-drive-mix.ts, deployed 2026-10-07 as mcp v141 (verify_jwt false); tests green (15 handler, 25 index, 2092 app, 174 scripts); fresh-thread test pending
-- [ ] Step 5: Workshop `get_dj_artist_top_songs` tool (Workshop repo, own prompt)
+- [ ] Step 5: Workshop `get_dj_artist_top_songs` tool — lives in this repo's workshop/ folder (not a separate repo), in workshop/workshop/tools/dj_write.py beside search_dj_music. Built 2026-10-07; Workshop tests 252/252 pass. Awaiting Checkpoint, Refresh Workshop on the Surface, and a live check.
 - [ ] Step 6: Seed the pool in chat — playlists, artist list, heavy-play artists; Alex reviews
 - [ ] Step 7: Dry runs in chat — simulate 60 days, tune artist cap and quotas
 - [ ] Step 8: Go live — create Drive Mix playlist; set up the daily scheduled task

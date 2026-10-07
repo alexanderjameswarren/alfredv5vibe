@@ -167,6 +167,174 @@ async def search_dj_music(args: dict, ctx: Ctx) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# get_dj_artist_top_songs — tier 1 (Drive Mix, docs/technical-spec-drive_mix-v7r.md §6)
+# ---------------------------------------------------------------------------
+
+TOP_SONGS_DEFAULT = 5
+TOP_SONGS_CAP = 25
+ARTIST_SEARCH_FETCH = 10
+TOP_SONGS_RANKING = (
+    "YouTube Music's own ranking from the artist page — not Alex's play counts."
+)
+
+
+def _artist_result_name(item: dict) -> str | None:
+    # Search results carry the name as `artist`; some versions as `artists`.
+    if isinstance(item.get("artist"), str):
+        return item["artist"]
+    names = [a.get("name") for a in (item.get("artists") or []) if isinstance(a, dict)]
+    return names[0] if names else None
+
+
+def _song_artists(item: dict) -> list[dict]:
+    if isinstance(item.get("artists"), list):
+        return _artists(item)
+    if isinstance(item.get("artist"), str):
+        return [{"name": item["artist"], "id": None}]
+    return []
+
+
+def _song_album(item: dict) -> dict | None:
+    if isinstance(item.get("album"), str):
+        return {"name": item["album"], "id": None}
+    return _album(item)
+
+
+@define_tool(
+    name="get_dj_artist_top_songs",
+    tier=1,
+    description=(
+        "Return an artist's top songs from YouTube Music, in the order YouTube "
+        "Music ranks them on the artist page. Read-only. "
+        "⚠️ THE RANKING IS YOUTUBE'S, NOT ALEX'S: it reflects YouTube Music's "
+        "popularity ordering, not his play counts (those are in get_dj_plays). "
+        "Pass `artist` (a name) or `channel_id` (an artist browse id, UC...), not "
+        "both. A name is resolved with an artist-filtered search and must match "
+        "a result's name exactly (case-insensitive). If MORE THAN ONE artist "
+        "matches exactly, or NONE does, no songs are returned: `resolved` is "
+        "false and `candidates` lists name, channel_id and subscribers — show "
+        "them to a human and re-call with the chosen channel_id. Never pick "
+        "between candidates yourself. "
+        "Each song has position, title, video_id, artists, album and year (when "
+        "YouTube gives one). When `limit` exceeds the songs on the artist page, "
+        "the artist's full songs list fills the rest, still in YouTube's order."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "artist": {"type": "string", "description": "Artist name, e.g. 'Bryan Adams'."},
+            "channel_id": {
+                "type": "string",
+                "description": "Artist browse id (UC...), e.g. from a previous call's candidates.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": f"Songs to return (default {TOP_SONGS_DEFAULT}, cap {TOP_SONGS_CAP}).",
+            },
+        },
+    },
+)
+async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
+    artist = args.get("artist")
+    channel_id = args.get("channel_id")
+    has_artist = isinstance(artist, str) and artist.strip() != ""
+    has_channel = isinstance(channel_id, str) and channel_id.strip() != ""
+    if has_artist == has_channel:
+        raise OperationalError(
+            "bad_argument: pass exactly one of `artist` (a name) or `channel_id` "
+            "(an artist browse id). Re-call with a corrected value."
+        )
+    limit = clamp_limit(args.get("limit"), default=TOP_SONGS_DEFAULT, cap=TOP_SONGS_CAP)
+    host = ctx.config.host_id
+
+    if has_artist:
+        query = artist.strip()
+        raw = await _call(
+            host, "search", query=query, filter="artists", limit=ARTIST_SEARCH_FETCH
+        ) or []
+        found = [
+            {
+                "name": _artist_result_name(r),
+                "channel_id": r.get("browseId"),
+                "subscribers": r.get("subscribers"),
+            }
+            for r in raw
+            if r.get("browseId")
+        ]
+        exact = [c for c in found if (c["name"] or "").strip().casefold() == query.casefold()]
+        if len(exact) != 1:
+            return {
+                "data": {
+                    "query": query,
+                    "resolved": False,
+                    "reason": (
+                        f"{len(exact)} artists match {query!r} exactly"
+                        if exact else f"no artist matches {query!r} exactly"
+                    ),
+                    "candidates": exact or found[:5],
+                    "songs": [],
+                    "reading": (
+                        "No songs returned on purpose. Show the candidates to a "
+                        "human and re-call with the chosen channel_id."
+                    ),
+                },
+                "meta": {},
+            }
+        channel_id = exact[0]["channel_id"]
+    else:
+        channel_id = channel_id.strip()
+
+    page = await _call(host, "get_artist", channelId=channel_id) or {}
+    section = page.get("songs") or {}
+    items = [s for s in (section.get("results") or []) if isinstance(s, dict)]
+    source = "artist_page"
+
+    # The page shows a handful; its songs list (a playlist) holds the rest in
+    # the same order. Append from it without reordering what the page gave.
+    if len(items) < limit and section.get("browseId"):
+        full = await _call(
+            host, "get_playlist", playlistId=section["browseId"], limit=limit
+        ) or {}
+        seen = {s.get("videoId") for s in items}
+        for t in full.get("tracks") or []:
+            if isinstance(t, dict) and t.get("videoId") not in seen:
+                items.append(t)
+                seen.add(t.get("videoId"))
+        source = "artist_page+full_songs_list"
+
+    songs = [
+        {
+            "position": i,
+            "title": s.get("title"),
+            "video_id": s.get("videoId"),
+            "artists": _song_artists(s),
+            "album": _song_album(s),
+            "year": s.get("year"),
+        }
+        for i, s in enumerate(items[:limit], start=1)
+    ]
+
+    return {
+        "data": {
+            "artist": page.get("name"),
+            "channel_id": channel_id,
+            "resolved": True,
+            "songs": songs,
+            "returned": len(songs),
+            "limit_applied": limit,
+            "source": source if songs else "none",
+            "ranking": TOP_SONGS_RANKING,
+            "reading": (
+                "The artist page has no songs section." if not songs
+                else "Check each song's artists before adding it anywhere durable."
+            ),
+        },
+        # No meta.truncated: the full songs list's length is not a known total.
+        "meta": {},
+    }
+
+
+# ---------------------------------------------------------------------------
 # create_dj_playlist — tier 2
 # ---------------------------------------------------------------------------
 
