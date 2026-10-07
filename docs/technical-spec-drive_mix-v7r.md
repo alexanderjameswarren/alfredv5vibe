@@ -134,11 +134,36 @@ Tier choices below are proposals; the platform contract wins if it says otherwis
 | `create_drive_mix_serving` | 2 | Records the serving for a date from the video_ids that actually went to YouTube, in order, as given. Checks each is an active pool song and refuses otherwise. Does not re-run or compare against the picker: that comparison would fail in exactly the case it is meant to catch, and the record must match what went out. Refuses with a clear error if that date already has a serving; there is no replace option. No `propose`. |
 | `create_drive_mix_sweep` | 1 | Runs the sweep and returns what was added. |
 
-## 6. Workshop tool (Workshop repo, separate from alfred-v5)
+## 6. Workshop tool (alfred-v5's `workshop/` folder)
 
-`get_dj_artist_top_songs` — given an artist name or channel id, return that artist's top songs as YouTube Music lists them on the artist page (title, video_id, artists, album, year if present), default 5, cap 25. Read-only. Uses ytmusicapi's artist lookup. When the name matches more than one artist channel, return the candidates rather than choosing.
+`get_dj_artist_top_songs`, in `workshop/workshop/tools/dj_write.py`, tier 1, read-only. It finds an artist's hits ranked by **YouTube Music play counts** (not Alex's plays), and proposes which ones to pool.
 
-This repo has no claims system, so it is handled in its own CLI prompt.
+- **Input:** `artist` (a name) or `channel_id` (UC...), exactly one. `limit` is the scan cap: default 50, cap 100. `suggest_ratio` defaults to 0.1 and `suggest_floor` to 10,000,000.
+- **Resolve:** an artist-filtered search. A name resolves only when exactly one result matches it exactly (case-insensitive). Otherwise `resolved: false`, with `candidates` and no songs, and a human chooses. When several match, each candidate is enriched from its artist page with subscribers and three top song titles. "Toto" returns three channels: the band with 1.51M subscribers, and two namesakes with 20 and 8.
+- **Scan:** the artist page's songs, then the full songs list (`get_playlist` on the section's browseId), in YouTube's order, up to `limit`.
+- **Dedupe:** normalise each title by lower-casing it and removing anything in () or [], anything after " - ", feat./ft./featuring credits, and punctuation, then collapsing spaces. The same normalised title is the same song.
+- **Variant flag:** a marker word in the title's *decoration* only, meaning the bracketed parts and anything after " - ", never the core title, so "Live Forever" is not flagged. The words are live, acoustic, unplugged, remix, mix, edit, demo, version, re-recorded, remaster, instrumental, karaoke, extended, reprise, mono, orchestral and session. "Taylor's Version" on its own is not a variant.
+- **Plays:** the artist page and songs list carry no play count (`views` is always None; probed 2026-10-07). So there is one song search per deduped song, for "<artist> <normalised title>". A hit is matched to a version by video_id, else by normalised title with the same artist (by name or channel id). `views` text ("3.1B", "133M", "2.4K") is parsed to an integer. A song's plays are the highest of any matched hit. With no match, plays are null and the song is never suggested.
+- **Representative:** the original (non-variant) version if one exists, else the most-played version. Bryan Adams' re-recorded "Classic Version"s are accepted as representatives.
+- **original_candidate:** when every version is a variant, the best non-variant search hit with the same title by the same artist, as video_id, title, album and plays. It is offered, never substituted.
+- **Suggested:** songs are sorted by plays, highest first. A song is `suggested` when plays ≥ suggest_ratio × the top song's plays and plays ≥ suggest_floor. This is a proposal for Alex to approve.
+- **Returns per song:** position, title, video_id, artists, album, plays, suggested, variant, variant_word, versions_merged (count and titles), and original_candidate. The response also carries artist, channel_id, scanned, distinct_songs, suggested_count, thresholds (with top_plays and plays_needed), and lookup_errors.
+- **year is dropped.** It was None on page songs, songs-list tracks and search results alike.
+- **Speed and the time budget:**
+  - Play-count searches run 5 at a time, and the ambiguity page reads run together.
+  - `time_budget_seconds` defaults to 25, with a range of 5 to 55. No lookup starts after it runs out. In-flight lookups get 3s of grace and are then dropped, so the call returns within budget + 3s.
+  - A song not looked up gets plays null and is never suggested. `not_looked_up` counts those songs, `meta.truncated` is (looked up, distinct songs), and the reading says to re-call with a smaller limit.
+  - Results are gathered first, then read back in YouTube's order, so completion order cannot change the answer. One failed lookup leaves that song at plays null and is listed in `lookup_errors`; only all of them failing fails the call.
+  - Speed is preferred over perfect dedupe: an occasional duplicate version is acceptable.
+- **Live run (desktop, unauthenticated, 2026-10-07), at the default scan of 50:**
+
+  | Artist | Sequential (5d) | Concurrent ×5 (5e) | Suggested |
+  |---|---|---|---|
+  | Bryan Adams | 23.6s | 8.1s | 10 (top Heaven (Live), 138M; bar 13.8M) |
+  | Toto (band channel) | 24.1s | 5.9s | 4: Africa 1.9B, Hold the Line 717M, Rosanna 227M, I'll Be Over You 191M |
+  | a-ha | 20.6s | 5.8s | 1: Take on Me 3.1B (bar 310M) |
+
+  The ambiguous "Toto" call took 0.9s. There were no lookup errors at concurrency 5.
 
 ## 7. The daily scheduled task (set up in chat, not code)
 

@@ -35,6 +35,9 @@ shared with dj.py — see that module's header for why each is the way it is.
 """
 from __future__ import annotations
 
+import asyncio
+import re
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from ..platform import Ctx, OperationalError, clamp_limit, define_tool
@@ -170,12 +173,76 @@ async def search_dj_music(args: dict, ctx: Ctx) -> dict:
 # get_dj_artist_top_songs — tier 1 (Drive Mix, docs/technical-spec-drive_mix-v7r.md §6)
 # ---------------------------------------------------------------------------
 
-TOP_SONGS_DEFAULT = 5
-TOP_SONGS_CAP = 25
+SCAN_DEFAULT = 50
+SCAN_CAP = 100
 ARTIST_SEARCH_FETCH = 10
+SONG_SEARCH_FETCH = 10
+SUGGEST_RATIO_DEFAULT = 0.1
+SUGGEST_FLOOR_DEFAULT = 10_000_000
+# Play-count searches run this many at a time. 5 ran clean live (2026-10-07).
+LOOKUP_CONCURRENCY = 5
+BUDGET_DEFAULT = 25
+BUDGET_MIN = 5
+BUDGET_MAX = 55
+# In-flight lookups get this long past the budget to land; then they are dropped.
+BUDGET_GRACE = 3.0
+_NOT_LOOKED_UP = object()
 TOP_SONGS_RANKING = (
-    "YouTube Music's own ranking from the artist page — not Alex's play counts."
+    "Sorted by YouTube Music play counts (song search 'plays') — not Alex's plays."
 )
+
+# Variant markers are looked for ONLY in the decoration a title carries — the
+# bracketed parts and anything after " - " — never in the core title, so
+# "Live Forever" or "Mix Tape" are not flagged.
+_VARIANT_RE = re.compile(
+    r"\b(live|acoustic|unplugged|remix(?:ed)?|mix|edit|demo|version|"
+    r"re-?recorded|re-?recording|remaster(?:ed)?|instrumental|karaoke|"
+    r"extended|reprise|mono|orchestral|session)\b"
+)
+# Alex keeps Taylor's Versions, so that phrase alone does not make a variant.
+_TAYLORS_RE = re.compile(r"taylor[’']s version")
+_BRACKETS_RE = re.compile(r"\([^)]*\)|\[[^\]]*\]")
+_FEAT_RE = re.compile(r"\b(feat\.?|ft\.?|featuring)\s.*$")
+_PLAYS_RE = re.compile(r"^\s*([\d.,]+)\s*([KMB]?)", re.IGNORECASE)
+_PLAYS_MULT = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
+
+
+def parse_plays(text: Any) -> int | None:
+    """'3.1B' -> 3_100_000_000, '133M plays' -> 133_000_000, '1,234' -> 1234."""
+    if not isinstance(text, str):
+        return None
+    m = _PLAYS_RE.match(text)
+    if not m:
+        return None
+    try:
+        n = Decimal(m.group(1).replace(",", ""))
+    except InvalidOperation:
+        return None
+    return int(n * _PLAYS_MULT[m.group(2).upper()])
+
+
+def normalise_title(title: str) -> str:
+    """Same result = same song. Drops brackets, ' - ' suffixes, feat. credits, punctuation."""
+    s = (title or "").lower()
+    core = _BRACKETS_RE.sub(" ", s).split(" - ")[0]
+    core = _FEAT_RE.sub(" ", core)
+    core = re.sub(r"[^\w\s]|_", "", core)
+    core = re.sub(r"\s+", " ", core).strip()
+    if core:
+        return core
+    # A title that is all decoration: fall back to the whole title, stripped.
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]|_", "", s)).strip()
+
+
+def variant_word(title: str) -> str | None:
+    """The variant marker in a title's decoration, or None for an original."""
+    s = (title or "").lower()
+    decoration = " ".join(_BRACKETS_RE.findall(s))
+    if " - " in s:
+        decoration += " " + s.split(" - ", 1)[1]
+    decoration = _TAYLORS_RE.sub(" ", decoration)
+    m = _VARIANT_RE.search(decoration)
+    return m.group(1) if m else None
 
 
 def _artist_result_name(item: dict) -> str | None:
@@ -204,20 +271,31 @@ def _song_album(item: dict) -> dict | None:
     name="get_dj_artist_top_songs",
     tier=1,
     description=(
-        "Return an artist's top songs from YouTube Music, in the order YouTube "
-        "Music ranks them on the artist page. Read-only. "
-        "⚠️ THE RANKING IS YOUTUBE'S, NOT ALEX'S: it reflects YouTube Music's "
-        "popularity ordering, not his play counts (those are in get_dj_plays). "
-        "Pass `artist` (a name) or `channel_id` (an artist browse id, UC...), not "
-        "both. A name is resolved with an artist-filtered search and must match "
-        "a result's name exactly (case-insensitive). If MORE THAN ONE artist "
-        "matches exactly, or NONE does, no songs are returned: `resolved` is "
-        "false and `candidates` lists name, channel_id and subscribers — show "
-        "them to a human and re-call with the chosen channel_id. Never pick "
-        "between candidates yourself. "
-        "Each song has position, title, video_id, artists, album and year (when "
-        "YouTube gives one). When `limit` exceeds the songs on the artist page, "
-        "the artist's full songs list fills the rest, still in YouTube's order."
+        "Find an artist's hits on YouTube Music. Read-only. Scans the artist's "
+        "songs (artist page, then the full songs list, up to `limit`), merges "
+        "versions of the same song (brackets, ' - ' suffixes and feat. credits "
+        "ignored), looks up each song's YouTube Music play count with one song "
+        "search (several at a time), and returns the songs sorted by plays. "
+        "A time budget (default 25s) bounds the call: songs not looked up in "
+        "time get plays null, are never suggested, and the result is marked "
+        "truncated — re-call with a smaller limit to finish faster. "
+        "⚠️ PLAYS ARE YOUTUBE MUSIC'S PLAY COUNTS, NOT ALEX'S (his are in "
+        "get_dj_plays). `plays` is the highest of any version; null when no "
+        "search result matched, and such a song is never suggested. "
+        "🛑 `suggested` IS A PROPOSAL FOR A HUMAN TO APPROVE, not a decision: "
+        "true when plays >= suggest_ratio x the top song's plays AND plays >= "
+        "suggest_floor. "
+        "Each song names one representative version: the original if one exists "
+        "(a Taylor's Version counts as original), else the most-played version. "
+        "`variant`/`variant_word` flag live, acoustic, remix, edit, demo, "
+        "re-recorded, '... Version' and similar. When every version is a variant, "
+        "`original_candidate` offers the best non-variant search result by the "
+        "same artist — offered, never substituted. "
+        "Pass `artist` (a name) or `channel_id` (UC...), not both. A name must "
+        "match exactly one artist search result (case-insensitive); otherwise "
+        "`resolved` is false and `candidates` lists name, channel_id and "
+        "subscribers with no songs — show them to a human and re-call with the "
+        "chosen channel_id. Never pick between candidates yourself."
     ),
     input_schema={
         "type": "object",
@@ -229,12 +307,30 @@ def _song_album(item: dict) -> dict | None:
             },
             "limit": {
                 "type": "integer",
-                "description": f"Songs to return (default {TOP_SONGS_DEFAULT}, cap {TOP_SONGS_CAP}).",
+                "description": f"Scan cap: artist songs to read before merging (default {SCAN_DEFAULT}, cap {SCAN_CAP}).",
+            },
+            "suggest_ratio": {
+                "type": "number",
+                "description": f"Suggest songs with at least this share of the top song's plays (default {SUGGEST_RATIO_DEFAULT}).",
+            },
+            "suggest_floor": {
+                "type": "integer",
+                "description": f"...and at least this many plays (default {SUGGEST_FLOOR_DEFAULT:,}).",
+            },
+            "time_budget_seconds": {
+                "type": "integer",
+                "description": (
+                    f"Stop starting play-count lookups after this many seconds "
+                    f"(default {BUDGET_DEFAULT}, {BUDGET_MIN}-{BUDGET_MAX}). Songs not "
+                    f"looked up get plays null and the result is marked truncated."
+                ),
             },
         },
     },
 )
 async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
+    loop = asyncio.get_running_loop()
+    started = loop.time()
     artist = args.get("artist")
     channel_id = args.get("channel_id")
     has_artist = isinstance(artist, str) and artist.strip() != ""
@@ -244,7 +340,26 @@ async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
             "bad_argument: pass exactly one of `artist` (a name) or `channel_id` "
             "(an artist browse id). Re-call with a corrected value."
         )
-    limit = clamp_limit(args.get("limit"), default=TOP_SONGS_DEFAULT, cap=TOP_SONGS_CAP)
+    limit = clamp_limit(args.get("limit"), default=SCAN_DEFAULT, cap=SCAN_CAP)
+    ratio = args.get("suggest_ratio", SUGGEST_RATIO_DEFAULT)
+    floor = args.get("suggest_floor", SUGGEST_FLOOR_DEFAULT)
+    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 < ratio <= 1:
+        raise OperationalError(
+            f"bad_argument: `suggest_ratio` must be a number above 0 and at most 1 "
+            f"(got {ratio!r}). Re-call with a corrected value."
+        )
+    if isinstance(floor, bool) or not isinstance(floor, int) or floor < 0:
+        raise OperationalError(
+            f"bad_argument: `suggest_floor` must be a whole number, 0 or more "
+            f"(got {floor!r}). Re-call with a corrected value."
+        )
+    budget = args.get("time_budget_seconds", BUDGET_DEFAULT)
+    if isinstance(budget, bool) or not isinstance(budget, (int, float)) or not BUDGET_MIN <= budget <= BUDGET_MAX:
+        raise OperationalError(
+            f"bad_argument: `time_budget_seconds` must be {BUDGET_MIN} to {BUDGET_MAX} "
+            f"(got {budget!r}). Re-call with a corrected value."
+        )
+    deadline = started + budget
     host = ctx.config.host_id
 
     if has_artist:
@@ -262,6 +377,22 @@ async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
             if r.get("browseId")
         ]
         exact = [c for c in found if (c["name"] or "").strip().casefold() == query.casefold()]
+        if len(exact) > 1:
+            # Search rarely carries subscribers; the artist page does, and its
+            # top songs tell a band from a namesake at a glance. Best effort:
+            # a failed page read leaves that candidate as search gave it.
+            pages = await asyncio.gather(
+                *(_call(host, "get_artist", channelId=c["channel_id"]) for c in exact[:5]),
+                return_exceptions=True,
+            )
+            for c, cp in zip(exact, pages):
+                if not isinstance(cp, dict):
+                    continue
+                c["subscribers"] = c["subscribers"] or cp.get("subscribers")
+                c["top_songs"] = [
+                    s.get("title") for s in ((cp.get("songs") or {}).get("results") or [])[:3]
+                    if isinstance(s, dict)
+                ]
         if len(exact) != 1:
             return {
                 "data": {
@@ -285,9 +416,9 @@ async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
         channel_id = channel_id.strip()
 
     page = await _call(host, "get_artist", channelId=channel_id) or {}
+    artist_name = page.get("name") or (artist.strip() if has_artist else None)
     section = page.get("songs") or {}
     items = [s for s in (section.get("results") or []) if isinstance(s, dict)]
-    source = "artist_page"
 
     # The page shows a handful; its songs list (a playlist) holds the rest in
     # the same order. Append from it without reordering what the page gave.
@@ -300,37 +431,166 @@ async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
             if isinstance(t, dict) and t.get("videoId") not in seen:
                 items.append(t)
                 seen.add(t.get("videoId"))
-        source = "artist_page+full_songs_list"
+    items = items[:limit]
 
-    songs = [
-        {
-            "position": i,
-            "title": s.get("title"),
+    # Merge versions of one song, keeping YouTube's order of first appearance.
+    groups: dict[str, list[dict]] = {}
+    for s in items:
+        title = s.get("title") or ""
+        groups.setdefault(normalise_title(title), []).append({
             "video_id": s.get("videoId"),
+            "title": title,
             "artists": _song_artists(s),
             "album": _song_album(s),
-            "year": s.get("year"),
-        }
-        for i, s in enumerate(items[:limit], start=1)
-    ]
+            "variant_word": variant_word(title),
+            "plays": None,
+        })
+
+    def by_artist(hit: dict) -> bool:
+        for a in _song_artists(hit):
+            if a.get("id") and a.get("id") == channel_id:
+                return True
+            if (a.get("name") or "").casefold() == (artist_name or "").casefold():
+                return True
+        return False
+
+    # Play-count lookups, LOOKUP_CONCURRENCY at a time, none started after the
+    # deadline. Results are keyed by song and read back in YouTube's order
+    # below, so completion order cannot change the answer.
+    sem = asyncio.Semaphore(LOOKUP_CONCURRENCY)
+
+    async def lookup(norm: str) -> Any:
+        async with sem:
+            if loop.time() >= deadline:
+                return _NOT_LOOKED_UP
+            try:
+                return await _call(
+                    host, "search", query=f"{artist_name} {norm}", filter="songs",
+                    limit=SONG_SEARCH_FETCH,
+                ) or []
+            except OperationalError as e:
+                return e
+
+    tasks = {norm: asyncio.ensure_future(lookup(norm)) for norm in groups}
+    if tasks:
+        _, pending = await asyncio.wait(
+            tasks.values(), timeout=max(0.0, deadline - loop.time()) + BUDGET_GRACE
+        )
+        for t in pending:
+            t.cancel()
+
+    songs: list[dict] = []
+    lookup_errors: list[str] = []
+    not_looked_up = 0
+    for norm, versions in groups.items():
+        song_plays: int | None = None
+        original: dict | None = None
+        task = tasks[norm]
+        result = task.result() if task.done() and not task.cancelled() else _NOT_LOOKED_UP
+        if result is _NOT_LOOKED_UP:
+            not_looked_up += 1
+            hits = []
+        elif isinstance(result, OperationalError):
+            lookup_errors.append(f"{norm}: {result}")
+            hits = []
+        else:
+            hits = result
+        by_id = {v["video_id"]: v for v in versions if v["video_id"]}
+        for h in hits:
+            plays = parse_plays(h.get("views"))
+            if plays is None:
+                continue
+            v = by_id.get(h.get("videoId"))
+            same_song = v is not None or (
+                normalise_title(h.get("title") or "") == norm and by_artist(h)
+            )
+            if not same_song:
+                continue
+            if v is not None:
+                v["plays"] = max(v["plays"] or 0, plays)
+            else:
+                # Same song, same artist, different upload: credit a version
+                # with this exact title, if there is one.
+                for x in versions:
+                    if x["title"].casefold() == (h.get("title") or "").casefold() and x["plays"] is None:
+                        x["plays"] = plays
+            song_plays = max(song_plays or 0, plays)
+            if variant_word(h.get("title") or "") is None and (
+                original is None or plays > original["plays"]
+            ):
+                original = {
+                    "video_id": h.get("videoId"),
+                    "title": h.get("title"),
+                    "album": _song_album(h),
+                    "plays": plays,
+                }
+
+        originals = [v for v in versions if v["variant_word"] is None]
+        pool = originals or versions
+        rep = max(pool, key=lambda v: v["plays"] or -1)  # first wins a tie: YouTube's order
+        all_variants = not originals
+        songs.append({
+            "title": rep["title"],
+            "video_id": rep["video_id"],
+            "artists": rep["artists"],
+            "album": rep["album"],
+            "plays": song_plays,
+            "variant": rep["variant_word"] is not None,
+            "variant_word": rep["variant_word"],
+            "versions_merged": {"count": len(versions), "titles": [v["title"] for v in versions]},
+            "original_candidate": original if all_variants else None,
+        })
+
+    attempted = len(groups) - not_looked_up
+    if attempted and len(lookup_errors) == attempted:
+        raise OperationalError(
+            f"upstream_error: every play-count search failed. First: {lookup_errors[0]}"
+        )
+
+    # Sort by plays, unknown last; Python's sort is stable, so ties keep YouTube's order.
+    songs.sort(key=lambda s: -(s["plays"] if s["plays"] is not None else -1))
+    top = songs[0]["plays"] if songs and songs[0]["plays"] is not None else None
+    for i, s in enumerate(songs, start=1):
+        s["position"] = i
+        s["suggested"] = bool(
+            top is not None and s["plays"] is not None
+            and s["plays"] >= ratio * top and s["plays"] >= floor
+        )
+    songs = [{"position": s.pop("position"), **s} for s in songs]
 
     return {
         "data": {
-            "artist": page.get("name"),
+            "artist": artist_name,
             "channel_id": channel_id,
             "resolved": True,
+            "scanned": len(items),
+            "distinct_songs": len(songs),
+            "suggested_count": sum(1 for s in songs if s["suggested"]),
+            "thresholds": {
+                "suggest_ratio": ratio,
+                "suggest_floor": floor,
+                "top_plays": top,
+                "plays_needed": max(int(ratio * top), floor) if top is not None else None,
+            },
             "songs": songs,
-            "returned": len(songs),
+            "not_looked_up": not_looked_up,
+            "lookup_errors": lookup_errors,
             "limit_applied": limit,
-            "source": source if songs else "none",
+            "time_budget_seconds": budget,
+            "elapsed_seconds": round(loop.time() - started, 1),
             "ranking": TOP_SONGS_RANKING,
             "reading": (
-                "The artist page has no songs section." if not songs
-                else "Check each song's artists before adding it anywhere durable."
+                "The artist page has no songs section." if not songs else
+                (f"The {budget}s time budget ran out: {not_looked_up} of {len(songs)} songs "
+                 f"were not looked up, so their plays are null and they are never suggested. "
+                 f"Re-call with a smaller limit to finish faster. " if not_looked_up else "")
+                + "`suggested` is a proposal for Alex to approve, not a decision. "
+                "Check each song's artists and variant flag before adding it anywhere durable."
             ),
         },
-        # No meta.truncated: the full songs list's length is not a known total.
-        "meta": {},
+        # truncated = (songs looked up, distinct songs) when the budget cut the
+        # lookups short; the songs list itself is never cut.
+        "meta": {"truncated": (len(songs) - not_looked_up, len(songs))} if not_looked_up else {},
     }
 
 
