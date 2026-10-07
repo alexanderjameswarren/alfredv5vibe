@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { machineEnvelope, classifyPrompt } from "./project-code.mjs";
+import { resolveRepo } from "./claims-core.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..", "..");
@@ -25,6 +26,7 @@ const GUARD = path.join(ROOT, ".claude", "hooks", "claims-guard.mjs");
 const REAL_LOG = path.join(ROOT, ".clip", "claims-guard.log");
 const REAL_BINDING = path.join(ROOT, ".git", "alfred-project-code.json");
 const REAL_STATUS = path.join(ROOT, ".clip", "session-status.json");
+const REAL_BLOCKS = resolveRepo(ROOT).blocksFile;
 
 const snapshot = (file) => (existsSync(file) ? readFileSync(file, "utf8") : null);
 const scratchDir = () => mkdtempSync(path.join(tmpdir(), "hooks-test-"));
@@ -52,7 +54,12 @@ function scratchMain() {
  * that drives that path would otherwise rebind his window.
  */
 function drive(hook, payload, { binding, statusFile, env = {} } = {}) {
-  const before = { log: snapshot(REAL_LOG), binding: snapshot(REAL_BINDING), status: snapshot(REAL_STATUS) };
+  const before = {
+    log: snapshot(REAL_LOG),
+    binding: snapshot(REAL_BINDING),
+    status: snapshot(REAL_STATUS),
+    blocks: snapshot(REAL_BLOCKS),
+  };
   const dir = scratchDir();
   const log = path.join(dir, "guard.log");
   const bindingFile = binding ?? path.join(dir, "project-code.json");
@@ -65,6 +72,7 @@ function drive(hook, payload, { binding, statusFile, env = {} } = {}) {
       CLAIMS_GUARD_LOG: log,
       CLAIMS_PROJECT_FILE: bindingFile,
       SESSION_STATUS_FILE: status,
+      CLAIMS_BLOCKS_FILE: path.join(dir, "blocks.json"),
       // The hooks prefer the project dir to the cwd, and a suite run from a
       // Claude session inherits that session's, so pin it to the payload's.
       CLAUDE_PROJECT_DIR: payload.cwd,
@@ -76,6 +84,7 @@ function drive(hook, payload, { binding, statusFile, env = {} } = {}) {
   assert.equal(snapshot(REAL_LOG), before.log, "the real log was written to");
   assert.equal(snapshot(REAL_BINDING), before.binding, "the real binding was written to");
   assert.equal(snapshot(REAL_STATUS), before.status, "the real status file was written to");
+  assert.equal(snapshot(REAL_BLOCKS), before.blocks, "the real blocks file was written to");
 
   let parsed = null;
   try {
@@ -456,7 +465,12 @@ test("a full test run leaves the real log and the real binding untouched", {
   // The child runs this same file, so it skips this test rather than recursing.
   skip: process.env.HOOKS_TEST_CHILD === "1" ? "inner run" : false,
 }, () => {
-  const before = { log: snapshot(REAL_LOG), binding: snapshot(REAL_BINDING), status: snapshot(REAL_STATUS) };
+  const before = {
+    log: snapshot(REAL_LOG),
+    binding: snapshot(REAL_BINDING),
+    status: snapshot(REAL_STATUS),
+    blocks: snapshot(REAL_BLOCKS),
+  };
 
   // Without dropping NODE_TEST_CONTEXT the child sees itself as a runner's
   // child, runs nothing and exits 0, so this test could never fail.
@@ -473,4 +487,5 @@ test("a full test run leaves the real log and the real binding untouched", {
   assert.equal(snapshot(REAL_LOG), before.log, ".clip/claims-guard.log was written to");
   assert.equal(snapshot(REAL_BINDING), before.binding, ".git/alfred-project-code.json was written to");
   assert.equal(snapshot(REAL_STATUS), before.status, ".clip/session-status.json was written to");
+  assert.equal(snapshot(REAL_BLOCKS), before.blocks, ".git/alfred-claim-blocks.json was written to");
 });

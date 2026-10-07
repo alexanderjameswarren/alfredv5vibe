@@ -535,6 +535,19 @@ Finish releases it. Do not write a prompt that asks a thread to release a file
 claim, or to "clean up its claims when done". Database claims are the exception,
 and `gitpush` Checkpoint releases those itself at step 8 above.
 
+**The one exception for files is `yield`.** When another thread is refused a file
+this thread holds, a hook tells the holder at the start of its next turn. If the
+file is unchanged from main and claimed on its own (not through a folder),
+`node scripts/claims.mjs yield <file>` releases that one claim; the script checks
+those conditions itself and refuses otherwise. Alex approved it for that case
+only. If yield refuses or is denied, the thread reports it and does not retry. A
+prompt never needs to ask for a yield; the hook covers it.
+
+**Switchboard shows blocks.** A waiting tile is striped and shows a padlock and the
+holder's name. A deadlocked tile shows "⇄" and the other thread's name. A holder's
+tile shows "Blocking N". The clipboard button under the arrows opens a window
+running `claims.mjs status`.
+
 ## Getting the report back
 
 The report reaches this thread in one of two ways.
@@ -598,6 +611,23 @@ was inside.
 
 **1. TLDR.** What the CLI actually did, in plain sentences. What changed, what
 works now, what it decided along the way.
+
+**Blocking lines.** If the report has any line starting `Blocking:`, put each one
+in the TLDR in plain words: which thread is waiting on which file.
+- **Unchanged file the CLI yielded:** say it was released, and that the waiting
+  thread must run gitsync before editing it.
+- **Changed file:** walk him through testing first. Only once testing has passed,
+  suggest the checkpoint, with the merge impact spelled out in full, because a
+  merge to main goes to production:
+  - exactly which paths it carries;
+  - whether main still builds and runs with only those paths;
+  - what changes in the live app;
+  - the exact gitpush command.
+
+  If the holder is the main checkout, say there is no single-file merge, and that
+  a push carries everything main has claimed and changed.
+- **Deadlock:** say plainly that the two threads are waiting on each other, and
+  that he chooses which one's change to checkpoint first.
 
 **2. Questions and recommendations.** Anything the CLI asked, or anything it
 left open that needs a decision. Each one gets: the question restated in full,

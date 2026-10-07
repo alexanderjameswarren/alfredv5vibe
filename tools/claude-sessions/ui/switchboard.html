@@ -16,6 +16,7 @@
   --yellow:#FBC02D; --onYellow:#1A1600; --green:#2E7D32; --onGreen:#FFFFFF;
   --grey:#7A8494; --onGrey:#FFFFFF; --dbRed:#C62828;
   --paused:#3F4652; --onPaused:#FFFFFF;   /* darker than chat grey; white text about 10:1 */
+  --idle:.3;   /* an arrow with nothing to scroll to, and the status button behind its icon */
   --gap:10px; --railW:120px; --barH:90px;
   --nameSize:30px; --actSize:26px; --metaSize:26px;
 }
@@ -63,6 +64,11 @@ body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verd
 .t-paused{background:var(--paused);color:var(--onPaused);font-style:italic}
 .action svg{height:.85em;width:auto;margin-right:.3em;vertical-align:-.05em;fill:currentColor}
 .tile.chat{box-shadow:inset 0 0 0 6px rgba(255,255,255,.55)}
+/* blocked on another thread's claim: the status colour stays, darker diagonal stripes over it */
+.tile.blocked{background-image:repeating-linear-gradient(135deg,rgba(0,0,0,.2) 0 14px,transparent 14px 28px)}
+/* the block just cleared: one flash */
+@keyframes cleared{0%,40%{filter:brightness(1.7)}100%{filter:none}}
+.tile.cleared{animation:cleared 900ms ease-out 1}
 /* tap feedback, and the long-press bar filling over 600 ms */
 .tile.pressed,.barBtn.pressed{filter:brightness(1.25)}
 .tile.pressed{transform:scale(.97)}
@@ -75,6 +81,7 @@ body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verd
 .meta{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:var(--metaSize);font-weight:700;opacity:.9}
 .meta .info{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .kind{flex:none;display:flex;align-items:center;gap:4px;height:var(--metaSize)}
+.kind:empty{display:none}   /* icon "none": a blocked or blocking tile gives the room to its bottom line */
 .kind svg{height:100%;width:auto;display:block;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 
 .rail{width:var(--railW);flex:none;display:flex;flex-direction:column;gap:var(--gap);padding:var(--gap) var(--gap) var(--gap) 0}
@@ -82,7 +89,13 @@ body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verd
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px}
 .rb .big{font-size:48px;line-height:1}
 .rb:active{filter:brightness(1.2)}
-.rb.off{opacity:.3} .rb.more{background:var(--yellow);color:var(--onYellow)}
+.rb.off{opacity:var(--idle)} .rb.more{background:var(--yellow);color:var(--onYellow)}
+.rb .big{margin:-6px 0}   /* the arrows give up some height to the status button */
+.rb.status{flex:none;height:96px;background:transparent;position:relative}
+/* the idle arrow's own background and fade, behind a full-strength icon: the same two values, so they cannot drift */
+.rb.status::before{content:"";position:absolute;inset:0;border-radius:inherit;background:var(--railBtn);opacity:var(--idle)}
+.rb.status svg{position:relative}
+.rb.status svg{height:52px;width:auto;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .empty{grid-column:1/-1;font-size:26px;font-weight:700;opacity:.6;padding:20px}
 </style>
 </head>
@@ -102,6 +115,7 @@ body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verd
     <nav class="rail" aria-label="Scroll">
       <button class="rb" id="up"><span class="big">▲</span><span id="upCount"></span></button>
       <button class="rb" id="down"><span class="big">▼</span><span id="downCount"></span></button>
+      <button class="rb status" id="status" aria-label="Claims status"><svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2.5h6V4M8.5 10h7M8.5 13.5h7M8.5 17h4"/></svg></button>
     </nav>
   </div>
 </div>
@@ -128,6 +142,7 @@ function tileEl(id) {
     b.innerHTML = '<div class="name"></div><div class="action"></div>' +
       '<div class="meta"><span class="kind"></span><span class="info"></span></div><span class="fill"></span>';
     wire(b, id);
+    b.addEventListener("animationend", () => b.classList.remove("cleared"));
     els.set(id, b);
   }
   return b;
@@ -163,7 +178,9 @@ function setText(el, text) { if (el.textContent !== text) el.textContent = text;
 // Single-colour icons in the tile's text colour: a ">_" terminal, a speech bubble, or both.
 const TERMINAL = '<svg viewBox="0 0 28 22" aria-label="CLI"><rect x="1" y="1" width="26" height="20" rx="4"/><path d="M7 7l4 4-4 4M14 15h7"/></svg>';
 const BUBBLE = '<svg viewBox="0 0 26 22" aria-label="Chat"><path d="M5 1h16a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4H11l-5 4v-4H5a4 4 0 0 1-4-4V5a4 4 0 0 1 4-4z"/></svg>';
-const ICONS = {cli: TERMINAL, both: TERMINAL + BUBBLE, chat: BUBBLE, "": "Claims"};
+// Waiting on another thread's claim: drawn beside the holder's name, in the same style.
+const LOCK = '<svg viewBox="0 0 18 22" aria-label="Blocked by"><rect x="1" y="9" width="16" height="12" rx="3"/><path d="M5 9V6a4 4 0 0 1 8 0v3"/></svg>';
+const ICONS = {cli: TERMINAL, both: TERMINAL + BUBBLE, chat: BUBBLE, lock: LOCK, "": "Claims"};
 const PAUSE = '<svg viewBox="0 0 16 20" aria-label="Paused"><rect x="1" y="1" width="5" height="18" rx="1.5"/><rect x="10" y="1" width="5" height="18" rx="1.5"/></svg>';
 // The action line; a paused tile gets the two-bar icon before "Paused Nm".
 function setAction(el, text, paused) {
@@ -211,12 +228,14 @@ function render(st) {
   const seen = new Set();
   st.tiles.forEach((t, i) => {
     const b = tileEl(t.id);
-    const cls = "tile t-" + t.color + (t.kind === "chat" ? " chat" : "");
-    if (b.dataset.cls !== cls) {   // keep a press or hold in progress across an update
-      const live = ["pressed", "holding"].filter(c => b.classList.contains(c));
+    const cls = "tile t-" + t.color + (t.kind === "chat" ? " chat" : "") + (t.blocked ? " blocked" : "");
+    const unblocked = b.dataset.cls && b.dataset.cls.endsWith(" blocked") && !t.blocked;
+    if (b.dataset.cls !== cls) {   // keep a press, hold or flash in progress across an update
+      const live = ["pressed", "holding", "cleared"].filter(c => b.classList.contains(c));
       b.className = [cls, ...live].join(" ");
       b.dataset.cls = cls;
     }
+    if (unblocked) b.classList.add("cleared");
     const [name, action, meta] = b.children;
     setText(name, t.name.replace(/_/g, " "));
     setAction(action, t.action, t.color === "paused");
@@ -258,6 +277,7 @@ $("up").onclick = () => page(-1);
 $("down").onclick = () => page(1);
 $("git").onclick = () => { if (gitStarted) return; flash($("git")); gitBusy(); post({type: "git"}); };
 $("move").onclick = () => { flash($("move")); post({type: "move"}); };
+$("status").onclick = () => { flash($("status")); post({type: "status"}); };
 tiles.addEventListener("scroll", counts, {passive: true});
 window.addEventListener("resize", () => { sizeRows(); counts(); });
 

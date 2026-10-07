@@ -71,6 +71,7 @@ import {
   isExempt,
   isLoneScriptCommand,
   readState,
+  recordBlocks,
   resolveCheckout,
   toRepoRelative,
   writeCheck,
@@ -311,6 +312,17 @@ function checkClaimsCommand(command, ctx) {
  * A worktree session reaching into main or another worktree. Its own claims say
  * nothing about those files, so no claim from here can make it right.
  */
+/**
+ * Write down which of these paths another thread holds, so it can be told.
+ * Never changes the decision: recordBlocks cannot throw, and the lock wait is short.
+ */
+function noteBlocks(ctx, state, paths) {
+  const hits = paths
+    .map((item) => ({ item, holders: holdersOf(state, item).filter((c) => c.owner !== ctx.owner) }))
+    .filter((h) => h.holders.length);
+  if (hits.length) recordBlocks(ctx, { waiter: ctx.owner, hits, via: "guard" }, { timeoutMs: 2000 });
+}
+
 function blockForeign(detail, paths, ctx, via) {
   block(
     detail,
@@ -445,6 +457,7 @@ function main() {
 
     const unclaimed = write.paths.filter((rel) => !heldBy(state, rel, ctx.owner));
     if (!unclaimed.length) allow(`shell write ok (${write.indicator})`);
+    noteBlocks(ctx, state, unclaimed);
     block(
       `shell write: ${unclaimed.join(", ")}`,
       `Claims guard is blocking this command: it can change repo files ${ctx.owner}\n` +
@@ -478,6 +491,7 @@ function main() {
 
   const holders = holdersOf(state, rel);
   const reserved = state.reservations.filter((r) => holds(r.item, rel));
+  noteBlocks(ctx, state, [rel]);
 
   block(
     `unclaimed: ${rel}`,

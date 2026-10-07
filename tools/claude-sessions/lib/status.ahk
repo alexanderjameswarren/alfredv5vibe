@@ -411,6 +411,8 @@ TouchCommand(type, id) {
         return {do: "git", key: ""}
     if type = "move"
         return {do: "move", key: ""}
+    if type = "status"
+        return {do: "status", key: ""}
     if type = "menu" && kind = "cli"
         return {do: "menu", key: key}
     if type = "tap" && kind = "cli"
@@ -442,6 +444,15 @@ TouchPlacement(monitors, mode, primary, scale := 1) {
     w := Round(1024 * zoom * scale), h := Round(600 * zoom * scale)
     return {mode: "main", noTouch: touch ? 0 : 1, x: m.l + (m.r - m.l - w) // 2, y: m.t + (m.b - m.t - h) // 2
         , w: w, h: h, zoom: zoom}
+}
+
+; Where the claims status window goes: the primary monitor, or the first other one if
+; the primary is the touch screen. Never the touch screen while another exists.
+StatusMonitor(monitors, primary) {
+    touch := TouchMonitor(monitors)
+    if primary != touch
+        return primary
+    return touch = 1 && monitors.Length > 1 ? 2 : 1
 }
 
 ; The mode a top-bar tap switches to. With no touch screen there is nothing to dock to.
@@ -489,6 +500,130 @@ OrphanOwners(claims, reservations, worktrees) {
         out.Push({owner: owner, n: n})
     return out
 }
+
+; --- Claim blocks (docs\technical-spec-claim_blocks-h3n.md) ---------------------
+; The same rules as scripts\lib\claims-core.mjs (overlaps, liveBlocks, blockLoops);
+; the node tests and test-status.ahk check the same cases.
+
+; Equal, or one is a folder ("x/") holding the other. Case-insensitive, like Windows paths.
+ItemsOverlap(a, b) {
+    a := StrLower(a), b := StrLower(b)
+    if a == b
+        return true
+    if SubStr(a, 1, 3) == "db:" || SubStr(b, 1, 3) == "db:"
+        return false
+    return FolderHolds(a, b) || FolderHolds(b, a)
+}
+FolderHolds(f, p) => SubStr(f, -1) == "/" && (SubStr(p, 1, StrLen(f)) == f || p "/" == f)
+
+; Blocks whose holder still holds a claim overlapping the path.
+LiveBlocks(blocks, claims) {
+    out := []
+    for b in blocks
+        for c in claims
+            if c.Get("owner", "") == b.Get("holder", "") && ItemsOverlap(c.Get("item", ""), b.Get("item", "")) {
+                out.Push(b)
+                break
+            }
+    return out
+}
+
+; Per owner: {by: holders it waits on, stuck: those of them it is in a loop with,
+; waiters: how many owners wait on it}. Owners in no block are absent.
+BlockView(live) {
+    next := Map(), waitersOf := Map(), view := Map()
+    for b in live {
+        w := b.Get("waiter", ""), h := b.Get("holder", "")
+        if !next.Has(w)
+            next[w] := []
+        if !HasValue(next[w], h)
+            next[w].Push(h)
+        if !waitersOf.Has(h)
+            waitersOf[h] := []
+        if !HasValue(waitersOf[h], w)
+            waitersOf[h].Push(w)
+    }
+    for w, holders in next {
+        bv := BlockViewOf(view, w)
+        for h in holders {
+            bv.by.Push(h)
+            if Reaches(next, h, w)
+                bv.stuck.Push(h)
+        }
+    }
+    for h, ws in waitersOf
+        BlockViewOf(view, h).waiters := ws.Length
+    return view
+}
+BlockViewOf(view, owner) {
+    if !view.Has(owner)
+        view[owner] := {by: [], stuck: [], waiters: 0}
+    return view[owner]
+}
+HasValue(list, x) {
+    for y in list
+        if y == x
+            return true
+    return false
+}
+Reaches(next, from, to) {
+    seen := Map(from, true), stack := [from]
+    while stack.Length
+        for n in next.Get(stack.Pop(), [])
+            if n == to
+                return true
+            else if !seen.Has(n)
+                seen[n] := true, stack.Push(n)
+    return false
+}
+
+; Approximate width in px of tile text at 26px Atkinson Hyperlegible Bold, from its advance widths.
+TileTextWidth(s) {
+    static w := Map(" ", 8, "-", 10, ".", 6, "·", 8, "±", 16, "↑", 14, "→", 14, "_", 11, "+", 16
+        , "0", 17, "1", 12, "2", 15, "3", 16, "4", 16, "5", 16, "6", 16, "7", 14, "8", 16, "9", 15
+        , "a", 14, "b", 16, "c", 14, "d", 16, "e", 15, "f", 10, "g", 16, "h", 15, "i", 8, "j", 7, "k", 15
+        , "l", 8, "m", 23, "n", 15, "o", 15, "p", 16, "q", 16, "r", 10, "s", 14, "t", 10, "u", 15, "v", 14
+        , "w", 19, "x", 14, "y", 14, "z", 13, "⇄", 26)   ; ⇄ may come from a fallback font: allow a full em
+    total := 0                 ; a Map is case-sensitive, so capitals fall to the default
+    for ch in StrSplit(s)
+        total += w.Get(ch, 18)     ; capitals and anything else: about 18
+    return total
+}
+
+; Room for the bottom line on a 1024-wide page: a 260px tile interior, less the icon
+; (33px terminal, 68px terminal+bubble, 21px padlock, 85px "Claims") and an 8px gap. "none": no icon.
+TileInfoWidth(icon) => icon = "none" ? 260
+    : 260 - 8 - (icon = "both" ? 68 : icon = "lock" ? 21 : icon = "" ? 85 : 33)
+
+; The bottom line of a tile under a block, joined by the page with en spaces (14px).
+; p: owner, view (BlockView), names (owner -> name for block labels), step, git.
+; Returns {blocked, step, git, note, icon}: icon "" keeps the tile's own; a waiter shows
+; the padlock beside its holder's name, and the rest hide theirs ("none") for room.
+BlockLine(p) {
+    if !p.view.Has(p.owner)
+        return {blocked: 0, step: p.step, git: p.git, note: "", icon: ""}
+    bv := p.view[p.owner]
+    if bv.stuck.Length
+        return {blocked: 1, step: "", git: "", note: "⇄ " BlockName(p.names, bv.stuck[1]), icon: "none"}
+    if bv.by.Length
+        return {blocked: 1, step: "", git: "", note: BlockName(p.names, bv.by[1]) (bv.by.Length > 1 ? " +" (bv.by.Length - 1) : ""), icon: "lock"}
+    note := (p.step != "" ? "· " : "") "Blocking " bv.waiters
+    parts := [p.step, p.git, note], text := "", n := 0
+    for part in parts
+        if part != ""
+            text .= (n++ ? " " : "") part
+    git := TileTextWidth(text) + 6 * (n - 1) <= TileInfoWidth("none") ? p.git : ""
+    return {blocked: 0, step: p.step, git: git, note: note, icon: "none"}
+}
+
+; Names for block labels: a tile's name, but main by its project alone ("claim blocks").
+BlockNames(codes, mainProject) {
+    names := Map()
+    for code in codes
+        names[code] := code = "main" && mainProject != "" ? ProjectName(mainProject) : TileName(code, mainProject)
+    return names
+}
+BlockName(names, owner) => StrReplace(names.Get(owner, owner), "_", " ")
 
 ; Whole days idle when over the 3-day orphan threshold, else 0.
 IdleDays(stamp, now) => stamp != "" && DateDiff(now, stamp, "Hours") > 72 ? DateDiff(now, stamp, "Days") : 0

@@ -10,6 +10,7 @@
       "Bash(node scripts/claims.mjs release:*)",
       "Bash(node scripts/claims.mjs claim:*)",
       "Bash(node scripts/claims.mjs reserve:*)",
+      "Bash(node scripts/claims.mjs yield:*)",
       "Bash(npx eslint:*)",
       "Bash(npx react-scripts build:*)",
       "Bash(npm uninstall:*)",
@@ -45,6 +46,9 @@
         "hooks": [{
           "type": "command",
           "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/prompt-check.mjs\""
+        }, {
+          "type": "command",
+          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-notice.mjs\""
         }]
       }
     ],

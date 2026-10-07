@@ -24,6 +24,7 @@ if !DirExist(SETTINGS_DIR)
     DirCreate(SETTINGS_DIR)
 REPO := IniRead(SETTINGS_INI, "panel", "repo", "C:\Users\Alex\projects\alfred-v5")
 CLAIMS_FILE := REPO "\.git\alfred-claims.json"
+BLOCKS_FILE := REPO "\.git\alfred-claim-blocks.json"   ; who waits on whom (claim_blocks spec)
 BINDING_FILE := REPO "\.git\alfred-project-code.json"
 ; Where the Chrome bridge host writes tabs.json (docs\technical-spec-switchboard_bridge.md).
 BRIDGE_DIR := IniRead(SETTINGS_INI, "panel", "bridge", EnvGet("LOCALAPPDATA") "\claude-sessions\bridge")
@@ -63,6 +64,7 @@ blinkOn := false
 lastTaskbar := -1
 needsResize := true
 claimsRaw := "", claimsState := Map("claims", [], "reservations", [])
+blocksRaw := "", blocksList := []
 mainProject := ""          ; main's bound project code, from BINDING_FILE; "" when free
 chatRows := []             ; Text controls for unpaired claude.ai chats, reused in order
 rowTabs := []              ; tabId shown in each visible chat row
@@ -331,6 +333,20 @@ ReadClaims() {
     }
 }
 
+; Missing means no blocks; a failed parse keeps the last good list, like ReadClaims.
+ReadBlocks() {
+    global blocksRaw, blocksList
+    text := ""
+    try text := FileRead(BLOCKS_FILE, "UTF-8")
+    if text == blocksRaw
+        return
+    if text = "" {
+        blocksRaw := "", blocksList := []
+        return
+    }
+    try blocksList := JSON.parse(text).Get("blocks", []), blocksRaw := text
+}
+
 MainCode() {
     try return JSON.parse(FileRead(BINDING_FILE, "UTF-8")).Get("code", "")
     return ""
@@ -570,6 +586,7 @@ Refresh() {
     UpdateAppMonitors()
     Sync()
     ReadClaims()
+    ReadBlocks()
     mainProject := MainCode()
     offset := DateDiff(A_Now, A_NowUTC, "Minutes") * 60
     codeWindows := listCodeWindows()
@@ -1034,11 +1051,34 @@ TouchDo(type, id) {
             RefreshGit()
             try touchCore.PostWebMessageAsJson('{"type":"gitDone"}')   ; the button goes back to its icon
         case "move": TouchMove()
+        case "status": OpenClaimsStatus()
         case "menu":       ; right-click: main screen mode only, the old button's menu
             if touchPlace != "" && touchPlace.mode = "main" && sessions.Has(c.key)
                 ButtonMenu(c.key)
     }
     TouchSend()
+}
+
+; The status button: a PowerShell console in the main checkout running `claims.mjs status`
+; and staying open, on the main monitor. conhost, so it is its own window and not a
+; Windows Terminal tab that could open anywhere.
+OpenClaimsStatus() {
+    cmd := "conhost.exe powershell.exe -NoExit -NoProfile -Command `"$Host.UI.RawUI.WindowTitle = 'Claims status'; node scripts/claims.mjs status`""
+    try Run(cmd, REPO, , &pid)
+    catch as err {
+        MsgBox("Could not open the claims status window.`n`n" err.Message, "Switchboard", "Icon! T30")
+        return
+    }
+    if !WinWait("ahk_pid " pid, , 5)
+        return
+    old := DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+    try {
+        mon := StatusMonitor(MonitorRects(), MonitorGetPrimary())
+        MonitorGetWorkArea(mon, &l, &t, &r, &b)
+        WinMove(l + 60, t + 60, Min(1200, r - l - 120), Min(800, b - t - 120), "ahk_pid " pid)
+        WinActivate("ahk_pid " pid)
+    }
+    DllCall("SetThreadDpiAwarenessContext", "ptr", old, "ptr")
 }
 
 ; AutoHotkey -> page: the whole state, posted only when it differs from the last one.
@@ -1065,6 +1105,8 @@ TouchState() {
     global touchOrder
     tiles := [], now := A_Now, nowUtc := A_NowUTC
     worktrees := []
+    view :=BlockView(LiveBlocks(blocksList, claimsState["claims"]))
+    names := BlockNames(order, mainProject)
     for code in order {
         s := sessions[code]
         stamp := s.since != "" ? IsoToStamp(s.since) : nowUtc
@@ -1081,17 +1123,22 @@ TouchState() {
         ; Paused is grey at once; s.color only catches up on the next Refresh.
         if idle                ; on the action line, so the bottom line keeps the git counts
             action .= " · idle " idle "d"
-        tiles.Push({id: "cli:" code, kind: "cli", icon: TileIcon("cli", s.hasChat), group: s.paused ? 2 : 0, color: s.paused ? "paused" : TileColor(s.color)
-            , name: TileName(code, mainProject), action: action, step: TileStep(s.step), git: git, note: ""})
+        bl := BlockLine({owner: code, view: view, names: names, step: TileStep(s.step), git: git})
+        tiles.Push({id: "cli:" code, kind: "cli", icon: bl.icon != "" ? bl.icon : TileIcon("cli", s.hasChat), group: s.paused ? 2 : 0
+            , color: s.paused ? "paused" : TileColor(s.color), name: TileName(code, mainProject), action: action
+            , step: bl.step, git: bl.git, note: bl.note, blocked: bl.blocked})
     }
     for tabId in rowTabs {
         r := rowState[tabId]
         tiles.Push({id: "chat:" tabId, kind: "chat", icon: TileIcon("chat", false), group: 1, color: TileColor(r.color), name: r.title
             , action: ChatAction(r.label), step: "", git: "", note: ""})
     }
-    for o in OrphanOwners(claimsState["claims"], claimsState["reservations"], worktrees)
-        tiles.Push({id: "orphan:" o.owner, kind: "orphan", icon: TileIcon("orphan", false), group: 3, color: "grey", name: o.owner
-            , action: "No worktree", step: "", git: "", note: o.n " held"})
+    for o in OrphanOwners(claimsState["claims"], claimsState["reservations"], worktrees) {
+        bl := BlockLine({owner: o.owner, view: view, names: names, step: o.n " held", git: ""})
+        tiles.Push({id: "orphan:" o.owner, kind: "orphan", icon: bl.icon != "" ? bl.icon : TileIcon("orphan", false), group: 3, color: "grey", name: o.owner
+            , action: "No worktree", step: "", git: "", note: bl.blocked ? bl.note : bl.step (bl.note != "" ? " " bl.note : "")
+            , blocked: bl.blocked})
+    }
     tiles := TileSort(tiles, touchOrder)
     touchOrder := Map()
     for i, t in tiles

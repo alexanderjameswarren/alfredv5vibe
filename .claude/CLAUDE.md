@@ -206,11 +206,42 @@ deploy for all of them, and nothing said so — `claims.mjs status` now flags an
 
 So: `release` is for Alex, for cleaning up, and for a database claim Checkpoint
 somehow left behind. If you think you need to release a file claim, you have
-misread this — say so and stop.
+misread this — say so and stop. The one exception is `yield`, below.
 
 **gitpush releases them**, in Finish mode, for a worktree or for `main`. It also
 has a "push only" mode for main that pushes and deliberately keeps the claims,
 for when the project is still going. Either way it is Alex running it, not you.
+
+## Claim blocks: when another thread is waiting on your file
+
+When a thread is refused a file you hold, it is recorded, and the `block-notice`
+hook tells you at the start of your next turn. **Do not change your plan.**
+
+**The one case a thread may release a file claim.** The notice says another
+thread is waiting on that file, and `node scripts/claims.mjs yield <file>`
+accepts it. Yield checks the conditions itself: the file is unchanged from main
+(nothing committed, staged, uncommitted or untracked) and claimed on its own, not
+through a folder. Alex has approved yield for exactly this case. It is the only
+way to do it: if yield refuses, or the permission system denies it, do not retry
+another way. Report it.
+
+**In the report:**
+
+- One line starting `Blocking:` for each waiting file: which project waits on which file.
+- For a yielded file, say you released it.
+- For a changed file:
+  - say whether the changes are finished now or once testing passes;
+  - give the merge impact: exactly which paths a checkpoint would carry; whether
+    main would still build and run with only those paths (imports, components,
+    helpers, database columns, functions or migrations not yet in main); and what
+    would change in the live app, since a merge to main goes to production;
+  - give the exact `gitpush` command. If the holder is the main checkout, say
+    there is no single-file merge and that a push carries everything main has
+    claimed and changed.
+- If the notice says DEADLOCK, say in the report that it is a deadlock.
+
+**Never merge, checkpoint or push to free a file.** That is Alex's decision.
+Apart from yield, file claims are released only by gitpush Finish.
 
 ## When the guard blocks something, stop and ask. Never route around it.
 

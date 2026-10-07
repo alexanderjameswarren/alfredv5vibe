@@ -37,21 +37,31 @@
 // the Surface do not see each other's claims. Known limit, not solved here.
 
 import {
+  addBlocks,
+  blockLoops,
   ClaimsError,
+  codeOfOwner,
   covers,
   DB_CLAIM_STALE_MS,
+  fileChanges,
   fold,
   holds,
   inspect,
   isDbItem,
   isExempt,
   isFolderItem,
+  liveBlocks,
   normaliseItem,
   overlaps,
+  pruneBlocksLocked,
+  readBlocks,
   readState,
+  recordBlocks,
   resolveRepo,
   staleDbClaims,
   withLock,
+  writeBlocks,
+  yieldDecision,
 } from "./lib/claims-core.mjs";
 import {
   clearMainCode,
@@ -88,7 +98,7 @@ function describe(item, owner, state) {
     const who = theirs
       .map((c) => `${c.owner} holds ${c.item}${c.note ? ` — ${c.note}` : ""}`)
       .join("; ");
-    return { status: "conflict", line: `CONFLICT  ${item} — ${who}${warn}` };
+    return { status: "conflict", line: `CONFLICT  ${item} — ${who}${warn}`, hit: { item, holders: theirs } };
   }
   if (mine.length) {
     const via = mine.some((c) => fold(c.item) === fold(item))
@@ -133,6 +143,28 @@ const noteStale = (ms) =>
 // ---------------------------------------------------------------------------
 // commands
 // ---------------------------------------------------------------------------
+
+function printBlocks(ctx, state) {
+  const live = liveBlocks(readBlocks(ctx.blocksFile), state);
+  if (!live.length) return;
+  const code = (o) => codeOfOwner(ctx, o);
+  const { inLoop, loops } = blockLoops(live);
+  console.log("Blocks — threads waiting on a path another thread holds");
+  for (const b of live) {
+    const via = fold(b.holder_item) === fold(b.item) ? "" : ` (via ${b.holder_item})`;
+    const loop = inLoop(b.waiter, b.holder) ? "  ⟲ DEADLOCK" : "";
+    console.log(
+      `  ${code(b.waiter)} waits for ${b.item} — held by ${code(b.holder)}${via}  [${age(b.blocked_at)}, ${b.via}]${loop}`,
+    );
+  }
+  for (const ring of loops) {
+    console.log(
+      `\n⟲  Deadlock: ${ring.map(code).join(", ")} are waiting on each other, so none can claim.\n` +
+        `   Whichever change is ready first gets checkpointed to free its file.`,
+    );
+  }
+  console.log("");
+}
 
 function cmdStatus(ctx) {
   const state = readState(ctx.file);
@@ -180,6 +212,8 @@ function cmdStatus(ctx) {
         `   blocks every other thread's deploy.`,
     );
   }
+  // Last, so it sits just above the prompt.
+  printBlocks(ctx, state);
   return 0;
 }
 
@@ -246,18 +280,24 @@ function cmdUnbind(ctx, items) {
   return 0;
 }
 
-function cmdCheck(ctx, items) {
+function cmdCheck(ctx, items, flags = {}) {
   if (!items.length) fail("check needs at least one item", 2);
   const state = readState(ctx.file);
   let conflicts = 0;
+  const hits = [];
 
   for (const item of items) {
-    const { status, line } = describe(item, ctx.owner, state);
-    if (status === "conflict") conflicts += 1;
+    const { status, line, hit } = describe(item, ctx.owner, state);
+    if (status === "conflict") {
+      conflicts += 1;
+      hits.push(hit);
+    }
     console.log(line);
   }
 
   if (conflicts) {
+    // Silent and best-effort: check's output and exit code stay exactly as they were.
+    recordBlocks(ctx, { waiter: ctx.owner, hits, via: "check", runTag: flags.runTag ?? null });
     console.log(
       `\n${conflicts} conflict${conflicts === 1 ? "" : "s"}. Stop and ask Alex — do not edit these.`,
     );
@@ -285,6 +325,21 @@ function cmdClaim(ctx, items, flags) {
         console.log(
           `\nClaimed nothing. ${conflicts.length} item${conflicts.length === 1 ? " is" : "s are"} held by another thread — stop and ask Alex.`,
         );
+        // The claims file is not written; the blocks file is, under the same lock.
+        writeBlocks(
+          ctx.blocksFile,
+          liveBlocks(
+            addBlocks(readBlocks(ctx.blocksFile), {
+              waiter: ctx.owner,
+              hits: conflicts.map((c) => c.hit),
+              via: "claim",
+              runTag: flags.runTag ?? null,
+              codeOf: (o) => codeOfOwner(ctx, o),
+            }),
+            state,
+          ),
+        );
+        console.log(`Recorded as a block, so ${[...new Set(conflicts.flatMap((c) => c.hit.holders.map((h) => h.owner)))].join(", ")} will be told.`);
         exit = 1;
         return null;
       }
@@ -327,6 +382,7 @@ function cmdClaim(ctx, items, flags) {
         console.log(`\nAbsorbed into the folder claim: ${consolidated.join(", ")}`);
       }
       console.log(`\n${added.length} claimed for ${ctx.owner}.`);
+      pruneBlocksLocked(ctx, state);
       return state;
     },
     { onStale: noteStale },
@@ -432,7 +488,42 @@ function cmdCleanup(ctx, items, flags) {
   if (target === ctx.owner) {
     console.log(`${target} is this thread — 'release --all' does the same thing.`);
   }
-  return releaseFor(ctx, target, [], { all: true });
+  return releaseFor(ctx, target, [], { all: true, finish: true });
+}
+
+/**
+ * The one exception to "a thread never releases its own file claim": give up a
+ * file another thread is waiting on, if this thread has not changed it at all.
+ * Every condition is checked here, not left to the thread. See yieldDecision.
+ */
+function cmdYield(ctx, items) {
+  if (items.length !== 1) fail("yield takes exactly one file", 2);
+  const [item] = items;
+  const changed = isDbItem(item) || isFolderItem(item) ? "" : fileChanges(ctx, item);
+  let exit = 0;
+
+  withLock(
+    ctx,
+    (state) => {
+      const blocks = readBlocks(ctx.blocksFile);
+      const d = yieldDecision({ state, blocks, owner: ctx.owner, item, changed });
+      if (!d.ok) {
+        console.log(`Not yielded: ${d.reason}`);
+        exit = 1;
+        return null;
+      }
+      state.claims = state.claims.filter(
+        (c) => !(c.owner === ctx.owner && fold(c.item) === fold(item)),
+      );
+      pruneBlocksLocked(ctx, state);
+      const waiters = [...new Set(d.blocks.map((b) => b.waiter_code))].join(", ");
+      console.log(`yielded   ${item} — unchanged from main, released for ${waiters}.`);
+      console.log(`\n${waiters} must run gitsync before editing it.`);
+      return state;
+    },
+    { onStale: noteStale },
+  );
+  return exit;
 }
 
 function releaseFor(ctx, target, items, flags) {
@@ -477,6 +568,7 @@ function releaseFor(ctx, target, items, flags) {
         }
       }
 
+      pruneBlocksLocked(ctx, state, flags.finish ? target : null);
       for (const line of removed) console.log(`released  ${line}`);
       const after = state.claims.length + state.reservations.length;
       console.log(`\nReleased ${before - after} record(s) for ${target}.`);
@@ -500,6 +592,7 @@ const USAGE = `Usage:
   node scripts/claims.mjs release <items...>
   node scripts/claims.mjs release --all
   node scripts/claims.mjs cleanup <owner>
+  node scripts/claims.mjs yield <file>
   node scripts/claims.mjs bind <project-code>
   node scripts/claims.mjs unbind
 
@@ -526,6 +619,12 @@ first — see .claude/CLAUDE.md. Never chain a claim onto another command.
 A THREAD NEVER RELEASES ITS OWN FILE CLAIMS. gitpush does that, once the work is
 merged and pushed. A file claim is held for the whole life of the thread, not for
 as long as you have the file open.
+
+The one exception is yield: when another thread is waiting on a file this thread
+holds by name (not through a folder) and has not changed at all — no difference
+from main, nothing staged, uncommitted or untracked — yield releases that one
+claim. It refuses otherwise. A refused check or claim is recorded as a block in
+<git common dir>/alfred-claim-blocks.json, which is how the holder finds out.
 
 Database claims (db:table, db:fn, db:deploy) are the exception, and they are
 short-lived: claim them at the step that deploys, and gitpush Checkpoint releases
@@ -582,6 +681,7 @@ function main() {
     reserve: cmdReserve,
     release: cmdRelease,
     cleanup: cmdCleanup,
+    yield: cmdYield,
     bind: cmdBind,
     unbind: cmdUnbind,
   };

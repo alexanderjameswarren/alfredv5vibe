@@ -25,8 +25,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { readMainCode } from "./project-code.mjs";
 
 export const CLAIMS_FILE = "alfred-claims.json";
+export const BLOCKS_FILE = "alfred-claim-blocks.json";
 export const LOCK_DIR = "alfred-claims.lock";
 export const LOCK_TIMEOUT_MS = 10_000;
 export const LOCK_STALE_MS = 30_000;
@@ -87,6 +89,10 @@ export function resolveRepo(cwd = process.cwd()) {
     root,
     dir: commonDir,
     file: path.join(commonDir, CLAIMS_FILE),
+    // CLAIMS_BLOCKS_FILE is for tests that drive the guard against this repo.
+    blocksFile: process.env.CLAIMS_BLOCKS_FILE
+      ? path.resolve(process.env.CLAIMS_BLOCKS_FILE)
+      : path.join(commonDir, BLOCKS_FILE),
     owner: isWorktree ? path.basename(root) : "main",
     isWorktree,
     // The main checkout holds the common .git; null for a bare repo.
@@ -1084,8 +1090,12 @@ export function itemsHeldBy(state, owner) {
  *
  * This is the release path for FILE claims: a thread never releases its own,
  * gitpush does it here once the work is merged and pushed. See .claude/CLAUDE.md.
+ *
+ * Without `match` it is a Finish, so the owner's own block records as a waiter go too.
  */
-export function removeClaims(ctx, owner, match = () => true) {
+export function removeClaims(ctx, owner, match) {
+  const finishing = match === undefined;
+  match ??= () => true;
   const removed = [];
   withLock(ctx, (state) => {
     for (const c of state.claims) {
@@ -1097,9 +1107,278 @@ export function removeClaims(ctx, owner, match = () => true) {
     state.reservations = state.reservations.filter(
       (r) => !(r.owner === owner && match(r.item)),
     );
+    pruneBlocksLocked(ctx, state, finishing ? owner : null);
     return state;
   });
   return removed;
+}
+
+// ---------------------------------------------------------------------------
+// block records
+// ---------------------------------------------------------------------------
+//
+// When a thread hits a path another thread holds — `check`, a refused `claim`,
+// or the guard blocking an edit — it is written down here, so Switchboard can
+// show it and the holder can be told. Nothing here grants or refuses anything.
+//
+// A separate file, not a key in the claims file: every `writeState`, including
+// the copies in worktrees that have not synced, writes only claims and
+// reservations, and would silently drop a key it did not know.
+
+/** Read the blocks file. Missing or broken reads as empty: a lost record is harmless. */
+export function readBlocks(file) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    return Array.isArray(parsed.blocks) ? parsed.blocks : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeBlocks(file, blocks) {
+  const tmp = `${file}.tmp-${process.pid}`;
+  writeFileSync(tmp, `${JSON.stringify({ blocks }, null, 2)}\n`, "utf8");
+  renameSync(tmp, file);
+}
+
+/** An owner's project code: the folder name for a worktree, main's bound code for main. */
+export function codeOfOwner(ctx, owner) {
+  return owner === "main" ? (readMainCode(ctx) ?? "main") : owner;
+}
+
+/**
+ * Records still in force: the holder still holds a claim overlapping the path.
+ * That one test covers "the waiter got it" and "the holder let go", and readers
+ * apply it themselves, so a write from older code can never leave one showing.
+ */
+export function liveBlocks(blocks, state) {
+  return blocks.filter((b) =>
+    state.claims.some((c) => c.owner === b.holder && !isDbItem(c.item) && overlaps(c.item, b.item)),
+  );
+}
+
+/**
+ * Loops among live blocks: threads that wait on each other, directly or round a
+ * longer ring. Returns { inLoop(waiter, holder), loops: [[owner, …], …] }.
+ * An edge waiter→holder is in a loop when the waiter is reachable back from the holder.
+ * Switchboard's status.ahk (BlockLoops) mirrors this rule; keep the two in step.
+ */
+export function blockLoops(live) {
+  const next = new Map();
+  for (const b of live) {
+    if (!next.has(b.waiter)) next.set(b.waiter, new Set());
+    next.get(b.waiter).add(b.holder);
+  }
+  const reaches = (from, to) => {
+    const seen = new Set([from]);
+    const stack = [from];
+    while (stack.length) {
+      for (const n of next.get(stack.pop()) ?? []) {
+        if (n === to) return true;
+        if (!seen.has(n)) seen.add(n), stack.push(n);
+      }
+    }
+    return false;
+  };
+  const inLoop = (waiter, holder) => next.get(waiter)?.has(holder) === true && reaches(holder, waiter);
+  const loops = [];
+  const placed = new Set();
+  for (const owner of [...next.keys()].sort()) {
+    if (placed.has(owner) || !reaches(owner, owner)) continue;
+    const ring = [...next.keys()].filter((o) => o === owner || (reaches(owner, o) && reaches(o, owner))).sort();
+    ring.forEach((o) => placed.add(o));
+    loops.push(ring);
+  }
+  return { inLoop, loops };
+}
+
+const sameBlock = (a, b) =>
+  a.waiter === b.waiter && a.holder === b.holder && fold(a.item) === fold(b.item);
+
+/**
+ * Add a record for each (path, holder claim), keeping the first `blocked_at`.
+ * Pure: returns the new list. `hits` is [{ item, holders: [claim, …] }].
+ */
+export function addBlocks(blocks, { waiter, hits, via, runTag = null, codeOf = (o) => o, now = new Date() }) {
+  const out = blocks.slice();
+  const stamp = now.toISOString();
+  for (const { item, holders } of hits) {
+    for (const c of holders) {
+      if (c.owner === waiter || isDbItem(c.item)) continue;
+      const rec = {
+        waiter,
+        waiter_code: codeOf(waiter),
+        item,
+        holder: c.owner,
+        holder_code: codeOf(c.owner),
+        holder_item: c.item,
+        via,
+        run_tag: runTag,
+        blocked_at: stamp,
+        last_seen: stamp,
+      };
+      const at = out.findIndex((b) => sameBlock(b, rec));
+      if (at === -1) out.push(rec);
+      else out[at] = { ...out[at], holder_item: c.item, via, last_seen: stamp };
+    }
+  }
+  return out;
+}
+
+/** Inside the lock: drop dead records, and a finished waiter's own. Writes only on change. */
+export function pruneBlocksLocked(ctx, state, finishedWaiter = null) {
+  if (!ctx.blocksFile) return;
+  const before = readBlocks(ctx.blocksFile);
+  const after = liveBlocks(before, state).filter((b) => b.waiter !== finishedWaiter);
+  if (after.length !== before.length) writeBlocks(ctx.blocksFile, after);
+}
+
+/**
+ * Record blocks under the lock. Best-effort by design: the callers are `check`
+ * and the guard, whose output and decision must not change, so this never throws.
+ */
+export function recordBlocks(ctx, args, { timeoutMs } = {}) {
+  try {
+    withLock(
+      ctx,
+      (state) => {
+        const next = liveBlocks(
+          addBlocks(readBlocks(ctx.blocksFile), { codeOf: (o) => codeOfOwner(ctx, o), ...args }),
+          state,
+        );
+        writeBlocks(ctx.blocksFile, next);
+        return null; // the claims file is untouched
+      },
+      { timeoutMs },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What the block-notice hook tells a holding thread, or "" when nobody waits on it.
+ * Pure: no git, so it cannot know which files are changed — it gives both rules
+ * and lets `yield` decide.
+ */
+export function holderNotice({ blocks, state, owner, codeOf = (o) => o }) {
+  const live = liveBlocks(blocks, state);
+  const mine = live.filter((b) => b.holder === owner);
+  if (!mine.length) return "";
+  const { inLoop } = blockLoops(live);
+  const mutual = [...new Set(mine.filter((b) => inLoop(b.waiter, owner)).map((b) => b.waiter))];
+  const me = codeOf(owner);
+  const isMain = owner === "main";
+  // Mapped now, not from the record: main may have been bound since.
+  const waiterOf = (b) => codeOf(b.waiter);
+
+  const files = mine.map((b) => {
+    const folder = isFolderItem(b.holder_item)
+      ? `\n    You hold it through the folder claim ${b.holder_item}, so it cannot be yielded: treat it as changed.`
+      : "";
+    return `  - ${waiterOf(b)} is waiting on ${b.item} (blocked since ${b.blocked_at}).${folder}`;
+  });
+  const merge = isMain
+    ? `     - the command: there is NO single-file merge from the main checkout. \`gitpush main push\`\n` +
+      `       carries everything main has claimed and changed, not just this file. Say so plainly.`
+    : `     - the exact command: \`gitpush ${owner} checkpoint --paths <file>\`. After it, the file matches\n` +
+      `       main and the claim can be released with \`node scripts/claims.mjs yield <file>\`.`;
+
+  return [
+    `CLAIM BLOCK NOTICE — another project is waiting on files this thread (${me}) holds:`,
+    ...files,
+    ``,
+    `Do NOT change your plan for this prompt because of this. Do the work you were asked to do,`,
+    `and handle each file above as follows.`,
+    ``,
+    `1. Unchanged (no difference from main, nothing staged, uncommitted or untracked): run`,
+    `   \`node scripts/claims.mjs yield <file>\` on its own, and say in your report that you released`,
+    `   it. yield checks those conditions itself; if it refuses, the file counts as changed.`,
+    `   If the permission system denies the command, do not retry it or try another way: say in`,
+    `   your report that the file is unchanged and Alex can run the yield command himself.`,
+    `2. Changed, or yield refused: KEEP the claim. Never merge it and never yield it. Your report says:`,
+    `   - the file has changes, and whether they are finished now or will be once testing passes;`,
+    `   - which project is waiting on it;`,
+    `   - the merge impact, assuming the merge goes straight to production (Vercel deploys main):`,
+    `     - exactly which paths the checkpoint would carry;`,
+    `     - whether main would still build and run with only those paths: imports, new components,`,
+    `       helpers, database columns, functions or migrations the file depends on that are not in main;`,
+    `     - what Alex would see change in the live app;`,
+    merge,
+    `3. Either way, the report has one line per file starting "Blocking:", for example`,
+    `   Blocking: ${waiterOf(mine[0])} waits for ${mine[0].item}`,
+    ``,
+    `The waiting thread must run gitsync before it edits a freed file.`,
+    ...(mutual.length
+      ? [
+          ``,
+          `DEADLOCK: ${mutual.map((w) => codeOf(w)).join(", ")} ${mutual.length === 1 ? "is" : "are"} waiting on you, and you are`,
+          `waiting on ${mutual.length === 1 ? "it" : "them"} too (directly or round a ring), so neither side can go first by claiming.`,
+          `Say in your report that this is a deadlock. Whichever thread's change is ready first reports its merge impact,`,
+          `so Alex can checkpoint it and free the file for the other.`,
+        ]
+      : []),
+  ].join("\n");
+}
+
+/**
+ * Whether `yield` may release `item` for `owner`: { ok, reason, blocks }.
+ * Pure; `changed` is the git answer, worked out by the caller.
+ */
+export function yieldDecision({ state, blocks, owner, item, changed }) {
+  if (isDbItem(item) || isFolderItem(item)) {
+    return { ok: false, reason: "yield takes one file, not a folder or a database item." };
+  }
+  const waiting = liveBlocks(blocks, state).filter(
+    (b) => b.holder === owner && fold(b.holder_item) === fold(item),
+  );
+  if (!waiting.length) {
+    return { ok: false, reason: `no thread is waiting on ${item} held by ${owner}.` };
+  }
+  const exact = state.claims.some((c) => c.owner === owner && fold(c.item) === fold(item));
+  if (!exact) {
+    return {
+      ok: false,
+      reason: `${owner} holds ${item} through a folder claim, which cannot be yielded. Treat it as changed.`,
+      blocks: waiting,
+    };
+  }
+  if (changed) {
+    return {
+      ok: false,
+      reason: `${item} has changes (${changed}). Keep the claim and report the merge impact.`,
+      blocks: waiting,
+    };
+  }
+  return { ok: true, blocks: waiting };
+}
+
+/**
+ * How this checkout's copy of `rel` differs from main, as a short reason, or "".
+ * Worktree: against local `main`. Main checkout: against `origin/main`, else HEAD.
+ * A git error counts as changed, so a broken check never frees a file.
+ */
+export function fileChanges(ctx, rel) {
+  const git = (args) =>
+    execFileSync("git", args, { cwd: ctx.root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  let base = "main";
+  if (!ctx.isWorktree) {
+    try {
+      git(["rev-parse", "--verify", "--quiet", "origin/main"]);
+      base = "origin/main";
+    } catch {
+      base = "HEAD";
+    }
+  }
+  try {
+    if (git(["diff", "--name-only", base, "--", rel]).trim()) return `differs from ${base}`;
+    const st = git(["status", "--porcelain", "--untracked-files=all", "--", rel]).trim();
+    if (st) return st.startsWith("??") ? "untracked" : "uncommitted or staged";
+    return "";
+  } catch {
+    return "git could not compare it";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1188,9 +1467,9 @@ function releaseHeldLock() {
  * `onStale` is called when a lock older than LOCK_STALE_MS is cleared away, so
  * the caller can say so in its own voice.
  */
-export function withLock(ctx, fn, { onStale } = {}) {
+export function withLock(ctx, fn, { onStale, timeoutMs = LOCK_TIMEOUT_MS } = {}) {
   const lock = path.join(ctx.dir, LOCK_DIR);
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
 
   for (;;) {
     try {
@@ -1218,7 +1497,7 @@ export function withLock(ctx, fn, { onStale } = {}) {
       if (Date.now() > deadline) {
         throw new ClaimsError(
           "locked",
-          `Could not get the claims lock within ${LOCK_TIMEOUT_MS / 1000}s: ${lock}\n` +
+          `Could not get the claims lock within ${timeoutMs / 1000}s: ${lock}\n` +
             `Another thread is mid-write. Try again; if it never clears, delete that folder.`,
         );
       }

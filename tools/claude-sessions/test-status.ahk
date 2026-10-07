@@ -273,6 +273,48 @@ Check("idle over 3 days", IdleDays("20261001000000", "20261005120000"), 4)
 Check("json", ToJson(Map("a", 1, "b", ["q", 2], "c", 'say "hi"`n'))
     , '{"a":1,"b":["q",2],"c":"say \"hi\"\n"}')
 Check("json control char", ToJson("x`ay"), '"x\u0007y"')
+Check("orphan gone once it holds nothing", OrphanOwners([Map("owner", "main")], [], []).Length, 0)
+
+; --- claim blocks: the same cases as scripts\lib\claim-blocks.test.mjs ---
+Cl(owner, item) => Map("owner", owner, "item", item)
+Bk(waiter, holder, item) => Map("waiter", waiter, "holder", holder, "item", item)
+Check("overlap same, any case", ItemsOverlap("src/A.js", "src/a.js"), true)
+Check("overlap folder", ItemsOverlap("src/", "src/a.js") && ItemsOverlap("src/a.js", "src/"), true)
+Check("overlap folder named bare", ItemsOverlap("src/items/", "src/items"), true)
+Check("no overlap sibling", ItemsOverlap("src/items/", "src/items-old/a.js"), false)
+Check("no overlap db", ItemsOverlap("db:deploy", "db:deploy/"), false)
+claimsB := [Cl("h", "src/"), Cl("w", "lib/x.js")]
+liveB := LiveBlocks([Bk("w", "h", "src/a.js"), Bk("w", "gone", "src/b.js"), Bk("x", "h", "docs/z.md")], claimsB)
+Check("live: holder still holds it", liveB.Length = 1 ? liveB[1]["holder"] : liveB.Length, "h")
+
+bnames := BlockNames(["main", "restructure_p1-h4nz"], "claim_blocks-h3n")
+Check("block names: main by its project alone", bnames["main"] " / " BlockName(bnames, "restructure_p1-h4nz"), "claim_blocks / restructure p1")
+Check("block names: unbound main", BlockNames(["main"], "")["main"], "main")
+Line(owner, view, step := "s3b", git := "") {
+    r := BlockLine({owner: owner, view: view, names: bnames, step: step, git: git})
+    return r.blocked "|" r.step "|" r.git "|" r.note "|" r.icon
+}
+chain := BlockView([Bk("restructure_p1-h4nz", "main", "src/b.js"), Bk("x", "restructure_p1-h4nz", "src/a.js")])
+Check("waiter: padlock and main's project", Line("restructure_p1-h4nz", chain), "1|||claim blocks|lock")
+Check("holder line", Line("main", chain), "0|s3b||· Blocking 1|none")
+Check("holder keeps git when it fits", Line("main", chain, "s3", "±2"), "0|s3|±2|· Blocking 1|none")
+Check("holder drops git when it does not", Line("main", chain, "s11", "±12 ↑3"), "0|s11||· Blocking 1|none")
+Check("untouched tile keeps its icon", Line("other", chain, "s2", "±1"), "0|s2|±1||")
+two := BlockView([Bk("a", "b", "src/x.js"), Bk("b", "a", "src/y.js"), Bk("c", "a", "src/y.js")])
+Check("deadlock", Line("a", two), "1|||⇄ b|none")
+Check("deadlock: other side", Line("b", two), "1|||⇄ a|none")
+Check("not in the deadlock", Line("c", two), "1|||a|lock")
+three := BlockView([Bk("a", "b", "1.js"), Bk("b", "c", "2.js"), Bk("c", "a", "3.js")])
+Check("three-ring", Line("a", three) " / " Line("c", three), "1|||⇄ b|none / 1|||⇄ a|none")
+Check("blocking count", BlockView([Bk("a", "h", "1.js"), Bk("b", "h", "2.js"), Bk("a", "h", "3.js")])["h"].waiters, 2)
+; At real width; parts are joined by en spaces (14px, counted as 8 + 6).
+for fitText in ["⇄ restructure p1", "s11 · Blocking 1", "1 held · Blocking 1"]
+    Check("fits: " fitText, TileTextWidth(fitText) + 6 * 2 <= TileInfoWidth("none"), true)
+for fitText in ["restructure p1", "claim blocks", "warren buffet"]
+    Check("fits beside the padlock: " fitText, TileTextWidth(fitText) <= TileInfoWidth("lock"), true)
+Check("status command", Cmd("status", ""), "status:")
+Check("status monitor: primary", StatusMonitor([{l: 0, t: 0, r: 1920, b: 1080}, {l: -1024, t: 0, r: 0, b: 600}], 1), 1)
+Check("status monitor: never touch", StatusMonitor([{l: -1024, t: 0, r: 0, b: 600}, {l: 0, t: 0, r: 1920, b: 1080}], 1), 2)
 
 ; #Warn only prints, so load this file again with /validate and fail on any warning.
 warnOut := A_Temp "\claude-sessions-test-warnings.txt"
