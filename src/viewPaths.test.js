@@ -17,7 +17,12 @@ import {
   addRouteFromPath,
   isSamStatsPath,
   isKnownPath,
+  isRecordId,
+  recordIdFromPath,
+  recordPath,
+  RECORD_VIEW,
 } from "./viewPaths";
+import { uid } from "./utils/flattenElements";
 
 // The bridge (Alfred.jsx) hands arbitrary runtime values to viewToPath and
 // arbitrary URLs to pathToView. These tests pin the contract the bridge relies
@@ -423,5 +428,40 @@ describe("isKnownPath (Step 9's unknown-path redirect)", () => {
       expect(isKnownPath(parentPath(path))).toBe(true);
     }
     expect(isKnownPath("/")).toBe(true);
+  });
+});
+
+describe("record links (/<id>)", () => {
+  const UUID = "5f387912-05b3-45c6-90f3-a162c3d8732e";
+  const APP_ID = "mm0s2dcabze16uiowwe";
+
+  it("recognises both id shapes", () => {
+    for (const id of [UUID, UUID.toUpperCase(), APP_ID, uid(), "a1".repeat(8).slice(0, 15)]) {
+      expect(isRecordId(id)).toBe(true);
+      expect(recordIdFromPath(recordPath(id))).toBe(id);
+      expect(pathToView(`/${id}`)).toBe(RECORD_VIEW);
+      expect(isKnownPath(`/${id}`)).toBe(true);
+    }
+    expect(recordIdFromPath(`/${APP_ID}/`)).toBe(APP_ID);
+  });
+
+  it("rejects near misses", () => {
+    for (const id of ["abcdefghijklmnopq", "a1b2c3d4e5f6g7", "a1".repeat(13), "Mm0s2dcabze16uiowwe", "mm0s2dcabze16uio-we"]) {
+      expect(isRecordId(id)).toBe(false);
+    }
+    expect(recordIdFromPath(`/inbox/${UUID}`)).toBeNull();
+  });
+
+  it("no word path matches", () => {
+    const segments = new Set(
+      Object.values(VIEW_TO_PATH).flatMap((p) => p.split("/")).filter(Boolean)
+    );
+    segments.add("stats").add("songs").add("execution").add("oauth").add("consent");
+    for (const s of segments) {
+      expect(isRecordId(s)).toBe(false);
+    }
+    for (const p of Object.values(VIEW_TO_PATH)) {
+      expect(pathToView(p)).not.toBe(RECORD_VIEW);
+    }
   });
 });
