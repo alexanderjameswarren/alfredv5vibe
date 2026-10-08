@@ -17,7 +17,11 @@ import { render, screen, fireEvent, act, waitFor, within } from "@testing-librar
 import "@testing-library/jest-dom";
 import { MemoryRouter } from "react-router-dom";
 
-jest.mock("./components/ScoreRenderer", () => () => null);
+let mockScoreProps = null;
+jest.mock("./components/ScoreRenderer", () => (props) => {
+  mockScoreProps = props;
+  return null;
+});
 
 let mockScrollProps = null;
 jest.mock("./components/ScrollEngine", () => (props) => {
@@ -389,6 +393,18 @@ test("Fingering mode, turned on in the drawer, docks its bar; its own switch tur
   expect(off.parentElement.firstElementChild).toBe(off);
   fireEvent.click(off);
   expect(screen.queryByRole("button", { name: /Undo/ })).not.toBeInTheDocument();
+});
+
+test("the stopped score fits the screen, except while the tray is open", async () => {
+  await open();
+  expect(mockScoreProps.fitHeight).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  expect(mockScoreProps.fitHeight).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  expect(mockScoreProps.fitHeight).toBe(true);
+  // The drawer is an overlay: it leaves the fit alone.
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  expect(mockScoreProps.fitHeight).toBe(true);
 });
 
 test("one panel at a time: More closes the tray, Snippets closes the drawer", async () => {

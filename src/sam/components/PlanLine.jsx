@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Check, Circle, CircleAlert, CircleDot, CircleSlash, Flame, Mountain } from "lucide-react";
 import { planLineText } from "../lib/activePlan";
 import PlanNextButton from "./PlanNextButton";
-import { UI } from "./MoreDrawer";
+import { UI } from "./uiStyles";
 
 // WHY Mountain FOR THE SONG GOAL (2026-09-27). It must not be confusable with the
 // plan line's circle family at a glance, which rules out both of the obvious "goal"

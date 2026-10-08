@@ -15,7 +15,7 @@ import { drawGhostOverlay } from "../lib/ghostOverlay";
 import { syncZoneLayer, drawSelectionRing } from "../lib/fingeringZones";
 import { CLEF_EXTRA } from "../lib/vexflowHelpers";
 import { SCORE_SCALE } from "../lib/samConstants";
-import { UI } from "./MoreDrawer";
+import { UI } from "./uiStyles";
 
 // Layout constants
 // Stopped view leaves extra room between the staves for lyrics + the lyric-edit
@@ -26,7 +26,19 @@ const BASS_Y = 290;                // was 210; +80 of inter-stave room
 const STAFF_H = 430;                // was 350; matches BASS_Y bump
 const LYRIC_Y = TREBLE_Y + 145;     // centered between staves with the new gap
 
-export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fingerings, fingeringMode = false, fingeringSelection = null, onSelectFingering, onTap, measureWidth, lyricPlacements, onLyricEdit, onAudioOffsetChange, showAudioOffset = false, idPrefix, ghostMeasures = null, ghostHands = "both", ghostOpacity }) {
+// FIT TO HEIGHT (song rail, step 5). The stopped score shrinks — never grows —
+// so the whole system shows without page scroll. Below FIT_MIN_SCALE notes get
+// hard to read from the keyboard, so it stops there and the page scrolls.
+export const FIT_MIN_SCALE = 0.6;
+const NATURAL_H = STAFF_H * SCORE_SCALE;
+
+// The zoom that fits `NATURAL_H` into `available` px, clamped to [min, 1].
+export function computeFitScale(available, natural = NATURAL_H, min = FIT_MIN_SCALE) {
+  if (!Number.isFinite(available) || available <= 0) return min;
+  return Math.max(min, Math.min(1, available / natural));
+}
+
+export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fingerings, fingeringMode = false, fingeringSelection = null, onSelectFingering, onTap, measureWidth, lyricPlacements, onLyricEdit, onAudioOffsetChange, showAudioOffset = false, idPrefix, ghostMeasures = null, ghostHands = "both", ghostOpacity, fitHeight = false, fitBottomPad = 8 }) {
   // Note <g> ids used to be `t-{measIdx}-{i}` with nothing distinguishing one
   // mounted score from another, so two on a page would put duplicate ids in the
   // document. Nothing reads them by id today — ScrollEngine's only lookup is
@@ -61,6 +73,46 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
   onSelectFingeringRef.current = onSelectFingering;
 
   const [editor, setEditor] = useState({ visible: false, x: 0, measureNum: null, value: "" });
+
+  // Fit to height. CSS `zoom` on the SVG's holder only: the browser lays out the
+  // smaller size (so page height and horizontal scroll shrink with it) and maps
+  // taps itself. Render-space, SCORE_SCALE and every timing figure are untouched.
+  const outerRef = useRef(null);
+  const [fitScale, setFitScale] = useState(1);
+  useEffect(() => {
+    if (!fitHeight) {
+      setFitScale(1);
+      return undefined;
+    }
+    function measure() {
+      const outer = outerRef.current;
+      const inner = containerRef.current;
+      if (!outer || !inner) return;
+      const doc = document.documentElement;
+      const outerRect = outer.getBoundingClientRect();
+      const top = outerRect.top + window.scrollY;
+      // What sits under the score in its own column (the lyrics row) plus the
+      // page's bottom padding still has to fit. Measured from the column, not the
+      // document, whose height includes empty space under a short page.
+      const column = outer.parentElement?.getBoundingClientRect();
+      const below = Math.max(0, (column ? column.bottom - outerRect.bottom : 0)) + fitBottomPad;
+      // The frame around the SVG (padding, border, any scrollbar) is not zoomed.
+      const chrome = Math.max(0, outerRect.height - inner.getBoundingClientRect().height);
+      setFitScale(computeFitScale(doc.clientHeight - top - below - chrome));
+    }
+    measure();
+    // Rows appearing or disappearing move the score; the window can resize.
+    // Each measure lands on the same answer, so the observer settles at once.
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(document.body);
+    // The column grows or shrinks when a row above the score comes or goes.
+    if (outerRef.current?.parentElement) ro?.observe(outerRef.current.parentElement);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [fitHeight, fitBottomPad]);
 
   showEditorRef.current = (measure, xOffset) => {
     setEditor({
@@ -756,13 +808,19 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
     <div
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
+      ref={outerRef}
       className="relative overflow-x-auto bg-white rounded-lg border border-border p-2 cursor-pointer"
     >
-      <div ref={containerRef} />
+      <div
+        ref={containerRef}
+        data-fit-scale={fitScale}
+        style={fitScale < 1 ? { zoom: fitScale } : undefined}
+      />
       {editor.visible && (
         <div
           ref={offsetEditorRef}
-          style={{ position: "absolute", left: editor.x, top: 0, zIndex: 10 }}
+          // A sibling of the zoomed holder, so its x follows the zoom by hand.
+          style={{ position: "absolute", left: editor.x * fitScale, top: 0, zIndex: 10 }}
           className="bg-card border border-border rounded p-1 shadow-md"
           onPointerDown={(e) => e.stopPropagation()}
           onPointerUp={(e) => e.stopPropagation()}

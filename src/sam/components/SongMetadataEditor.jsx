@@ -5,7 +5,7 @@ import { DEFAULTS } from "../lib/samConstants";
 import { goalFromEditor, heardGoalTempo } from "../lib/goalTempo";
 import WarmupLadderEditor from "./WarmupLadderEditor";
 import { draftFromValue, validateMode, valueFromDraft } from "../lib/warmupLadderEdit";
-import { UI } from "./MoreDrawer";
+import { UI } from "./uiStyles";
 
 // The dialog's text and number fields, in the song page's shared radius.
 const DIALOG_INPUT = `w-full px-3 py-2 border border-border ${UI.radius} text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent`;

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { ChevronDown, ChevronRight, CircleArrowRight, Disc, Save, Archive, ArchiveRestore, Flame } from "lucide-react";
 import RestControl from "./RestControl";
-import { UI } from "./MoreDrawer";
+import { UI } from "./uiStyles";
 import { supabase } from "../../supabaseClient";
 import { formatSnippetTitle, findMatchingSnippet, ensureSnippetSaved, snippetFromRow } from "../lib/snippetsApi";
 import useSnippetPracticeSummary from "../lib/useSnippetPracticeSummary";

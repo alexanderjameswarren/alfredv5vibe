@@ -8,7 +8,8 @@ import SongLoader from "./components/SongLoader";
 import BackButton from "./components/BackButton";
 import SettingsBar from "./components/SettingsBar";
 import SongRail from "./components/SongRail";
-import MoreDrawer, { DrawerSection, UI } from "./components/MoreDrawer";
+import MoreDrawer, { DrawerSection } from "./components/MoreDrawer";
+import { UI } from "./components/uiStyles";
 import AudioToolbar from "./components/AudioToolbar";
 import {
   SpeedField, AudioSyncBpm, SoundControls, TuningControls, LoopControl,
@@ -2295,6 +2296,12 @@ export default function SamPlayer({ onBack }) {
                   ghostMeasures={ghostMeasures}
                   ghostHands={ghostHands}
                   ghostOpacity={ghostOpacity}
+                  // Fit the whole system on screen unless the tray is open (then
+                  // the page scrolls, as agreed). The drawer is an overlay and
+                  // takes no space, so it leaves the fit alone.
+                  fitHeight={!snippetsOpen}
+                  // The page's py-2 under the column.
+                  fitBottomPad={8}
                 />
                 {lyricPlacements && (
                   <div className="flex items-center justify-center gap-4 mt-2 mb-3">

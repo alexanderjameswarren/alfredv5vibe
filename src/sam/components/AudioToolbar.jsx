@@ -3,7 +3,7 @@ import { Download, Upload, RefreshCw, Wand2 } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 import { uploadAudio } from "../lib/audioPlayer";
 import { recompileMeasures } from "../lib/measureCompiler";
-import { UI } from "./MoreDrawer";
+import { UI } from "./uiStyles";
 
 // Utility actions, placed in the More drawer by `keys`: Export, Audio upload,
 // Refresh (recompile lyrics blob from rows), Auto-Match (assign syllables to RH

@@ -1,7 +1,7 @@
 import React from "react";
 import { Play, Pause, RotateCcw, Square, GraduationCap, Flame } from "lucide-react";
 import BackButton from "./BackButton";
-import { UI } from "./MoreDrawer";
+import { UI } from "./uiStyles";
 
 // Stateless cluster of playback transport buttons. Visibility per state:
 //   always         → Back to Alfred (far left)

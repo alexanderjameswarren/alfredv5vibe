@@ -5,7 +5,7 @@ import SegmentedControl from "./SegmentedControl";
 import { supabase } from "../../supabaseClient";
 import { DEFAULTS } from "../lib/samConstants";
 import { heardTempo } from "../lib/activePlan";
-import { UI } from "./MoreDrawer";
+import { UI } from "./uiStyles";
 
 // The song page's numeric settings, as pieces placed by the song rail layout:
 //   TempoControls   → the rail: BPM (Speed % on audio songs), Goal, Save

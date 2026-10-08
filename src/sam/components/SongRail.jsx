@@ -2,7 +2,7 @@ import React from "react";
 import { ArrowLeft, ListMusic, MoreHorizontal, X } from "lucide-react";
 import TransportControls from "./TransportControls";
 import { TempoControls } from "./NumericSettings";
-import { UI } from "./MoreDrawer";
+import { UI } from "./uiStyles";
 
 // The song page's left rail (layout "D"): transport, tempo, Snippets, More and
 // Back in one fixed column, so a left hand reaches everything without crossing

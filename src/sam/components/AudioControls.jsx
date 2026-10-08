@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Play, Pause } from "lucide-react";
-import { UI } from "./MoreDrawer";
+import { UI } from "./uiStyles";
 
 export default function AudioControls({ audioElement, playbackState }) {
   const [playing, setPlaying] = useState(false);

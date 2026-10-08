@@ -55,8 +55,13 @@ scrolls); fit-to-height applies to the stopped, tray-closed score only.
   MoreDrawer.jsx. Drawer rows wrap inside its width.
   *Check:* the Save bug; Fingering mode on in both places; hover on several
   buttons; Edit Song dialog inputs.
-- [ ] **5. Score fit-to-height.** Stopped score, tray closed: CSS scale only.
-  Paused score (ScrollEngine) not scaled.
+- [x] **4d. Finish the one look.** SegmentedControl, RestControl, FingeringBar
+  (selected finger in the tan on-state), WarmupLadderEditor on the shared radius
+  and press. `UI` moved from MoreDrawer.jsx to uiStyles.js; no visual change.
+  *Check:* Sight Reader only looks rounder; the selected finger look.
+- [x] **5. Score fit-to-height.** Stopped score, tray closed: CSS `zoom` on the
+  SVG holder only, clamped to [0.6, 1]. Paused score (ScrollEngine) not scaled.
+  The drawer is an overlay, so it leaves the fit as it is.
   *Check:* at 1024 x 640 with the tray closed both staves show and the page does
   not scroll; scoring unchanged.
 - [ ] **6. Tests.** Selector updates, MoreDrawer tests, both suites.
@@ -98,3 +103,11 @@ scrolls); fit-to-height applies to the stopped, tray-closed score only.
   needs a claim. Not restyled because they are not held: SegmentedControl
   (shared with Sight Reader), RestControl, FingeringBar, WarmupLadderEditor.
   Next's box rounded via PlanLine's variant, so PlanNextButton is unchanged.
+- Steps 4d and 5 done 2026-10-08. Claimed SegmentedControl, RestControl,
+  FingeringBar, WarmupLadderEditor, uiStyles.js and ScoreRenderer.fit.test.jsx.
+  Fit: ScoreRenderer `fitHeight` / `computeFitScale` / FIT_MIN_SCALE = 0.6.
+  Available height = window height − the score frame's top − what is under it
+  in its column − the page's 8px bottom padding − the frame itself. Measured on
+  mount, on resize, and by a ResizeObserver on the body and the column, so rows
+  appearing or going re-fit it. The offset editor's x follows the zoom.
+  SCORE_SCALE, ScrollEngine and all timing untouched.
