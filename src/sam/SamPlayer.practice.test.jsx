@@ -332,6 +332,27 @@ test("Play after a Practice run records again", async () => {
   await waitFor(() => expect(writesTo("sam_sessions").length).toBeGreaterThan(0));
 });
 
+test("Practice closes the snippet tray, and it stays closed after Stop", async () => {
+  await open();
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  expect(screen.getByLabelText("Snippet tray")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^Practice$/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  await screen.findByRole("button", { name: /^Play$/ });
+  expect(screen.queryByLabelText("Snippet tray")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Snippets" })).toHaveAttribute("aria-pressed", "false");
+});
+
+test("Play closes the snippet tray too", async () => {
+  await open();
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  fireEvent.click(screen.getByRole("button", { name: /^Play$/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+  await screen.findByRole("button", { name: /^Stop$/ });
+  expect(screen.queryByLabelText("Snippet tray")).not.toBeInTheDocument();
+});
+
 test("Practice shows its own bar, not the session counters", async () => {
   await start(/^Practice$/);
   expect(screen.getByText("PRACTICE")).toBeInTheDocument();

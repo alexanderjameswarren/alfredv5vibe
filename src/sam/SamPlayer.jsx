@@ -1956,9 +1956,12 @@ export default function SamPlayer({ onBack }) {
               <SongRail
                 playbackState={playbackState}
                 songDbId={songDbId}
-                onPlay={handlePlay} onPractice={handlePractice} onPause={handlePause}
+                // Starting a run closes the tray, so the score is clean after Stop.
+                onPlay={() => { setSnippetsOpen(false); handlePlay(); }}
+                onPractice={() => { setSnippetsOpen(false); handlePractice(); }}
+                onPause={handlePause}
                 onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
-                onWarmUp={handleWarmUp}
+                onWarmUp={() => { setSnippetsOpen(false); handleWarmUp(); }}
                 warmUpVisible={warmupAvailable}
                 warmUpPrimary={!!planItem?.goal_is_warmup}
                 warmUpDisabledReason={warmupDisabledReason}

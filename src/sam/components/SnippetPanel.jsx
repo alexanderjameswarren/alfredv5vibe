@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { CircleArrowRight, Disc, Save, Archive, ArchiveRestore, Flame } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { ChevronDown, ChevronRight, CircleArrowRight, Disc, Save, Archive, ArchiveRestore, Flame } from "lucide-react";
 import RestControl from "./RestControl";
 import { supabase } from "../../supabaseClient";
 import { formatSnippetTitle, findMatchingSnippet, ensureSnippetSaved, snippetFromRow } from "../lib/snippetsApi";
@@ -62,6 +62,24 @@ function blurOnEnter(e) {
   if (e.key === "Enter") e.currentTarget.blur();
 }
 
+// How long after the last keystroke in Start/End the range applies.
+export const RANGE_DEBOUNCE_MS = 500;
+
+// Start/End as typed → { ok, start, end } or { ok: false, error }. Nothing is
+// ever corrected: an invalid pair changes nothing and says why.
+export function validateRange(startText, endText, totalMeasures) {
+  const whole = (t) => /^\d+$/.test(String(t).trim());
+  if (!whole(startText)) return { ok: false, error: "Start must be a whole number" };
+  if (!whole(endText)) return { ok: false, error: "End must be a whole number" };
+  const start = Number(startText);
+  const end = Number(endText);
+  if (start < 1 || end < 1 || start > totalMeasures || end > totalMeasures) {
+    return { ok: false, error: `Song has ${totalMeasures} measures` };
+  }
+  if (start > end) return { ok: false, error: "Start must be at or before End" };
+  return { ok: true, start, end };
+}
+
 // The snippet tray (song rail, step 3). Opened and closed by the rail's
 // Snippets toggle, so `open` is the caller's; closing it keeps the loaded range.
 export default function SnippetPanel({
@@ -111,8 +129,16 @@ export default function SnippetPanel({
   const [savedSnippets, setSavedSnippets] = useState([]);
   const [archivedSnippets, setArchivedSnippets] = useState([]);
   const [showArchived, setShowArchived] = useState(false);
-
-  const maxMeas = totalMeasures;
+  // The message for an invalid Start/End, shown once a commit has judged it.
+  const [rangeError, setRangeError] = useState(null);
+  // True between a keystroke in Start/End and its commit; drives the debounce.
+  const typedRef = useRef(false);
+  const debounceRef = useRef(null);
+  // The saved list's own fold. Collapsed every time the tray opens.
+  const [listOpen, setListOpen] = useState(false);
+  useEffect(() => {
+    if (open) setListOpen(false);
+  }, [open]);
 
   // Saved snippets are shown newest-created first — the one you just made is
   // the one you most likely want to practise. The fetch below already asks for
@@ -172,6 +198,8 @@ export default function SnippetPanel({
     setEndInput(String(end));
     setRestMeasures(snippet?.restMeasures ?? 0);
     setHandMode(snippet?.handMode || "both");
+    setRangeError(null);
+    typedRef.current = false;
   }, [snippet, totalMeasures]);
 
   // The LIVE saved snippet the controls currently describe, if any. Recomputed
@@ -240,25 +268,59 @@ export default function SnippetPanel({
   // would otherwise load a snippet the user never asked for — which, from the
   // full-song state, would look like Full Song spontaneously turning into a
   // whole-span snippet.
-  function commitStart() {
-    let n = Number(startInput);
-    if (!n || n < 1) n = 1;
-    if (n > endMeas) n = endMeas;
-    setStartInput(String(n));
-    if (n === startMeas) return;
-    setStartMeas(n);
-    emitRange({ startMeasure: n });
+  //
+  // Start and End commit together, from blur, Enter, or the debounce after
+  // typing. An invalid pair is reported and changes nothing: the boxes keep what
+  // was typed, and the score keeps the last valid range.
+  function commitRange() {
+    typedRef.current = false;
+    const v = validateRange(startInput, endInput, totalMeasures);
+    if (!v.ok) {
+      setRangeError(v.error);
+      return;
+    }
+    setRangeError(null);
+    if (v.start === startMeas && v.end === endMeas) return;
+    setStartMeas(v.start);
+    setEndMeas(v.end);
+    emitRange({ startMeasure: v.start, endMeasure: v.end });
   }
 
-  function commitEnd() {
-    let n = Number(endInput);
-    if (!n || n < startMeas) n = startMeas;
-    if (n > maxMeas) n = maxMeas;
-    setEndInput(String(n));
-    if (n === endMeas) return;
-    setEndMeas(n);
-    emitRange({ endMeasure: n });
+  // Clip as you type: apply RANGE_DEBOUNCE_MS after the last keystroke in either
+  // box. Only typing arms it — the mirror effect above setting the boxes never does.
+  useEffect(() => {
+    if (!typedRef.current) return undefined;
+    debounceRef.current = setTimeout(commitRange, RANGE_DEBOUNCE_MS);
+    return () => clearTimeout(debounceRef.current);
+    // commitRange is this render's, which holds these inputs.
+  }, [startInput, endInput]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function typeStart(text) {
+    typedRef.current = true;
+    setStartInput(text);
   }
+
+  function typeEnd(text) {
+    typedRef.current = true;
+    setEndInput(text);
+  }
+
+  // Blur and Enter apply at once, cancelling the pending debounce.
+  function commitNow() {
+    clearTimeout(debounceRef.current);
+    commitRange();
+  }
+
+  const currentRow = snippet?.dbId ? savedSnippets.find((s) => s.id === snippet.dbId) : null;
+  const rowTitle = (s) => formatSnippetTitle({
+    startMeasure: s.start_measure,
+    endMeasure: s.end_measure,
+    handMode: s.settings?.handMode || "both",
+    restMeasures: s.rest_measures ?? 0,
+  });
+
+  const rangeValid = validateRange(startInput, endInput, totalMeasures).ok;
+  const rangePending = startInput !== String(startMeas) || endInput !== String(endMeas);
 
   function commitRestMeasures(n) {
     if (n === restMeasures) return;
@@ -280,6 +342,11 @@ export default function SnippetPanel({
     setRestMeasures(s.rest_measures ?? 0);
     const hm = s.settings?.handMode || "both";
     setHandMode(hm);
+    // A typed edit still waiting on the debounce must not override the choice.
+    clearTimeout(debounceRef.current);
+    typedRef.current = false;
+    setRangeError(null);
+    setListOpen(false);
 
     onSnippetChange(snippetFromRow(s));
   }
@@ -416,12 +483,13 @@ export default function SnippetPanel({
               <input
                 type="number"
                 value={startInput}
-                onChange={(e) => setStartInput(e.target.value)}
-                onBlur={commitStart}
+                onChange={(e) => typeStart(e.target.value)}
+                onBlur={commitNow}
                 onKeyDown={blurOnEnter}
                 onFocus={(e) => e.target.select()}
+                aria-invalid={rangeError ? "true" : undefined}
                 className="w-14 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
-                min={1} max={endMeas}
+                min={1} max={totalMeasures}
               />
             </label>
             <label className="text-muted-foreground">
@@ -429,14 +497,18 @@ export default function SnippetPanel({
               <input
                 type="number"
                 value={endInput}
-                onChange={(e) => setEndInput(e.target.value)}
-                onBlur={commitEnd}
+                onChange={(e) => typeEnd(e.target.value)}
+                onBlur={commitNow}
                 onKeyDown={blurOnEnter}
                 onFocus={(e) => e.target.select()}
+                aria-invalid={rangeError ? "true" : undefined}
                 className="w-14 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
-                min={startMeas} max={maxMeas}
+                min={1} max={totalMeasures}
               />
             </label>
+            {rangeError && (
+              <span role="alert" className="text-sm text-red-700">{rangeError}</span>
+            )}
             <RestControl value={restMeasures} onChange={commitRestMeasures} />
             <div className="flex items-center gap-1 text-muted-foreground">
               Hand:
@@ -460,7 +532,8 @@ export default function SnippetPanel({
             {!liveMatch && (
               <button
                 onClick={handleSaveNew}
-                disabled={saving || !songDbId}
+                // Never saves a range that is invalid or still being typed.
+                disabled={saving || !songDbId || !rangeValid || rangePending}
                 className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50"
               >
                 <Save className="w-3.5 h-3.5" />
@@ -469,10 +542,27 @@ export default function SnippetPanel({
             )}
           </div>
 
-          {/* Saved snippets list */}
-          {savedSnippets.length > 0 && (
+          {/* Saved snippets: a header that folds the list (collapsed each time
+              the tray opens, and again once a snippet is chosen), naming the
+              current one so the fold never hides what is loaded. Archived
+              snippets live inside the fold too. */}
+          {(savedSnippets.length > 0 || archivedSnippets.length > 0) && (
             <div className="mt-3 border-t border-border pt-3">
-              <div className="text-xs text-muted-foreground mb-2 font-medium">Saved snippets</div>
+              <button
+                type="button"
+                onClick={() => setListOpen((o) => !o)}
+                aria-expanded={listOpen}
+                className="w-full flex items-center gap-1 text-left text-sm text-muted-foreground hover:text-dark font-medium min-h-[44px] px-1"
+              >
+                {listOpen ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
+                <span className="min-w-0 truncate">
+                  Saved snippets ({savedSnippets.length})
+                  {currentRow && ` · current: ${rowTitle(currentRow)}`}
+                </span>
+              </button>
+              {listOpen && (<>
+          {savedSnippets.length > 0 && (
+            <div className="mt-1">
               {/* DO NOT add a max-height or overflow-y here. This list renders
                   at full height by design (M1.7): collapsing the snippet panel
                   is the control over how much room it takes, and an inner
@@ -484,7 +574,8 @@ export default function SnippetPanel({
                   list as a "good property worth keeping" — but that cap belonged
                   to the breakdown, which was NEW stacked vertical space. This
                   list is not: it only exists while the panel is open, and the
-                  panel already closes. */}
+                  panel already closes. (Song rail 3b: the list now also folds
+                  under its own "Saved snippets" header — still no height cap.) */}
               <div className="flex flex-col gap-1">
                 {savedSnippets.map((s) => (
                   <div
@@ -557,7 +648,7 @@ export default function SnippetPanel({
 
           {/* Archived snippets toggle + list */}
           {archivedSnippets.length > 0 && (
-            <div className={`text-center ${savedSnippets.length > 0 ? "mt-2" : "mt-3 border-t border-border pt-3"}`}>
+            <div className="text-center mt-2">
               <button
                 onClick={() => setShowArchived(!showArchived)}
                 className="text-xs text-muted-foreground hover:text-dark min-h-[44px] px-2"
@@ -603,6 +694,9 @@ export default function SnippetPanel({
                   </div>
                 </div>
               )}
+            </div>
+          )}
+              </>)}
             </div>
           )}
         </div>

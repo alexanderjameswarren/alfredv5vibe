@@ -26,6 +26,16 @@ scrolls); fit-to-height applies to the stopped, tray-closed score only.
   icon on each row, Enter commits Start/End. No list height cap.
   *Check:* tapping a row and committing Start/End both clip the score at once;
   Save New, Archive, Restore, View archived work; Whole song clears the range.
+- [x] **3b. Tray refinements.** No auto-correct on Start/End: validated (whole
+  numbers, Start ≤ End, within 1..measures) with an inline red message; an
+  invalid range changes nothing and disables Save New. Clip as you type, 500 ms
+  after the last keystroke (blur and Enter still immediate). Saved list folds
+  under "Saved snippets (N) · current: …", collapsed whenever the tray opens and
+  after choosing a snippet; still no height cap. Play, Practice and Warm up close
+  the tray; the range stays.
+  *Check:* typing 21→24 over 18–20 clips after a pause; Start 30 / End 24 shows
+  "Start must be at or before End" and keeps the last range; past the last
+  measure shows "Song has N measures".
 - [ ] **4. More drawer.** Slides from the left beside the rail over a dimmed
   score; dim area or Close shuts it. Audio, Metronome, Score playback, Tuning,
   Loop (Repeat + rest), Fingering mode, Diff, Show Imported, Export, Refresh,
