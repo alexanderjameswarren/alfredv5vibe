@@ -1,10 +1,12 @@
 import React from "react";
 import { Send } from "lucide-react";
 import UndoMessage from "./UndoMessage";
+import Notice from "./Notice";
 
 // The bottom dock — the Undo message on top of the Capture bar — moved out of
 // Alfred.jsx unchanged. Its state stays in Alfred and comes in as props.
 export default function BottomDock({
+  notice,
   pendingUndo,
   runUndo,
   dismissUndo,
@@ -15,6 +17,7 @@ export default function BottomDock({
 }) {
   return (
     <div className="fixed bottom-0 left-0 right-0 z-20">
+      <Notice notice={notice} />
       <UndoMessage
         pendingUndo={pendingUndo}
         onUndo={runUndo}

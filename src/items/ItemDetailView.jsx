@@ -1,12 +1,31 @@
 import React, { useState } from "react";
-import { Archive, ArrowLeft, Copy, Play, Plus, Settings } from "lucide-react";
+import { Archive, ArrowLeft, CalendarPlus, Copy, Play, Plus, Settings } from "lucide-react";
 import ObjectIcon from "../shared/ObjectIcon";
+import OverflowMenu from "../shared/OverflowMenu";
+import { ACTION_BUTTON } from "../shared/actionButton";
 import DetailMeta from "../shared/DetailMeta";
+import StatusMenu from "../shared/StatusMenu";
+import StatusFilterChips from "../shared/StatusFilterChips";
+import SchedulePopover from "../shared/recurrence/SchedulePopover";
+import { getTodayDate } from "../utils/eventDates";
+import { itemActionTarget } from "../utils/runNow";
+import {
+  closedBlockTitle,
+  filterByStatus,
+  rankByActivity,
+  recordActions,
+  readStoredStatusFilter,
+  statusCounts,
+  toggleStatusFilter,
+  writeStoredStatusFilter,
+} from "../utils/status";
 import PendingReminder from "../inbox/PendingReminder";
 import OriginalCapture from "../inbox/OriginalCapture";
 import ItemCard from "./ItemCard";
 import IntentionCard from "../intentions/IntentionCard";
 import ExecutionBadge from "../executions/ExecutionBadge";
+
+const CollectionIcon = (props) => <ObjectIcon type="collection" {...props} />;
 
 export default function ItemDetailView({
   tagPool = [],
@@ -30,6 +49,7 @@ export default function ItemDetailView({
   executions = [],
   onOpenExecution,
   onStartNow,
+  onScheduleItem,
   onUpdateEvent,
   onActivate,
   onAddIntention,
@@ -39,6 +59,7 @@ export default function ItemDetailView({
   onViewItem,
   onViewIntentionDetail,
   onClone,
+  onSetStatus,
   collections = [],
   onDirtyChange,
   startInEditMode = false,
@@ -51,8 +72,15 @@ export default function ItemDetailView({
   const [isEditing, setIsEditing] = useState(Boolean(startInEditMode));
   const [showCloneDialog, setShowCloneDialog] = useState(false);
   const [cloneName, setCloneName] = useState("");
+  const [relatedStatus, setRelatedStatus] = useState(() => readStoredStatusFilter("item-related"));
 
   if (!item) return null;
+
+  function toggleRelatedStatus(status) {
+    const next = toggleStatusFilter(relatedStatus, status);
+    setRelatedStatus(next);
+    writeStoredStatusFilter("item-related", next);
+  }
 
   function copyElementToClipboard(el) {
     const linkedItem = (el.itemId || el.item_id) ? items.find((i) => i.id === (el.itemId || el.item_id)) : null;
@@ -67,6 +95,12 @@ export default function ItemDetailView({
   const itemIntentions = intents.filter(
     (i) => i.itemId === item.id && !i.archived,
   );
+  const visibleIntentions = rankByActivity(filterByStatus(itemIntentions, relatedStatus), events, executions);
+  const closedTitle = closedBlockTitle(item, "item");
+  // Item Start Now and Schedule act on the intention Run Now would pick.
+  // One picker for every item button: an intention mid-run first (itemActionTarget).
+  const target = itemActionTarget(item.id, intents, events, executions);
+  const actions = recordActions(target?.intent, events, executions);
 
   // Get context name for badge
   const contextName =
@@ -90,8 +124,10 @@ export default function ItemDetailView({
           tagPool={tagPool}
           item={item}
           contexts={contexts}
-          onUpdate={(id, updates) => {
-            onUpdateItem(id, updates);
+          onUpdate={async (id, { status, ...updates }) => {
+            await onUpdateItem(id, updates);
+            // Status goes through its own patch, after the fields (see storage.set).
+            if (status && onSetStatus) await onSetStatus(id, status);
             if (updates.archived) {
               onBack();
             } else {
@@ -99,6 +135,7 @@ export default function ItemDetailView({
             }
           }}
           isEditing={true}
+          editableStatus={Boolean(onSetStatus)}
           onCancel={() => setIsEditing(false)}
           allItems={items}
           onDirtyChange={onDirtyChange}
@@ -131,92 +168,90 @@ export default function ItemDetailView({
           empty space sat beside it. Nothing here competes for horizontal room
           any more. Structurally identical to IntentionDetailView's header. */}
       <div className="mb-4 sm:mb-6">
-        <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold">
-          <ObjectIcon type="item" className="w-6 h-6 text-primary" align="first-line" />
-          <span className="min-w-0">{item.name}</span>
-        </h2>
+        <div className="flex items-start justify-between gap-2">
+          <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold min-w-0">
+            <ObjectIcon type="item" className="w-6 h-6 text-primary" align="first-line" />
+            <span className="min-w-0">{item.name}</span>
+          </h2>
+          {onSetStatus && <StatusMenu row={item} onChoose={(status) => onSetStatus(item.id, status)} />}
+        </div>
 
         <DetailMeta contextName={contextName} tags={item.tags} />
 
         {/* Reminders stay on the capture the item was filed from. */}
         {item.sourceInboxId && <PendingReminder inboxId={item.sourceInboxId} />}
 
-        {/* Record actions, in the spec's order:
-            Start Now · Clone · Edit · Add to Collection · Archive.
+        {/* Phones show no tooltips, so the disabled buttons' reason is spelled out. */}
+        {(closedTitle || actions.moveBlocked) && (
+          <p className="mt-2 text-sm text-muted-foreground">{closedTitle || actions.moveBlocked}</p>
+        )}
 
-            Left-aligned now that they have their own row — they line up with
-            the title above rather than floating off to the right of it.
-            flex-wrap because five buttons do not fit one line on a phone. */}
+        {/* Record actions: Start Now / Continue (the one primary), Schedule /
+            Reschedule, Edit, ⋯ — the same rule as intention detail, applied to
+            the intention Run Now would pick. Labels at every width. The rarer
+            actions live in the menu, each with icon and label: Create
+            Intention, Clone, Add to Collection, Archive. */}
         <div className="flex flex-wrap gap-2 mt-3">
           {onStartNow && (
-            // bg-primary, not bg-success. Item detail was the only site using
-            // success for this verb; the other three — intention detail,
-            // IntentionCard's row, and EventCard's "Start" — are all primary,
-            // and EventCard's "Start" is literally the same action.
-            //
-            // The deciding argument is what success already means: it carries
-            // "Do Today" and "Complete". On intention detail Do Today sits two
-            // buttons from Start Now, so giving them the same fill would erase
-            // the only visual difference between "schedule it for later today"
-            // and "begin it right now" — the two actions most easily confused.
             <button
-              onClick={() => onStartNow(item.id)}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              onClick={() => (actions.open ? onOpenExecution?.(actions.open) : onStartNow(item.id, target?.intent.id))}
+              disabled={Boolean(closedTitle)}
+              title={closedTitle || undefined}
+              className={`${ACTION_BUTTON} bg-success hover:bg-success-hover text-white`}
             >
               <Play className="w-4 h-4" />
-              Start Now
+              {actions.primaryLabel}
             </button>
           )}
-          {onClone && (
-            <button
-              onClick={() => {
-                setCloneName(item.name + " (Copy)");
-                setShowCloneDialog(true);
-              }}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-            >
-              <Copy className="w-4 h-4" />
-              <span className="hidden sm:inline">Clone</span>
-            </button>
+          {onScheduleItem && (
+            <span title={closedTitle || actions.moveBlocked || undefined}>
+              <SchedulePopover
+                label={actions.scheduleLabel}
+                icon={<CalendarPlus className="w-4 h-4" />}
+                initialDate={actions.liveDate || getTodayDate()}
+                onPick={(date) => onScheduleItem(item, date, target?.intent.id)}
+                disabled={Boolean(closedTitle || actions.moveBlocked)}
+                className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
+              />
+            </span>
           )}
           <button
             onClick={() => setIsEditing(true)}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+            className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
           >
             <Settings className="w-4 h-4" />
-            <span className="hidden sm:inline">Edit Item</span>
-            <span className="sm:hidden">Edit</span>
+            Edit
           </button>
-          {/* Fifth button. Sits before Archive, not after it: the documented
-              order puts the destructive action last, and that convention
-              outranks "append the new one at the end". Present on every item,
-              not just recipes — `collectable` is a generic flag and a packing
-              list should work the same way. */}
-          {onAddToCollection && (
-            <button
-              onClick={onAddToCollection}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-            >
-              <ObjectIcon type="collection" className="w-4 h-4" />
-              <span className="hidden sm:inline">Add to Collection</span>
-              <span className="sm:hidden">Collect</span>
-            </button>
-          )}
-          {/* New here. Archiving was previously reachable only from inside the
-              edit form, which broke governing rule 4 — a state change hidden
-              behind a content-editing surface. `onUpdateItem` already offers
-              the Undo, so there is no confirmation and nothing to add.
-              Leaves the page because it is showing the record just archived. */}
-          <button
-            onClick={() => {
-              onUpdateItem(item.id, { archived: true });
-              onBack();
-            }}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-          >
-            <Archive className="w-4 h-4" />
-            <span className="hidden sm:inline">Archive</span>
-          </button>
+          <OverflowMenu
+            actions={[
+              onOpenAddIntention && {
+                label: "Create Intention",
+                icon: Plus,
+                onClick: () => onOpenAddIntention(item.id),
+                disabled: Boolean(closedTitle),
+                title: closedTitle,
+              },
+              onClone && {
+                label: "Clone",
+                icon: Copy,
+                onClick: () => {
+                  setCloneName(item.name + " (Copy)");
+                  setShowCloneDialog(true);
+                },
+              },
+              onAddToCollection && { label: "Add to Collection", icon: CollectionIcon, onClick: onAddToCollection },
+              // `onUpdateItem` offers the Undo; leaves the page it was showing.
+              {
+                label: "Archive",
+                icon: Archive,
+                destructive: true,
+                onClick: () => {
+                  onUpdateItem(item.id, { archived: true });
+                  onBack();
+                },
+              },
+            ].filter(Boolean)}
+          />
         </div>
       </div>
 
@@ -325,7 +360,7 @@ export default function ItemDetailView({
                             onClick={() => onViewItem(linkedItem.id, "item-detail")}
                             className="ml-0 flex items-center gap-2 text-sm text-primary hover:text-primary-hover mb-2"
                           >
-                            <span>→</span>
+                            <ObjectIcon type="item" className="w-4 h-4 shrink-0" />
                             <span>{linkedItem.name}</span>
                           </button>
                         )}
@@ -364,7 +399,7 @@ export default function ItemDetailView({
                             onClick={() => onViewItem(linkedItem.id, "item-detail")}
                             className="ml-6 flex items-center gap-2 text-sm text-primary hover:text-primary-hover mt-1"
                           >
-                            <span>→</span>
+                            <ObjectIcon type="item" className="w-4 h-4 shrink-0" />
                             <span>{linkedItem.name}</span>
                           </button>
                         )}
@@ -407,7 +442,7 @@ export default function ItemDetailView({
                           onClick={() => onViewItem(linkedItem.id, "item-detail")}
                           className="ml-9 flex items-center gap-2 text-sm text-primary hover:text-primary-hover mt-1"
                         >
-                          <span>→</span>
+                          <ObjectIcon type="item" className="w-4 h-4 shrink-0" />
                           <span>{linkedItem.name}</span>
                         </button>
                       )}
@@ -471,24 +506,25 @@ export default function ItemDetailView({
           <h3 className="text-lg font-medium">
             Related Intentions ({itemIntentions.length})
           </h3>
-          {onOpenAddIntention && (
-            <button
-              onClick={() => onOpenAddIntention(item.id)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
-            >
-              <Plus className="w-4 h-4" />
-              Create Intention
-            </button>
-          )}
         </div>
+
+        {itemIntentions.length > 0 && (
+          <StatusFilterChips
+            counts={statusCounts(itemIntentions)}
+            selected={relatedStatus}
+            onToggle={toggleRelatedStatus}
+          />
+        )}
 
         {itemIntentions.length === 0 ? (
           <p className="text-muted-foreground text-sm">
             No intentions linked to this item
           </p>
+        ) : visibleIntentions.length === 0 ? (
+          <p className="text-muted-foreground text-sm">No intentions match the chips above</p>
         ) : (
           <div className="space-y-2">
-            {itemIntentions.map((intent) => (
+            {visibleIntentions.map((intent) => (
               <IntentionCard
                 tagPool={tagPool}
                 key={intent.id}

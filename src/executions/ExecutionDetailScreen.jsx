@@ -25,6 +25,9 @@ export default function ExecutionDetailScreen({
   closeExecution,
   pauseExecution,
   makeExecutionActive,
+  onViewContext,
+  onViewIntention,
+  onViewItem,
 }) {
   return (
     <>
@@ -65,6 +68,9 @@ export default function ExecutionDetailScreen({
           onCancel={() => closeExecution("cancelled")}
           onBack={() => setView(previousView)}
           getIntentDisplay={getIntentDisplay}
+          onViewContext={onViewContext}
+          onViewIntention={onViewIntention}
+          onViewItem={onViewItem}
         />
       )}
     </>

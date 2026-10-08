@@ -1,8 +1,9 @@
-import { storage } from "../utils/storage";
+import { storage, writeError } from "../utils/storage";
 import { uid } from "../utils/flattenElements";
 import { toLocalDateString } from "../utils/eventDates";
 import { calculateNextEventDate, getRecurrenceConfig } from "../utils/recurrence";
-import { hasFutureLiveEvent } from "../utils/runNow";
+import { liveEventsFor, statusOf } from "../utils/status";
+import { assertNoActiveRun } from "../utils/runGuard";
 
 // Event writers, moved out of Alfred.jsx unchanged. Holds no state: everything it
 // reads or sets is Alfred's, passed in.
@@ -18,9 +19,11 @@ export function useEventActions({
     const event = events.find((e) => e.id === eventId);
     if (!event) return;
     return withLoading('Saving...', async () => {
+      if (updates.time && updates.time !== event.time) await assertNoActiveRun(event.id);
       const updated = { ...event, ...updates };
       const savedEvent = await storage.set(`event:${event.id}`, updated);
-      setEvents(events.map((e) => (e.id === eventId ? savedEvent || updated : e)));
+      if (!savedEvent) throw writeError("The event");
+      setEvents(events.map((e) => (e.id === eventId ? savedEvent : e)));
 
       // If archiving a recurring event, trigger recurrence to create next event
       let successor = null;
@@ -32,16 +35,17 @@ export function useEventActions({
         const intent = intents.find((i) => i.id === event.intentId);
         const label = event.text || intent?.text || "event";
         offerUndoFor(`Archived "${label}".`, async () => {
-          await storage.set(`event:${event.id}`, event);
-          setEvents((prev) => prev.map((e) => (e.id === eventId ? event : e)));
           // The successor only exists because of the archive being undone, so
           // it goes with it. Deleting rather than archiving: it was never a
           // real event the user saw, and an archived ghost would surface in the
-          // recycle bin as something they never scheduled.
+          // recycle bin as something they never scheduled. Deleted FIRST: one
+          // live event per intention, so the original cannot return beside it.
           if (successor) {
             await storage.delete(`event:${successor.id}`);
             setEvents((prev) => prev.filter((e) => e.id !== successor.id));
           }
+          if (!(await storage.set(`event:${event.id}`, event))) throw writeError("Restoring the event");
+          setEvents((prev) => prev.map((e) => (e.id === eventId ? event : e)));
         });
       }
     });
@@ -62,9 +66,15 @@ export function useEventActions({
     const config = getRecurrenceConfig(intent);
     if (config.type === "once") return null;
 
-    // A later live event already carries the recurrence (e.g. a Run Now beside a
-    // scheduled one); a successor here would put two events on the same day.
-    if (hasFutureLiveEvent(intent.id, events, archivedEvent?.id, toLocalDateString(new Date()))) {
+    // Only an active intention recurs. A successor for one parked in background
+    // would be flipped straight back to active by the event trigger (088).
+    // Read fresh: state can lag the database's own status moves.
+    const fresh = await storage.get(`intent:${intentId}`);
+    if (statusOf(fresh || intent) !== "active") return null;
+
+    // One live event per intention: if another is still live (overdue counts),
+    // it already carries the recurrence. `events` still holds the archived one.
+    if (liveEventsFor(events, intent.id).some((e) => e.id !== archivedEvent?.id)) {
       return null;
     }
 
@@ -89,7 +99,9 @@ export function useEventActions({
         createdAt: new Date().toISOString(),
       };
       const savedEvent = await storage.set(`event:${newEvent.id}`, newEvent);
-      setEvents((prev) => [...prev, savedEvent || newEvent]);
+      // Not thrown: the run that triggered this has already closed. Logged by storage.
+      if (!savedEvent) return null;
+      setEvents((prev) => [...prev, savedEvent]);
       return newEvent;
     }
     return null;

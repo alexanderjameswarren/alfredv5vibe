@@ -1,5 +1,6 @@
 import { storage } from "../utils/storage";
 import { uid } from "../utils/flattenElements";
+import { STATUS_LABELS } from "../utils/status";
 
 // Item writers, moved out of Alfred.jsx unchanged. Holds no state: everything it
 // reads or sets is Alfred's, passed in.
@@ -114,5 +115,23 @@ export function useItemActions({
     });
   }
 
-  return { updateItem, deepCloneItem };
+  // The only way an item's status changes by hand: storage.set drops it on UPDATE.
+  // Undo never restores someday, which the database would refuse.
+  async function setItemStatus(itemId, status) {
+    const item = items.find((i) => i.id === itemId);
+    if (!item) return;
+    return withLoading("Saving...", async () => {
+      const saved = await storage.patch(`item:${itemId}`, { status });
+      if (!saved) throw new Error("Status was not saved.");
+      setItems((prev) => prev.map((i) => (i.id === itemId ? saved : i)));
+      const previous = item.status;
+      if (!previous || previous === "someday") return;
+      offerUndoFor(`Moved to ${STATUS_LABELS[status]}.`, async () => {
+        const back = await storage.patch(`item:${itemId}`, { status: previous });
+        if (back) setItems((prev) => prev.map((i) => (i.id === itemId ? back : i)));
+      });
+    });
+  }
+
+  return { updateItem, deepCloneItem, setItemStatus };
 }

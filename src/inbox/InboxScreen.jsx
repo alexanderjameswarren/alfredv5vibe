@@ -27,6 +27,7 @@ export default function InboxScreen({
   processInboxItemFromList,
   copyTaskInboxItem,
   discardInboxItem,
+  setInboxSuggestedStatus,
   archivedInboxItems,
   olderArchived,
   archivedShowAll,
@@ -82,6 +83,7 @@ export default function InboxScreen({
               onProcess={processInboxItemFromList}
               onCopy={copyTaskInboxItem}
               onDiscard={discardInboxItem}
+              onSetStatus={setInboxSuggestedStatus}
               reminder={reminderBadge(reminderIndex.byInbox[inboxItem.id])}
             />
           ))}

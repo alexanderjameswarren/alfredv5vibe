@@ -12,9 +12,12 @@ export default function ExecutionBadge({ exec, intents, contexts, getIntentDispl
         e.stopPropagation();
         onOpen(exec);
       }}
+      // Teal means running, app-wide: the same colour as the Start and Continue
+      // buttons that reach it. Paused stays amber, a different state.
+      data-state={isActive ? "active" : "paused"}
       className={`p-3 sm:p-4 rounded cursor-pointer shadow-sm hover:shadow-md transition-shadow duration-200 min-h-[44px] ${
         isActive
-          ? "bg-primary-light border-2 border-primary"
+          ? "bg-success-light border-2 border-success"
           : "bg-warning-light border-2 border-warning"
       }`}
     >
@@ -29,7 +32,8 @@ export default function ExecutionBadge({ exec, intents, contexts, getIntentDispl
         </span>
       </p>
       {exec.contextId && (
-        <p className="text-sm text-foreground">
+        <p className="flex items-center gap-1.5 text-sm text-foreground">
+          <ObjectIcon type="context" className="w-3.5 h-3.5" />
           {contexts.find((c) => c.id === exec.contextId)?.name}
         </p>
       )}

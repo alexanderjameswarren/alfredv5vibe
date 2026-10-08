@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { ArrowLeft, Check, Pause, Pencil, Play, Timer, X } from "lucide-react";
+import { ArrowLeft, Check, Pause, Pencil, Play, Timer, Trash2 } from "lucide-react";
 import { formatEventDate } from "../utils/eventDates";
 import ObjectIcon from "../shared/ObjectIcon";
 import {
@@ -9,6 +9,10 @@ import {
   ChainRemainingToggle,
 } from "../NotificationChainInline";
 import ItemNameLabel from "../items/ItemNameLabel";
+import EventMetaLink from "../schedule/EventMetaLink";
+
+export const DELETE_EXECUTION_CONFIRM =
+  "Delete this execution? Its notes and ticked steps are deleted. The scheduled date stays.";
 
 export default function ExecutionDetailView({
   execution,
@@ -32,6 +36,9 @@ export default function ExecutionDetailView({
   onBack,
   getIntentDisplay,
   onOpenSettings,
+  onViewContext,
+  onViewIntention,
+  onViewItem,
 }) {
   const [localNotes, setLocalNotes] = useState(execution.notes || "");
   const [, setTick] = useState(0);
@@ -104,6 +111,13 @@ export default function ExecutionDetailView({
   const soleItem = soleItemId ? items.find((i) => i.id === soleItemId) : null;
   const editableItemId = soleItem ? soleItemId : null;
   const editableItemName = soleItem?.name || "";
+  // The intention's own item first, else the run's single item.
+  const linkedItem = (intent?.itemId && items.find((i) => i.id === intent.itemId)) || soleItem || null;
+
+  function leaveTo(go) {
+    onUpdateNotes(localNotes);
+    go();
+  }
 
   return (
     <div>
@@ -158,16 +172,50 @@ export default function ExecutionDetailView({
             </button>
           )}
         </div>
-        <div className="flex items-center gap-2 mt-1">
-          {contextName && (
-            <span className="text-xs bg-success-light text-foreground px-2 py-0.5 rounded">
-              {contextName}
-            </span>
-          )}
-          {dateDisplay && (
-            <span className="text-sm text-muted-foreground">{dateDisplay}</span>
-          )}
-        </div>
+        {dateDisplay && (
+          <p className="text-sm text-muted-foreground mt-1">{dateDisplay}</p>
+        )}
+        {/* Linked records, the event edit form's pattern: context, intention and
+            item, each tappable, so a running or paused run is never a dead end.
+            Notes are flushed first, as Back does. */}
+        {(contextName || intent || linkedItem) && (
+          <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-xs mt-2" aria-label="Linked records">
+            {contextName &&
+              (onViewContext ? (
+                <button
+                  onClick={() => leaveTo(() => onViewContext(execution.contextId))}
+                  title={`Open context: ${contextName}`}
+                  className="inline-flex items-center gap-1 bg-warning-light hover:bg-warning text-foreground px-2 py-1 rounded transition-colors"
+                >
+                  <ObjectIcon type="context" className="w-3.5 h-3.5" />
+                  {contextName}
+                </button>
+              ) : (
+                <span className="inline-flex items-center gap-1 bg-warning-light text-foreground px-2 py-1 rounded">
+                  <ObjectIcon type="context" className="w-3.5 h-3.5" />
+                  {contextName}
+                </span>
+              ))}
+            {intent && onViewIntention && (
+              <EventMetaLink
+                icon={<ObjectIcon type="intention" className="w-3.5 h-3.5" />}
+                name={getIntentDisplay(intent)}
+                showName
+                onClick={() => leaveTo(() => onViewIntention(intent.id))}
+                title={`Open intention: ${getIntentDisplay(intent)}`}
+              />
+            )}
+            {linkedItem && onViewItem && (
+              <EventMetaLink
+                icon={<ObjectIcon type="item" className="w-3.5 h-3.5" />}
+                name={linkedItem.name}
+                showName
+                onClick={() => leaveTo(() => onViewItem(linkedItem.id))}
+                title={`Open item: ${linkedItem.name}`}
+              />
+            )}
+          </div>
+        )}
       </div>
 
       {/* Collection-based execution view */}
@@ -399,17 +447,22 @@ export default function ExecutionDetailView({
       </div>
 
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-0 pt-4 border-t border-border">
+        {/* Deletes the execution outright: no undo anywhere, so it asks first.
+            Red outline, no fill, alone on the left. Pause is tinted, Complete the
+            only solid button. Teal is reserved for "in progress". */}
         <button
-          onClick={onCancel}
-          className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+          onClick={() => {
+            if (window.confirm(DELETE_EXECUTION_CONFIRM)) onCancel();
+          }}
+          className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] border-2 border-destructive text-destructive hover:bg-destructive/10 rounded-lg transition-colors duration-200"
         >
-          <X className="w-4 h-4" />
-          Cancel
+          <Trash2 className="w-4 h-4" />
+          Delete Execution
         </button>
         {execution.status === "paused" ? (
           <button
             onClick={onMakeActive}
-            className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
           >
             <Play className="w-4 h-4" />
             Make Active
@@ -417,7 +470,7 @@ export default function ExecutionDetailView({
         ) : (
           <button
             onClick={onPause}
-            className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-warning hover:bg-warning-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] border-2 border-warning bg-warning-light text-foreground hover:shadow-md rounded-lg transition-all duration-200"
           >
             <Pause className="w-4 h-4" />
             Pause
@@ -425,7 +478,7 @@ export default function ExecutionDetailView({
         )}
         <button
           onClick={onComplete}
-          className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+          className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
         >
           <Check className="w-5 h-5" />
           Complete

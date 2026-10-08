@@ -9,6 +9,9 @@ import InsertRowButton from "../shared/InsertRowButton";
 import RepeatBlockDialog from "../shared/RepeatBlockDialog";
 import ObjectIcon from "../shared/ObjectIcon";
 import ExecutionBadge from "../executions/ExecutionBadge";
+import StatusPill from "../shared/StatusPill";
+import StatusPicker from "../shared/StatusPicker";
+import { statusOf, statusOptionsFor } from "../utils/status";
 
 export default function ItemCard({
   item,
@@ -30,6 +33,8 @@ export default function ItemCard({
   stickyFooter = false,
   // `{ text, muted }` for the capture this item came from. Memories list only.
   reminder = null,
+  // Edit form only: a status picker whose choice goes out with Save, as `status`.
+  editableStatus = false,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(item.name);
@@ -51,6 +56,7 @@ export default function ItemCard({
     ),
   );
   const [tags, setTags] = useState(item.tags || []);
+  const [editStatus, setEditStatus] = useState(statusOf(item));
   const [isCaptureTarget, setIsCaptureTarget] = useState(
     item.isCaptureTarget || false,
   );
@@ -85,9 +91,10 @@ export default function ItemCard({
       contextId !== (item.contextId || "") ||
       JSON.stringify(tags) !== JSON.stringify(item.tags || []) ||
       isCaptureTarget !== (item.isCaptureTarget || false) ||
+      editStatus !== statusOf(item) ||
       JSON.stringify(elements) !== JSON.stringify(originalElements);
     onDirtyChange(isDirty, "this item");
-  }, [isEditing, name, description, contextId, elements, tags, isCaptureTarget]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isEditing, name, description, contextId, elements, tags, isCaptureTarget, editStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => { if (onDirtyChange) onDirtyChange(false); };
@@ -107,6 +114,8 @@ export default function ItemCard({
       elements,
       tags,
       isCaptureTarget,
+      // Only when changed; the caller applies it after the fields (storage.patch).
+      ...(editableStatus && editStatus !== statusOf(item) ? { status: editStatus } : {}),
     });
     if (!onCancel) {
       // Only control isEditing state if we're not in add mode
@@ -130,6 +139,7 @@ export default function ItemCard({
         ),
       );
       setTags(item.tags || []);
+      setEditStatus(statusOf(item));
       setIsCaptureTarget(item.isCaptureTarget || false);
       setIsEditing(false);
     }
@@ -253,6 +263,12 @@ export default function ItemCard({
     return (
       <EditCard>
         <div className="space-y-3">
+          {editableStatus && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm text-muted-foreground">Status</span>
+              <StatusPicker value={editStatus} onChange={setEditStatus} options={statusOptionsFor(statusOf(item))} />
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-foreground mb-1">
               Name
@@ -614,6 +630,9 @@ export default function ItemCard({
         <ObjectIcon type="item" className="w-4 h-4 text-primary" align="first-line" />
         <span className="min-w-0">{item.name}</span>
       </p>
+      <div className="mb-2">
+        <StatusPill row={item} />
+      </div>
       {reminder && (
         <p
           className={`text-xs text-muted-foreground mb-2${reminder.muted ? " opacity-70" : ""}`}

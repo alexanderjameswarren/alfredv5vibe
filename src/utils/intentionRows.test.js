@@ -100,7 +100,17 @@ describe("intentionRowFromTriage — the rest of the row", () => {
       endDate: "2026-12-31",
       tags: ["mobility"],
       sourceInboxId: "inbox-1",
+      status: "someday",
     });
+  });
+
+  it("carries the status chosen at triage, someday unless active", () => {
+    const pick = (status) =>
+      intentionRowFromTriage({ ...base, intentionData: { text: "x", status } }).status;
+    expect(pick("active")).toBe("active");
+    expect(pick("someday")).toBe("someday");
+    expect(pick(undefined)).toBe("someday");
+    expect(pick("closed")).toBe("someday");
   });
 
   it("always records which capture it came from", () => {

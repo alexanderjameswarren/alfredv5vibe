@@ -47,6 +47,8 @@ export function computeBaseline(inboxItem) {
     intentDescription: inboxItem.suggestedIntentDescription || intent.rest,
     linkedItemId: inboxItem.suggestedItemId || "",
     eventDate: inboxItem.suggestedEventDate || "",
+    // Migration 088. One value for the item and the intention alike.
+    status: inboxItem.suggestedStatus === "active" ? "active" : "someday",
   };
 }
 
@@ -105,6 +107,7 @@ export function triageDataForOneTap(inboxItem) {
           contextId: b.contextId || null,
           elements: b.elements,
           tags: b.tags,
+          status: b.status,
         }
       : null,
     itemItemLinks: [],
@@ -121,6 +124,7 @@ export function triageDataForOneTap(inboxItem) {
           itemId: b.itemOn ? null : b.linkedItemId || null,
           createEvent: Boolean(b.eventDate),
           eventDate: b.eventDate || null,
+          status: b.status,
         }
       : null,
     // Collections are hidden on the detail page for now, so they are not filed from

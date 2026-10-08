@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { Archive, Play } from "lucide-react";
+import { Archive, Minus, Play, Repeat } from "lucide-react";
 import { detailsForStorage } from "../utils/intentionRows";
-import { getTodayDate } from "../utils/eventDates";
+import { formatEventDate, getTodayDate } from "../utils/eventDates";
+import WhenButton from "../shared/WhenButton";
 import { getRecurrenceConfig } from "../utils/recurrence";
 import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
 import EditCard from "../shared/EditCard";
@@ -11,7 +12,10 @@ import ItemPicker, { PickedItem } from "../shared/ItemPicker";
 import ObjectIcon from "../shared/ObjectIcon";
 import SchedulePopover from "../shared/recurrence/SchedulePopover";
 import RecurrenceQuickSelect from "../shared/recurrence/RecurrenceQuickSelect";
-import EventCard from "../schedule/EventCard";
+import ScheduledLine from "../shared/ScheduledLine";
+import StatusPill from "../shared/StatusPill";
+import StatusPicker from "../shared/StatusPicker";
+import { closedBlockTitle, recordActions, statusOf, statusOptionsFor } from "../utils/status";
 
 export default function IntentionCard({
   intent,
@@ -40,6 +44,11 @@ export default function IntentionCard({
   // `{ text, muted }` from reminderBadge ("7:17 AM", or muted "Sent 7:36 AM").
   // Intentions list only.
   reminder = null,
+  // Edit form only: a status picker whose choice goes out with Save, as `status`.
+  // The caller runs the guard and the live-events sheet then.
+  editableStatus = false,
+  // Shown inside the form, e.g. why Save was refused.
+  formNotice = null,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(intent.text);
@@ -47,6 +56,8 @@ export default function IntentionCard({
   // null so the textarea stays controlled; converted back to null on save.
   const [description, setDescription] = useState(intent.description || "");
   const [recurrenceConfig, setRecurrenceConfig] = useState(intent.recurrenceConfig || null);
+  // The When control's mode. Repeat chosen but no pattern picked saves as once.
+  const [repeating, setRepeating] = useState(getRecurrenceConfig(intent).type !== "once");
   const [intentEndDate, setIntentEndDate] = useState(intent.endDate || null);
   const [targetStartDate, setTargetStartDate] = useState(intent.targetStartDate || null);
   const [itemSearch, setItemSearch] = useState("");
@@ -54,6 +65,7 @@ export default function IntentionCard({
   const [selectedCollectionId, setSelectedCollectionId] = useState(intent.collectionId || "");
   const [tags, setTags] = useState(intent.tags || []);
   const [selectedContextId, setSelectedContextId] = useState(intent.contextId || "");
+  const [editStatus, setEditStatus] = useState(statusOf(intent));
 
   // Was a per-card query on mount asking
   // `intent_id = … AND closed_at IS NULL` — one round trip per row on the
@@ -79,12 +91,14 @@ export default function IntentionCard({
       name !== intent.text ||
       description !== (intent.description || "") ||
       JSON.stringify(recurrenceConfig) !== JSON.stringify(intent.recurrenceConfig || null) ||
+      intentEndDate !== (intent.endDate || null) ||
       selectedItemId !== (intent.itemId || "") ||
       selectedCollectionId !== (intent.collectionId || "") ||
       selectedContextId !== (intent.contextId || "") ||
+      editStatus !== statusOf(intent) ||
       JSON.stringify(tags) !== JSON.stringify(intent.tags || []);
     onDirtyChange(isDirty, "this intention");
-  }, [isEditing, name, description, recurrenceConfig, selectedItemId, selectedCollectionId, selectedContextId, tags]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isEditing, name, description, recurrenceConfig, intentEndDate, selectedItemId, selectedCollectionId, selectedContextId, tags, editStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => { if (onDirtyChange) onDirtyChange(false); };
@@ -102,8 +116,9 @@ export default function IntentionCard({
       // disagree about what "no details" means.
       const detailsToStore = detailsForStorage(description);
       const updates = showScheduling
-        ? { text: name, description: detailsToStore, recurrenceConfig, endDate: intentEndDate, targetStartDate, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null }
+        ? { text: name, description: detailsToStore, recurrenceConfig, endDate: repeating ? intentEndDate : null, targetStartDate, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null }
         : { text: name, description: detailsToStore, itemId: selectedItemId || null, contextId: selectedContextId || null, tags, collectionId: selectedCollectionId || null };
+      if (editableStatus && editStatus !== statusOf(intent)) updates.status = editStatus;
       onUpdate(intent.id, updates, scheduledDate);
     }
     if (!onCancel) {
@@ -120,6 +135,7 @@ export default function IntentionCard({
       setName(intent.text);
       setDescription(intent.description || "");
       setRecurrenceConfig(intent.recurrenceConfig || null);
+      setRepeating(getRecurrenceConfig(intent).type !== "once");
       setIntentEndDate(intent.endDate || null);
       setTargetStartDate(intent.targetStartDate || null);
       setTags(intent.tags || []);
@@ -127,6 +143,7 @@ export default function IntentionCard({
       setSelectedCollectionId(intent.collectionId || "");
       setItemSearch("");
       setSelectedContextId(intent.contextId || "");
+      setEditStatus(statusOf(intent));
       setIsEditing(false);
     }
   }
@@ -137,14 +154,20 @@ export default function IntentionCard({
       ? contexts.find((c) => c.id === intent.contextId)?.name
       : null;
 
-  const relatedEvents = events.filter(
-    (e) => e.intentId === intent.id && !e.archived,
-  );
+  const closedTitle = closedBlockTitle(intent, "intention");
+  const actions = recordActions(intent, events, executions);
 
   if (isEditing) {
     return (
       <EditCard>
         <div className="space-y-3">
+          {editableStatus && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm text-muted-foreground">Status</span>
+              <StatusPicker value={editStatus} onChange={setEditStatus} options={statusOptionsFor(statusOf(intent))} />
+            </div>
+          )}
+          {formNotice}
           <div>
             <label className="block text-sm font-medium text-foreground mb-1">
               Name
@@ -253,75 +276,58 @@ export default function IntentionCard({
             <TagPicker value={tags} onChange={setTags} pool={tagPool} />
           </div>
 
+          {/* When: repeat or not, in the inbox's button style. No dates here —
+              Schedule/Reschedule on the page own the one live event (step 31).
+              The stop date is Repeat's own "Ends on" (intents.end_date). */}
           {showScheduling && (
             <div>
-              <label className="block text-sm font-medium text-foreground mb-1">
-                Recurrence
-              </label>
-              <RecurrenceQuickSelect
-                value={recurrenceConfig}
-                onChange={(config) => {
-                  setRecurrenceConfig(config);
-                }}
-                onEndDateChange={setIntentEndDate}
-              />
+              <span className="block text-sm font-medium text-foreground mb-1">When</span>
+              <div className="flex flex-wrap gap-2">
+                <WhenButton
+                  on={!repeating}
+                  onClick={() => {
+                    setRepeating(false);
+                    setRecurrenceConfig({ type: "once" });
+                    setIntentEndDate(null);
+                  }}
+                  icon={Minus}
+                  label="Doesn't repeat"
+                />
+                <WhenButton
+                  on={repeating}
+                  onClick={() => setRepeating(true)}
+                  icon={Repeat}
+                  label="Repeat"
+                />
+              </div>
+              {repeating && (
+                <div className="mt-2">
+                  <RecurrenceQuickSelect
+                    value={recurrenceConfig}
+                    onChange={setRecurrenceConfig}
+                    onEndDateChange={setIntentEndDate}
+                  />
+                  {intentEndDate && (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Ends {formatEventDate(intentEndDate)}
+                      {" · "}
+                      <button
+                        type="button"
+                        onClick={() => setIntentEndDate(null)}
+                        className="underline underline-offset-2 hover:text-foreground"
+                      >
+                        Remove end date
+                      </button>
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          {showScheduling && (
-            <div className="flex gap-3">
-              <div className="flex-1">
-                <label className="block text-sm font-medium text-foreground mb-1">
-                  Target Start Date
-                </label>
-                <input
-                  type="date"
-                  value={targetStartDate || ""}
-                  onChange={(e) => setTargetStartDate(e.target.value || null)}
-                  className="w-full px-3 py-2 border border-border rounded text-base"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="block text-sm font-medium text-foreground mb-1">
-                  End Date
-                </label>
-                <input
-                  type="date"
-                  value={intentEndDate || ""}
-                  onChange={(e) => setIntentEndDate(e.target.value || null)}
-                  className="w-full px-3 py-2 border border-border rounded text-base"
-                />
-              </div>
-            </div>
-          )}
-
+          {/* Edit and add forms: Save, Cancel, Archive. No scheduling mid-form
+              (Restructure P1 steps 18-19). */}
           <PinnedFooter pinned={stickyFooter}>
-            {/* Both go through handleSave, so each still saves the form AND
-                schedules in one action — which is what the old Do Today did and
-                the old Schedule Later did not. The popover only supplies the
-                date; the asymmetry being fixed is that one committed and the
-                other quietly waited for Save.
-
-                Opening upward: this footer sits at the bottom of the card, and
-                a downward popover would open under the fixed Capture bar. */}
-            {showScheduling && onSchedule && relatedEvents.length === 0 && (
-              <>
-                <SchedulePopover
-                  label="Do Today"
-                  initialDate={getTodayDate()}
-                  onPick={(date) => handleSave(date)}
-                  placement="top"
-                  className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-                />
-                <SchedulePopover
-                  label="Schedule Later"
-                  onPick={(date) => handleSave(date)}
-                  placement="top"
-                  className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-                />
-              </>
-            )}
-
             <button
               onClick={() => handleSave(null)}
               className="px-3 sm:px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
@@ -370,13 +376,19 @@ export default function IntentionCard({
             <span className="min-w-0">{getIntentDisplay(intent)}</span>
           </p>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
+            <StatusPill row={intent} />
+            {/* The one live event is a date on the row, not a nested card. */}
+            {(actions.live || actions.open) && (
+              <ScheduledLine actions={actions} className="text-xs text-foreground" />
+            )}
             {showScheduling && (
               <span className="text-sm text-muted-foreground">
                 {getRecurrenceDisplayString(getRecurrenceConfig(intent), intent.endDate)}
               </span>
             )}
             {contextName && (
-              <span className="text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
+              <span className="inline-flex items-center gap-1 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
+                <ObjectIcon type="context" className="w-3.5 h-3.5" />
                 {contextName}
               </span>
             )}
@@ -411,13 +423,6 @@ export default function IntentionCard({
             </span>
           )}
         </div>
-        {/* Display mode — a list row, not one of Step 6's two surfaces. This
-            stays a single-click commit rather than a popover: it is a quick
-            action sitting next to Start Now, there is no Schedule Later beside
-            it to be asymmetric with, and making the common case two clicks on
-            a row you are scanning past would be a worse trade. It does pick up
-            the rest of Step 6 for free — it no longer navigates, and it now
-            reports the date through the message. */}
         {/* Row action strip — Step 12.1. Matches the one EventCard took in 8a:
             gap-3 because 8px is Material's documented FLOOR for adjacent targets
             rather than a comfortable value and the neighbour here is destructive,
@@ -426,36 +431,43 @@ export default function IntentionCard({
             nothing horizontally — without it the "right-aligned" strip lands on the
             left on exactly the device this app is built for.
 
-            The strip renders when it has something in it. Do Today / Start Now keep
+            The strip renders when it has something in it. Start Now / Schedule keep
             their own condition; Archive has a different one, which is the whole
             point of the restructure below. */}
-        {((showScheduling && relatedEvents.length === 0) ||
-          (onArchive && intent.id)) && (
+        {(showScheduling || (onArchive && intent.id)) && (
           <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
-            {showScheduling && relatedEvents.length === 0 && (
+            {/* Same rule as the detail pages (recordActions): always shown,
+                labels follow the open execution and the one live event. */}
+            {showScheduling && (
               <>
-                {onSchedule && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSchedule(intent.id, "today");
-                    }}
-                    className="px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-                  >
-                    Do Today
-                  </button>
-                )}
                 {onStartNow && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      onStartNow(intent.id);
+                      if (actions.open) onOpenExecution?.(actions.open);
+                      else onStartNow(intent.id);
                     }}
-                    className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+                    disabled={Boolean(closedTitle)}
+                    title={closedTitle || undefined}
+                    className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] whitespace-nowrap bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Play className="w-4 h-4" />
-                    Start Now
+                    {actions.primaryLabel}
                   </button>
+                )}
+                {/* Defaults to today (or the date being moved), so scheduling
+                    for today stays two taps. The wrapper stops the tap reaching
+                    the row's navigate. */}
+                {onSchedule && (
+                  <span onClick={(e) => e.stopPropagation()} title={closedTitle || actions.moveBlocked || undefined}>
+                    <SchedulePopover
+                      label={actions.scheduleLabel}
+                      initialDate={actions.liveDate || getTodayDate()}
+                      onPick={(date) => onSchedule(intent.id, date)}
+                      disabled={Boolean(closedTitle || actions.moveBlocked)}
+                      className="px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
+                    />
+                  </span>
                 )}
               </>
             )}
@@ -464,8 +476,7 @@ export default function IntentionCard({
                 it belongs on the row. Step 8 gave EventCard this and left its
                 sibling behind — that omission is what 12.1 closes.
 
-                Deliberately NOT gated on `relatedEvents.length === 0`, unlike Do
-                Today and Start Now. An intention with events is still archivable:
+                Not gated on events. An intention with events is still archivable:
                 `archiveIntention` cascades to them and builds the compound Undo
                 from Step 2. That is why this sits outside their fragment.
 
@@ -503,30 +514,6 @@ export default function IntentionCard({
           </div>
         )}
       </div>
-      {relatedEvents.length > 0 && (
-        <div className="mt-2 space-y-2">
-          {/* No items / onViewIntention / onViewItem / onViewContextDetail on
-              the cards below. Each is rendered INSIDE the intention it belongs
-              to, whose own row already carries the intention name, the context
-              badge and the navigation to all of it — see the prop comments on
-              EventCard. The chips would duplicate the line directly above. */}
-          {relatedEvents.map((ev) => (
-            <EventCard
-              key={ev.id}
-              event={ev}
-              intent={intent}
-              contexts={contexts}
-              onUpdate={onUpdateEvent}
-              onActivate={onActivate}
-              getIntentDisplay={getIntentDisplay}
-              executions={executions}
-              onOpenExecution={onOpenExecution}
-              onCancelExecution={onCancelExecution}
-              nested
-            />
-          ))}
-        </div>
-      )}
     </div>
   );
 }

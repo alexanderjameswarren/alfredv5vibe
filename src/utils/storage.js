@@ -1,6 +1,32 @@
 import { supabase } from "../supabaseClient";
 import { toCamelCase, toSnakeCase } from "./caseConvert";
 
+// Status on items and intents is moved by database triggers (088) as well as by
+// hand, so a whole-record UPDATE from stale browser state must not carry it.
+// It is still sent on INSERT; storage.patch is how it changes afterwards.
+const STATUS_TABLES = new Set(["items", "intents"]);
+export function withoutStatus(table, dbValue) {
+  if (!STATUS_TABLES.has(table)) return dbValue;
+  const { status, status_changed_at, ...rest } = dbValue;
+  return rest;
+}
+
+/**
+ * An Error to throw after `storage.set` returned false, inside withLoading so the
+ * user sees it. The two named unique violations are the one-live-event and
+ * one-open-execution indexes (Restructure P1).
+ */
+export function writeError(what) {
+  const e = storage.lastError;
+  if (e?.code === "23505" && /events_one_live_per_intent/.test(e.message || "")) {
+    return new Error(`${what}: this intention already has a live event. Reschedule or archive it first.`);
+  }
+  if (e?.code === "23505" && /executions_one_open_per_intent/.test(e.message || "")) {
+    return new Error(`${what}: this intention already has an open execution. Continue or finish it first.`);
+  }
+  return new Error(`${what} was not saved.`);
+}
+
 export const storage = {
   // Map key prefixes to table names
   tableMap: {
@@ -95,7 +121,7 @@ export const storage = {
         // PostgREST coerces it to whatever the destination column is.
         const { data: updated, error: updateError } = await supabase
           .from(table)
-          .update(dbValue)
+          .update(withoutStatus(table, dbValue))
           .eq("id", id)
           .select();
 
@@ -125,6 +151,38 @@ export const storage = {
       }
     } catch (e) {
       console.error("Storage set error:", e, "Key:", key, "Value:", value);
+      this.lastError = e;
+      return false;
+    }
+  },
+
+  // The error behind the last `false` from set, for callers that must tell the
+  // user (see writeError).
+  lastError: null,
+
+  /**
+   * Update only the named fields and return the row as it now stands, or
+   * `false`. The only way status changes on items and intents — see
+   * withoutStatus.
+   */
+  async patch(key, fields) {
+    try {
+      const [prefix, id] = key.split(":");
+      const table = this.tableMap[prefix];
+      if (!table || !id) {
+        console.error("Invalid key format:", key);
+        return false;
+      }
+      const { data, error } = await supabase
+        .from(table)
+        .update(this.toSnakeCase(fields))
+        .eq("id", id)
+        .select()
+        .maybeSingle();
+      if (error) throw error;
+      return data ? this.toCamelCase(data) : false;
+    } catch (e) {
+      console.error("Storage patch error:", e, "Key:", key, "Fields:", fields);
       return false;
     }
   },
