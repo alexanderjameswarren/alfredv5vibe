@@ -21,6 +21,9 @@ import React, { useState, useEffect, useRef } from "react";
  * edit-form footer opens upward (downward would land under the fixed Capture
  * bar), the detail-page header opens downward.
  */
+const PANEL_WIDTH = 240; // w-60
+const EDGE = 16; // the page gutter
+
 export default function SchedulePopover({
   label,
   icon = null,
@@ -33,6 +36,7 @@ export default function SchedulePopover({
 }) {
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState(initialDate);
+  const [align, setAlign] = useState("left");
   const ref = useRef(null);
 
   useEffect(() => {
@@ -45,6 +49,10 @@ export default function SchedulePopover({
   }, [open]);
 
   function toggle() {
+    // Open from the button's left edge when the panel fits that way, else its
+    // right edge; anchoring right on a left-hand button ran it off a phone.
+    const rect = ref.current?.getBoundingClientRect();
+    setAlign(rect && rect.left + PANEL_WIDTH + EDGE > window.innerWidth ? "right" : "left");
     setOpen((wasOpen) => {
       // Reset on every open, so Do Today always offers today even after the
       // popover was left holding some other date from a previous visit.
@@ -72,7 +80,8 @@ export default function SchedulePopover({
       </button>
       {open && (
         <div
-          className={`absolute right-0 z-30 w-60 p-3 bg-card border border-border rounded-lg shadow-lg ${
+          data-align={align}
+          className={`absolute ${align === "right" ? "right-0" : "left-0"} z-30 w-60 p-3 bg-card border border-border rounded-lg shadow-lg ${
             placement === "top" ? "bottom-full mb-2" : "top-full mt-2"
           }`}
         >

@@ -1,8 +1,9 @@
-import { storage } from "../utils/storage";
+import { storage, writeError } from "../utils/storage";
 import { uid, flattenElements } from "../utils/flattenElements";
 import { getTodayDate } from "../utils/eventDates";
 import { getRecurrenceConfig } from "../utils/recurrence";
-import { runNowTargetForItem, isDueBy } from "../utils/runNow";
+import { itemActionTarget, isDueBy } from "../utils/runNow";
+import { carriedItems, liveEventsFor } from "../utils/status";
 import {
   createNotificationSteps,
   completeNotificationStep,
@@ -36,11 +37,33 @@ export function useExecutionActions({
   triggerRecurrence,
   clearCompletedFromCollection,
   withLoading,
+  watchStatus,
 }) {
+  // The rows an execution insert can flip to active (088): its intention, that
+  // intention's item, and every item it carries.
+  function watchExecution(intent, itemIds = []) {
+    return watchStatus({ intents: [intent], items: carriedItems(intent, itemIds, items) });
+  }
+
+  // At most one open (active or paused) execution per intention.
+  function openExecutionFor(intentId) {
+    return [...activeExecutions, ...pausedExecutions].find((e) => e.intentId === intentId) || null;
+  }
+
   async function activate(eventId) {
     const event = events.find((e) => e.id === eventId);
     if (!event) return;
+    const open = openExecutionFor(event.intentId);
+    if (open) {
+      setPreviousView(view);
+      goToExecution(open);
+      return;
+    }
     return withLoading('Starting execution...', async () => {
+      const settle = watchExecution(
+        intents.find((i) => i.id === event.intentId),
+        event.itemIds,
+      );
       // Collection-based execution
       if (event.collectionId) {
         const execution = {
@@ -58,7 +81,8 @@ export function useExecutionActions({
           completedItemIds: [],
           progress: [],
         };
-        await storage.set(`execution:${execution.id}`, execution);
+        if (!(await storage.set(`execution:${execution.id}`, execution))) throw writeError("Starting");
+        await settle();
         await startNotificationChain(execution);
         setActiveExecution(execution);
         setActiveExecutions((prev) => [execution, ...prev]);
@@ -107,7 +131,8 @@ export function useExecutionActions({
         progress: [],
       };
 
-      await storage.set(`execution:${execution.id}`, execution);
+      if (!(await storage.set(`execution:${execution.id}`, execution))) throw writeError("Starting");
+      await settle();
       await startNotificationChain(execution);
       setActiveExecution(execution);
       setActiveExecutions((prev) => [execution, ...prev]);
@@ -241,16 +266,16 @@ export function useExecutionActions({
         setEvents(events.map((e) => (e.id === event.id ? archivedEvent : e)));
       }
 
-      // Handle recurrence: archive one-time intents, or create next event for recurring
+      // Handle recurrence: close a done one-off, or create next event for recurring
       const intent = intents.find((i) => i.id === activeExecution.intentId);
       if (intent) {
         const config = getRecurrenceConfig(intent);
         if (config.type === "once") {
-          // One-time: archive intent on done (existing behavior)
+          // Closed, not archived: finishing is a reason to keep it. Its one
+          // live event was the one just archived above.
           if (outcome === "done") {
-            const archivedIntent = { ...intent, archived: true };
-            await storage.set(`intent:${intent.id}`, archivedIntent);
-            setIntents(intents.map((i) => (i.id === intent.id ? archivedIntent : i)));
+            const closedIntent = await storage.patch(`intent:${intent.id}`, { status: "closed" });
+            if (closedIntent) setIntents((prev) => prev.map((i) => (i.id === intent.id ? closedIntent : i)));
           }
         } else {
           // Recurring: calculate and create next event
@@ -286,6 +311,8 @@ export function useExecutionActions({
       pausedExecutions.find((e) => e.eventId === eventId);
     if (!exec) return;
     return withLoading('Cancelling...', async () => {
+      // Chain first, as closeExecution does: afterwards its rows would be orphans.
+      await endNotificationChain(exec.id);
       await storage.delete(`execution:${exec.id}`);
       setActiveExecutions((prev) => prev.filter((e) => e.id !== exec.id));
       setPausedExecutions((prev) => prev.filter((e) => e.id !== exec.id));
@@ -418,33 +445,28 @@ export function useExecutionActions({
     );
   }
 
-  async function startNowFromItem(itemId) {
+  // `targetIntentId`: item detail's pick, so the button and the action agree.
+  async function startNowFromItem(itemId, targetIntentId) {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
 
     // Attach to a live intention for this item rather than minting a one-off
     // beside it — a one-off left the recurring intention behind and its
-    // recurrence silently died.
-    const target = runNowTargetForItem(item.id, intents, events);
-    if (target) {
-      if (isDueBy(target.event, getTodayDate())) {
-        const running = [...activeExecutions, ...pausedExecutions].find(
-          (e) => e.eventId === target.event.id,
-        );
-        if (running) {
-          setPreviousView(view);
-          goToExecution(running);
-          return;
-        }
-        return activate(target.event.id);
-      }
-      return startNowFromIntention(target.intent.id);
-    }
+    // recurrence silently died. One mid-run comes first (itemActionTarget).
+    // That intention's own rule then continues, runs, moves or creates its one event.
+    const intentId =
+      targetIntentId ||
+      itemActionTarget(item.id, intents, events, [...activeExecutions, ...pausedExecutions])?.intent.id;
+    if (intentId) return startNowFromIntention(intentId);
 
     return withLoading('Starting execution...', async () => {
+      // Only the item can be "moved" here; the intention is new, so it is
+      // re-read for state but never announced.
+      const newIntentId = uid();
+      const settle = watchStatus({ items: [item], refreshIntentIds: [newIntentId] });
       // Create intention linked to this item
       const newIntent = {
-        id: uid(),
+        id: newIntentId,
         user_id: user.id,
         text: item.name,
         createdAt: new Date().toISOString(),
@@ -470,7 +492,8 @@ export function useExecutionActions({
         createdAt: new Date().toISOString(),
       };
       const savedEvent = await storage.set(`event:${newEvent.id}`, newEvent);
-      setEvents((prev) => [...prev, savedEvent || newEvent]);
+      if (!savedEvent) throw writeError("Today's event");
+      setEvents((prev) => [...prev, savedEvent]);
 
       // Build execution inline (can't call activate — state hasn't updated yet)
       let itemElements = [];
@@ -507,7 +530,8 @@ export function useExecutionActions({
         progress: [],
       };
 
-      await storage.set(`execution:${execution.id}`, execution);
+      if (!(await storage.set(`execution:${execution.id}`, execution))) throw writeError("Starting");
+      await settle();
       await startNotificationChain(execution);
       setActiveExecution(execution);
       setActiveExecutions((prev) => [execution, ...prev]);
@@ -519,11 +543,34 @@ export function useExecutionActions({
   async function startNowFromIntention(intentId) {
     const intent = intents.find((i) => i.id === intentId);
     if (!intent) return;
+    // One live event per intention: run that one, never add a second beside it.
+    // An open execution is continued; a future date is moved to today first.
+    const open = openExecutionFor(intentId);
+    if (open) {
+      setPreviousView(view);
+      goToExecution(open);
+      return;
+    }
+    const live = liveEventsFor(events, intentId)[0];
+    if (live) {
+      const today = getTodayDate();
+      if (!isDueBy(live, today)) {
+        const moved = await withLoading('Moving to today...', async () => {
+          const saved = await storage.set(`event:${live.id}`, { ...live, time: today });
+          if (!saved) throw writeError("Moving the event to today");
+          setEvents((prev) => prev.map((e) => (e.id === live.id ? saved : e)));
+          return true;
+        });
+        if (!moved) return;
+      }
+      return activate(live.id);
+    }
     return withLoading('Starting execution...', async () => {
       // Find linked item if any
       const linkedItem = intent.itemId
         ? items.find((i) => i.id === intent.itemId)
         : null;
+      const settle = watchExecution(intent, linkedItem ? [linkedItem.id] : []);
 
       // Create event for today
       const newEvent = {
@@ -538,7 +585,8 @@ export function useExecutionActions({
         createdAt: new Date().toISOString(),
       };
       const savedEvent = await storage.set(`event:${newEvent.id}`, newEvent);
-      setEvents((prev) => [...prev, savedEvent || newEvent]);
+      if (!savedEvent) throw writeError("Today's event");
+      setEvents((prev) => [...prev, savedEvent]);
 
       // Collection-based execution
       if (intent.collectionId) {
@@ -557,7 +605,8 @@ export function useExecutionActions({
           completedItemIds: [],
           progress: [],
         };
-        await storage.set(`execution:${execution.id}`, execution);
+        if (!(await storage.set(`execution:${execution.id}`, execution))) throw writeError("Starting");
+        await settle();
         await startNotificationChain(execution);
         setActiveExecution(execution);
         setActiveExecutions((prev) => [execution, ...prev]);
@@ -600,7 +649,8 @@ export function useExecutionActions({
         progress: [],
       };
 
-      await storage.set(`execution:${execution.id}`, execution);
+      if (!(await storage.set(`execution:${execution.id}`, execution))) throw writeError("Starting");
+      await settle();
       await startNotificationChain(execution);
       setActiveExecution(execution);
       setActiveExecutions((prev) => [execution, ...prev]);

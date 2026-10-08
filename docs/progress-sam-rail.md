@@ -1,0 +1,113 @@
+# SAM song page — left rail (layout "D")
+
+Layout only: every control keeps its logic. Target: Surface Go, Edge, ~1024 x 640,
+touch targets ≥ 44px. The playing screen (FocusedPlaybackBar / PracticeBar) is
+unchanged throughout. No database work.
+
+Decisions (2026-10-07): snippet row's left icon loads only; Start/End clip on
+blur and on Enter; audio songs show Speed % in the rail, BPM + edit-sync in More;
+the tray pushes the score down and the snippet list keeps NO height cap (page
+scrolls); fit-to-height applies to the stopped, tray-closed score only.
+
+## Steps
+
+- [x] **1. Shell and rail.** Two columns; rail with Play / Resume / Restart / Stop,
+  Practice, Warm up (under Practice), tempo box (BPM, or Speed % on audio songs),
+  Goal, Save (when dirty), Snippets and More (disabled placeholders), Back. Old
+  rows stay below in the right column.
+  *Check:* Play, Practice, Pause, Resume, Restart, Stop and Back all work; the
+  tempo box, Goal and Save behave as before; the playing screen is identical.
+- [x] **2. Title row and plan bar.** Title, range, artist, pencil, then Practiced
+  today and MIDI on the right; plan bar with Set tempo and Next on the right,
+  warm-up summary line kept under it.
+  *Check:* pencil opens Edit song; Next opens the next item; Set tempo works.
+- [x] **3. Snippet tray.** Snippets toggles the existing panel, attached under the
+  plan bar, pushing the score down. Whole song (existing Full Song), left load
+  icon on each row, Enter commits Start/End. No list height cap.
+  *Check:* tapping a row and committing Start/End both clip the score at once;
+  Save New, Archive, Restore, View archived work; Whole song clears the range.
+- [x] **3b. Tray refinements.** No auto-correct on Start/End: validated (whole
+  numbers, Start ≤ End, within 1..measures) with an inline red message; an
+  invalid range changes nothing and disables Save New. Clip as you type, 500 ms
+  after the last keystroke (blur and Enter still immediate). Saved list folds
+  under "Saved snippets (N) · current: …", collapsed whenever the tray opens and
+  after choosing a snippet; still no height cap. Play, Practice and Warm up close
+  the tray; the range stays.
+  *Check:* typing 21→24 over 18–20 clips after a pause; Start 30 / End 24 shows
+  "Start must be at or before End" and keeps the last range; past the last
+  measure shows "Song has N measures".
+- [x] **4. More drawer.** Slides from the left beside the rail over a dimmed
+  score; dim area or Close shuts it. Audio, Metronome, Score playback, Tuning,
+  Loop (Repeat + rest), Fingering mode, Diff, Show Imported, Export, Refresh,
+  Stats (incl. song goal).
+  *Check:* every drawer control works; nothing remains below the score but the
+  conditional fingering / ghost / lyrics rows.
+- [x] **4b. Drawer refinements.** One panel at a time (tray or drawer, never
+  both). "Fingering mode: on" off switch at the left of the fingering row.
+  Tuning is its own always-open drawer section between Sound and Tools; its Save
+  shows only when Timing / Chord / Measure W differ. Edit Song (pencil) in Tools
+  opens the same Edit song dialog, closing the drawer first.
+  *Check:* each of the four in the app; the title's pencil still works.
+- [x] **4c. One look, Save fix.** Rail Save shows only for tempo (BPM / Speed %),
+  Tuning Save only for Timing / Chord / Measure W; both save everything. Every
+  button and input on the song page uses one radius (rounded-lg), one on-state
+  (tan fill, brown border and text) and one hover/press darkening, from `UI` in
+  MoreDrawer.jsx. Drawer rows wrap inside its width.
+  *Check:* the Save bug; Fingering mode on in both places; hover on several
+  buttons; Edit Song dialog inputs.
+- [x] **4d. Finish the one look.** SegmentedControl, RestControl, FingeringBar
+  (selected finger in the tan on-state), WarmupLadderEditor on the shared radius
+  and press. `UI` moved from MoreDrawer.jsx to uiStyles.js; no visual change.
+  *Check:* Sight Reader only looks rounder; the selected finger look.
+- [x] **5. Score fit-to-height.** Stopped score, tray closed: CSS `zoom` on the
+  SVG holder only, clamped to [0.6, 1]. Paused score (ScrollEngine) not scaled.
+  The drawer is an overlay, so it leaves the fit as it is.
+  *Check:* at 1024 x 640 with the tray closed both staves show and the page does
+  not scroll; scoring unchanged.
+- [ ] **6. Tests.** Selector updates, MoreDrawer tests, both suites.
+  *Check:* both suites green.
+
+## Log
+
+- Step 1 done 2026-10-07. Tempo, Goal and Save moved from NumericSettings into
+  an exported `TempoControls`; `showBpmEdit` lifted to SamPlayer. The right
+  column is the same element in every state so ScrollEngine survives a pause.
+- Step 2 done 2026-10-08. Practiced today moved from NumericSettings to the
+  title row; PlanLine renders in SettingsBar's `children` slot under it, one
+  line per row with Next at the right. Export / Audio / Refresh / Auto-Match and
+  Full Song stay in the title row until steps 4 and 3. The song goal line moved
+  up with the plan block (it is part of PlanLine) until step 4.
+- Step 3 done 2026-10-08. Plan bar: Next leads the line, outlined in the
+  primary colour (styled from PlanLine via `[&_[data-next-box]]`, so
+  PlanNextButton.jsx is unchanged). SnippetPanel's `open` is now controlled by
+  the rail's Snippets toggle; the old collapsible row is gone; Full Song became
+  the tray's Whole song (FullSongButton removed); left load icon per saved row;
+  Enter blurs Start/End to commit. Fingering mode / Diff / Show Imported, which
+  rode on the old Snippet row, sit on their own row above the score until step 4.
+- Step 4 done 2026-10-08. MoreDrawer.jsx (fixed, clipped to the area right of
+  the rail, 410px, dim + Escape + Close; Web Animation slide so no transform
+  lingers). NumericSettings split into named pieces (SpeedField, AudioSyncBpm,
+  SoundControls, TuningControls, LoopControl; default export removed).
+  AudioToolbar takes `keys` and renders labelled buttons, placed twice (Audio,
+  Tools). SettingsBar is now the title row only. Song goal moved from PlanLine
+  (no longer passed `songNote`) to Stats. Any run start closes the drawer.
+  Auto-Match also sits in Tools on songs without audio, so it is never lost.
+- Step 4b done 2026-10-08. Claimed SongMetadataEditor.jsx (not in the original
+  plan) to give it optional controlled `open` / `onOpenChange`; SamPlayer owns
+  `editOpen`, so the pencil and Edit Song open one dialog. Tuning's localStorage
+  open flag removed (always open). Tuning Save uses `tuningDirty` only; the
+  rail's Save is unchanged (any field).
+- Step 4c done 2026-10-08. `UI` (radius, press, pressLabel, on, off, button,
+  outline, toggle, input) lives in MoreDrawer.jsx because it has no imports, so
+  nothing importing it can form a cycle; a dedicated file would be tidier but
+  needs a claim. Not restyled because they are not held: SegmentedControl
+  (shared with Sight Reader), RestControl, FingeringBar, WarmupLadderEditor.
+  Next's box rounded via PlanLine's variant, so PlanNextButton is unchanged.
+- Steps 4d and 5 done 2026-10-08. Claimed SegmentedControl, RestControl,
+  FingeringBar, WarmupLadderEditor, uiStyles.js and ScoreRenderer.fit.test.jsx.
+  Fit: ScoreRenderer `fitHeight` / `computeFitScale` / FIT_MIN_SCALE = 0.6.
+  Available height = window height − the score frame's top − what is under it
+  in its column − the page's 8px bottom padding − the frame itself. Measured on
+  mount, on resize, and by a ResizeObserver on the body and the column, so rows
+  appearing or going re-fit it. The offset editor's x follows the zoom.
+  SCORE_SCALE, ScrollEngine and all timing untouched.

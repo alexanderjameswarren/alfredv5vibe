@@ -1,6 +1,7 @@
 import React from "react";
 import { ChevronDown, ChevronRight, Flame, Trash2 } from "lucide-react";
 import InsertRowButton from "../../shared/InsertRowButton";
+import { UI } from "./uiStyles";
 import { sourceLabel } from "../lib/warmupLadder";
 import {
   MAX_RUNGS, canRemoveRung, draftSummary, toDraft, validateMode, withRungAt,
@@ -102,7 +103,7 @@ export default function WarmupLadderEditor({
   };
 
   const INPUT =
-    "w-full px-1 py-2 text-center border border-border rounded text-sm text-foreground min-h-[44px] " +
+    `w-full px-1 py-2 text-center border border-border ${UI.radius} text-sm text-foreground min-h-[44px] ` +
     "focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent";
 
   // THE ONE TEMPLATE, used by the heading row and by every rung. EVERY TRACK IS A
@@ -301,7 +302,7 @@ export default function WarmupLadderEditor({
                           type="button"
                           onClick={() => removeRow(i)}
                           disabled={!removable.ok}
-                          className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-destructive disabled:opacity-40 disabled:hover:text-muted-foreground"
+                          className={`p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-destructive disabled:opacity-40 disabled:hover:text-muted-foreground ${UI.radius}`}
                           aria-label={removable.ok ? `Remove rung ${i + 1}` : `Remove rung ${i + 1} — ${removable.reason}`}
                           title={removable.ok ? `Remove rung ${i + 1}` : removable.reason}
                         >

@@ -93,6 +93,11 @@ describe("computeBaseline", () => {
     expect(b.intentDescription).toBe("Left side, above the porch.");
   });
 
+  it("status is the suggestion when active, else someday", () => {
+    expect(computeBaseline(row({ suggestedStatus: "active" })).status).toBe("active");
+    expect(computeBaseline(row()).status).toBe("someday");
+  });
+
   it("a suggested description wins over the split leftover", () => {
     const b = computeBaseline(row({ capturedText: "Fix the gutter\nLeft side.", suggestedItemDescription: "Ladder in shed." }));
     expect(b.itemName).toBe("Fix the gutter");
@@ -118,9 +123,18 @@ describe("triageDataForOneTap", () => {
       contextId: "ctx-alfred",
       elements: [],
       tags: ["ui"],
+      status: "someday",
     });
     expect(data.createIntention).toBe(false);
     expect(data.intentionData).toBeNull();
+  });
+
+  it("sends the suggested status to both records", () => {
+    const data = triageDataForOneTap(
+      row({ suggestItem: true, suggestIntent: true, suggestedStatus: "active" }),
+    );
+    expect(data.itemData.status).toBe("active");
+    expect(data.intentionData.status).toBe("active");
   });
 
   it("sends an intention built from the suggestions, with a date as an event", () => {

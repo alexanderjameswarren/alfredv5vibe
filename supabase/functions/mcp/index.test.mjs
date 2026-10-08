@@ -288,11 +288,16 @@ test("the tool count is 72 after the job-search tools", () => {
   // 2026-10-07, +8 for Warren Buffet Phase 1, all additions, ONE deploy.
   const EXPECTED_ADDED_2026_10_07 = ["get_wb_accounts", "get_wb_balance_history", "get_wb_net_worth",
     "get_wb_transactions", "get_wb_holdings", "update_wb_account", "create_wb_manual_account", "record_wb_balance"];
-  for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07]) {
+  // 2026-10-07, +8 for Drive Mix, all additions, ONE deploy.
+  const EXPECTED_ADDED_DRIVE_MIX = ["get_drive_mix_songs", "create_drive_mix_songs", "update_drive_mix_songs",
+    "update_drive_mix_artist", "get_drive_mix_pick", "get_drive_mix_simulation", "create_drive_mix_serving",
+    "create_drive_mix_sweep"];
+  for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
+                      ...EXPECTED_ADDED_DRIVE_MIX]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 86,
-    `expected 86 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 94,
+    `expected 94 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -348,6 +353,37 @@ test("Warren Buffet schemas advertise exactly the args their handlers read", () 
   assert.deepEqual(tiers, {
     get_wb_accounts: 1, get_wb_balance_history: 1, get_wb_net_worth: 1, get_wb_transactions: 1,
     get_wb_holdings: 1, update_wb_account: 2, create_wb_manual_account: 1, record_wb_balance: 2,
+  });
+});
+
+test("Drive Mix schemas advertise exactly the args their handlers read, at the spec's tiers", () => {
+  const src = readFileSync(join(TOOLS, "dj-drive-mix.ts"), "utf-8");
+  // Args read inside the shared helpers count for every block that calls them.
+  // Helper bodies are cut out first so they are not read as part of the tool block above them.
+  const helperArgs = {};
+  let rest = src;
+  for (const h of ["pickParams", "artistPlan"]) {
+    const start = rest.search(new RegExp(`(export )?(async )?function ${h}\\(`));
+    const body = rest.slice(start).split("\n}\n")[0];
+    helperArgs[h] = [...body.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]);
+    rest = rest.replace(body, "");
+  }
+  const blocks = rest.split("defineTool({").slice(1);
+  assert.equal(blocks.length, 8, `expected 8 tools in dj-drive-mix.ts, found ${blocks.length}`);
+  const tiers = {};
+  for (const b of blocks) {
+    const name = /name:\s*"([^"]+)"/.exec(b)[1];
+    tiers[name] = Number(/tier:\s*(\d)/.exec(b)[1]);
+    const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+    for (const [h, keys] of Object.entries(helperArgs)) if (b.includes(`${h}(`)) keys.forEach((k) => read.add(k));
+    if (tiers[name] === 3) read.add("confirmed");
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
+  }
+  assert.deepEqual(tiers, {
+    get_drive_mix_songs: 1, create_drive_mix_songs: 1, update_drive_mix_songs: 2, update_drive_mix_artist: 3,
+    get_drive_mix_pick: 1, get_drive_mix_simulation: 1, create_drive_mix_serving: 2, create_drive_mix_sweep: 1,
   });
 });
 

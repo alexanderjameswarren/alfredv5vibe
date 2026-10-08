@@ -1,13 +1,14 @@
 import React from "react";
-import { Play, Pause, RotateCcw, Square, Disc, GraduationCap, Flame } from "lucide-react";
+import { Play, Pause, RotateCcw, Square, GraduationCap, Flame } from "lucide-react";
 import BackButton from "./BackButton";
+import { UI } from "./uiStyles";
 
 // Stateless cluster of playback transport buttons. Visibility per state:
 //   always         → Back to Alfred (far left)
 //   stopped        → Play + Warm up + Practice
 //   playing        → Pause
 //   paused         → Resume + Restart + Stop
-//   any + snippet  → Full Song (returns to full song view)
+// (Full Song is the snippet tray's "Whole song" button now.)
 //
 // WARM UP (spec §7.1). Between Play and Practice, in Practice's outline
 // treatment — or first in the transport and filled, when the loaded range is a
@@ -23,18 +24,19 @@ export default function TransportControls({
   onBack,
   playbackState,
   songDbId,
-  snippet,
   onPlay,
   onPractice,
   onPause,
   onResume,
   onRestart,
   onStop,
-  onFullSong,
   onWarmUp,
   warmUpVisible = false,
   warmUpPrimary = false,
   warmUpDisabledReason = null,
+  // The song rail: full-width buttons stacked top to bottom, Play tallest, and
+  // Warm up always under Practice (still filled when it is the item's goal).
+  vertical = false,
 }) {
   const isStopped = playbackState === "stopped";
   const isPlaying = playbackState === "playing";
@@ -43,18 +45,25 @@ export default function TransportControls({
   const showWarmUp = isStopped && !!onWarmUp && warmUpVisible;
   const warmUpDisabled = !songDbId || !!warmUpDisabledReason;
 
+  // Shared shape of every transport button; only the colours differ per button.
+  // Radius and hover/press darkening are the song page's one look (UI).
+  const shape = vertical
+    ? `w-full flex items-center justify-center gap-1.5 px-1 py-2 min-h-[44px] font-medium text-sm ${UI.radius} ${UI.press}`
+    : `shrink-0 whitespace-nowrap flex items-center gap-1.5 px-4 py-2 min-h-[44px] font-medium text-sm ${UI.radius} ${UI.press}`;
+  const playShape = vertical ? `${shape} flex-col min-h-[72px]` : shape;
+
   const warmUpButton = showWarmUp ? (
     <button
       onClick={onWarmUp}
       disabled={warmUpDisabled}
       title={warmUpDisabledReason || undefined}
       data-variant={warmUpPrimary ? "primary" : "outline"}
-      className={`shrink-0 whitespace-nowrap flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors ${
+      className={`${shape} ${
         warmUpDisabled
           ? "border border-border text-muted-foreground opacity-50 cursor-not-allowed"
           : warmUpPrimary
-            ? "bg-primary hover:bg-primary-hover text-white"
-            : "border border-border text-muted-foreground hover:text-dark"
+            ? "bg-primary text-white"
+            : `border ${UI.off}`
       }`}
     >
       <Flame className="w-4 h-4" />
@@ -70,16 +79,16 @@ export default function TransportControls({
 
       {/* A warm-up item's ladder IS the goal, so its button leads the transport,
           ahead of Play. Still after the back arrow, which is not a transport. */}
-      {warmUpPrimary && warmUpButton}
+      {!vertical && warmUpPrimary && warmUpButton}
 
       {!isPlaying && (
         <button
           onClick={isPaused ? onResume : onPlay}
           disabled={isStopped && !songDbId}
-          className={`shrink-0 whitespace-nowrap flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors ${
+          className={`${playShape} ${
             isStopped && !songDbId
               ? "bg-secondary text-muted-foreground cursor-not-allowed"
-              : "bg-primary hover:bg-primary-hover text-white"
+              : "bg-primary text-white"
           }`}
         >
           <Play className="w-4 h-4" />
@@ -88,7 +97,7 @@ export default function TransportControls({
       )}
 
       {/* Between Play and Practice unless it led the row (§7.1). */}
-      {!warmUpPrimary && warmUpButton}
+      {!vertical && !warmUpPrimary && warmUpButton}
 
       {/* Practice — immediately to the right of Play, at Play's size, but in
           the OUTLINE treatment its neighbours Tuning, Next and Full Song share:
@@ -101,21 +110,19 @@ export default function TransportControls({
         <button
           onClick={onPractice}
           disabled={!songDbId}
-          className={`shrink-0 whitespace-nowrap flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors border border-border ${
-            !songDbId
-              ? "text-muted-foreground opacity-50 cursor-not-allowed"
-              : "text-muted-foreground hover:text-dark"
-          }`}
+          className={`${shape} border ${UI.off} ${!songDbId ? "opacity-50 cursor-not-allowed" : ""}`}
         >
           <GraduationCap className="w-4 h-4" />
           Practice
         </button>
       )}
 
+      {vertical && warmUpButton}
+
       {isPlaying && (
         <button
           onClick={onPause}
-          className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors bg-amber-500 hover:bg-amber-600 text-white"
+          className={`${shape} bg-amber-500 text-white`}
         >
           <Pause className="w-4 h-4" /> Pause
         </button>
@@ -124,7 +131,7 @@ export default function TransportControls({
       {isPaused && (
         <button
           onClick={onRestart}
-          className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors bg-red-500 hover:bg-red-600 text-white"
+          className={`${shape} bg-red-500 text-white`}
         >
           <RotateCcw className="w-4 h-4" /> Restart
         </button>
@@ -133,21 +140,12 @@ export default function TransportControls({
       {isPaused && (
         <button
           onClick={onStop}
-          className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors bg-secondary hover:bg-secondary text-foreground border border-border"
+          className={`${shape} bg-secondary text-foreground border border-border`}
         >
           <Square className="w-4 h-4" /> Stop
         </button>
       )}
 
-      {snippet && (
-        <button
-          onClick={onFullSong}
-          className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-3 py-2 rounded min-h-[44px] text-sm font-medium transition-colors border border-border text-muted-foreground hover:text-dark"
-        >
-          <Disc className="w-4 h-4" />
-          Full Song
-        </button>
-      )}
     </>
   );
 }

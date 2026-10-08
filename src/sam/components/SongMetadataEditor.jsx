@@ -5,6 +5,10 @@ import { DEFAULTS } from "../lib/samConstants";
 import { goalFromEditor, heardGoalTempo } from "../lib/goalTempo";
 import WarmupLadderEditor from "./WarmupLadderEditor";
 import { draftFromValue, validateMode, valueFromDraft } from "../lib/warmupLadderEdit";
+import { UI } from "./uiStyles";
+
+// The dialog's text and number fields, in the song page's shared radius.
+const DIALOG_INPUT = `w-full px-3 py-2 border border-border ${UI.radius} text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent`;
 
 // The Edit Song dialog — the ONE implementation, used by the player (pencil
 // beside the song title, via the default export below) and by the song
@@ -241,7 +245,7 @@ export function SongEditDialog({
               type="text"
               value={editTitle}
               onChange={(e) => setEditTitle(e.target.value)}
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+              className={DIALOG_INPUT}
               placeholder="Song title"
             />
           </div>
@@ -254,7 +258,7 @@ export function SongEditDialog({
               type="text"
               value={editArtist}
               onChange={(e) => setEditArtist(e.target.value)}
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+              className={DIALOG_INPUT}
               placeholder="Artist name (optional)"
             />
           </div>
@@ -269,7 +273,7 @@ export function SongEditDialog({
                   type="number"
                   value={editBpm}
                   onChange={(e) => setEditBpm(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  className={DIALOG_INPUT}
                   placeholder="68"
                   min={20}
                   max={300}
@@ -297,7 +301,7 @@ export function SongEditDialog({
                       setEditPlaybackSpeed(v);
                       if (Number(v) !== DEFAULTS.playbackSpeed) setEditShowBpm(false);
                     }}
-                    className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                    className={DIALOG_INPUT}
                     placeholder="100"
                     min={10}
                     max={200}
@@ -312,7 +316,7 @@ export function SongEditDialog({
                       type="number"
                       value={editBpm}
                       onChange={(e) => setEditBpm(e.target.value)}
-                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                      className={DIALOG_INPUT}
                       placeholder="68"
                       min={20}
                       max={300}
@@ -334,7 +338,7 @@ export function SongEditDialog({
                 onChange={(e) => setEditGoal(e.target.value)}
                 aria-invalid={goal.error ? "true" : "false"}
                 aria-describedby={goal.error ? "sam-edit-goal-error" : undefined}
-                className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${
+                className={`w-full px-3 py-2 border ${UI.radius} text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${
                   goal.error ? "border-destructive" : "border-border"
                 }`}
                 min={1}
@@ -380,7 +384,7 @@ export function SongEditDialog({
                 type="number"
                 value={editTimingWindow}
                 onChange={(e) => setEditTimingWindow(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                className={DIALOG_INPUT}
                 placeholder="300"
                 min={100}
                 max={2000}
@@ -394,7 +398,7 @@ export function SongEditDialog({
                 type="number"
                 value={editChordMs}
                 onChange={(e) => setEditChordMs(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                className={DIALOG_INPUT}
                 placeholder="80"
                 min={10}
                 max={500}
@@ -408,7 +412,7 @@ export function SongEditDialog({
                 type="number"
                 value={editMeasureWidth}
                 onChange={(e) => setEditMeasureWidth(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                className={DIALOG_INPUT}
                 placeholder="300"
                 min={150}
                 max={600}
@@ -438,14 +442,14 @@ export function SongEditDialog({
           <button
             onClick={onClose}
             disabled={saving}
-            className="flex-1 px-4 py-2 border border-border rounded-lg text-sm font-medium text-foreground hover:bg-secondary min-h-[44px] disabled:opacity-50 transition-colors"
+            className={`flex-1 px-4 py-2 text-sm font-medium min-h-[44px] disabled:opacity-50 ${UI.outline}`}
           >
             Cancel
           </button>
           <button
             onClick={handleSaveEdit}
             disabled={saving || !!goal.error}
-            className="flex-1 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-sm font-medium min-h-[44px] disabled:opacity-50 transition-colors"
+            className={`flex-1 px-4 py-2 bg-primary text-white text-sm font-medium min-h-[44px] disabled:opacity-50 ${UI.radius} ${UI.press}`}
           >
             {saving ? "Saving..." : "Save"}
           </button>
@@ -456,15 +460,20 @@ export function SongEditDialog({
 }
 
 // The player's entry point: the pencil beside the song title, opening the
-// dialog above. Props are passed straight through.
+// dialog above. Props are passed straight through. `open` / `onOpenChange` are
+// optional: given, the caller owns the state, so a second trigger (the More
+// drawer's Edit Song) opens this same dialog.
 export default function SongMetadataEditor(props) {
-  const [open, setOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const controlled = props.open !== undefined;
+  const open = controlled ? props.open : ownOpen;
+  const setOpen = controlled ? (v) => props.onOpenChange?.(v) : setOwnOpen;
   return (
     <>
       {props.songDbId && (
         <button
           onClick={() => setOpen(true)}
-          className="p-1 text-muted-foreground hover:text-primary transition-colors"
+          className={`p-1 min-h-[32px] min-w-[32px] flex items-center justify-center text-muted-foreground ${UI.radius} ${UI.press}`}
           title="Edit song"
         >
           <Pencil className="w-3.5 h-3.5" />

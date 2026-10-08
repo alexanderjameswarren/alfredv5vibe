@@ -156,6 +156,11 @@ _YT_RESPONSES: dict[str, Any] = {
         ],
     },
     "search": [],
+    "get_artist": {
+        "name": "Test Artist", "channelId": "UC_test",
+        "songs": {"results": [{"videoId": "v1", "title": "Test Track",
+                               "artists": [{"name": "Test Artist", "id": "UC_test"}]}]},
+    },
     "create_playlist": "PL_created",
     "edit_playlist": {"status": "STATUS_SUCCEEDED"},
     "get_library_albums": [
@@ -197,6 +202,7 @@ _CALLS: dict[str, dict] = {
     "get_job_status": {"job_id": "nope"},
     "list_jobs": {},
     "search_dj_music": {"query": "foo fighters"},
+    "get_dj_artist_top_songs": {"channel_id": "UC_test"},
     "create_dj_playlist": {"title": "Test Playlist", "confirmed": True},
     "edit_dj_playlist": {
         "playlist_id": "PL_test",

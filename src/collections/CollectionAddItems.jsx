@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { ArrowLeft, Plus } from "lucide-react";
 import { matchesQuery } from "../utils/search";
 import PinnedFooter from "../shared/PinnedFooter";
+import ObjectIcon from "../shared/ObjectIcon";
 
 export default function CollectionAddItems({ availableItems, contexts, onAdd, onCancel, maxItems, collection, onCreateItem }) {
   const [search, setSearch] = useState("");
@@ -93,7 +94,10 @@ export default function CollectionAddItems({ availableItems, contexts, onAdd, on
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-sm truncate">{item.name}</p>
                   {contextName && (
-                    <span className="text-xs text-muted-foreground">{contextName}</span>
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <ObjectIcon type="context" className="w-3 h-3" />
+                      {contextName}
+                    </span>
                   )}
                 </div>
                 {isSelected && (

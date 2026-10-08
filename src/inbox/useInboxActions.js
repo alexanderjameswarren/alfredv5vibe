@@ -8,6 +8,7 @@ import {
 import { undoNeedsConfirming, undoWarning } from "../utils/inboxArchive";
 import { copyTextForTask, triageDataForOneTap } from "../utils/inboxSuggestions";
 import { intentionRowFromTriage } from "../utils/intentionRows";
+import { carriedItems } from "../utils/status";
 
 // Inbox writers, moved out of Alfred.jsx unchanged. Holds no state: everything it
 // reads or sets is Alfred's, passed in — including `addItemsToCollection` and
@@ -32,7 +33,25 @@ export function useInboxActions({
   addItemsToCollection,
   withLoading,
   offerUndoFor,
+  watchStatus,
 }) {
+  // The card's one-tap status toggle: someday or active only. Shown at once,
+  // put back if the write fails.
+  async function setInboxSuggestedStatus(inboxItemId, status) {
+    const before = allInboxItems.find((i) => i.id === inboxItemId);
+    if (!before) return;
+    const apply = (value) =>
+      setAllInboxItems((prev) =>
+        prev.map((i) => (i.id === inboxItemId ? { ...i, suggestedStatus: value } : i)),
+      );
+    apply(status);
+    const saved = await storage.patch(`inbox:${inboxItemId}`, { suggestedStatus: status });
+    if (!saved) {
+      apply(before.suggestedStatus);
+      window.alert("Status was not saved.");
+    }
+  }
+
   async function handleCapture() {
     if (!captureText.trim()) return;
     return withLoading('Saving...', async () => {
@@ -277,6 +296,7 @@ export function useInboxActions({
     if (!inboxItem) return;
     return withLoading('Saving...', async () => {
       let createdItemId = null;
+      let createdItem = null;
 
       // "Delete only on success" needs an explicit check, because none of the
       // writers below throw. `storage.set` catches its own errors and returns
@@ -307,6 +327,8 @@ export function useInboxActions({
           elements: triageData.itemData.elements || [],
           tags: triageData.itemData.tags || [],
           isCaptureTarget: false,
+          // Chosen at triage (088); sent on INSERT, which storage.set keeps.
+          status: triageData.itemData.status === "active" ? "active" : "someday",
           createdAt: new Date().toISOString(),
           // Where this came from — Clipboard Step 14. Only meaningful because
           // the inbox row below is now archived rather than deleted; the FK is
@@ -319,6 +341,7 @@ export function useInboxActions({
         const savedItem = wrote(await storage.set(`item:${newItem.id}`, newItem, isShared));
         setItems((prev) => [...prev, savedItem || newItem]);
         createdItemId = newItem.id;
+        createdItem = savedItem || newItem;
 
         // "Attach this Item" — appending the new item as a bullet element of an
         // existing one — used to happen here, driven by `triageData.itemItemLinks`.
@@ -359,8 +382,13 @@ export function useInboxActions({
           refreshReminderIndex();
         }
 
-        // Create event if scheduled
+        // Create event if scheduled. A date makes a someday intention and its item
+        // active (088 trigger); the watch re-reads them and says so.
         if (triageData.intentionData.createEvent && triageData.intentionData.eventDate) {
+          const settle = watchStatus({
+            intents: [savedIntent || newIntent],
+            items: carriedItems(newIntent, [], [createdItem, ...items]),
+          });
           const newEvent = {
             id: uid(),
             user_id: user.id,
@@ -378,6 +406,7 @@ export function useInboxActions({
           };
           const savedEvent = wrote(await storage.set(`event:${newEvent.id}`, newEvent));
           setEvents((prev) => [...prev, savedEvent || newEvent]);
+          await settle();
         }
       }
 
@@ -523,6 +552,7 @@ export function useInboxActions({
     copyTaskInboxItem,
     handleInboxSave,
     unarchiveInboxItem,
+    setInboxSuggestedStatus,
   };
 }
 
@@ -557,4 +587,5 @@ const CLEARED_ENRICHMENT = {
   suggestedEventDate: null,
   suggestedTags: [],
   suggestedCollectionId: null,
+  suggestedStatus: "someday",
 };

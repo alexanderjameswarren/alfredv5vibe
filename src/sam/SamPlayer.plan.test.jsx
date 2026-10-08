@@ -159,6 +159,12 @@ function renderHome() {
 
 const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Open the snippet tray and unfold its saved list. */
+async function openSavedList() {
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Saved snippets/ }));
+}
+
 async function expandPlan() {
   fireEvent.click(await screen.findByRole("button", { name: /Today's plan · / }));
 }
@@ -339,18 +345,22 @@ test("a song outside the plan shows nothing new", async () => {
   expect(screen.queryByText(/^Song goal:/)).not.toBeInTheDocument();
 });
 
-test("song note under the plan line, and alone when the loaded range has no item", async () => {
+test("the song goal is in the More drawer's Stats, not under the plan line", async () => {
   mockDb.tables.sam_practice_plan_songs[0].song_note = "Keep it steady.";
   const { unmount } = renderSong();
-  expect(await screen.findByRole("button", { name: "Song goal: Keep it steady." })).toBeInTheDocument();
-  expect(screen.getByText(/^Plan · Whole song · 55 BPM/)).toBeInTheDocument();
+  expect(await screen.findByText(/^Plan · Whole song · 55 BPM/)).toBeInTheDocument();
+  expect(screen.queryByText("Song goal: Keep it steady.")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  const stats = screen.getByRole("region", { name: "Stats" });
+  expect(within(stats).getByText("Song goal: Keep it steady.")).toBeInTheDocument();
   unmount();
 
   seed();
   mockDb.tables.sam_practice_plan_songs[0].song_note = "Keep it steady.";
   mockDb.tables.sam_practice_plan_items = mockDb.tables.sam_practice_plan_items.filter((i) => i.snippet_id);
   renderSong();
-  expect(await screen.findByRole("button", { name: "Song goal: Keep it steady." })).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: "More" }));
+  expect(await screen.findByText("Song goal: Keep it steady.")).toBeInTheDocument();
   expect(screen.queryByText(/^Plan ·/)).not.toBeInTheDocument();
 });
 
@@ -385,7 +395,7 @@ test("no plan badge while playing a range outside the plan", async () => {
 test("the planned snippet's row in the Snippet panel carries a plan tag", async () => {
   renderSong();
   await screen.findByLabelText(/BPM:/);
-  fireEvent.click(screen.getByRole("button", { name: /Snippet/ }));
+  await openSavedList();
   const tag = await screen.findByText("Plan · 60 BPM · 0/4");
   expect(tag).toHaveAttribute("data-state", "open");
   // Legible on a plain row and on the selected (filled) row: the row's own
@@ -398,7 +408,7 @@ test("a finished snippet's tag reads Plan ✓", async () => {
   mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 5, qualifying: 5 }];
   renderSong();
   await screen.findByLabelText(/BPM:/);
-  fireEvent.click(screen.getByRole("button", { name: /Snippet/ }));
+  await openSavedList();
   expect(await screen.findByText("Plan ✓")).toHaveAttribute("data-state", "done");
 });
 
@@ -453,8 +463,9 @@ function addUnplannedSnippet() {
 
 /** Load a snippet by its row in the Snippet panel. */
 async function loadSnippetFromPanel(rowText) {
-  fireEvent.click(screen.getByRole("button", { name: /Snippet/ }));
-  const row = await screen.findByRole("button", { name: new RegExp(esc(rowText)) });
+  await openSavedList();
+  // Anchored: the list header also names the current snippet.
+  const row = await screen.findByRole("button", { name: new RegExp(`^${esc(rowText)}`) });
   await act(async () => { fireEvent.click(row); });
 }
 
@@ -472,6 +483,86 @@ test("an unplanned snippet of a planned song: the line says so, and Next still p
   // The first INCOMPLETE item in plan order — the snippet item, not the
   // finished whole-song one above it.
   expect(screen.getByRole("button", { name: "Next: Throwaway m.1–1 · RH" })).toBeInTheDocument();
+});
+
+// --- The snippet tray (song rail, step 3) -------------------------------------
+
+test("tray: left icon loads and folds the list; closing keeps the range; Whole song clears it", async () => {
+  addUnplannedSnippet();
+  renderSong();
+  await screen.findByText("Plan · Whole song · 55 BPM · 80% · Done 2/2 today");
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  expect(screen.getByRole("button", { name: "Snippets" })).toHaveAttribute("aria-pressed", "true");
+  // The list starts folded.
+  const header = await screen.findByRole("button", { name: /^Saved snippets \(2\)$/ });
+  expect(header).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("button", { name: "Load m.2-2" })).not.toBeInTheDocument();
+  fireEvent.click(header);
+  await act(async () => { fireEvent.click(await screen.findByRole("button", { name: "Load m.2-2" })); });
+  expect(await screen.findByText("Not in today's plan")).toBeInTheDocument();
+  // Choosing folds it again, and the header names what is loaded.
+  expect(screen.queryByRole("button", { name: "Load m.2-2" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Saved snippets \(2\) · current: Measures 2-2 Both No Rest$/ }))
+    .toHaveAttribute("aria-expanded", "false");
+
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  expect(screen.queryByLabelText("Snippet tray")).not.toBeInTheDocument();
+  expect(screen.getByText("Not in today's plan")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Whole song" })); });
+  await screen.findByText("Plan · Whole song · 55 BPM · 80% · Done 2/2 today");
+  expect(screen.getByRole("button", { name: "Whole song" })).toBeDisabled();
+});
+
+test("tray: Enter in End commits the range like leaving the box", async () => {
+  renderSong();
+  await screen.findByText("Plan · Whole song · 55 BPM · 80% · Done 2/2 today");
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  const end = screen.getByLabelText(/End:/);
+  end.focus();
+  fireEvent.change(end, { target: { value: "1" } });
+  await act(async () => { fireEvent.keyDown(end, { key: "Enter" }); });
+  expect(await screen.findByRole("button", { name: "Whole song" })).toBeEnabled();
+});
+
+test("tray: an invalid range is reported, not corrected, and changes nothing", async () => {
+  renderSong();
+  await screen.findByText("Plan · Whole song · 55 BPM · 80% · Done 2/2 today");
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  const start = screen.getByLabelText(/Start:/);
+  const end = screen.getByLabelText(/End:/);
+
+  fireEvent.change(start, { target: { value: "2" } });
+  fireEvent.change(end, { target: { value: "1" } });
+  fireEvent.blur(end);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Start must be at or before End");
+  // Nothing reset, nothing loaded, nothing saved.
+  expect(start).toHaveValue(2);
+  expect(end).toHaveValue(1);
+  expect(screen.getByText("Plan · Whole song · 55 BPM · 80% · Done 2/2 today")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /Save New/ })).toBeDisabled();
+
+  fireEvent.change(end, { target: { value: "5" } });
+  fireEvent.blur(end);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Song has 2 measures");
+  expect(mockDb.inserts.filter((i) => i.table === "sam_snippets")).toEqual([]);
+});
+
+test("tray: typing applies the range after the debounce, with no blur or Enter", async () => {
+  renderSong();
+  await screen.findByText("Plan · Whole song · 55 BPM · 80% · Done 2/2 today");
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  fireEvent.change(screen.getByLabelText(/End:/), { target: { value: "1" } });
+  // Not yet: still the whole song.
+  expect(screen.getByRole("button", { name: "Whole song" })).toBeDisabled();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Whole song" })).toBeEnabled(), { timeout: 2000 });
+
+  // An emptied box is quiet until the debounce, then says so and changes nothing.
+  fireEvent.change(screen.getByLabelText(/End:/), { target: { value: "" } });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(await screen.findByRole("alert", {}, { timeout: 2000 })).toHaveTextContent("End must be a whole number");
+  expect(screen.getByRole("button", { name: "Whole song" })).toBeEnabled();
 });
 
 test("tapping Next from an unplanned range opens that item at its target tempo", async () => {

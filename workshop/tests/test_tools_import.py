@@ -62,6 +62,7 @@ EXPECTED_TOOLS = {
     "create_dj_playlist",
     "edit_dj_playlist",
     "get_dj_album",
+    "get_dj_artist_top_songs",
     "get_dj_history",
     "get_dj_library_albums",
     "get_dj_playlists",
@@ -142,8 +143,9 @@ class ToolsImportTests(unittest.TestCase):
         terms. 14 since the Jazz thread landed: replace_dj_playlist (its write
         path — overwriting a working playlist was five calls), plus
         get_dj_library_albums and get_dj_album (its seed and its coverage input).
+        15 since Drive Mix: get_dj_artist_top_songs (its artist seed).
         """
-        self.assertEqual(len(EXPECTED_TOOLS), 14)
+        self.assertEqual(len(EXPECTED_TOOLS), 15)
 
 
 class ImportCheckIsNotVacuousTests(unittest.TestCase):

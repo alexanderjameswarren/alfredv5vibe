@@ -98,8 +98,10 @@ function PreviewMark({ icon: Glyph, tone, children }) {
  *   reminder ("7:17 AM"), or, muted, the latest sent one ("Sent 7:36 AM"). Omitted
  *   when there is neither.
  */
-export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProcess, onCopy, onDiscard, reminder }) {
+export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProcess, onCopy, onDiscard, onSetStatus, reminder }) {
   const enriched = isEnriched(inboxItem);
+  // What the filed item and intention will start as (088). One tap flips it.
+  const status = inboxItem.suggestedStatus === "active" ? "active" : "someday";
   const canProcess = canProcessInOneTap(inboxItem);
   const isTask = inboxItem.sourceType === "task";
 
@@ -198,6 +200,21 @@ export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProc
           with the trash can pushed to the far edge — the mockup's layout, and it keeps
           both targets away from the text you are reading. */}
       <div className="flex items-center justify-between sm:justify-end gap-1.5 shrink-0">
+        {onSetStatus && (
+          <button
+            onClick={stop(() => onSetStatus(inboxItem.id, status === "active" ? "someday" : "active"))}
+            aria-label={`Status ${status === "active" ? "Active" : "Someday"}, tap to change`}
+            title="What it is filed as. Tap to switch Someday / Active"
+            className={`inline-flex items-center min-h-[44px] px-3 py-2 rounded-full border text-sm transition-colors ${
+              // Tan, not teal: teal is reserved for an execution in progress.
+              status === "active"
+                ? "bg-secondary text-foreground border-primary"
+                : "bg-background text-muted-foreground border-border hover:bg-secondary"
+            }`}
+          >
+            {status === "active" ? "Active" : "Someday"}
+          </button>
+        )}
         {canProcess && (
           <button
             onClick={stop(() => onProcess(inboxItem.id))}

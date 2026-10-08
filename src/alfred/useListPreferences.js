@@ -1,4 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  readStoredStatusFilter,
+  writeStoredStatusFilter,
+  toggleStatusFilter,
+} from "../utils/status";
 import { useSortPreference } from "../shared/SortControl";
 import { collapseOnSearch } from "../shared/TagFilter";
 import {
@@ -7,6 +12,16 @@ import {
   NAMED_RECORD_SORT_OPTIONS,
   INTENTION_SORT_OPTIONS,
 } from "../utils/listSortOptions";
+
+// Status chips (088), saved per page the way sort is: read on first render so
+// the first paint is already filtered, written on every change.
+function useStatusFilter(page) {
+  const [selected, setSelected] = useState(() => readStoredStatusFilter(page));
+  useEffect(() => {
+    writeStoredStatusFilter(page, selected);
+  }, [page, selected]);
+  return { selected, toggle: (status) => setSelected((prev) => toggleStatusFilter(prev, status)) };
+}
 
 // Per-page sort, search and tag-bar state, moved out of Alfred.jsx unchanged and
 // called where it was, so the eight sort-preference effects keep their place.
@@ -46,6 +61,9 @@ export function useListPreferences() {
   // single row drives Items, Intentions and Collections alike. The default is
   // the order Items always had here; Intentions and Collections had none.
   const contextDetailSort = useSortPreference("alfred.sort.context-detail", NAMED_RECORD_SORT_OPTIONS, "updated");
+  // One chip row per page; Context detail's drives its items and intentions alike.
+  const intentionsStatus = useStatusFilter("intentions");
+  const contextDetailStatus = useStatusFilter("context-detail");
 
   // Per-page search text, keyed by page. In memory only, unlike the sort
   // preference: it survives opening a record and pressing Back — the text is
@@ -89,6 +107,8 @@ export function useListPreferences() {
     intentionsSort,
     memoriesSort,
     contextDetailSort,
+    intentionsStatus,
+    contextDetailStatus,
     searchFor,
     setSearchFor,
     tagsCollapsedFor,

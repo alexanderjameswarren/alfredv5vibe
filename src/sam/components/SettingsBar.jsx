@@ -1,44 +1,27 @@
 import React from "react";
-import TransportControls from "./TransportControls";
-import AudioToolbar from "./AudioToolbar";
 import SongMetadataEditor from "./SongMetadataEditor";
-import NumericSettings from "./NumericSettings";
+import { formatMinutesUnits } from "../lib/practiceTimeFormat";
 
-// Layout shell composing the four focused subcomponents. Forwards each prop to
-// only the child that needs it. The static song-title block + MIDI status live
-// here because they read from props that span both transport and metadata
-// contexts. Each numeric input is a `useNumericInput` hook object passed
-// straight through.
+// The song page's title row, with the plan bar and snippet tray (`children`)
+// directly under it. Transport, Back and the tempo box live in the song rail
+// (SongRail); every other setting, tool and stat lives in the More drawer.
 export default function SettingsBar({
-  onBack,
   song, snippet,
   bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed,
   playbackState, songDbId,
-  onPlay, onPractice, onPause, onResume, onRestart, onStop,
-  // Warm-up ladder (warm-up spec §7.1). Forwarded straight through, like every
-  // other transport prop.
-  onWarmUp, warmUpVisible, warmUpPrimary, warmUpDisabledReason,
   // { ladder, source } for the song itself, for the Edit Song dialog's ladder
   // editor (warm-up spec §7.4).
   songWarmup = null,
-  onExport,
   midiConnected, midiDevice,
   pausedMeasure,
   onSongUpdate,
-  onAudioUploaded,
-  onFullSong,
-  onLyricsChanged,
-  skipTiedNotes,
   hasImportedFingerings,
-  songRepeat,
-  onSongRepeatChange,
-  songRestMeasures,
-  onSongRestMeasuresChange,
-  metronome,
-  setMetronome,
-  scorePlayback,
-  setScorePlayback,
   todayMinutes,
+  // The Edit song dialog's open state, owned by SamPlayer so the drawer's
+  // Edit Song can open it too.
+  editOpen,
+  onEditOpenChange,
+  children = null,
 }) {
   const isPaused = playbackState === "paused";
 
@@ -56,114 +39,68 @@ export default function SettingsBar({
 
   return (
     <>
-      {/* Top row: playback controls and title (left), utility actions (right).
-          
+      {/* Title row: title, range, artist and pencil (left); Practiced today
+          and MIDI (right).
+
           NOT `flex-wrap`, and that is the fix. With wrapping on, nothing in the
           row was allowed to shrink, so the only way flexbox could resolve an
-          overflow was to push the action cluster onto a second line and wrap
+          overflow was to push the right-hand items onto a second line and wrap
           the title — which is exactly what long titles produced.
-          
+
           Now one element is designated flexible and everything else is fixed:
-          the title gets `flex-1 min-w-0` and truncates, the actions get
+          the title gets `flex-1 min-w-0` and truncates, the rest get
           `shrink-0` and never move. A title of any length is absorbed by the
           ellipsis instead of by the layout. */}
       <div className="flex items-center gap-2 mb-2">
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          <TransportControls
-            onBack={onBack}
-            playbackState={playbackState}
-            songDbId={songDbId}
-            snippet={snippet}
-            onPlay={onPlay}
-            onPractice={onPractice}
-            onPause={onPause}
-            onResume={onResume}
-            onRestart={onRestart}
-            onStop={onStop}
-            onFullSong={onFullSong}
-            onWarmUp={onWarmUp}
-            warmUpVisible={warmUpVisible}
-            warmUpPrimary={warmUpPrimary}
-            warmUpDisabledReason={warmUpDisabledReason}
-          />
-
-          <div className="flex items-center gap-2 flex-1 min-w-0">
-            {/* The one flexible element in the row. `min-w-0` is what lets it
-                shrink below its content width at all — without it `truncate`
-                never engages and the row overflows instead. */}
-            <h2
-              className="text-sm font-medium text-dark truncate min-w-0"
-              title={fullTitleText}
-            >
-              {song.title || "Untitled"}
-              <span className="text-muted-foreground font-normal">
-                {` (${rangeLabel})`}
-                {isPaused && pausedMeasure != null && ` — paused at m.${pausedMeasure}`}
-              </span>
-              {song.artist && (
-                <span className="text-muted-foreground"> — {song.artist}</span>
-              )}
-            </h2>
-            <SongMetadataEditor
-              song={song}
-              songDbId={songDbId}
-              bpm={bpm}
-              timingWindowMs={timingWindowMs}
-              chordMs={chordMs}
-              measureWidth={measureWidth}
-              playbackSpeed={playbackSpeed}
-              onSongUpdate={onSongUpdate}
-              hasImportedFingerings={hasImportedFingerings}
-              resolvedWarmup={songWarmup}
-            />
-          </div>
-
-          <span className="text-sm text-muted-foreground shrink-0 whitespace-nowrap">
-            MIDI:{" "}
-            {midiConnected ? (
-              <strong className="text-success">{midiDevice}</strong>
-            ) : (
-              <span className="text-warning">Waiting...</span>
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          {/* The one flexible element in the row. `min-w-0` is what lets it
+              shrink below its content width at all — without it `truncate`
+              never engages and the row overflows instead. */}
+          <h2
+            className="text-sm font-medium text-dark truncate min-w-0"
+            title={fullTitleText}
+          >
+            {song.title || "Untitled"}
+            <span className="text-muted-foreground font-normal">
+              {` (${rangeLabel})`}
+              {isPaused && pausedMeasure != null && ` — paused at m.${pausedMeasure}`}
+            </span>
+            {song.artist && (
+              <span className="text-muted-foreground"> — {song.artist}</span>
             )}
-          </span>
-        </div>
-
-        {/* Anchored right at every width: `shrink-0` so it never compresses,
-            and no wrapping so it can never be pushed to a row of its own. */}
-        <div className="flex items-center gap-2 shrink-0">
-          <AudioToolbar
+          </h2>
+          <SongMetadataEditor
             song={song}
             songDbId={songDbId}
-            skipTiedNotes={skipTiedNotes}
+            bpm={bpm}
+            timingWindowMs={timingWindowMs}
+            chordMs={chordMs}
+            measureWidth={measureWidth}
+            playbackSpeed={playbackSpeed}
             onSongUpdate={onSongUpdate}
-            onAudioUploaded={onAudioUploaded}
-            onLyricsChanged={onLyricsChanged}
-            onExport={onExport}
+            hasImportedFingerings={hasImportedFingerings}
+            resolvedWarmup={songWarmup}
+            open={editOpen}
+            onOpenChange={onEditOpenChange}
           />
         </div>
+
+        {/* Right end: the day's all-songs total, then MIDI. */}
+        <span className="shrink-0 whitespace-nowrap flex items-center gap-2 text-sm text-muted-foreground">
+          <span>Practiced today</span>
+          <strong className="text-dark">{formatMinutesUnits(todayMinutes ?? 0)}</strong>
+        </span>
+        <span className="text-sm text-muted-foreground shrink-0 whitespace-nowrap pr-1">
+          MIDI:{" "}
+          {midiConnected ? (
+            <strong className="text-success">{midiDevice}</strong>
+          ) : (
+            <span className="text-warning">Waiting...</span>
+          )}
+        </span>
       </div>
 
-      <NumericSettings
-        song={song}
-        snippet={snippet}
-        songDbId={songDbId}
-        playbackState={playbackState}
-        bpm={bpm}
-        timingWindowMs={timingWindowMs}
-        chordMs={chordMs}
-        measureWidth={measureWidth}
-        playbackSpeed={playbackSpeed}
-        songRepeat={songRepeat}
-        onSongRepeatChange={onSongRepeatChange}
-        songRestMeasures={songRestMeasures}
-        onSongRestMeasuresChange={onSongRestMeasuresChange}
-        onSongUpdate={onSongUpdate}
-        metronome={metronome}
-        setMetronome={setMetronome}
-        scorePlayback={scorePlayback}
-        setScorePlayback={setScorePlayback}
-        todayMinutes={todayMinutes}
-      />
+      {children}
     </>
   );
 }

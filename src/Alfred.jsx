@@ -38,6 +38,14 @@ import { useAlfredData, useCollectionPoll } from "./alfred/useAlfredData";
 import { useRealtime } from "./alfred/useRealtime";
 import AppChrome from "./shared/AppChrome";
 import BottomDock from "./shared/BottomDock";
+import { useNotice } from "./shared/Notice";
+import { useStatusSync } from "./alfred/useStatusSync";
+import {
+  statusCounts,
+  filterByStatus,
+  rankByActivity,
+  withTag,
+} from "./utils/status";
 import GamesPage from "./games/GamesPage";
 import { sortRows } from "./utils/sortOrders";
 import { matchesQuery } from "./utils/search";
@@ -231,6 +239,10 @@ export default function Alfred() {
   const [captureText, setCaptureText] = useState("");
   const [showContextForm, setShowContextForm] = useState(false);
   const [editingContext, setEditingContext] = useState(null);
+  // "Moved to active" after a write the 088 triggers may answer. Before the
+  // action hooks, which take `watchStatus`.
+  const { notice, showNotice } = useNotice();
+  const { watchStatus } = useStatusSync({ setIntents, setItems, showNotice });
   // Called here, after `user` and every state it reads. `withLoading` and
   // `offerUndoFor` are function declarations below, hoisted.
   const {
@@ -264,10 +276,11 @@ export default function Alfred() {
     withLoading,
     offerUndoFor,
   });
-  const { moveToPlanner, updateIntent, archiveIntention } = useIntentionActions({
+  const { moveToPlanner, scheduleFromItem, updateIntent, archiveIntention, setIntentionStatus } = useIntentionActions({
     user,
     intents,
     setIntents,
+    items,
     events,
     setEvents,
     view,
@@ -276,8 +289,9 @@ export default function Alfred() {
     intentionReturnView,
     withLoading,
     offerUndoFor,
+    watchStatus,
   });
-  const { updateItem, deepCloneItem } = useItemActions({
+  const { updateItem, deepCloneItem, setItemStatus } = useItemActions({
     user,
     items,
     setItems,
@@ -364,6 +378,7 @@ export default function Alfred() {
     triggerRecurrence,
     clearCompletedFromCollection,
     withLoading,
+    watchStatus,
   });
   const {
     handleCapture,
@@ -373,6 +388,7 @@ export default function Alfred() {
     copyTaskInboxItem,
     handleInboxSave,
     unarchiveInboxItem,
+    setInboxSuggestedStatus,
   } = useInboxActions({
     user,
     inboxItems,
@@ -393,6 +409,7 @@ export default function Alfred() {
     addItemsToCollection,
     withLoading,
     offerUndoFor,
+    watchStatus,
   });
   // `refreshData` is a function declaration below, hoisted.
   const recycleBin = useRecycleBin({ view, refreshData, contextArchiveBlockers });
@@ -623,6 +640,8 @@ export default function Alfred() {
     intentionsSort,
     memoriesSort,
     contextDetailSort,
+    intentionsStatus,
+    contextDetailStatus,
     searchFor,
     setSearchFor,
     tagsCollapsedFor,
@@ -997,12 +1016,14 @@ export default function Alfred() {
   const pinnedCollections = activeCollections.filter((c) => c.pinned);
   const allLiveExecutions = [...activeExecutions, ...pausedExecutions];
 
-  // Intentions: Marked as intentions, not archived, no active event
-  const intentionsWithoutActiveEvent = intents.filter((i) => {
-    if (!i.isIntention || i.archived) return false;
-    const hasActiveEvent = validEvents.some((e) => e.intentId === i.id);
-    return !hasActiveEvent;
-  });
+  // Intentions: every live intention. Which of them show is the status chips'
+  // call (088), not a hidden "no live event" rule, which this used to be.
+  const liveIntentions = intents.filter((i) => i.isIntention && !i.archived);
+  // Counted before tags and search, like the inbox source tabs, so a chip's
+  // number does not move as you type.
+  // Counts only rows passing the tag filter, as the tag chips count only rows
+  // passing the status chips. Every chip still shows, zero included.
+  const intentionStatusCounts = statusCounts(withTag(liveIntentions, filterTag));
 
   const memoriesWithoutContext = items.filter((i) => !i.contextId && !i.archived);
 
@@ -1048,13 +1069,18 @@ export default function Alfred() {
   ).filter((c) =>
     matchesQuery(searchFor("contexts"), c.name, c.description, c.keywords),
   );
-  const visibleIntentions = sortRows(
-    intentionsWithoutActiveEvent.filter(
-      (intent) => !filterTag || (intent.tags && intent.tags.includes(filterTag)),
+  // What is happening now first (rankByActivity); the chosen sort orders within each group.
+  const visibleIntentions = rankByActivity(
+    sortRows(
+      filterByStatus(liveIntentions, intentionsStatus.selected).filter(
+        (intent) => !filterTag || (intent.tags && intent.tags.includes(filterTag)),
+      ),
+      intentionsSort.sortKey,
+      INTENTION_ACCESSORS,
+      intentionsSort.sortDir,
     ),
-    intentionsSort.sortKey,
-    INTENTION_ACCESSORS,
-    intentionsSort.sortDir,
+    validEvents,
+    allLiveExecutions,
   ).filter((intent) => matchesQuery(searchFor("intentions"), getIntentDisplay(intent)));
   const visibleMemories = sortRows(
     memoriesWithoutContext.filter(
@@ -1179,6 +1205,7 @@ export default function Alfred() {
             processInboxItemFromList={processInboxItemFromList}
             copyTaskInboxItem={copyTaskInboxItem}
             discardInboxItem={discardInboxItem}
+            setInboxSuggestedStatus={setInboxSuggestedStatus}
             archivedInboxItems={archivedInboxItems}
             olderArchived={olderArchived}
             archivedShowAll={archivedShowAll}
@@ -1249,6 +1276,12 @@ export default function Alfred() {
             search={searchFor("context-detail")}
             onSearchChange={setSearchFor("context-detail")}
             intents={intents.filter((i) => i.contextId === selectedContextId && !(i.isIntention && i.archived))}
+            allIntents={intents}
+            statusFilter={contextDetailStatus}
+            archivedItems={items.filter((i) => i.contextId === selectedContextId && i.archived)}
+            archivedIntents={intents.filter(
+              (i) => i.contextId === selectedContextId && i.isIntention && i.archived,
+            )}
             contexts={contexts}
             onBack={() => {
               setSelectedContextId(null);
@@ -1298,6 +1331,7 @@ export default function Alfred() {
             tagPool={tagPool}
             intention={intents.find((i) => i.id === effectiveIntentionId)}
             capturedText={capturedTextFor(intents.find((i) => i.id === effectiveIntentionId))}
+            intents={intents}
             events={events}
             contexts={contexts}
             items={items}
@@ -1317,6 +1351,7 @@ export default function Alfred() {
             onOpenExecution={openExecution}
             onCancelExecution={cancelExecutionForEvent}
             onArchiveIntention={archiveIntention}
+            onSetStatus={setIntentionStatus}
             onSchedule={moveToPlanner}
             onStartNow={startNowFromIntention}
             collections={activeCollections}
@@ -1370,6 +1405,7 @@ export default function Alfred() {
             onBack={handleBackFromItemDetail}
             onAddToCollection={() => setView("item-add-to-collection")}
             onUpdateItem={updateItem}
+            onSetStatus={setItemStatus}
             onEditItem={() => {
               // User can click item to edit inline
             }}
@@ -1379,6 +1415,7 @@ export default function Alfred() {
             executions={allLiveExecutions.filter((ex) => ex.itemIds?.includes(selectedItemId))}
             onOpenExecution={openExecution}
             onStartNow={startNowFromItem}
+            onScheduleItem={scheduleFromItem}
             onUpdateEvent={updateEvent}
             onActivate={activate}
             onAddIntention={handleAddIntentionToContext}
@@ -1425,6 +1462,14 @@ export default function Alfred() {
             closeExecution={closeExecution}
             pauseExecution={pauseExecution}
             makeExecutionActive={makeExecutionActive}
+            // Back from these lands on Home (Active/Paused/Today), one tap from
+            // the run: "execution-detail" as a return view has no id in its path.
+            onViewIntention={(id) => viewIntentionDetail(id, "home")}
+            onViewItem={(id) => viewItemDetail(id, "home")}
+            onViewContext={(id) => {
+              viewContextDetail(id);
+              setPreviousView("home");
+            }}
           />
         )}
 
@@ -1454,7 +1499,9 @@ export default function Alfred() {
         {/* Intentions View */}
         {view === "intentions" && (
           <IntentionsScreen
-            intentionsWithoutActiveEvent={intentionsWithoutActiveEvent}
+            liveIntentions={liveIntentions}
+            intentionStatusCounts={intentionStatusCounts}
+            intentionsStatus={intentionsStatus}
             visibleIntentions={visibleIntentions}
             validEvents={validEvents}
             allLiveExecutions={allLiveExecutions}
@@ -1638,6 +1685,7 @@ export default function Alfred() {
           the bar's height changes as its textarea grows, and any offset would
           be wrong the moment somebody types a long capture. */}
       <BottomDock
+        notice={notice}
         pendingUndo={pendingUndo}
         runUndo={runUndo}
         dismissUndo={dismissUndo}

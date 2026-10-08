@@ -7,6 +7,7 @@ import {
 } from "../utils/ingredientMatch";
 import PinnedFooter from "../shared/PinnedFooter";
 import ItemPicker from "../shared/ItemPicker";
+import ObjectIcon from "../shared/ObjectIcon";
 
 /**
  * Add to Collection — resolve an item's collectable elements to items in a
@@ -185,7 +186,10 @@ export default function ItemAddToCollection({ item, items, collections, contexts
       <h2 className="text-lg sm:text-xl font-medium text-foreground mb-1">
         Add to Collection
       </h2>
-      <p className="text-sm text-muted-foreground mb-3">{item.name}</p>
+      <p className="flex items-center gap-1.5 text-sm text-muted-foreground mb-3">
+        <ObjectIcon type="item" className="w-4 h-4 shrink-0" />
+        {item.name}
+      </p>
 
       {available.length === 0 ? (
         <p className="text-sm text-muted-foreground py-4">

@@ -86,6 +86,16 @@ import {
   recordWbBalanceTool,
 } from "../_shared/tools/warren-buffet.ts";
 import {
+  getDriveMixSongsTool,
+  createDriveMixSongsTool,
+  updateDriveMixSongsTool,
+  updateDriveMixArtistTool,
+  getDriveMixPickTool,
+  getDriveMixSimulationTool,
+  createDriveMixServingTool,
+  createDriveMixSweepTool,
+} from "../_shared/tools/dj-drive-mix.ts";
+import {
   getKenQuizBatchTool,
   recordKenAttemptsTool,
   createKenAreaTool,
@@ -2905,6 +2915,164 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(recordWbBalanceTool, args, token),
+  );
+
+  // --- Drive Mix (docs/technical-spec-drive_mix-v7r.md §5) ---
+  const DM_SLICES =
+    "Slices: country_rap (genre country or rap, any decade), 1980s-and-earlier (decade 1980 or before, 1950s included), 1990s-2000s, 2010s-2020s. Every tagged song is in exactly one. ";
+  const dmGenre = z.enum(["pop", "rock", "alternative", "country", "rap", "rnb", "dance", "other"]);
+  const dmStatus = z.enum(["pending", "active", "retired"]);
+  const dmSource = z.enum(["playlist_seed", "artist_top", "history_sweep", "manual"]);
+  const dmPickParams = {
+    count: z.number().optional().describe("Songs in the playlist, 1 to 200. Default 50 (about 3 hours); about 170 for 10 hours."),
+    artist_cap: z.number().optional().describe("Max songs per artist_key in one playlist. Default ceil(count / 25): 2 at 50, 7 at 170."),
+    quotas: z.record(z.string(), z.number()).optional().describe(
+      'Share per slice, scaled to count (largest remainder); counts that already sum to count are used as given. Default shape {"country_rap":6,"1980s-and-earlier":10,"2010s-2020s":12,"1990s-2000s":22}.'),
+    cooldown_days: z.number().optional().describe(
+      "Prefer no NEW songs from an artist with any pool song heard in this many days before the date; they are used only as a last resort to reach count (cooling: true). Carried-over songs are exempt. Default 2; 0 turns it off."),
+  };
+  const DM_PICK_RULES =
+    "Carry-over first: songs from the most recent serving that are still active and have not been heard since go back in (carried: true), counting toward their slice and the artist cap but never dropped by them, and never more than count. " +
+    "Then each slice is topped up to its quota in last-heard order (never-heard first), then fill, skipping cooling artists; only if still short are cooling artists used. The artist cap applies throughout. ";
+
+  server.registerTool(
+    "get_drive_mix_songs",
+    {
+      title: "Get Drive Mix Songs",
+      description:
+        "List songs in the Drive Mix pool (the daily car playlist's song pool), sorted by artist_key then title. Filter by status, artist (matched against artist_key, case-insensitive exact), source, or untagged: true (decade or genre missing). " +
+        "Also returns pool-wide counts by status and, for active tagged songs, by slice — use them to check a slice can fill its quota. " + DM_SLICES + "Tier 1.",
+      inputSchema: {
+        status: dmStatus.optional().describe("Only this status. pending = not yet tagged and reviewed; only active songs are picked."),
+        artist: z.string().optional().describe("Only this artist_key, e.g. 'bryan adams'."),
+        source: dmSource.optional().describe("Only songs that entered the pool this way."),
+        untagged: z.boolean().optional().describe("true = only songs missing decade or genre."),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getDriveMixSongsTool, args, token),
+  );
+
+  server.registerTool(
+    "create_drive_mix_songs",
+    {
+      title: "Add Drive Mix Songs",
+      description:
+        "Add up to 50 songs to the Drive Mix pool in one call. A song with both decade and genre arrives active (pickable); otherwise pending, to be tagged with update_drive_mix_songs. " +
+        "Songs already in the pool (same video_id) or repeated in the call are skipped and listed in `skipped`. artist_key defaults to the first name of a collaboration, lower-cased; pass it only when that default is wrong. Returns `added` and `skipped`. Tier 1.",
+      inputSchema: {
+        songs: z.array(z.object({
+          video_id: z.string().describe("YouTube video id, 11 characters."),
+          title: z.string(),
+          artist: z.string().describe("Billing as YouTube gives it."),
+          artist_key: z.string().optional(),
+          decade: z.number().optional().describe("1950, 1960 ... 2020."),
+          genre: dmGenre.optional(),
+        })).describe("1 to 50 songs."),
+        source: dmSource.optional().describe("How these songs entered the pool. Default 'manual'."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createDriveMixSongsTool, args, token),
+  );
+
+  server.registerTool(
+    "update_drive_mix_songs",
+    {
+      title: "Update Drive Mix Songs",
+      description:
+        "Apply one change to up to 50 pool songs by id (from get_drive_mix_songs): set decade, genre or artist_key, or change status. Activating needs decade and genre on every song, from this call or already set. " +
+        "retired_reason only with status 'retired'; moving a song out of retired clears its reason. Unknown ids refuse the whole call. Audited and reversible. Tier 2.",
+      inputSchema: {
+        ids: z.array(z.string()).describe("Pool song ids, 1 to 50."),
+        decade: z.number().optional().describe("1950, 1960 ... 2020."),
+        genre: dmGenre.optional(),
+        artist_key: z.string().optional().describe("Normalised primary artist for the per-artist cap."),
+        status: dmStatus.optional(),
+        retired_reason: z.string().optional().describe("Why, when retiring."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateDriveMixSongsTool, args, token),
+  );
+
+  server.registerTool(
+    "update_drive_mix_artist",
+    {
+      title: "Retire or Reactivate a Drive Mix Artist",
+      description:
+        "Retire, or reactivate, every pool song for one artist_key. Without confirmed: true this returns a proposal listing the songs it would change; show Alex that list and call again with confirmed: true only after he agrees. " +
+        "Reactivating sends tagged songs to active and untagged ones to pending. Tier 3.",
+      inputSchema: {
+        artist_key: z.string().describe("The artist_key, e.g. 'bryan adams' (case-insensitive)."),
+        action: z.enum(["retire", "reactivate"]),
+        retired_reason: z.string().optional().describe("Required for retire."),
+        confirmed: z.boolean().optional().describe("true to apply, after Alex approves the proposal."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateDriveMixArtistTool, args, token),
+  );
+
+  server.registerTool(
+    "get_drive_mix_pick",
+    {
+      title: "Dry-run the Drive Mix Pick",
+      description:
+        "Run the Drive Mix picker for a date and return the playlist it would serve, in order, with video_ids ready for replace_dj_playlist. Writes nothing. The same date gives the same list while no new plays or servings land. " +
+        DM_PICK_RULES + DM_SLICES +
+        "Reports quotas_used, artist_cap_used, carried_over, cooling_used (last-resort songs from cooling artists), short_by and slice_shortfalls. Dates are UTC days; pass date explicitly in the daily task. Tier 1.",
+      inputSchema: {
+        date: z.string().optional().describe("YYYY-MM-DD. Default today (UTC)."),
+        ...dmPickParams,
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getDriveMixPickTool, args, token),
+  );
+
+  server.registerTool(
+    "get_drive_mix_simulation",
+    {
+      title: "Simulate Drive Mix",
+      description:
+        "Run the Drive Mix picker for consecutive days without writing anything, through the same logic as a real pick: the first heard_per_day songs of each day count as heard that day (default all), for recency and the artist cooldown, and the rest carry over to the next day. Use it to tune artist_cap, cooldown_days and quotas. " +
+        "LIMIT: days x count must be at most 6,000 song-days (e.g. 60 days at 100 songs, 30 days at 200), because the database stops a call at 8 seconds; a larger request is refused before it runs. " +
+        "Returns quotas_used, artist_cap_used, repeat_gap (days between serves of a song), heard_gap (days between hearings), carried_per_day_avg, cooling_fills (total and per day), expected_gap_days (pool / count), shortfalls, per-song served/heard counts, and per-artist served and days_appeared (most days first), cut to limit. Tier 1.",
+      inputSchema: {
+        start: z.string().optional().describe("First day, YYYY-MM-DD. Default today (UTC)."),
+        days: z.number().optional().describe("Days to simulate, default 60, max 120."),
+        heard_per_day: z.number().optional().describe("How many of each day's songs count as heard. Default all."),
+        limit: z.number().optional().describe("Max rows in the songs and artists lists, default 20, cap 50."),
+        ...dmPickParams,
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getDriveMixSimulationTool, args, token),
+  );
+
+  server.registerTool(
+    "create_drive_mix_serving",
+    {
+      title: "Record a Drive Mix Serving",
+      description:
+        "Record what the Drive Mix playlist carried on a date: pass the video_ids exactly as sent to YouTube, in playlist order, and only AFTER the playlist write succeeded. Recorded as given — it does not re-run the picker. " +
+        "Every video_id must be an active pool song. A date that already has a serving is refused; there is no replace. Tier 2.",
+      inputSchema: {
+        date: z.string().optional().describe("YYYY-MM-DD, the date the playlist was picked for. Default today (UTC)."),
+        video_ids: z.array(z.string()).describe("The video_ids sent to YouTube, in order, 1 to 200."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createDriveMixServingTool, args, token),
+  );
+
+  server.registerTool(
+    "create_drive_mix_sweep",
+    {
+      title: "Sweep History into Drive Mix",
+      description:
+        "Add to the Drive Mix pool, as pending, every song played on at least two different days that is not already pooled (matched by canonical track group), is not by an artist with an active jazz tag, and is not credited to 'Release'. " +
+        "Returns how many were added and the first `limit` of them; tag each with update_drive_mix_songs, or retire it. Tier 1.",
+      inputSchema: {
+        limit: z.number().optional().describe("Max added songs listed, default 20, cap 50. The count is always complete."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createDriveMixSweepTool, args, token),
   );
 
   return server;

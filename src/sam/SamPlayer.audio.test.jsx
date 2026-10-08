@@ -122,6 +122,10 @@ function renderPlayer() {
 }
 
 async function uploadFile() {
+  // Audio upload lives in the More drawer.
+  if (!document.querySelector('input[type="file"][accept*="mp3"]')) {
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+  }
   const input = document.querySelector('input[type="file"][accept*="mp3"]');
   const file = new File(["mp3"], "track.mp3", { type: "audio/mpeg" });
   await act(async () => {
@@ -148,9 +152,9 @@ beforeEach(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 
-// The tempo box (NumericSettings) reads the same song: BPM without audio,
-// Playback Speed % with it.
-const tempoBoxShowsAudio = () => screen.queryByText(/^Playback Speed %:/) !== null;
+// The tempo box (the rail's TempoControls) reads the same song: BPM without
+// audio, Speed % with it.
+const tempoBoxShowsAudio = () => screen.queryByText(/^Speed %:/) !== null;
 const tempoBoxShowsBpm = () => screen.queryByText(/^BPM:/) !== null;
 
 test("before any upload the dialog shows the no-audio layout", async () => {
@@ -177,6 +181,13 @@ test("after a successful upload the dialog shows the audio layout, no reload", a
     expect(mockLoadAudio).toHaveBeenCalledWith(SONG_ID, `u1/${SONG_ID}-1.mp3`, expect.anything())
   );
   expect(await screen.findByText("Mute audio")).toBeInTheDocument();
+  // An audio song's drawer leads with Audio, which now holds upload and sync.
+  const drawer = screen.getByRole("dialog", { name: "More" });
+  expect(within(drawer).getAllByRole("region").map((r) => r.getAttribute("aria-label")))
+    .toEqual(["Audio", "Sound", "Tuning", "Tools", "Stats"]);
+  const audio = within(drawer).getByRole("region", { name: "Audio" });
+  expect(within(audio).getByRole("button", { name: "Edit audio sync" })).toBeInTheDocument();
+  expect(within(audio).getByText(/^Playback Speed %:/)).toBeInTheDocument();
   expect(tempoBoxShowsAudio()).toBe(true);
   expect(tempoBoxShowsBpm()).toBe(false);
 

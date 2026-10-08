@@ -120,6 +120,13 @@ describe("the two toggles", () => {
     expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
   });
 
+  it("shows New Intention tan when on, never teal", () => {
+    setup({ suggestIntent: true });
+    const toggle = screen.getByRole("button", { name: /New Intention/ });
+    expect(toggle.className).toMatch(/bg-secondary/);
+    expect(toggle.className).not.toMatch(/success/);
+  });
+
   it("preselects each section from the enrichment", () => {
     setup({ suggestItem: true, suggestIntent: true });
     expect(screen.getByRole("button", { name: /New Item/ })).toHaveAttribute("aria-pressed", "true");
@@ -308,6 +315,13 @@ describe("Details reaches the database row", () => {
 });
 
 describe("When", () => {
+  it("marks the chosen answer tan, never teal", () => {
+    setup({ suggestIntent: true, suggestedIntentText: "Fix it" });
+    const someday = screen.getByRole("button", { name: /Someday/ });
+    expect(someday.className).toMatch(/bg-secondary/);
+    expect(someday.className).not.toMatch(/success/);
+  });
+
   it("is Someday until something says otherwise", () => {
     setup({ suggestIntent: true, suggestedIntentText: "Fix it" });
     expect(screen.getByRole("button", { name: /Someday/ })).toHaveAttribute("aria-pressed", "true");

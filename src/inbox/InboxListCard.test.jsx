@@ -271,3 +271,16 @@ describe("the shared pieces are not rebuilt elsewhere", () => {
     }
   });
 });
+
+test("the Active status pill is tan, not teal", () => {
+  render(
+    <InboxListCard
+      inboxItem={{ id: "inbox-1", capturedText: "x", suggestedStatus: "active", createdAt: "2026-10-08T09:00:00Z" }}
+      onOpen={jest.fn()}
+      onSetStatus={jest.fn()}
+    />,
+  );
+  const pill = screen.getByRole("button", { name: /Status Active/ });
+  expect(pill.className).toMatch(/bg-secondary/);
+  expect(pill.className).not.toMatch(/success/);
+});

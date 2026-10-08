@@ -1,4 +1,4 @@
-import { runNowTargetForItem, isDueBy, hasFutureLiveEvent } from "./runNow";
+import { runNowTargetForItem, itemActionTarget, isDueBy, hasFutureLiveEvent } from "./runNow";
 
 const daily = { type: "fixed", frequency: "daily", interval: 1 };
 const once = { type: "once" };
@@ -9,6 +9,15 @@ describe("runNowTargetForItem", () => {
   test("none live -> null", () => {
     const intents = [intent("a", { archived: true, recurrenceConfig: daily }), intent("b", { itemId: "other" })];
     expect(runNowTargetForItem("item-1", intents, [])).toBeNull();
+  });
+
+  test("closed intentions are skipped like archived ones", () => {
+    const intents = [
+      intent("shut", { recurrenceConfig: daily, status: "closed" }),
+      intent("open", { recurrenceConfig: once, status: "active" }),
+    ];
+    expect(runNowTargetForItem("item-1", intents, []).intent.id).toBe("open");
+    expect(runNowTargetForItem("item-1", [intents[0]], [])).toBeNull();
   });
 
   test("recurring beats a newer one-off", () => {
@@ -44,6 +53,24 @@ describe("runNowTargetForItem", () => {
   test("legacy recurrence string counts as recurring", () => {
     const intents = [intent("leg", { recurrence: "daily" }), intent("one", { recurrenceConfig: once, createdAt: "2026-10-01" })];
     expect(runNowTargetForItem("item-1", intents, []).intent.id).toBe("leg");
+  });
+});
+
+describe("itemActionTarget", () => {
+  const intents = [
+    intent("rec", { recurrenceConfig: daily, status: "active" }),
+    intent("some", { recurrenceConfig: once, status: "someday" }),
+  ];
+  test("an intention with an open run wins over the usual pick", () => {
+    const t = itemActionTarget("item-1", intents, [], [{ id: "x", intentId: "some", status: "paused" }]);
+    expect(t.intent.id).toBe("some");
+  });
+  test("an open run on another item's intention is ignored", () => {
+    const t = itemActionTarget("item-1", [...intents, intent("other", { itemId: "item-2" })], [], [{ id: "x", intentId: "other" }]);
+    expect(t.intent.id).toBe("rec");
+  });
+  test("no open run falls back to runNowTargetForItem", () => {
+    expect(itemActionTarget("item-1", intents, [], []).intent.id).toBe("rec");
   });
 });
 

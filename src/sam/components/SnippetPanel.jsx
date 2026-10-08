@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
-import { ChevronDown, ChevronRight, Save, Archive, ArchiveRestore, Flame } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { ChevronDown, ChevronRight, CircleArrowRight, Disc, Save, Archive, ArchiveRestore, Flame } from "lucide-react";
 import RestControl from "./RestControl";
+import { UI } from "./uiStyles";
 import { supabase } from "../../supabaseClient";
 import { formatSnippetTitle, findMatchingSnippet, ensureSnippetSaved, snippetFromRow } from "../lib/snippetsApi";
 import useSnippetPracticeSummary from "../lib/useSnippetPracticeSummary";
@@ -57,8 +58,36 @@ function PlanTag({ tag }) {
   );
 }
 
+// Enter commits a measure box the same way leaving it does: blur runs the commit.
+function blurOnEnter(e) {
+  if (e.key === "Enter") e.currentTarget.blur();
+}
+
+// How long after the last keystroke in Start/End the range applies.
+export const RANGE_DEBOUNCE_MS = 500;
+
+// Start/End as typed → { ok, start, end } or { ok: false, error }. Nothing is
+// ever corrected: an invalid pair changes nothing and says why.
+export function validateRange(startText, endText, totalMeasures) {
+  const whole = (t) => /^\d+$/.test(String(t).trim());
+  if (!whole(startText)) return { ok: false, error: "Start must be a whole number" };
+  if (!whole(endText)) return { ok: false, error: "End must be a whole number" };
+  const start = Number(startText);
+  const end = Number(endText);
+  if (start < 1 || end < 1 || start > totalMeasures || end > totalMeasures) {
+    return { ok: false, error: `Song has ${totalMeasures} measures` };
+  }
+  if (start > end) return { ok: false, error: "Start must be at or before End" };
+  return { ok: true, start, end };
+}
+
+// The snippet tray (song rail, step 3). Opened and closed by the rail's
+// Snippets toggle, so `open` is the caller's; closing it keeps the loaded range.
 export default function SnippetPanel({
-  songDbId, totalMeasures, snippet, onSnippetChange, scoreTools = null,
+  songDbId, totalMeasures, snippet, onSnippetChange,
+  open = false,
+  // Clears the range (handleSnippetChange(null)); the tray's Whole song button.
+  onWholeSong = null,
   // (snippetId) => { text, state } | null — the practice plan's tag for a
   // planned snippet (§7.4). Archived snippets aren't listed, so never tagged.
   planTagFor = null,
@@ -91,7 +120,6 @@ export default function SnippetPanel({
     setLadderShowErrors(false);
     setLadderError(null);
   }
-  const [open, setOpen] = useState(false);
   const [startMeas, setStartMeas] = useState(snippet?.startMeasure || 1);
   const [startInput, setStartInput] = useState(String(snippet?.startMeasure || 1));
   const [endMeas, setEndMeas] = useState(snippet?.endMeasure || totalMeasures);
@@ -102,8 +130,16 @@ export default function SnippetPanel({
   const [savedSnippets, setSavedSnippets] = useState([]);
   const [archivedSnippets, setArchivedSnippets] = useState([]);
   const [showArchived, setShowArchived] = useState(false);
-
-  const maxMeas = totalMeasures;
+  // The message for an invalid Start/End, shown once a commit has judged it.
+  const [rangeError, setRangeError] = useState(null);
+  // True between a keystroke in Start/End and its commit; drives the debounce.
+  const typedRef = useRef(false);
+  const debounceRef = useRef(null);
+  // The saved list's own fold. Collapsed every time the tray opens.
+  const [listOpen, setListOpen] = useState(false);
+  useEffect(() => {
+    if (open) setListOpen(false);
+  }, [open]);
 
   // Saved snippets are shown newest-created first — the one you just made is
   // the one you most likely want to practise. The fetch below already asks for
@@ -163,6 +199,8 @@ export default function SnippetPanel({
     setEndInput(String(end));
     setRestMeasures(snippet?.restMeasures ?? 0);
     setHandMode(snippet?.handMode || "both");
+    setRangeError(null);
+    typedRef.current = false;
   }, [snippet, totalMeasures]);
 
   // The LIVE saved snippet the controls currently describe, if any. Recomputed
@@ -231,25 +269,59 @@ export default function SnippetPanel({
   // would otherwise load a snippet the user never asked for — which, from the
   // full-song state, would look like Full Song spontaneously turning into a
   // whole-span snippet.
-  function commitStart() {
-    let n = Number(startInput);
-    if (!n || n < 1) n = 1;
-    if (n > endMeas) n = endMeas;
-    setStartInput(String(n));
-    if (n === startMeas) return;
-    setStartMeas(n);
-    emitRange({ startMeasure: n });
+  //
+  // Start and End commit together, from blur, Enter, or the debounce after
+  // typing. An invalid pair is reported and changes nothing: the boxes keep what
+  // was typed, and the score keeps the last valid range.
+  function commitRange() {
+    typedRef.current = false;
+    const v = validateRange(startInput, endInput, totalMeasures);
+    if (!v.ok) {
+      setRangeError(v.error);
+      return;
+    }
+    setRangeError(null);
+    if (v.start === startMeas && v.end === endMeas) return;
+    setStartMeas(v.start);
+    setEndMeas(v.end);
+    emitRange({ startMeasure: v.start, endMeasure: v.end });
   }
 
-  function commitEnd() {
-    let n = Number(endInput);
-    if (!n || n < startMeas) n = startMeas;
-    if (n > maxMeas) n = maxMeas;
-    setEndInput(String(n));
-    if (n === endMeas) return;
-    setEndMeas(n);
-    emitRange({ endMeasure: n });
+  // Clip as you type: apply RANGE_DEBOUNCE_MS after the last keystroke in either
+  // box. Only typing arms it — the mirror effect above setting the boxes never does.
+  useEffect(() => {
+    if (!typedRef.current) return undefined;
+    debounceRef.current = setTimeout(commitRange, RANGE_DEBOUNCE_MS);
+    return () => clearTimeout(debounceRef.current);
+    // commitRange is this render's, which holds these inputs.
+  }, [startInput, endInput]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function typeStart(text) {
+    typedRef.current = true;
+    setStartInput(text);
   }
+
+  function typeEnd(text) {
+    typedRef.current = true;
+    setEndInput(text);
+  }
+
+  // Blur and Enter apply at once, cancelling the pending debounce.
+  function commitNow() {
+    clearTimeout(debounceRef.current);
+    commitRange();
+  }
+
+  const currentRow = snippet?.dbId ? savedSnippets.find((s) => s.id === snippet.dbId) : null;
+  const rowTitle = (s) => formatSnippetTitle({
+    startMeasure: s.start_measure,
+    endMeasure: s.end_measure,
+    handMode: s.settings?.handMode || "both",
+    restMeasures: s.rest_measures ?? 0,
+  });
+
+  const rangeValid = validateRange(startInput, endInput, totalMeasures).ok;
+  const rangePending = startInput !== String(startMeas) || endInput !== String(endMeas);
 
   function commitRestMeasures(n) {
     if (n === restMeasures) return;
@@ -271,6 +343,11 @@ export default function SnippetPanel({
     setRestMeasures(s.rest_measures ?? 0);
     const hm = s.settings?.handMode || "both";
     setHandMode(hm);
+    // A typed edit still waiting on the debounce must not override the choice.
+    clearTimeout(debounceRef.current);
+    typedRef.current = false;
+    setRangeError(null);
+    setListOpen(false);
 
     onSnippetChange(snippetFromRow(s));
   }
@@ -387,43 +464,33 @@ export default function SnippetPanel({
   }
 
   return (
-    <div className="mb-3">
-      {/* The Snippet toggle is a small control on an otherwise empty row, and
-          this row is the last one before the score — so the score's own
-          controls ride at the far end of it rather than claiming a row. Both
-          sides are `min-h-[44px]`, so this costs no vertical space at all. */}
-      <div className="flex items-center gap-2">
-        <button
-          onClick={() => setOpen(!open)}
-          className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-dark min-h-[44px] px-1"
-        >
-          {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-          Snippet
-          {snippet && (
-            <span className="text-xs text-primary ml-1">
-              (m.{snippet.startMeasure}–{snippet.endMeasure})
-            </span>
-          )}
-        </button>
-        {scoreTools && (
-          <div className="ml-auto flex items-center gap-2 shrink-0">{scoreTools}</div>
-        )}
-      </div>
-
+    <div className={open ? "mb-3" : undefined}>
       {open && (
-        <div className="mt-1 p-3 bg-card border border-border rounded-lg text-sm">
+        <div className="p-3 bg-card border border-border rounded-lg text-sm" aria-label="Snippet tray">
           {/* Measure range controls */}
           <div className="flex items-center gap-3 flex-wrap">
+            {/* Clears the range — the old Full Song button, same handler. */}
+            <button
+              type="button"
+              onClick={onWholeSong ?? undefined}
+              disabled={!snippet || !onWholeSong}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm min-h-[44px] disabled:opacity-50 ${UI.outline}`}
+            >
+              <Disc className="w-3.5 h-3.5" />
+              Whole song
+            </button>
             <label className="text-muted-foreground">
               Start:{" "}
               <input
                 type="number"
                 value={startInput}
-                onChange={(e) => setStartInput(e.target.value)}
-                onBlur={commitStart}
+                onChange={(e) => typeStart(e.target.value)}
+                onBlur={commitNow}
+                onKeyDown={blurOnEnter}
                 onFocus={(e) => e.target.select()}
-                className="w-14 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
-                min={1} max={endMeas}
+                aria-invalid={rangeError ? "true" : undefined}
+                className={`w-14 ${UI.input}`}
+                min={1} max={totalMeasures}
               />
             </label>
             <label className="text-muted-foreground">
@@ -431,18 +498,23 @@ export default function SnippetPanel({
               <input
                 type="number"
                 value={endInput}
-                onChange={(e) => setEndInput(e.target.value)}
-                onBlur={commitEnd}
+                onChange={(e) => typeEnd(e.target.value)}
+                onBlur={commitNow}
+                onKeyDown={blurOnEnter}
                 onFocus={(e) => e.target.select()}
-                className="w-14 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
-                min={startMeas} max={maxMeas}
+                aria-invalid={rangeError ? "true" : undefined}
+                className={`w-14 ${UI.input}`}
+                min={1} max={totalMeasures}
               />
             </label>
+            {rangeError && (
+              <span role="alert" className="text-sm text-red-700">{rangeError}</span>
+            )}
             <RestControl value={restMeasures} onChange={commitRestMeasures} />
             <div className="flex items-center gap-1 text-muted-foreground">
               Hand:
               {["both", "lh", "rh"].map((mode) => (
-                <label key={mode} className={`px-2 py-1 border rounded text-sm min-h-[44px] flex items-center cursor-pointer ${handMode === mode ? "border-primary bg-primary-light text-primary font-medium" : "border-border"}`}>
+                <label key={mode} className={`px-2 py-1 border text-sm min-h-[44px] flex items-center cursor-pointer ${UI.radius} ${UI.pressLabel} ${handMode === mode ? `${UI.on} font-medium` : UI.off}`}>
                   <input
                     type="radio"
                     name="handMode"
@@ -461,8 +533,9 @@ export default function SnippetPanel({
             {!liveMatch && (
               <button
                 onClick={handleSaveNew}
-                disabled={saving || !songDbId}
-                className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50"
+                // Never saves a range that is invalid or still being typed.
+                disabled={saving || !songDbId || !rangeValid || rangePending}
+                className={`flex items-center gap-1 px-3 py-1.5 text-sm min-h-[44px] disabled:opacity-50 ${UI.outline}`}
               >
                 <Save className="w-3.5 h-3.5" />
                 {saving ? "Saving..." : "Save New"}
@@ -470,10 +543,27 @@ export default function SnippetPanel({
             )}
           </div>
 
-          {/* Saved snippets list */}
-          {savedSnippets.length > 0 && (
+          {/* Saved snippets: a header that folds the list (collapsed each time
+              the tray opens, and again once a snippet is chosen), naming the
+              current one so the fold never hides what is loaded. Archived
+              snippets live inside the fold too. */}
+          {(savedSnippets.length > 0 || archivedSnippets.length > 0) && (
             <div className="mt-3 border-t border-border pt-3">
-              <div className="text-xs text-muted-foreground mb-2 font-medium">Saved snippets</div>
+              <button
+                type="button"
+                onClick={() => setListOpen((o) => !o)}
+                aria-expanded={listOpen}
+                className={`w-full flex items-center gap-1 text-left text-sm font-medium min-h-[44px] px-2 ${UI.toggle(listOpen)}`}
+              >
+                {listOpen ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
+                <span className="min-w-0 truncate">
+                  Saved snippets ({savedSnippets.length})
+                  {currentRow && ` · current: ${rowTitle(currentRow)}`}
+                </span>
+              </button>
+              {listOpen && (<>
+          {savedSnippets.length > 0 && (
+            <div className="mt-1">
               {/* DO NOT add a max-height or overflow-y here. This list renders
                   at full height by design (M1.7): collapsing the snippet panel
                   is the control over how much room it takes, and an inner
@@ -485,20 +575,28 @@ export default function SnippetPanel({
                   list as a "good property worth keeping" — but that cap belonged
                   to the breakdown, which was NEW stacked vertical space. This
                   list is not: it only exists while the panel is open, and the
-                  panel already closes. */}
+                  panel already closes. (Song rail 3b: the list now also folds
+                  under its own "Saved snippets" header — still no height cap.) */}
               <div className="flex flex-col gap-1">
                 {savedSnippets.map((s) => (
                   <div
                     key={s.id}
-                    className={`flex items-center gap-1 rounded text-sm min-h-[44px] transition-colors group ${
+                    className={`flex items-center gap-1 border text-sm min-h-[44px] group ${UI.radius} ${
                       snippet?.dbId === s.id
-                        ? "bg-primary-light text-primary font-medium"
-                        : "hover:bg-secondary text-dark"
+                        ? `${UI.on} font-medium`
+                        : "border-transparent text-dark"
                     }`}
                   >
-                    {/* The whole row stays one click to load the snippet; the
-                        numbers ride inside that same button rather than beside
-                        it, so there is no dead strip on the right of the row. */}
+                    {/* Load icon on the LEFT (left-handed reach). Loads only —
+                        it never starts playback; same as tapping the row. */}
+                    <button
+                      onClick={() => handleLoadSnippet(s)}
+                      className={`p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-primary shrink-0 ${UI.radius} ${UI.press}`}
+                      title="Load snippet"
+                      aria-label={`Load m.${s.start_measure}-${s.end_measure}`}
+                    >
+                      <CircleArrowRight className="w-4 h-4" />
+                    </button>
                     {/* The whole row stays one click to load the snippet; the
                         figures ride inside that same button rather than beside
                         it, so there is no dead strip on the right of the row.
@@ -506,7 +604,7 @@ export default function SnippetPanel({
                         a cut-off figure is worse than a taller row. */}
                     <button
                       onClick={() => handleLoadSnippet(s)}
-                      className="flex-1 min-w-0 flex items-center gap-3 flex-wrap text-left px-3 py-2"
+                      className={`flex-1 min-w-0 flex items-center gap-3 flex-wrap text-left px-3 py-2 ${UI.radius} ${UI.press}`}
                     >
                       <span className="font-medium">
                         {formatSnippetTitle({
@@ -526,7 +624,7 @@ export default function SnippetPanel({
                     {warmupFor && (
                       <button
                         onClick={(e) => { e.stopPropagation(); openLadder(s); }}
-                        className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-dark"
+                        className={`p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground ${UI.radius} ${UI.press}`}
                         title="Warm-up ladder"
                         aria-label={`Warm-up ladder for m.${s.start_measure}-${s.end_measure}`}
                       >
@@ -537,7 +635,7 @@ export default function SnippetPanel({
                     )}
                     <button
                       onClick={(e) => handleArchiveSnippet(e, s)}
-                      className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                      className={`p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground opacity-0 group-hover:opacity-100 ${UI.radius} ${UI.press}`}
                       title="Archive snippet"
                     >
                       <Archive className="w-3.5 h-3.5" />
@@ -551,10 +649,10 @@ export default function SnippetPanel({
 
           {/* Archived snippets toggle + list */}
           {archivedSnippets.length > 0 && (
-            <div className={`text-center ${savedSnippets.length > 0 ? "mt-2" : "mt-3 border-t border-border pt-3"}`}>
+            <div className="text-center mt-2">
               <button
                 onClick={() => setShowArchived(!showArchived)}
-                className="text-xs text-muted-foreground hover:text-dark min-h-[44px] px-2"
+                className={`text-xs text-muted-foreground min-h-[44px] px-2 ${UI.radius} ${UI.press}`}
               >
                 {showArchived ? "Hide archived snippets" : `View archived snippets (${archivedSnippets.length})`}
               </button>
@@ -587,7 +685,7 @@ export default function SnippetPanel({
                         </div>
                         <button
                           onClick={(e) => handleRestoreSnippet(e, s)}
-                          className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-success transition-colors"
+                          className={`p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground ${UI.radius} ${UI.press}`}
                           title="Restore snippet"
                         >
                           <ArchiveRestore className="w-3.5 h-3.5" />
@@ -597,6 +695,9 @@ export default function SnippetPanel({
                   </div>
                 </div>
               )}
+            </div>
+          )}
+              </>)}
             </div>
           )}
         </div>
@@ -673,14 +774,14 @@ export default function SnippetPanel({
               <button
                 onClick={closeLadder}
                 disabled={ladderSaving}
-                className="px-4 py-2 border border-border rounded text-sm text-foreground hover:bg-secondary min-h-[44px] disabled:opacity-50"
+                className={`px-4 py-2 text-sm min-h-[44px] disabled:opacity-50 ${UI.outline}`}
               >
                 Cancel
               </button>
               <button
                 onClick={saveLadder}
                 disabled={ladderSaving}
-                className="px-4 py-2 rounded text-sm font-medium bg-primary hover:bg-primary-hover text-white min-h-[44px] disabled:opacity-50"
+                className={`px-4 py-2 text-sm font-medium bg-primary text-white min-h-[44px] disabled:opacity-50 ${UI.radius} ${UI.press}`}
               >
                 {ladderSaving ? "Saving…" : "Save"}
               </button>
