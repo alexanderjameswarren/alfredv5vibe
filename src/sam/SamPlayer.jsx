@@ -7,6 +7,7 @@ import ScrollEngine from "./components/ScrollEngine";
 import SongLoader from "./components/SongLoader";
 import BackButton from "./components/BackButton";
 import SettingsBar from "./components/SettingsBar";
+import SongRail from "./components/SongRail";
 import StatsBar from "./components/StatsBar";
 import SnippetPanel from "./components/SnippetPanel";
 import AudioControls from "./components/AudioControls";
@@ -198,6 +199,12 @@ export default function SamPlayer({ onBack }) {
   const audioFilePath = song?.audioFilePath ?? null;
   const [audioMuted, setAudioMuted] = useState(false);
   const playbackSpeed = useNumericInput(DEFAULTS.playbackSpeed);
+  // Audio songs: whether the sync BPM box is revealed. Shared by the rail's
+  // Speed % (whose blur hides it) and the settings row (which shows it). Reset
+  // whenever playback starts or the song changes, as it was when the settings
+  // row owned it and unmounted then.
+  const [showBpmEdit, setShowBpmEdit] = useState(false);
+  const hideBpmEdit = useCallback(() => setShowBpmEdit(false), []);
 
   // The tempo Practice actually scrolls at.
   //
@@ -363,6 +370,11 @@ export default function SamPlayer({ onBack }) {
   // is the single source of that constant. Null until it arrives, and null if it
   // cannot be read — in which case a range with no ladder of its own simply has
   // no warm-up, rather than being given a second, drifting copy of the default.
+  useEffect(() => {
+    if (playbackState === "playing") setShowBpmEdit(false);
+  }, [playbackState]);
+  useEffect(() => setShowBpmEdit(false), [songDbId]);
+
   const [defaultLadder, setDefaultLadder] = useState(null);
   useEffect(() => {
     let alive = true;
@@ -1894,7 +1906,9 @@ export default function SamPlayer({ onBack }) {
           two clicks away (pause, then back) during playback. */}
       {/* The song library sits tighter to the top: its header row replaces the
           padding (practice plans M4 follow-up). The player keeps py-6. */}
-      <div ref={scrollContainerRef} className={`mx-auto px-3 sm:px-4 ${song ? "py-6" : "pt-2 pb-6"}`}>
+      {/* Playing keeps py-6 so the playing screen is untouched; stopped and
+          paused use py-2, which the rail's full-height column is sized against. */}
+      <div ref={scrollContainerRef} className={`mx-auto px-3 sm:px-4 ${song ? (playbackState === "playing" ? "py-6" : "py-2") : "pt-2 pb-6"}`}>
         {importError && (
           <div className="mb-4 mx-3 sm:mx-4 p-3 bg-red-50 border border-red-200 rounded flex items-start justify-between gap-3 text-sm text-red-700">
             <span className="whitespace-pre-wrap">{importError}</span>
@@ -1933,7 +1947,33 @@ export default function SamPlayer({ onBack }) {
             />
           </>
         ) : (
-          <>
+          // Two columns: the rail (stopped and paused) and everything else.
+          // The right column is the same element in every state, so ScrollEngine
+          // keeps its place in the tree — and its scroll position — across a pause.
+          <div className="flex items-start">
+            {playbackState !== "playing" && (
+              <SongRail
+                playbackState={playbackState}
+                songDbId={songDbId}
+                snippet={snippet}
+                onPlay={handlePlay} onPractice={handlePractice} onPause={handlePause}
+                onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
+                onWarmUp={handleWarmUp}
+                warmUpVisible={warmupAvailable}
+                warmUpPrimary={!!planItem?.goal_is_warmup}
+                warmUpDisabledReason={warmupDisabledReason}
+                song={song}
+                bpm={bpm}
+                timingWindowMs={timingWindowMs}
+                chordMs={chordMs}
+                measureWidth={measureWidth}
+                playbackSpeed={playbackSpeed}
+                onSongUpdate={setSong}
+                onHideBpmEdit={hideBpmEdit}
+                onBack={handleBackToLibrary}
+              />
+            )}
+            <div className="flex-1 min-w-0">
             {playbackState === "playing" ? (
               practiceMode ? (
                 <PracticeBar onPause={handlePause} stuck={stuckBeat} />
@@ -1965,7 +2005,6 @@ export default function SamPlayer({ onBack }) {
             ) : (
               <>
                 <SettingsBar
-                  onBack={handleBackToLibrary}
                   song={song} snippet={snippet}
                   bpm={bpm}
                   timingWindowMs={timingWindowMs}
@@ -1973,7 +2012,7 @@ export default function SamPlayer({ onBack }) {
                   measureWidth={measureWidth}
                   playbackSpeed={playbackSpeed}
                   playbackState={playbackState} songDbId={songDbId}
-                  onPlay={handlePlay} onPractice={handlePractice} onPause={handlePause} onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
+                  showBpmEdit={showBpmEdit} setShowBpmEdit={setShowBpmEdit}
                   onExport={handleExport}
                   midiConnected={midiConnected} midiDevice={midiDevice}
                   pausedMeasure={pausedMeasure}
@@ -1984,10 +2023,6 @@ export default function SamPlayer({ onBack }) {
                   songWarmup={resolveLadder({ song, defaultLadder })}
                   onAudioUploaded={handleAudioUploaded}
                   onFullSong={() => handleSnippetChange(null)}
-                  onWarmUp={handleWarmUp}
-                  warmUpVisible={warmupAvailable}
-                  warmUpPrimary={!!planItem?.goal_is_warmup}
-                  warmUpDisabledReason={warmupDisabledReason}
                   onLyricsChanged={setLyricPlacements}
                   skipTiedNotes={skipTiedNotes}
                   hasImportedFingerings={hasImported}
@@ -2000,7 +2035,24 @@ export default function SamPlayer({ onBack }) {
                   scorePlayback={scorePlayback}
                   setScorePlayback={setScorePlayback}
                   todayMinutes={todayMinutes}
-                />
+                >
+                  {/* The plan bar, directly under the title row. */}
+                  <PlanLine
+                    item={planItem}
+                    state={planItemState}
+                    songNote={planSongNote}
+                    heardTempo={heardTempo(bpm.value, playbackSpeed.value)}
+                    onSetTempo={applyPlanTempo}
+                    nextItem={nextPlanItem}
+                    // The same path the home page checklist uses — one way in.
+                    onOpenNext={openPlanItem}
+                    // §7.3, widened: one line saying what pressing Warm up will do
+                    // and where the ladder came from, shown WHENEVER the button is
+                    // available — plan item or not, running or not.
+                    warmupSummary={warmupAvailable ? ladderSummaryText(warmupResolved.ladder) : null}
+                    warmupSourceLabel={warmupAvailable ? sourceLabel(warmupResolved.source) : null}
+                  />
+                </SettingsBar>
 
                 <AudioControls audioElement={audioElement} playbackState={playbackState} />
 
@@ -2032,22 +2084,6 @@ export default function SamPlayer({ onBack }) {
                   songPassesToday={songPassesToday}
                   songPassesTotal={songPassesTotal}
                   accuracyGoal={accuracyGoal}
-                />
-
-                <PlanLine
-                  item={planItem}
-                  state={planItemState}
-                  songNote={planSongNote}
-                  heardTempo={heardTempo(bpm.value, playbackSpeed.value)}
-                  onSetTempo={applyPlanTempo}
-                  nextItem={nextPlanItem}
-                  // The same path the home page checklist uses — one way in.
-                  onOpenNext={openPlanItem}
-                  // §7.3, widened: one line saying what pressing Warm up will do
-                  // and where the ladder came from, shown WHENEVER the button is
-                  // available — plan item or not, running or not.
-                  warmupSummary={warmupAvailable ? ladderSummaryText(warmupResolved.ladder) : null}
-                  warmupSourceLabel={warmupAvailable ? sourceLabel(warmupResolved.source) : null}
                 />
 
                 <SnippetPanel
@@ -2206,7 +2242,8 @@ export default function SamPlayer({ onBack }) {
                 onScrollStart={practiceMode ? null : scheduleAudioStartOnScroll}
               />
             )}
-          </>
+            </div>
+          </div>
         )}
       </div>
     </div>

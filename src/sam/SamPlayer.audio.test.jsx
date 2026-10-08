@@ -148,9 +148,9 @@ beforeEach(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 
-// The tempo box (NumericSettings) reads the same song: BPM without audio,
-// Playback Speed % with it.
-const tempoBoxShowsAudio = () => screen.queryByText(/^Playback Speed %:/) !== null;
+// The tempo box (the rail's TempoControls) reads the same song: BPM without
+// audio, Speed % with it.
+const tempoBoxShowsAudio = () => screen.queryByText(/^Speed %:/) !== null;
 const tempoBoxShowsBpm = () => screen.queryByText(/^BPM:/) !== null;
 
 test("before any upload the dialog shows the no-audio layout", async () => {

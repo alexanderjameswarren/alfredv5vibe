@@ -16,7 +16,7 @@ jest.mock("../../supabaseClient", () => ({
   },
 }));
 
-const NumericSettings = require("./NumericSettings").default;
+const { TempoControls } = require("./NumericSettings");
 const { mapSongRow, SONG_EDIT_COLUMNS } = require("../lib/songLoad");
 
 // A stand-in for useNumericInput: a fixed value, with set() recorded.
@@ -49,14 +49,7 @@ function mountSettings(song, { bpm = 70, speed = 100 } = {}) {
     measureWidth: numeric(500),
   };
   render(
-    <NumericSettings
-      song={song} snippet={null} songDbId="song-1" playbackState="stopped"
-      {...hooks}
-      songRepeat={false} onSongRepeatChange={() => {}}
-      songRestMeasures={0} onSongRestMeasuresChange={() => {}}
-      metronome="off" setMetronome={() => {}}
-      scorePlayback="off" setScorePlayback={() => {}}
-    />
+    <TempoControls song={song} songDbId="song-1" {...hooks} />
   );
   return hooks;
 }

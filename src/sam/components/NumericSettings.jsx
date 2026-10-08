@@ -2,7 +2,6 @@ import React, { useState, useEffect } from "react";
 import { AudioWaveform, Save, Repeat, SlidersHorizontal } from "lucide-react";
 import RestControl from "./RestControl";
 import SegmentedControl from "./SegmentedControl";
-import { formatMinutesUnits } from "../lib/practiceTimeFormat";
 import { supabase } from "../../supabaseClient";
 import { DEFAULTS } from "../lib/samConstants";
 import { heardTempo } from "../lib/activePlan";
@@ -18,9 +17,9 @@ import { heardTempo } from "../lib/activePlan";
 // appears while the field still has focus — it is meant to read as a prompt
 // the moment a change is typed, not after a stray tap to blur.
 //
-// Save sits beside whatever is being edited: right of BPM (or Speed/BPM on
-// audio songs) while Tuning is collapsed, after the Tuning fields — i.e. left
-// of Repeat — while it is open.
+// The tempo box (BPM, or Speed % on audio songs), Goal and their Save are
+// `TempoControls`, rendered in the song rail. This row keeps the audio-sync
+// BPM, Tuning (with its own Save), Repeat, Metronome and Score playback.
 //
 // Each numeric input is a `useNumericInput` return value: the component
 // reads `.input` for the draft, calls `.setInput` on change, and
@@ -70,7 +69,7 @@ function writeAdvancedOpen(open) {
 // already equals the goal. Tapping it puts the goal in the tempo box for this
 // sitting — the BPM for a song without audio, the speed for a song with audio
 // (its BPM is the scroll-sync calibration and stays put). Nothing is saved.
-function GoalLabel({ song, hasAudio, bpm, playbackSpeed }) {
+function GoalLabel({ song, hasAudio, bpm, playbackSpeed, className = "" }) {
   if (!song?.goalSetAt || song.goalEffectiveBpm == null) return null;
   const heard = heardTempo(bpm.value, playbackSpeed.value);
   const below = heard != null && heard < song.goalEffectiveBpm;
@@ -97,46 +96,17 @@ function GoalLabel({ song, hasAudio, bpm, playbackSpeed }) {
         below
           ? "border-amber-600 text-amber-700 hover:text-amber-800"
           : "border-border text-muted-foreground hover:text-dark disabled:hover:text-muted-foreground"
-      }`}
+      } ${className}`}
     >
       Goal {song.goalEffectiveBpm}
     </button>
   );
 }
 
-export default function NumericSettings({
-  song,
-  snippet,
-  songDbId,
-  playbackState,
-  bpm,
-  timingWindowMs,
-  chordMs,
-  measureWidth,
-  playbackSpeed,
-  songRepeat,
-  onSongRepeatChange,
-  songRestMeasures,
-  onSongRestMeasuresChange,
-  onSongUpdate,
-  metronome,
-  setMetronome,
-  scorePlayback,
-  setScorePlayback,
-  todayMinutes = 0,
-}) {
-  const [showBpmEdit, setShowBpmEdit] = useState(false);
+// The Save-as-song-defaults logic, shared by the rail's tempo Save and the
+// Tuning group's Save so the two can never disagree about what is dirty.
+function useSaveSettings({ song, songDbId, bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed, onSongUpdate }) {
   const [savingSettings, setSavingSettings] = useState(false);
-  // Above the early return below: this component bails out during playback, and
-  // hooks must run in the same order on every render.
-  const [advancedOpen, setAdvancedOpen] = useState(readAdvancedOpen);
-  useEffect(() => {
-    writeAdvancedOpen(advancedOpen);
-  }, [advancedOpen]);
-
-  if (playbackState === "playing") return null;
-
-  const hasAudio = !!song?.audioFilePath;
 
   const isDirty =
     bpm.preview(RULES.bpm) !== (song?.defaultBpm ?? DEFAULTS.bpm) ||
@@ -144,11 +114,6 @@ export default function NumericSettings({
     chordMs.preview(RULES.chordMs) !== (song?.defaultChordMs ?? DEFAULTS.chordMs) ||
     measureWidth.preview(RULES.measureWidth) !== (song?.defaultMeasureWidth ?? DEFAULTS.measureWidth) ||
     playbackSpeed.preview(RULES.playbackSpeed) !== (song?.playbackSpeed ?? DEFAULTS.playbackSpeed);
-
-  function handleEnableBpmEdit() {
-    playbackSpeed.set(DEFAULTS.playbackSpeed);
-    setShowBpmEdit(true);
-  }
 
   async function handleSaveSettings() {
     if (!songDbId) return;
@@ -195,17 +160,105 @@ export default function NumericSettings({
   // `onMouseDown` preventDefault keeps focus in the field being edited, so the
   // tap lands on Save instead of being spent blurring the input — and blur
   // re-rendering the row cannot move the button out from under the finger.
-  const saveButton = isDirty && (
-    <button
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={handleSaveSettings}
-      disabled={savingSettings || !songDbId}
-      className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50"
-    >
-      <Save className="w-3.5 h-3.5" />
-      {savingSettings ? "Saving..." : "Save"}
-    </button>
+  function saveButton(className = "") {
+    return isDirty && (
+      <button
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={handleSaveSettings}
+        disabled={savingSettings || !songDbId}
+        className={`flex items-center justify-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50 ${className}`}
+      >
+        <Save className="w-3.5 h-3.5" />
+        {savingSettings ? "Saving..." : "Save"}
+      </button>
+    );
+  }
+
+  return { saveButton };
+}
+
+// The tempo box for the rail: BPM on a song without audio, Speed % on a song
+// with it (its BPM is the scroll-sync calibration, edited in the settings row),
+// then Goal, then Save while anything differs from the song's defaults.
+export function TempoControls({
+  song, songDbId, bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed,
+  onSongUpdate, onHideBpmEdit,
+}) {
+  const { saveButton } = useSaveSettings({
+    song, songDbId, bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed, onSongUpdate,
+  });
+  const hasAudio = !!song?.audioFilePath;
+  const field = hasAudio ? playbackSpeed : bpm;
+  const inputClass = "w-full px-2 py-1 border border-border rounded text-sm min-h-[44px]";
+
+  return (
+    <div className="flex flex-col gap-2 w-full">
+      <label className="flex flex-col gap-1 text-sm text-foreground">
+        {hasAudio ? "Speed %:" : "BPM:"}
+        <input
+          type="number"
+          value={field.input}
+          onFocus={(e) => e.target.select()}
+          onChange={(e) => field.setInput(e.target.value)}
+          onBlur={() => {
+            if (!hasAudio) {
+              bpm.commit(RULES.bpm);
+              return;
+            }
+            const n = playbackSpeed.commit(RULES.playbackSpeed);
+            if (n !== DEFAULTS.playbackSpeed) onHideBpmEdit?.();
+          }}
+          className={inputClass}
+          min={hasAudio ? 10 : 20} max={hasAudio ? 200 : 300}
+        />
+      </label>
+      <GoalLabel song={song} hasAudio={hasAudio} bpm={bpm} playbackSpeed={playbackSpeed} className="w-full justify-center" />
+      {saveButton("w-full")}
+    </div>
   );
+}
+
+export default function NumericSettings({
+  song,
+  snippet,
+  songDbId,
+  playbackState,
+  bpm,
+  timingWindowMs,
+  chordMs,
+  measureWidth,
+  playbackSpeed,
+  songRepeat,
+  onSongRepeatChange,
+  songRestMeasures,
+  onSongRestMeasuresChange,
+  onSongUpdate,
+  metronome,
+  setMetronome,
+  scorePlayback,
+  setScorePlayback,
+  // Lifted to SamPlayer: the rail's Speed % blur hides it.
+  showBpmEdit = false,
+  setShowBpmEdit = () => {},
+}) {
+  const { saveButton } = useSaveSettings({
+    song, songDbId, bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed, onSongUpdate,
+  });
+  // Above the early return below: this component bails out during playback, and
+  // hooks must run in the same order on every render.
+  const [advancedOpen, setAdvancedOpen] = useState(readAdvancedOpen);
+  useEffect(() => {
+    writeAdvancedOpen(advancedOpen);
+  }, [advancedOpen]);
+
+  if (playbackState === "playing") return null;
+
+  const hasAudio = !!song?.audioFilePath;
+
+  function handleEnableBpmEdit() {
+    playbackSpeed.set(DEFAULTS.playbackSpeed);
+    setShowBpmEdit(true);
+  }
 
   return (
     <div className="flex items-center gap-3 mb-3 flex-wrap">
@@ -213,23 +266,7 @@ export default function NumericSettings({
           then left alone for months, but they were costing a permanent slot in
           this row and pushing it onto a second line on a laptop screen (M3.5).
           Collapsed by default, and the choice is remembered between sessions.
-          BPM, Repeat and Speed stay out here because they get changed mid-run. */}
-      {!hasAudio && (
-        <label className="text-sm text-foreground">
-          BPM:{" "}
-          <input
-            type="number"
-            value={bpm.input}
-            onFocus={(e) => e.target.select()}
-            onChange={(e) => bpm.setInput(e.target.value)}
-            onBlur={() => bpm.commit(RULES.bpm)}
-            className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
-            min={20} max={300}
-          />
-        </label>
-      )}
-      {!hasAudio && <GoalLabel song={song} hasAudio={false} bpm={bpm} playbackSpeed={playbackSpeed} />}
-      {!advancedOpen && !hasAudio && saveButton}
+          The tempo box, Goal and the tempo Save live in the rail (TempoControls). */}
       <button
         type="button"
         onClick={() => setAdvancedOpen((open) => !open)}
@@ -283,7 +320,7 @@ export default function NumericSettings({
           min={150} max={600} step={50}
         />
       </label>
-      {saveButton}
+      {saveButton()}
         </>
       )}
 
@@ -311,22 +348,6 @@ export default function NumericSettings({
       )}
       {hasAudio && (
         <>
-          <label className="text-sm text-foreground">
-            Playback Speed %:{" "}
-            <input
-              type="number"
-              value={playbackSpeed.input}
-              onFocus={(e) => e.target.select()}
-              onChange={(e) => playbackSpeed.setInput(e.target.value)}
-              onBlur={() => {
-                const n = playbackSpeed.commit(RULES.playbackSpeed);
-                if (n !== DEFAULTS.playbackSpeed) setShowBpmEdit(false);
-              }}
-              className="w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
-              min={10} max={200}
-            />
-          </label>
-          <GoalLabel song={song} hasAudio bpm={bpm} playbackSpeed={playbackSpeed} />
           {showBpmEdit ? (
             <label className="text-sm text-foreground">
               BPM:{" "}
@@ -349,7 +370,6 @@ export default function NumericSettings({
           )}
         </>
       )}
-      {!advancedOpen && hasAudio && saveButton}
 
       {/* Metronome and score playback moved here from the stats row (option D).
           They are playback settings, so they belong with BPM, Tuning and
@@ -388,18 +408,7 @@ export default function NumericSettings({
       />
       </span>
 
-      {/* Pushed right so it lands under the utility cluster on the row
-          above. That separation is the point: this is a fact about the DAY,
-          across every song, and it used to sit inline with song-scoped figures
-          under a "Today:" label that read as though it were about this song. */}
-      {/* `pr-2` matches the `px-2` on the toolbar buttons in the row above, so
-          the two right edges line up. Without it this text sits flush to the
-          row while those buttons are inset by their own padding, and the
-          mismatch reads as a stray 8px. */}
-      <span className="ml-auto pr-2 shrink-0 whitespace-nowrap flex items-center gap-2 text-sm text-muted-foreground">
-        <span>Practiced today</span>
-        <strong className="text-dark">{formatMinutesUnits(todayMinutes)}</strong>
-      </span>
+      {/* "Practiced today" moved to the title row (SettingsBar). */}
     </div>
   );
 }

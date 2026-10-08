@@ -385,7 +385,7 @@ test("no plan badge while playing a range outside the plan", async () => {
 test("the planned snippet's row in the Snippet panel carries a plan tag", async () => {
   renderSong();
   await screen.findByLabelText(/BPM:/);
-  fireEvent.click(screen.getByRole("button", { name: /Snippet/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Snippet(?!s)/ }));
   const tag = await screen.findByText("Plan · 60 BPM · 0/4");
   expect(tag).toHaveAttribute("data-state", "open");
   // Legible on a plain row and on the selected (filled) row: the row's own
@@ -398,7 +398,7 @@ test("a finished snippet's tag reads Plan ✓", async () => {
   mockDb.progressRows = [{ plan_item_id: "item-snip", day: "2026-09-16", attempts: 5, qualifying: 5 }];
   renderSong();
   await screen.findByLabelText(/BPM:/);
-  fireEvent.click(screen.getByRole("button", { name: /Snippet/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Snippet(?!s)/ }));
   expect(await screen.findByText("Plan ✓")).toHaveAttribute("data-state", "done");
 });
 
@@ -453,7 +453,7 @@ function addUnplannedSnippet() {
 
 /** Load a snippet by its row in the Snippet panel. */
 async function loadSnippetFromPanel(rowText) {
-  fireEvent.click(screen.getByRole("button", { name: /Snippet/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Snippet(?!s)/ }));
   const row = await screen.findByRole("button", { name: new RegExp(esc(rowText)) });
   await act(async () => { fireEvent.click(row); });
 }

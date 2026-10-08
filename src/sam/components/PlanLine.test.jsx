@@ -188,6 +188,14 @@ describe("Next when the loaded range is in no plan item", () => {
     snippet: { start_measure: 1, end_measure: 16, hand_mode: "both" },
   };
 
+  test("one line: text truncates, Next pushed right, nothing wraps", () => {
+    render(<PlanLine item={null} state={null} heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />);
+    expect(screen.getByText("Not in today's plan")).toHaveClass("truncate", "min-w-0");
+    expect(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" })).toHaveClass("ml-auto");
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(screen.getByText("Not in today's plan").parentElement).not.toHaveClass("flex-wrap");
+  });
+
   test("says where he is, then offers where to go", () => {
     render(<PlanLine item={null} state={null} heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />);
     expect(screen.getByText("Not in today's plan")).toBeInTheDocument();

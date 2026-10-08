@@ -1,23 +1,19 @@
 import React from "react";
-import TransportControls from "./TransportControls";
+import { FullSongButton } from "./TransportControls";
 import AudioToolbar from "./AudioToolbar";
 import SongMetadataEditor from "./SongMetadataEditor";
 import NumericSettings from "./NumericSettings";
+import { formatMinutesUnits } from "../lib/practiceTimeFormat";
 
-// Layout shell composing the four focused subcomponents. Forwards each prop to
-// only the child that needs it. The static song-title block + MIDI status live
-// here because they read from props that span both transport and metadata
-// contexts. Each numeric input is a `useNumericInput` hook object passed
-// straight through.
+// Layout shell composing the focused subcomponents. Forwards each prop to
+// only the child that needs it. The transport, Back and the tempo box live in
+// the song rail (SongRail). Each numeric input is a `useNumericInput` hook
+// object passed straight through.
 export default function SettingsBar({
-  onBack,
   song, snippet,
   bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed,
   playbackState, songDbId,
-  onPlay, onPractice, onPause, onResume, onRestart, onStop,
-  // Warm-up ladder (warm-up spec §7.1). Forwarded straight through, like every
-  // other transport prop.
-  onWarmUp, warmUpVisible, warmUpPrimary, warmUpDisabledReason,
+  showBpmEdit, setShowBpmEdit,
   // { ladder, source } for the song itself, for the Edit Song dialog's ladder
   // editor (warm-up spec §7.4).
   songWarmup = null,
@@ -39,6 +35,8 @@ export default function SettingsBar({
   scorePlayback,
   setScorePlayback,
   todayMinutes,
+  // The plan bar, placed directly under the title row.
+  children = null,
 }) {
   const isPaused = playbackState === "paused";
 
@@ -56,8 +54,9 @@ export default function SettingsBar({
 
   return (
     <>
-      {/* Top row: playback controls and title (left), utility actions (right).
-          
+      {/* Title row: title, range, artist and pencil (left); Practiced today
+          and MIDI (right). The plan bar (`children`) renders directly under it.
+
           NOT `flex-wrap`, and that is the fix. With wrapping on, nothing in the
           row was allowed to shrink, so the only way flexbox could resolve an
           overflow was to push the action cluster onto a second line and wrap
@@ -69,23 +68,7 @@ export default function SettingsBar({
           ellipsis instead of by the layout. */}
       <div className="flex items-center gap-2 mb-2">
         <div className="flex items-center gap-3 flex-1 min-w-0">
-          <TransportControls
-            onBack={onBack}
-            playbackState={playbackState}
-            songDbId={songDbId}
-            snippet={snippet}
-            onPlay={onPlay}
-            onPractice={onPractice}
-            onPause={onPause}
-            onResume={onResume}
-            onRestart={onRestart}
-            onStop={onStop}
-            onFullSong={onFullSong}
-            onWarmUp={onWarmUp}
-            warmUpVisible={warmUpVisible}
-            warmUpPrimary={warmUpPrimary}
-            warmUpDisabledReason={warmUpDisabledReason}
-          />
+          <FullSongButton snippet={snippet} onFullSong={onFullSong} />
 
           <div className="flex items-center gap-2 flex-1 min-w-0">
             {/* The one flexible element in the row. `min-w-0` is what lets it
@@ -117,19 +100,25 @@ export default function SettingsBar({
               resolvedWarmup={songWarmup}
             />
           </div>
-
-          <span className="text-sm text-muted-foreground shrink-0 whitespace-nowrap">
-            MIDI:{" "}
-            {midiConnected ? (
-              <strong className="text-success">{midiDevice}</strong>
-            ) : (
-              <span className="text-warning">Waiting...</span>
-            )}
-          </span>
         </div>
 
-        {/* Anchored right at every width: `shrink-0` so it never compresses,
-            and no wrapping so it can never be pushed to a row of its own. */}
+        {/* Right end: the day's all-songs total, then MIDI. `shrink-0` so
+            neither compresses; the title's ellipsis absorbs the squeeze. */}
+        <span className="shrink-0 whitespace-nowrap flex items-center gap-2 text-sm text-muted-foreground">
+          <span>Practiced today</span>
+          <strong className="text-dark">{formatMinutesUnits(todayMinutes ?? 0)}</strong>
+        </span>
+        <span className="text-sm text-muted-foreground shrink-0 whitespace-nowrap">
+          MIDI:{" "}
+          {midiConnected ? (
+            <strong className="text-success">{midiDevice}</strong>
+          ) : (
+            <span className="text-warning">Waiting...</span>
+          )}
+        </span>
+
+        {/* Export, Audio, Refresh, Auto-Match: here until the More drawer
+            (step 4) gives them a home. */}
         <div className="flex items-center gap-2 shrink-0">
           <AudioToolbar
             song={song}
@@ -142,6 +131,8 @@ export default function SettingsBar({
           />
         </div>
       </div>
+
+      {children}
 
       <NumericSettings
         song={song}
@@ -162,7 +153,8 @@ export default function SettingsBar({
         setMetronome={setMetronome}
         scorePlayback={scorePlayback}
         setScorePlayback={setScorePlayback}
-        todayMinutes={todayMinutes}
+        showBpmEdit={showBpmEdit}
+        setShowBpmEdit={setShowBpmEdit}
       />
     </>
   );

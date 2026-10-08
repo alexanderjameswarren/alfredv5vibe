@@ -123,34 +123,36 @@ export default function PlanLine({
   return (
     <div className="mb-2 px-1 text-sm" aria-label="Practice plan">
       {offPlan && (
-        <div className="flex items-center gap-2 flex-wrap min-h-[44px]" data-state="off-plan">
+        <div className="flex items-center gap-2 min-h-[44px]" data-state="off-plan">
           {/* A SLASHED circle, which is the one shape that says what this row
               means: the loaded range is not a plan item at all, so none of the
               four plan states applies to it. Muted, because it is the absence of
               plan work rather than plan work going badly. */}
           <CircleSlash className={`${ICON} text-muted-foreground`} role="img" aria-label="Not in the plan" />
-          <span className="text-foreground">Not in today&apos;s plan</span>
-          <PlanNextButton item={nextItem} onOpen={onOpenNext} />
+          <span className="text-foreground min-w-0 truncate">Not in today&apos;s plan</span>
+          <PlanNextButton item={nextItem} onOpen={onOpenNext} className="ml-auto min-w-0" />
         </div>
       )}
+      {/* The plan bar: one line, the text truncating (full text in its title)
+          so Set tempo and Next never wrap; Next sits at the right end. */}
       {item && (
         <div
-          className="flex items-center gap-2 flex-wrap min-h-[44px]"
+          className="flex items-center gap-2 min-h-[44px]"
           data-state={state.done ? "done" : state.amber ? "amber" : "open"}
         >
           <PlanIcon state={state} tone={tone} />
-          <span className={tone}>{planLineText(item, state)}</span>
+          <span className={`${tone} min-w-0 truncate`} title={planLineText(item, state)}>{planLineText(item, state)}</span>
           {showSetTempo && (
             <button
               type="button"
               onClick={onSetTempo}
               title={`Set the tempo box to ${item.target_effective_bpm} BPM for this session`}
-              className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px]"
+              className="shrink-0 whitespace-nowrap flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px]"
             >
               Set tempo
             </button>
           )}
-          {state.done && <PlanNextButton item={nextItem} onOpen={onOpenNext} />}
+          {state.done && <PlanNextButton item={nextItem} onOpen={onOpenNext} className="ml-auto min-w-0" />}
         </div>
       )}
       {/* Whenever Warm up is available — see the note at the top. A ramp that
