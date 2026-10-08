@@ -21,7 +21,7 @@ scrolls); fit-to-height applies to the stopped, tray-closed score only.
   today and MIDI on the right; plan bar with Set tempo and Next on the right,
   warm-up summary line kept under it.
   *Check:* pencil opens Edit song; Next opens the next item; Set tempo works.
-- [ ] **3. Snippet tray.** Snippets toggles the existing panel, attached under the
+- [x] **3. Snippet tray.** Snippets toggles the existing panel, attached under the
   plan bar, pushing the score down. Whole song (existing Full Song), left load
   icon on each row, Enter commits Start/End. No list height cap.
   *Check:* tapping a row and committing Start/End both clip the score at once;
@@ -49,3 +49,10 @@ scrolls); fit-to-height applies to the stopped, tray-closed score only.
   line per row with Next at the right. Export / Audio / Refresh / Auto-Match and
   Full Song stay in the title row until steps 4 and 3. The song goal line moved
   up with the plan block (it is part of PlanLine) until step 4.
+- Step 3 done 2026-10-08. Plan bar: Next leads the line, outlined in the
+  primary colour (styled from PlanLine via `[&_[data-next-box]]`, so
+  PlanNextButton.jsx is unchanged). SnippetPanel's `open` is now controlled by
+  the rail's Snippets toggle; the old collapsible row is gone; Full Song became
+  the tray's Whole song (FullSongButton removed); left load icon per saved row;
+  Enter blurs Start/End to commit. Fingering mode / Diff / Show Imported, which
+  rode on the old Snippet row, sit on their own row above the score until step 4.

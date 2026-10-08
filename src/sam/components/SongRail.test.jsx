@@ -64,8 +64,15 @@ test("audio song: the tempo slot is Speed %", () => {
   expect(screen.queryByText(/^BPM:/)).not.toBeInTheDocument();
 });
 
-test("Snippets and More are disabled until wired", () => {
+test("More is disabled until wired", () => {
   mount();
-  expect(button(/Snippets/)).toBeDisabled();
   expect(button(/More/)).toBeDisabled();
+});
+
+test("Snippets is a pressed-state toggle", () => {
+  const onToggleSnippets = jest.fn();
+  mount({ onToggleSnippets, snippetsOpen: true });
+  expect(button("Snippets")).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(button("Snippets"));
+  expect(onToggleSnippets).toHaveBeenCalled();
 });

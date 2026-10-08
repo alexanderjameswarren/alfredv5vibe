@@ -20,6 +20,13 @@ import PlanNextButton from "./PlanNextButton";
 // the column with it.
 const ICON = "w-4 h-4 shrink-0";
 
+// Next leads the plan line as its main call to action: never shrinks (the plan
+// text gives way instead), and its visible box is outlined in the Play colour —
+// not filled, so it does not compete with Play. Styled from here via the box's
+// data attribute so PlanNextButton itself stays unchanged.
+const NEXT_LEAD =
+  "shrink-0 [&_[data-next-box]]:border-primary [&_[data-next-box]]:text-primary [&_[data-next-box]]:font-medium hover:[&_[data-next-box]]:bg-primary-light";
+
 // The plan line's state, as one shape with only the fill changing (Circle →
 // CircleDot → Check), plus CircleAlert for the amber case. One family means the
 // four states are told apart by fill rather than by four unrelated glyphs.
@@ -128,18 +135,19 @@ export default function PlanLine({
               means: the loaded range is not a plan item at all, so none of the
               four plan states applies to it. Muted, because it is the absence of
               plan work rather than plan work going badly. */}
+          <PlanNextButton item={nextItem} onOpen={onOpenNext} className={NEXT_LEAD} />
           <CircleSlash className={`${ICON} text-muted-foreground`} role="img" aria-label="Not in the plan" />
           <span className="text-foreground min-w-0 truncate">Not in today&apos;s plan</span>
-          <PlanNextButton item={nextItem} onOpen={onOpenNext} className="ml-auto min-w-0" />
         </div>
       )}
-      {/* The plan bar: one line, the text truncating (full text in its title)
-          so Set tempo and Next never wrap; Next sits at the right end. */}
+      {/* The plan bar: one line. Next leads it (left edge, for the left hand);
+          the plan text is what truncates (full text in its title). */}
       {item && (
         <div
           className="flex items-center gap-2 min-h-[44px]"
           data-state={state.done ? "done" : state.amber ? "amber" : "open"}
         >
+          {state.done && <PlanNextButton item={nextItem} onOpen={onOpenNext} className={NEXT_LEAD} />}
           <PlanIcon state={state} tone={tone} />
           <span className={`${tone} min-w-0 truncate`} title={planLineText(item, state)}>{planLineText(item, state)}</span>
           {showSetTempo && (
@@ -152,7 +160,6 @@ export default function PlanLine({
               Set tempo
             </button>
           )}
-          {state.done && <PlanNextButton item={nextItem} onOpen={onOpenNext} className="ml-auto min-w-0" />}
         </div>
       )}
       {/* Whenever Warm up is available — see the note at the top. A ramp that

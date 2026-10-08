@@ -14,7 +14,7 @@ function Divider() {
 const TOGGLE = "w-full flex items-center justify-center gap-1.5 px-1 py-2 rounded min-h-[44px] text-sm font-medium border transition-colors";
 
 export default function SongRail({
-  playbackState, songDbId, snippet,
+  playbackState, songDbId,
   onPlay, onPractice, onPause, onResume, onRestart, onStop,
   onWarmUp, warmUpVisible, warmUpPrimary, warmUpDisabledReason,
   song, bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed,
@@ -32,7 +32,6 @@ export default function SongRail({
         vertical
         playbackState={playbackState}
         songDbId={songDbId}
-        snippet={snippet}
         onPlay={onPlay}
         onPractice={onPractice}
         onPause={onPause}

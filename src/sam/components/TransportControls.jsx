@@ -1,5 +1,5 @@
 import React from "react";
-import { Play, Pause, RotateCcw, Square, Disc, GraduationCap, Flame } from "lucide-react";
+import { Play, Pause, RotateCcw, Square, GraduationCap, Flame } from "lucide-react";
 import BackButton from "./BackButton";
 
 // Stateless cluster of playback transport buttons. Visibility per state:
@@ -7,7 +7,7 @@ import BackButton from "./BackButton";
 //   stopped        → Play + Warm up + Practice
 //   playing        → Pause
 //   paused         → Resume + Restart + Stop
-//   any + snippet  → Full Song (returns to full song view)
+// (Full Song is the snippet tray's "Whole song" button now.)
 //
 // WARM UP (spec §7.1). Between Play and Practice, in Practice's outline
 // treatment — or first in the transport and filled, when the loaded range is a
@@ -23,14 +23,12 @@ export default function TransportControls({
   onBack,
   playbackState,
   songDbId,
-  snippet,
   onPlay,
   onPractice,
   onPause,
   onResume,
   onRestart,
   onStop,
-  onFullSong,
   onWarmUp,
   warmUpVisible = false,
   warmUpPrimary = false,
@@ -150,21 +148,6 @@ export default function TransportControls({
         </button>
       )}
 
-      {onFullSong && <FullSongButton snippet={snippet} onFullSong={onFullSong} />}
     </>
-  );
-}
-
-// Back to the whole song; shown only while a snippet is loaded.
-export function FullSongButton({ snippet, onFullSong }) {
-  if (!snippet) return null;
-  return (
-    <button
-      onClick={onFullSong}
-      className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-3 py-2 rounded min-h-[44px] text-sm font-medium transition-colors border border-border text-muted-foreground hover:text-dark"
-    >
-      <Disc className="w-4 h-4" />
-      Full Song
-    </button>
   );
 }

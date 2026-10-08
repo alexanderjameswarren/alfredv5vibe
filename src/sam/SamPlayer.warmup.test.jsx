@@ -264,7 +264,7 @@ async function openSnippetOffPlan() {
     </MemoryRouter>
   );
   await screen.findByLabelText(/BPM:/);
-  fireEvent.click(await screen.findByRole("button", { name: /^Snippet(?!s)/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Snippets" }));
   fireEvent.click(await screen.findByRole("button", { name: /Measures 1-1 RH/ }));
   await waitFor(() => expect(warmUpButton()).toBeInTheDocument());
 }
@@ -597,7 +597,7 @@ const openLadderDialog = async () => {
   // Idempotent: the panel is only toggled when the flame is not already on screen,
   // so a test can open the dialog twice without closing the panel in between.
   if (!screen.queryByRole("button", { name: /Warm-up ladder for m\.1-1/ })) {
-    fireEvent.click(await screen.findByRole("button", { name: /^Snippet(?!s)/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Snippets" }));
   }
   fireEvent.click(await screen.findByRole("button", { name: /Warm-up ladder for m\.1-1/ }));
   return screen.findByRole("dialog", { name: "Warm-up ladder" });

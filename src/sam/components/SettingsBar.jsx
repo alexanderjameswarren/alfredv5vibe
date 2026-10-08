@@ -1,5 +1,4 @@
 import React from "react";
-import { FullSongButton } from "./TransportControls";
 import AudioToolbar from "./AudioToolbar";
 import SongMetadataEditor from "./SongMetadataEditor";
 import NumericSettings from "./NumericSettings";
@@ -22,7 +21,6 @@ export default function SettingsBar({
   pausedMeasure,
   onSongUpdate,
   onAudioUploaded,
-  onFullSong,
   onLyricsChanged,
   skipTiedNotes,
   hasImportedFingerings,
@@ -68,7 +66,6 @@ export default function SettingsBar({
           ellipsis instead of by the layout. */}
       <div className="flex items-center gap-2 mb-2">
         <div className="flex items-center gap-3 flex-1 min-w-0">
-          <FullSongButton snippet={snippet} onFullSong={onFullSong} />
 
           <div className="flex items-center gap-2 flex-1 min-w-0">
             {/* The one flexible element in the row. `min-w-0` is what lets it

@@ -205,6 +205,10 @@ export default function SamPlayer({ onBack }) {
   // row owned it and unmounted then.
   const [showBpmEdit, setShowBpmEdit] = useState(false);
   const hideBpmEdit = useCallback(() => setShowBpmEdit(false), []);
+  // The snippet tray (rail's Snippets toggle). Only the tray's visibility:
+  // the loaded range is `snippet` and survives closing it.
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
+  const toggleSnippets = useCallback(() => setSnippetsOpen((o) => !o), []);
 
   // The tempo Practice actually scrolls at.
   //
@@ -1846,12 +1850,9 @@ export default function SamPlayer({ onBack }) {
 
   // Controls that belong to the score: Fingering mode, Diff, Show Imported.
   //
-  // They have moved twice. M3.5 took them off a row of their own and put them
-  // in SettingsBar's top-right cluster; they now sit at the far end of the
-  // Snippet toggle row, which is the last row before the score and was
-  // otherwise empty. That reads as what they are — score controls, next to the
-  // score — costs no vertical space, since both sides of that row are already
-  // 44px tall, and gives the transport row its width back.
+  // They sat at the far end of the old Snippet toggle row; that row became the
+  // rail's Snippets toggle (song rail, step 3), so they have a right-aligned row
+  // above the score until the More drawer (step 4) takes them.
   //
   // Still gated on `stopped`, exactly as before, so nothing about WHEN they are
   // available has changed across any of the moves.
@@ -1955,7 +1956,6 @@ export default function SamPlayer({ onBack }) {
               <SongRail
                 playbackState={playbackState}
                 songDbId={songDbId}
-                snippet={snippet}
                 onPlay={handlePlay} onPractice={handlePractice} onPause={handlePause}
                 onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
                 onWarmUp={handleWarmUp}
@@ -1970,6 +1970,8 @@ export default function SamPlayer({ onBack }) {
                 playbackSpeed={playbackSpeed}
                 onSongUpdate={setSong}
                 onHideBpmEdit={hideBpmEdit}
+                snippetsOpen={snippetsOpen}
+                onToggleSnippets={toggleSnippets}
                 onBack={handleBackToLibrary}
               />
             )}
@@ -2022,7 +2024,6 @@ export default function SamPlayer({ onBack }) {
                   // against.
                   songWarmup={resolveLadder({ song, defaultLadder })}
                   onAudioUploaded={handleAudioUploaded}
-                  onFullSong={() => handleSnippetChange(null)}
                   onLyricsChanged={setLyricPlacements}
                   skipTiedNotes={skipTiedNotes}
                   hasImportedFingerings={hasImported}
@@ -2051,6 +2052,18 @@ export default function SamPlayer({ onBack }) {
                     // available — plan item or not, running or not.
                     warmupSummary={warmupAvailable ? ladderSummaryText(warmupResolved.ladder) : null}
                     warmupSourceLabel={warmupAvailable ? sourceLabel(warmupResolved.source) : null}
+                  />
+                  {/* The snippet tray: under the plan block, pushing the score
+                      down. Closing it keeps the loaded range. */}
+                  <SnippetPanel
+                    open={snippetsOpen}
+                    songDbId={songDbId}
+                    totalMeasures={song.measures.length}
+                    snippet={snippet}
+                    onSnippetChange={handleSnippetChange}
+                    onWholeSong={() => handleSnippetChange(null)}
+                    planTagFor={planTagFor}
+                    warmupFor={warmupForSnippetRow}
                   />
                 </SettingsBar>
 
@@ -2086,15 +2099,10 @@ export default function SamPlayer({ onBack }) {
                   accuracyGoal={accuracyGoal}
                 />
 
-                <SnippetPanel
-                  songDbId={songDbId}
-                  totalMeasures={song.measures.length}
-                  snippet={snippet}
-                  onSnippetChange={handleSnippetChange}
-                  scoreTools={scoreToolButtons}
-                  planTagFor={planTagFor}
-                  warmupFor={warmupForSnippetRow}
-                />
+                {/* Score tools: their own row until the More drawer (step 4). */}
+                {scoreToolButtons && (
+                  <div className="flex items-center justify-end gap-2 mb-3">{scoreToolButtons}</div>
+                )}
               </>
             )}
 

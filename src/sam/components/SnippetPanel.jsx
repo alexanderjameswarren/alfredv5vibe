@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { ChevronDown, ChevronRight, Save, Archive, ArchiveRestore, Flame } from "lucide-react";
+import { CircleArrowRight, Disc, Save, Archive, ArchiveRestore, Flame } from "lucide-react";
 import RestControl from "./RestControl";
 import { supabase } from "../../supabaseClient";
 import { formatSnippetTitle, findMatchingSnippet, ensureSnippetSaved, snippetFromRow } from "../lib/snippetsApi";
@@ -57,8 +57,18 @@ function PlanTag({ tag }) {
   );
 }
 
+// Enter commits a measure box the same way leaving it does: blur runs the commit.
+function blurOnEnter(e) {
+  if (e.key === "Enter") e.currentTarget.blur();
+}
+
+// The snippet tray (song rail, step 3). Opened and closed by the rail's
+// Snippets toggle, so `open` is the caller's; closing it keeps the loaded range.
 export default function SnippetPanel({
-  songDbId, totalMeasures, snippet, onSnippetChange, scoreTools = null,
+  songDbId, totalMeasures, snippet, onSnippetChange,
+  open = false,
+  // Clears the range (handleSnippetChange(null)); the tray's Whole song button.
+  onWholeSong = null,
   // (snippetId) => { text, state } | null — the practice plan's tag for a
   // planned snippet (§7.4). Archived snippets aren't listed, so never tagged.
   planTagFor = null,
@@ -91,7 +101,6 @@ export default function SnippetPanel({
     setLadderShowErrors(false);
     setLadderError(null);
   }
-  const [open, setOpen] = useState(false);
   const [startMeas, setStartMeas] = useState(snippet?.startMeasure || 1);
   const [startInput, setStartInput] = useState(String(snippet?.startMeasure || 1));
   const [endMeas, setEndMeas] = useState(snippet?.endMeasure || totalMeasures);
@@ -387,33 +396,21 @@ export default function SnippetPanel({
   }
 
   return (
-    <div className="mb-3">
-      {/* The Snippet toggle is a small control on an otherwise empty row, and
-          this row is the last one before the score — so the score's own
-          controls ride at the far end of it rather than claiming a row. Both
-          sides are `min-h-[44px]`, so this costs no vertical space at all. */}
-      <div className="flex items-center gap-2">
-        <button
-          onClick={() => setOpen(!open)}
-          className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-dark min-h-[44px] px-1"
-        >
-          {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-          Snippet
-          {snippet && (
-            <span className="text-xs text-primary ml-1">
-              (m.{snippet.startMeasure}–{snippet.endMeasure})
-            </span>
-          )}
-        </button>
-        {scoreTools && (
-          <div className="ml-auto flex items-center gap-2 shrink-0">{scoreTools}</div>
-        )}
-      </div>
-
+    <div className={open ? "mb-3" : undefined}>
       {open && (
-        <div className="mt-1 p-3 bg-card border border-border rounded-lg text-sm">
+        <div className="p-3 bg-card border border-border rounded-lg text-sm" aria-label="Snippet tray">
           {/* Measure range controls */}
           <div className="flex items-center gap-3 flex-wrap">
+            {/* Clears the range — the old Full Song button, same handler. */}
+            <button
+              type="button"
+              onClick={onWholeSong ?? undefined}
+              disabled={!snippet || !onWholeSong}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50"
+            >
+              <Disc className="w-3.5 h-3.5" />
+              Whole song
+            </button>
             <label className="text-muted-foreground">
               Start:{" "}
               <input
@@ -421,6 +418,7 @@ export default function SnippetPanel({
                 value={startInput}
                 onChange={(e) => setStartInput(e.target.value)}
                 onBlur={commitStart}
+                onKeyDown={blurOnEnter}
                 onFocus={(e) => e.target.select()}
                 className="w-14 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
                 min={1} max={endMeas}
@@ -433,6 +431,7 @@ export default function SnippetPanel({
                 value={endInput}
                 onChange={(e) => setEndInput(e.target.value)}
                 onBlur={commitEnd}
+                onKeyDown={blurOnEnter}
                 onFocus={(e) => e.target.select()}
                 className="w-14 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
                 min={startMeas} max={maxMeas}
@@ -496,9 +495,16 @@ export default function SnippetPanel({
                         : "hover:bg-secondary text-dark"
                     }`}
                   >
-                    {/* The whole row stays one click to load the snippet; the
-                        numbers ride inside that same button rather than beside
-                        it, so there is no dead strip on the right of the row. */}
+                    {/* Load icon on the LEFT (left-handed reach). Loads only —
+                        it never starts playback; same as tapping the row. */}
+                    <button
+                      onClick={() => handleLoadSnippet(s)}
+                      className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-primary hover:text-primary-hover shrink-0"
+                      title="Load snippet"
+                      aria-label={`Load m.${s.start_measure}-${s.end_measure}`}
+                    >
+                      <CircleArrowRight className="w-4 h-4" />
+                    </button>
                     {/* The whole row stays one click to load the snippet; the
                         figures ride inside that same button rather than beside
                         it, so there is no dead strip on the right of the row.
