@@ -24,10 +24,12 @@ Three parts:
 
 | Slice | Share | Of 50 |
 |---|---|---|
-| 1980s and earlier (any decade ≤ 1980, 1950s included) | 15% | 8 |
-| 1990s–2000s | 55% | 27 |
-| 2010s–2020s | 20% | 10 |
-| Country and rap (any decade) | 10% | 5 |
+| 1980s and earlier (any decade ≤ 1980, 1950s included) | 20% | 10 |
+| 1990s–2000s | 44% | 22 |
+| 2010s–2020s | 24% | 12 |
+| Country and rap (any decade) | 12% | 6 |
+
+  These are the step 7 quotas. Until then they were 8 / 27 / 10 / 5.
 
   A song tagged country or rap always counts in the country-and-rap slice, whatever its decade.
 - **Song variety comes first, artist variety second.** No song repeats until every other eligible song has had its turn. Artist variety is a guardrail: at most 2 songs per artist per playlist (tunable), and never the same artist twice in a row.
@@ -88,25 +90,77 @@ Consequence to know: if the daily history sync fails, recency does not advance, 
 
 ### Algorithm, for a given date and count (default 50)
 
-1. Eligible songs: `status = 'active'` with decade and genre set.
-2. All randomness is `md5` of the date and the song id, so a dry run and the real run for the same date return the same playlist (as long as no new plays land in between).
-3. For each slice, in this order — country and rap, 1980s and earlier, 2010s–2020s, 1990s–2000s — walk that slice's songs in recency order and take songs until the slice quota is met, skipping any whose `artist_key` has already reached the artist cap in this playlist. Every tagged song is in exactly one slice. Since step 6, "1980s and earlier" takes any decade ≤ 1980; before that it was 1960s–1980s, and older songs were fill only.
-4. If a slice runs short, fill the remaining slots from all eligible songs in recency order, same artist cap.
-5. Order the final list randomly (seeded), then fix any adjacent same-artist pairs by swapping.
-6. Return: position, song id, video_id, title, artist, artist_key, slice (`fill` for step 4 songs), last heard.
+1. Eligible songs: `status = 'active'` with decade and genre set. Recency is computed for every pool song, whatever its status, because the cooldown in step 4 reads all of them.
+2. All randomness is `md5` of the date and the song id, so a dry run and the real run for the same date return the same playlist, as long as no new plays or servings land in between.
+3. **Carry-over (step 7).** Take the most recent serving before D. Every song in it that is still eligible and has **not been heard since that serving's date** goes into today's list first, marked `carried`. "Not heard since" means no `dj_plays` for its canonical group on or after `served_on` and before D.
+   - Carried songs count toward their slice's quota and toward the artist cap, but are never dropped by either.
+   - They are exempt from the cooldown.
+   - If they alone exceed the count, the least recently heard are kept.
+   - Carried songs chain: one still unheard tomorrow was in today's serving, so it carries again.
+4. **Slices.** In this order — country and rap, 1980s and earlier, 2010s–2020s, 1990s–2000s — each slice is topped up to its quota, less what was carried, in recency order. New songs are skipped when:
+   - their `artist_key` has reached the artist cap (carried songs count), or
+   - their artist is **cooling down**: any pool song by that artist_key, any status, was heard in the `p_cooldown_days` days before D, via the canonical-group mapping. With the default of 2, a play on D-1 or D-2 blocks new songs on D; 0 turns the cooldown off.
 
-Parameters with defaults: `p_date` (today, UTC), `p_count` (50), `p_artist_cap` (2), `p_quotas` (jsonb song counts per slice: `{"country_rap":5,"1980s-and-earlier":8,"2010s-2020s":10,"1990s-2000s":27}`; must sum to at most `p_count`, the rest is filled by step 4), and `p_recency` (internal, for the simulator: a song_id → last-heard map that replaces the `dj_plays` lookup).
+   The list never goes past the count. So when carried songs push one slice over its quota, the remaining slices still fill only to the total count, and the slices filled last (1990s–2000s) give way. Every tagged song is in exactly one slice. Since step 6, "1980s and earlier" takes any decade ≤ 1980; before that it was 1960s–1980s, and older songs were fill only.
+5. If a slice runs short, the remaining slots are filled from all eligible songs in recency order (slice `fill`), under the same artist cap and cooldown. The cooldown is absolute, so a heavy listening day can leave a list short; the shortfall is reported.
+6. Order the final list randomly (seeded), then fix any adjacent same-artist pairs by swapping.
+7. Return: position, song id, video_id, title, artist, artist_key, slice (`fill` for step 5 songs), carried, and last heard.
+
+Parameters with defaults:
+- `p_date`: today, UTC.
+- `p_count`: 50.
+- `p_artist_cap`: 2.
+- `p_quotas`: jsonb song counts per slice, `{"country_rap":6,"1980s-and-earlier":10,"2010s-2020s":12,"1990s-2000s":22}`. They must sum to at most `p_count`; the rest is filled by step 5.
+- `p_cooldown_days`: 2, range 0–30.
+- `p_recency` and `p_last_serving`: internal, for the simulator. They are a song_id → last-heard map and `{served_on, song_ids}`; when given, they replace the `dj_plays` and `drive_mix_servings` reads, so a simulated day runs the same code as a real one.
+
+Why step 7 changed the picker: on the seeded pool (1,440 active), big catalogues such as Alanis Morissette (42 songs) and Foo Fighters (45) appeared nearly every day even at artist_cap 1. The cooldown ties artist variety to what Alex actually heard. Carry-over stops a short drive from burning the songs he never reached.
 
 ### Simulator
 
-A second function runs the picker for N consecutive days (cap 120) without writing anything. It is a `stable` plpgsql function that holds the simulated last-heard map in memory, starting from real recency before the start date, and passes it to the picker as `p_recency`; no temp tables. Between simulated days it treats the first `p_heard_per_day` songs of each playlist as heard (default: all of them), so recency advances as it would in real use. It returns:
+A second function runs the picker for N consecutive days (cap 120) without writing anything. It is a `stable` plpgsql function with no temp tables. It holds the simulated last-heard map and the previous day's list in memory, starting from real recency and the real last serving before the start date, and passes them to the picker as `p_recency` and `p_last_serving`. Each day, the first `p_heard_per_day` songs (default: all) count as heard **on that day**, for both recency and the cooldown; the rest carry over, exactly as in real use. It takes `p_cooldown_days` like the picker. It returns:
 
-- per-song: times served in the window,
-- per-artist: times served, number of songs in pool,
-- the minimum and median number of days between repeats of any song,
-- slice shortfalls (days a slice could not be filled).
+- per-song: times served and times heard,
+- per-artist: times served, **days_appeared** (distinct days with at least one song, to check the cooldown), and songs in the pool,
+- `repeat_gap`: min and median days between serves of a song; carry-over makes 1-day gaps normal on short drives,
+- `heard_gap`: min and median days between hearings of a song, which is the listener's real repetition,
+- `carried_per_day_avg`,
+- slice shortfalls: days a slice, or the whole list, could not be filled.
 
 This is how the artist cap and quotas get tuned with real numbers before going live.
+
+### Length independence (step 7)
+
+- The count is 1–200 for pick, simulation and serving. About 50 songs is 3 hours; about 170 is 10 hours.
+- Quotas are always proportions, scaled to the count by largest remainder, with ties to the earlier slice. So counts that already sum to the count come back unchanged.
+  - The default shape is 6/10/12/22. That gives 6/10/12/22 at 50 and 20/34/41/75 at 170.
+- The artist cap defaults to ceil(count / 25): 2 at 50, 7 at 170. An explicit cap wins.
+- Carry-over never exceeds the count, so a 170-song day followed by a 50-song day carries at most 50.
+- The cooldown is a preference. A fourth pass takes cooling artists, in recency order and under the cap, only when the list would otherwise be short (`cooling = true`). The tool reports these as `cooling_used`, and the simulator as `cooling_fills`, total and per day.
+
+### Performance (measured 2026-10-08)
+
+The pool had 1,768 songs, against 6,700 dj_tracks and 18,491 dj_plays.
+
+| Operation | Time |
+|---|---|
+| `drive_mix_pick(today, 50)` | 451 ms |
+| `drive_mix_simulate`, 60 days at 50 | 2,330 ms (about 0.8 ms per song-day) |
+| Per-song correlated recency | 28 ms |
+| Set-based recency | 81 ms |
+
+- The per-song correlated recency is faster than a set-based rewrite, so it stays. No index was needed: `dj_plays(track_id)`, `dj_tracks(canonical_track_id)` and `dj_tracks(user_id, video_id)` cover it.
+- **The binding limit is `statement_timeout = 8s` on the `authenticated` role,** which every MCP call runs as. So `get_drive_mix_simulation` refuses any request where days × count > 6,000 song-days before it calls the database: 60 days at 100 songs is allowed, as is 30 days at 200, while 120 × 200 is refused.
+
+### Step 7 simulation results (seeded pool, 60 days, count 50)
+
+| Heard per day | repeat_gap | heard_gap | Carried per day | Shortfalls | Cooling fills | Distinct heard |
+|---|---|---|---|---|---|---|
+| 50 | min 17, median 23 | min 17, median 23 | 0 | 0 | 0 | 1,362 |
+| 15 | min 1, median 1 | none repeated | 34.4 | 0 | 0 | 900 |
+
+- **Heard 50:** the big catalogues dropped to about 20 days of 60: Alanis, Oasis, Coldplay, Katy Perry and the Beatles 20 each; Foo Fighters and Taylor Swift 19.
+- **Heard 15:** carry-over dominates and only about 16 new songs a day are drawn, so artists with many never-heard songs show up on many days: Oasis, Alanis and Michael Jackson 43 each, The Commitments 41, Foo Fighters 29, Taylor Swift 12.
 
 ### Sweep
 
