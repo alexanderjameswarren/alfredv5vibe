@@ -47,6 +47,7 @@ import {
   withTag,
 } from "./utils/status";
 import GamesPage from "./games/GamesPage";
+import MoneyPage from "./money/MoneyPage";
 import { sortRows } from "./utils/sortOrders";
 import { matchesQuery } from "./utils/search";
 // `supabaseUrl` used to be imported alongside this: it built the ai-enrich
@@ -1669,6 +1670,9 @@ export default function Alfred() {
 
         {/* Games View */}
         {view === "games" && <GamesPage />}
+
+        {/* Money View (Warren Buffet) */}
+        {view === "money" && <MoneyPage />}
 
         {/* Settings View */}
         {view === "settings" && <SettingsScreen />}
