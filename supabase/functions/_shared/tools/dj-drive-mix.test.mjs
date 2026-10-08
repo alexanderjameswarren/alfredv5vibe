@@ -143,13 +143,59 @@ test("update_drive_mix_artist retire skips songs already retired", async () => {
 });
 
 test("get_drive_mix_pick passes the date and only the params given, and reports shortfalls", async () => {
-  const rows = [{ slice: "country_rap", video_id: VID(1) }, { slice: "fill", video_id: VID(2) }];
+  const rows = [{ slice: "country_rap", video_id: VID(1), carried: true }, { slice: "fill", video_id: VID(2), carried: false }];
   const db = fakeDb(undefined, () => ({ data: rows, error: null }));
-  const out = await m.getDriveMixPickTool.handler({ date: "2026-10-08", artist_cap: 3 }, { db });
-  assert.deepEqual(db.rpcs[0], ["drive_mix_pick", { p_date: "2026-10-08", p_artist_cap: 3 }]);
+  const out = await m.getDriveMixPickTool.handler({ date: "2026-10-08", artist_cap: 3, cooldown_days: 0 }, { db });
+  assert.deepEqual(db.rpcs[0], ["drive_mix_pick", { p_date: "2026-10-08", p_artist_cap: 3, p_cooldown_days: 0 }]);
   assert.equal(out.short_by, 48);
+  assert.equal(out.carried_over, 1);
   assert.deepEqual(out.video_ids, [VID(1), VID(2)]);
-  assert.deepEqual(out.slice_shortfalls.find((s) => s.slice === "country_rap"), { slice: "country_rap", quota: 5, filled: 1 });
+  assert.deepEqual(out.slice_shortfalls.find((s) => s.slice === "country_rap"), { slice: "country_rap", quota: 6, filled: 1 });
+});
+
+test("cooldown_days is validated and the default quotas sum to 50", async () => {
+  await assert.rejects(m.getDriveMixPickTool.handler({ cooldown_days: 31 }, { db: fakeDb() }), /0 to 30/);
+  await assert.rejects(m.getDriveMixSimulationTool.handler({ cooldown_days: -1 }, { db: fakeDb() }), /0 to 30/);
+  assert.equal(Object.values(m.DEFAULT_QUOTAS).reduce((a, b) => a + b, 0), 50);
+});
+
+test("quotas scale to any count by largest remainder", () => {
+  const q50 = m.scaleQuotas(m.DEFAULT_QUOTAS, 50);
+  assert.deepEqual(q50, m.DEFAULT_QUOTAS, "counts that sum to count are unchanged");
+  const q170 = m.scaleQuotas(m.DEFAULT_QUOTAS, 170);
+  // 20.4 / 34 / 40.8 / 74.8: the two .8s win the spare songs, earlier slice first.
+  assert.deepEqual(q170, { country_rap: 20, "1980s-and-earlier": 34, "2010s-2020s": 41, "1990s-2000s": 75 });
+  for (const n of [1, 7, 33, 199, 200]) {
+    assert.equal(Object.values(m.scaleQuotas(m.DEFAULT_QUOTAS, n)).reduce((a, b) => a + b, 0), n, `count ${n}`);
+  }
+  assert.deepEqual(m.scaleQuotas({ country_rap: 1, "1990s-2000s": 1 }, 3), {
+    country_rap: 2, "1980s-and-earlier": 0, "2010s-2020s": 0, "1990s-2000s": 1 });
+});
+
+test("simulation refuses more than 6,000 song-days before calling the database", async () => {
+  const db = fakeDb(undefined, () => ({ data: { songs: [], artists: [] }, error: null }));
+  await assert.rejects(m.getDriveMixSimulationTool.handler({ days: 120, count: 200 }, { db }), /24000 song-days.*Nothing was run/);
+  await assert.rejects(m.getDriveMixSimulationTool.handler({ count: 101 }, { db }), /60 days x 101/);
+  assert.equal(db.rpcs.length, 0);
+  await m.getDriveMixSimulationTool.handler({ days: 60, count: 100 }, { db });
+  await m.getDriveMixSimulationTool.handler({ days: 30, count: 200 }, { db });
+  assert.equal(db.rpcs.length, 2);
+});
+
+test("artist cap defaults to ceil(count / 25)", () => {
+  assert.deepEqual([1, 25, 26, 50, 170, 200].map(m.defaultArtistCap), [1, 1, 2, 2, 7, 8]);
+});
+
+test("a 170-song pick reports scaled quotas, the default cap and cooling fills", async () => {
+  const rows = [{ slice: "fill", video_id: VID(1), carried: false, cooling: true }];
+  const db = fakeDb(undefined, () => ({ data: rows, error: null }));
+  const out = await m.getDriveMixPickTool.handler({ date: "2026-10-08", count: 170 }, { db });
+  assert.deepEqual(db.rpcs[0], ["drive_mix_pick", { p_date: "2026-10-08", p_count: 170 }]);
+  assert.equal(out.artist_cap_used, 7);
+  assert.equal(out.quotas_used["1990s-2000s"], 75);
+  assert.equal(out.cooling_used, 1);
+  await assert.rejects(m.getDriveMixPickTool.handler({ count: 201 }, { db }), /1 to 200/);
+  await assert.rejects(m.getDriveMixPickTool.handler({ quotas: { country_rap: 0 } }, { db }), /not all be zero/);
 });
 
 test("get_drive_mix_pick on an empty pool returns an empty list", async () => {

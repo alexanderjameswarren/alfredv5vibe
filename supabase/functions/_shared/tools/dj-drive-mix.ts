@@ -20,9 +20,9 @@ export const GENRES = ["pop", "rock", "alternative", "country", "rap", "rnb", "d
 export const STATUSES = ["pending", "active", "retired"] as const;
 export const SOURCES = ["playlist_seed", "artist_top", "history_sweep", "manual"] as const;
 export const SLICES = ["country_rap", "1980s-and-earlier", "2010s-2020s", "1990s-2000s"] as const;
-// Mirrors drive_mix_pick's default p_quotas (migration 095). Used only to report shortfalls.
+// Mirrors drive_mix_pick's default p_quotas (step 7 migration). Used only to report shortfalls.
 export const DEFAULT_QUOTAS: Record<string, number> = {
-  country_rap: 5, "1980s-and-earlier": 8, "2010s-2020s": 10, "1990s-2000s": 27,
+  country_rap: 6, "1980s-and-earlier": 10, "2010s-2020s": 12, "1990s-2000s": 22,
 };
 
 const COLUMNS =
@@ -30,7 +30,8 @@ const COLUMNS =
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_BATCH = 50;
-const MAX_PLAYLIST = 100;
+const MAX_PLAYLIST = 200;
+export const SIM_SONG_DAYS_MAX = 6000;
 
 // ---------------------------------------------------------------------------
 // Validation helpers
@@ -101,21 +102,50 @@ function parseIntIn(T: string, key: string, v: unknown, min: number, max: number
 
 function parseQuotas(T: string, v: unknown): Record<string, number> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) {
-    throw new Error(`${T}: quotas must be an object of slice -> song count, e.g. ${JSON.stringify(DEFAULT_QUOTAS)}.`);
+    throw new Error(`${T}: quotas must be an object of slice -> share, e.g. ${JSON.stringify(DEFAULT_QUOTAS)}.`);
   }
+  let sum = 0;
   for (const [k, n] of Object.entries(v as Record<string, unknown>)) {
     parseEnum(T, "quotas key", k, SLICES);
-    parseIntIn(T, `quotas.${k}`, n, 0, MAX_PLAYLIST);
+    if (typeof n !== "number" || !Number.isFinite(n) || n < 0) {
+      throw new Error(`${T}: quotas.${k} must be a number, 0 or more. Got ${JSON.stringify(n)}.`);
+    }
+    sum += n;
   }
+  if (sum === 0) throw new Error(`${T}: quotas must not all be zero.`);
   return v as Record<string, number>;
+}
+
+/**
+ * Quotas as drive_mix_pick applies them: proportions scaled to `count` by
+ * largest remainder, ties to the earlier slice in SLICES. Mirrors the SQL in
+ * the step 7 migration; counts that already sum to `count` come back unchanged.
+ */
+export function scaleQuotas(quotas: Record<string, number>, count: number): Record<string, number> {
+  const total = SLICES.reduce((a, s) => a + (quotas[s] ?? 0), 0);
+  const parts = SLICES.map((s, o) => {
+    const exact = ((quotas[s] ?? 0) * count) / total;
+    return { s, o, f: Math.floor(exact), rem: exact - Math.floor(exact) };
+  });
+  let spare = count - parts.reduce((a, p) => a + p.f, 0);
+  for (const p of [...parts].sort((a, b) => b.rem - a.rem || a.o - b.o)) {
+    if (spare-- > 0) p.f += 1;
+  }
+  return Object.fromEntries(parts.map((p) => [p.s, p.f]));
+}
+
+/** drive_mix_pick's default artist cap: 2 at 50 songs, 7 at 170. */
+export function defaultArtistCap(count: number): number {
+  return Math.ceil(count / 25);
 }
 
 /** The pick/simulation params shared by both tools, as drive_mix_pick arguments. Omitted = SQL default. */
 function pickParams(T: string, args: Record<string, unknown>): Record<string, unknown> {
   const p: Record<string, unknown> = {};
   if (given(args.count)) p.p_count = parseIntIn(T, "count", args.count, 1, MAX_PLAYLIST);
-  if (given(args.artist_cap)) p.p_artist_cap = parseIntIn(T, "artist_cap", args.artist_cap, 1, 10);
+  if (given(args.artist_cap)) p.p_artist_cap = parseIntIn(T, "artist_cap", args.artist_cap, 1, 50);
   if (given(args.quotas)) p.p_quotas = parseQuotas(T, args.quotas);
+  if (given(args.cooldown_days)) p.p_cooldown_days = parseIntIn(T, "cooldown_days", args.cooldown_days, 0, 30);
   return p;
 }
 
@@ -414,13 +444,18 @@ export const getDriveMixPickTool = defineTool({
     const params = { p_date: date, ...pickParams(T, args) };
     const { data, error } = await ctx.db.rpc("drive_mix_pick", params);
     if (error) throw new Error(describeDbError(T, error));
-    const rows = (data ?? []) as { slice: string; video_id: string }[];
-    const count = (params as Record<string, unknown>).p_count as number ?? 50;
-    const quotas = ((params as Record<string, unknown>).p_quotas as Record<string, number>) ?? DEFAULT_QUOTAS;
+    const rows = (data ?? []) as { slice: string; video_id: string; carried?: boolean; cooling?: boolean }[];
+    const p = params as Record<string, unknown>;
+    const count = (p.p_count as number) ?? 50;
+    const quotas = scaleQuotas((p.p_quotas as Record<string, number>) ?? DEFAULT_QUOTAS, count);
     return {
       date,
       requested: count,
       returned: rows.length,
+      quotas_used: quotas,
+      artist_cap_used: (p.p_artist_cap as number) ?? defaultArtistCap(count),
+      carried_over: rows.filter((r) => r.carried).length,
+      cooling_used: rows.filter((r) => r.cooling).length,
       short_by: Math.max(0, count - rows.length),
       slice_shortfalls: shortfalls(rows, quotas),
       video_ids: rows.map((r) => r.video_id),
@@ -443,6 +478,16 @@ export const getDriveMixSimulationTool = defineTool({
     if (given(args.days)) params.p_days = parseIntIn(T, "days", args.days, 1, 120);
     if (given(args.heard_per_day)) params.p_heard_per_day = parseIntIn(T, "heard_per_day", args.heard_per_day, 0, MAX_PLAYLIST);
     const LIMIT = clampLimit(args.limit as number | undefined);
+    // About 0.8 ms per song-day; the authenticated role's 8s statement_timeout ends the call.
+    const days = (params.p_days as number) ?? 60;
+    const count = (params.p_count as number) ?? 50;
+    if (days * count > SIM_SONG_DAYS_MAX) {
+      throw new Error(
+        `${T}: ${days} days x ${count} songs = ${days * count} song-days, over the limit of ${SIM_SONG_DAYS_MAX} ` +
+          `(the database stops a call at 8 seconds). Nothing was run. Lower days or count and call again, ` +
+          `e.g. 60 days at 100 songs, or 30 days at 200.`,
+      );
+    }
 
     const { data, error } = await ctx.db.rpc("drive_mix_simulate", params);
     if (error) throw new Error(describeDbError(T, error));

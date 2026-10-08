@@ -2924,11 +2924,16 @@ export function createMcpServer(token: string) {
   const dmStatus = z.enum(["pending", "active", "retired"]);
   const dmSource = z.enum(["playlist_seed", "artist_top", "history_sweep", "manual"]);
   const dmPickParams = {
-    count: z.number().optional().describe("Songs in the playlist. Default 50, max 100."),
-    artist_cap: z.number().optional().describe("Max songs per artist_key in one playlist. Default 2."),
+    count: z.number().optional().describe("Songs in the playlist, 1 to 200. Default 50 (about 3 hours); about 170 for 10 hours."),
+    artist_cap: z.number().optional().describe("Max songs per artist_key in one playlist. Default ceil(count / 25): 2 at 50, 7 at 170."),
     quotas: z.record(z.string(), z.number()).optional().describe(
-      'Songs per slice, summing to at most count; the rest is fill. Default {"country_rap":5,"1980s-and-earlier":8,"2010s-2020s":10,"1990s-2000s":27}.'),
+      'Share per slice, scaled to count (largest remainder); counts that already sum to count are used as given. Default shape {"country_rap":6,"1980s-and-earlier":10,"2010s-2020s":12,"1990s-2000s":22}.'),
+    cooldown_days: z.number().optional().describe(
+      "Prefer no NEW songs from an artist with any pool song heard in this many days before the date; they are used only as a last resort to reach count (cooling: true). Carried-over songs are exempt. Default 2; 0 turns it off."),
   };
+  const DM_PICK_RULES =
+    "Carry-over first: songs from the most recent serving that are still active and have not been heard since go back in (carried: true), counting toward their slice and the artist cap but never dropped by them, and never more than count. " +
+    "Then each slice is topped up to its quota in last-heard order (never-heard first), then fill, skipping cooling artists; only if still short are cooling artists used. The artist cap applies throughout. ";
 
   server.registerTool(
     "get_drive_mix_songs",
@@ -3011,9 +3016,9 @@ export function createMcpServer(token: string) {
     {
       title: "Dry-run the Drive Mix Pick",
       description:
-        "Run the Drive Mix picker for a date and return the playlist it would serve, in order, with video_ids ready for replace_dj_playlist. Writes nothing. The same date gives the same list while no new plays land. " +
-        "Recency is the last day heard in listening history before the date; never-heard songs come first. " + DM_SLICES +
-        "Reports short_by (fewer songs than asked) and slice_shortfalls. Dates are UTC days; pass date explicitly in the daily task. Tier 1.",
+        "Run the Drive Mix picker for a date and return the playlist it would serve, in order, with video_ids ready for replace_dj_playlist. Writes nothing. The same date gives the same list while no new plays or servings land. " +
+        DM_PICK_RULES + DM_SLICES +
+        "Reports quotas_used, artist_cap_used, carried_over, cooling_used (last-resort songs from cooling artists), short_by and slice_shortfalls. Dates are UTC days; pass date explicitly in the daily task. Tier 1.",
       inputSchema: {
         date: z.string().optional().describe("YYYY-MM-DD. Default today (UTC)."),
         ...dmPickParams,
@@ -3027,8 +3032,9 @@ export function createMcpServer(token: string) {
     {
       title: "Simulate Drive Mix",
       description:
-        "Run the Drive Mix picker for consecutive days without writing anything, treating the first heard_per_day songs of each day as heard (default all). Use it to tune artist_cap and quotas. " +
-        "Returns repeat_gap (min and median days between repeats of a song), expected_gap_days (pool / count), shortfalls (days a slice or the list came up short), and per-song and per-artist serve counts, most served first, cut to limit. Tier 1.",
+        "Run the Drive Mix picker for consecutive days without writing anything, through the same logic as a real pick: the first heard_per_day songs of each day count as heard that day (default all), for recency and the artist cooldown, and the rest carry over to the next day. Use it to tune artist_cap, cooldown_days and quotas. " +
+        "LIMIT: days x count must be at most 6,000 song-days (e.g. 60 days at 100 songs, 30 days at 200), because the database stops a call at 8 seconds; a larger request is refused before it runs. " +
+        "Returns quotas_used, artist_cap_used, repeat_gap (days between serves of a song), heard_gap (days between hearings), carried_per_day_avg, cooling_fills (total and per day), expected_gap_days (pool / count), shortfalls, per-song served/heard counts, and per-artist served and days_appeared (most days first), cut to limit. Tier 1.",
       inputSchema: {
         start: z.string().optional().describe("First day, YYYY-MM-DD. Default today (UTC)."),
         days: z.number().optional().describe("Days to simulate, default 60, max 120."),
@@ -3049,7 +3055,7 @@ export function createMcpServer(token: string) {
         "Every video_id must be an active pool song. A date that already has a serving is refused; there is no replace. Tier 2.",
       inputSchema: {
         date: z.string().optional().describe("YYYY-MM-DD, the date the playlist was picked for. Default today (UTC)."),
-        video_ids: z.array(z.string()).describe("The video_ids sent to YouTube, in order, 1 to 100."),
+        video_ids: z.array(z.string()).describe("The video_ids sent to YouTube, in order, 1 to 200."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(createDriveMixServingTool, args, token),
