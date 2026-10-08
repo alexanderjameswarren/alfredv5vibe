@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Music } from "lucide-react";
+import { Music, Pencil } from "lucide-react";
 import { SAM_PATH, samSongPath, samSongIdFromPath } from "../viewPaths";
 import ScoreRenderer from "./components/ScoreRenderer";
 import ScrollEngine from "./components/ScrollEngine";
@@ -213,11 +213,24 @@ export default function SamPlayer({ onBack }) {
   // The snippet tray (rail's Snippets toggle). Only the tray's visibility:
   // the loaded range is `snippet` and survives closing it.
   const [snippetsOpen, setSnippetsOpen] = useState(false);
-  const toggleSnippets = useCallback(() => setSnippetsOpen((o) => !o), []);
-  // The More drawer (rail's More / Close).
+  // The More drawer (rail's More / Close). One panel at a time: opening either
+  // the tray or the drawer closes the other.
   const [moreOpen, setMoreOpen] = useState(false);
-  const toggleMore = useCallback(() => setMoreOpen((o) => !o), []);
+  const toggleSnippets = useCallback(() => {
+    setSnippetsOpen((o) => {
+      if (!o) setMoreOpen(false);
+      return !o;
+    });
+  }, []);
+  const toggleMore = useCallback(() => {
+    setMoreOpen((o) => {
+      if (!o) setSnippetsOpen(false);
+      return !o;
+    });
+  }, []);
   const closeMore = useCallback(() => setMoreOpen(false), []);
+  // The Edit song dialog: the title's pencil and the drawer's Edit Song.
+  const [editOpen, setEditOpen] = useState(false);
 
   // The tempo Practice actually scrolls at.
   //
@@ -2051,6 +2064,8 @@ export default function SamPlayer({ onBack }) {
                   songWarmup={resolveLadder({ song, defaultLadder })}
                   hasImportedFingerings={hasImported}
                   todayMinutes={todayMinutes}
+                  editOpen={editOpen}
+                  onEditOpenChange={setEditOpen}
                 >
                   {/* The plan bar, directly under the title row. The song goal
                       is in the More drawer's Stats. */}
@@ -2126,7 +2141,7 @@ export default function SamPlayer({ onBack }) {
                     />
                   </DrawerSection>
 
-                  <DrawerSection title="Tools">
+                  <DrawerSection title="Tuning">
                     <TuningControls
                       song={song}
                       songDbId={songDbId}
@@ -2137,6 +2152,23 @@ export default function SamPlayer({ onBack }) {
                       playbackSpeed={playbackSpeed}
                       onSongUpdate={setSong}
                     />
+                  </DrawerSection>
+
+                  <DrawerSection title="Tools">
+                    {songDbId && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* The same dialog as the title's pencil; the drawer
+                            closes first so the dialog is not behind it. */}
+                        <button
+                          type="button"
+                          onClick={() => { setMoreOpen(false); setEditOpen(true); }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded text-sm text-foreground hover:text-primary min-h-[44px]"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          Edit Song
+                        </button>
+                      </div>
+                    )}
                     <LoopControl
                       snippet={snippet}
                       songRepeat={songRepeat}
@@ -2187,6 +2219,16 @@ export default function SamPlayer({ onBack }) {
                     the Fingering mode button, which now sits in the top row. */}
                 {fingeringMode && (
                   <div className="flex items-center gap-2 px-1 mb-2">
+                    {/* The off switch, where the mode is used: same handler and
+                        look as the drawer's button when on. */}
+                    <button
+                      onClick={toggleFingeringMode}
+                      aria-pressed="true"
+                      className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-transparent text-white transition-colors shrink-0"
+                      style={{ backgroundColor: "var(--fingering-accent)" }}
+                    >
+                      Fingering mode: on
+                    </button>
                     <FingeringBar
                       hasSelection={!!fingeringSelection}
                       currentFinger={selectedCurrentFinger}

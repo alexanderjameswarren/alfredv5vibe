@@ -456,9 +456,14 @@ export function SongEditDialog({
 }
 
 // The player's entry point: the pencil beside the song title, opening the
-// dialog above. Props are passed straight through.
+// dialog above. Props are passed straight through. `open` / `onOpenChange` are
+// optional: given, the caller owns the state, so a second trigger (the More
+// drawer's Edit Song) opens this same dialog.
 export default function SongMetadataEditor(props) {
-  const [open, setOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const controlled = props.open !== undefined;
+  const open = controlled ? props.open : ownOpen;
+  const setOpen = controlled ? (v) => props.onOpenChange?.(v) : setOwnOpen;
   return (
     <>
       {props.songDbId && (

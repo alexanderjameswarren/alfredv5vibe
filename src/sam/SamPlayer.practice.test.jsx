@@ -350,9 +350,15 @@ test("More opens the drawer in section order; Play closes it and it stays closed
   const drawer = screen.getByRole("dialog", { name: "More" });
   const sections = within(drawer).getAllByRole("region").map((r) => r.getAttribute("aria-label"));
   // No audio on this song: no Audio section, and upload sits in Tools.
-  expect(sections).toEqual(["Sound", "Tools", "Stats"]);
+  expect(sections).toEqual(["Sound", "Tuning", "Tools", "Stats"]);
+  // Tuning is always open: its fields, no toggle.
+  const tuning = within(drawer).getByRole("region", { name: "Tuning" });
+  for (const label of [/Timing ±ms/, /Chord ms/, /Measure W/]) {
+    expect(within(tuning).getByLabelText(label)).toBeInTheDocument();
+  }
+  expect(within(drawer).queryByRole("button", { name: /^Tuning$/ })).not.toBeInTheDocument();
   const tools = within(drawer).getByRole("region", { name: "Tools" });
-  for (const name of [/Tuning/, /Fingering mode/, /Export/, /Refresh/, /Audio/]) {
+  for (const name of [/Edit Song/, /Fingering mode/, /Export/, /Refresh/, /Audio/]) {
     expect(within(tools).getByRole("button", { name })).toBeInTheDocument();
   }
   expect(within(tools).getByText("Loop song")).toBeInTheDocument();
@@ -368,13 +374,41 @@ test("More opens the drawer in section order; Play closes it and it stays closed
   expect(screen.getByRole("button", { name: "More" })).toHaveAttribute("aria-pressed", "false");
 });
 
-test("Fingering mode, turned on in the drawer, docks its bar in the right column", async () => {
+test("Fingering mode, turned on in the drawer, docks its bar; its own switch turns it off", async () => {
   await open();
   fireEvent.click(screen.getByRole("button", { name: "More" }));
   fireEvent.click(screen.getByRole("button", { name: "Fingering mode" }));
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(screen.queryByRole("dialog", { name: "More" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Undo/ })).toBeInTheDocument();
+  // The off switch leads the row.
+  const off = screen.getByRole("button", { name: "Fingering mode: on" });
+  // eslint-disable-next-line testing-library/no-node-access
+  expect(off.parentElement.firstElementChild).toBe(off);
+  fireEvent.click(off);
+  expect(screen.queryByRole("button", { name: /Undo/ })).not.toBeInTheDocument();
+});
+
+test("one panel at a time: More closes the tray, Snippets closes the drawer", async () => {
+  await open();
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  expect(screen.getByLabelText("Snippet tray")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  expect(screen.getByRole("dialog", { name: "More" })).toBeInTheDocument();
+  expect(screen.queryByLabelText("Snippet tray")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  expect(screen.getByLabelText("Snippet tray")).toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "More" })).not.toBeInTheDocument();
+});
+
+test("Edit Song in Tools closes the drawer and opens the Edit song dialog", async () => {
+  await open();
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  fireEvent.click(screen.getByRole("button", { name: /Edit Song/ }));
+  expect(screen.queryByRole("dialog", { name: "More" })).not.toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Edit Song" })).toBeInTheDocument();
+  // The title's pencil is still there.
+  expect(screen.getByTitle("Edit song")).toBeInTheDocument();
 });
 
 test("Play closes the snippet tray too", async () => {

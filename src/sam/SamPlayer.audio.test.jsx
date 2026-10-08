@@ -184,7 +184,7 @@ test("after a successful upload the dialog shows the audio layout, no reload", a
   // An audio song's drawer leads with Audio, which now holds upload and sync.
   const drawer = screen.getByRole("dialog", { name: "More" });
   expect(within(drawer).getAllByRole("region").map((r) => r.getAttribute("aria-label")))
-    .toEqual(["Audio", "Sound", "Tools", "Stats"]);
+    .toEqual(["Audio", "Sound", "Tuning", "Tools", "Stats"]);
   const audio = within(drawer).getByRole("region", { name: "Audio" });
   expect(within(audio).getByRole("button", { name: "Edit audio sync" })).toBeInTheDocument();
   expect(within(audio).getByText(/^Playback Speed %:/)).toBeInTheDocument();

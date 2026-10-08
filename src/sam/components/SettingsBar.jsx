@@ -17,6 +17,10 @@ export default function SettingsBar({
   onSongUpdate,
   hasImportedFingerings,
   todayMinutes,
+  // The Edit song dialog's open state, owned by SamPlayer so the drawer's
+  // Edit Song can open it too.
+  editOpen,
+  onEditOpenChange,
   children = null,
 }) {
   const isPaused = playbackState === "paused";
@@ -76,6 +80,8 @@ export default function SettingsBar({
             onSongUpdate={onSongUpdate}
             hasImportedFingerings={hasImportedFingerings}
             resolvedWarmup={songWarmup}
+            open={editOpen}
+            onOpenChange={onEditOpenChange}
           />
         </div>
 

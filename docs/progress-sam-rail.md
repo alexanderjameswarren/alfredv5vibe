@@ -42,6 +42,12 @@ scrolls); fit-to-height applies to the stopped, tray-closed score only.
   Stats (incl. song goal).
   *Check:* every drawer control works; nothing remains below the score but the
   conditional fingering / ghost / lyrics rows.
+- [x] **4b. Drawer refinements.** One panel at a time (tray or drawer, never
+  both). "Fingering mode: on" off switch at the left of the fingering row.
+  Tuning is its own always-open drawer section between Sound and Tools; its Save
+  shows only when Timing / Chord / Measure W differ. Edit Song (pencil) in Tools
+  opens the same Edit song dialog, closing the drawer first.
+  *Check:* each of the four in the app; the title's pencil still works.
 - [ ] **5. Score fit-to-height.** Stopped score, tray closed: CSS scale only.
   Paused score (ScrollEngine) not scaled.
   *Check:* at 1024 x 640 with the tray closed both staves show and the page does
@@ -74,3 +80,8 @@ scrolls); fit-to-height applies to the stopped, tray-closed score only.
   Tools). SettingsBar is now the title row only. Song goal moved from PlanLine
   (no longer passed `songNote`) to Stats. Any run start closes the drawer.
   Auto-Match also sits in Tools on songs without audio, so it is never lost.
+- Step 4b done 2026-10-08. Claimed SongMetadataEditor.jsx (not in the original
+  plan) to give it optional controlled `open` / `onOpenChange`; SamPlayer owns
+  `editOpen`, so the pencil and Edit Song open one dialog. Tuning's localStorage
+  open flag removed (always open). Tuning Save uses `tuningDirty` only; the
+  rail's Save is unchanged (any field).

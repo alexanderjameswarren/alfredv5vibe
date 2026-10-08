@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { AudioWaveform, Save, Repeat, SlidersHorizontal } from "lucide-react";
+import React, { useState } from "react";
+import { AudioWaveform, Save, Repeat } from "lucide-react";
 import RestControl from "./RestControl";
 import SegmentedControl from "./SegmentedControl";
 import { supabase } from "../../supabaseClient";
@@ -10,7 +10,8 @@ import { heardTempo } from "../lib/activePlan";
 //   TempoControls   → the rail: BPM (Speed % on audio songs), Goal, Save
 //   SpeedField, AudioSyncBpm → More drawer, Audio
 //   SoundControls   → More drawer, Sound (Metronome, Score playback)
-//   TuningControls, LoopControl → More drawer, Tools
+//   TuningControls  → More drawer, Tuning (always open)
+//   LoopControl     → More drawer, Tools
 //
 // Visibility rules for BPM vs Speed %:
 //   no audio          → BPM only
@@ -33,12 +34,6 @@ import { heardTempo } from "../lib/activePlan";
 // song reload. The toggle is hidden while a snippet is selected: snippet loop
 // and song repeat are mutually exclusive, since both drive `loop` /
 // `audioEndMs` / the appended rest measures.
-//
-// The "Tuning" group's open/closed state, remembered between sessions.
-// Wrapped because storage access throws outright in some contexts (private
-// windows, site data blocked), and a settings row that cannot render is a much
-// worse outcome than a group that forgets it was open.
-const ADVANCED_OPEN_KEY = "sam.numericSettings.tuningOpen";
 
 // Parse/clamp rules per field. One table so blur, the dirty check and Save can
 // never disagree about what a draft means.
@@ -51,22 +46,6 @@ const RULES = {
 };
 
 const FIELD = "w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]";
-
-function readAdvancedOpen() {
-  try {
-    return window.localStorage.getItem(ADVANCED_OPEN_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function writeAdvancedOpen(open) {
-  try {
-    window.localStorage.setItem(ADVANCED_OPEN_KEY, open ? "true" : "false");
-  } catch {
-    /* ignore — the group just won't be remembered */
-  }
-}
 
 // "Goal 75" beside the tempo box (practice plans spec §7.4). Shown only for a
 // confirmed goal (goalSetAt set). A button styled like its Save and Tuning
@@ -113,11 +92,13 @@ function GoalLabel({ song, hasAudio, bpm, playbackSpeed, className = "" }) {
 function useSaveSettings({ song, songDbId, bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed, onSongUpdate }) {
   const [savingSettings, setSavingSettings] = useState(false);
 
-  const isDirty =
-    bpm.preview(RULES.bpm) !== (song?.defaultBpm ?? DEFAULTS.bpm) ||
+  const tuningDirty =
     timingWindowMs.preview(RULES.timingWindowMs) !== (song?.defaultTimingWindowMs ?? DEFAULTS.timingWindowMs) ||
     chordMs.preview(RULES.chordMs) !== (song?.defaultChordMs ?? DEFAULTS.chordMs) ||
-    measureWidth.preview(RULES.measureWidth) !== (song?.defaultMeasureWidth ?? DEFAULTS.measureWidth) ||
+    measureWidth.preview(RULES.measureWidth) !== (song?.defaultMeasureWidth ?? DEFAULTS.measureWidth);
+  const isDirty =
+    tuningDirty ||
+    bpm.preview(RULES.bpm) !== (song?.defaultBpm ?? DEFAULTS.bpm) ||
     playbackSpeed.preview(RULES.playbackSpeed) !== (song?.playbackSpeed ?? DEFAULTS.playbackSpeed);
 
   async function handleSaveSettings() {
@@ -165,8 +146,10 @@ function useSaveSettings({ song, songDbId, bpm, timingWindowMs, chordMs, measure
   // `onMouseDown` preventDefault keeps focus in the field being edited, so the
   // tap lands on Save instead of being spent blurring the input — and blur
   // re-rendering the row cannot move the button out from under the finger.
-  function saveButton(className = "") {
-    return isDirty && (
+  // `tuningOnly`: the Tuning section's Save shows only for its own fields; it
+  // still saves everything, exactly as the rail's does.
+  function saveButton(className = "", tuningOnly = false) {
+    return (tuningOnly ? tuningDirty : isDirty) && (
       <button
         onMouseDown={(e) => e.preventDefault()}
         onClick={handleSaveSettings}
@@ -279,38 +262,17 @@ export function AudioSyncBpm({ bpm, playbackSpeed, showBpmEdit = false, setShowB
   );
 }
 
-// Timing / Chord / Measure W: set once and then left alone for months, so they
-// sit folded behind Tuning (remembered between sessions), with their own Save.
+// Timing / Chord / Measure W: the drawer's Tuning section, always open, with
+// their own Save (shown only while something differs from the saved song).
 export function TuningControls({
   song, songDbId, bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed, onSongUpdate,
 }) {
   const { saveButton } = useSaveSettings({
     song, songDbId, bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed, onSongUpdate,
   });
-  const [advancedOpen, setAdvancedOpen] = useState(readAdvancedOpen);
-  useEffect(() => {
-    writeAdvancedOpen(advancedOpen);
-  }, [advancedOpen]);
 
   return (
     <div className="flex items-center gap-3 flex-wrap">
-      <button
-        type="button"
-        onClick={() => setAdvancedOpen((open) => !open)}
-        aria-expanded={advancedOpen}
-        title="Timing window, chord grouping and measure width"
-        className={`flex items-center gap-1.5 px-2 py-1 border rounded text-sm min-h-[44px] transition-colors ${
-          advancedOpen
-            ? "border-primary bg-primary-light text-primary"
-            : "border-border text-muted-foreground hover:text-dark"
-        }`}
-      >
-        <SlidersHorizontal className="w-4 h-4" />
-        Tuning
-      </button>
-
-      {advancedOpen && (
-        <>
           <label className="text-sm text-foreground">
             Timing ±ms:{" "}
             <input
@@ -347,9 +309,7 @@ export function TuningControls({
               min={150} max={600} step={50}
             />
           </label>
-          {saveButton()}
-        </>
-      )}
+          {saveButton("", true)}
     </div>
   );
 }

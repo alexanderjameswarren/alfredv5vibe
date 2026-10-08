@@ -122,6 +122,38 @@ test("audio at the goal speed: 67 at 90% is 60, so disabled", () => {
   expect(hooks.playbackSpeed.set).not.toHaveBeenCalled();
 });
 
+describe("Tuning section", () => {
+  const { TuningControls } = require("./NumericSettings");
+  const SAVED = { ...NO_AUDIO, defaultTimingWindowMs: 300, defaultChordMs: 80, defaultMeasureWidth: 500 };
+  const mountTuning = (over = {}) => {
+    const hooks = {
+      bpm: numeric(70), playbackSpeed: numeric(100),
+      timingWindowMs: numeric(300), chordMs: numeric(80), measureWidth: numeric(500), ...over,
+    };
+    render(<TuningControls song={SAVED} songDbId="song-1" {...hooks} />);
+  };
+  const save = () => screen.queryByRole("button", { name: /Save/ });
+
+  test("always open: the three fields, no toggle", () => {
+    mountTuning();
+    expect(screen.getByLabelText(/Timing ±ms/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Chord ms/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Measure W/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Tuning/ })).not.toBeInTheDocument();
+  });
+
+  test("Save only when a tuning field differs, not for tempo alone", () => {
+    mountTuning({ bpm: numeric(90) });
+    expect(save()).not.toBeInTheDocument();
+  });
+
+  test("Save appears for a changed tuning field and writes the song row", () => {
+    mountTuning({ chordMs: numeric(120) });
+    fireEvent.click(save());
+    expect(mockWrites).toEqual([{ table: "sam_songs", row: expect.objectContaining({ default_chord_ms: 120 }) }]);
+  });
+});
+
 test("the song mapping and the edit dialog's columns carry the goal fields", () => {
   const song = mapSongRow({ title: "x", goal_bpm: 67, goal_playback_speed: 90, goal_effective_bpm: 60, goal_set_at: "t" }, []);
   expect(song).toMatchObject({ goalEffectiveBpm: 60, goalSetAt: "t" });
