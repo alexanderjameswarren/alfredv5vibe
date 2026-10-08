@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Play, Pause } from "lucide-react";
+import { UI } from "./MoreDrawer";
 
 export default function AudioControls({ audioElement, playbackState }) {
   const [playing, setPlaying] = useState(false);
@@ -81,7 +82,7 @@ export default function AudioControls({ audioElement, playbackState }) {
     <div className="flex items-center gap-3 px-3 py-2 bg-card border border-border rounded-lg mb-3">
       <button
         onClick={togglePlay}
-        className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded bg-primary hover:bg-primary-hover text-white transition-colors"
+        className={`p-2 min-h-[44px] min-w-[44px] flex items-center justify-center bg-primary text-white ${UI.radius} ${UI.press}`}
       >
         {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
       </button>

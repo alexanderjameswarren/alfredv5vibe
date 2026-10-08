@@ -1,6 +1,7 @@
 import React from "react";
 import { Play, Pause, RotateCcw, Square, GraduationCap, Flame } from "lucide-react";
 import BackButton from "./BackButton";
+import { UI } from "./MoreDrawer";
 
 // Stateless cluster of playback transport buttons. Visibility per state:
 //   always         → Back to Alfred (far left)
@@ -45,9 +46,10 @@ export default function TransportControls({
   const warmUpDisabled = !songDbId || !!warmUpDisabledReason;
 
   // Shared shape of every transport button; only the colours differ per button.
+  // Radius and hover/press darkening are the song page's one look (UI).
   const shape = vertical
-    ? "w-full flex items-center justify-center gap-1.5 px-1 py-2 rounded min-h-[44px] font-medium text-sm transition-colors"
-    : "shrink-0 whitespace-nowrap flex items-center gap-1.5 px-4 py-2 rounded min-h-[44px] font-medium text-sm transition-colors";
+    ? `w-full flex items-center justify-center gap-1.5 px-1 py-2 min-h-[44px] font-medium text-sm ${UI.radius} ${UI.press}`
+    : `shrink-0 whitespace-nowrap flex items-center gap-1.5 px-4 py-2 min-h-[44px] font-medium text-sm ${UI.radius} ${UI.press}`;
   const playShape = vertical ? `${shape} flex-col min-h-[72px]` : shape;
 
   const warmUpButton = showWarmUp ? (
@@ -60,8 +62,8 @@ export default function TransportControls({
         warmUpDisabled
           ? "border border-border text-muted-foreground opacity-50 cursor-not-allowed"
           : warmUpPrimary
-            ? "bg-primary hover:bg-primary-hover text-white"
-            : "border border-border text-muted-foreground hover:text-dark"
+            ? "bg-primary text-white"
+            : `border ${UI.off}`
       }`}
     >
       <Flame className="w-4 h-4" />
@@ -86,7 +88,7 @@ export default function TransportControls({
           className={`${playShape} ${
             isStopped && !songDbId
               ? "bg-secondary text-muted-foreground cursor-not-allowed"
-              : "bg-primary hover:bg-primary-hover text-white"
+              : "bg-primary text-white"
           }`}
         >
           <Play className="w-4 h-4" />
@@ -108,11 +110,7 @@ export default function TransportControls({
         <button
           onClick={onPractice}
           disabled={!songDbId}
-          className={`${shape} border border-border ${
-            !songDbId
-              ? "text-muted-foreground opacity-50 cursor-not-allowed"
-              : "text-muted-foreground hover:text-dark"
-          }`}
+          className={`${shape} border ${UI.off} ${!songDbId ? "opacity-50 cursor-not-allowed" : ""}`}
         >
           <GraduationCap className="w-4 h-4" />
           Practice
@@ -124,7 +122,7 @@ export default function TransportControls({
       {isPlaying && (
         <button
           onClick={onPause}
-          className={`${shape} bg-amber-500 hover:bg-amber-600 text-white`}
+          className={`${shape} bg-amber-500 text-white`}
         >
           <Pause className="w-4 h-4" /> Pause
         </button>
@@ -133,7 +131,7 @@ export default function TransportControls({
       {isPaused && (
         <button
           onClick={onRestart}
-          className={`${shape} bg-red-500 hover:bg-red-600 text-white`}
+          className={`${shape} bg-red-500 text-white`}
         >
           <RotateCcw className="w-4 h-4" /> Restart
         </button>
@@ -142,7 +140,7 @@ export default function TransportControls({
       {isPaused && (
         <button
           onClick={onStop}
-          className={`${shape} bg-secondary hover:bg-secondary text-foreground border border-border`}
+          className={`${shape} bg-secondary text-foreground border border-border`}
         >
           <Square className="w-4 h-4" /> Stop
         </button>

@@ -67,7 +67,7 @@ test("a real button styled like Save: label, tooltip, border and height", () => 
   mountSettings(NO_AUDIO, { bpm: 70 });
   expect(goal()).toHaveTextContent(/^Goal 75$/);
   expect(goal()).toHaveAttribute("title", "Set tempo to goal (this session only)");
-  expect(goal()).toHaveClass("border", "rounded", "text-sm", "px-3", "py-1.5", "min-h-[44px]");
+  expect(goal()).toHaveClass("border", "rounded-lg", "text-sm", "px-3", "py-1.5", "min-h-[44px]");
 });
 
 test("no audio: below the goal it is amber (text and border) and enabled", () => {
@@ -145,6 +145,26 @@ describe("Tuning section", () => {
   test("Save only when a tuning field differs, not for tempo alone", () => {
     mountTuning({ bpm: numeric(90) });
     expect(save()).not.toBeInTheDocument();
+  });
+
+  test("the rail's Save shows for tempo only, never for a tuning change", () => {
+    const hooks = { timingWindowMs: numeric(300), measureWidth: numeric(500), playbackSpeed: numeric(100) };
+    const { unmount } = render(
+      <TempoControls song={SAVED} songDbId="song-1" bpm={numeric(70)} chordMs={numeric(120)} {...hooks} />
+    );
+    expect(save()).not.toBeInTheDocument();
+    unmount();
+    render(<TempoControls song={SAVED} songDbId="song-1" bpm={numeric(90)} chordMs={numeric(80)} {...hooks} />);
+    expect(save()).toBeInTheDocument();
+  });
+
+  test("both kinds pending: each Save shows", () => {
+    const hooks = {
+      bpm: numeric(90), chordMs: numeric(120), timingWindowMs: numeric(300),
+      measureWidth: numeric(500), playbackSpeed: numeric(100),
+    };
+    render(<><TempoControls song={SAVED} songDbId="song-1" {...hooks} /><TuningControls song={SAVED} songDbId="song-1" {...hooks} /></>);
+    expect(screen.getAllByRole("button", { name: /Save/ })).toHaveLength(2);
   });
 
   test("Save appears for a changed tuning field and writes the song row", () => {

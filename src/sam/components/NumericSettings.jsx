@@ -5,6 +5,7 @@ import SegmentedControl from "./SegmentedControl";
 import { supabase } from "../../supabaseClient";
 import { DEFAULTS } from "../lib/samConstants";
 import { heardTempo } from "../lib/activePlan";
+import { UI } from "./MoreDrawer";
 
 // The song page's numeric settings, as pieces placed by the song rail layout:
 //   TempoControls   → the rail: BPM (Speed % on audio songs), Goal, Save
@@ -45,7 +46,9 @@ const RULES = {
   playbackSpeed: { min: 1, max: 200, fallback: DEFAULTS.playbackSpeed },
 };
 
-const FIELD = "w-16 px-2 py-1 border border-border rounded text-sm min-h-[44px]";
+const FIELD = `w-16 ${UI.input}`;
+// A label and its box kept together as one unit, so a row wraps between fields.
+const LABEL = "inline-flex items-center gap-1 whitespace-nowrap text-sm text-foreground";
 
 // "Goal 75" beside the tempo box (practice plans spec §7.4). Shown only for a
 // confirmed goal (goalSetAt set). A button styled like its Save and Tuning
@@ -76,10 +79,10 @@ function GoalLabel({ song, hasAudio, bpm, playbackSpeed, className = "" }) {
       title={label}
       aria-label={label}
       data-below={below ? "true" : "false"}
-      className={`shrink-0 whitespace-nowrap flex items-center gap-1 px-3 py-1.5 border rounded text-sm min-h-[44px] transition-colors disabled:opacity-50 disabled:cursor-default ${
+      className={`shrink-0 whitespace-nowrap flex items-center gap-1 px-3 py-1.5 border text-sm min-h-[44px] disabled:opacity-50 disabled:cursor-default ${UI.radius} ${UI.press} ${
         below
-          ? "border-amber-600 text-amber-700 hover:text-amber-800"
-          : "border-border text-muted-foreground hover:text-dark disabled:hover:text-muted-foreground"
+          ? "border-amber-600 text-amber-700 bg-card"
+          : "border-border text-muted-foreground bg-card"
       } ${className}`}
     >
       Goal {song.goalEffectiveBpm}
@@ -96,8 +99,7 @@ function useSaveSettings({ song, songDbId, bpm, timingWindowMs, chordMs, measure
     timingWindowMs.preview(RULES.timingWindowMs) !== (song?.defaultTimingWindowMs ?? DEFAULTS.timingWindowMs) ||
     chordMs.preview(RULES.chordMs) !== (song?.defaultChordMs ?? DEFAULTS.chordMs) ||
     measureWidth.preview(RULES.measureWidth) !== (song?.defaultMeasureWidth ?? DEFAULTS.measureWidth);
-  const isDirty =
-    tuningDirty ||
+  const tempoDirty =
     bpm.preview(RULES.bpm) !== (song?.defaultBpm ?? DEFAULTS.bpm) ||
     playbackSpeed.preview(RULES.playbackSpeed) !== (song?.playbackSpeed ?? DEFAULTS.playbackSpeed);
 
@@ -146,15 +148,16 @@ function useSaveSettings({ song, songDbId, bpm, timingWindowMs, chordMs, measure
   // `onMouseDown` preventDefault keeps focus in the field being edited, so the
   // tap lands on Save instead of being spent blurring the input — and blur
   // re-rendering the row cannot move the button out from under the finger.
-  // `tuningOnly`: the Tuning section's Save shows only for its own fields; it
-  // still saves everything, exactly as the rail's does.
+  // Each Save shows for its own fields — the rail's for tempo (BPM / Speed %),
+  // Tuning's for Timing / Chord / Measure W — and either saves everything, so
+  // with both kinds pending both show and one tap saves both.
   function saveButton(className = "", tuningOnly = false) {
-    return (tuningOnly ? tuningDirty : isDirty) && (
+    return (tuningOnly ? tuningDirty : tempoDirty) && (
       <button
         onMouseDown={(e) => e.preventDefault()}
         onClick={handleSaveSettings}
         disabled={savingSettings || !songDbId}
-        className={`flex items-center justify-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50 ${className}`}
+        className={`flex items-center justify-center gap-1 px-3 py-1.5 text-sm min-h-[44px] disabled:opacity-50 ${UI.outline} ${className}`}
       >
         <Save className="w-3.5 h-3.5" />
         {savingSettings ? "Saving..." : "Save"}
@@ -177,7 +180,7 @@ export function TempoControls({
   });
   const hasAudio = !!song?.audioFilePath;
   const field = hasAudio ? playbackSpeed : bpm;
-  const inputClass = "w-full px-2 py-1 border border-border rounded text-sm min-h-[44px]";
+  const inputClass = `w-full ${UI.input}`;
 
   return (
     <div className="flex flex-col gap-2 w-full">
@@ -210,7 +213,7 @@ export function TempoControls({
 // hook as the rail's box, so the two always agree.
 export function SpeedField({ playbackSpeed, onHideBpmEdit }) {
   return (
-    <label className="text-sm text-foreground">
+    <label className={LABEL}>
       Playback Speed %:{" "}
       <input
         type="number"
@@ -237,7 +240,7 @@ export function AudioSyncBpm({ bpm, playbackSpeed, showBpmEdit = false, setShowB
   }
 
   return showBpmEdit ? (
-    <label className="text-sm text-foreground">
+    <label className={LABEL}>
       BPM:{" "}
       <input
         type="number"
@@ -255,7 +258,7 @@ export function AudioSyncBpm({ bpm, playbackSpeed, showBpmEdit = false, setShowB
       onClick={handleEnableBpmEdit}
       title="Edit audio sync"
       aria-label="Edit audio sync"
-      className="min-h-[44px] min-w-[44px] flex items-center justify-center text-muted hover:text-dark"
+      className={`min-h-[44px] min-w-[44px] flex items-center justify-center ${UI.outline}`}
     >
       <AudioWaveform className="w-4 h-4" />
     </button>
@@ -273,7 +276,7 @@ export function TuningControls({
 
   return (
     <div className="flex items-center gap-3 flex-wrap">
-          <label className="text-sm text-foreground">
+          <label className={LABEL}>
             Timing ±ms:{" "}
             <input
               type="number"
@@ -285,7 +288,7 @@ export function TuningControls({
               min={100} max={2000}
             />
           </label>
-          <label className="text-sm text-foreground">
+          <label className={LABEL}>
             Chord ms:{" "}
             <input
               type="number"
@@ -297,7 +300,7 @@ export function TuningControls({
               min={10} max={500}
             />
           </label>
-          <label className="text-sm text-foreground">
+          <label className={LABEL}>
             Measure W:{" "}
             <input
               type="number"
@@ -321,7 +324,7 @@ export function LoopControl({ snippet, songRepeat, onSongRepeatChange, songRestM
     <div className="flex items-center gap-3 flex-wrap">
       <label
         title="Repeat whole song"
-        className={`px-2 py-1 border rounded min-h-[44px] flex items-center gap-1.5 text-sm cursor-pointer ${songRepeat ? "border-primary bg-primary-light text-primary" : "border-border text-muted-foreground"}`}
+        className={`px-2 py-1 border min-h-[44px] flex items-center gap-1.5 text-sm cursor-pointer ${UI.radius} ${UI.pressLabel} ${songRepeat ? UI.on : UI.off}`}
       >
         <input
           type="checkbox"
@@ -343,7 +346,7 @@ export function LoopControl({ snippet, songRepeat, onSongRepeatChange, songRestM
 // SegmentedControl's built-in label (shown only at xl) is hidden so it never
 // reads twice.
 export function SoundControls({ metronome, setMetronome, scorePlayback, setScorePlayback }) {
-  const group = "flex items-center gap-3 text-sm text-foreground [&>span>span:first-child]:!hidden";
+  const group = "flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-foreground [&>span>span:first-child]:!hidden";
   return (
     <div className="flex flex-col gap-2">
       <div className={group}>

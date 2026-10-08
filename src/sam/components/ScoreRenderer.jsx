@@ -15,6 +15,7 @@ import { drawGhostOverlay } from "../lib/ghostOverlay";
 import { syncZoneLayer, drawSelectionRing } from "../lib/fingeringZones";
 import { CLEF_EXTRA } from "../lib/vexflowHelpers";
 import { SCORE_SCALE } from "../lib/samConstants";
+import { UI } from "./MoreDrawer";
 
 // Layout constants
 // Stopped view leaves extra room between the staves for lyrics + the lyric-edit
@@ -786,7 +787,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
                 cancelEditor();
               }
             }}
-            className="w-24 px-2 py-1 border border-border rounded text-xs"
+            className={`w-24 px-2 py-1 border border-border text-xs ${UI.radius}`}
           />
         </div>
       )}

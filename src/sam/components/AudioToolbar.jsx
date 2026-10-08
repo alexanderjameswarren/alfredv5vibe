@@ -3,6 +3,7 @@ import { Download, Upload, RefreshCw, Wand2 } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 import { uploadAudio } from "../lib/audioPlayer";
 import { recompileMeasures } from "../lib/measureCompiler";
+import { UI } from "./MoreDrawer";
 
 // Utility actions, placed in the More drawer by `keys`: Export, Audio upload,
 // Refresh (recompile lyrics blob from rows), Auto-Match (assign syllables to RH
@@ -216,7 +217,7 @@ export default function AudioToolbar({
           onClick={a.onClick}
           disabled={a.disabled}
           title={a.label}
-          className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded text-sm text-foreground hover:text-primary min-h-[44px] disabled:opacity-50"
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-sm min-h-[44px] disabled:opacity-50 ${UI.outline}`}
         >
           {a.icon}
           {a.label}
@@ -244,13 +245,13 @@ export default function AudioToolbar({
             <div className="flex gap-3">
               <button
                 onClick={() => setShowAutoMatchConfirm(false)}
-                className="flex-1 px-4 py-2 border border-border rounded-lg text-sm font-medium text-foreground hover:bg-secondary min-h-[44px] transition-colors"
+                className={`flex-1 px-4 py-2 text-sm font-medium min-h-[44px] ${UI.outline}`}
               >
                 Cancel
               </button>
               <button
                 onClick={handleAutoMatch}
-                className="flex-1 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-sm font-medium min-h-[44px] transition-colors"
+                className={`flex-1 px-4 py-2 bg-primary text-white text-sm font-medium min-h-[44px] ${UI.radius} ${UI.press}`}
               >
                 Confirm
               </button>

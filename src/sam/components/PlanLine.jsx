@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Check, Circle, CircleAlert, CircleDot, CircleSlash, Flame, Mountain } from "lucide-react";
 import { planLineText } from "../lib/activePlan";
 import PlanNextButton from "./PlanNextButton";
+import { UI } from "./MoreDrawer";
 
 // WHY Mountain FOR THE SONG GOAL (2026-09-27). It must not be confusable with the
 // plan line's circle family at a glance, which rules out both of the obvious "goal"
@@ -25,7 +26,7 @@ const ICON = "w-4 h-4 shrink-0";
 // not filled, so it does not compete with Play. Styled from here via the box's
 // data attribute so PlanNextButton itself stays unchanged.
 const NEXT_LEAD =
-  "shrink-0 [&_[data-next-box]]:border-primary [&_[data-next-box]]:text-primary [&_[data-next-box]]:font-medium hover:[&_[data-next-box]]:bg-primary-light";
+  `shrink-0 [&_[data-next-box]]:border-primary [&_[data-next-box]]:text-primary [&_[data-next-box]]:font-medium [&_[data-next-box]]:bg-card [&_[data-next-box]]:rounded-lg ${UI.press}`;
 
 // The plan line's state, as one shape with only the fill changing (Circle →
 // CircleDot → Check), plus CircleAlert for the amber case. One family means the
@@ -155,7 +156,7 @@ export default function PlanLine({
               type="button"
               onClick={onSetTempo}
               title={`Set the tempo box to ${item.target_effective_bpm} BPM for this session`}
-              className="shrink-0 whitespace-nowrap flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px]"
+              className={`shrink-0 whitespace-nowrap flex items-center gap-1 px-3 py-1.5 text-sm min-h-[44px] ${UI.outline}`}
             >
               Set tempo
             </button>

@@ -58,6 +58,14 @@ test("warm up sits under Practice", () => {
   expect(names.indexOf("Warm up")).toBe(names.indexOf("Practice") + 1);
 });
 
+test("one look: every rail button has the shared radius and press feedback", () => {
+  mount({ onToggleSnippets: jest.fn(), onToggleMore: jest.fn() });
+  for (const b of screen.getAllByRole("button")) {
+    expect(b).toHaveClass("rounded-lg", "enabled:hover:brightness-95", "enabled:active:brightness-90");
+  }
+  expect(screen.getByRole("spinbutton")).toHaveClass("rounded-lg");
+});
+
 test("audio song: the tempo slot is Speed %", () => {
   mount({ song: { ...SONG, audioFilePath: "u/x.mp3" } });
   expect(screen.getByText(/^Speed %:/)).toBeInTheDocument();
@@ -74,6 +82,7 @@ test("More reads Close, pressed, while the drawer is open", () => {
 test("open drawer: the button is Close and pressed", () => {
   mount({ onToggleMore: jest.fn(), moreOpen: true });
   expect(button("Close")).toHaveAttribute("aria-pressed", "true");
+  expect(button("Close")).toHaveClass("bg-primary-light", "border-primary", "text-primary", "rounded-lg");
   expect(button("More")).not.toBeInTheDocument();
 });
 

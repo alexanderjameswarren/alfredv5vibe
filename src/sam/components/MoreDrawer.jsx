@@ -1,5 +1,26 @@
 import React, { useEffect, useRef } from "react";
 
+// ONE LOOK FOR THE SONG PAGE (song rail, 4c). Every button and input on the
+// song page — rail, title row, plan bar, tray, fingering row, this drawer, the
+// Edit song dialog — takes its radius, press feedback and on-state from here.
+// Kept in this dependency-free file so any of them can import it without a cycle.
+export const UI = {
+  // The radius of the Edit song dialog's inputs and the old Fingering mode button.
+  radius: "rounded-lg",
+  // Hover darkens a little, pressed a little more. `enabled:` keeps disabled
+  // buttons still; labels (checkbox/radio toggles) use `pressLabel`.
+  press: "transition duration-100 enabled:hover:brightness-95 enabled:active:brightness-90",
+  pressLabel: "transition duration-100 hover:brightness-95 active:brightness-90",
+  // Selected / on: light tan fill, brown border and text.
+  on: "border-primary bg-primary-light text-primary",
+  off: "border-border bg-card text-muted-foreground",
+};
+// An outlined button: shape + press + the off look; append UI.on via `toggle`.
+UI.button = `${UI.radius} ${UI.press} border`;
+UI.outline = `${UI.button} ${UI.off}`;
+UI.toggle = (isOn) => `${UI.button} ${isOn ? UI.on : UI.off}`;
+UI.input = `${UI.radius} border border-border px-2 py-1 text-sm min-h-[44px]`;
+
 // The rail's More drawer (song rail, step 4). Slides in from the left directly
 // beside the rail, over a dimmed score; the rail itself is never covered, so it
 // stays usable. Closes on the dim area, on Escape, or via the rail's Close.
@@ -15,7 +36,9 @@ export function DrawerSection({ title, children }) {
   return (
     <section aria-label={title} className="py-3 border-b border-border last:border-b-0">
       <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-2">{title}</h3>
-      <div className="flex flex-col gap-2">{children}</div>
+      {/* min-w-0 + the panel's overflow-x-hidden: rows wrap to the drawer's
+          width instead of running off its right edge. */}
+      <div className="flex flex-col gap-2 min-w-0 [&>div]:flex-wrap">{children}</div>
     </section>
   );
 }
@@ -55,7 +78,7 @@ export default function MoreDrawer({ open, onClose, children }) {
         ref={panelRef}
         role="dialog"
         aria-label="More"
-        className="absolute inset-y-0 left-0 w-[410px] max-w-full bg-card border-r border-border shadow-lg overflow-y-auto px-4"
+        className="absolute inset-y-0 left-0 w-[410px] max-w-full bg-card border-r border-border shadow-lg overflow-y-auto overflow-x-hidden px-4"
       >
         {children}
       </div>

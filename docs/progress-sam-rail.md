@@ -48,6 +48,13 @@ scrolls); fit-to-height applies to the stopped, tray-closed score only.
   shows only when Timing / Chord / Measure W differ. Edit Song (pencil) in Tools
   opens the same Edit song dialog, closing the drawer first.
   *Check:* each of the four in the app; the title's pencil still works.
+- [x] **4c. One look, Save fix.** Rail Save shows only for tempo (BPM / Speed %),
+  Tuning Save only for Timing / Chord / Measure W; both save everything. Every
+  button and input on the song page uses one radius (rounded-lg), one on-state
+  (tan fill, brown border and text) and one hover/press darkening, from `UI` in
+  MoreDrawer.jsx. Drawer rows wrap inside its width.
+  *Check:* the Save bug; Fingering mode on in both places; hover on several
+  buttons; Edit Song dialog inputs.
 - [ ] **5. Score fit-to-height.** Stopped score, tray closed: CSS scale only.
   Paused score (ScrollEngine) not scaled.
   *Check:* at 1024 x 640 with the tray closed both staves show and the page does
@@ -85,3 +92,9 @@ scrolls); fit-to-height applies to the stopped, tray-closed score only.
   `editOpen`, so the pencil and Edit Song open one dialog. Tuning's localStorage
   open flag removed (always open). Tuning Save uses `tuningDirty` only; the
   rail's Save is unchanged (any field).
+- Step 4c done 2026-10-08. `UI` (radius, press, pressLabel, on, off, button,
+  outline, toggle, input) lives in MoreDrawer.jsx because it has no imports, so
+  nothing importing it can form a cycle; a dedicated file would be tidier but
+  needs a claim. Not restyled because they are not held: SegmentedControl
+  (shared with Sight Reader), RestControl, FingeringBar, WarmupLadderEditor.
+  Next's box rounded via PlanLine's variant, so PlanNextButton is unchanged.

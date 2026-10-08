@@ -2,6 +2,7 @@ import React from "react";
 import { ArrowLeft, ListMusic, MoreHorizontal, X } from "lucide-react";
 import TransportControls from "./TransportControls";
 import { TempoControls } from "./NumericSettings";
+import { UI } from "./MoreDrawer";
 
 // The song page's left rail (layout "D"): transport, tempo, Snippets, More and
 // Back in one fixed column, so a left hand reaches everything without crossing
@@ -11,7 +12,7 @@ function Divider() {
   return <hr className="w-full border-border" />;
 }
 
-const TOGGLE = "w-full flex items-center justify-center gap-1.5 px-1 py-2 rounded min-h-[44px] text-sm font-medium border transition-colors";
+const SHAPE = "w-full flex items-center justify-center gap-1.5 px-1 py-2 min-h-[44px] text-sm font-medium disabled:opacity-40";
 
 export default function SongRail({
   playbackState, songDbId,
@@ -65,11 +66,7 @@ export default function SongRail({
         onClick={onToggleSnippets ?? undefined}
         disabled={!onToggleSnippets}
         aria-pressed={snippetsOpen}
-        className={`${TOGGLE} disabled:opacity-40 ${
-          snippetsOpen
-            ? "border-primary bg-primary-light text-primary"
-            : "border-border text-muted-foreground hover:text-dark"
-        }`}
+        className={`${SHAPE} ${UI.toggle(snippetsOpen)}`}
       >
         <ListMusic className="w-4 h-4" />
         Snippets
@@ -83,11 +80,7 @@ export default function SongRail({
         disabled={!onToggleMore}
         aria-expanded={moreOpen}
         aria-pressed={moreOpen}
-        className={`${TOGGLE} disabled:opacity-40 ${
-          moreOpen
-            ? "border-primary bg-primary-light text-primary"
-            : "border-border text-muted-foreground hover:text-dark"
-        }`}
+        className={`${SHAPE} ${UI.toggle(moreOpen)}`}
       >
         {moreOpen ? <X className="w-4 h-4" /> : <MoreHorizontal className="w-4 h-4" />}
         {moreOpen ? "Close" : "More"}
@@ -98,7 +91,7 @@ export default function SongRail({
         onClick={onBack}
         title="Back to song library"
         aria-label="Back to song library"
-        className={`${TOGGLE} border-transparent text-muted-foreground hover:text-foreground`}
+        className={`${SHAPE} ${UI.outline}`}
       >
         <ArrowLeft className="w-5 h-5" />
         Back

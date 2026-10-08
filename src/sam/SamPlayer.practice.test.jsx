@@ -381,8 +381,10 @@ test("Fingering mode, turned on in the drawer, docks its bar; its own switch tur
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(screen.queryByRole("dialog", { name: "More" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Undo/ })).toBeInTheDocument();
-  // The off switch leads the row.
+  // The off switch leads the row, in the shared on look (tan, brown) — no accent fill.
   const off = screen.getByRole("button", { name: "Fingering mode: on" });
+  expect(off).toHaveClass("bg-primary-light", "border-primary", "text-primary", "rounded-lg");
+  expect(off).not.toHaveAttribute("style");
   // eslint-disable-next-line testing-library/no-node-access
   expect(off.parentElement.firstElementChild).toBe(off);
   fireEvent.click(off);

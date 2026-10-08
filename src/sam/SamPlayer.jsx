@@ -8,7 +8,7 @@ import SongLoader from "./components/SongLoader";
 import BackButton from "./components/BackButton";
 import SettingsBar from "./components/SettingsBar";
 import SongRail from "./components/SongRail";
-import MoreDrawer, { DrawerSection } from "./components/MoreDrawer";
+import MoreDrawer, { DrawerSection, UI } from "./components/MoreDrawer";
 import AudioToolbar from "./components/AudioToolbar";
 import {
   SpeedField, AudioSyncBpm, SoundControls, TuningControls, LoopControl,
@@ -1897,7 +1897,7 @@ export default function SamPlayer({ onBack }) {
         <button
           onClick={toggleShowImported}
           aria-pressed={showImportedFingerings}
-          className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors"
+          className={`min-h-[44px] px-4 text-sm font-medium ${UI.toggle(showImportedFingerings)}`}
         >
           {showImportedFingerings ? "Hide Imported" : "Show Imported"}
         </button>
@@ -1906,11 +1906,7 @@ export default function SamPlayer({ onBack }) {
         <button
           onClick={() => setGhostMode((on) => !on)}
           aria-pressed={ghostMode}
-          className={`min-h-[44px] px-4 rounded-lg text-sm font-medium border transition-colors ${
-            ghostMode
-              ? "bg-foreground text-background border-transparent"
-              : "bg-card text-foreground border-border hover:bg-muted"
-          }`}
+          className={`min-h-[44px] px-4 text-sm font-medium ${UI.toggle(ghostMode)}`}
         >
           {ghostMode ? "Diff: on" : "Diff"}
         </button>
@@ -1918,12 +1914,7 @@ export default function SamPlayer({ onBack }) {
       <button
         onClick={toggleFingeringMode}
         aria-pressed={fingeringMode}
-        className={`min-h-[44px] px-4 rounded-lg text-sm font-medium border transition-colors ${
-          fingeringMode
-            ? "text-white border-transparent"
-            : "bg-card text-foreground border-border hover:bg-muted"
-        }`}
-        style={fingeringMode ? { backgroundColor: "var(--fingering-accent)" } : undefined}
+        className={`min-h-[44px] px-4 text-sm font-medium ${UI.toggle(fingeringMode)}`}
       >
         {fingeringMode ? "Fingering mode: on" : "Fingering mode"}
       </button>
@@ -2162,7 +2153,7 @@ export default function SamPlayer({ onBack }) {
                         <button
                           type="button"
                           onClick={() => { setMoreOpen(false); setEditOpen(true); }}
-                          className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded text-sm text-foreground hover:text-primary min-h-[44px]"
+                          className={`flex items-center gap-1.5 px-3 py-1.5 text-sm min-h-[44px] ${UI.outline}`}
                         >
                           <Pencil className="w-3.5 h-3.5" />
                           Edit Song
@@ -2224,8 +2215,7 @@ export default function SamPlayer({ onBack }) {
                     <button
                       onClick={toggleFingeringMode}
                       aria-pressed="true"
-                      className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-transparent text-white transition-colors shrink-0"
-                      style={{ backgroundColor: "var(--fingering-accent)" }}
+                      className={`min-h-[44px] px-4 text-sm font-medium shrink-0 ${UI.toggle(true)}`}
                     >
                       Fingering mode: on
                     </button>
@@ -2243,7 +2233,7 @@ export default function SamPlayer({ onBack }) {
                     <button
                       onClick={undoFingering}
                       disabled={!canUndoFingering}
-                      className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed ml-auto"
+                      className={`min-h-[44px] px-4 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed ml-auto ${UI.outline}`}
                     >
                       ↺ Undo
                     </button>
@@ -2260,11 +2250,7 @@ export default function SamPlayer({ onBack }) {
                           key={v}
                           onClick={() => setGhostHands(v)}
                           aria-pressed={ghostHands === v}
-                          className={`min-h-[36px] px-3 rounded-md text-sm border transition-colors ${
-                            ghostHands === v
-                              ? "bg-foreground text-background border-transparent"
-                              : "bg-card text-foreground border-border hover:bg-muted"
-                          }`}
+                          className={`min-h-[36px] px-3 text-sm ${UI.toggle(ghostHands === v)}`}
                         >
                           {label}
                         </button>
@@ -2325,7 +2311,7 @@ export default function SamPlayer({ onBack }) {
                       <button
                         onClick={handleSaveLyrics}
                         disabled={lyricsSaving}
-                        className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-sm font-medium min-h-[44px] disabled:opacity-50 transition-colors"
+                        className={`px-4 py-2 bg-primary text-white text-sm font-medium min-h-[44px] disabled:opacity-50 ${UI.radius} ${UI.press}`}
                       >
                         {lyricsSaving ? "Saving..." : "Save Lyrics"}
                       </button>

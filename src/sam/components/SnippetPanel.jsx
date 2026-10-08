@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { ChevronDown, ChevronRight, CircleArrowRight, Disc, Save, Archive, ArchiveRestore, Flame } from "lucide-react";
 import RestControl from "./RestControl";
+import { UI } from "./MoreDrawer";
 import { supabase } from "../../supabaseClient";
 import { formatSnippetTitle, findMatchingSnippet, ensureSnippetSaved, snippetFromRow } from "../lib/snippetsApi";
 import useSnippetPracticeSummary from "../lib/useSnippetPracticeSummary";
@@ -473,7 +474,7 @@ export default function SnippetPanel({
               type="button"
               onClick={onWholeSong ?? undefined}
               disabled={!snippet || !onWholeSong}
-              className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50"
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm min-h-[44px] disabled:opacity-50 ${UI.outline}`}
             >
               <Disc className="w-3.5 h-3.5" />
               Whole song
@@ -488,7 +489,7 @@ export default function SnippetPanel({
                 onKeyDown={blurOnEnter}
                 onFocus={(e) => e.target.select()}
                 aria-invalid={rangeError ? "true" : undefined}
-                className="w-14 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
+                className={`w-14 ${UI.input}`}
                 min={1} max={totalMeasures}
               />
             </label>
@@ -502,7 +503,7 @@ export default function SnippetPanel({
                 onKeyDown={blurOnEnter}
                 onFocus={(e) => e.target.select()}
                 aria-invalid={rangeError ? "true" : undefined}
-                className="w-14 px-2 py-1 border border-border rounded text-sm min-h-[44px]"
+                className={`w-14 ${UI.input}`}
                 min={1} max={totalMeasures}
               />
             </label>
@@ -513,7 +514,7 @@ export default function SnippetPanel({
             <div className="flex items-center gap-1 text-muted-foreground">
               Hand:
               {["both", "lh", "rh"].map((mode) => (
-                <label key={mode} className={`px-2 py-1 border rounded text-sm min-h-[44px] flex items-center cursor-pointer ${handMode === mode ? "border-primary bg-primary-light text-primary font-medium" : "border-border"}`}>
+                <label key={mode} className={`px-2 py-1 border text-sm min-h-[44px] flex items-center cursor-pointer ${UI.radius} ${UI.pressLabel} ${handMode === mode ? `${UI.on} font-medium` : UI.off}`}>
                   <input
                     type="radio"
                     name="handMode"
@@ -534,7 +535,7 @@ export default function SnippetPanel({
                 onClick={handleSaveNew}
                 // Never saves a range that is invalid or still being typed.
                 disabled={saving || !songDbId || !rangeValid || rangePending}
-                className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px] disabled:opacity-50"
+                className={`flex items-center gap-1 px-3 py-1.5 text-sm min-h-[44px] disabled:opacity-50 ${UI.outline}`}
               >
                 <Save className="w-3.5 h-3.5" />
                 {saving ? "Saving..." : "Save New"}
@@ -552,7 +553,7 @@ export default function SnippetPanel({
                 type="button"
                 onClick={() => setListOpen((o) => !o)}
                 aria-expanded={listOpen}
-                className="w-full flex items-center gap-1 text-left text-sm text-muted-foreground hover:text-dark font-medium min-h-[44px] px-1"
+                className={`w-full flex items-center gap-1 text-left text-sm font-medium min-h-[44px] px-2 ${UI.toggle(listOpen)}`}
               >
                 {listOpen ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
                 <span className="min-w-0 truncate">
@@ -580,17 +581,17 @@ export default function SnippetPanel({
                 {savedSnippets.map((s) => (
                   <div
                     key={s.id}
-                    className={`flex items-center gap-1 rounded text-sm min-h-[44px] transition-colors group ${
+                    className={`flex items-center gap-1 border text-sm min-h-[44px] group ${UI.radius} ${
                       snippet?.dbId === s.id
-                        ? "bg-primary-light text-primary font-medium"
-                        : "hover:bg-secondary text-dark"
+                        ? `${UI.on} font-medium`
+                        : "border-transparent text-dark"
                     }`}
                   >
                     {/* Load icon on the LEFT (left-handed reach). Loads only —
                         it never starts playback; same as tapping the row. */}
                     <button
                       onClick={() => handleLoadSnippet(s)}
-                      className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-primary hover:text-primary-hover shrink-0"
+                      className={`p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-primary shrink-0 ${UI.radius} ${UI.press}`}
                       title="Load snippet"
                       aria-label={`Load m.${s.start_measure}-${s.end_measure}`}
                     >
@@ -603,7 +604,7 @@ export default function SnippetPanel({
                         a cut-off figure is worse than a taller row. */}
                     <button
                       onClick={() => handleLoadSnippet(s)}
-                      className="flex-1 min-w-0 flex items-center gap-3 flex-wrap text-left px-3 py-2"
+                      className={`flex-1 min-w-0 flex items-center gap-3 flex-wrap text-left px-3 py-2 ${UI.radius} ${UI.press}`}
                     >
                       <span className="font-medium">
                         {formatSnippetTitle({
@@ -623,7 +624,7 @@ export default function SnippetPanel({
                     {warmupFor && (
                       <button
                         onClick={(e) => { e.stopPropagation(); openLadder(s); }}
-                        className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-dark"
+                        className={`p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground ${UI.radius} ${UI.press}`}
                         title="Warm-up ladder"
                         aria-label={`Warm-up ladder for m.${s.start_measure}-${s.end_measure}`}
                       >
@@ -634,7 +635,7 @@ export default function SnippetPanel({
                     )}
                     <button
                       onClick={(e) => handleArchiveSnippet(e, s)}
-                      className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                      className={`p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground opacity-0 group-hover:opacity-100 ${UI.radius} ${UI.press}`}
                       title="Archive snippet"
                     >
                       <Archive className="w-3.5 h-3.5" />
@@ -651,7 +652,7 @@ export default function SnippetPanel({
             <div className="text-center mt-2">
               <button
                 onClick={() => setShowArchived(!showArchived)}
-                className="text-xs text-muted-foreground hover:text-dark min-h-[44px] px-2"
+                className={`text-xs text-muted-foreground min-h-[44px] px-2 ${UI.radius} ${UI.press}`}
               >
                 {showArchived ? "Hide archived snippets" : `View archived snippets (${archivedSnippets.length})`}
               </button>
@@ -684,7 +685,7 @@ export default function SnippetPanel({
                         </div>
                         <button
                           onClick={(e) => handleRestoreSnippet(e, s)}
-                          className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground hover:text-success transition-colors"
+                          className={`p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground ${UI.radius} ${UI.press}`}
                           title="Restore snippet"
                         >
                           <ArchiveRestore className="w-3.5 h-3.5" />
@@ -773,14 +774,14 @@ export default function SnippetPanel({
               <button
                 onClick={closeLadder}
                 disabled={ladderSaving}
-                className="px-4 py-2 border border-border rounded text-sm text-foreground hover:bg-secondary min-h-[44px] disabled:opacity-50"
+                className={`px-4 py-2 text-sm min-h-[44px] disabled:opacity-50 ${UI.outline}`}
               >
                 Cancel
               </button>
               <button
                 onClick={saveLadder}
                 disabled={ladderSaving}
-                className="px-4 py-2 rounded text-sm font-medium bg-primary hover:bg-primary-hover text-white min-h-[44px] disabled:opacity-50"
+                className={`px-4 py-2 text-sm font-medium bg-primary text-white min-h-[44px] disabled:opacity-50 ${UI.radius} ${UI.press}`}
               >
                 {ladderSaving ? "Saving…" : "Save"}
               </button>
