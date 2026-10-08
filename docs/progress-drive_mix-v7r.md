@@ -3,28 +3,45 @@
 Project code: `drive_mix-v7r`
 Spec: docs/technical-spec-drive_mix-v7r.md
 
-## Status: In Progress — Step 5 built, awaiting Checkpoint and Surface refresh
+## Status: Live (2026-10-08) — step 9 open
 
 ### Development Steps
 - [x] Step 1: Read-only plan — files, database items, claims check (s1)
 - [x] Step 2: Confirm and claim (s2)
-- [x] Step 3: Database — tables, picker, simulator and sweep functions; register_table; CONFORMANT (just-in-time database step, Checkpoint) — migration 095 applied 2026-10-07; CONFORMANT (51 tables); drive_mix_pick on the empty pool returns []
-- [ ] Step 4: Alfred MCP tools (section 5 of the spec); deploy; verify in a fresh thread — 8 tools in dj-drive-mix.ts, deployed 2026-10-07 as mcp v141 (verify_jwt false); tests green (15 handler, 25 index, 2092 app, 174 scripts); fresh-thread test pending
-- [ ] Step 5: Workshop `get_dj_artist_top_songs` tool — lives in this repo's workshop/ folder (not a separate repo), in workshop/workshop/tools/dj_write.py beside search_dj_music. Built 2026-10-07 and live on the Surface. Live testing found duplicates, re-recordings and an empty year field, so it was reworked to rank by YouTube Music play counts: dedupe, variant flags, representative choice, original_candidate, and suggested thresholds (spec §6). Then made concurrent (5 at a time) with a 25s time budget: live calls now take 6-8s instead of 20-24s. Workshop tests 261/261 pass.
-- [ ] Step 6: On the Surface, calls took 23-27s. Fix: scan default 30, concurrency 8, and a 20s budget covering the whole call; guest credits are never suggested; Workshop tests 265/265. The picker's oldest slice becomes 1980s-and-earlier (decade ≤ 1980), and fill_only is gone. Migration 097 applied 2026-10-08: CONFORMANT; today's pick is 1980s-and-earlier 8, 1990s-2000s 27, 2010s-2020s 10, country_rap 5. Active pool by slice: 68 / 500 / 334 / 163 (about 1,065). mcp deployed as v142 (verify_jwt false). Checkpointed.
-- [ ] Step 7: Picker gains carry-over (unheard songs from the last serving go first), an artist cooldown driven by listening (default 2 days), and new quotas 6/10/22/12. The simulator models both and reports days_appeared and heard_gap. Then made length-independent (count 1–200, quotas scale, cap ceil(count/25)), with the cooldown changed to a preference with a last-resort pass. Migration 098 applied 2026-10-08: CONFORMANT. Simulations at heard 50 and 15, and a 170-song pick, are recorded in spec §4. Timing: pick 451 ms; simulate about 0.8 ms per song-day. get_drive_mix_simulation refuses days × count > 6,000 (8s role timeout). mcp deployed as v143 (verify_jwt false). Tests 45/45, app 2092, scripts 174. Checkpointed.
-- [ ] Step 8: get_drive_mix_pick timed out through MCP (about 10 s as authenticated; the 451 ms in step 7 was measured as postgres, so RLS was bypassed). The cause was the per-song correlated recency, whose OR join seq-scanned dj_tracks once per song. Migration 099 (applied 2026-10-08) computes recency once, set-based, with explicit user_id filters. As authenticated: pick 50 in 461 ms, pick 170 in 42 ms, 30-day sim in 1,150 ms, with output hashes identical to 098. CONFORMANT. No TypeScript change, so no mcp deploy. Awaiting Checkpoint and a fresh-thread MCP re-test. Awaiting Checkpoint, Refresh Workshop, and the fresh-thread check.
-- [ ] Step 6: Seed the pool in chat — playlists, artist list, heavy-play artists; Alex reviews
-- [ ] Step 7: Dry runs in chat — simulate 60 days, tune artist cap and quotas
-- [ ] Step 8: Go live — create Drive Mix playlist; set up the daily scheduled task
+- [x] Step 3: Database — tables, picker, simulator and sweep functions; register_table; CONFORMANT — migration 095 applied 2026-10-07
+- [x] Step 4: Alfred MCP tools (spec §5) — 8 tools in supabase/functions/_shared/tools/dj-drive-mix.ts; first deployed 2026-10-07 as mcp v141, now v143
+- [x] Step 5: Workshop `get_dj_artist_top_songs` (spec §6) — in this repo's workshop/ folder (workshop/workshop/tools/dj_write.py), not a separate repo; live on the Surface
+- [x] Step 6: Seed the pool in chat — playlists, artist list, heavy-play artists, history sweep; Alex reviewed
+- [x] Step 7: Dry runs in chat — simulations used to tune quotas, cooldown and carry-over (see build log, spec §4)
+- [x] Step 8: Go live (2026-10-08)
+  - The YouTube playlist "Drive Mix", id `PLbtyzvGuByeU`, PRIVATE. It is recorded in DJ as kind `utility` (dj_playlists id 5dffb7c9-fa3f-4490-8b5c-4cc53a772485).
+  - The first serving was recorded for 2026-10-08.
+  - The daily scheduled task "Drive Mix daily refresh" runs at 4:54 am Pacific: sweep, tag, pick, replace the playlist, record the serving. It posts an inbox item only on problems.
+  - Chat procedures are in `.claude/skills/drive-mix/SKILL.md`.
 - [ ] Step 9: Feedback — test whether skips appear in history; check whether thumbs-down can be read
 
+### Build log (CLI rounds after the plan steps)
+- **5d/5e (2026-10-07):** top-songs ranking reworked to YouTube Music play counts, with dedupe, variant flags, original_candidate and suggested thresholds. Then concurrent lookups with a time budget. Workshop tests 261.
+- **6 (2026-10-07/08):**
+  - Workshop: scan 30, concurrency 8, a 20s budget covering the whole call, and guest credits never suggested. Workshop tests 265.
+  - Picker: the oldest slice became 1980s-and-earlier and fill_only went (migration 097). mcp v142.
+- **7 (2026-10-08):** carry-over, a listening-driven artist cooldown (a preference, with a last-resort pass), quotas 6/10/12/22, and length independence (count 1–200, quotas scale, cap ceil(count/25)), in migration 098. `get_drive_mix_simulation` refuses days × count > 6,000. mcp v143.
+- **8 (2026-10-08):** `get_drive_mix_pick` timed out through MCP: about 10 s as authenticated. Step 7's 451 ms had been measured as postgres, so RLS was bypassed.
+  - The cause was the per-song correlated recency, whose OR join seq-scanned `dj_tracks` once per song.
+  - Migration 099 makes recency set-based, with explicit user_id filters. As authenticated: pick 50 in 461 ms, pick 170 in 42 ms, a 30-day simulation in 1,150 ms.
+  - Output hashes were identical to 098. No TypeScript change.
+
 ### Testing Steps
-- [ ] Picker returns 50 songs with correct slice counts and no adjacent same artist
-- [ ] Dry run and recorded serving for the same date match
+- [x] Picker returns the scaled slice counts (6/10/12/22 at 50, 20/34/41/75 at 170) — verified 2026-10-08
+- [ ] Dry run and recorded serving for the same date match — superseded: a serving records the video_ids actually sent, not a re-pick
 - [ ] Sweep skips jazz-tagged artists, "Release", and songs already pooled
-- [ ] Simulation numbers match the expected repeat interval
+- [x] Simulation numbers match the expected repeat interval — 60 days at heard 50: repeat_gap min 17, median 23
+
+### Open items
+- **(a) Afternoon and evening plays count a day late.** The DJ history sync runs at 10 am, so plays after that only reach dj_plays the next morning, after the 4:54 am refresh. Recency, carry-over and the cooldown see them a day late. If it matters in practice, the fix is an extra history sync before 4:54 am.
+- **(b) The register_table owner policy uses an unwrapped `auth.uid()`.** It reads `user_id = auth.uid()`, not `(select auth.uid())`, so Postgres may evaluate it per row. That is a platform-wide performance fix, to scope as its own project; not changed here.
 
 ### Notes
-- 2026-10-07: Spec corrected before step 3. The sweep trusts only active jazz tags, matched on the exact dj_tracks.artist. A serving records the video_ids that were sent, with no re-pick and no replace (tier 2). The simulator is stable and in-memory, passing p_recency to the picker. p_quotas holds counts. A trigger, drive_mix_songs_set_artist_key, fills artist_key.
-- Step 4 tool file is supabase/functions/_shared/tools/dj-drive-mix.ts: the dj- prefix keeps it real in mcp/index.test.mjs.
+- 2026-10-07: Spec corrected before step 3. The sweep trusts only active jazz tags, matched on the exact dj_tracks.artist. A serving records the video_ids that were sent, with no re-pick and no replace (tier 2). The simulator is stable and in-memory.
+- The tool file is supabase/functions/_shared/tools/dj-drive-mix.ts: the dj- prefix keeps it real in mcp/index.test.mjs.
+- Time picker and simulator queries as `authenticated` (spec §4, Performance), never as postgres.
