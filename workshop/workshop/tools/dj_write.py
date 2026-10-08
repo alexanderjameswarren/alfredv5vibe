@@ -173,20 +173,37 @@ async def search_dj_music(args: dict, ctx: Ctx) -> dict:
 # get_dj_artist_top_songs — tier 1 (Drive Mix, docs/technical-spec-drive_mix-v7r.md §6)
 # ---------------------------------------------------------------------------
 
-SCAN_DEFAULT = 50
+SCAN_DEFAULT = 30
 SCAN_CAP = 100
 ARTIST_SEARCH_FETCH = 10
 SONG_SEARCH_FETCH = 10
 SUGGEST_RATIO_DEFAULT = 0.1
 SUGGEST_FLOOR_DEFAULT = 10_000_000
-# Play-count searches run this many at a time. 5 ran clean live (2026-10-07).
-LOOKUP_CONCURRENCY = 5
-BUDGET_DEFAULT = 25
+# Play-count searches run this many at a time. 8 ran clean live (2026-10-07).
+LOOKUP_CONCURRENCY = 8
+BUDGET_DEFAULT = 20
 BUDGET_MIN = 5
 BUDGET_MAX = 55
-# In-flight lookups get this long past the budget to land; then they are dropped.
+# The whole call — artist search, page and songs-list reads, lookups — gets
+# this long past the budget to land in-flight reads; then they are dropped.
 BUDGET_GRACE = 3.0
 _NOT_LOOKED_UP = object()
+_TIMED_OUT = object()
+
+
+async def _bounded(aw: Any, hard_deadline: float) -> Any:
+    """Await `aw` until `hard_deadline`, else return _TIMED_OUT.
+
+    asyncio.wait rather than wait_for: a ytmusicapi call runs in a thread that
+    cannot be interrupted, and wait_for would sit waiting for it to finish.
+    """
+    loop = asyncio.get_running_loop()
+    task = asyncio.ensure_future(aw)
+    done, _ = await asyncio.wait({task}, timeout=max(0.0, hard_deadline - loop.time()))
+    if not done:
+        task.cancel()
+        return _TIMED_OUT
+    return task.result()
 TOP_SONGS_RANKING = (
     "Sorted by YouTube Music play counts (song search 'plays') — not Alex's plays."
 )
@@ -276,9 +293,12 @@ def _song_album(item: dict) -> dict | None:
         "versions of the same song (brackets, ' - ' suffixes and feat. credits "
         "ignored), looks up each song's YouTube Music play count with one song "
         "search (several at a time), and returns the songs sorted by plays. "
-        "A time budget (default 25s) bounds the call: songs not looked up in "
+        f"A time budget (default {BUDGET_DEFAULT}s, plus {BUDGET_GRACE:.0f}s grace) "
+        "bounds the WHOLE call, page reads included: songs not looked up in "
         "time get plays null, are never suggested, and the result is marked "
         "truncated — re-call with a smaller limit to finish faster. "
+        "A song where the artist is credited but NOT FIRST (a guest spot, or a "
+        "feat. on someone else's song) has `guest: true` and is never suggested. "
         "⚠️ PLAYS ARE YOUTUBE MUSIC'S PLAY COUNTS, NOT ALEX'S (his are in "
         "get_dj_plays). `plays` is the highest of any version; null when no "
         "search result matched, and such a song is never suggested. "
@@ -320,8 +340,8 @@ def _song_album(item: dict) -> dict | None:
             "time_budget_seconds": {
                 "type": "integer",
                 "description": (
-                    f"Stop starting play-count lookups after this many seconds "
-                    f"(default {BUDGET_DEFAULT}, {BUDGET_MIN}-{BUDGET_MAX}). Songs not "
+                    f"Time budget for the whole call (default {BUDGET_DEFAULT}, "
+                    f"{BUDGET_MIN}-{BUDGET_MAX}). No lookup starts after it; songs not "
                     f"looked up get plays null and the result is marked truncated."
                 ),
             },
@@ -360,13 +380,25 @@ async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
             f"(got {budget!r}). Re-call with a corrected value."
         )
     deadline = started + budget
+    # Every read in the call is bounded by this one instant, so the call
+    # returns within budget + grace however slow the host or YouTube is.
+    hard_deadline = deadline + BUDGET_GRACE
     host = ctx.config.host_id
+
+    def out_of_time(what: str) -> OperationalError:
+        return OperationalError(
+            f"upstream_timeout: the {what} did not come back within the "
+            f"{budget}s time budget. Re-call; a smaller limit leaves more time."
+        )
 
     if has_artist:
         query = artist.strip()
-        raw = await _call(
+        raw = await _bounded(_call(
             host, "search", query=query, filter="artists", limit=ARTIST_SEARCH_FETCH
-        ) or []
+        ), hard_deadline)
+        if raw is _TIMED_OUT:
+            raise out_of_time("artist search")
+        raw = raw or []
         found = [
             {
                 "name": _artist_result_name(r),
@@ -381,10 +413,12 @@ async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
             # Search rarely carries subscribers; the artist page does, and its
             # top songs tell a band from a namesake at a glance. Best effort:
             # a failed page read leaves that candidate as search gave it.
-            pages = await asyncio.gather(
+            pages = await _bounded(asyncio.gather(
                 *(_call(host, "get_artist", channelId=c["channel_id"]) for c in exact[:5]),
                 return_exceptions=True,
-            )
+            ), hard_deadline)
+            if pages is _TIMED_OUT:
+                pages = []
             for c, cp in zip(exact, pages):
                 if not isinstance(cp, dict):
                     continue
@@ -415,17 +449,26 @@ async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
     else:
         channel_id = channel_id.strip()
 
-    page = await _call(host, "get_artist", channelId=channel_id) or {}
+    page = await _bounded(_call(host, "get_artist", channelId=channel_id), hard_deadline)
+    if page is _TIMED_OUT:
+        raise out_of_time("artist page")
+    page = page or {}
     artist_name = page.get("name") or (artist.strip() if has_artist else None)
     section = page.get("songs") or {}
     items = [s for s in (section.get("results") or []) if isinstance(s, dict)]
 
     # The page shows a handful; its songs list (a playlist) holds the rest in
     # the same order. Append from it without reordering what the page gave.
+    # Skipped once the budget is spent; a list that times out leaves the page's songs.
+    songs_list_read = "not_needed"
     if len(items) < limit and section.get("browseId"):
-        full = await _call(
-            host, "get_playlist", playlistId=section["browseId"], limit=limit
-        ) or {}
+        full = _TIMED_OUT
+        if loop.time() < deadline:
+            full = await _bounded(_call(
+                host, "get_playlist", playlistId=section["browseId"], limit=limit
+            ), hard_deadline)
+        songs_list_read = "timed_out" if full is _TIMED_OUT else "read"
+        full = {} if full is _TIMED_OUT else (full or {})
         seen = {s.get("videoId") for s in items}
         for t in full.get("tracks") or []:
             if isinstance(t, dict) and t.get("videoId") not in seen:
@@ -474,7 +517,7 @@ async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
     tasks = {norm: asyncio.ensure_future(lookup(norm)) for norm in groups}
     if tasks:
         _, pending = await asyncio.wait(
-            tasks.values(), timeout=max(0.0, deadline - loop.time()) + BUDGET_GRACE
+            tasks.values(), timeout=max(0.0, hard_deadline - loop.time())
         )
         for t in pending:
             t.cancel()
@@ -529,12 +572,19 @@ async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
         pool = originals or versions
         rep = max(pool, key=lambda v: v["plays"] or -1)  # first wins a tie: YouTube's order
         all_variants = not originals
+        # A guest spot: the artist is credited, but not first. Listed, never suggested.
+        first = (rep["artists"] or [{}])[0]
+        guest = bool(rep["artists"]) and not (
+            (first.get("id") and first.get("id") == channel_id)
+            or (first.get("name") or "").casefold() == (artist_name or "").casefold()
+        )
         songs.append({
             "title": rep["title"],
             "video_id": rep["video_id"],
             "artists": rep["artists"],
             "album": rep["album"],
             "plays": song_plays,
+            "guest": guest,
             "variant": rep["variant_word"] is not None,
             "variant_word": rep["variant_word"],
             "versions_merged": {"count": len(versions), "titles": [v["title"] for v in versions]},
@@ -549,11 +599,13 @@ async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
 
     # Sort by plays, unknown last; Python's sort is stable, so ties keep YouTube's order.
     songs.sort(key=lambda s: -(s["plays"] if s["plays"] is not None else -1))
-    top = songs[0]["plays"] if songs and songs[0]["plays"] is not None else None
+    # The bar is set by the artist's own songs, so a huge guest spot cannot raise it.
+    own = [s["plays"] for s in songs if s["plays"] is not None and not s["guest"]]
+    top = max(own) if own else None
     for i, s in enumerate(songs, start=1):
         s["position"] = i
         s["suggested"] = bool(
-            top is not None and s["plays"] is not None
+            top is not None and s["plays"] is not None and not s["guest"]
             and s["plays"] >= ratio * top and s["plays"] >= floor
         )
     songs = [{"position": s.pop("position"), **s} for s in songs]
@@ -574,6 +626,7 @@ async def get_dj_artist_top_songs(args: dict, ctx: Ctx) -> dict:
             },
             "songs": songs,
             "not_looked_up": not_looked_up,
+            "songs_list_read": songs_list_read,
             "lookup_errors": lookup_errors,
             "limit_applied": limit,
             "time_budget_seconds": budget,

@@ -2919,7 +2919,7 @@ export function createMcpServer(token: string) {
 
   // --- Drive Mix (docs/technical-spec-drive_mix-v7r.md §5) ---
   const DM_SLICES =
-    "Slices: country_rap (genre country or rap, any decade), 1960s-1980s, 1990s-2000s, 2010s-2020s; a song from the 1950s or earlier fits none and is only used as fill. ";
+    "Slices: country_rap (genre country or rap, any decade), 1980s-and-earlier (decade 1980 or before, 1950s included), 1990s-2000s, 2010s-2020s. Every tagged song is in exactly one. ";
   const dmGenre = z.enum(["pop", "rock", "alternative", "country", "rap", "rnb", "dance", "other"]);
   const dmStatus = z.enum(["pending", "active", "retired"]);
   const dmSource = z.enum(["playlist_seed", "artist_top", "history_sweep", "manual"]);
@@ -2927,7 +2927,7 @@ export function createMcpServer(token: string) {
     count: z.number().optional().describe("Songs in the playlist. Default 50, max 100."),
     artist_cap: z.number().optional().describe("Max songs per artist_key in one playlist. Default 2."),
     quotas: z.record(z.string(), z.number()).optional().describe(
-      'Songs per slice, summing to at most count; the rest is fill. Default {"country_rap":5,"1960s-1980s":8,"2010s-2020s":10,"1990s-2000s":27}.'),
+      'Songs per slice, summing to at most count; the rest is fill. Default {"country_rap":5,"1980s-and-earlier":8,"2010s-2020s":10,"1990s-2000s":27}.'),
   };
 
   server.registerTool(
@@ -2961,7 +2961,7 @@ export function createMcpServer(token: string) {
           title: z.string(),
           artist: z.string().describe("Billing as YouTube gives it."),
           artist_key: z.string().optional(),
-          decade: z.number().optional().describe("1960, 1970 ... 2020."),
+          decade: z.number().optional().describe("1950, 1960 ... 2020."),
           genre: dmGenre.optional(),
         })).describe("1 to 50 songs."),
         source: dmSource.optional().describe("How these songs entered the pool. Default 'manual'."),
@@ -2979,7 +2979,7 @@ export function createMcpServer(token: string) {
         "retired_reason only with status 'retired'; moving a song out of retired clears its reason. Unknown ids refuse the whole call. Audited and reversible. Tier 2.",
       inputSchema: {
         ids: z.array(z.string()).describe("Pool song ids, 1 to 50."),
-        decade: z.number().optional().describe("1960, 1970 ... 2020."),
+        decade: z.number().optional().describe("1950, 1960 ... 2020."),
         genre: dmGenre.optional(),
         artist_key: z.string().optional().describe("Normalised primary artist for the per-artist cap."),
         status: dmStatus.optional(),

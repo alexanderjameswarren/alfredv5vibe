@@ -24,7 +24,7 @@ Three parts:
 
 | Slice | Share | Of 50 |
 |---|---|---|
-| 1960s–1980s | 15% | 8 |
+| 1980s and earlier (any decade ≤ 1980, 1950s included) | 15% | 8 |
 | 1990s–2000s | 55% | 27 |
 | 2010s–2020s | 20% | 10 |
 | Country and rap (any decade) | 10% | 5 |
@@ -51,7 +51,7 @@ Three parts:
 | title | text not null | |
 | artist | text not null | display billing as YouTube gives it |
 | artist_key | text not null | normalised primary artist used for the per-artist cap: lower-cased, trimmed, first name of a collaboration (split on `,` `&` `+` feat. ft. featuring with). Filled by a before-insert trigger when not supplied; settable by tool when the default is wrong |
-| decade | smallint null | 1960, 1970 … 2020. Null until tagged |
+| decade | smallint null | 1950, 1960 … 2020. Null until tagged |
 | genre | text null | check: pop, rock, alternative, country, rap, rnb, dance, other. Null until tagged |
 | status | text not null | check: pending, active, retired. Only `active` is picked |
 | source | text not null | check: playlist_seed, artist_top, history_sweep, manual |
@@ -90,12 +90,12 @@ Consequence to know: if the daily history sync fails, recency does not advance, 
 
 1. Eligible songs: `status = 'active'` with decade and genre set.
 2. All randomness is `md5` of the date and the song id, so a dry run and the real run for the same date return the same playlist (as long as no new plays land in between).
-3. For each slice, in this order — country and rap, 1960s–1980s, 2010s–2020s, 1990s–2000s — walk that slice's songs in recency order and take songs until the slice quota is met, skipping any whose `artist_key` has already reached the artist cap in this playlist. Songs from the 1950s or earlier fit no slice; they are reached only by step 4.
+3. For each slice, in this order — country and rap, 1980s and earlier, 2010s–2020s, 1990s–2000s — walk that slice's songs in recency order and take songs until the slice quota is met, skipping any whose `artist_key` has already reached the artist cap in this playlist. Every tagged song is in exactly one slice. Since step 6, "1980s and earlier" takes any decade ≤ 1980; before that it was 1960s–1980s, and older songs were fill only.
 4. If a slice runs short, fill the remaining slots from all eligible songs in recency order, same artist cap.
 5. Order the final list randomly (seeded), then fix any adjacent same-artist pairs by swapping.
 6. Return: position, song id, video_id, title, artist, artist_key, slice (`fill` for step 4 songs), last heard.
 
-Parameters with defaults: `p_date` (today, UTC), `p_count` (50), `p_artist_cap` (2), `p_quotas` (jsonb song counts per slice: `{"country_rap":5,"1960s-1980s":8,"2010s-2020s":10,"1990s-2000s":27}`; must sum to at most `p_count`, the rest is filled by step 4), and `p_recency` (internal, for the simulator: a song_id → last-heard map that replaces the `dj_plays` lookup).
+Parameters with defaults: `p_date` (today, UTC), `p_count` (50), `p_artist_cap` (2), `p_quotas` (jsonb song counts per slice: `{"country_rap":5,"1980s-and-earlier":8,"2010s-2020s":10,"1990s-2000s":27}`; must sum to at most `p_count`, the rest is filled by step 4), and `p_recency` (internal, for the simulator: a song_id → last-heard map that replaces the `dj_plays` lookup).
 
 ### Simulator
 
@@ -138,7 +138,7 @@ Tier choices below are proposals; the platform contract wins if it says otherwis
 
 `get_dj_artist_top_songs`, in `workshop/workshop/tools/dj_write.py`, tier 1, read-only. It finds an artist's hits ranked by **YouTube Music play counts** (not Alex's plays), and proposes which ones to pool.
 
-- **Input:** `artist` (a name) or `channel_id` (UC...), exactly one. `limit` is the scan cap: default 50, cap 100. `suggest_ratio` defaults to 0.1 and `suggest_floor` to 10,000,000.
+- **Input:** `artist` (a name) or `channel_id` (UC...), exactly one. `limit` is the scan cap: default 30 (50 until step 6), cap 100. `suggest_ratio` defaults to 0.1 and `suggest_floor` to 10,000,000.
 - **Resolve:** an artist-filtered search. A name resolves only when exactly one result matches it exactly (case-insensitive). Otherwise `resolved: false`, with `candidates` and no songs, and a human chooses. When several match, each candidate is enriched from its artist page with subscribers and three top song titles. "Toto" returns three channels: the band with 1.51M subscribers, and two namesakes with 20 and 8.
 - **Scan:** the artist page's songs, then the full songs list (`get_playlist` on the section's browseId), in YouTube's order, up to `limit`.
 - **Dedupe:** normalise each title by lower-casing it and removing anything in () or [], anything after " - ", feat./ft./featuring credits, and punctuation, then collapsing spaces. The same normalised title is the same song.
@@ -146,12 +146,15 @@ Tier choices below are proposals; the platform contract wins if it says otherwis
 - **Plays:** the artist page and songs list carry no play count (`views` is always None; probed 2026-10-07). So there is one song search per deduped song, for "<artist> <normalised title>". A hit is matched to a version by video_id, else by normalised title with the same artist (by name or channel id). `views` text ("3.1B", "133M", "2.4K") is parsed to an integer. A song's plays are the highest of any matched hit. With no match, plays are null and the song is never suggested.
 - **Representative:** the original (non-variant) version if one exists, else the most-played version. Bryan Adams' re-recorded "Classic Version"s are accepted as representatives.
 - **original_candidate:** when every version is a variant, the best non-variant search hit with the same title by the same artist, as video_id, title, album and plays. It is offered, never substituted.
-- **Suggested:** songs are sorted by plays, highest first. A song is `suggested` when plays ≥ suggest_ratio × the top song's plays and plays ≥ suggest_floor. This is a proposal for Alex to approve.
+- **Suggested:** songs are sorted by plays, highest first. A song is `suggested` when plays ≥ suggest_ratio × the top song's plays and plays ≥ suggest_floor. This is a proposal for Alex to approve. Alex confirmed the 10% and 10M defaults: a-ha gives only Take on Me, and Toto gives four.
+- **Guest spots:** a song is suggested only when the requested artist is the **first** credited artist on its representative version. When the artist is credited second or later (Pavarotti's "'O Sole Mio" with Bryan Adams, or a feat. on someone else's song), the song gets `guest: true`, stays in the list, and is never suggested. The top-plays bar is set by the artist's own songs only, so a big guest spot cannot raise it.
 - **Returns per song:** position, title, video_id, artists, album, plays, suggested, variant, variant_word, versions_merged (count and titles), and original_candidate. The response also carries artist, channel_id, scanned, distinct_songs, suggested_count, thresholds (with top_plays and plays_needed), and lookup_errors.
 - **year is dropped.** It was None on page songs, songs-list tracks and search results alike.
 - **Speed and the time budget:**
-  - Play-count searches run 5 at a time, and the ambiguity page reads run together.
-  - `time_budget_seconds` defaults to 25, with a range of 5 to 55. No lookup starts after it runs out. In-flight lookups get 3s of grace and are then dropped, so the call returns within budget + 3s.
+  - Play-count searches run 8 at a time (5 until step 6; 8 ran clean live), and the ambiguity page reads run together.
+  - `time_budget_seconds` defaults to 20 (25 until step 6), with a range of 5 to 55. It covers the **whole call**: artist search, candidate enrichment, the artist page, the songs list and the lookups all share one hard deadline at budget + 3s grace.
+  - When the artist search or artist page misses that deadline, the call fails with a retryable `upstream_timeout`. A songs list that misses it leaves just the page's songs (`songs_list_read: timed_out`). No lookup starts after the budget, and in-flight ones are dropped at the hard deadline.
+  - Step 6 made this change because on the Surface the 5e build took 22.9 to 27.1s, over its 25s budget: the page reads were not counted.
   - A song not looked up gets plays null and is never suggested. `not_looked_up` counts those songs, `meta.truncated` is (looked up, distinct songs), and the reading says to re-call with a smaller limit.
   - Results are gathered first, then read back in YouTube's order, so completion order cannot change the answer. One failed lookup leaves that song at plays null and is listed in `lookup_errors`; only all of them failing fails the call.
   - Speed is preferred over perfect dedupe: an occasional duplicate version is acceptable.
@@ -164,6 +167,8 @@ Tier choices below are proposals; the platform contract wins if it says otherwis
   | a-ha | 20.6s | 5.8s | 1: Take on Me 3.1B (bar 310M) |
 
   The ambiguous "Toto" call took 0.9s. There were no lookup errors at concurrency 5.
+
+  **Step 6** (desktop, scan 30, concurrency 8): Bryan Adams 5.8s with 10 suggested ('O Sole Mio flagged as a guest), the Toto band 5.1s with 4 suggested, a-ha 11.7s with 1 suggested. There were no lookup errors.
 
 ## 7. The daily scheduled task (set up in chat, not code)
 
