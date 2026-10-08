@@ -59,10 +59,11 @@ const writes = (db) => db.chains.filter((c) => c.ops.some((o) => ["insert", "upd
 
 test("sliceOf follows the picker's rules", () => {
   assert.equal(m.sliceOf(1990, "country"), "country_rap");
-  assert.equal(m.sliceOf(1970, "rock"), "1960s-1980s");
+  assert.equal(m.sliceOf(1970, "rock"), "1980s-and-earlier");
+  assert.equal(m.sliceOf(1950, "rock"), "1980s-and-earlier");
   assert.equal(m.sliceOf(2000, "pop"), "1990s-2000s");
   assert.equal(m.sliceOf(2020, "pop"), "2010s-2020s");
-  assert.equal(m.sliceOf(1950, "pop"), null);
+  assert.equal(m.sliceOf(null, "pop"), null);
 });
 
 test("parsers reject junk", () => {
@@ -213,5 +214,5 @@ test("get_drive_mix_songs filters by normalised artist_key and returns pool coun
   assert.deepEqual(out.meta, { count: 1, limit_applied: 1, truncated: true, total: 3 });
   assert.deepEqual(out.data.pool.by_status, { pending: 2, active: 2, retired: 2 });
   assert.deepEqual(Object.keys(out.data.pool.active_eligible_by_slice),
-    ["country_rap", "1960s-1980s", "1990s-2000s", "2010s-2020s", "fill_only"]);
+    ["country_rap", "1980s-and-earlier", "1990s-2000s", "2010s-2020s"]);
 });

@@ -19,10 +19,10 @@ import { clampLimit, defineTool, describeDbError, envelope } from "../platform.t
 export const GENRES = ["pop", "rock", "alternative", "country", "rap", "rnb", "dance", "other"] as const;
 export const STATUSES = ["pending", "active", "retired"] as const;
 export const SOURCES = ["playlist_seed", "artist_top", "history_sweep", "manual"] as const;
-export const SLICES = ["country_rap", "1960s-1980s", "2010s-2020s", "1990s-2000s"] as const;
+export const SLICES = ["country_rap", "1980s-and-earlier", "2010s-2020s", "1990s-2000s"] as const;
 // Mirrors drive_mix_pick's default p_quotas (migration 095). Used only to report shortfalls.
 export const DEFAULT_QUOTAS: Record<string, number> = {
-  country_rap: 5, "1960s-1980s": 8, "2010s-2020s": 10, "1990s-2000s": 27,
+  country_rap: 5, "1980s-and-earlier": 8, "2010s-2020s": 10, "1990s-2000s": 27,
 };
 
 const COLUMNS =
@@ -119,14 +119,13 @@ function pickParams(T: string, args: Record<string, unknown>): Record<string, un
   return p;
 }
 
-/** Slice a song counts in, as drive_mix_pick decides it. null = fits none (fill only). */
+/** Slice a song counts in, as drive_mix_pick decides it. null = untagged. */
 export function sliceOf(decade: number | null, genre: string | null): string | null {
   if (genre === "country" || genre === "rap") return "country_rap";
   if (decade === null) return null;
-  if (decade >= 1960 && decade <= 1980) return "1960s-1980s";
-  if (decade >= 1990 && decade <= 2000) return "1990s-2000s";
-  if (decade >= 2010 && decade <= 2020) return "2010s-2020s";
-  return null;
+  if (decade <= 1980) return "1980s-and-earlier";
+  if (decade <= 2000) return "1990s-2000s";
+  return "2010s-2020s";
 }
 
 /** Slices that came up short of their quota in a pick's rows. */
@@ -174,19 +173,17 @@ export const getDriveMixSongsTool = defineTool({
     const all = () => ctx.db.from("drive_mix_songs").select("id", { count: "exact", head: true });
     const eligible = () => all().eq("status", "active").not("decade", "is", null).not("genre", "is", null);
     const notCR = (q: any) => q.not("genre", "in", "(country,rap)");
-    const [pending, active, retired, cr, s6080, s9000, s1020, eligibleTotal] = await Promise.all([
+    const [pending, active, retired, cr, s80, s9000, s1020] = await Promise.all([
       headCount(T, all().eq("status", "pending")),
       headCount(T, all().eq("status", "active")),
       headCount(T, all().eq("status", "retired")),
       headCount(T, eligible().in("genre", ["country", "rap"])),
-      headCount(T, notCR(eligible()).gte("decade", 1960).lte("decade", 1980)),
+      headCount(T, notCR(eligible()).lte("decade", 1980)),
       headCount(T, notCR(eligible()).gte("decade", 1990).lte("decade", 2000)),
-      headCount(T, notCR(eligible()).gte("decade", 2010).lte("decade", 2020)),
-      headCount(T, eligible()),
+      headCount(T, notCR(eligible()).gte("decade", 2010)),
     ]);
     const bySlice = {
-      country_rap: cr, "1960s-1980s": s6080, "1990s-2000s": s9000, "2010s-2020s": s1020,
-      fill_only: eligibleTotal - cr - s6080 - s9000 - s1020,
+      country_rap: cr, "1980s-and-earlier": s80, "1990s-2000s": s9000, "2010s-2020s": s1020,
     };
 
     const rows = data ?? [];

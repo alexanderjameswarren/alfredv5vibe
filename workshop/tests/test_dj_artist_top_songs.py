@@ -266,5 +266,61 @@ class ConcurrencyTests(unittest.TestCase):
         self.assertEqual(env["meta"], {})
 
 
+class _SlowMethods(_Fake):
+    def __init__(self, responses: dict, delays: dict):
+        super().__init__(responses)
+        self.delays = delays
+
+    async def __call__(self, host_id, method, **kwargs):
+        await asyncio.sleep(self.delays.get(method, 0))
+        return await super().__call__(host_id, method, **kwargs)
+
+
+class Step6Tests(unittest.TestCase):
+    def test_new_defaults(self):
+        import workshop.tools.dj_write as w
+        self.assertEqual((w.SCAN_DEFAULT, w.BUDGET_DEFAULT, w.LOOKUP_CONCURRENCY), (30, 20, 8))
+        d = _run(_Fake({"get_artist": _page("a-ha", [])}), {"channel_id": "UC_aha"})
+        self.assertEqual((d["limit_applied"], d["time_budget_seconds"]), (30, 20))
+
+    def test_guest_credit_is_listed_but_never_suggested(self):
+        page = _page("Bryan Adams", [
+            _item("v1", "Summer of 69", "Bryan Adams", "UC_ba"),
+            {"videoId": "v2", "title": "'O Sole Mio", "album": None,
+             "artists": [{"name": "Luciano Pavarotti", "id": "UC_lp"}, {"name": "Bryan Adams", "id": "UC_ba"}]},
+        ])
+        fake = _Fake({"get_artist": page, "songs": {
+            "Bryan Adams summer of 69": [_hit("v1", "Summer of 69", "40M", "Bryan Adams")],
+            "Bryan Adams o sole mio": [_hit("v2", "'O Sole Mio", "900M", "Luciano Pavarotti")],
+        }})
+        d = _run(fake, {"channel_id": "UC_ba"})
+        guest = next(s for s in d["songs"] if s["video_id"] == "v2")
+        own = next(s for s in d["songs"] if s["video_id"] == "v1")
+        self.assertEqual((guest["guest"], guest["suggested"], guest["plays"]), (True, False, 900_000_000))
+        self.assertEqual((own["guest"], own["suggested"]), (False, True))
+        self.assertEqual(d["thresholds"]["top_plays"], 40_000_000, "a guest spot does not set the bar")
+
+    def test_budget_covers_a_slow_artist_page(self):
+        fake = _SlowMethods({"get_artist": _page("a-ha", [])}, {"get_artist": 2.0})
+        with mock.patch("workshop.tools.dj_write.BUDGET_MIN", 0.1), \
+             mock.patch("workshop.tools.dj_write.BUDGET_GRACE", 0.1):
+            t0 = time.monotonic()
+            with self.assertRaises(OperationalError) as cm:
+                _run(fake, {"channel_id": "UC_aha", "time_budget_seconds": 0.3})
+            self.assertLess(time.monotonic() - t0, 1.2)
+        self.assertIn("upstream_timeout: the artist page", str(cm.exception))
+
+    def test_budget_covers_a_slow_songs_list(self):
+        page = _page("a-ha", [_item("v1", "Take on Me")], browse="VLPL_all")
+        fake = _SlowMethods({"get_artist": page, "get_playlist": {"tracks": []}}, {"get_playlist": 2.0})
+        with mock.patch("workshop.tools.dj_write.BUDGET_MIN", 0.1), \
+             mock.patch("workshop.tools.dj_write.BUDGET_GRACE", 0.1):
+            t0 = time.monotonic()
+            d = _run(fake, {"channel_id": "UC_aha", "time_budget_seconds": 0.3})
+            self.assertLess(time.monotonic() - t0, 1.2)
+        self.assertEqual(d["songs_list_read"], "timed_out")
+        self.assertEqual([s["title"] for s in d["songs"]], ["Take on Me"], "the page's songs are kept")
+
+
 if __name__ == "__main__":
     unittest.main()
