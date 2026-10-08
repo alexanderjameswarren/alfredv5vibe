@@ -47,6 +47,7 @@ export const VIEW_TO_PATH = {
   timer: "/timer",
   sam: "/sam",
   games: "/games",
+  money: "/money",
 };
 
 export const DEFAULT_VIEW = "home";
@@ -77,6 +78,8 @@ export function pathToView(pathname) {
   if (recordIdFromPath(pathname)) return RECORD_VIEW;
   // Everything under /sam is the SAM view; see the SAM section below.
   if (isSamPath(pathname)) return "sam";
+  // Everything under /money is the Money view; see the Money section below.
+  if (moneyRouteFromPath(pathname)) return "money";
   // /schedule/execution/:id is the same view as the bare /schedule/execution.
   if (executionIdFromPath(pathname)) return "execution-detail";
   // /inbox/detail/:id is the same view as the bare /inbox/detail.
@@ -103,6 +106,7 @@ export function viewToPath(view) {
 export function isKnownPath(pathname) {
   if (recordIdFromPath(pathname)) return true;
   if (isSamPath(pathname)) return true;
+  if (moneyRouteFromPath(pathname)) return true;
   // Deliberately executionIdFromPath, not isExecutionPath: a malformed
   // /schedule/execution/a/b has no extractable id and stays unknown, so it is
   // redirected to home like any other nonsense path rather than half-served.
@@ -342,6 +346,35 @@ export function isSamStatsPath(pathname) {
 export function isSamPath(pathname) {
   const path = normalizePath(pathname);
   return path === SAM_PATH || path.startsWith(`${SAM_PATH}/`);
+}
+
+// --- Money sub-routes (warren_buffet-w7b, Step 7) ----------------------------
+//
+// Same arrangement as SAM: one view, "money", with its screens beneath it.
+// MoneyPage reads the route; a malformed path returns null and is not known.
+
+export const MONEY_PATH = "/money";
+export const MONEY_ACCOUNTS_PATH = "/money/accounts";
+export const MONEY_NEW_ACCOUNT_PATH = "/money/accounts/new";
+export const MONEY_NET_WORTH_PATH = "/money/net-worth";
+
+export function moneyAccountPath(accountId) {
+  return `${MONEY_ACCOUNTS_PATH}/${encodeURIComponent(accountId)}`;
+}
+
+/**
+ * @returns {{tab: "overview"|"accounts"|"net-worth", accountId: string|null, adding: boolean}|null}
+ */
+export function moneyRouteFromPath(pathname) {
+  const path = normalizePath(pathname);
+  if (path === MONEY_PATH) return { tab: "overview", accountId: null, adding: false };
+  if (path === MONEY_NET_WORTH_PATH) return { tab: "net-worth", accountId: null, adding: false };
+  if (path === MONEY_ACCOUNTS_PATH) return { tab: "accounts", accountId: null, adding: false };
+  if (path === MONEY_NEW_ACCOUNT_PATH) return { tab: "accounts", accountId: null, adding: true };
+  if (!path.startsWith(`${MONEY_ACCOUNTS_PATH}/`)) return null;
+  const id = path.slice(MONEY_ACCOUNTS_PATH.length + 1);
+  if (!id || id.includes("/")) return null;
+  return { tab: "accounts", accountId: decodeURIComponent(id), adding: false };
 }
 
 // --- Record links (record_links-r7k) -----------------------------------------

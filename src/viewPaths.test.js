@@ -21,6 +21,8 @@ import {
   recordIdFromPath,
   recordPath,
   RECORD_VIEW,
+  moneyAccountPath,
+  moneyRouteFromPath,
 } from "./viewPaths";
 import { uid } from "./utils/flattenElements";
 
@@ -29,10 +31,10 @@ import { uid } from "./utils/flattenElements";
 // on — above all "never crash, fall back to home".
 
 describe("the map itself", () => {
-  it("covers all 23 view values", () => {
+  it("covers all 24 view values", () => {
     // 20 until Step 12.6 added the two add pages; 23 since Clipboard Step 17
-    // made inbox triage a page.
-    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(23);
+    // made inbox triage a page; 24 with Money (warren_buffet-w7b).
+    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(24);
   });
 
   it("is a bijection — no two views share a path", () => {
@@ -462,6 +464,26 @@ describe("record links (/<id>)", () => {
     }
     for (const p of Object.values(VIEW_TO_PATH)) {
       expect(pathToView(p)).not.toBe(RECORD_VIEW);
+    }
+  });
+});
+
+describe("money sub-routes", () => {
+  it("resolves every Money screen to the money view", () => {
+    expect(moneyRouteFromPath("/money")).toEqual({ tab: "overview", accountId: null, adding: false });
+    expect(moneyRouteFromPath("/money/net-worth/")).toEqual({ tab: "net-worth", accountId: null, adding: false });
+    expect(moneyRouteFromPath("/money/accounts/new").adding).toBe(true);
+    expect(moneyRouteFromPath(moneyAccountPath("abc-1"))).toEqual({ tab: "accounts", accountId: "abc-1", adding: false });
+    for (const p of ["/money", "/money/accounts", "/money/accounts/abc-1", "/money/net-worth"]) {
+      expect(pathToView(p)).toBe("money");
+      expect(isKnownPath(p)).toBe(true);
+    }
+  });
+
+  it("rejects malformed Money paths", () => {
+    for (const p of ["/money/x", "/money/accounts/a/b", "/moneybags"]) {
+      expect(moneyRouteFromPath(p)).toBeNull();
+      expect(isKnownPath(p)).toBe(false);
     }
   });
 });
