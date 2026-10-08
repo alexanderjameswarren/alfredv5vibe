@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Check, Circle, CircleAlert, CircleDot, CircleSlash, Flame, Mountain } from "lucide-react";
 import { planLineText } from "../lib/activePlan";
 import PlanNextButton from "./PlanNextButton";
+import { UI } from "./uiStyles";
 
 // WHY Mountain FOR THE SONG GOAL (2026-09-27). It must not be confusable with the
 // plan line's circle family at a glance, which rules out both of the obvious "goal"
@@ -19,6 +20,13 @@ import PlanNextButton from "./PlanNextButton";
 // `shrink-0` matters: these rows wrap, and an icon allowed to squash would take
 // the column with it.
 const ICON = "w-4 h-4 shrink-0";
+
+// Next leads the plan line as its main call to action: never shrinks (the plan
+// text gives way instead), and its visible box is outlined in the Play colour —
+// not filled, so it does not compete with Play. Styled from here via the box's
+// data attribute so PlanNextButton itself stays unchanged.
+const NEXT_LEAD =
+  `shrink-0 [&_[data-next-box]]:border-primary [&_[data-next-box]]:text-primary [&_[data-next-box]]:font-medium [&_[data-next-box]]:bg-card [&_[data-next-box]]:rounded-lg ${UI.press}`;
 
 // The plan line's state, as one shape with only the fill changing (Circle →
 // CircleDot → Check), plus CircleAlert for the amber case. One family means the
@@ -123,34 +131,36 @@ export default function PlanLine({
   return (
     <div className="mb-2 px-1 text-sm" aria-label="Practice plan">
       {offPlan && (
-        <div className="flex items-center gap-2 flex-wrap min-h-[44px]" data-state="off-plan">
+        <div className="flex items-center gap-2 min-h-[44px]" data-state="off-plan">
           {/* A SLASHED circle, which is the one shape that says what this row
               means: the loaded range is not a plan item at all, so none of the
               four plan states applies to it. Muted, because it is the absence of
               plan work rather than plan work going badly. */}
+          <PlanNextButton item={nextItem} onOpen={onOpenNext} className={NEXT_LEAD} />
           <CircleSlash className={`${ICON} text-muted-foreground`} role="img" aria-label="Not in the plan" />
-          <span className="text-foreground">Not in today&apos;s plan</span>
-          <PlanNextButton item={nextItem} onOpen={onOpenNext} />
+          <span className="text-foreground min-w-0 truncate">Not in today&apos;s plan</span>
         </div>
       )}
+      {/* The plan bar: one line. Next leads it (left edge, for the left hand);
+          the plan text is what truncates (full text in its title). */}
       {item && (
         <div
-          className="flex items-center gap-2 flex-wrap min-h-[44px]"
+          className="flex items-center gap-2 min-h-[44px]"
           data-state={state.done ? "done" : state.amber ? "amber" : "open"}
         >
+          {state.done && <PlanNextButton item={nextItem} onOpen={onOpenNext} className={NEXT_LEAD} />}
           <PlanIcon state={state} tone={tone} />
-          <span className={tone}>{planLineText(item, state)}</span>
+          <span className={`${tone} min-w-0 truncate`} title={planLineText(item, state)}>{planLineText(item, state)}</span>
           {showSetTempo && (
             <button
               type="button"
               onClick={onSetTempo}
               title={`Set the tempo box to ${item.target_effective_bpm} BPM for this session`}
-              className="flex items-center gap-1 px-3 py-1.5 border border-border rounded text-sm text-muted-foreground hover:text-dark min-h-[44px]"
+              className={`shrink-0 whitespace-nowrap flex items-center gap-1 px-3 py-1.5 text-sm min-h-[44px] ${UI.outline}`}
             >
               Set tempo
             </button>
           )}
-          {state.done && <PlanNextButton item={nextItem} onOpen={onOpenNext} />}
         </div>
       )}
       {/* Whenever Warm up is available — see the note at the top. A ramp that

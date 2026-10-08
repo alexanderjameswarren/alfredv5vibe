@@ -1,12 +1,19 @@
 import React, { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Music } from "lucide-react";
+import { Music, Pencil } from "lucide-react";
 import { SAM_PATH, samSongPath, samSongIdFromPath } from "../viewPaths";
 import ScoreRenderer from "./components/ScoreRenderer";
 import ScrollEngine from "./components/ScrollEngine";
 import SongLoader from "./components/SongLoader";
 import BackButton from "./components/BackButton";
 import SettingsBar from "./components/SettingsBar";
+import SongRail from "./components/SongRail";
+import MoreDrawer, { DrawerSection } from "./components/MoreDrawer";
+import { UI } from "./components/uiStyles";
+import AudioToolbar from "./components/AudioToolbar";
+import {
+  SpeedField, AudioSyncBpm, SoundControls, TuningControls, LoopControl,
+} from "./components/NumericSettings";
 import StatsBar from "./components/StatsBar";
 import SnippetPanel from "./components/SnippetPanel";
 import AudioControls from "./components/AudioControls";
@@ -198,6 +205,33 @@ export default function SamPlayer({ onBack }) {
   const audioFilePath = song?.audioFilePath ?? null;
   const [audioMuted, setAudioMuted] = useState(false);
   const playbackSpeed = useNumericInput(DEFAULTS.playbackSpeed);
+  // Audio songs: whether the sync BPM box is revealed. Shared by the rail's
+  // Speed % (whose blur hides it) and the settings row (which shows it). Reset
+  // whenever playback starts or the song changes, as it was when the settings
+  // row owned it and unmounted then.
+  const [showBpmEdit, setShowBpmEdit] = useState(false);
+  const hideBpmEdit = useCallback(() => setShowBpmEdit(false), []);
+  // The snippet tray (rail's Snippets toggle). Only the tray's visibility:
+  // the loaded range is `snippet` and survives closing it.
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
+  // The More drawer (rail's More / Close). One panel at a time: opening either
+  // the tray or the drawer closes the other.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const toggleSnippets = useCallback(() => {
+    setSnippetsOpen((o) => {
+      if (!o) setMoreOpen(false);
+      return !o;
+    });
+  }, []);
+  const toggleMore = useCallback(() => {
+    setMoreOpen((o) => {
+      if (!o) setSnippetsOpen(false);
+      return !o;
+    });
+  }, []);
+  const closeMore = useCallback(() => setMoreOpen(false), []);
+  // The Edit song dialog: the title's pencil and the drawer's Edit Song.
+  const [editOpen, setEditOpen] = useState(false);
 
   // The tempo Practice actually scrolls at.
   //
@@ -363,6 +397,16 @@ export default function SamPlayer({ onBack }) {
   // is the single source of that constant. Null until it arrives, and null if it
   // cannot be read — in which case a range with no ladder of its own simply has
   // no warm-up, rather than being given a second, drifting copy of the default.
+  useEffect(() => {
+    if (playbackState === "playing") {
+      setShowBpmEdit(false);
+      // Any run start (Play, Practice, Warm up, Resume) closes the drawer, so
+      // it is never waiting behind the score after Stop.
+      setMoreOpen(false);
+    }
+  }, [playbackState]);
+  useEffect(() => setShowBpmEdit(false), [songDbId]);
+
   const [defaultLadder, setDefaultLadder] = useState(null);
   useEffect(() => {
     let alive = true;
@@ -1832,24 +1876,29 @@ export default function SamPlayer({ onBack }) {
     URL.revokeObjectURL(url);
   }
 
-  // Controls that belong to the score: Fingering mode, Diff, Show Imported.
-  //
-  // They have moved twice. M3.5 took them off a row of their own and put them
-  // in SettingsBar's top-right cluster; they now sit at the far end of the
-  // Snippet toggle row, which is the last row before the score and was
-  // otherwise empty. That reads as what they are — score controls, next to the
-  // score — costs no vertical space, since both sides of that row are already
-  // 44px tall, and gives the transport row its width back.
-  //
-  // Still gated on `stopped`, exactly as before, so nothing about WHEN they are
-  // available has changed across any of the moves.
+  // The drawer's utility actions are one AudioToolbar component placed twice
+  // (Audio and Tools sections), each showing its own `keys`.
+  const hasAudioFile = !!audioFilePath;
+  const toolbarProps = {
+    song,
+    songDbId,
+    skipTiedNotes,
+    onSongUpdate: setSong,
+    onAudioUploaded: handleAudioUploaded,
+    onLyricsChanged: setLyricPlacements,
+    onExport: handleExport,
+  };
+
+  // Controls that belong to the score: Fingering mode, Diff, Show Imported —
+  // in the More drawer's Tools (song rail, step 4). Still gated on `stopped`,
+  // exactly as before, so nothing about WHEN they are available has changed.
   const scoreToolButtons = playbackState === "stopped" ? (
     <>
       {hasImported && (
         <button
           onClick={toggleShowImported}
           aria-pressed={showImportedFingerings}
-          className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors"
+          className={`min-h-[44px] px-4 text-sm font-medium ${UI.toggle(showImportedFingerings)}`}
         >
           {showImportedFingerings ? "Hide Imported" : "Show Imported"}
         </button>
@@ -1858,11 +1907,7 @@ export default function SamPlayer({ onBack }) {
         <button
           onClick={() => setGhostMode((on) => !on)}
           aria-pressed={ghostMode}
-          className={`min-h-[44px] px-4 rounded-lg text-sm font-medium border transition-colors ${
-            ghostMode
-              ? "bg-foreground text-background border-transparent"
-              : "bg-card text-foreground border-border hover:bg-muted"
-          }`}
+          className={`min-h-[44px] px-4 text-sm font-medium ${UI.toggle(ghostMode)}`}
         >
           {ghostMode ? "Diff: on" : "Diff"}
         </button>
@@ -1870,12 +1915,7 @@ export default function SamPlayer({ onBack }) {
       <button
         onClick={toggleFingeringMode}
         aria-pressed={fingeringMode}
-        className={`min-h-[44px] px-4 rounded-lg text-sm font-medium border transition-colors ${
-          fingeringMode
-            ? "text-white border-transparent"
-            : "bg-card text-foreground border-border hover:bg-muted"
-        }`}
-        style={fingeringMode ? { backgroundColor: "var(--fingering-accent)" } : undefined}
+        className={`min-h-[44px] px-4 text-sm font-medium ${UI.toggle(fingeringMode)}`}
       >
         {fingeringMode ? "Fingering mode: on" : "Fingering mode"}
       </button>
@@ -1894,7 +1934,9 @@ export default function SamPlayer({ onBack }) {
           two clicks away (pause, then back) during playback. */}
       {/* The song library sits tighter to the top: its header row replaces the
           padding (practice plans M4 follow-up). The player keeps py-6. */}
-      <div ref={scrollContainerRef} className={`mx-auto px-3 sm:px-4 ${song ? "py-6" : "pt-2 pb-6"}`}>
+      {/* Playing keeps py-6 so the playing screen is untouched; stopped and
+          paused use py-2, which the rail's full-height column is sized against. */}
+      <div ref={scrollContainerRef} className={`mx-auto px-3 sm:px-4 ${song ? (playbackState === "playing" ? "py-6" : "py-2") : "pt-2 pb-6"}`}>
         {importError && (
           <div className="mb-4 mx-3 sm:mx-4 p-3 bg-red-50 border border-red-200 rounded flex items-start justify-between gap-3 text-sm text-red-700">
             <span className="whitespace-pre-wrap">{importError}</span>
@@ -1933,7 +1975,40 @@ export default function SamPlayer({ onBack }) {
             />
           </>
         ) : (
-          <>
+          // Two columns: the rail (stopped and paused) and everything else.
+          // The right column is the same element in every state, so ScrollEngine
+          // keeps its place in the tree — and its scroll position — across a pause.
+          <div className="flex items-start">
+            {playbackState !== "playing" && (
+              <SongRail
+                playbackState={playbackState}
+                songDbId={songDbId}
+                // Starting a run closes the tray and the drawer, so the score is
+                // clean after Stop.
+                onPlay={() => { setSnippetsOpen(false); setMoreOpen(false); handlePlay(); }}
+                onPractice={() => { setSnippetsOpen(false); setMoreOpen(false); handlePractice(); }}
+                onPause={handlePause}
+                onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
+                onWarmUp={() => { setSnippetsOpen(false); setMoreOpen(false); handleWarmUp(); }}
+                warmUpVisible={warmupAvailable}
+                warmUpPrimary={!!planItem?.goal_is_warmup}
+                warmUpDisabledReason={warmupDisabledReason}
+                song={song}
+                bpm={bpm}
+                timingWindowMs={timingWindowMs}
+                chordMs={chordMs}
+                measureWidth={measureWidth}
+                playbackSpeed={playbackSpeed}
+                onSongUpdate={setSong}
+                onHideBpmEdit={hideBpmEdit}
+                snippetsOpen={snippetsOpen}
+                onToggleSnippets={toggleSnippets}
+                moreOpen={moreOpen}
+                onToggleMore={toggleMore}
+                onBack={handleBackToLibrary}
+              />
+            )}
+            <div className="flex-1 min-w-0">
             {playbackState === "playing" ? (
               practiceMode ? (
                 <PracticeBar onPause={handlePause} stuck={stuckBeat} />
@@ -1965,7 +2040,6 @@ export default function SamPlayer({ onBack }) {
             ) : (
               <>
                 <SettingsBar
-                  onBack={handleBackToLibrary}
                   song={song} snippet={snippet}
                   bpm={bpm}
                   timingWindowMs={timingWindowMs}
@@ -1973,8 +2047,6 @@ export default function SamPlayer({ onBack }) {
                   measureWidth={measureWidth}
                   playbackSpeed={playbackSpeed}
                   playbackState={playbackState} songDbId={songDbId}
-                  onPlay={handlePlay} onPractice={handlePractice} onPause={handlePause} onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
-                  onExport={handleExport}
                   midiConnected={midiConnected} midiDevice={midiDevice}
                   pausedMeasure={pausedMeasure}
                   onSongUpdate={setSong}
@@ -1982,83 +2054,152 @@ export default function SamPlayer({ onBack }) {
                   // plan item — which is what the Edit Song dialog is editing
                   // against.
                   songWarmup={resolveLadder({ song, defaultLadder })}
-                  onAudioUploaded={handleAudioUploaded}
-                  onFullSong={() => handleSnippetChange(null)}
-                  onWarmUp={handleWarmUp}
-                  warmUpVisible={warmupAvailable}
-                  warmUpPrimary={!!planItem?.goal_is_warmup}
-                  warmUpDisabledReason={warmupDisabledReason}
-                  onLyricsChanged={setLyricPlacements}
-                  skipTiedNotes={skipTiedNotes}
                   hasImportedFingerings={hasImported}
-                  songRepeat={songRepeat}
-                  onSongRepeatChange={setSongRepeat}
-                  songRestMeasures={songRestMeasures}
-                  onSongRestMeasuresChange={setSongRestMeasures}
-                  metronome={metronome}
-                  setMetronome={setMetronome}
-                  scorePlayback={scorePlayback}
-                  setScorePlayback={setScorePlayback}
                   todayMinutes={todayMinutes}
-                />
+                  editOpen={editOpen}
+                  onEditOpenChange={setEditOpen}
+                >
+                  {/* The plan bar, directly under the title row. The song goal
+                      is in the More drawer's Stats. */}
+                  <PlanLine
+                    item={planItem}
+                    state={planItemState}
+                    heardTempo={heardTempo(bpm.value, playbackSpeed.value)}
+                    onSetTempo={applyPlanTempo}
+                    nextItem={nextPlanItem}
+                    // The same path the home page checklist uses — one way in.
+                    onOpenNext={openPlanItem}
+                    // §7.3, widened: one line saying what pressing Warm up will do
+                    // and where the ladder came from, shown WHENEVER the button is
+                    // available — plan item or not, running or not.
+                    warmupSummary={warmupAvailable ? ladderSummaryText(warmupResolved.ladder) : null}
+                    warmupSourceLabel={warmupAvailable ? sourceLabel(warmupResolved.source) : null}
+                  />
+                  {/* The snippet tray: under the plan block, pushing the score
+                      down. Closing it keeps the loaded range. */}
+                  <SnippetPanel
+                    open={snippetsOpen}
+                    songDbId={songDbId}
+                    totalMeasures={song.measures.length}
+                    snippet={snippet}
+                    onSnippetChange={handleSnippetChange}
+                    onWholeSong={() => handleSnippetChange(null)}
+                    planTagFor={planTagFor}
+                    warmupFor={warmupForSnippetRow}
+                  />
+                </SettingsBar>
 
-                <AudioControls audioElement={audioElement} playbackState={playbackState} />
+                {/* Everything else: rail's More. Never on the playing screen —
+                    this whole branch is stopped / paused only. */}
+                <MoreDrawer open={moreOpen} onClose={closeMore}>
+                  {hasAudioFile && (
+                    <DrawerSection title="Audio">
+                      <AudioControls audioElement={audioElement} playbackState={playbackState} />
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <SpeedField playbackSpeed={playbackSpeed} onHideBpmEdit={hideBpmEdit} />
+                        <AudioSyncBpm
+                          bpm={bpm}
+                          playbackSpeed={playbackSpeed}
+                          showBpmEdit={showBpmEdit}
+                          setShowBpmEdit={setShowBpmEdit}
+                        />
+                      </div>
+                      {audioElement && (
+                        <div className="flex items-center gap-4">
+                          <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer min-h-[44px]">
+                            <input
+                              type="checkbox"
+                              checked={audioMuted}
+                              onChange={(e) => setAudioMuted(e.target.checked)}
+                              className="w-4 h-4 accent-primary"
+                            />
+                            Mute audio
+                          </label>
+                          <AudioMsCounter audioElement={audioElement} />
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <AudioToolbar {...toolbarProps} keys={["automatch", "audio"]} />
+                      </div>
+                    </DrawerSection>
+                  )}
 
-                {audioElement && (
-                  <div className="flex items-center gap-4 px-3 mb-3">
-                    <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={audioMuted}
-                        onChange={(e) => setAudioMuted(e.target.checked)}
-                        className="w-4 h-4 accent-primary"
+                  <DrawerSection title="Sound">
+                    <SoundControls
+                      metronome={metronome}
+                      setMetronome={setMetronome}
+                      scorePlayback={scorePlayback}
+                      setScorePlayback={setScorePlayback}
+                    />
+                  </DrawerSection>
+
+                  <DrawerSection title="Tuning">
+                    <TuningControls
+                      song={song}
+                      songDbId={songDbId}
+                      bpm={bpm}
+                      timingWindowMs={timingWindowMs}
+                      chordMs={chordMs}
+                      measureWidth={measureWidth}
+                      playbackSpeed={playbackSpeed}
+                      onSongUpdate={setSong}
+                    />
+                  </DrawerSection>
+
+                  <DrawerSection title="Tools">
+                    {songDbId && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* The same dialog as the title's pencil; the drawer
+                            closes first so the dialog is not behind it. */}
+                        <button
+                          type="button"
+                          onClick={() => { setMoreOpen(false); setEditOpen(true); }}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 text-sm min-h-[44px] ${UI.outline}`}
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          Edit Song
+                        </button>
+                      </div>
+                    )}
+                    <LoopControl
+                      snippet={snippet}
+                      songRepeat={songRepeat}
+                      onSongRepeatChange={setSongRepeat}
+                      songRestMeasures={songRestMeasures}
+                      onSongRestMeasuresChange={setSongRestMeasures}
+                    />
+                    {scoreToolButtons && (
+                      <div className="flex items-center gap-2 flex-wrap">{scoreToolButtons}</div>
+                    )}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {/* Without audio, upload (and lyrics Auto-Match) sit here. */}
+                      <AudioToolbar
+                        {...toolbarProps}
+                        keys={hasAudioFile ? ["export", "refresh"] : ["export", "refresh", "audio", "automatch"]}
                       />
-                      Mute audio
-                    </label>
-                    <AudioMsCounter audioElement={audioElement} />
-                  </div>
-                )}
+                    </div>
+                  </DrawerSection>
 
-                <StatsBar
-                  lastNote={lastNote}
-                  loopCount={loopCount}
-                  hitCount={hitCount}
-                  missCount={missCount}
-                  sessionStats={sessionStats}
-                  lastResult={lastResult}
-                  playbackState={playbackState}
-                  songTodaySeconds={perSongTodaySeconds}
-                  songTotalSeconds={perSongTotalSeconds}
-                  songPassesToday={songPassesToday}
-                  songPassesTotal={songPassesTotal}
-                  accuracyGoal={accuracyGoal}
-                />
-
-                <PlanLine
-                  item={planItem}
-                  state={planItemState}
-                  songNote={planSongNote}
-                  heardTempo={heardTempo(bpm.value, playbackSpeed.value)}
-                  onSetTempo={applyPlanTempo}
-                  nextItem={nextPlanItem}
-                  // The same path the home page checklist uses — one way in.
-                  onOpenNext={openPlanItem}
-                  // §7.3, widened: one line saying what pressing Warm up will do
-                  // and where the ladder came from, shown WHENEVER the button is
-                  // available — plan item or not, running or not.
-                  warmupSummary={warmupAvailable ? ladderSummaryText(warmupResolved.ladder) : null}
-                  warmupSourceLabel={warmupAvailable ? sourceLabel(warmupResolved.source) : null}
-                />
-
-                <SnippetPanel
-                  songDbId={songDbId}
-                  totalMeasures={song.measures.length}
-                  snippet={snippet}
-                  onSnippetChange={handleSnippetChange}
-                  scoreTools={scoreToolButtons}
-                  planTagFor={planTagFor}
-                  warmupFor={warmupForSnippetRow}
-                />
+                  <DrawerSection title="Stats">
+                    {planSongNote && (
+                      <p className="text-sm text-foreground whitespace-pre-wrap">Song goal: {planSongNote}</p>
+                    )}
+                    <StatsBar
+                      lastNote={lastNote}
+                      loopCount={loopCount}
+                      hitCount={hitCount}
+                      missCount={missCount}
+                      sessionStats={sessionStats}
+                      lastResult={lastResult}
+                      playbackState={playbackState}
+                      songTodaySeconds={perSongTodaySeconds}
+                      songTotalSeconds={perSongTotalSeconds}
+                      songPassesToday={songPassesToday}
+                      songPassesTotal={songPassesTotal}
+                      accuracyGoal={accuracyGoal}
+                    />
+                  </DrawerSection>
+                </MoreDrawer>
               </>
             )}
 
@@ -2070,6 +2211,15 @@ export default function SamPlayer({ onBack }) {
                     the Fingering mode button, which now sits in the top row. */}
                 {fingeringMode && (
                   <div className="flex items-center gap-2 px-1 mb-2">
+                    {/* The off switch, where the mode is used: same handler and
+                        look as the drawer's button when on. */}
+                    <button
+                      onClick={toggleFingeringMode}
+                      aria-pressed="true"
+                      className={`min-h-[44px] px-4 text-sm font-medium shrink-0 ${UI.toggle(true)}`}
+                    >
+                      Fingering mode: on
+                    </button>
                     <FingeringBar
                       hasSelection={!!fingeringSelection}
                       currentFinger={selectedCurrentFinger}
@@ -2084,7 +2234,7 @@ export default function SamPlayer({ onBack }) {
                     <button
                       onClick={undoFingering}
                       disabled={!canUndoFingering}
-                      className="min-h-[44px] px-4 rounded-lg text-sm font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed ml-auto"
+                      className={`min-h-[44px] px-4 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed ml-auto ${UI.outline}`}
                     >
                       ↺ Undo
                     </button>
@@ -2101,11 +2251,7 @@ export default function SamPlayer({ onBack }) {
                           key={v}
                           onClick={() => setGhostHands(v)}
                           aria-pressed={ghostHands === v}
-                          className={`min-h-[36px] px-3 rounded-md text-sm border transition-colors ${
-                            ghostHands === v
-                              ? "bg-foreground text-background border-transparent"
-                              : "bg-card text-foreground border-border hover:bg-muted"
-                          }`}
+                          className={`min-h-[36px] px-3 text-sm ${UI.toggle(ghostHands === v)}`}
                         >
                           {label}
                         </button>
@@ -2150,6 +2296,12 @@ export default function SamPlayer({ onBack }) {
                   ghostMeasures={ghostMeasures}
                   ghostHands={ghostHands}
                   ghostOpacity={ghostOpacity}
+                  // Fit the whole system on screen unless the tray is open (then
+                  // the page scrolls, as agreed). The drawer is an overlay and
+                  // takes no space, so it leaves the fit alone.
+                  fitHeight={!snippetsOpen}
+                  // The page's py-2 under the column.
+                  fitBottomPad={8}
                 />
                 {lyricPlacements && (
                   <div className="flex items-center justify-center gap-4 mt-2 mb-3">
@@ -2166,7 +2318,7 @@ export default function SamPlayer({ onBack }) {
                       <button
                         onClick={handleSaveLyrics}
                         disabled={lyricsSaving}
-                        className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-sm font-medium min-h-[44px] disabled:opacity-50 transition-colors"
+                        className={`px-4 py-2 bg-primary text-white text-sm font-medium min-h-[44px] disabled:opacity-50 ${UI.radius} ${UI.press}`}
                       >
                         {lyricsSaving ? "Saving..." : "Save Lyrics"}
                       </button>
@@ -2206,7 +2358,8 @@ export default function SamPlayer({ onBack }) {
                 onScrollStart={practiceMode ? null : scheduleAudioStartOnScroll}
               />
             )}
-          </>
+            </div>
+          </div>
         )}
       </div>
     </div>

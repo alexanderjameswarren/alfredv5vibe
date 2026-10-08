@@ -264,8 +264,9 @@ async function openSnippetOffPlan() {
     </MemoryRouter>
   );
   await screen.findByLabelText(/BPM:/);
-  fireEvent.click(await screen.findByRole("button", { name: /^Snippet/ }));
-  fireEvent.click(await screen.findByRole("button", { name: /Measures 1-1 RH/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Snippets" }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Saved snippets/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Measures 1-1 RH/ }));
   await waitFor(() => expect(warmUpButton()).toBeInTheDocument());
 }
 
@@ -500,13 +501,12 @@ test("a warm-up item's plan line reports the ladder, not a pass count", async ()
   expect(plan).not.toHaveTextContent("0/4");
 });
 
-test("a warm-up item's button leads the transport, filled", async () => {
+test("a warm-up item's button is filled, under Practice in the rail", async () => {
   seed({ goalIsWarmup: true });
   await openPlanItem();
   expect(warmUpButton()).toHaveAttribute("data-variant", "primary");
-  // Ahead of Play in the DOM, which is the row order.
   const buttons = screen.getAllByRole("button").map((b) => b.textContent);
-  expect(buttons.indexOf("Warm up")).toBeLessThan(buttons.indexOf("Play"));
+  expect(buttons.indexOf("Warm up")).toBe(buttons.indexOf("Practice") + 1);
 });
 
 test("mid-run, the plan badge carries the live rung — the only plan readout on screen", async () => {
@@ -598,7 +598,10 @@ const openLadderDialog = async () => {
   // Idempotent: the panel is only toggled when the flame is not already on screen,
   // so a test can open the dialog twice without closing the panel in between.
   if (!screen.queryByRole("button", { name: /Warm-up ladder for m\.1-1/ })) {
-    fireEvent.click(await screen.findByRole("button", { name: /^Snippet/ }));
+    if (!screen.queryByRole("button", { name: /^Saved snippets/ })) {
+      fireEvent.click(await screen.findByRole("button", { name: "Snippets" }));
+    }
+    fireEvent.click(await screen.findByRole("button", { name: /^Saved snippets/ }));
   }
   fireEvent.click(await screen.findByRole("button", { name: /Warm-up ladder for m\.1-1/ }));
   return screen.findByRole("dialog", { name: "Warm-up ladder" });

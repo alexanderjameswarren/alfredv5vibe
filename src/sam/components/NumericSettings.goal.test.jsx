@@ -16,7 +16,7 @@ jest.mock("../../supabaseClient", () => ({
   },
 }));
 
-const NumericSettings = require("./NumericSettings").default;
+const { TempoControls } = require("./NumericSettings");
 const { mapSongRow, SONG_EDIT_COLUMNS } = require("../lib/songLoad");
 
 // A stand-in for useNumericInput: a fixed value, with set() recorded.
@@ -49,14 +49,7 @@ function mountSettings(song, { bpm = 70, speed = 100 } = {}) {
     measureWidth: numeric(500),
   };
   render(
-    <NumericSettings
-      song={song} snippet={null} songDbId="song-1" playbackState="stopped"
-      {...hooks}
-      songRepeat={false} onSongRepeatChange={() => {}}
-      songRestMeasures={0} onSongRestMeasuresChange={() => {}}
-      metronome="off" setMetronome={() => {}}
-      scorePlayback="off" setScorePlayback={() => {}}
-    />
+    <TempoControls song={song} songDbId="song-1" {...hooks} />
   );
   return hooks;
 }
@@ -74,7 +67,7 @@ test("a real button styled like Save: label, tooltip, border and height", () => 
   mountSettings(NO_AUDIO, { bpm: 70 });
   expect(goal()).toHaveTextContent(/^Goal 75$/);
   expect(goal()).toHaveAttribute("title", "Set tempo to goal (this session only)");
-  expect(goal()).toHaveClass("border", "rounded", "text-sm", "px-3", "py-1.5", "min-h-[44px]");
+  expect(goal()).toHaveClass("border", "rounded-lg", "text-sm", "px-3", "py-1.5", "min-h-[44px]");
 });
 
 test("no audio: below the goal it is amber (text and border) and enabled", () => {
@@ -127,6 +120,58 @@ test("audio at the goal speed: 67 at 90% is 60, so disabled", () => {
   expect(goal()).toBeDisabled();
   fireEvent.click(goal());
   expect(hooks.playbackSpeed.set).not.toHaveBeenCalled();
+});
+
+describe("Tuning section", () => {
+  const { TuningControls } = require("./NumericSettings");
+  const SAVED = { ...NO_AUDIO, defaultTimingWindowMs: 300, defaultChordMs: 80, defaultMeasureWidth: 500 };
+  const mountTuning = (over = {}) => {
+    const hooks = {
+      bpm: numeric(70), playbackSpeed: numeric(100),
+      timingWindowMs: numeric(300), chordMs: numeric(80), measureWidth: numeric(500), ...over,
+    };
+    render(<TuningControls song={SAVED} songDbId="song-1" {...hooks} />);
+  };
+  const save = () => screen.queryByRole("button", { name: /Save/ });
+
+  test("always open: the three fields, no toggle", () => {
+    mountTuning();
+    expect(screen.getByLabelText(/Timing ±ms/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Chord ms/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Measure W/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Tuning/ })).not.toBeInTheDocument();
+  });
+
+  test("Save only when a tuning field differs, not for tempo alone", () => {
+    mountTuning({ bpm: numeric(90) });
+    expect(save()).not.toBeInTheDocument();
+  });
+
+  test("the rail's Save shows for tempo only, never for a tuning change", () => {
+    const hooks = { timingWindowMs: numeric(300), measureWidth: numeric(500), playbackSpeed: numeric(100) };
+    const { unmount } = render(
+      <TempoControls song={SAVED} songDbId="song-1" bpm={numeric(70)} chordMs={numeric(120)} {...hooks} />
+    );
+    expect(save()).not.toBeInTheDocument();
+    unmount();
+    render(<TempoControls song={SAVED} songDbId="song-1" bpm={numeric(90)} chordMs={numeric(80)} {...hooks} />);
+    expect(save()).toBeInTheDocument();
+  });
+
+  test("both kinds pending: each Save shows", () => {
+    const hooks = {
+      bpm: numeric(90), chordMs: numeric(120), timingWindowMs: numeric(300),
+      measureWidth: numeric(500), playbackSpeed: numeric(100),
+    };
+    render(<><TempoControls song={SAVED} songDbId="song-1" {...hooks} /><TuningControls song={SAVED} songDbId="song-1" {...hooks} /></>);
+    expect(screen.getAllByRole("button", { name: /Save/ })).toHaveLength(2);
+  });
+
+  test("Save appears for a changed tuning field and writes the song row", () => {
+    mountTuning({ chordMs: numeric(120) });
+    fireEvent.click(save());
+    expect(mockWrites).toEqual([{ table: "sam_songs", row: expect.objectContaining({ default_chord_ms: 120 }) }]);
+  });
 });
 
 test("the song mapping and the edit dialog's columns carry the goal fields", () => {

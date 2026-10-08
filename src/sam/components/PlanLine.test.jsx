@@ -108,21 +108,21 @@ describe("Next on the plan line", () => {
     expect(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" })).toBeInTheDocument();
   });
 
-  test("quieter than the plan line: the outline of Save and Tuning, a size down", () => {
+  test("leads the line, outlined in the Play colour but not filled, a size down", () => {
     render(
       <PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={55} nextItem={NEXT}
         onSetTempo={() => {}} onOpenNext={() => {}} />
     );
     const btn = screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" });
     const box = nextBox(btn);
-    // Same outline as its neighbour Save: border, radius, background, muted
-    // text, body size. Nothing filled, nothing shouting.
-    const save = screen.getByRole("button", { name: "Set tempo" });
-    for (const c of ["border", "border-border", "rounded", "text-sm", "text-muted-foreground"]) {
-      expect(save).toHaveClass(c);
-      expect(box).toHaveClass(c);
-    }
-    expect(box).not.toHaveClass("bg-primary", "text-primary-foreground", "font-medium");
+    // Order: Next, then the plan text, then Set tempo.
+    const names = screen.getAllByRole("button").map((b) => b.textContent);
+    expect(names[0]).toMatch(/^Next:/);
+    expect(names[1]).toBe("Set tempo");
+    // The primary outline is applied to the box from PlanLine; never a fill.
+    expect(btn).toHaveClass("shrink-0", "[&_[data-next-box]]:border-primary", "[&_[data-next-box]]:text-primary");
+    expect(box).toHaveClass("border", "rounded", "text-sm");
+    expect(box).not.toHaveClass("bg-primary", "text-primary-foreground");
     // ...but a size down from them: shorter box, tighter sides.
     expect(box).toHaveClass("min-h-[33px]", "px-2.5");
     expect(box).not.toHaveClass("min-h-[44px]", "px-3");
@@ -188,6 +188,18 @@ describe("Next when the loaded range is in no plan item", () => {
     snippet: { start_measure: 1, end_measure: 16, hand_mode: "both" },
   };
 
+  test("one line: Next first and fixed, the text truncates, nothing wraps", () => {
+    render(<PlanLine item={null} state={null} heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />);
+    const label = screen.getByText("Not in today's plan");
+    expect(label).toHaveClass("truncate", "min-w-0");
+    // eslint-disable-next-line testing-library/no-node-access
+    const row = label.parentElement;
+    expect(row).not.toHaveClass("flex-wrap");
+    // eslint-disable-next-line testing-library/no-node-access
+    expect(row.firstElementChild).toBe(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" }));
+    expect(row.firstElementChild).toHaveClass("shrink-0");
+  });
+
   test("says where he is, then offers where to go", () => {
     render(<PlanLine item={null} state={null} heardTempo={60} nextItem={NEXT} onOpenNext={() => {}} />);
     expect(screen.getByText("Not in today's plan")).toBeInTheDocument();
@@ -204,8 +216,9 @@ describe("Next when the loaded range is in no plan item", () => {
     const box = nextBox(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" }));
     // Identical size and outline to the done-item Next — it is the same
     // component, and this locks that it stays that way.
-    expect(box).toHaveClass("border", "border-border", "rounded", "text-sm",
-      "text-muted-foreground", "min-h-[33px]", "px-2.5");
+    expect(box).toHaveClass("border", "rounded", "text-sm", "min-h-[33px]", "px-2.5");
+    expect(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" }))
+      .toHaveClass("[&_[data-next-box]]:border-primary");
     expect(box).not.toHaveClass("bg-primary", "min-h-[44px]", "px-3");
   });
 

@@ -1,4 +1,5 @@
 import React from "react";
+import { UI } from "./uiStyles";
 
 // Number bar for RH fingering entry (edit view, fingering mode on).
 //
@@ -12,7 +13,7 @@ import React from "react";
 // (the melody note).
 //
 // Pure presentational — all state lives in the parent.
-const BTN = "h-14 w-14 rounded-lg border text-lg font-semibold flex items-center justify-center transition-colors select-none disabled:opacity-40 disabled:cursor-not-allowed";
+const BTN = `h-14 w-14 ${UI.button} text-lg font-semibold flex items-center justify-center select-none disabled:opacity-40 disabled:cursor-not-allowed`;
 
 export default function FingeringBar({
   hasSelection,
@@ -39,7 +40,7 @@ export default function FingeringBar({
           aria-label={`Notehead ${ni + 1}`}
           aria-pressed={active}
           onClick={() => onPickNotehead?.(ni)}
-          className="w-6 h-6 rounded-full border flex items-center justify-center"
+          className={`w-6 h-6 rounded-full border flex items-center justify-center ${UI.press}`}
           style={active ? accentStyle : { borderColor: "var(--border)" }}
         >
           <span className="w-2 h-2 rounded-full" style={{ backgroundColor: active ? "var(--fingering-accent-fg)" : "var(--muted-foreground)" }} />
@@ -64,8 +65,9 @@ export default function FingeringBar({
             type="button"
             disabled={!hasSelection}
             onClick={() => onNumber?.(n)}
-            className={BTN}
-            style={active ? accentStyle : { borderColor: "var(--border)" }}
+            aria-pressed={active}
+            // The selected finger in the song page's on look (tan, brown).
+            className={`${BTN} ${active ? UI.on : `${UI.off} text-foreground`}`}
           >
             {n}
           </button>
@@ -77,8 +79,7 @@ export default function FingeringBar({
         disabled={!hasSelection}
         onClick={() => onClear?.()}
         aria-label="Clear fingering"
-        className={`${BTN} text-muted-foreground`}
-        style={{ borderColor: "var(--border)" }}
+        className={`${BTN} ${UI.off}`}
       >
         ✕
       </button>
@@ -88,8 +89,7 @@ export default function FingeringBar({
         disabled={!hasSelection || !canAdvance}
         onClick={() => onAdvance?.()}
         aria-label="Next note"
-        className={BTN}
-        style={{ borderColor: "var(--border)" }}
+        className={`${BTN} ${UI.off} text-foreground`}
       >
         ›
       </button>

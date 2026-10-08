@@ -1,4 +1,5 @@
 import React from "react";
+import { UI } from "./uiStyles";
 
 // Compact one-click selector, used where a row of radio buttons was eating
 // horizontal space and pushing the stats row onto a second line (M3.5).
@@ -39,7 +40,7 @@ export default function SegmentedControl({
       aria-disabled={disabled || undefined}
     >
       <span className="hidden xl:inline">{label}</span>
-      <span className="inline-flex rounded border border-border overflow-hidden">
+      <span className={`inline-flex ${UI.radius} border border-border overflow-hidden`}>
         {options.map(([optionValue, optionLabel, optionTitle, optionDisabled], i) => {
           const selected = value === optionValue;
           const off = disabled || Boolean(optionDisabled);
@@ -51,12 +52,12 @@ export default function SegmentedControl({
               aria-pressed={selected}
               disabled={off}
               onClick={() => onChange(optionValue)}
-              className={`px-2 py-1 text-xs transition-colors ${
+              className={`px-2 py-1 text-xs ${UI.press} ${
                 i > 0 ? "border-l border-border" : ""
               } ${
                 selected
                   ? "bg-primary-light text-primary font-medium"
-                  : "bg-card text-muted-foreground hover:text-dark"
+                  : "bg-card text-muted-foreground"
               } ${off ? "cursor-not-allowed " : ""}${
                 // Only the option-level grey, or it would compound with the
                 // group's own opacity and fade the whole row nearly out.

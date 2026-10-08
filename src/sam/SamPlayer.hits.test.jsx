@@ -180,8 +180,12 @@ async function play(result) {
 }
 
 // "Hits: 0" -> "0". The label is the span's own text; the value is its <strong>.
-const counter = (label) =>
-  screen.getByText(new RegExp(`^${label}:`)).textContent.replace(`${label}: `, "");
+// Paused, the counters are in the More drawer's Stats, so open it first.
+const counter = (label) => {
+  const re = new RegExp(`^${label}:`);
+  if (!screen.queryByText(re)) fireEvent.click(screen.getByRole("button", { name: "More" }));
+  return screen.getByText(re).textContent.replace(`${label}: `, "");
+};
 
 test("a partial chord adds to neither on-screen Hits nor Misses", async () => {
   await startPlaying();
