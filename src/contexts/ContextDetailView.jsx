@@ -9,6 +9,17 @@ import {
   itemSearchFields,
 } from "../utils/listSortOptions";
 import ObjectIcon from "../shared/ObjectIcon";
+import StatusFilterChips from "../shared/StatusFilterChips";
+import {
+  DEFAULT_STATUS_FILTER,
+  STATUS_LABELS,
+  statusOf,
+  statusCounts,
+  filterByStatus,
+  rankByStatus,
+  rankByActivity,
+  withTag,
+} from "../utils/status";
 import ListToolbar, { NoMatches } from "../shared/ListToolbar";
 import TagFilter from "../shared/TagFilter";
 import ContextForm from "./ContextForm";
@@ -41,6 +52,7 @@ export default function ContextDetailView({
   onViewItemDetail,
   executions = [],
   onOpenExecution,
+  allIntents,
   events = [],
   onUpdateEvent,
   onActivate,
@@ -63,9 +75,15 @@ export default function ContextDetailView({
   sort,
   search = "",
   onSearchChange,
+  // Status chips (088), one row for items and intentions alike, saved per page.
+  statusFilter = { selected: DEFAULT_STATUS_FILTER, toggle: () => {} },
+  // This context's archived records: the record of what has shipped.
+  archivedItems = [],
+  archivedIntents = [],
 }) {
   const [itemsExpanded, setItemsExpanded] = useState(true);
   const [intentionsExpanded, setIntentionsExpanded] = useState(true);
+  const [archivedExpanded, setArchivedExpanded] = useState(false);
   // Editing happens here now. It used to set two pieces of Alfred state and
   // then navigate to the Contexts list to render the form there, so "Edit" on
   // this page silently moved you to a different screen — and browser Back left
@@ -80,12 +98,27 @@ export default function ContextDetailView({
   // in with `select("*")` on items, so element text is searchable without a
   // fetch.
   const sortBy = (rows, accessors) =>
-    sortRows(rows, sort.sortKey, accessors, sort.sortDir);
-  const visibleItems = sortBy(items, NAMED_RECORD_ACCESSORS)
+    rankByStatus(sortRows(rows, sort.sortKey, accessors, sort.sortDir));
+  // The tag filter here applies to items only, so only items are narrowed by it.
+  const statusCountsHere = statusCounts([...withTag(items, filterTag), ...intents]);
+  const visibleItems = sortBy(filterByStatus(items, statusFilter.selected), NAMED_RECORD_ACCESSORS)
     .filter((item) => !filterTag || (item.tags && item.tags.includes(filterTag)))
     .filter((item) => matchesQuery(search, ...itemSearchFields(item)));
-  const visibleIntents = sortBy(intents, INTENTION_ACCESSORS).filter((intent) =>
-    matchesQuery(search, getIntentDisplay(intent)),
+  // Intentions: what is happening now first, the chosen sort within each group.
+  const visibleIntents = rankByActivity(
+    sortRows(filterByStatus(intents, statusFilter.selected), sort.sortKey, INTENTION_ACCESSORS, sort.sortDir),
+    events,
+    executions,
+  ).filter((intent) => matchesQuery(search, getIntentDisplay(intent)));
+  // "n of m" whenever anything is hidden, by search or by a chip.
+  const countLabel = (shown, total) => (shown === total ? `${total}` : `${shown} of ${total}`);
+  const archivedRows = [
+    ...archivedItems.map((r) => ({ kind: "item", id: r.id, label: r.name, row: r })),
+    ...archivedIntents.map((r) => ({ kind: "intention", id: r.id, label: getIntentDisplay(r), row: r })),
+  ].sort((a, b) =>
+    String(b.row.statusChangedAt || b.row.updatedAt || "").localeCompare(
+      String(a.row.statusChangedAt || a.row.updatedAt || ""),
+    ),
   );
   const contextCollections = collections.filter((c) => c.contextId === contextId);
   const visibleCollections = sortBy(contextCollections, NAMED_RECORD_ACCESSORS).filter(
@@ -127,19 +160,14 @@ export default function ContextDetailView({
             <ObjectIcon type="context" className="w-6 h-6 text-primary" align="first-line" />
             <span className="min-w-0">{context.name}</span>
           </h2>
-          {/* Record actions, top right. The spec asks for Edit · Archive here;
-              Archive is absent because `contexts` has no `archived` column and
-              adding one is a migration. See the Step 5 findings. */}
+          {/* Record actions, top right: Edit · Archive. */}
           <div className="flex flex-wrap justify-end gap-2 shrink-0">
             <button
               onClick={() => setIsEditingContext((v) => !v)}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
               <Settings className="w-4 h-4" />
-              <span className="hidden sm:inline">
-                {isEditingContext ? "Close Editor" : "Edit Context"}
-              </span>
-              <span className="sm:hidden">{isEditingContext ? "Close" : "Edit"}</span>
+              {isEditingContext ? "Close" : "Edit"}
             </button>
             {/* Only while the context is empty. Contexts are taxonomy: nothing
                 cascades, so archiving one that still holds records would strand
@@ -163,7 +191,7 @@ export default function ContextDetailView({
                 }`}
               >
                 <Archive className="w-4 h-4" />
-                <span className="hidden sm:inline">Archive</span>
+                Archive
               </button>
             )}
           </div>
@@ -189,6 +217,13 @@ export default function ContextDetailView({
           className="mb-3"
         />
       )}
+      {(items.length > 0 || intents.length > 0) && (
+        <StatusFilterChips
+          counts={statusCountsHere}
+          selected={statusFilter.selected}
+          onToggle={statusFilter.toggle}
+        />
+      )}
 
       <div className="space-y-6">
         <div>
@@ -198,7 +233,7 @@ export default function ContextDetailView({
               className="flex items-center gap-2 text-base sm:text-lg font-medium text-foreground"
             >
               <ChevronDown className={`w-4 h-4 transition-transform ${itemsExpanded ? "" : "-rotate-90"}`} />
-              Items ({searching ? `${visibleItems.length} of ${items.length}` : items.length})
+              Items ({countLabel(visibleItems.length, items.length)})
             </button>
             <button
               onClick={() => onOpenAddItem()}
@@ -211,8 +246,9 @@ export default function ContextDetailView({
 
           {itemsExpanded && (
             <>
+              {/* Counts only items the status chips let through. */}
               <TagFilter
-                entities={items}
+                entities={filterByStatus(items, statusFilter.selected)}
                 activeTag={filterTag}
                 onFilter={onFilterTag}
                 collapsed={tagsCollapsed}
@@ -222,6 +258,8 @@ export default function ContextDetailView({
                 <p className="text-muted-foreground text-sm">No items in this context</p>
               ) : searching && visibleItems.length === 0 ? (
                 <NoMatches noun="items" query={search} />
+              ) : visibleItems.length === 0 ? (
+                <p className="text-muted-foreground text-sm">No items match the chips above</p>
               ) : (
                 <div className="space-y-2">
                   {visibleItems.map((item) => (
@@ -234,7 +272,9 @@ export default function ContextDetailView({
                       onViewDetail={onViewItemDetail}
                       allItems={allItems}
                       executions={executions.filter((ex) => ex.itemIds?.includes(item.id))}
-                      intents={intents}
+                      // Every intention, not this context's: a run's intention may
+                      // live elsewhere, and a badge that cannot find it reads "Execution".
+                      intents={allIntents || intents}
                       getIntentDisplay={getIntentDisplay}
                       onOpenExecution={onOpenExecution}
                     />
@@ -252,7 +292,7 @@ export default function ContextDetailView({
               className="flex items-center gap-2 text-base sm:text-lg font-medium text-foreground"
             >
               <ChevronDown className={`w-4 h-4 transition-transform ${intentionsExpanded ? "" : "-rotate-90"}`} />
-              Intentions ({searching ? `${visibleIntents.length} of ${intents.length}` : intents.length})
+              Intentions ({countLabel(visibleIntents.length, intents.length)})
             </button>
             <button
               onClick={() => onOpenAddIntention()}
@@ -271,6 +311,8 @@ export default function ContextDetailView({
                 </p>
               ) : searching && visibleIntents.length === 0 ? (
                 <NoMatches noun="intentions" query={search} />
+              ) : visibleIntents.length === 0 ? (
+                <p className="text-muted-foreground text-sm">No intentions match the chips above</p>
               ) : (
                 <div className="space-y-2">
                   {visibleIntents.map((intent) => (
@@ -337,7 +379,56 @@ export default function ContextDetailView({
             );
           })()}
         </div>
+
+        {/* Archived items and intentions — what this context has shipped.
+            Collapsed; newest change first. Restoring stays in the Recycle Bin. */}
+        <div>
+          <button
+            onClick={() => setArchivedExpanded((v) => !v)}
+            aria-expanded={archivedExpanded}
+            className="flex items-center gap-2 mb-3 text-base sm:text-lg font-medium text-foreground"
+          >
+            <ChevronDown className={`w-4 h-4 transition-transform ${archivedExpanded ? "" : "-rotate-90"}`} />
+            Archived ({archivedRows.length})
+          </button>
+          {archivedExpanded &&
+            (archivedRows.length === 0 ? (
+              <p className="text-muted-foreground text-sm">Nothing archived in this context</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {archivedRows.map((r) => (
+                  <li key={`${r.kind}-${r.id}`}>
+                    <button
+                      onClick={() =>
+                        r.kind === "item" ? onViewItemDetail?.(r.id) : onViewIntentionDetail?.(r.id)
+                      }
+                      className="w-full flex items-center gap-2 px-3 py-2 min-h-[44px] text-left bg-card border border-border rounded-lg hover:border-primary transition-colors"
+                    >
+                      <ObjectIcon
+                        type={r.kind === "item" ? "item" : "intention"}
+                        className="w-4 h-4 shrink-0 text-muted-foreground"
+                      />
+                      <span className="min-w-0 flex-1 truncate">{r.label}</span>
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {STATUS_LABELS[statusOf(r.row)]}
+                        {archivedDate(r.row) && ` · ${archivedDate(r.row)}`}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ))}
+        </div>
       </div>
     </div>
   );
+}
+
+function archivedDate(row) {
+  const raw = row.statusChangedAt || row.updatedAt;
+  if (!raw) return null;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime())
+    ? null
+    : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }

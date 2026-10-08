@@ -74,9 +74,11 @@ import EditCard from "../shared/EditCard";
 import InsertRowButton from "../shared/InsertRowButton";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
 import { computeBaseline } from "../utils/inboxSuggestions";
+import StatusPicker from "../shared/StatusPicker";
 import { splitCaptureName } from "../utils/captureName";
 import { isFirstStep } from "../utils/elementOffsets";
 import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
+import WhenButton from "../shared/WhenButton";
 
 /**
  * A YYYY-MM-DD date, written the way the design shows it ("Sat, Sep 26").
@@ -133,10 +135,11 @@ function caretOffsetFromClick(e) {
  * disabled control. `aria-pressed` carries the state for a screen reader, since
  * colour is the only other thing saying it.
  */
+// "secondary" is tan: teal is reserved for an execution in progress.
 function SectionToggle({ on, onToggle, tone, icon: Glyph, label }) {
-  const filled = tone === "primary" ? "bg-primary text-white" : "bg-success text-white";
-  const outlined = tone === "primary" ? "bg-card text-primary" : "bg-card text-success";
-  const edge = tone === "primary" ? "border-primary" : "border-success";
+  const filled = tone === "primary" ? "bg-primary text-white" : "bg-secondary text-foreground";
+  const outlined = tone === "primary" ? "bg-card text-primary" : "bg-card text-foreground";
+  const edge = tone === "primary" ? "border-primary" : "border-primary/40";
   return (
     <button
       type="button"
@@ -155,7 +158,7 @@ function SectionToggle({ on, onToggle, tone, icon: Glyph, label }) {
 /** A section heading inside the card: glyph plus name, in the section's colour. */
 function SectionHeading({ icon: Glyph, children, tone }) {
   const color =
-    tone === "primary" ? "text-primary" : tone === "success" ? "text-success" : "text-muted-foreground";
+    tone === "primary" ? "text-primary" : "text-foreground";
   return (
     <h3 className={`flex items-center gap-2 text-lg font-bold ${color}`}>
       <Glyph className="w-[18px] h-[18px] shrink-0" aria-hidden="true" />
@@ -239,6 +242,8 @@ export default function InboxDetailView({
   // out.
   const [contextId, setContextId] = useState(baseline.contextId);
   const [tags, setTags] = useState(baseline.tags);
+  // What the filed item and intention start as (088): someday or active.
+  const [status, setStatus] = useState(baseline.status);
 
   const [itemOn, setItemOn] = useState(baseline.itemOn);
   const [intentionOn, setIntentionOn] = useState(baseline.intentionOn);
@@ -297,6 +302,7 @@ export default function InboxDetailView({
     captureDirty ||
     contextId !== baseline.contextId ||
     !sameStrings(tags, baseline.tags) ||
+    status !== baseline.status ||
     itemOn !== baseline.itemOn ||
     intentionOn !== baseline.intentionOn ||
     itemName !== baseline.itemName ||
@@ -565,6 +571,7 @@ export default function InboxDetailView({
             contextId: contextId || null,
             elements,
             tags,
+            status,
           }
         : null,
       // "Attach this Item" is not on this page — see the header note.
@@ -595,6 +602,7 @@ export default function InboxDetailView({
             itemId: itemOn ? null : linkedItemId || null,
             createEvent: whenMode === "date" && !!eventDate,
             eventDate: whenMode === "date" ? eventDate || null : null,
+            status,
           }
         : null,
       // Collections are hidden on this page for now — README, Rules.
@@ -679,6 +687,16 @@ export default function InboxDetailView({
             </span>
             <TagPicker value={tags} onChange={setTags} pool={tagPool} />
           </div>
+
+          <div>
+            <span className={LABEL}>Status</span>
+            <StatusPicker
+              value={status}
+              onChange={setStatus}
+              options={["someday", "active"]}
+              label="Status for what this files as"
+            />
+          </div>
         </div>
 
         {/* The two toggles. Either, both, or neither. */}
@@ -693,7 +711,7 @@ export default function InboxDetailView({
           <SectionToggle
             on={intentionOn}
             onToggle={() => setIntentionOn((v) => !v)}
-            tone="success"
+            tone="secondary"
             icon={Navigation2}
             label="New Intention"
           />
@@ -889,7 +907,7 @@ export default function InboxDetailView({
           <>
             <Divider />
             <div className="space-y-4">
-              <SectionHeading icon={Navigation2} tone="success">
+              <SectionHeading icon={Navigation2} tone="secondary">
                 New Intention
               </SectionHeading>
 
@@ -1168,21 +1186,3 @@ export default function InboxDetailView({
   );
 }
 
-/** One of the three When choices. Sage when chosen, plain when not. */
-function WhenButton({ on, onClick, icon: Glyph, label }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={on}
-      onClick={onClick}
-      className={`inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-1.5 rounded-lg border text-sm transition-colors ${
-        on
-          ? "border-success bg-success-light text-foreground"
-          : "border-border bg-card text-muted-foreground hover:text-foreground"
-      }`}
-    >
-      <Glyph className="w-4 h-4 shrink-0" aria-hidden="true" />
-      {label}
-    </button>
-  );
-}

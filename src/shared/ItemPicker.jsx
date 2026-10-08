@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import SearchInput from "./SearchInput";
 import { matchesQuery } from "../utils/search";
+import ObjectIcon from "./ObjectIcon";
 
 // The shared "pick an item" search: every place you search for ONE item to
 // link, attach or target. (Add Items to Collection is deliberately not one of
@@ -178,7 +179,8 @@ export default function ItemPicker({
                       {item.name}
                     </div>
                     {contextName && (
-                      <div className="text-xs text-muted-foreground">
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <ObjectIcon type="context" className="w-3 h-3" />
                         {contextName}
                       </div>
                     )}

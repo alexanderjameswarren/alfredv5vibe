@@ -1,5 +1,7 @@
 import React, { useState } from "react";
-import { Archive, ArrowLeft, Play, Settings } from "lucide-react";
+import { Archive, ArrowLeft, CalendarPlus, CalendarX, Play, Settings } from "lucide-react";
+import OverflowMenu from "../shared/OverflowMenu";
+import { ACTION_BUTTON } from "../shared/actionButton";
 import { getTodayDate } from "../utils/eventDates";
 import { getRecurrenceConfig } from "../utils/recurrence";
 import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
@@ -10,7 +12,11 @@ import PendingReminder from "../inbox/PendingReminder";
 import OriginalCapture from "../inbox/OriginalCapture";
 import IntentionCard from "./IntentionCard";
 import ItemCard from "../items/ItemCard";
-import EventCard from "../schedule/EventCard";
+import ScheduledLine from "../shared/ScheduledLine";
+import PreviousExecutions from "../executions/PreviousExecutions";
+import StatusMenu from "../shared/StatusMenu";
+import StatusEventsSheet from "../shared/StatusEventsSheet";
+import { liveEventsFor, closedBlockTitle, recordActions, STATUS_LABELS } from "../utils/status";
 
 export default function IntentionDetailView({
   tagPool = [],
@@ -18,6 +24,7 @@ export default function IntentionDetailView({
   // The capture this intention was filed from, resolved by the caller from
   // `sourceInboxId`. Null for one created by hand. See OriginalCapture.
   capturedText,
+  intents,
   events,
   contexts,
   items,
@@ -38,17 +45,89 @@ export default function IntentionDetailView({
   onArchiveIntention,
   onSchedule,
   onStartNow,
+  onSetStatus,
   collections = [],
   onDirtyChange,
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  // The move waiting on the live-events sheet's answer — `{ status, form }`, where
+  // `form` is the edit form's save riding along — and why a move was refused.
+  const [pending, setPending] = useState(null);
+  const [statusBlocked, setStatusBlocked] = useState(null);
 
   if (!intention) return null;
 
-  // Filter events for this intention that aren't archived
-  const intentionEvents = events.filter(
-    (e) => e.intentId === intention.id && !e.archived,
+  const liveEvents = liveEventsFor(events, intention.id);
+  const closedTitle = closedBlockTitle(intention, "intention");
+  const actions = recordActions(intention, events, executions);
+
+  // The page picker and the form's Save both pass through here. Returns false
+  // when the move must wait (sheet) or is refused (running execution).
+  function gateStatus(status, form = null) {
+    setStatusBlocked(null);
+    if (status !== "background" && status !== "closed") return true;
+    if (hasActiveExecutions) {
+      setStatusBlocked(
+        `Cannot move to ${STATUS_LABELS[status]}: an execution is in progress. Finish or cancel it first.`,
+      );
+      return false;
+    }
+    if (liveEvents.length > 0) {
+      setPending({ status, form });
+      return false;
+    }
+    return true;
+  }
+
+  function chooseStatus(status) {
+    if (gateStatus(status)) onSetStatus(intention.id, status);
+  }
+
+  // Edit form Save: fields first, then status through its own patch.
+  async function commit({ status, form }, archiveEvents = false) {
+    if (form) await onUpdateIntention(form.id, form.fields, form.scheduledDate);
+    if (status) await onSetStatus(intention.id, status, { archiveEvents });
+    if (form) setIsEditing(false);
+  }
+
+  function saveForm(id, { status, ...fields }, scheduledDate) {
+    const form = { id, fields, scheduledDate };
+    if (!status || gateStatus(status, form)) return commit({ status, form });
+    // Held or refused: the form stays open, and still dirty.
+    if (onDirtyChange) onDirtyChange(true, "this intention");
+  }
+
+  function answerSheet(archiveEvents) {
+    const held = pending;
+    setPending(null);
+    commit(held, archiveEvents);
+  }
+
+  function cancelSheet() {
+    if (pending?.form && onDirtyChange) onDirtyChange(true, "this intention");
+    setPending(null);
+  }
+
+  const statusNotices = (
+    <>
+      {statusBlocked && (
+        <p role="alert" className="mt-2 text-sm text-destructive">
+          {statusBlocked}
+        </p>
+      )}
+      {pending && (
+        <StatusEventsSheet
+          status={pending.status}
+          event={liveEvents[0]}
+          onArchive={() => answerSheet(true)}
+          onKeep={() => answerSheet(false)}
+          onCancel={cancelSheet}
+        />
+      )}
+    </>
   );
+
+  const isRecurring = getRecurrenceConfig(intention).type !== "once";
 
   // `executions` is allLiveExecutions — active plus paused, which is exactly
   // the set IntentionCard's own guard queries the database for. Same rule,
@@ -81,17 +160,12 @@ export default function IntentionDetailView({
           contexts={contexts}
           items={items}
           collections={collections}
-          onUpdate={(id, updates, scheduledDate) => {
-            onUpdateIntention(id, updates, scheduledDate);
-            setIsEditing(false);
-          }}
-          onSchedule={(id, date) => {
-            // Don't need to schedule here, just close edit mode
-            setIsEditing(false);
-          }}
+          onUpdate={saveForm}
           getIntentDisplay={getIntentDisplay}
           showScheduling={true}
           isEditing={true}
+          editableStatus={Boolean(onSetStatus)}
+          formNotice={statusNotices}
           onCancel={() => setIsEditing(false)}
           onArchive={onArchiveIntention}
           // Required as of Step 8a: the card's archive guard is derived from
@@ -126,10 +200,13 @@ export default function IntentionDetailView({
           empty space sat beside it. Nothing here competes for horizontal room
           any more. Structurally identical to ItemDetailView's header. */}
       <div className="mb-4 sm:mb-6">
-        <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold">
-          <ObjectIcon type="intention" className="w-6 h-6 text-primary" align="first-line" />
-          <span className="min-w-0">{intention.text}</span>
-        </h2>
+        <div className="flex items-start justify-between gap-2">
+          <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold min-w-0">
+            <ObjectIcon type="intention" className="w-6 h-6 text-primary" align="first-line" />
+            <span className="min-w-0">{intention.text}</span>
+          </h2>
+          {onSetStatus && <StatusMenu row={intention} onChoose={chooseStatus} />}
+        </div>
 
         {/* Details — `intents.description`, migration 069. Step 17c.
             Below the name and above the metadata, because it is the intention's
@@ -150,79 +227,76 @@ export default function IntentionDetailView({
         <p className="text-sm text-muted-foreground mt-2">
           Recurrence: {getRecurrenceDisplayString(getRecurrenceConfig(intention), intention.endDate)}
         </p>
+        {/* The one live event, as part of the intention; its actions are in the row below. */}
+        <p className="text-sm mt-1">
+          <ScheduledLine actions={actions} />
+        </p>
 
         <PendingReminder intentId={intention.id} />
 
-        {/* Record actions, in the spec's order:
-            Do Today · Schedule Later · Start Now · Edit · Archive.
+        {statusNotices}
 
-            Left-aligned now that they have their own row — they line up with
-            the title above rather than floating off to the right of it.
-
-            Do Today and Start Now are gated on having no events, matching
-            IntentionCard: once something is scheduled, scheduling it again
-            from the same screen is not the action anyone wants. */}
+        {/* Record actions, matching item detail and the cards (recordActions):
+            Start Now / Continue, Schedule / Reschedule, Edit, ⋯ holding
+            Archive. Always present; the first two are disabled while closed.
+            Archive keeps the active-execution guard. */}
         <div className="flex flex-wrap gap-2 mt-3">
-          {/* The slot Step 5 left open. No form to save here, so these commit
-              the schedule directly. Opening downward — this bar is at the top
-              of the page. */}
-          {onSchedule && intentionEvents.length === 0 && (
-            <>
-              <SchedulePopover
-                label="Do Today"
-                initialDate={getTodayDate()}
-                onPick={(date) => onSchedule(intention.id, date)}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-              />
-              <SchedulePopover
-                label="Schedule Later"
-                onPick={(date) => onSchedule(intention.id, date)}
-                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-              />
-            </>
-          )}
-          {onStartNow && intentionEvents.length === 0 && (
+          {onStartNow && (
             <button
-              onClick={() => onStartNow(intention.id)}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              onClick={() => (actions.open ? onOpenExecution?.(actions.open) : onStartNow(intention.id))}
+              disabled={Boolean(closedTitle)}
+              title={closedTitle || undefined}
+              className={`${ACTION_BUTTON} bg-success hover:bg-success-hover text-white`}
             >
               <Play className="w-4 h-4" />
-              Start Now
+              {actions.primaryLabel}
             </button>
+          )}
+          {onSchedule && (
+            <span title={closedTitle || actions.moveBlocked || undefined}>
+              <SchedulePopover
+                label={actions.scheduleLabel}
+                icon={<CalendarPlus className="w-4 h-4" />}
+                initialDate={actions.liveDate || getTodayDate()}
+                onPick={(date) => onSchedule(intention.id, date)}
+                disabled={Boolean(closedTitle || actions.moveBlocked)}
+                className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
+              />
+            </span>
           )}
           <button
             onClick={() => setIsEditing(true)}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+            className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
           >
             <Settings className="w-4 h-4" />
-            <span className="hidden sm:inline">Edit Intention</span>
-            <span className="sm:hidden">Edit</span>
+            Edit
           </button>
-          {/* Archive was previously reachable only from inside the edit form.
-              The same active-execution guard IntentionCard applies, but read
-              from the `executions` prop already in hand rather than with a
-              fresh query — the card does its own round trip, which this page
-              does not need. */}
-          {onArchiveIntention && (
-            <button
-              onClick={() => onArchiveIntention(intention.id)}
-              disabled={hasActiveExecutions}
-              title={
-                hasActiveExecutions
-                  ? "Cannot archive: active execution in progress"
-                  : "Archive this intention and all related events"
-              }
-              className={`flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base ${
-                hasActiveExecutions
-                  ? "bg-secondary text-muted-foreground cursor-not-allowed"
-                  : "bg-destructive hover:bg-destructive-hover text-white"
-              }`}
-            >
-              <Archive className="w-4 h-4" />
-              <span className="hidden sm:inline">Archive</span>
-            </button>
-          )}
+          <OverflowMenu
+            actions={[
+              // Drops the live date. Recurring: the next one follows (updateEvent).
+              actions.live && onUpdateEvent && {
+                label: isRecurring ? "Skip this date" : "Unschedule",
+                icon: CalendarX,
+                onClick: () => onUpdateEvent(actions.live.id, { archived: true }),
+                disabled: Boolean(actions.open),
+                // Paused too: archiving the date would orphan the paused run.
+                title: actions.open ? "Finish or cancel the execution before dropping its date" : null,
+              },
+              onArchiveIntention && {
+                label: "Archive",
+                icon: Archive,
+                destructive: true,
+                onClick: () => onArchiveIntention(intention.id),
+                disabled: hasActiveExecutions,
+                title: hasActiveExecutions ? "Cannot archive: active execution in progress" : null,
+              },
+            ].filter(Boolean)}
+          />
         </div>
+        {/* Phones show no tooltips, so the reason is also spelled out here. */}
+        {(closedTitle || actions.moveBlocked) && (onStartNow || onSchedule) && (
+          <p className="mt-2 text-sm text-muted-foreground">{closedTitle || actions.moveBlocked}</p>
+        )}
       </div>
 
       {/* Linked Item Section */}
@@ -239,7 +313,9 @@ export default function IntentionDetailView({
                 onUpdate={onUpdateItem}
                 onViewDetail={onViewItemDetail}
                 executions={executions.filter((ex) => ex.itemIds?.includes(linkedItem.id))}
-                intents={[intention]}
+                // All of them: the item's run may belong to another of its intentions,
+                // and a badge that cannot find its intention reads "Execution".
+                intents={intents || [intention]}
                 getIntentDisplay={getIntentDisplay}
                 onOpenExecution={onOpenExecution}
               />
@@ -250,38 +326,7 @@ export default function IntentionDetailView({
         </div>
       )}
 
-      <div>
-        <h3 className="text-lg font-medium mb-3">
-          Scheduled Events ({intentionEvents.length})
-        </h3>
-        {intentionEvents.length === 0 ? (
-          <p className="text-muted-foreground text-sm">
-            No events scheduled for this intention
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {intentionEvents.map((event) => (
-              <EventCard
-                key={event.id}
-                event={event}
-                intent={intention}
-                contexts={contexts}
-                onUpdate={onUpdateEvent}
-                onActivate={onActivate}
-                getIntentDisplay={getIntentDisplay}
-                executions={executions}
-                onOpenExecution={onOpenExecution}
-                onCancelExecution={onCancelExecution}
-                items={items}
-                onViewItem={onViewItemDetail}
-                onViewContextDetail={onViewContextDetail}
-                // No onViewIntention: this page IS the intention, so the link
-                // would point at the screen you are already reading.
-              />
-            ))}
-          </div>
-        )}
-      </div>
+      <PreviousExecutions intentId={intention.id} />
 
       {/* Last on the page, and only when this intention was filed from a capture. */}
       <OriginalCapture capturedText={capturedText} />

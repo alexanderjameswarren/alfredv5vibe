@@ -1,15 +1,19 @@
 import React from "react";
 import { Plus } from "lucide-react";
 import TagFilter from "../shared/TagFilter";
+import StatusFilterChips from "../shared/StatusFilterChips";
 import ListToolbar, { NoMatches } from "../shared/ListToolbar";
 import { INTENTION_SORT_OPTIONS } from "../utils/listSortOptions";
 import { reminderBadge } from "../utils/remindersApi";
+import { filterByStatus } from "../utils/status";
 import IntentionCard from "./IntentionCard";
 
 // The Intentions list screen, moved out of Alfred.jsx unchanged. Everything it reads
 // comes in as props from Alfred.
 export default function IntentionsScreen({
-  intentionsWithoutActiveEvent,
+  liveIntentions,
+  intentionStatusCounts,
+  intentionsStatus,
   visibleIntentions,
   validEvents,
   allLiveExecutions,
@@ -50,8 +54,16 @@ export default function IntentionsScreen({
         </button>
       </div>
 
+      <StatusFilterChips
+        counts={intentionStatusCounts}
+        selected={intentionsStatus.selected}
+        onToggle={intentionsStatus.toggle}
+      />
+
+      {/* Counts only the rows the status chips let through, so a tag with
+          none of them is gone rather than counting a list you cannot see. */}
       <TagFilter
-        entities={intentionsWithoutActiveEvent}
+        entities={filterByStatus(liveIntentions, intentionsStatus.selected)}
         activeTag={filterTag}
         onFilter={setFilterTag}
         collapsed={tagsCollapsedFor("intentions")}
@@ -61,7 +73,7 @@ export default function IntentionsScreen({
       {/* Step 12.8. This page was missed by Step 9b, so until now it had no
           sort control AND no ordering — a bare `.filter()` over a query with
           no ORDER BY, which is arbitrary rather than merely undocumented. */}
-      {intentionsWithoutActiveEvent.length > 0 && (
+      {liveIntentions.length > 0 && (
         <ListToolbar
           query={searchFor("intentions")}
           onQueryChange={setSearchFor("intentions")}
@@ -73,15 +85,16 @@ export default function IntentionsScreen({
         />
       )}
 
-      {intentionsWithoutActiveEvent.length === 0 ? (
+      {liveIntentions.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
-          <p>No available intentions.</p>
-          <p className="text-sm mt-2">
-            All intentions are currently scheduled.
-          </p>
+          <p>No intentions yet.</p>
         </div>
       ) : searchFor("intentions").trim() && visibleIntentions.length === 0 ? (
         <NoMatches noun="intentions" query={searchFor("intentions")} />
+      ) : visibleIntentions.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground">
+          <p>Nothing matches the chips above.</p>
+        </div>
       ) : (
         <div className="space-y-3">
           {visibleIntentions.map((intent) => (

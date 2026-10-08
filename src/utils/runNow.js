@@ -15,7 +15,8 @@ function liveEventsFor(intentId, events, excludeEventId) {
  */
 export function runNowTargetForItem(itemId, intents, events) {
   const candidates = intents
-    .filter((i) => !i.archived && i.itemId === itemId)
+    // Closed is over for good (nothing pulls a row out of it), so never a target.
+    .filter((i) => !i.archived && i.status !== "closed" && i.itemId === itemId)
     .map((intent) => ({ intent, event: liveEventsFor(intent.id, events)[0] || null }));
   if (candidates.length === 0) return null;
 
@@ -29,6 +30,19 @@ export function runNowTargetForItem(itemId, intents, events) {
   return candidates.sort((a, b) =>
     String(b.intent.createdAt || "").localeCompare(String(a.intent.createdAt || "")),
   )[0];
+}
+
+/**
+ * Which of the item's intentions its buttons act on: one with an OPEN (active or
+ * paused) execution first, so the item reads Continue while any run is going;
+ * otherwise runNowTargetForItem's pick. Same shape, `{ intent, event }`.
+ */
+export function itemActionTarget(itemId, intents, events, openExecutions) {
+  const running = openExecutions
+    .map((x) => intents.find((i) => i.id === x.intentId && i.itemId === itemId && !i.archived))
+    .find(Boolean);
+  if (running) return { intent: running, event: liveEventsFor(running.id, events)[0] || null };
+  return runNowTargetForItem(itemId, intents, events);
 }
 
 /** Is the event dated today or earlier, so Run Now should start it rather than add one? */

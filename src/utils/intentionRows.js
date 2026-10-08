@@ -93,6 +93,8 @@ export function intentionRowFromTriage({
     endDate: data.endDate || null,
     tags: data.tags || [],
     sourceInboxId,
+    // Chosen at triage (088). Sent on INSERT only; storage.patch changes it later.
+    status: data.status === "active" ? "active" : "someday",
   };
 }
 

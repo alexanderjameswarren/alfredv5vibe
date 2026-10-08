@@ -75,7 +75,8 @@ export default function CollectionCard({
               {memberCount} {memberCount === 1 ? "item" : "items"}
             </span>
             {contextName && (
-              <span className="text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
+              <span className="inline-flex items-center gap-1 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
+                <ObjectIcon type="context" className="w-3.5 h-3.5" />
                 {contextName}
               </span>
             )}

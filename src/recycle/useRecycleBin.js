@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../supabaseClient";
 import { storage } from "../utils/storage";
+import { formatEventDate } from "../utils/eventDates";
 
 // The Recycle Bin's state, loaders and writers, moved out of Alfred.jsx unchanged.
 // `refreshData` and `contextArchiveBlockers` still belong to Alfred and come in as arguments.
@@ -129,7 +130,32 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
     }
   }
 
+  // Why restoring this row would break "one live event, at most one open
+  // execution, per intention" — or null when it would not.
+  async function restoreBlocker(tab, id) {
+    if (tab !== "events" && tab !== "executions") return null;
+    const { data: row } = await supabase.from(tab).select("intent_id").eq("id", id).maybeSingle();
+    if (!row?.intent_id) return null;
+    if (tab === "events") {
+      const { data: live } = await supabase
+        .from("events").select("id, time")
+        .eq("intent_id", row.intent_id).not("archived", "is", true).neq("id", id).limit(1);
+      return live?.length
+        ? `Its intention already has a live event (${formatEventDate(String(live[0].time).slice(0, 10))}). Reschedule or archive that one first.`
+        : null;
+    }
+    const { data: open } = await supabase
+      .from("executions").select("id")
+      .eq("intent_id", row.intent_id).in("status", ["active", "paused"]).neq("id", id).limit(1);
+    return open?.length ? "Its intention already has an open execution. Finish or cancel that one first." : null;
+  }
+
   async function recycleRestore(tab, id) {
+    const blocker = await restoreBlocker(tab, id);
+    if (blocker) {
+      alert("Not restored. " + blocker);
+      return;
+    }
     setRecycleLoading(true);
     try {
       let table, updates;
@@ -297,11 +323,27 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
       }
 
       const ids = Array.from(recycleSelected);
-      const { error } = await supabase.from(table).update(updates).in("id", ids);
-      if (error) throw error;
+      let restored = new Set(ids);
+      if (recycleTab === "events" || recycleTab === "executions") {
+        // One at a time, so a second row for the same intention is refused by
+        // the first one's restore rather than failing the whole batch.
+        restored = new Set();
+        const refused = [];
+        for (const id of ids) {
+          const blocker = await restoreBlocker(recycleTab, id);
+          if (blocker) { refused.push(blocker); continue; }
+          const { error } = await supabase.from(table).update(updates).eq("id", id);
+          if (error) throw error;
+          restored.add(id);
+        }
+        if (refused.length) alert(`${refused.length} not restored. ${refused[0]}`);
+      } else {
+        const { error } = await supabase.from(table).update(updates).in("id", ids);
+        if (error) throw error;
+      }
 
-      setRecycleData(prev => prev.filter(r => !recycleSelected.has(r.id)));
-      setRecycleSelected(new Set());
+      setRecycleData(prev => prev.filter(r => !restored.has(r.id)));
+      setRecycleSelected(new Set([...recycleSelected].filter((id) => !restored.has(id))));
 
       // See recycleRestore for why contexts is included and collections is
       // required.

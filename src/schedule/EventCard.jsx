@@ -1,8 +1,9 @@
 import React, { useState } from "react";
-import { Archive, Pause, Play } from "lucide-react";
+import { Archive, Play } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import ObjectIcon from "../shared/ObjectIcon";
 import { formatEventDate } from "../utils/eventDates";
+import { closedBlockTitle, RUN_ACTIVE_MOVE_REASON } from "../utils/status";
 import EventMetaLink from "./EventMetaLink";
 
 export default function EventCard({
@@ -37,7 +38,8 @@ export default function EventCard({
   const [eventName, setEventName] = useState(event.text || intent?.text || "");
 
   function handleSave() {
-    onUpdate(event.id, { time: scheduledDate, text: eventName });
+    // The date stays put while its run is active; the name may still change.
+    onUpdate(event.id, runIsActive ? { text: eventName } : { time: scheduledDate, text: eventName });
     setIsEditing(false);
   }
 
@@ -76,6 +78,12 @@ export default function EventCard({
   // write and guards against a stale client, which is a different job from
   // deciding whether to grey a button out.
   const hasActiveExecution = Boolean(execution);
+  const runIsActive = execution?.status === "active";
+  // A kept event of a closed intention: Start would run something status says is over.
+  const closedTitle = intent ? closedBlockTitle(intent, "intention") : null;
+  // The edit form's Start Now: one open run per intention, nothing on a closed one.
+  const openRun = executions.find((ex) => ex.intentId === event.intentId);
+  const startBlocked = closedTitle || (openRun ? "This intention already has an open execution. Continue it instead." : null);
 
   // The title, hoisted out of the JSX because the two links below compare
   // against it to decide whether to spell their own name out.
@@ -202,8 +210,11 @@ export default function EventCard({
               type="date"
               value={scheduledDate}
               onChange={(e) => setScheduledDate(e.target.value)}
-              className="w-full px-3 py-2 min-h-[44px] border border-border rounded"
+              disabled={runIsActive}
+              title={runIsActive ? RUN_ACTIVE_MOVE_REASON : undefined}
+              className="w-full px-3 py-2 min-h-[44px] border border-border rounded disabled:opacity-50"
             />
+            {runIsActive && <p className="mt-1 text-xs text-muted-foreground">{RUN_ACTIVE_MOVE_REASON}</p>}
           </div>
 
           {/* The same chips the display row carries. Opening the form used to
@@ -235,6 +246,20 @@ export default function EventCard({
               Cancel, and calling it Close made it read like a fourth kind of
               thing next to three cards that all say Cancel. */}
           <div className="flex flex-wrap gap-2">
+            {/* Teal Start Now, leftmost, as on the detail pages. Runs this event;
+                a run already open on the intention, or a closed intention, says why not. */}
+            <button
+              onClick={() => {
+                setIsEditing(false);
+                onActivate(event.id);
+              }}
+              disabled={Boolean(startBlocked)}
+              title={startBlocked || undefined}
+              className="flex items-center gap-2 px-4 py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Play className="w-4 h-4" />
+              Start Now
+            </button>
             <button
               onClick={handleSave}
               className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
@@ -316,6 +341,10 @@ export default function EventCard({
           <p className="text-sm text-muted-foreground">
             {formatEventDate(event.time)} • {execution ? (execution.status === "active" ? "In progress" : "Paused") : "Not started"}
           </p>
+          {/* Phones show no tooltips; desktop has Start's title instead. */}
+          {closedTitle && !execution && (
+            <p className="sm:hidden text-xs text-muted-foreground">{closedTitle}</p>
+          )}
           {/* Suppressed entirely when nested. The IntentionCard this sits
               inside renders the same context badge two lines above, and its
               own row IS the intention — so every chip here would be a repeat
@@ -350,23 +379,12 @@ export default function EventCard({
               e.stopPropagation();
               if (onOpenExecution) onOpenExecution(execution);
             }}
-            className={`flex items-center justify-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 shrink-0 text-sm sm:text-base ${
-              execution.status === "active"
-                ? "bg-primary hover:bg-primary-hover text-white"
-                : "bg-warning hover:bg-warning-hover text-white"
-            }`}
+            // Teal is the primary action colour app-wide. An open run reads
+            // Continue whether active or paused; the line above says which.
+            className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 shrink-0 text-sm sm:text-base bg-success hover:bg-success-hover text-white"
           >
-            {execution.status === "active" ? (
-              <>
-                <Play className="w-3 h-3" />
-                Continue
-              </>
-            ) : (
-              <>
-                <Pause className="w-3 h-3" />
-                Paused
-              </>
-            )}
+            <Play className="w-3 h-3" />
+            Continue
           </button>
         ) : (
           <button
@@ -374,7 +392,9 @@ export default function EventCard({
               e.stopPropagation();
               onActivate(event.id);
             }}
-            className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 shrink-0 text-sm sm:text-base"
+            disabled={Boolean(closedTitle)}
+            title={closedTitle || undefined}
+            className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 shrink-0 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Play className="w-3 h-3" />
             Start
