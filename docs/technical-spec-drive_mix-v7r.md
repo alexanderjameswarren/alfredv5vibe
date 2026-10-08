@@ -138,19 +138,32 @@ This is how the artist cap and quotas get tuned with real numbers before going l
 - Carry-over never exceeds the count, so a 170-song day followed by a 50-song day carries at most 50.
 - The cooldown is a preference. A fourth pass takes cooling artists, in recency order and under the cap, only when the list would otherwise be short (`cooling = true`). The tool reports these as `cooling_used`, and the simulator as `cooling_fills`, total and per day.
 
-### Performance (measured 2026-10-08)
+### Performance (measured 2026-10-08, as `authenticated`)
+
+🛑 **Measure as `authenticated`, never as postgres.** The SQL editor runs as postgres, which bypasses RLS, so its timings do not show the real path. Step 7's editor numbers (pick 451 ms) hid a pick that took about 10 s as `authenticated` and timed out through MCP. Time it inside a transaction:
+
+```
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"<uid>","role":"authenticated"}';
+set local statement_timeout = '120s';
+-- the query to time
+```
 
 The pool had 1,768 songs, against 6,700 dj_tracks and 18,491 dj_plays.
 
-| Operation | Time |
-|---|---|
-| `drive_mix_pick(today, 50)` | 451 ms |
-| `drive_mix_simulate`, 60 days at 50 | 2,330 ms (about 0.8 ms per song-day) |
-| Per-song correlated recency | 28 ms |
-| Set-based recency | 81 ms |
+| Operation, as `authenticated` | 098 (correlated recency) | 099 (set-based recency) |
+|---|---|---|
+| `drive_mix_pick(today, 50)` | 10,095 ms | 461 ms |
+| `drive_mix_pick(today, 170)` | 10,118 ms | 42 ms |
+| `drive_mix_simulate`, 30 days at 50 | 5,138 ms | 1,150 ms (about 0.8 ms per song-day) |
 
-- The per-song correlated recency is faster than a set-based rewrite, so it stays. No index was needed: `dj_plays(track_id)`, `dj_tracks(canonical_track_id)` and `dj_tracks(user_id, video_id)` cover it.
-- **The binding limit is `statement_timeout = 8s` on the `authenticated` role,** which every MCP call runs as. So `get_drive_mix_simulation` refuses any request where days × count > 6,000 song-days before it calls the database: 60 days at 100 songs is allowed, as is 30 days at 200, while 120 × 200 is refused.
+- **Why 098 was slow:** recency was a correlated subquery per pool song. Its join `t.id = g OR t.canonical_track_id = g` cannot use an index, so it seq-scanned all of `dj_tracks` once per song: 1,500 loops × 6,700 rows. RLS made that worse.
+- **What 099 changed:** recency is one aggregate per call, `dj_plays` × `dj_tracks` grouped by `coalesce(canonical_track_id, id)`, with every table filtered by `user_id = auth.uid()` (read once into a variable). That one result is reused for last-heard order, carry-over and the cooldown.
+- **Results are unchanged:** fingerprints of pick 50, pick 170 and a 30-day simulation were identical before and after.
+- **The registered owner policies** are `user_id = auth.uid()`, not wrapped in `(select auth.uid())`. Here that showed up only as a one-time filter, a minor cost. Changing it would be a `register_table` (platform) decision and was not made.
+- **With no signed-in user,** both functions refuse instead of reading every user's rows.
+- **The binding limit is `statement_timeout = 8s` on the `authenticated` role,** which every MCP call runs as. At about 0.8 ms per song-day, `get_drive_mix_simulation` refuses any request where days × count > 6,000 song-days before it calls the database. 60 days at 100 songs is allowed, as is 30 days at 200; 120 × 200 is refused.
 
 ### Step 7 simulation results (seeded pool, 60 days, count 50)
 
