@@ -13,7 +13,7 @@
 // mocked to decide what each chord scores.
 
 import React from "react";
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { MemoryRouter } from "react-router-dom";
 
@@ -342,6 +342,39 @@ test("Practice closes the snippet tray, and it stays closed after Stop", async (
   await screen.findByRole("button", { name: /^Play$/ });
   expect(screen.queryByLabelText("Snippet tray")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Snippets" })).toHaveAttribute("aria-pressed", "false");
+});
+
+test("More opens the drawer in section order; Play closes it and it stays closed", async () => {
+  await open();
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  const drawer = screen.getByRole("dialog", { name: "More" });
+  const sections = within(drawer).getAllByRole("region").map((r) => r.getAttribute("aria-label"));
+  // No audio on this song: no Audio section, and upload sits in Tools.
+  expect(sections).toEqual(["Sound", "Tools", "Stats"]);
+  const tools = within(drawer).getByRole("region", { name: "Tools" });
+  for (const name of [/Tuning/, /Fingering mode/, /Export/, /Refresh/, /Audio/]) {
+    expect(within(tools).getByRole("button", { name })).toBeInTheDocument();
+  }
+  expect(within(tools).getByText("Loop song")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Close" })).toHaveAttribute("aria-pressed", "true");
+  // Nothing of it is left above the score.
+  expect(screen.queryAllByRole("button", { name: /Fingering mode/ })).toHaveLength(1);
+
+  fireEvent.click(screen.getByRole("button", { name: /^Play$/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Stop$/ }));
+  await screen.findByRole("button", { name: /^Play$/ });
+  expect(screen.queryByRole("dialog", { name: "More" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "More" })).toHaveAttribute("aria-pressed", "false");
+});
+
+test("Fingering mode, turned on in the drawer, docks its bar in the right column", async () => {
+  await open();
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  fireEvent.click(screen.getByRole("button", { name: "Fingering mode" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(screen.queryByRole("dialog", { name: "More" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /Undo/ })).toBeInTheDocument();
 });
 
 test("Play closes the snippet tray too", async () => {

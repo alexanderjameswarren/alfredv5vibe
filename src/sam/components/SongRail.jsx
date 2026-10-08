@@ -82,7 +82,12 @@ export default function SongRail({
         onClick={onToggleMore ?? undefined}
         disabled={!onToggleMore}
         aria-expanded={moreOpen}
-        className={`${TOGGLE} border-border text-muted-foreground hover:text-dark disabled:opacity-40`}
+        aria-pressed={moreOpen}
+        className={`${TOGGLE} disabled:opacity-40 ${
+          moreOpen
+            ? "border-primary bg-primary-light text-primary"
+            : "border-border text-muted-foreground hover:text-dark"
+        }`}
       >
         {moreOpen ? <X className="w-4 h-4" /> : <MoreHorizontal className="w-4 h-4" />}
         {moreOpen ? "Close" : "More"}

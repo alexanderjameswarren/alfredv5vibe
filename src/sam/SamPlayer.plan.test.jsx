@@ -345,18 +345,22 @@ test("a song outside the plan shows nothing new", async () => {
   expect(screen.queryByText(/^Song goal:/)).not.toBeInTheDocument();
 });
 
-test("song note under the plan line, and alone when the loaded range has no item", async () => {
+test("the song goal is in the More drawer's Stats, not under the plan line", async () => {
   mockDb.tables.sam_practice_plan_songs[0].song_note = "Keep it steady.";
   const { unmount } = renderSong();
-  expect(await screen.findByRole("button", { name: "Song goal: Keep it steady." })).toBeInTheDocument();
-  expect(screen.getByText(/^Plan · Whole song · 55 BPM/)).toBeInTheDocument();
+  expect(await screen.findByText(/^Plan · Whole song · 55 BPM/)).toBeInTheDocument();
+  expect(screen.queryByText("Song goal: Keep it steady.")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  const stats = screen.getByRole("region", { name: "Stats" });
+  expect(within(stats).getByText("Song goal: Keep it steady.")).toBeInTheDocument();
   unmount();
 
   seed();
   mockDb.tables.sam_practice_plan_songs[0].song_note = "Keep it steady.";
   mockDb.tables.sam_practice_plan_items = mockDb.tables.sam_practice_plan_items.filter((i) => i.snippet_id);
   renderSong();
-  expect(await screen.findByRole("button", { name: "Song goal: Keep it steady." })).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: "More" }));
+  expect(await screen.findByText("Song goal: Keep it steady.")).toBeInTheDocument();
   expect(screen.queryByText(/^Plan ·/)).not.toBeInTheDocument();
 });
 

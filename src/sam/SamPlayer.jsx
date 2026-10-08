@@ -8,6 +8,11 @@ import SongLoader from "./components/SongLoader";
 import BackButton from "./components/BackButton";
 import SettingsBar from "./components/SettingsBar";
 import SongRail from "./components/SongRail";
+import MoreDrawer, { DrawerSection } from "./components/MoreDrawer";
+import AudioToolbar from "./components/AudioToolbar";
+import {
+  SpeedField, AudioSyncBpm, SoundControls, TuningControls, LoopControl,
+} from "./components/NumericSettings";
 import StatsBar from "./components/StatsBar";
 import SnippetPanel from "./components/SnippetPanel";
 import AudioControls from "./components/AudioControls";
@@ -209,6 +214,10 @@ export default function SamPlayer({ onBack }) {
   // the loaded range is `snippet` and survives closing it.
   const [snippetsOpen, setSnippetsOpen] = useState(false);
   const toggleSnippets = useCallback(() => setSnippetsOpen((o) => !o), []);
+  // The More drawer (rail's More / Close).
+  const [moreOpen, setMoreOpen] = useState(false);
+  const toggleMore = useCallback(() => setMoreOpen((o) => !o), []);
+  const closeMore = useCallback(() => setMoreOpen(false), []);
 
   // The tempo Practice actually scrolls at.
   //
@@ -375,7 +384,12 @@ export default function SamPlayer({ onBack }) {
   // cannot be read — in which case a range with no ladder of its own simply has
   // no warm-up, rather than being given a second, drifting copy of the default.
   useEffect(() => {
-    if (playbackState === "playing") setShowBpmEdit(false);
+    if (playbackState === "playing") {
+      setShowBpmEdit(false);
+      // Any run start (Play, Practice, Warm up, Resume) closes the drawer, so
+      // it is never waiting behind the score after Stop.
+      setMoreOpen(false);
+    }
   }, [playbackState]);
   useEffect(() => setShowBpmEdit(false), [songDbId]);
 
@@ -1848,14 +1862,22 @@ export default function SamPlayer({ onBack }) {
     URL.revokeObjectURL(url);
   }
 
-  // Controls that belong to the score: Fingering mode, Diff, Show Imported.
-  //
-  // They sat at the far end of the old Snippet toggle row; that row became the
-  // rail's Snippets toggle (song rail, step 3), so they have a right-aligned row
-  // above the score until the More drawer (step 4) takes them.
-  //
-  // Still gated on `stopped`, exactly as before, so nothing about WHEN they are
-  // available has changed across any of the moves.
+  // The drawer's utility actions are one AudioToolbar component placed twice
+  // (Audio and Tools sections), each showing its own `keys`.
+  const hasAudioFile = !!audioFilePath;
+  const toolbarProps = {
+    song,
+    songDbId,
+    skipTiedNotes,
+    onSongUpdate: setSong,
+    onAudioUploaded: handleAudioUploaded,
+    onLyricsChanged: setLyricPlacements,
+    onExport: handleExport,
+  };
+
+  // Controls that belong to the score: Fingering mode, Diff, Show Imported —
+  // in the More drawer's Tools (song rail, step 4). Still gated on `stopped`,
+  // exactly as before, so nothing about WHEN they are available has changed.
   const scoreToolButtons = playbackState === "stopped" ? (
     <>
       {hasImported && (
@@ -1956,12 +1978,13 @@ export default function SamPlayer({ onBack }) {
               <SongRail
                 playbackState={playbackState}
                 songDbId={songDbId}
-                // Starting a run closes the tray, so the score is clean after Stop.
-                onPlay={() => { setSnippetsOpen(false); handlePlay(); }}
-                onPractice={() => { setSnippetsOpen(false); handlePractice(); }}
+                // Starting a run closes the tray and the drawer, so the score is
+                // clean after Stop.
+                onPlay={() => { setSnippetsOpen(false); setMoreOpen(false); handlePlay(); }}
+                onPractice={() => { setSnippetsOpen(false); setMoreOpen(false); handlePractice(); }}
                 onPause={handlePause}
                 onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
-                onWarmUp={() => { setSnippetsOpen(false); handleWarmUp(); }}
+                onWarmUp={() => { setSnippetsOpen(false); setMoreOpen(false); handleWarmUp(); }}
                 warmUpVisible={warmupAvailable}
                 warmUpPrimary={!!planItem?.goal_is_warmup}
                 warmUpDisabledReason={warmupDisabledReason}
@@ -1975,6 +1998,8 @@ export default function SamPlayer({ onBack }) {
                 onHideBpmEdit={hideBpmEdit}
                 snippetsOpen={snippetsOpen}
                 onToggleSnippets={toggleSnippets}
+                moreOpen={moreOpen}
+                onToggleMore={toggleMore}
                 onBack={handleBackToLibrary}
               />
             )}
@@ -2017,8 +2042,6 @@ export default function SamPlayer({ onBack }) {
                   measureWidth={measureWidth}
                   playbackSpeed={playbackSpeed}
                   playbackState={playbackState} songDbId={songDbId}
-                  showBpmEdit={showBpmEdit} setShowBpmEdit={setShowBpmEdit}
-                  onExport={handleExport}
                   midiConnected={midiConnected} midiDevice={midiDevice}
                   pausedMeasure={pausedMeasure}
                   onSongUpdate={setSong}
@@ -2026,25 +2049,14 @@ export default function SamPlayer({ onBack }) {
                   // plan item — which is what the Edit Song dialog is editing
                   // against.
                   songWarmup={resolveLadder({ song, defaultLadder })}
-                  onAudioUploaded={handleAudioUploaded}
-                  onLyricsChanged={setLyricPlacements}
-                  skipTiedNotes={skipTiedNotes}
                   hasImportedFingerings={hasImported}
-                  songRepeat={songRepeat}
-                  onSongRepeatChange={setSongRepeat}
-                  songRestMeasures={songRestMeasures}
-                  onSongRestMeasuresChange={setSongRestMeasures}
-                  metronome={metronome}
-                  setMetronome={setMetronome}
-                  scorePlayback={scorePlayback}
-                  setScorePlayback={setScorePlayback}
                   todayMinutes={todayMinutes}
                 >
-                  {/* The plan bar, directly under the title row. */}
+                  {/* The plan bar, directly under the title row. The song goal
+                      is in the More drawer's Stats. */}
                   <PlanLine
                     item={planItem}
                     state={planItemState}
-                    songNote={planSongNote}
                     heardTempo={heardTempo(bpm.value, playbackSpeed.value)}
                     onSetTempo={applyPlanTempo}
                     nextItem={nextPlanItem}
@@ -2070,42 +2082,100 @@ export default function SamPlayer({ onBack }) {
                   />
                 </SettingsBar>
 
-                <AudioControls audioElement={audioElement} playbackState={playbackState} />
+                {/* Everything else: rail's More. Never on the playing screen —
+                    this whole branch is stopped / paused only. */}
+                <MoreDrawer open={moreOpen} onClose={closeMore}>
+                  {hasAudioFile && (
+                    <DrawerSection title="Audio">
+                      <AudioControls audioElement={audioElement} playbackState={playbackState} />
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <SpeedField playbackSpeed={playbackSpeed} onHideBpmEdit={hideBpmEdit} />
+                        <AudioSyncBpm
+                          bpm={bpm}
+                          playbackSpeed={playbackSpeed}
+                          showBpmEdit={showBpmEdit}
+                          setShowBpmEdit={setShowBpmEdit}
+                        />
+                      </div>
+                      {audioElement && (
+                        <div className="flex items-center gap-4">
+                          <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer min-h-[44px]">
+                            <input
+                              type="checkbox"
+                              checked={audioMuted}
+                              onChange={(e) => setAudioMuted(e.target.checked)}
+                              className="w-4 h-4 accent-primary"
+                            />
+                            Mute audio
+                          </label>
+                          <AudioMsCounter audioElement={audioElement} />
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <AudioToolbar {...toolbarProps} keys={["automatch", "audio"]} />
+                      </div>
+                    </DrawerSection>
+                  )}
 
-                {audioElement && (
-                  <div className="flex items-center gap-4 px-3 mb-3">
-                    <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={audioMuted}
-                        onChange={(e) => setAudioMuted(e.target.checked)}
-                        className="w-4 h-4 accent-primary"
+                  <DrawerSection title="Sound">
+                    <SoundControls
+                      metronome={metronome}
+                      setMetronome={setMetronome}
+                      scorePlayback={scorePlayback}
+                      setScorePlayback={setScorePlayback}
+                    />
+                  </DrawerSection>
+
+                  <DrawerSection title="Tools">
+                    <TuningControls
+                      song={song}
+                      songDbId={songDbId}
+                      bpm={bpm}
+                      timingWindowMs={timingWindowMs}
+                      chordMs={chordMs}
+                      measureWidth={measureWidth}
+                      playbackSpeed={playbackSpeed}
+                      onSongUpdate={setSong}
+                    />
+                    <LoopControl
+                      snippet={snippet}
+                      songRepeat={songRepeat}
+                      onSongRepeatChange={setSongRepeat}
+                      songRestMeasures={songRestMeasures}
+                      onSongRestMeasuresChange={setSongRestMeasures}
+                    />
+                    {scoreToolButtons && (
+                      <div className="flex items-center gap-2 flex-wrap">{scoreToolButtons}</div>
+                    )}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {/* Without audio, upload (and lyrics Auto-Match) sit here. */}
+                      <AudioToolbar
+                        {...toolbarProps}
+                        keys={hasAudioFile ? ["export", "refresh"] : ["export", "refresh", "audio", "automatch"]}
                       />
-                      Mute audio
-                    </label>
-                    <AudioMsCounter audioElement={audioElement} />
-                  </div>
-                )}
+                    </div>
+                  </DrawerSection>
 
-                <StatsBar
-                  lastNote={lastNote}
-                  loopCount={loopCount}
-                  hitCount={hitCount}
-                  missCount={missCount}
-                  sessionStats={sessionStats}
-                  lastResult={lastResult}
-                  playbackState={playbackState}
-                  songTodaySeconds={perSongTodaySeconds}
-                  songTotalSeconds={perSongTotalSeconds}
-                  songPassesToday={songPassesToday}
-                  songPassesTotal={songPassesTotal}
-                  accuracyGoal={accuracyGoal}
-                />
-
-                {/* Score tools: their own row until the More drawer (step 4). */}
-                {scoreToolButtons && (
-                  <div className="flex items-center justify-end gap-2 mb-3">{scoreToolButtons}</div>
-                )}
+                  <DrawerSection title="Stats">
+                    {planSongNote && (
+                      <p className="text-sm text-foreground whitespace-pre-wrap">Song goal: {planSongNote}</p>
+                    )}
+                    <StatsBar
+                      lastNote={lastNote}
+                      loopCount={loopCount}
+                      hitCount={hitCount}
+                      missCount={missCount}
+                      sessionStats={sessionStats}
+                      lastResult={lastResult}
+                      playbackState={playbackState}
+                      songTodaySeconds={perSongTodaySeconds}
+                      songTotalSeconds={perSongTotalSeconds}
+                      songPassesToday={songPassesToday}
+                      songPassesTotal={songPassesTotal}
+                      accuracyGoal={accuracyGoal}
+                    />
+                  </DrawerSection>
+                </MoreDrawer>
               </>
             )}
 

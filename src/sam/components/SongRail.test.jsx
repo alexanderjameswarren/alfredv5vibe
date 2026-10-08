@@ -64,9 +64,17 @@ test("audio song: the tempo slot is Speed %", () => {
   expect(screen.queryByText(/^BPM:/)).not.toBeInTheDocument();
 });
 
-test("More is disabled until wired", () => {
-  mount();
-  expect(button(/More/)).toBeDisabled();
+test("More reads Close, pressed, while the drawer is open", () => {
+  const onToggleMore = jest.fn();
+  mount({ onToggleMore, moreOpen: false });
+  fireEvent.click(button("More"));
+  expect(onToggleMore).toHaveBeenCalled();
+});
+
+test("open drawer: the button is Close and pressed", () => {
+  mount({ onToggleMore: jest.fn(), moreOpen: true });
+  expect(button("Close")).toHaveAttribute("aria-pressed", "true");
+  expect(button("More")).not.toBeInTheDocument();
 });
 
 test("Snippets is a pressed-state toggle", () => {

@@ -36,7 +36,7 @@ scrolls); fit-to-height applies to the stopped, tray-closed score only.
   *Check:* typing 21→24 over 18–20 clips after a pause; Start 30 / End 24 shows
   "Start must be at or before End" and keeps the last range; past the last
   measure shows "Song has N measures".
-- [ ] **4. More drawer.** Slides from the left beside the rail over a dimmed
+- [x] **4. More drawer.** Slides from the left beside the rail over a dimmed
   score; dim area or Close shuts it. Audio, Metronome, Score playback, Tuning,
   Loop (Repeat + rest), Fingering mode, Diff, Show Imported, Export, Refresh,
   Stats (incl. song goal).
@@ -66,3 +66,11 @@ scrolls); fit-to-height applies to the stopped, tray-closed score only.
   the tray's Whole song (FullSongButton removed); left load icon per saved row;
   Enter blurs Start/End to commit. Fingering mode / Diff / Show Imported, which
   rode on the old Snippet row, sit on their own row above the score until step 4.
+- Step 4 done 2026-10-08. MoreDrawer.jsx (fixed, clipped to the area right of
+  the rail, 410px, dim + Escape + Close; Web Animation slide so no transform
+  lingers). NumericSettings split into named pieces (SpeedField, AudioSyncBpm,
+  SoundControls, TuningControls, LoopControl; default export removed).
+  AudioToolbar takes `keys` and renders labelled buttons, placed twice (Audio,
+  Tools). SettingsBar is now the title row only. Song goal moved from PlanLine
+  (no longer passed `songNote`) to Stats. Any run start closes the drawer.
+  Auto-Match also sits in Tools on songs without audio, so it is never lost.
