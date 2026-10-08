@@ -12,6 +12,7 @@ import {
   Music,
   Timer,
   Gamepad2,
+  Wallet,
 } from "lucide-react";
 
 // --- Alfred's icon vocabulary (Step 12.10) ----------------------------------
@@ -47,6 +48,7 @@ export const OBJECT_ICONS = {
   timer: Timer,
   sam: Music,
   games: Gamepad2,
+  money: Wallet,
 };
 
 /**
