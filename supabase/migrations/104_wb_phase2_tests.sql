@@ -1,6 +1,8 @@
 -- Purpose: Warren Buffet Phase 2 Step 2 tests and verification, run after 103_wb_phase2_tables.sql. Pure-function cases (cleaning, kinds, transfer matching, pair decision, rule matching) on invented values, plus structural checks on the live database.
 -- Kind: read-only diagnostic (never "applied"; writes nothing)
 -- Applied: YES — run 2026-10-09 by Alex after 103: 69 tests, 0 failed; every check true. Read-only, safe to re-run any time.
+-- Extended 2026-10-09 with the cleaning and payment-to-a-person cases for the Step 3 fix; needs that fix applied first.
+-- After the Step 3 reprocess, no_transaction_processed_yet and split_tags_empty are expected to be false.
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md).
 -- Spec: docs/technical-spec-warren_buffet_p2-m4t.md sections 4 and 5.
@@ -26,10 +28,20 @@ clean_cases(name, raw, strip, expected) as (values
   ('masked card star',        'CARD PAYMENT ****9876',                     false, 'CARD PAYMENT'),
   ('asterisk code',           'BOOKSHOP MKTP US*2K4HJ1',                   false, 'BOOKSHOP MKTP US'),
   ('asterisk before name',    'SQ *CORNER COFFEE',                         false, 'SQ CORNER COFFEE'),
-  ('city state stripped',     'CORNER COFFEE SPRINGFIELD OR',              true,  'CORNER COFFEE'),
-  ('city state kept',         'CORNER COFFEE SPRINGFIELD OR',              false, 'CORNER COFFEE SPRINGFIELD OR'),
-  ('city state alone kept',   'SPRINGFIELD OR',                            true,  'SPRINGFIELD OR'),
-  ('store then city',         'NEIGHBORHOOD GROCER #0042 SPRINGFIELD OR',  true,  'NEIGHBORHOOD GROCER'),
+  ('state stripped, city kept','CORNER COFFEE SPRINGFIELD OR',             true,  'CORNER COFFEE SPRINGFIELD'),
+  ('state kept, no merchant', 'CORNER COFFEE SPRINGFIELD OR',              false, 'CORNER COFFEE SPRINGFIELD OR'),
+  ('state alone stripped',    'SPRINGFIELD OR',                            true,  'SPRINGFIELD'),
+  ('store number then state', 'NEIGHBORHOOD GROCER #0042 SPRINGFIELD OR',  true,  'NEIGHBORHOOD GROCER SPRINGFIELD'),
+  ('phone 3-7 one dash',      'PET STORE 888-5550123 AZ',                  false, 'PET STORE AZ'),
+  ('phone 3-7, merchant',     'PET STORE 888-5550123 AZ',                  true,  'PET STORE'),
+  ('phone dots',              'GYM CLUB 888.555.1234',                     false, 'GYM CLUB'),
+  ('phone leading 1',         'GYM CLUB 1-888-555-1234',                   false, 'GYM CLUB'),
+  ('help url and code',       'SEARCHCO *PH ABCD5X s.co/helppay#CA',       false, 'SEARCHCO PH'),
+  ('bare domain kept',        'BOOKSHOP.COM',                              false, 'BOOKSHOP.COM'),
+  ('code led by digit kept',  '7ELEVEN STORE',                             false, '7ELEVEN STORE'),
+  ('masked digits and lot',   'FUND CORE BOND ETF XXXXX6         937',     false, 'FUND CORE BOND ETF'),
+  ('masked long then word',   'TRANSFER TO CARD XXXXXXXXXXXX1111 ON',      false, 'TRANSFER TO CARD ON'),
+  ('date with ON',            'TRANSFER TO CARD XXXXXXXXXXXX1111 ON 01/02/26', false, 'TRANSFER TO CARD'),
   ('blank is null',           '   ',                                       false, null),
   ('null is null',            null,                                        false, null)
 ),
@@ -49,12 +61,17 @@ phrase_cases(name, fn, input, expected) as (values
   ('not interest',        'interest', 'INTERESTING BOOKS',                   false),
   ('fee',                 'fee',      'MONTHLY SERVICE FEE',                 true),
   ('interest charge fee', 'fee',      'INTEREST CHARGE ON PURCHASES',        true),
-  ('not fee',             'fee',      'COFFEE HOUSE',                        false)
+  ('not fee',             'fee',      'COFFEE HOUSE',                        false),
+  ('venmo payee',         'p2p',      'Transfer to Venmo',                   true),
+  ('zelle',               'p2p',      'ZELLE TO A FRIEND',                   true),
+  ('visa direct',         'p2p',      'PAYAPP *A FRIEND Visa Direct NY',     true),
+  ('not p2p',             'p2p',      'ONLINE TRANSFER TO SAVINGS',          false)
 ),
 phrases as (
   select 'phrase_' || fn as fn, name,
          (case fn when 'transfer' then wb_is_transfer_phrase(input)
                   when 'interest' then wb_is_interest_phrase(input)
+                  when 'p2p' then wb_is_p2p_phrase(input)
                   else wb_is_fee_phrase(input) end)::text as got,
          expected::text as expected
   from phrase_cases
@@ -71,7 +88,9 @@ kind_cases(name, role, amount, description, payee, merchant_kind, expected) as (
   ('bank fee',                'spending_cash',       -10.00, 'MONTHLY SERVICE FEE',        null,             null,     'fee'),
   ('card refund',             'credit_card',          30.00, 'BOOKSHOP RETURN',            null,             null,     'refund'),
   ('income',                  'spending_cash',      1000.00, 'PAYROLL DEPOSIT',            null,             null,     'income'),
-  ('spend',                   'spending_cash',       -42.50, 'NEIGHBORHOOD GROCER',        null,             null,     'spend')
+  ('spend',                   'spending_cash',       -42.50, 'NEIGHBORHOOD GROCER',        null,             null,     'spend'),
+  ('payment to a person',     'credit_card',         -25.75, 'PAYAPP *A FRIEND Visa Direct NY', 'Transfer to Venmo', null, 'spend'),
+  ('money from a person',     'spending_cash',        40.00, 'ZELLE FROM A FRIEND',        null,             null,     'income')
 ),
 kinds as (
   select 'default_kind' as fn, name,

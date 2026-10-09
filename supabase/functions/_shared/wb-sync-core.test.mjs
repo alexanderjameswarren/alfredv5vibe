@@ -276,3 +276,36 @@ test("mapAccount sets only sync-owned columns", () => {
   ]);
   assert.equal(row.last4, "4321");
 });
+
+test("chunks: remainder, exact multiple, empty, bad size", () => {
+  assert.deepEqual(core.chunks([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
+  assert.deepEqual(core.chunks([1, 2, 3, 4], 2), [[1, 2], [3, 4]]);
+  assert.deepEqual(core.chunks([], 100), []);
+  assert.throws(() => core.chunks([1], 0));
+});
+
+test("idsToProcess: touched rows, then unprocessed, deduped", () => {
+  const upserted = [
+    { id: "t1", account_id: "a", external_id: "x1" },
+    { id: "t2", account_id: "a", external_id: "x2" },
+    { id: "t3", account_id: "b", external_id: "x1" },
+  ];
+  const touched = new Set([core.txnKey("a", "x1"), core.txnKey("b", "x1")]);
+  assert.deepEqual(core.idsToProcess(upserted, touched, ["t9", "t3"]), ["t1", "t3", "t9"]);
+});
+
+test("idsToProcess: unchanged rows are skipped unless never processed", () => {
+  const upserted = [{ id: "t1", account_id: "a", external_id: "x1" }];
+  assert.deepEqual(core.idsToProcess(upserted, new Set(), []), []);
+  assert.deepEqual(core.idsToProcess(upserted, new Set(), ["t1"]), ["t1"]);
+});
+
+test("addProcessResult: sums counts, keeps errors, treats missing fields as 0", () => {
+  let t = core.emptyProcessTotals();
+  t = core.addProcessResult(t, { processed: 100, paired: 2, transfer_candidates: 1, rule_tags: 5 }, null);
+  t = core.addProcessResult(t, null, "chunk 2: statement timeout");
+  t = core.addProcessResult(t, { processed: 7 }, null);
+  assert.deepEqual(t, {
+    processed: 107, paired: 2, transfer_candidates: 1, rule_tags: 5, errors: ["chunk 2: statement timeout"],
+  });
+});
