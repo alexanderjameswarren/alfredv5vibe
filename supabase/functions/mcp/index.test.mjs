@@ -292,12 +292,14 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_DRIVE_MIX = ["get_drive_mix_songs", "create_drive_mix_songs", "update_drive_mix_songs",
     "update_drive_mix_artist", "get_drive_mix_pick", "get_drive_mix_simulation", "create_drive_mix_serving",
     "create_drive_mix_sweep"];
+  // 2026-10-09, +1 for Drive Mix thumbs.
+  const EXPECTED_ADDED_2026_10_09 = ["update_drive_mix_thumbs"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
-                      ...EXPECTED_ADDED_DRIVE_MIX]) {
+                      ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 94,
-    `expected 94 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 95,
+    `expected 95 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -369,7 +371,7 @@ test("Drive Mix schemas advertise exactly the args their handlers read, at the s
     rest = rest.replace(body, "");
   }
   const blocks = rest.split("defineTool({").slice(1);
-  assert.equal(blocks.length, 8, `expected 8 tools in dj-drive-mix.ts, found ${blocks.length}`);
+  assert.equal(blocks.length, 9, `expected 9 tools in dj-drive-mix.ts, found ${blocks.length}`);
   const tiers = {};
   for (const b of blocks) {
     const name = /name:\s*"([^"]+)"/.exec(b)[1];
@@ -384,6 +386,7 @@ test("Drive Mix schemas advertise exactly the args their handlers read, at the s
   assert.deepEqual(tiers, {
     get_drive_mix_songs: 1, create_drive_mix_songs: 1, update_drive_mix_songs: 2, update_drive_mix_artist: 3,
     get_drive_mix_pick: 1, get_drive_mix_simulation: 1, create_drive_mix_serving: 2, create_drive_mix_sweep: 1,
+    update_drive_mix_thumbs: 2,
   });
 });
 

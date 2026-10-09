@@ -58,9 +58,13 @@ Three parts:
 | status | text not null | check: pending, active, retired. Only `active` is picked |
 | source | text not null | check: playlist_seed, artist_top, history_sweep, manual |
 | retired_reason | text null | only allowed when status is retired |
+| thumbs | text null | step 10. check: up, down. Alex's latest thumb. `down` is never picked, whatever the status; `up` always counts as familiar |
+| thumbs_at | timestamptz null | step 10. When the latest thumb, or its clearing, happened. Required when thumbs is set. A thumb older than this is ignored, so the latest thumb wins |
 | added_at | timestamptz default now() | |
 
 `pending` means "in the pool but not yet tagged and reviewed". Swept songs arrive pending; the daily task tags them and either activates them or retires them (for example a calm track that is not radio pop).
+
+**Thumbs (step 10).** A thumbs down no longer retires a song. It keeps the song's status, and the picker skips it until a later thumbs up. A thumbs up on a song retired as `cut by Alex` or `cut by Alex (not known)` reactivates it (pending if untagged). A thumbs up never revives a song retired for any other reason: jazz, ambient or sleep, holiday or soundtrack, classical, kids or novelty. The step 10 migration moved songs retired as "thumbs down" to active (pending if untagged), with thumbs down and the reason cleared.
 
 ### `drive_mix_servings` — what was served each day
 
@@ -90,7 +94,9 @@ Consequence to know: if the daily history sync fails, recency does not advance, 
 
 ### Algorithm, for a given date and count (default 50)
 
-1. Eligible songs: `status = 'active'` with decade and genre set. Recency is computed for every pool song, whatever its status, because the cooldown in step 4 reads all of them.
+1. Eligible songs: `status = 'active'` with decade and genre set, and not thumbs down. Recency is computed for every pool song, whatever its status, because the cooldown in step 4 reads all of them.
+   - **Familiar or new (step 10).** A song is familiar when its canonical group was heard on at least `p_familiar_days` (5) distinct days, through the same canonical mapping as recency, or when it is thumbs up. Every other song is new. The day count is a `count(distinct played_on)` in the same aggregate as recency, so there is no extra scan.
+   - The rule is deliberately simple. Alex reviewed 20 songs with fewer than 5 play days and knew 8 of them. Era, source and 1-2 play days all failed to predict which; thumbs correct it over time.
 2. All randomness is `md5` of the date and the song id, so a dry run and the real run for the same date return the same playlist, as long as no new plays or servings land in between.
 3. **Carry-over (step 7).** Take the most recent serving before D. Every song in it that is still eligible and has **not been heard since that serving's date** goes into today's list first, marked `carried`. "Not heard since" means no `dj_plays` for its canonical group on or after `served_on` and before D.
    - Carried songs count toward their slice's quota and toward the artist cap, but are never dropped by either.
@@ -102,9 +108,27 @@ Consequence to know: if the daily history sync fails, recency does not advance, 
    - their artist is **cooling down**: any pool song by that artist_key, any status, was heard in the `p_cooldown_days` days before D, via the canonical-group mapping. With the default of 2, a play on D-1 or D-2 blocks new songs on D; 0 turns the cooldown off.
 
    The list never goes past the count. So when carried songs push one slice over its quota, the remaining slices still fill only to the total count, and the slices filled last (1990s–2000s) give way. Every tagged song is in exactly one slice. Since step 6, "1980s and earlier" takes any decade ≤ 1980; before that it was 1960s–1980s, and older songs were fill only.
-5. If a slice runs short, the remaining slots are filled from all eligible songs in recency order (slice `fill`), under the same artist cap and cooldown. The cooldown is absolute, so a heavy listening day can leave a list short; the shortfall is reported.
-6. Order the final list randomly (seeded), then fix any adjacent same-artist pairs by swapping.
-7. Return: position, song id, video_id, title, artist, artist_key, slice (`fill` for step 5 songs), carried, and last heard.
+
+   **The familiar/new blend (step 10).**
+   - New songs fill at most floor(`p_new_share` × count) of the list: 12 of 50 at 0.25. That cap is split across slices in proportion to their quotas, by largest remainder like the quotas, which gives 2 / 2 / 3 / 5 for country_rap / 1980s / 2010s / 1990s at 50. The rest of each quota is that slice's familiar share.
+   - Each slice runs four passes, all in recency order:
+     1. familiar songs, up to the familiar share;
+     2. new songs, up to the new share;
+     3. more familiar songs, if new ran short;
+     4. more new songs, if familiar ran short. These are marked `new_over_cap`.
+   - Carried songs count against their side's share.
+   - **Familiar gap.** A familiar song heard fewer than `p_familiar_gap_days` (7) days before D is skipped in every pass, so its slot goes to a new song in the same slice. 0 turns it off. Carried songs are exempt.
+   - **Exempt slices (migration 102).** Every song in a `p_familiar_slices_exempt` slice counts as familiar: that slice takes no new share, and the cap is split over the other slices. The default is `{1980s-and-earlier}`, which gives 2 / 0 / 4 / 6 at 50. Alex expects to know unplayed oldies, and that slice had only 9 familiar songs of 281.
+   - **Familiar breaks the cooldown (102).** With `p_familiar_breaks_cooldown` (default true), a slice tries familiar songs by cooling artists, up to the familiar share, before any new song. The fill pass does the same. They are marked `cooling`. The per-list artist cap is never broken.
+   - **new_over_cap (102)** marks every new song past its natural slice's new share, counted in selection order, so carried songs are counted first. Under 101 only the backfill passes set it, so carried new songs were never flagged.
+   - **Why 102.** With 101 the new share averaged 0.469 in a 30-day simulation at 50. The reasons familiar songs were skipped, per day: mostly the artist cap (about 140), then the cooldown (about 20), then the 7-day gap (about 7). Familiar songs cluster by artist because they are heard album by album. Diagnostic simulations of the variants: as 101, 0.469; oldies exempt, 0.313; oldies exempt with familiar songs breaking the cooldown, 0.246 (chosen); oldies exempt with a 5-day gap, 0.277. A pick without carry-over was already exactly on target (12 new); today's real pick was high only because of 24 new songs carried over from the old picker's serving.
+5. If a slice runs short, the remaining slots are filled from all eligible songs in recency order (slice `fill`), familiar first, under the same artist cap, cooldown and familiar gap. The last resort then takes, in order: familiar songs by cooling artists, new songs by cooling artists, and finally familiar songs inside the gap. `cooling` is true when the artist really was cooling. A list can still come up short, and the shortfall is reported.
+6. **Order (step 10): spread, not shuffled.**
+   - The chosen songs are grouped by natural slice and by familiar/new: 8 groups. A song taken as `fill` still belongs to its natural slice here.
+   - Inside each group the songs are ordered by md5(date, song). Song r of a group of k aims at position (r − 0.5) × n / k, plus a jitter from md5(date, song) of up to a quarter of the group's spacing either way.
+   - The list is sorted by aim. So every slice, and its new songs, are spaced evenly from start to end. Until step 10 a plain seeded shuffle front-loaded 1980s-and-earlier songs and back-loaded country, rap and 2010s–2020s songs.
+   - Adjacent same-artist pairs are then fixed by swapping with the **nearest** position that leaves both spots clean, so the spacing survives. It stays deterministic for a date.
+7. Return: position, song id, video_id, title, artist, artist_key, slice (`fill` for step 5 songs), song_slice (the natural slice), carried, cooling, last heard, distinct_days, familiar and new_over_cap.
 
 Parameters with defaults:
 - `p_date`: today, UTC.
@@ -112,7 +136,16 @@ Parameters with defaults:
 - `p_artist_cap`: 2.
 - `p_quotas`: jsonb song counts per slice, `{"country_rap":6,"1980s-and-earlier":10,"2010s-2020s":12,"1990s-2000s":22}`. They must sum to at most `p_count`; the rest is filled by step 5.
 - `p_cooldown_days`: 2, range 0–30.
-- `p_recency` and `p_last_serving`: internal, for the simulator. They are a song_id → last-heard map and `{served_on, song_ids}`; when given, they replace the `dj_plays` and `drive_mix_servings` reads, so a simulated day runs the same code as a real one.
+- `p_new_share`: 0.25, range 0–1 (step 10).
+- `p_familiar_days`: 5, range 1–365 (step 10).
+- `p_familiar_gap_days`: 7, range 0–60 (step 10).
+- `p_familiar_slices_exempt`: `{1980s-and-earlier}`, any of the four slices, or `{}` (102).
+- `p_familiar_breaks_cooldown`: true (102).
+- `p_recency`, `p_play_days` and `p_last_serving`: internal, for the simulator.
+  - They are a song_id → last-heard map, a song_id → distinct-days map, and `{served_on, song_ids}`.
+  - When given, they replace the `dj_plays` and `drive_mix_servings` reads, so a simulated day runs the same code as a real one.
+
+Step 10 changed the signature, so the function was dropped and recreated rather than replaced. The tools call it by parameter name.
 
 Why step 7 changed the picker: on the seeded pool (1,440 active), big catalogues such as Alanis Morissette (42 songs) and Foo Fighters (45) appeared nearly every day even at artist_cap 1. The cooldown ties artist variety to what Alex actually heard. Carry-over stops a short drive from burning the songs he never reached.
 
@@ -125,7 +158,12 @@ A second function runs the picker for N consecutive days (cap 120) without writi
 - `repeat_gap`: min and median days between serves of a song; carry-over makes 1-day gaps normal on short drives,
 - `heard_gap`: min and median days between hearings of a song, which is the listener's real repetition,
 - `carried_per_day_avg`,
-- slice shortfalls: days a slice, or the whole list, could not be filled.
+- slice shortfalls: days a slice, or the whole list, could not be filled,
+- `new_songs` (step 10): the cap per day; the new share's average, average from day 2 (day 1 carries over the real last serving), minimum and maximum; `over_cap_total`; and each day's new and over-cap counts,
+- `cooling_breaks` (102): familiar songs served by a cooling artist,
+- `slices` (step 10): per natural slice, `avg_position` (fair is `ideal_avg_position`, (count + 1) / 2), `familiar_served`, `new_served`, and `familiar_min_repeat_gap`, the fewest days between two serves of a familiar song.
+
+It takes `p_new_share`, `p_familiar_days` and `p_familiar_gap_days` like the picker, and keeps a play-days map in memory. A simulated hearing adds a play day, so new songs become familiar during a run.
 
 This is how the artist cap and quotas get tuned with real numbers before going live.
 
@@ -192,12 +230,13 @@ Tier choices below are proposals; the platform contract wins if it says otherwis
 
 | Tool | Tier | Purpose |
 |---|---|---|
-| `get_drive_mix_songs` | 1 | List pool songs. Filters: status, artist (matches artist_key), untagged only, source. Bounded by `clampLimit`. Also returns pool counts by status and slice. |
+| `get_drive_mix_songs` | 1 | List pool songs. Filters: status, artist (matches artist_key), untagged only, source, thumbs. Bounded by `clampLimit`. Also returns pool counts by status, by thumbs, and by slice (active, tagged, not thumbs down). |
 | `create_drive_mix_songs` | 1 | Add up to 50 songs in one call. Skips duplicates by video_id and reports them. Default status `pending` unless decade and genre are supplied, then `active`. |
 | `update_drive_mix_songs` | 2 | Update by song ids: decade, genre, artist_key, status, retired_reason. |
 | `update_drive_mix_artist` | 3 | Retire or reactivate every song for one artist_key. `propose` lists the songs affected. |
-| `get_drive_mix_pick` | 1 | Dry run of the picker for a date. Writes nothing. |
-| `get_drive_mix_simulation` | 1 | Runs the simulator for N days (cap 120). Writes nothing. |
+| `get_drive_mix_pick` | 1 | Dry run of the picker for a date. Writes nothing. Step 10 adds `new_share`, `familiar_days`, `familiar_gap_days`, `familiar_slices_exempt` and `familiar_breaks_cooldown`. It reports `new_cap`, `new_songs`, `new_over_cap`, `cooling_breaks`, and per song distinct_days, familiar, new_over_cap and song_slice. |
+| `get_drive_mix_simulation` | 1 | Runs the simulator for N days (cap 120). Writes nothing. Takes the same step 10 params and returns `new_songs`, `cooling_breaks` and `slices`. |
+| `update_drive_mix_thumbs` | 2 | Step 10. Takes up to 200 of {video_id, thumbs: up/down/clear, at}. The latest `at` wins, within the call and against the stored thumbs_at, and the write re-checks thumbs_at. A thumbs up revives only songs cut by Alex (section 3). Returns updated, revived and skipped. |
 | `create_drive_mix_serving` | 2 | Records the serving for a date from the video_ids that actually went to YouTube, in order, as given. Checks each is an active pool song and refuses otherwise. Does not re-run or compare against the picker: that comparison would fail in exactly the case it is meant to catch, and the record must match what went out. Refuses with a clear error if that date already has a serving; there is no replace option. No `propose`. |
 | `create_drive_mix_sweep` | 1 | Runs the sweep and returns what was added. |
 
@@ -214,6 +253,8 @@ Tier choices below are proposals; the platform contract wins if it says otherwis
 - **Representative:** the original (non-variant) version if one exists, else the most-played version. Bryan Adams' re-recorded "Classic Version"s are accepted as representatives.
 - **original_candidate:** when every version is a variant, the best non-variant search hit with the same title by the same artist, as video_id, title, album and plays. It is offered, never substituted.
 - **Suggested:** songs are sorted by plays, highest first. A song is `suggested` when plays ≥ suggest_ratio × the top song's plays and plays ≥ suggest_floor. This is a proposal for Alex to approve. Alex confirmed the 10% and 10M defaults: a-ha gives only Take on Me, and Toto gives four.
+  - **Step 10: the bar stays, and the review decides.** On 2026-10-09 Alex chose Take a Bow, Ray of Light and Express Yourself, all below Madonna's bar. He rejected Billy Joel's Honesty and Vienna, his #4 and #5 by plays. No play-count rule separates those, and anchoring the bar to the 5th song only made both lists deeper.
+  - So the tool is unchanged. When adding an artist, the drive-mix skill calls it with limit 60 and shows Alex every suggested song plus about 10 below the bar. Nothing is added without his pick. At scan 30, Ray of Light and Express Yourself were not even scanned.
 - **Guest spots:** a song is suggested only when the requested artist is the **first** credited artist on its representative version. When the artist is credited second or later (Pavarotti's "'O Sole Mio" with Bryan Adams, or a feat. on someone else's song), the song gets `guest: true`, stays in the list, and is never suggested. The top-plays bar is set by the artist's own songs only, so a big guest spot cannot raise it.
 - **Returns per song:** position, title, video_id, artists, album, plays, suggested, variant, variant_word, versions_merged (count and titles), and original_candidate. The response also carries artist, channel_id, scanned, distinct_songs, suggested_count, thresholds (with top_plays and plays_needed), and lookup_errors.
 - **year is dropped.** It was None on page songs, songs-list tracks and search results alike.
@@ -242,6 +283,7 @@ Tier choices below are proposals; the platform contract wins if it says otherwis
 Runs early morning, after the existing DJ daily history sync:
 
 1. Run the sweep. Tag each new pending song's decade and genre, and activate it, or retire it with a reason if it isn't radio pop.
+   - Thumbs (step 10): pass every thumb read to `update_drive_mix_thumbs` with video_id, thumbs and `at`. Never retire a song for a thumbs down.
 2. Dry-run the pick for today.
 3. Replace the Drive Mix playlist with those video_ids (Workshop `replace_dj_playlist`).
 4. Only after the playlist write succeeds, record the serving.

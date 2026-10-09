@@ -94,6 +94,7 @@ import {
   getDriveMixSimulationTool,
   createDriveMixServingTool,
   createDriveMixSweepTool,
+  updateDriveMixThumbsTool,
 } from "../_shared/tools/dj-drive-mix.ts";
 import {
   getKenQuizBatchTool,
@@ -2930,10 +2931,21 @@ export function createMcpServer(token: string) {
       'Share per slice, scaled to count (largest remainder); counts that already sum to count are used as given. Default shape {"country_rap":6,"1980s-and-earlier":10,"2010s-2020s":12,"1990s-2000s":22}.'),
     cooldown_days: z.number().optional().describe(
       "Prefer no NEW songs from an artist with any pool song heard in this many days before the date; they are used only as a last resort to reach count (cooling: true). Carried-over songs are exempt. Default 2; 0 turns it off."),
+    new_share: z.number().optional().describe(
+      "Most of the list that may be NEW songs (not familiar), 0 to 1. Default 0.25: 12 of 50, split across slices like the quotas."),
+    familiar_days: z.number().optional().describe(
+      "A song is FAMILIAR when its canonical group was heard on at least this many distinct days, or Alex thumbed it up. Default 5."),
+    familiar_gap_days: z.number().optional().describe(
+      "A familiar song heard fewer than this many days before the date is skipped and its slot goes to a new song in the same slice (new_over_cap). Default 7; 0 turns it off."),
+    familiar_slices_exempt: z.array(z.enum(["country_rap", "1980s-and-earlier", "2010s-2020s", "1990s-2000s"])).optional().describe(
+      'Slices whose songs all count as familiar, so the new-song cap is split over the other slices. Default ["1980s-and-earlier"]; [] for none.'),
+    familiar_breaks_cooldown: z.boolean().optional().describe(
+      "true (default): before a slot goes to a new song, a familiar song by a cooling artist may take it (cooling: true). The artist cap is never broken."),
   };
   const DM_PICK_RULES =
-    "Carry-over first: songs from the most recent serving that are still active and have not been heard since go back in (carried: true), counting toward their slice and the artist cap but never dropped by them, and never more than count. " +
-    "Then each slice is topped up to its quota in last-heard order (never-heard first), then fill, skipping cooling artists; only if still short are cooling artists used. The artist cap applies throughout. ";
+    "Thumbs-down songs are never picked. Carry-over first: songs from the most recent serving that are still eligible and have not been heard since go back in (carried: true), counting toward their slice, shares and the artist cap but never dropped by them, and never more than count. " +
+    "Then each slice is topped up to its quota in last-heard order (never-heard first): familiar songs to the slice's familiar share (1980s-and-earlier songs all count as familiar by default), new songs to its new share, each side backfilling the other. Then fill. Cooling artists are skipped, except that a familiar song by a cooling artist is preferred to a new song; only if still short are other cooling-artist songs used. The artist cap applies throughout. " +
+    "The order spreads every slice, and its new songs, evenly through the list, with no adjacent same artist. ";
 
   server.registerTool(
     "get_drive_mix_songs",
@@ -2941,12 +2953,13 @@ export function createMcpServer(token: string) {
       title: "Get Drive Mix Songs",
       description:
         "List songs in the Drive Mix pool (the daily car playlist's song pool), sorted by artist_key then title. Filter by status, artist (matched against artist_key, case-insensitive exact), source, or untagged: true (decade or genre missing). " +
-        "Also returns pool-wide counts by status and, for active tagged songs, by slice — use them to check a slice can fill its quota. " + DM_SLICES + "Tier 1.",
+        "Also returns pool-wide counts by status and thumbs and, for active tagged songs not thumbed down, by slice — use them to check a slice can fill its quota. " + DM_SLICES + "Tier 1.",
       inputSchema: {
         status: dmStatus.optional().describe("Only this status. pending = not yet tagged and reviewed; only active songs are picked."),
         artist: z.string().optional().describe("Only this artist_key, e.g. 'bryan adams'."),
         source: dmSource.optional().describe("Only songs that entered the pool this way."),
         untagged: z.boolean().optional().describe("true = only songs missing decade or genre."),
+        thumbs: z.enum(["up", "down"]).optional().describe("Only songs with this latest thumb."),
         limit: z.number().optional().describe("Max rows, default 20, cap 50."),
       },
     },
@@ -3018,7 +3031,9 @@ export function createMcpServer(token: string) {
       description:
         "Run the Drive Mix picker for a date and return the playlist it would serve, in order, with video_ids ready for replace_dj_playlist. Writes nothing. The same date gives the same list while no new plays or servings land. " +
         DM_PICK_RULES + DM_SLICES +
-        "Reports quotas_used, artist_cap_used, carried_over, cooling_used (last-resort songs from cooling artists), short_by and slice_shortfalls. Dates are UTC days; pass date explicitly in the daily task. Tier 1.",
+        "Each song carries distinct_days (days heard), familiar, new_over_cap and song_slice (its natural slice, even when slice is fill). " +
+        "new_over_cap marks every new song past its slice's new share, carried songs included. " +
+        "Reports quotas_used, artist_cap_used, new_cap, new_songs, new_over_cap, cooling_breaks (familiar songs by cooling artists), carried_over, cooling_used (all songs by cooling artists), short_by and slice_shortfalls. Dates are UTC days; pass date explicitly in the daily task. Tier 1.",
       inputSchema: {
         date: z.string().optional().describe("YYYY-MM-DD. Default today (UTC)."),
         ...dmPickParams,
@@ -3034,7 +3049,8 @@ export function createMcpServer(token: string) {
       description:
         "Run the Drive Mix picker for consecutive days without writing anything, through the same logic as a real pick: the first heard_per_day songs of each day count as heard that day (default all), for recency and the artist cooldown, and the rest carry over to the next day. Use it to tune artist_cap, cooldown_days and quotas. " +
         "LIMIT: days x count must be at most 6,000 song-days (e.g. 60 days at 100 songs, 30 days at 200), because the database stops a call at 8 seconds; a larger request is refused before it runs. " +
-        "Returns quotas_used, artist_cap_used, repeat_gap (days between serves of a song), heard_gap (days between hearings), carried_per_day_avg, cooling_fills (total and per day), expected_gap_days (pool / count), shortfalls, per-song served/heard counts, and per-artist served and days_appeared (most days first), cut to limit. Tier 1.",
+        "Heard songs also gain a play day, so new songs become familiar during a run. " +
+        "Returns quotas_used, artist_cap_used, new_songs (share per day: avg, avg from day 2, min, max, over_cap_total, and each day), cooling_breaks, slices (per natural slice: avg_position against ideal_avg_position, familiar_served, new_served, familiar_min_repeat_gap), repeat_gap (days between serves of a song), heard_gap (days between hearings), carried_per_day_avg, cooling_fills (total and per day), expected_gap_days (pool / count), shortfalls, per-song served/heard counts, and per-artist served and days_appeared (most days first), cut to limit. Tier 1.",
       inputSchema: {
         start: z.string().optional().describe("First day, YYYY-MM-DD. Default today (UTC)."),
         days: z.number().optional().describe("Days to simulate, default 60, max 120."),
@@ -3073,6 +3089,25 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(createDriveMixSweepTool, args, token),
+  );
+
+  server.registerTool(
+    "update_drive_mix_thumbs",
+    {
+      title: "Record Drive Mix Thumbs",
+      description:
+        "Record Alex's thumbs on Drive Mix pool songs, by video_id. The latest thumb wins: one older than the song's recorded thumbs_at is skipped, so replaying old feedback cannot undo a newer thumb. " +
+        "down = never picked again, whatever the status, until a later up. up = always counts as familiar; on a song retired as 'cut by Alex' or 'cut by Alex (not known)' it also reactivates it (pending if untagged). It never revives songs retired for any other reason (jazz, ambient or sleep, holiday or soundtrack, classical, kids or novelty). clear = no thumb. " +
+        "Returns updated, revived and skipped (not in the pool, or older than the recorded thumb). Audited and reversible. Tier 2.",
+      inputSchema: {
+        thumbs: z.array(z.object({
+          video_id: z.string().describe("YouTube video id, 11 characters."),
+          thumbs: z.enum(["up", "down", "clear"]),
+          at: z.string().optional().describe("When the thumb was given or seen, ISO timestamp. Default now."),
+        })).describe("1 to 200 thumbs. Several for one video_id: the latest `at` wins."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateDriveMixThumbsTool, args, token),
   );
 
   return server;
