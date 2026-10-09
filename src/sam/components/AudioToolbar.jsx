@@ -1,9 +1,15 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import { Download, Upload, RefreshCw, Wand2 } from "lucide-react";
 import { supabase } from "../../supabaseClient";
 import { uploadAudio } from "../lib/audioPlayer";
 import { recompileMeasures } from "../lib/measureCompiler";
+import { matchSyllablesToNotes } from "../lib/lyricsAutoMatch";
 import { UI } from "./uiStyles";
+
+// One look for every button in the drawer's Tools grid: same height, size,
+// weight and colour; toggles differ only by the on fill. Never wraps.
+export const toolButton = (isOn = false) =>
+  `flex items-center gap-2 px-3 min-h-[44px] w-full text-sm whitespace-nowrap disabled:opacity-50 ${UI.toggle(isOn)}`;
 
 // Utility actions, placed in the More drawer by `keys`: Export, Audio upload,
 // Refresh (recompile lyrics blob from rows), Auto-Match (assign syllables to RH
@@ -20,29 +26,17 @@ export default function AudioToolbar({
   onAudioUploaded,
   onLyricsChanged,
   onExport,
-  // Which actions to show, as labelled buttons in the More drawer — e.g.
-  // ["automatch", "audio"] in its Audio section, ["export", "refresh"] in Tools.
+  // From the player's lyric state, so it follows a Lyrics save or delete.
+  hasLyrics = false,
+  // Which actions to show, in this order, as labelled buttons in the More
+  // drawer — e.g. ["automatch", "audio"] in its Audio section.
   keys = ["export", "audio", "refresh", "automatch"],
 }) {
-  const wantsLyrics = keys.includes("automatch");
   const [uploading, setUploading] = useState(false);
-  const [hasLyrics, setHasLyrics] = useState(false);
   const [showAutoMatchConfirm, setShowAutoMatchConfirm] = useState(false);
   const [autoMatching, setAutoMatching] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const audioInputRef = useRef(null);
-
-  useEffect(() => {
-    if (!songDbId || !wantsLyrics) {
-      setHasLyrics(false);
-      return;
-    }
-    supabase
-      .from("sam_song_lyrics")
-      .select("*", { count: "exact", head: true })
-      .eq("song_id", songDbId)
-      .then(({ count }) => setHasLyrics((count || 0) > 0));
-  }, [songDbId, wantsLyrics]);
 
   async function handleAudioUpload(e) {
     const file = e.target.files?.[0];
@@ -81,31 +75,9 @@ export default function AudioToolbar({
         return;
       }
 
-      // Walk measures, assign syllables to non-rest RH events
-      const placements = [];
-      let syllableIdx = 0;
+      const { placements, unplaced: remaining } = matchSyllablesToNotes(song.measures, lyrics, { skipTiedNotes });
 
-      for (const measure of song.measures) {
-        if (syllableIdx >= lyrics.length) break;
-        const rh = measure.rh || [];
-        for (let rhIdx = 0; rhIdx < rh.length; rhIdx++) {
-          if (syllableIdx >= lyrics.length) break;
-          const evt = rh[rhIdx];
-          if (!evt.notes || evt.notes.length === 0) continue;
-          // Skip tied continuation notes when checkbox is checked
-          if (skipTiedNotes && evt.notes.every(n => n.tie === "end" || n.tie === "both")) continue;
-          placements.push({
-            word_order: lyrics[syllableIdx].word_order,
-            measure_num: measure.number,
-            rh_index: rhIdx,
-          });
-          syllableIdx++;
-        }
-      }
-
-      // Check for leftover syllables
-      if (syllableIdx < lyrics.length) {
-        const remaining = lyrics.length - syllableIdx;
+      if (remaining > 0) {
         alert(`${remaining} syllable${remaining === 1 ? "" : "s"} unplaced — the song has fewer RH notes than lyrics.`);
         setAutoMatching(false);
         return;
@@ -176,7 +148,7 @@ export default function AudioToolbar({
     {
       key: "export",
       label: "Export",
-      icon: <Download className="w-3.5 h-3.5" />,
+      icon: <Download className="w-4 h-4 flex-shrink-0" />,
       onClick: onExport,
       disabled: false,
       show: true,
@@ -184,7 +156,7 @@ export default function AudioToolbar({
     {
       key: "audio",
       label: uploading ? "Uploading..." : "Audio",
-      icon: <Upload className="w-3.5 h-3.5" />,
+      icon: <Upload className="w-4 h-4 flex-shrink-0" />,
       onClick: () => audioInputRef.current?.click(),
       disabled: uploading,
       show: !!songDbId,
@@ -192,7 +164,7 @@ export default function AudioToolbar({
     {
       key: "refresh",
       label: refreshing ? "Refreshing..." : "Refresh",
-      icon: <RefreshCw className={`w-3.5 h-3.5${refreshing ? " animate-spin" : ""}`} />,
+      icon: <RefreshCw className={`w-4 h-4 flex-shrink-0${refreshing ? " animate-spin" : ""}`} />,
       onClick: handleRefresh,
       disabled: refreshing,
       show: !!songDbId,
@@ -200,12 +172,14 @@ export default function AudioToolbar({
     {
       key: "automatch",
       label: autoMatching ? "Matching..." : "Auto-Match",
-      icon: <Wand2 className="w-3.5 h-3.5" />,
+      icon: <Wand2 className="w-4 h-4 flex-shrink-0" />,
       onClick: () => setShowAutoMatchConfirm(true),
       disabled: autoMatching,
       show: !!songDbId && hasLyrics,
     },
-  ].filter((a) => a.show && keys.includes(a.key));
+  ]
+    .filter((a) => a.show && keys.includes(a.key))
+    .sort((a, b) => keys.indexOf(a.key) - keys.indexOf(b.key));
 
   return (
     <>
@@ -217,7 +191,7 @@ export default function AudioToolbar({
           onClick={a.onClick}
           disabled={a.disabled}
           title={a.label}
-          className={`flex items-center gap-1.5 px-3 py-1.5 text-sm min-h-[44px] disabled:opacity-50 ${UI.outline}`}
+          className={toolButton()}
         >
           {a.icon}
           {a.label}

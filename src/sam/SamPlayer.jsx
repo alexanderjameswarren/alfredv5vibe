@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Music, Pencil } from "lucide-react";
+import { GitCompare, Hand, Import, Mic, Music, Pencil } from "lucide-react";
 import { SAM_PATH, samSongPath, samSongIdFromPath } from "../viewPaths";
 import ScoreRenderer from "./components/ScoreRenderer";
 import ScrollEngine from "./components/ScrollEngine";
@@ -10,7 +10,9 @@ import SettingsBar from "./components/SettingsBar";
 import SongRail from "./components/SongRail";
 import MoreDrawer, { DrawerSection } from "./components/MoreDrawer";
 import { UI } from "./components/uiStyles";
-import AudioToolbar from "./components/AudioToolbar";
+import AudioToolbar, { toolButton } from "./components/AudioToolbar";
+import LyricsSheet from "./components/LyricsSheet";
+import { saveSongLyrics, deleteSongLyrics } from "./lib/lyricsApi";
 import {
   SpeedField, AudioSyncBpm, SoundControls, TuningControls, LoopControl,
 } from "./components/NumericSettings";
@@ -105,6 +107,16 @@ function AudioMsCounter({ audioElement }) {
     <span className="text-sm font-mono font-medium text-foreground tabular-nums whitespace-nowrap">
       {ms} ms
     </span>
+  );
+}
+
+// One labelled group of the drawer's Tools grid.
+function ToolGroup({ title, children }) {
+  return (
+    <div role="group" aria-label={title}>
+      <div className="text-xs text-muted-foreground mb-1">{title}</div>
+      <div className="grid grid-cols-2 gap-2">{children}</div>
+    </div>
   );
 }
 
@@ -232,6 +244,8 @@ export default function SamPlayer({ onBack }) {
   const closeMore = useCallback(() => setMoreOpen(false), []);
   // The Edit song dialog: the title's pencil and the drawer's Edit Song.
   const [editOpen, setEditOpen] = useState(false);
+  // The Lyrics sheet: paste, replace or delete the song's lyrics (drawer's Tools).
+  const [lyricsOpen, setLyricsOpen] = useState(false);
 
   // The tempo Practice actually scrolls at.
   //
@@ -498,6 +512,23 @@ export default function SamPlayer({ onBack }) {
     lyricEditHandlers,
     saveLyrics,
   } = useLyricEditor({ song, songDbId, skipTiedNotes, supabase });
+
+  // Lyrics sheet writes. Both hand back recompiled measures, folded into the
+  // song so the score redraws with (or without) the words, no reload.
+  async function handleLyricsSave(text) {
+    const res = await saveSongLyrics(songDbId, text, song.measures);
+    setSong((s) => ({ ...s, measures: res.measures }));
+    setLyricPlacements(res.lyrics);
+    if (res.unplaced > 0) {
+      alert(`${res.unplaced} syllable${res.unplaced === 1 ? "" : "s"} did not fit on the right-hand notes and were left unplaced.`);
+    }
+  }
+
+  async function handleLyricsDelete() {
+    const measures = await deleteSongLyrics(songDbId);
+    setSong((s) => ({ ...s, measures }));
+    setLyricPlacements(null);
+  }
 
   // Fingering writes + resolved render map (load, optimistic set/clear, undo).
   // Imported (musicxml) fingerings default to SHOWN — `?? true` — so a
@@ -1887,38 +1918,42 @@ export default function SamPlayer({ onBack }) {
     onAudioUploaded: handleAudioUploaded,
     onLyricsChanged: setLyricPlacements,
     onExport: handleExport,
+    hasLyrics: !!lyricPlacements,
   };
 
   // Controls that belong to the score: Fingering mode, Diff, Show Imported —
-  // in the More drawer's Tools (song rail, step 4). Still gated on `stopped`,
-  // exactly as before, so nothing about WHEN they are available has changed.
+  // in the More drawer's Tools, Practice group. Still gated on `stopped`.
+  // Toggles show "on" by their fill alone, like Loop song.
   const scoreToolButtons = playbackState === "stopped" ? (
     <>
+      <button
+        onClick={toggleFingeringMode}
+        aria-pressed={fingeringMode}
+        className={toolButton(fingeringMode)}
+      >
+        <Hand className="w-4 h-4 flex-shrink-0" />
+        Fingering mode
+      </button>
       {hasImported && (
         <button
           onClick={toggleShowImported}
           aria-pressed={showImportedFingerings}
-          className={`min-h-[44px] px-4 text-sm font-medium ${UI.toggle(showImportedFingerings)}`}
+          className={toolButton(showImportedFingerings)}
         >
-          {showImportedFingerings ? "Hide Imported" : "Show Imported"}
+          <Import className="w-4 h-4 flex-shrink-0" />
+          Show Imported
         </button>
       )}
       {parentSong && (
         <button
           onClick={() => setGhostMode((on) => !on)}
           aria-pressed={ghostMode}
-          className={`min-h-[44px] px-4 text-sm font-medium ${UI.toggle(ghostMode)}`}
+          className={toolButton(ghostMode)}
         >
-          {ghostMode ? "Diff: on" : "Diff"}
+          <GitCompare className="w-4 h-4 flex-shrink-0" />
+          Diff
         </button>
       )}
-      <button
-        onClick={toggleFingeringMode}
-        aria-pressed={fingeringMode}
-        className={`min-h-[44px] px-4 text-sm font-medium ${UI.toggle(fingeringMode)}`}
-      >
-        {fingeringMode ? "Fingering mode: on" : "Fingering mode"}
-      </button>
     </>
   ) : null;
 
@@ -2118,7 +2153,7 @@ export default function SamPlayer({ onBack }) {
                           <AudioMsCounter audioElement={audioElement} />
                         </div>
                       )}
-                      <div className="flex items-center gap-2 flex-wrap">
+                      <div className="grid grid-cols-2 gap-2">
                         <AudioToolbar {...toolbarProps} keys={["automatch", "audio"]} />
                       </div>
                     </DrawerSection>
@@ -2147,37 +2182,51 @@ export default function SamPlayer({ onBack }) {
                   </DrawerSection>
 
                   <DrawerSection title="Tools">
+                    {/* Two-column grid in three groups: Practice, Song, Files.
+                        Every button is `toolButton`, so they match. */}
+                    {(!snippet || scoreToolButtons) && (
+                      <ToolGroup title="Practice">
+                        <LoopControl
+                          snippet={snippet}
+                          songRepeat={songRepeat}
+                          onSongRepeatChange={setSongRepeat}
+                          songRestMeasures={songRestMeasures}
+                          onSongRestMeasuresChange={setSongRestMeasures}
+                        />
+                        {scoreToolButtons}
+                      </ToolGroup>
+                    )}
                     {songDbId && (
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {/* The same dialog as the title's pencil; the drawer
-                            closes first so the dialog is not behind it. */}
+                      <ToolGroup title="Song">
+                        {/* Both dialogs open with the drawer closed, so neither
+                            sits behind it. */}
                         <button
                           type="button"
                           onClick={() => { setMoreOpen(false); setEditOpen(true); }}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 text-sm min-h-[44px] ${UI.outline}`}
+                          className={toolButton()}
                         >
-                          <Pencil className="w-3.5 h-3.5" />
+                          <Pencil className="w-4 h-4 flex-shrink-0" />
                           Edit Song
                         </button>
-                      </div>
+                        <button
+                          type="button"
+                          onClick={() => { setMoreOpen(false); setLyricsOpen(true); }}
+                          className={toolButton()}
+                        >
+                          <Mic className="w-4 h-4 flex-shrink-0" />
+                          Lyrics
+                        </button>
+                        {/* Without audio, Auto-Match sits here. */}
+                        {!hasAudioFile && <AudioToolbar {...toolbarProps} keys={["automatch"]} />}
+                      </ToolGroup>
                     )}
-                    <LoopControl
-                      snippet={snippet}
-                      songRepeat={songRepeat}
-                      onSongRepeatChange={setSongRepeat}
-                      songRestMeasures={songRestMeasures}
-                      onSongRestMeasuresChange={setSongRestMeasures}
-                    />
-                    {scoreToolButtons && (
-                      <div className="flex items-center gap-2 flex-wrap">{scoreToolButtons}</div>
-                    )}
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {/* Without audio, upload (and lyrics Auto-Match) sit here. */}
+                    <ToolGroup title="Files">
+                      {/* Without audio, upload sits here. */}
                       <AudioToolbar
                         {...toolbarProps}
-                        keys={hasAudioFile ? ["export", "refresh"] : ["export", "refresh", "audio", "automatch"]}
+                        keys={hasAudioFile ? ["export", "refresh"] : ["audio", "export", "refresh"]}
                       />
-                    </div>
+                    </ToolGroup>
                   </DrawerSection>
 
                   <DrawerSection title="Stats">
@@ -2200,6 +2249,16 @@ export default function SamPlayer({ onBack }) {
                     />
                   </DrawerSection>
                 </MoreDrawer>
+
+                {lyricsOpen && songDbId && (
+                  <LyricsSheet
+                    songTitle={song.title}
+                    hasLyrics={!!lyricPlacements}
+                    onSave={handleLyricsSave}
+                    onDelete={handleLyricsDelete}
+                    onClose={() => setLyricsOpen(false)}
+                  />
+                )}
               </>
             )}
 

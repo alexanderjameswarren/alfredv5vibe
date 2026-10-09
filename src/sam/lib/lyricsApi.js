@@ -10,6 +10,9 @@
 // Frontend-only module, so it imports the shared authenticated client directly
 // — same rationale as fingeringsApi.js.
 import { supabase } from "../../supabaseClient";
+import { recompileMeasures } from "./measureCompiler";
+import { loadSplitter, splitLyrics } from "./lyricsSplit";
+import { matchSyllablesToNotes } from "./lyricsAutoMatch";
 
 /**
  * Replace every lyric row for a song. Used by the JSON import path, which
@@ -48,4 +51,31 @@ export async function importLyrics(songId, lyrics) {
     if (insErr) throw new Error("Failed to write lyrics: " + insErr.message);
   }
   return rows.length;
+}
+
+/**
+ * The Lyrics sheet's save: split pasted text, Auto-Match it onto `measures`
+ * (tied continuations skipped), replace every row, recompile the blob.
+ * Syllables past the last note are stored unplaced.
+ *
+ * @returns {Promise<{lyrics:Array, measures:Array, unplaced:number}>}
+ */
+export async function saveSongLyrics(songId, text, measures) {
+  const syllables = splitLyrics(text, await loadSplitter());
+  if (syllables.length === 0) throw new Error("No lyrics to save.");
+  const lyrics = syllables.map((syllable, i) => ({ word_order: i + 1, syllable }));
+  const { placements, unplaced } = matchSyllablesToNotes(measures, lyrics, { skipTiedNotes: true });
+  placements.forEach((p, i) => {
+    lyrics[i].measure_num = p.measure_num;
+    lyrics[i].rh_index = p.rh_index;
+  });
+  const placed = lyrics.map((l) => ({ measure_num: null, rh_index: null, ...l }));
+  await importLyrics(songId, placed);
+  return { lyrics: placed, measures: await recompileMeasures(songId, supabase), unplaced };
+}
+
+/** Remove every lyric row for a song and recompile, returning the new measures. */
+export async function deleteSongLyrics(songId) {
+  await importLyrics(songId, []);
+  return recompileMeasures(songId, supabase);
 }

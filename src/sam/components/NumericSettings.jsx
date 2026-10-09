@@ -318,13 +318,15 @@ export function TuningControls({
 }
 
 // Whole-song repeat and its rest count. Hidden while a snippet is loaded.
+// Renders as cells of the Tools grid: the toggle, then the rest count on a
+// full-width row of its own while looping.
 export function LoopControl({ snippet, songRepeat, onSongRepeatChange, songRestMeasures, onSongRestMeasuresChange }) {
   if (snippet) return null;
   return (
-    <div className="flex items-center gap-3 flex-wrap">
+    <>
       <label
         title="Repeat whole song"
-        className={`px-2 py-1 border min-h-[44px] flex items-center gap-1.5 text-sm cursor-pointer ${UI.radius} ${UI.pressLabel} ${songRepeat ? UI.on : UI.off}`}
+        className={`px-3 border min-h-[44px] w-full flex items-center gap-2 text-sm whitespace-nowrap cursor-pointer ${UI.radius} ${UI.pressLabel} ${songRepeat ? UI.on : UI.off}`}
       >
         <input
           type="checkbox"
@@ -332,13 +334,15 @@ export function LoopControl({ snippet, songRepeat, onSongRepeatChange, songRestM
           onChange={(e) => onSongRepeatChange(e.target.checked)}
           className="sr-only"
         />
-        <Repeat className="w-4 h-4" />
+        <Repeat className="w-4 h-4 flex-shrink-0" />
         Loop song
       </label>
       {songRepeat && (
-        <RestControl value={songRestMeasures} onChange={onSongRestMeasuresChange} />
+        <div className="col-span-2 order-last">
+          <RestControl value={songRestMeasures} onChange={onSongRestMeasuresChange} />
+        </div>
       )}
-    </div>
+    </>
   );
 }
 

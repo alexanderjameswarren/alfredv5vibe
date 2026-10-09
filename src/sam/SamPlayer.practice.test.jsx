@@ -362,10 +362,15 @@ test("More opens the drawer in section order; Play closes it and it stays closed
   }
   expect(within(drawer).queryByRole("button", { name: /^Tuning$/ })).not.toBeInTheDocument();
   const tools = within(drawer).getByRole("region", { name: "Tools" });
-  for (const name of [/Edit Song/, /Fingering mode/, /Export/, /Refresh/, /Audio/]) {
-    expect(within(tools).getByRole("button", { name })).toBeInTheDocument();
-  }
-  expect(within(tools).getByText("Loop song")).toBeInTheDocument();
+  const groups = within(tools).getAllByRole("group").map((g) => g.getAttribute("aria-label"));
+  expect(groups).toEqual(["Practice", "Song", "Files"]);
+  const names = (group) => within(within(tools).getByRole("group", { name: group }))
+    .getAllByRole("button").map((b) => b.textContent);
+  expect(names("Song")).toEqual(["Edit Song", "Lyrics"]);
+  expect(names("Files")).toEqual(["Audio", "Export", "Refresh"]);
+  const practice = within(tools).getByRole("group", { name: "Practice" });
+  expect(within(practice).getByText("Loop song")).toBeInTheDocument();
+  expect(within(practice).getByRole("button", { name: "Fingering mode" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Close" })).toHaveAttribute("aria-pressed", "true");
   // Nothing of it is left above the score.
   expect(screen.queryAllByRole("button", { name: /Fingering mode/ })).toHaveLength(1);
@@ -427,6 +432,16 @@ test("Edit Song in Tools closes the drawer and opens the Edit song dialog", asyn
   expect(await screen.findByRole("heading", { name: "Edit Song" })).toBeInTheDocument();
   // The title's pencil is still there.
   expect(screen.getByTitle("Edit song")).toBeInTheDocument();
+});
+
+test("Lyrics in Tools closes the drawer and opens the Lyrics sheet", async () => {
+  await open();
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  fireEvent.click(screen.getByRole("button", { name: "Lyrics" }));
+  expect(screen.queryByRole("dialog", { name: "More" })).not.toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "Lyrics" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog", { name: "Lyrics" })).not.toBeInTheDocument();
 });
 
 test("Play closes the snippet tray too", async () => {
