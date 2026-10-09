@@ -9,8 +9,9 @@ import * as core from "../_shared/wb-sync-core.ts";
 
 // wb-sync — daily SimpleFIN pull into the wb_ tables.
 //
-// Spec: docs/technical-spec-warren_buffet-w7b.md section 7. Pure logic lives in
-// _shared/wb-sync-core.ts, which is where the tests are.
+// Spec: docs/history/technical-spec-warren_buffet-w7b.md section 7, and
+// docs/technical-spec-warren_buffet_p2-m4t.md section 5 for processing. Pure
+// logic lives in _shared/wb-sync-core.ts, which is where the tests are.
 //
 // NOT an MCP tool. Called by pg_cron via pg_net (Step 4) or by hand, with no
 // user token, so like notify-dispatch it is deployed with verify_jwt = false
@@ -41,11 +42,7 @@ function secretMatches(provided: string | null, expected: string): boolean {
 const CHUNK = 500;
 const PAGE = 1000;
 
-function chunks<T>(rows: T[], size = CHUNK): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < rows.length; i += size) out.push(rows.slice(i, i + size));
-  return out;
-}
+const chunks = <T>(rows: T[], size = CHUNK): T[][] => core.chunks(rows, size);
 
 /** Page past PostgREST's row cap. */
 async function selectAll<T>(
@@ -107,6 +104,29 @@ interface Counts {
   transactions_updated: number;
   transactions_unchanged: number;
   pending_deleted: number;
+  transactions_processed: number;
+}
+
+/**
+ * Phase 2 processing for the given ids, in chunks. Never throws: a failed chunk
+ * is recorded and its rows stay unprocessed, to be picked up by the next run.
+ */
+async function processTransactions(db: SupabaseClient, ids: string[]): Promise<core.ProcessTotals> {
+  let totals = core.emptyProcessTotals();
+  for (const [i, part] of core.chunks(ids, core.PROCESS_CHUNK).entries()) {
+    try {
+      const { data, error } = await db.rpc("wb_process_transactions", { ids: part });
+      totals = core.addProcessResult(
+        totals,
+        (data ?? null) as Obj | null,
+        error ? `chunk ${i + 1} (${part.length} rows): ${error.message}`.slice(0, 300) : null,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      totals = core.addProcessResult(totals, null, `chunk ${i + 1} (${part.length} rows): ${msg}`.slice(0, 300));
+    }
+  }
+  return totals;
 }
 
 async function sync(
@@ -116,7 +136,7 @@ async function sync(
   now: Date,
   windowStart: Date,
   hasBlockingErrors: boolean,
-): Promise<Counts> {
+): Promise<{ counts: Counts; processing: core.ProcessTotals }> {
   const nowIso = now.toISOString();
   const asOf = core.localDate(now);
   const accounts = (Array.isArray(body.accounts) ? body.accounts : []) as Obj[];
@@ -129,8 +149,9 @@ async function sync(
     transactions_updated: 0,
     transactions_unchanged: 0,
     pending_deleted: 0,
+    transactions_processed: 0,
   };
-  if (accounts.length === 0) return counts;
+  if (accounts.length === 0) return { counts, processing: core.emptyProcessTotals() };
 
   // 1. Accounts. Only sync-owned columns are in the payload, so human columns
   //    are never touched by the upsert's update.
@@ -198,6 +219,7 @@ async function sync(
   // stored field changed; every returned row still gets last_seen_at.
   let existing = 0;
   let changed = 0;
+  const touched = new Set<string>(); // new or changed, for processing
   for (const part of chunks(txnRows, 200)) {
     const { data, error } = await db
       .from("wb_transactions")
@@ -207,15 +229,27 @@ async function sync(
     if (error) throw new Error(`wb_transactions read: ${error.message}`);
     const stored = new Map((data ?? []).map((r) => [`${r.account_id}|${r.external_id}`, r as Obj]));
     for (const row of part) {
-      const s = stored.get(`${row.account_id}|${row.external_id}`);
-      if (!s) continue;
+      const key = core.txnKey(row.account_id, row.external_id);
+      const s = stored.get(key);
+      if (!s) {
+        touched.add(key);
+        continue;
+      }
       existing++;
-      if (core.transactionChanged(s, row)) changed++;
+      if (core.transactionChanged(s, row)) {
+        changed++;
+        touched.add(key);
+      }
     }
   }
+  const upserted: Array<{ id: string; account_id: string; external_id: string }> = [];
   for (const part of chunks(txnRows)) {
-    const { error } = await db.from("wb_transactions").upsert(part, { onConflict: "account_id,external_id" });
+    const { data, error } = await db
+      .from("wb_transactions")
+      .upsert(part, { onConflict: "account_id,external_id" })
+      .select("id, account_id, external_id");
     if (error) throw new Error(`wb_transactions upsert: ${error.message}`);
+    upserted.push(...((data ?? []) as typeof upserted));
   }
   counts.transactions_new = txnRows.length - existing;
   counts.transactions_updated = changed;
@@ -239,7 +273,30 @@ async function sync(
   }
   counts.pending_deleted = doomed.length;
 
-  return counts;
+  // 6. Phase 2 processing: new and changed rows, plus any never processed
+  //    (an earlier failed chunk, or rows from before processing existed).
+  let unprocessed: string[] = [];
+  let unprocessedError: string | null = null;
+  try {
+    unprocessed = (await selectAll<{ id: string }>((from, to) =>
+      db
+        .from("wb_transactions")
+        .select("id")
+        .eq("context_id", owner.context_id)
+        .is("processed_at", null)
+        .order("id")
+        .range(from, to)
+    )).map((r) => r.id);
+  } catch (err) {
+    unprocessedError = `unprocessed read: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300);
+  }
+  const doomedSet = new Set(doomed);
+  const ids = core.idsToProcess(upserted, touched, unprocessed).filter((id) => !doomedSet.has(id));
+  let processing = await processTransactions(db, ids);
+  if (unprocessedError) processing = core.addProcessResult(processing, null, unprocessedError);
+  counts.transactions_processed = processing.processed;
+
+  return { counts, processing };
 }
 
 /** Trimmed env value; a pasted secret can carry a trailing space or newline. */
@@ -361,7 +418,8 @@ Deno.serve(async (req) => {
       ? { errors: [core.SIMULATED_MESSAGE], accounts: [] }
       : await fetchSimplefin(accessUrl!, windowStart);
     const { informational, blocking } = core.classifyErrors(core.errorMessages(body));
-    const counts = await sync(db, body, owner, now, windowStart, blocking.length > 0);
+    const { counts, processing } = await sync(db, body, owner, now, windowStart, blocking.length > 0);
+    // Processing problems are recorded but never change the status.
     const status = core.runStatus(blocking);
     const blockingSafe = blocking.map((m) => core.redact(m, secrets));
 
@@ -370,6 +428,14 @@ Deno.serve(async (req) => {
       ...(simulate ? {} : { covered_from: coveredFrom, covered_to: coveredTo }),
       details: {
         ...counts,
+        processing: {
+          paired: processing.paired,
+          transfer_candidates: processing.transfer_candidates,
+          rule_tags: processing.rule_tags,
+        },
+        ...(processing.errors.length
+          ? { processing_errors: processing.errors.map((m) => core.redact(m, secrets)) }
+          : {}),
         simplefin_errors: blockingSafe,
         simplefin_notices: informational.map((m) => core.redact(m, secrets)),
         ...(status === "partial" ? { failure_kind: "simplefin_errors" } : {}),
@@ -386,7 +452,8 @@ Deno.serve(async (req) => {
         `skipped_manual=${counts.snapshots_skipped_manual} holdings=${counts.holdings} ` +
         `txn_new=${counts.transactions_new} txn_updated=${counts.transactions_updated} ` +
         `txn_unchanged=${counts.transactions_unchanged} notices=${informational.length} ` +
-        `pending_deleted=${counts.pending_deleted} errors=${blocking.length} ` +
+        `pending_deleted=${counts.pending_deleted} processed=${counts.transactions_processed} ` +
+        `processing_errors=${processing.errors.length} errors=${blocking.length} ` +
         `alerts_created=${alerts.created} alerts_open=${alerts.already_open}`,
     );
     return json({
@@ -394,6 +461,7 @@ Deno.serve(async (req) => {
       run_id: runId,
       status,
       ...counts,
+      processing_errors: processing.errors.length,
       simplefin_errors: blocking.length,
       alerts,
       ...(simulate ? { simulated: true } : {}),

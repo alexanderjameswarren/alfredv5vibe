@@ -2,7 +2,8 @@
 //
 // No Deno APIs, no imports, no I/O: everything here takes plain values and
 // returns plain values, so wb-sync-core.test.mjs can run it under node --test.
-// Spec: docs/technical-spec-warren_buffet-w7b.md sections 6 and 7.
+// Spec: docs/history/technical-spec-warren_buffet-w7b.md sections 6 and 7;
+// processing: docs/technical-spec-warren_buffet_p2-m4t.md section 5.
 
 export const APP = "warren_buffet";
 export const JOB = "wb-sync";
@@ -373,6 +374,62 @@ export function alertFor(input: AlertInput, institutions: string[], runId: strin
     `wb-sync run ${runId} on ${runDate}. This item stays the only alert for this problem while it is open; ` +
     `archive it once the connection is fixed.`;
   return { key: errorKey(input.message), title, text, failureKind: input.failureKind };
+}
+
+// ── Phase 2 processing (docs/technical-spec-warren_buffet_p2-m4t.md §5) ──────
+
+/** Transactions per wb_process_transactions call. */
+export const PROCESS_CHUNK = 100;
+
+export function chunks<T>(rows: T[], size: number): T[][] {
+  if (!Number.isInteger(size) || size < 1) throw new Error(`chunk size must be a positive integer, got ${size}`);
+  const out: T[][] = [];
+  for (let i = 0; i < rows.length; i += size) out.push(rows.slice(i, i + size));
+  return out;
+}
+
+export function txnKey(accountId: string, externalId: string): string {
+  return `${accountId}|${externalId}`;
+}
+
+/**
+ * Ids to process: the upserted rows this run inserted or changed (by
+ * account|external key), then any row never processed. Deduped, in that order.
+ */
+export function idsToProcess(
+  upserted: Array<{ id: string; account_id: string; external_id: string }>,
+  touchedKeys: Set<string>,
+  unprocessedIds: string[],
+): string[] {
+  const out = new Set<string>();
+  for (const r of upserted) if (touchedKeys.has(txnKey(r.account_id, r.external_id))) out.add(r.id);
+  for (const id of unprocessedIds) out.add(id);
+  return [...out];
+}
+
+export interface ProcessTotals {
+  processed: number;
+  paired: number;
+  transfer_candidates: number;
+  rule_tags: number;
+  errors: string[];
+}
+
+export function emptyProcessTotals(): ProcessTotals {
+  return { processed: 0, paired: 0, transfer_candidates: 0, rule_tags: 0, errors: [] };
+}
+
+/** Adds one wb_process_transactions result, or its error, to the totals. */
+export function addProcessResult(totals: ProcessTotals, result: Obj | null, error: string | null): ProcessTotals {
+  if (error) return { ...totals, errors: [...totals.errors, error] };
+  const n = (k: string) => (typeof result?.[k] === "number" ? (result[k] as number) : 0);
+  return {
+    processed: totals.processed + n("processed"),
+    paired: totals.paired + n("paired"),
+    transfer_candidates: totals.transfer_candidates + n("transfer_candidates"),
+    rule_tags: totals.rule_tags + n("rule_tags"),
+    errors: totals.errors,
+  };
 }
 
 /** Alerts to create: one per distinct key, none whose key already has an open item. */

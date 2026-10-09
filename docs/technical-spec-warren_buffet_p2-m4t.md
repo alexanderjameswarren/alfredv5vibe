@@ -160,25 +160,30 @@ All three use the Pacific date of `coalesce(posted_at, transacted_at)`; amounts 
 Security invoker, `search_path = public, pg_temp`, executable by `authenticated` and `service_role` only. Returns counts as jsonb. Helpers, all pure and tested on invented values:
 
 - `wb_clean_description(raw text, strip_location boolean)`
-- `wb_is_transfer_phrase(text)`, `wb_is_interest_phrase(text)`, `wb_is_fee_phrase(text)`
+- `wb_is_transfer_phrase(text)`, `wb_is_interest_phrase(text)`, `wb_is_fee_phrase(text)`, `wb_is_p2p_phrase(text)` (Venmo, Zelle, Visa Direct, PayPal, Cash App; migration 107)
 - `wb_default_kind(account_role, amount, raw_description, payee, merchant_default_kind)`
 - `wb_transfer_match(a_account, a_amount, a_date, b_account, b_amount, b_date)` and `wb_pair_decision(forward_matches, reverse_matches)` → `pair`, `ambiguous` or `none`.
 - `wb_rule_matches(match, account_id, amount, payee, description, clean_description, merchant_id, kind)`.
 
 For each transaction in `ids`, in order:
 
-1. **Clean** the description: decode HTML entities (named and numeric), drop masked card numbers (`XXXX1234`, `*1234`), reference numbers (`REF #…`, `CONF …`, `*` followed by a code), phone numbers, store numbers (`#123`, digit runs of four or more), collapse whitespace, trim stray punctuation. When a merchant matched, also drop a trailing two-letter state code and the single word before it (the city).
+1. **Clean** the description:
+   - decode HTML entities (named and numeric);
+   - drop URLs with a path (`g.co/helppay#CA`), masked account numbers and any short number after them (`XXXX1234`, `XXXXX6   937`), reference numbers (`REF #…`, `CONF …`, `*` followed by a code), phone numbers in the common shapes (including `888-5550123`), upper-case letter-digit codes of five or more (`PTQV5S`), dates (`ON 10/02/26`), and store numbers (`#123`, digit runs of four or more);
+   - collapse whitespace and trim stray punctuation.
+
+   When a merchant matched, also drop a trailing two-letter state code. The city stays: without a city list, removing "the word before the state" also removed merchant words (migration 107).
 2. **Merchant** (skipped when `merchant_source` is `claude` or `manual`): the merchant whose pattern is contained in the payee, else in the description (pattern inside the text, never the reverse); the longest matching pattern wins, then the name. Source `default`; null when nothing matches.
 3. **Default kind** (skipped when `kind_source` is `claude` or `manual`, or the row is already paired). Precedence:
    1. account role `retirement` or `taxable_investment` → `investment`;
    2. the merchant's `default_kind`;
-   3. a transfer or card-payment phrase → `transfer`;
+   3. a transfer or card-payment phrase → `transfer`, unless the row is a payment to a person (`wb_is_p2p_phrase`), which falls through to the sign rules;
    4. a positive interest phrase → `interest`;
    5. a negative fee or interest-charge phrase → `fee`;
    6. a positive amount on a `credit_card` or `emergency_credit` account → `refund`;
    7. any other positive amount → `income`, and anything else → `spend`.
    Source `default`.
-4. **Transfer pairing** (posted rows only; never a row whose `kind_source` is `claude` or `manual`). A candidate is an unpaired row whose kind is `transfer`. Its matches are unpaired, posted rows on another household account (synced, role not `closed` or `history_rollup`) with the opposite amount, within 5 days. The search also runs in reverse, from the match back to the candidates. Exactly one match both ways → pair both rows, kind `transfer`, source `default`, `transfer_candidate` false. Otherwise the candidate gets `transfer_candidate = true`, which puts it in the review queue.
+4. **Transfer pairing** (posted rows only; never a row whose `kind_source` is `claude` or `manual`). A candidate is an unpaired row whose kind is `transfer`. Its matches are unpaired, posted rows on another household account (synced, role not `closed` or `history_rollup`) with the opposite amount, within 5 days. The search also runs in reverse, from the match back to the candidates. Exactly one match both ways → pair both rows, kind `transfer`, source `default`, `transfer_candidate` false. Otherwise the candidate gets `transfer_candidate = true`, which puts it in the review queue. A payment to a person is also searched for a match and paired on exactly one, but is never flagged as a candidate.
 5. **Rules** (posted rows only). Delete the transaction's existing `source = 'rule'` tags. Then run the active rules in priority order:
    - `set_kind` applies unless the kind is `claude`/`manual` or the row is paired; source `rule`.
    - `set_merchant_id` applies unless the merchant is `claude`/`manual`; source `rule`.
