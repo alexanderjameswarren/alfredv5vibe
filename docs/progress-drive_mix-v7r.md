@@ -3,7 +3,7 @@
 Project code: `drive_mix-v7r`
 Spec: docs/technical-spec-drive_mix-v7r.md
 
-## Status: Live (2026-10-08) — step 9 open
+## Status: Live (2026-10-08) — step 10 in progress
 
 ### Development Steps
 - [x] Step 1: Read-only plan — files, database items, claims check (s1)
@@ -19,6 +19,18 @@ Spec: docs/technical-spec-drive_mix-v7r.md
   - The daily scheduled task "Drive Mix daily refresh" runs at 4:54 am Pacific: sweep, tag, pick, replace the playlist, record the serving. It posts an inbox item only on problems.
   - Chat procedures are in `.claude/skills/drive-mix/SKILL.md`.
 - [ ] Step 9: Feedback — test whether skips appear in history; check whether thumbs-down can be read
+- [x] Step 10a: Read-only plan for spread order, familiar/new blend, thumbs, top-songs bar (s10, 2026-10-09). The top-songs change was dropped and is handled by the skill's review instead.
+- [x] Step 10b: Code (s11). Migration 101_drive_mix_familiar_spread_thumbs.sql; `update_drive_mix_thumbs` plus the new pick and simulation params in dj-drive-mix.ts and mcp/index.ts; spec §3–§7; the drive-mix skill.
+- [x] Step 10c: Database. gitsync showed no drift (only 100_restructure_p2 came in); numbered 101; applied 2026-10-09; CONFORMANT.
+- [x] Step 10d: Verified 101 as authenticated: pick 50 in 345 ms, pick 200 in 55 ms, 30-day sim in 2,102 ms; spacing fair (every slice's average position 25.4–25.5). The new share averaged 0.469, against a 0.25 target.
+  - A diagnostic (temporary functions only, not kept) found the cause: familiar songs were skipped mostly by the artist cap, then the cooldown. Alex chose variant (c): oldies exempt, familiar songs may break the cooldown, sim 0.246.
+- [x] Step 10d2: Migration 102 (variant c, plus the new_over_cap fix) applied 2026-10-09. As authenticated: pick 50 in 458 ms, pick 200 in 61 ms, 30-day sim in 2,251 ms.
+  - Sim: the new share averaged 0.246 (0.24 from day 2), with 147 cooling breaks and no shortfalls.
+  - Slice average positions were 25.4–25.5.
+  - Familiar minimum repeat gap: 7 days, and 25 for 1980s-and-earlier.
+  - CONFORMANT.
+- [x] Step 10e: MCP deployed 2026-10-09; the live get_drive_mix_pick returns new_cap, new_over_cap and cooling_breaks. Checkpoint next.
+- [ ] Step 10f: Daily task's thumbs step updated in chat.
 
 ### Build log (CLI rounds after the plan steps)
 - **5d/5e (2026-10-07):** top-songs ranking reworked to YouTube Music play counts, with dedupe, variant flags, original_candidate and suggested thresholds. Then concurrent lookups with a time budget. Workshop tests 261.
@@ -30,6 +42,12 @@ Spec: docs/technical-spec-drive_mix-v7r.md
   - The cause was the per-song correlated recency, whose OR join seq-scanned `dj_tracks` once per song.
   - Migration 099 makes recency set-based, with explicit user_id filters. As authenticated: pick 50 in 461 ms, pick 170 in 42 ms, a 30-day simulation in 1,150 ms.
   - Output hashes were identical to 098. No TypeScript change.
+- **10 (2026-10-09):** two days of real listening produced four changes:
+  - the order spreads slices and new songs evenly;
+  - new songs are capped at 25% per list, familiar meaning 5 or more play days or a thumbs up;
+  - familiar songs keep a 7-day gap, because 1980s-and-earlier had only 9 familiar songs of 281;
+  - thumbs down is excluded in the picker, and the latest thumb wins.
+  Item 4, the top-songs bar, was dropped: Alex's picks for Madonna and Billy Joel showed that play counts cannot predict what he knows.
 
 ### Testing Steps
 - [x] Picker returns the scaled slice counts (6/10/12/22 at 50, 20/34/41/75 at 170) — verified 2026-10-08

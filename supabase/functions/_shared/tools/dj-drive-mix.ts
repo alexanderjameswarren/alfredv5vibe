@@ -12,6 +12,7 @@
 //   get_drive_mix_simulation   tier 1 — drive_mix_simulate for N days. Writes nothing.
 //   create_drive_mix_serving   tier 2 — record the video_ids that went to YouTube for a date.
 //   create_drive_mix_sweep     tier 1 — drive_mix_sweep: pool history songs as pending.
+//   update_drive_mix_thumbs    tier 2 — record Alex's thumbs; the latest thumb wins.
 // ============================================================================
 
 import { clampLimit, defineTool, describeDbError, envelope } from "../platform.ts";
@@ -25,8 +26,18 @@ export const DEFAULT_QUOTAS: Record<string, number> = {
   country_rap: 6, "1980s-and-earlier": 10, "2010s-2020s": 12, "1990s-2000s": 22,
 };
 
+export const THUMBS = ["up", "down"] as const;
+// Retired for these reasons, a song comes back on a thumbs up. Any other reason (jazz, holiday...) stays.
+export const THUMBS_UP_REVIVES = ["cut by Alex", "cut by Alex (not known)"];
+// Mirror drive_mix_pick's defaults.
+export const DEFAULT_NEW_SHARE = 0.25;
+export const DEFAULT_FAMILIAR_DAYS = 5;
+export const DEFAULT_FAMILIAR_GAP_DAYS = 7;
+export const DEFAULT_FAMILIAR_SLICES_EXEMPT = ["1980s-and-earlier"];
+export const DEFAULT_FAMILIAR_BREAKS_COOLDOWN = true;
+
 const COLUMNS =
-  "id, video_id, title, artist, artist_key, decade, genre, status, source, retired_reason, added_at";
+  "id, video_id, title, artist, artist_key, decade, genre, status, source, retired_reason, thumbs, thumbs_at, added_at";
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_BATCH = 50;
@@ -146,7 +157,34 @@ function pickParams(T: string, args: Record<string, unknown>): Record<string, un
   if (given(args.artist_cap)) p.p_artist_cap = parseIntIn(T, "artist_cap", args.artist_cap, 1, 50);
   if (given(args.quotas)) p.p_quotas = parseQuotas(T, args.quotas);
   if (given(args.cooldown_days)) p.p_cooldown_days = parseIntIn(T, "cooldown_days", args.cooldown_days, 0, 30);
+  if (given(args.new_share)) {
+    const v = args.new_share;
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) {
+      throw new Error(`${T}: new_share must be a number from 0 to 1, e.g. 0.25. Got ${JSON.stringify(v)}.`);
+    }
+    p.p_new_share = v;
+  }
+  if (given(args.familiar_days)) p.p_familiar_days = parseIntIn(T, "familiar_days", args.familiar_days, 1, 365);
+  if (given(args.familiar_gap_days)) {
+    p.p_familiar_gap_days = parseIntIn(T, "familiar_gap_days", args.familiar_gap_days, 0, 60);
+  }
+  if (given(args.familiar_slices_exempt)) {
+    const v = args.familiar_slices_exempt;
+    if (!Array.isArray(v)) throw new Error(`${T}: familiar_slices_exempt must be a list of slices, e.g. ["1980s-and-earlier"], or [] for none.`);
+    p.p_familiar_slices_exempt = [...new Set(v.map((s) => parseEnum(T, "familiar_slices_exempt", s, SLICES)))];
+  }
+  if (given(args.familiar_breaks_cooldown)) {
+    if (typeof args.familiar_breaks_cooldown !== "boolean") {
+      throw new Error(`${T}: familiar_breaks_cooldown must be true or false.`);
+    }
+    p.p_familiar_breaks_cooldown = args.familiar_breaks_cooldown;
+  }
   return p;
+}
+
+/** drive_mix_pick's new-song cap: floor(share x count), 12 of 50 at 0.25. */
+export function newSongCap(share: number, count: number): number {
+  return Math.floor(share * count + 1e-9);
 }
 
 /** Slice a song counts in, as drive_mix_pick decides it. null = untagged. */
@@ -186,6 +224,7 @@ export const getDriveMixSongsTool = defineTool({
     const source = given(args.source) ? parseEnum(T, "source", args.source, SOURCES) : null;
     const artist = given(args.artist) ? normaliseArtistKey(T, args.artist) : null;
     const untagged = args.untagged === true;
+    const thumbs = given(args.thumbs) ? parseEnum(T, "thumbs", args.thumbs, THUMBS) : null;
     const LIMIT = clampLimit(args.limit as number | undefined);
 
     let q = ctx.db.from("drive_mix_songs").select(COLUMNS, { count: "exact" });
@@ -193,6 +232,7 @@ export const getDriveMixSongsTool = defineTool({
     if (source) q = q.eq("source", source);
     if (artist) q = q.eq("artist_key", artist);
     if (untagged) q = q.or("decade.is.null,genre.is.null");
+    if (thumbs) q = q.eq("thumbs", thumbs);
     const { data, error, count } = await q
       .order("artist_key", { ascending: true })
       .order("title", { ascending: true })
@@ -201,12 +241,15 @@ export const getDriveMixSongsTool = defineTool({
 
     // Pool-wide counts, independent of the filters above.
     const all = () => ctx.db.from("drive_mix_songs").select("id", { count: "exact", head: true });
-    const eligible = () => all().eq("status", "active").not("decade", "is", null).not("genre", "is", null);
+    const eligible = () => all().eq("status", "active").not("decade", "is", null).not("genre", "is", null)
+      .or("thumbs.is.null,thumbs.neq.down");
     const notCR = (q: any) => q.not("genre", "in", "(country,rap)");
-    const [pending, active, retired, cr, s80, s9000, s1020] = await Promise.all([
+    const [pending, active, retired, up, down, cr, s80, s9000, s1020] = await Promise.all([
       headCount(T, all().eq("status", "pending")),
       headCount(T, all().eq("status", "active")),
       headCount(T, all().eq("status", "retired")),
+      headCount(T, all().eq("thumbs", "up")),
+      headCount(T, all().eq("thumbs", "down")),
       headCount(T, eligible().in("genre", ["country", "rap"])),
       headCount(T, notCR(eligible()).lte("decade", 1980)),
       headCount(T, notCR(eligible()).gte("decade", 1990).lte("decade", 2000)),
@@ -222,7 +265,7 @@ export const getDriveMixSongsTool = defineTool({
       {
         songs: rows,
         matched: total,
-        pool: { by_status: { pending, active, retired }, active_eligible_by_slice: bySlice },
+        pool: { by_status: { pending, active, retired }, by_thumbs: { up, down }, active_eligible_by_slice: bySlice },
       },
       { count: rows.length, limit_applied: LIMIT, truncated: total > rows.length, total },
     );
@@ -444,16 +487,27 @@ export const getDriveMixPickTool = defineTool({
     const params = { p_date: date, ...pickParams(T, args) };
     const { data, error } = await ctx.db.rpc("drive_mix_pick", params);
     if (error) throw new Error(describeDbError(T, error));
-    const rows = (data ?? []) as { slice: string; video_id: string; carried?: boolean; cooling?: boolean }[];
+    const rows = (data ?? []) as {
+      slice: string; video_id: string; carried?: boolean; cooling?: boolean; familiar?: boolean; new_over_cap?: boolean;
+    }[];
     const p = params as Record<string, unknown>;
     const count = (p.p_count as number) ?? 50;
     const quotas = scaleQuotas((p.p_quotas as Record<string, number>) ?? DEFAULT_QUOTAS, count);
+    const newShare = (p.p_new_share as number) ?? DEFAULT_NEW_SHARE;
     return {
       date,
       requested: count,
       returned: rows.length,
       quotas_used: quotas,
       artist_cap_used: (p.p_artist_cap as number) ?? defaultArtistCap(count),
+      familiar_days_used: (p.p_familiar_days as number) ?? DEFAULT_FAMILIAR_DAYS,
+      familiar_gap_days_used: (p.p_familiar_gap_days as number) ?? DEFAULT_FAMILIAR_GAP_DAYS,
+      familiar_slices_exempt_used: (p.p_familiar_slices_exempt as string[]) ?? DEFAULT_FAMILIAR_SLICES_EXEMPT,
+      familiar_breaks_cooldown_used: (p.p_familiar_breaks_cooldown as boolean) ?? DEFAULT_FAMILIAR_BREAKS_COOLDOWN,
+      new_cap: newSongCap(newShare, count),
+      new_songs: rows.filter((r) => r.familiar === false).length,
+      new_over_cap: rows.filter((r) => r.new_over_cap).length,
+      cooling_breaks: rows.filter((r) => r.familiar && r.cooling).length,
       carried_over: rows.filter((r) => r.carried).length,
       cooling_used: rows.filter((r) => r.cooling).length,
       short_by: Math.max(0, count - rows.length),
@@ -577,5 +631,98 @@ export const createDriveMixSweepTool = defineTool({
       { added: rows.length, songs: rows.slice(0, LIMIT) },
       { limit_applied: LIMIT, truncated: rows.length > LIMIT, total: rows.length },
     );
+  },
+});
+
+// ---------------------------------------------------------------------------
+// update_drive_mix_thumbs — tier 2
+// ---------------------------------------------------------------------------
+// Latest thumb wins: a thumb older than the song's thumbs_at is skipped, so
+// replaying old feedback cannot undo a newer thumb. "clear" keeps thumbs_at.
+
+type Thumb = { video_id: string; thumbs: "up" | "down" | null; at: string };
+
+/** One thumb per video_id, the latest by `at` (a tie goes to the later entry). */
+export function parseThumbs(T: string, v: unknown, now = new Date()): Thumb[] {
+  if (!Array.isArray(v) || v.length === 0 || v.length > MAX_PLAYLIST) {
+    throw new Error(`${T}: thumbs must be a list of 1 to ${MAX_PLAYLIST} {video_id, thumbs, at}. Nothing was changed.`);
+  }
+  const latest = new Map<string, Thumb>();
+  for (const [i, raw] of v.entries()) {
+    const S = `${T}: thumbs[${i}]`;
+    if (typeof raw !== "object" || raw === null) throw new Error(`${S} must be an object. Nothing was changed.`);
+    const r = raw as Record<string, unknown>;
+    const videoId = parseVideoId(S, r.video_id);
+    const value = parseEnum(S, "thumbs", r.thumbs, ["up", "down", "clear"]);
+    let at = now.toISOString();
+    if (given(r.at)) {
+      const d = typeof r.at === "string" ? new Date(r.at) : new Date(NaN);
+      if (Number.isNaN(d.getTime()) || d.getTime() > now.getTime() + 86_400_000) {
+        throw new Error(`${S}: at must be an ISO timestamp, not in the future. Got ${JSON.stringify(r.at)}. Nothing was changed.`);
+      }
+      at = d.toISOString();
+    }
+    const prior = latest.get(videoId);
+    if (!prior || at >= prior.at) {
+      latest.set(videoId, { video_id: videoId, thumbs: value === "clear" ? null : value as "up" | "down", at });
+    }
+  }
+  return [...latest.values()];
+}
+
+type ThumbRow = {
+  id: string; video_id: string; title: string; status: string; retired_reason: string | null;
+  decade: number | null; genre: string | null; thumbs: string | null; thumbs_at: string | null;
+};
+
+export const updateDriveMixThumbsTool = defineTool({
+  name: "update_drive_mix_thumbs",
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const T = "update_drive_mix_thumbs";
+    const thumbs = parseThumbs(T, args.thumbs);
+
+    const { data: pool, error: readError } = await ctx.db
+      .from("drive_mix_songs")
+      .select("id, video_id, title, status, retired_reason, decade, genre, thumbs, thumbs_at")
+      .in("video_id", thumbs.map((t) => t.video_id));
+    if (readError) throw new Error(`${T}: ${readError.message}`);
+    const byVideo = new Map(((pool ?? []) as ThumbRow[]).map((r) => [r.video_id, r]));
+
+    const skipped: { video_id: string; reason: string }[] = [];
+    const revived: { video_id: string; title: string; status: string }[] = [];
+    const groups = new Map<string, { patch: Record<string, unknown>; at: string; ids: string[] }>();
+    for (const t of thumbs) {
+      const row = byVideo.get(t.video_id);
+      if (!row) {
+        skipped.push({ video_id: t.video_id, reason: "not in the pool" });
+        continue;
+      }
+      if (row.thumbs_at && new Date(row.thumbs_at).getTime() > new Date(t.at).getTime()) {
+        skipped.push({ video_id: t.video_id, reason: `older than the thumb recorded at ${row.thumbs_at}` });
+        continue;
+      }
+      const patch: Record<string, unknown> = { thumbs: t.thumbs, thumbs_at: t.at };
+      if (t.thumbs === "up" && row.status === "retired" && THUMBS_UP_REVIVES.includes(row.retired_reason ?? "")) {
+        patch.status = row.decade != null && row.genre != null ? "active" : "pending";
+        patch.retired_reason = null;
+        revived.push({ video_id: row.video_id, title: row.title, status: patch.status as string });
+      }
+      const key = JSON.stringify(patch);
+      if (!groups.has(key)) groups.set(key, { patch, at: t.at, ids: [] });
+      groups.get(key)!.ids.push(row.id);
+    }
+
+    const updated: unknown[] = [];
+    for (const g of groups.values()) {
+      // Re-checked in the write, so a newer thumb landing meanwhile is not overwritten.
+      const { data, error } = await ctx.db.from("drive_mix_songs").update(g.patch)
+        .in("id", g.ids)
+        .or(`thumbs_at.is.null,thumbs_at.lte."${g.at}"`)
+        .select("id, video_id, title, status, thumbs, thumbs_at");
+      if (error) throw new Error(describeDbError(T, error));
+      updated.push(...(data ?? []));
+    }
+    return { recorded: updated.length, updated, revived, skipped };
   },
 });
