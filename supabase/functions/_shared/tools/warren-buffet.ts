@@ -1,7 +1,9 @@
 // ============================================================================
 // supabase/functions/_shared/tools/warren-buffet.ts
 //
-// Warren Buffet Phase 1 tools. Spec: docs/technical-spec-warren_buffet-w7b.md §8.
+// Warren Buffet Phase 1 tools. Spec: docs/history/technical-spec-warren_buffet-w7b.md §8.
+// get_wb_transactions gained Phase 2 fields and filters (docs/technical-spec-warren_buffet_p2-m4t.md §6).
+// Phase 2 tools are in warren-buffet-p2.ts, which shares the helpers exported here.
 //
 //   get_wb_accounts          tier 1 — accounts with latest balance and staleness
 //   get_wb_balance_history   tier 1 — one account's snapshots, or a role group's daily total
@@ -63,10 +65,12 @@ const SNAPSHOT_COLUMNS = "id, account_id, as_of, balance, available_balance, sou
 const NET_WORTH_COLUMNS =
   "as_of, spending_cash, reserve_cash, credit_owed, loans, retirement, taxable_investments, " +
   "rewards, history_rollup, closed, unassigned, net_worth";
-// No `raw`: the full SimpleFIN object stays out of every list read.
-const TXN_COLUMNS =
-  "id, account_id, posted_at, transacted_at, amount, description, payee, memo, mcc, pending, " +
-  "first_seen_at, last_seen_at, account:wb_accounts(display_name, name)";
+// From wb_transaction_list, which has no `raw`: the SimpleFIN object stays out of every list read.
+export const TXN_COLUMNS =
+  "id, account_id, account_label, posted_at, transacted_at, txn_date, amount, description, clean_description, " +
+  "payee, memo, mcc, pending, merchant_id, merchant_name, merchant_source, kind, kind_source, transfer_pair_id, " +
+  "transfer_candidate, reviewed, tag_names, split_count, needs_review, first_seen_at, last_seen_at";
+export const WB_KINDS = ["spend", "income", "transfer", "refund", "investment", "interest", "fee"] as const;
 const HOLDING_COLUMNS =
   "account_id, as_of, symbol, description, shares, market_value, cost_basis, purchase_price, " +
   "currency, account:wb_accounts(display_name, name)";
@@ -75,14 +79,14 @@ const HOLDING_COLUMNS =
 // Validation helpers (shared by the handlers; none read args directly)
 // ---------------------------------------------------------------------------
 
-const absent = (v: unknown) => v === undefined || v === null;
+export const absent = (v: unknown) => v === undefined || v === null;
 
 export function requireId(T: string, key: string, v: unknown): string {
   if (typeof v !== "string" || v.trim() === "") throw new Error(`${T}: ${key} is required.`);
   return v.trim();
 }
 
-function optText(T: string, key: string, v: unknown): string | null {
+export function optText(T: string, key: string, v: unknown): string | null {
   if (absent(v)) return null;
   if (typeof v !== "string") throw new Error(`${T}: ${key} must be text.`);
   const s = v.trim();
@@ -112,7 +116,7 @@ export function parseMoney(T: string, key: string, v: unknown): number | null {
   return Math.round(v * 100) / 100;
 }
 
-function oneOf<T extends string>(T: string, key: string, v: unknown, allowed: readonly T[]): T | null {
+export function oneOf<T extends string>(T: string, key: string, v: unknown, allowed: readonly T[]): T | null {
   if (absent(v)) return null;
   if (!(allowed as readonly unknown[]).includes(v)) {
     throw new Error(`${T}: ${key} must be one of ${allowed.join(", ")}. Got ${JSON.stringify(v)}.`);
@@ -120,7 +124,7 @@ function oneOf<T extends string>(T: string, key: string, v: unknown, allowed: re
   return v as T;
 }
 
-function optBool(T: string, key: string, v: unknown): boolean | null {
+export function optBool(T: string, key: string, v: unknown): boolean | null {
   if (absent(v)) return null;
   if (typeof v !== "boolean") throw new Error(`${T}: ${key} must be true or false.`);
   return v;
@@ -134,7 +138,7 @@ function rewardRate(T: string, v: unknown): number | null {
   return Math.round(v * 1e6) / 1e6;
 }
 
-function checkRange(T: string, a: string | null, b: string | null, aKey: string, bKey: string) {
+export function checkRange(T: string, a: string | null, b: string | null, aKey: string, bKey: string) {
   if (a && b && a > b) throw new Error(`${T}: ${aKey} ${a} is after ${bKey} ${b}. Nothing was changed.`);
 }
 
@@ -155,7 +159,7 @@ export function pacificMidnight(date: string): string {
   return `${date}T00:00:00${offset}`;
 }
 
-function nextDay(date: string): string {
+export function nextDay(date: string): string {
   const d = new Date(`${date}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + 1);
   return d.toISOString().slice(0, 10);
@@ -170,9 +174,19 @@ export function searchTerm(T: string, v: unknown): string | null {
   return s;
 }
 
-const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+/** One tag name or a list of them, for an overlaps filter on tag_names. */
+export function tagNames(T: string, v: unknown): string[] | null {
+  if (absent(v)) return null;
+  const list = Array.isArray(v) ? v : [v];
+  if (!list.length || list.some((x) => typeof x !== "string" || x.trim() === "")) {
+    throw new Error(`${T}: tag must be a tag name or a list of tag names.`);
+  }
+  return [...new Set(list.map((x) => (x as string).trim()))];
+}
 
-function limitOf(T: string, v: unknown): number {
+export const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+export function limitOf(T: string, v: unknown): number {
   if (absent(v)) return clampLimit(undefined);
   if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
     throw new Error(`${T}: limit must be a positive whole number.`);
@@ -180,7 +194,7 @@ function limitOf(T: string, v: unknown): number {
   return clampLimit(v);
 }
 
-function listResult(rows: unknown[], count: number | null | undefined, LIMIT: number) {
+export function listResult(rows: unknown[], count: number | null | undefined, LIMIT: number) {
   const total = count ?? rows.length;
   const truncated = total > rows.length;
   return envelope(rows, { count: total, limit_applied: LIMIT, truncated, ...(truncated ? { total } : {}) });
@@ -313,16 +327,26 @@ export const getWbTransactionsTool = defineTool({
       throw new Error(`${T}: min_amount ${min} is greater than max_amount ${max}.`);
     }
     const pending = optBool(T, "pending", args.pending);
+    const kind = oneOf(T, "kind", args.kind, WB_KINDS);
+    const merchantId = absent(args.merchant_id) ? null : requireId(T, "merchant_id", args.merchant_id);
+    const tags = tagNames(T, args.tag);
+    const needsReview = optBool(T, "needs_review", args.needs_review);
     const LIMIT = limitOf(T, args.limit);
 
-    let q = ctx.db.from("wb_transactions").select(TXN_COLUMNS, { count: "exact" });
+    let q = ctx.db.from("wb_transaction_list").select(TXN_COLUMNS, { count: "exact" });
     if (accountId) q = q.eq("account_id", accountId);
     if (from) q = q.gte("posted_at", pacificMidnight(from));
     if (to) q = q.lt("posted_at", pacificMidnight(nextDay(to)));
-    if (search) q = q.or(`description.ilike.*${search}*,payee.ilike.*${search}*`);
+    if (search) {
+      q = q.or(`description.ilike.*${search}*,clean_description.ilike.*${search}*,payee.ilike.*${search}*`);
+    }
     if (min !== null) q = q.gte("amount", min);
     if (max !== null) q = q.lte("amount", max);
     if (pending !== null) q = q.eq("pending", pending);
+    if (kind) q = q.eq("kind", kind);
+    if (merchantId) q = q.eq("merchant_id", merchantId);
+    if (tags) q = q.overlaps("tag_names", tags);
+    if (needsReview !== null) q = q.eq("needs_review", needsReview);
     const { data, error, count } = await q
       .order("posted_at", { ascending: false, nullsFirst: true })
       .order("transacted_at", { ascending: false })

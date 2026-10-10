@@ -294,12 +294,17 @@ test("the tool count is 72 after the job-search tools", () => {
     "create_drive_mix_sweep"];
   // 2026-10-09, +1 for Drive Mix thumbs.
   const EXPECTED_ADDED_2026_10_09 = ["update_drive_mix_thumbs"];
+  // 2026-10-09, +17 for Warren Buffet Phase 2, all additions, ONE deploy.
+  const EXPECTED_ADDED_WB_P2 = ["get_wb_review_queue", "get_wb_tags", "create_wb_tag", "update_wb_tag",
+    "get_wb_merchants", "upsert_wb_merchant", "get_wb_rules", "create_wb_rule", "update_wb_rule",
+    "get_wb_rule_preview", "create_wb_rule_from_transaction", "tag_wb_transactions", "set_wb_transaction_kind",
+    "split_wb_transaction", "mark_wb_reviewed", "reprocess_wb_transactions", "get_wb_spending", "get_wb_cash_flow"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
-                      ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09]) {
+                      ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 95,
-    `expected 95 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 113,
+    `expected 113 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -356,6 +361,53 @@ test("Warren Buffet schemas advertise exactly the args their handlers read", () 
     get_wb_accounts: 1, get_wb_balance_history: 1, get_wb_net_worth: 1, get_wb_transactions: 1,
     get_wb_holdings: 1, update_wb_account: 2, create_wb_manual_account: 1, record_wb_balance: 2,
   });
+});
+
+test("Warren Buffet Phase 2 schemas advertise exactly the args their handlers read, at the agreed tiers", () => {
+  const src = readFileSync(join(TOOLS, "warren-buffet-p2.ts"), "utf-8");
+  // Args read in shared helpers count for every block that calls them; their
+  // bodies are cut out first so they are not read as part of a block above them.
+  const helperArgs = {};
+  let rest = src;
+  for (const h of ["ruleFields", "fixArgs", "fixAction"]) {
+    const start = rest.search(new RegExp(`(export )?(async )?function ${h}\\(`));
+    const body = rest.slice(start).split("\n}\n")[0];
+    helperArgs[h] = [...body.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]);
+    rest = rest.replace(body, "");
+  }
+  const blocks = rest.split("defineTool({").slice(1);
+  assert.equal(blocks.length, 18, `expected 18 tools in warren-buffet-p2.ts, found ${blocks.length}`);
+  const tiers = {};
+  for (const b of blocks) {
+    const name = /name:\s*"([^"]+)"/.exec(b)[1];
+    tiers[name] = Number(/tier:\s*(\d)/.exec(b)[1]);
+    const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+    for (const [h, keys] of Object.entries(helperArgs)) if (b.includes(`${h}(`)) keys.forEach((k) => read.add(k));
+    if (tiers[name] === 3) read.add("confirmed");
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
+  }
+  assert.deepEqual(tiers, {
+    get_wb_review_queue: 1, get_wb_tags: 1, create_wb_tag: 1, update_wb_tag: 2, get_wb_merchants: 1,
+    upsert_wb_merchant: 2, get_wb_rules: 1, create_wb_rule: 2, update_wb_rule: 2, get_wb_rule_preview: 1,
+    create_wb_rule_from_transaction: 3, tag_wb_transactions: 2, set_wb_transaction_kind: 2, split_wb_transaction: 2,
+    mark_wb_reviewed: 2, reprocess_wb_transactions: 2, get_wb_spending: 1, get_wb_cash_flow: 1,
+  });
+});
+
+test("Warren Buffet Phase 2 descriptions state the sign rule, the manual rule and merchant matching", () => {
+  const wb = registered.filter((r) => /_wb_/.test(r.name));
+  const desc = (n) => wb.find((r) => r.name === n).cfg.description;
+  for (const n of ["get_wb_review_queue", "set_wb_transaction_kind", "split_wb_transaction", "get_wb_spending", "get_wb_cash_flow", "get_wb_transactions"]) {
+    assert.match(desc(n), /money in is positive, money out is negative/, n);
+  }
+  for (const n of ["upsert_wb_merchant", "create_wb_rule", "update_wb_rule", "create_wb_rule_from_transaction", "tag_wb_transactions", "set_wb_transaction_kind", "reprocess_wb_transactions"]) {
+    assert.match(desc(n), /never overwritten by rules/, n);
+  }
+  for (const n of ["get_wb_rules", "create_wb_rule", "update_wb_rule", "get_wb_rule_preview", "create_wb_rule_from_transaction"]) {
+    assert.match(desc(n), /match on merchants/, n);
+  }
 });
 
 test("Drive Mix schemas advertise exactly the args their handlers read, at the spec's tiers", () => {
