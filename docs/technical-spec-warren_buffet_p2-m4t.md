@@ -115,7 +115,9 @@ Changing `exclusive` pushes the new value onto every `wb_split_tags` row of the 
 
 ### 4.6 `wb_split_tags` (audited)
 
-`id, split_id` (cascade), `tag_id` (restrict), `group_id` and `group_exclusive` (copied from the tag's group by BEFORE trigger, never typed), `source` check in (`rule`, `claude`, `manual`), `rule_id` nullable (on delete set null), `created_at`. Unique `(split_id, tag_id)`. Partial unique index `(split_id, group_id) where group_exclusive`.
+`id, split_id` (cascade), `tag_id` (restrict), `group_id` and `group_exclusive` (copied from the tag's group by BEFORE trigger, never typed), `source` check in (`rule`, `claude`, `manual`), `rule_id` nullable (on delete set null), `created_at`. Unique `(split_id, tag_id)`. Partial unique index `(split_id, group_id) where group_exclusive`. `replaced_rule_id` (Step 4, nullable, on delete set null; never on a `rule` tag) records the rule whose tag a hand tag replaced or took over, for rule health (Step 10).
+
+A hand removal of a rule tag is not remembered: the next reprocess adds it back. To stop a rule tagging something, change the rule, or tag the split by hand in that group.
 
 ### 4.7 `wb_rules` (audited)
 
@@ -127,6 +129,7 @@ Changing `exclusive` pushes the new value onto every `wb_split_tags` row of the 
 | set_merchant_id | optional |
 | add_tag_ids | uuid[] |
 | created_by | `claude`, `manual` |
+| created_from_transaction_id | nullable, references `wb_transactions` on delete set null; the transaction a rule was made from by "Always do this" (§6.1) |
 | hit_count, last_hit_at | computed by processing from `wb_transactions.matched_rule_ids`: the number of matching transactions and the date of the newest one; written only when changed, so a reprocess does not audit every rule |
 | notes | |
 
@@ -152,6 +155,13 @@ All three use the Pacific date of `coalesce(posted_at, transacted_at)`; amounts 
   - `price_change`, `new_recurring` — added in Step 7.
 - `wb_spending_by_tag` — per month, per group, per tag at `leaf` level and rolled up to the `top` parent, the sum of split amounts for kinds `spend`, `refund` and `fee`. Exclusive groups also get an untagged row (`tag_id` null), so a group's rows add up to total spending. Posted rows only; transfers, income and investments excluded by construction.
 - `wb_cash_flow_monthly` — per month: `income` (kinds `income` and `interest`), `spending` (`spend` + `refund` + `fee`), `net`. Transfers and investments excluded; posted rows only. (Phase 3 builds burn rate and free cash on top of this.)
+- `wb_transaction_list` (Step 4) — every transaction with `account_label`, `merchant_name`, `tag_names text[]` (filtered with overlaps), `split_count` and `needs_review` (true when the row is in the review queue; computed inline, kept in step with `wb_review_queue`). No `raw`. What `get_wb_transactions` and the UI list.
+- `wb_rule_health` (Step 10) — one row per finding, with `finding`, merchant, rule and counts:
+  - `duplicate_rules`: a merchant with two or more active rules;
+  - `one_hit_rule`: a rule that matched once and never again in 30 days;
+  - `overridden_rule`: a rule whose tags were overridden by hand two or more times;
+  - `rule_missing`: a merchant tagged by hand three or more times with no rule;
+  - `merchant_no_category`: a merchant with no category.
 
 ---
 
@@ -212,7 +222,9 @@ Platform contract as in Phase 1 (`ctx.db` only, list default 20 cap 50, filters 
 | `get_wb_merchants` / `upsert_wb_merchant` | read / 2 | Merchants and their patterns. |
 | `get_wb_rules` | read | Rules with hit counts. |
 | `create_wb_rule` / `update_wb_rule` | 2 / 2 | Rules; update can deactivate. |
-| `tag_wb_transactions` | 2 (≤ 25 rows) / 3 (more) | Apply tags to transactions' default splits, source `claude` or `manual`. |
+| `get_wb_rule_preview` | read | Dry run for a rule match, or the §6.1 plan for one transaction: merchant and pattern, count, too-narrow flag, existing rules. |
+| `create_wb_rule_from_transaction` | 3 (with `propose`) | §6.1 "Always do this": the proposal is the plan; on `confirmed: true` it creates or updates the merchant, then creates or updates the merchant rule, and reprocesses. |
+| `tag_wb_transactions` | 2, at most 25 rows per call | Add or remove tags on transactions' single split, source `claude` or `manual`. `defineTool` takes one static tier, so there is no tier-3 bulk form: bulk tagging is the job of rules. |
 | `set_wb_transaction_kind` | 2 | Set kind (and optionally merchant) with source `manual` or `claude`; can pair or unpair transfers (both rows get the source, so processing leaves them alone). |
 | `split_wb_transaction` | 2 | Replace a transaction's splits; amounts must sum. |
 | `mark_wb_reviewed` | 2 | Mark transactions reviewed. |
@@ -220,15 +232,27 @@ Platform contract as in Phase 1 (`ctx.db` only, list default 20 cap 50, filters 
 | `get_wb_spending` | read | Spending by tag group, month range, rolled up or leaf level. |
 | `get_wb_cash_flow` | read | Monthly income, spending, net. |
 | `get_wb_subscriptions` / `upsert_wb_subscription` / `record_wb_subscription_price` | read / 2 / 2 | Step 7. |
+| `get_wb_rule_health` | read | Rows from `wb_rule_health`. Step 10. |
 
-Tool descriptions state the sign rule and that manual tags are never overwritten by rules. The new tools go in `_shared/tools/warren-buffet-p2.ts`; the Phase 1 file keeps its eight.
+Tool descriptions state the sign rule and that manual tags are never overwritten by rules, and the rule tools say that rules match on merchants, not on exact descriptions. The new tools go in `_shared/tools/warren-buffet-p2.ts`; the Phase 1 file keeps its eight.
+
+Multi-row writes are one transaction each, through invoker functions from the Step 4 migration: `wb_replace_splits`, `wb_set_transfer_pair`, `wb_apply_tags` and `wb_rule_preview`. PostgREST runs each call in its own transaction, so two separate calls could leave a split sum broken or a half-made pair.
+
+### 6.1 Rules from a fix ("Always do this")
+
+Used by the transaction detail UI (Step 6) and by the tools (Step 4).
+
+1. A rule created from a fix matches on the **merchant**, never on the exact raw description. If the transaction has no merchant yet, the same action creates or updates the merchant first, with a short match pattern: the shortest distinctive word, editable before saving.
+2. Before saving, show the match pattern and how many past transactions it would catch (a dry-run count). A count of 1 is flagged as probably too narrow.
+3. If a rule already exists for that merchant, offer to update it instead of adding another.
+4. The rule records the transaction it was created from (`created_from_transaction_id`) and `created_by`.
 
 ---
 
 ## 7. UI (Money section additions)
 
 1. **Transactions tab**: list with filters (account, month, kind, tag, text, needs-review). Each row shows clean description, merchant, amount, kind chip, tags. Tap to open.
-2. **Transaction detail**: raw and clean description, kind (editable), tags per group (exclusive groups as a single picker), split editor, transfer pair link, notes. After a manual change, offer **"Always do this for <merchant>"**, which creates a rule (source `manual`) and reprocesses matching rows.
+2. **Transaction detail**: raw and clean description, kind (editable), tags per group (exclusive groups as a single picker), split editor, transfer pair link, notes. After a manual change, offer **"Always do this for <merchant>"**, which follows §6.1 (merchant match, dry-run count, update an existing rule rather than add one), creates or updates the rule (`created_by` `manual`) and reprocesses matching rows.
 3. **Review tab**: the review queue, newest first, grouped by reason, with one-tap actions.
 4. **Spending tab**: a month picker, totals by Category (top level, expandable to children), and a cash-flow strip (income, spending, net) for the last 6 months. Desktop first; mobile must work.
 5. **Subscriptions tab** (Step 8): active and watching subscriptions with cadence, current price, last price change, next expected charge, review date, bundle and billed-through relationships, notes.
@@ -246,12 +270,13 @@ Each step ends with verification and stops for Alex. Database claims are taken j
 | 1 | Read-only plan: current state of wb-sync and the wb_ tools, Money UI structure, migration number, conformance, claims check, and any conflict with this spec. | CLI |
 | 2 | Migration A: §4.1–4.7 tables and columns, triggers (default split, split sum, amount follow, exclusive tags, tag parent), seeded tag groups, default splits for existing rows, the §5 helpers and `wb_process_transactions` (security invoker), views `wb_review_queue`, `wb_spending_by_tag`, `wb_cash_flow_monthly`. No existing row is processed. Conformance CONFORMANT. SQL tests for cleaning, kinds and pairing in a read-only diagnostics file (invented values only). | CLI + Alex |
 | 3 | wb-sync calls processing for new, changed and unprocessed rows; one-time reprocess of all existing rows. Verify transfer pairs (the two recurring transfers and the card payments pair; nothing else does), kinds on investment accounts, cleaned descriptions. | CLI + Alex |
-| 4 | Phase 2 MCP tools from §6 except subscriptions, including the `get_wb_transactions` extension. Deploy. Verification in a fresh claude.ai chat. Needs `mcp/index.ts`, held by drive_mix-v7r as of Step 1. | CLI + Claude |
+| 4 | Phase 2 MCP tools from §6 except subscriptions and rule health, including the `get_wb_transactions` extension and §6.1. Deploy. Verification in a fresh claude.ai chat. | CLI + Claude |
 | 5 | Starter taxonomy, in claude.ai: Claude reads all transactions and the review queue, proposes Category tags (with parents), Who tags, Tax tags, merchants and rules; Alex refines; Claude creates them and reprocesses; review queue shrinks to genuine edge cases. | Claude + Alex |
 | 6 | UI: Transactions, transaction detail with "always do this", Review, Spending. | CLI + Alex |
 | 7 | Migration B + tools: `wb_subscriptions`, `wb_subscription_prices`, `wb_transactions.subscription_id`, monthly-pattern detection in processing (watching rows, price-change reasons in the review queue). | CLI + Alex |
 | 8 | Subscriptions seeding in claude.ai (including annual ones Alex knows about, prepaid terms, bundles and billed-through notes), then the Subscriptions tab UI. | Claude + Alex, then CLI |
 | 9 | Phase 2 review; Phase 3 build steps. | Claude + Alex |
+| 10 | Rule health and a weekly cleanup task: view `wb_rule_health` (§4.9), tool `get_wb_rule_health`, and a weekly scheduled claude.ai task. The task reads the review queue and rule health, then creates one Alfred inbox item with proposed rule fixes and other cleanup for Alex to approve. Other data-cleanup checks may be added to it later. | CLI, then Claude + Alex |
 
 ---
 

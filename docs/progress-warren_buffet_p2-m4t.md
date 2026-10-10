@@ -10,12 +10,13 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 1 | Read-only plan: wb-sync and wb_ tools as built, Money UI structure, migration number, conformance, claims check, spec conflicts | done | 2026-10-09. Fixes 4a–4f and 9.1–9.9 approved and written into spec §3–§6 and §8 |
 | 2 | Migration A: merchants, tag groups, tags, splits, split tags, rules, new transaction columns, triggers, `wb_process_transactions`, review/spending/cash-flow views | done | `103_wb_phase2_tables.sql` applied 2026-10-09; `104_wb_phase2_tests.sql` 69/69, every check true; CONFORMANT, 58 tables |
 | 3 | wb-sync calls processing; one-time reprocess; verify transfer pairs, investment kinds, cleaned descriptions | done | 2026-10-09: wb-sync v5 processes new, changed and unprocessed rows. 105/106/107 applied; 394/394 processed, 16 genuine pairs, 0 candidates, no split mismatches |
-| 4 | Phase 2 MCP tools (except subscriptions); deploy; verify in a fresh chat | not started | |
+| 4 | Phase 2 MCP tools (except subscriptions); deploy; verify in a fresh chat | done | 2026-10-10: 18 tools plus the get_wb_transactions extension; 108 applied, 109 all checks true; CONFORMANT, 58 tables. mcp v146. claude.ai verification 10/10, plus the plain split refusal. 110 removed the test rule and tag |
 | 5 | Starter taxonomy, merchants and rules (in claude.ai) | not started | |
 | 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | not started | |
 | 7 | Migration B + tools: subscriptions, price history, monthly detection | not started | |
 | 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | not started | |
 | 9 | Phase 2 review and Phase 3 steps | not started | |
+| 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | not started | Added 2026-10-09 |
 
 ## Carried from Phase 1
 
@@ -34,3 +35,25 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
   - 106: unprocessed 0. Kinds: spend 284, transfer 32, investment 55, income 12, interest 9, refund 2. The 16 pairs are all genuine and symmetric: the tax-savings and mortgage-savings transfers, five card payments, and two CNB-to-checking transfers. Investment accounts are all `investment`. The review queue holds `missing_required_tag` 298 only, and there are no split mismatches.
   - A sync invoke returned ok, transactions_processed 0, processing_errors 0.
   - Known leftover, accepted: some fund descriptions keep a trailing lot number (e.g. "… FDS 180"); investment rows are not categorized.
+- Step 4 plan (2026-10-09), approved:
+  - The tool table: 18 new tools plus the get_wb_transactions extension. The plan said 17; that was a miscount.
+  - A Step 4 migration with `wb_rules.created_from_transaction_id`, `wb_split_tags.replaced_rule_id`, view `wb_transaction_list`, and the invoker functions `wb_rule_preview`, `wb_replace_splits`, `wb_set_transfer_pair` and `wb_apply_tags`.
+  - `tag_wb_transactions` is tier 2 with a hard cap of 25. The names `get_wb_rule_preview` and `create_wb_rule_from_transaction` (tier 3 with propose) are agreed.
+  - Spec §6.1 ("Always do this") and Step 10 (rule health) were added the same day.
+- Step 4 (2026-10-09/10):
+  - `108_wb_phase2_step4_tool_support.sql` applied by Alex. It adds `wb_rules.created_from_transaction_id`, `wb_split_tags.replaced_rule_id`, view `wb_transaction_list`, and the invoker functions `wb_rule_preview`, `wb_replace_splits`, `wb_set_transfer_pair` and `wb_apply_tags`. Tested in PGlite first.
+  - 109: all 10 checks true; needs_review 301, equal to the queue; preview_kind_spend 287; preview_transfer_phrase 48, not too narrow. Conformance CONFORMANT, 58 tables.
+  - mcp v145 deployed with verify_jwt off; an unauthenticated POST gets the function's own 401.
+  - claude.ai verification passed 10/10:
+    - all 18 tools are present, and get_wb_transactions has the new fields and no raw;
+    - the review queue holds 301, missing_required_tag only; tag groups are seeded, with no tags, merchants or rules;
+    - spending is negative, and cash flow has 4 rows;
+    - the preview on a real PetSmart transaction proposed merchant "Petsmart", pattern "petsmart", count 12, not too narrow;
+    - create_wb_rule_from_transaction returned a 3-step proposal and was not confirmed;
+    - the write round trip was clean, and all 11 refusals refused and changed nothing;
+    - cleanup left the test tag and rule inactive and unused.
+  - Fix: the split refusal had passed through the raw database error, with amounts and internals. v146 maps every known database refusal in the Phase 2 tools to a plain sentence. A fresh chat confirmed "split_wb_transaction: Split amounts must add up to the transaction amount. Nothing was changed." with no amounts or code.
+  - `110_wb_phase2_step4_test_cleanup.sql` deleted the ZZ test rule and tag.
+  - Tests: functions 629, CLI 174.
+  - Two app tests fail on 2026-10-10 only because they look for today's date: `PreviousExecutions.test.jsx` and `StatusEventsSheet.test.jsx`, from restructure_p1-h4nz. Not ours; Alfred item 49958c85.
+  - Known limit, accepted: a bare hand removal of a rule tag returns on reprocess.

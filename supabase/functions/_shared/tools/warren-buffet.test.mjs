@@ -128,13 +128,28 @@ test("get_wb_transactions never selects raw, and builds its filters", async () =
     { account_id: "a1", from: "2026-07-01", to: "2026-07-31", search: "coffee", max_amount: -5, pending: false },
     { db },
   );
+  assert.equal(db.log[0].table, "wb_transaction_list");
   const ops = db.log[0].ops;
   assert.ok(!/\braw\b/.test(ops[0][1]), "raw must not be selected");
   assert.deepEqual(ops.find((o) => o[0] === "gte"), ["gte", "posted_at", "2026-07-01T00:00:00-07:00"]);
   assert.deepEqual(ops.find((o) => o[0] === "lt"), ["lt", "posted_at", "2026-08-01T00:00:00-07:00"]);
-  assert.deepEqual(ops.find((o) => o[0] === "or"), ["or", "description.ilike.*coffee*,payee.ilike.*coffee*"]);
+  assert.deepEqual(ops.find((o) => o[0] === "or"),
+    ["or", "description.ilike.*coffee*,clean_description.ilike.*coffee*,payee.ilike.*coffee*"]);
   assert.deepEqual(ops.find((o) => o[0] === "lte"), ["lte", "amount", -5]);
   assert.ok(ops.findIndex((o) => o[0] === "limit") > ops.findIndex((o) => o[0] === "eq" && o[1] === "pending"));
+});
+
+test("get_wb_transactions Phase 2 filters run before the limit", async () => {
+  const db = fakeDb();
+  await m.getWbTransactionsTool.handler(
+    { kind: "spend", merchant_id: "m1", tag: ["Food", "Food", "Pets"], needs_review: true }, { db });
+  const ops = db.log[0].ops;
+  assert.deepEqual(ops.filter((o) => o[0] === "eq"),
+    [["eq", "kind", "spend"], ["eq", "merchant_id", "m1"], ["eq", "needs_review", true]]);
+  assert.deepEqual(ops.find((o) => o[0] === "overlaps"), ["overlaps", "tag_names", ["Food", "Pets"]]);
+  assert.ok(ops.findIndex((o) => o[0] === "limit") > ops.findIndex((o) => o[0] === "overlaps"));
+  await assert.rejects(m.getWbTransactionsTool.handler({ kind: "spending" }, { db }), /kind must be one of/);
+  await assert.rejects(m.getWbTransactionsTool.handler({ tag: [""] }, { db }), /tag must be/);
 });
 
 test("get_wb_transactions rejects min above max", async () => {

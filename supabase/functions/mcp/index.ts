@@ -86,6 +86,26 @@ import {
   recordWbBalanceTool,
 } from "../_shared/tools/warren-buffet.ts";
 import {
+  getWbReviewQueueTool,
+  getWbTagsTool,
+  createWbTagTool,
+  updateWbTagTool,
+  getWbMerchantsTool,
+  upsertWbMerchantTool,
+  getWbRulesTool,
+  createWbRuleTool,
+  updateWbRuleTool,
+  getWbRulePreviewTool,
+  createWbRuleFromTransactionTool,
+  tagWbTransactionsTool,
+  setWbTransactionKindTool,
+  splitWbTransactionTool,
+  markWbReviewedTool,
+  reprocessWbTransactionsTool,
+  getWbSpendingTool,
+  getWbCashFlowTool,
+} from "../_shared/tools/warren-buffet-p2.ts";
+import {
   getDriveMixSongsTool,
   createDriveMixSongsTool,
   updateDriveMixSongsTool,
@@ -2758,6 +2778,7 @@ export function createMcpServer(token: string) {
   const wbRole = z.enum(["unassigned", "spending_cash", "reserve_cash", "credit_card", "emergency_credit",
     "loan", "retirement", "taxable_investment", "rewards", "history_rollup", "closed"]);
   const wbDate = (what: string) => z.string().optional().describe(`${what}, YYYY-MM-DD (Pacific date).`);
+  const wbKind = z.enum(["spend", "income", "transfer", "refund", "investment", "interest", "fee"]);
 
   server.registerTool(
     "get_wb_accounts",
@@ -2815,16 +2836,20 @@ export function createMcpServer(token: string) {
     {
       title: "Get Money Transactions",
       description:
-        "Raw bank transactions as SimpleFIN reported them, newest first (pending ones without a posted date come first): amount, posted_at, transacted_at, description, payee, memo, mcc, pending, and the account's name. Not categorized yet. " +
+        "Bank transactions, newest first (pending ones without a posted date come first): amount, dates, the raw description and payee as SimpleFIN reported them, plus the Phase 2 fields: clean_description, merchant_name, kind (spend, income, transfer, refund, investment, interest, fee) with kind_source, transfer_pair_id, reviewed, tag_names, split_count and needs_review, and the account_label. " +
         WB_SIGN + "from/to filter the posted date in Pacific time, so a pending charge with no posted date only appears when no date range is given. Tier 1.",
       inputSchema: {
         account_id: z.string().optional().describe("Only this account (get_wb_accounts, field account_id)."),
         from: wbDate("Posted on or after"),
         to: wbDate("Posted on or before"),
-        search: z.string().optional().describe("Text to find in the description or payee, case-insensitive."),
+        search: z.string().optional().describe("Text to find in the raw or clean description or the payee, case-insensitive."),
         min_amount: z.number().optional().describe("Lowest amount, signed. To find deposits of 100 or more, pass min_amount 100."),
         max_amount: z.number().optional().describe("Highest amount, signed. To find spending over 100, pass max_amount -100."),
         pending: z.boolean().optional().describe("true = only pending, false = only posted."),
+        kind: wbKind.optional().describe("Only this kind."),
+        merchant_id: z.string().optional().describe("Only this merchant (get_wb_merchants, field id)."),
+        tag: z.union([z.string(), z.array(z.string())]).optional().describe("A tag name, or a list: rows carrying any of them."),
+        needs_review: z.boolean().optional().describe("true = only rows in the review queue."),
         limit: z.number().optional().describe("Max rows, default 20, cap 50."),
       },
     },
@@ -2916,6 +2941,345 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(recordWbBalanceTool, args, token),
+  );
+
+  // --- Warren Buffet, Phase 2 (docs/technical-spec-warren_buffet_p2-m4t.md §6, §6.1) ---
+  const WB_MANUAL =
+    "Tags, kinds and merchants set by hand (source manual) or by Claude (source claude) are never overwritten by rules; a rule only replaces its own tags. ";
+  const WB_RULES =
+    "Rules match on merchants (match.merchant_id), not on exact descriptions: put the messy bank text in a merchant's match_patterns, then write the rule against the merchant. ";
+  const wbHandSource = z.enum(["claude", "manual"]).optional()
+    .describe("'claude' (default) for your own judgment; 'manual' only when Alex or Elise told you the answer.");
+  const wbIds = (what: string) => z.array(z.string()).describe(what);
+  const wbMonth = (what: string) => z.string().optional().describe(`${what}, YYYY-MM.`);
+  const wbMatch = z.object({
+    merchant_id: z.string().optional().describe("Preferred: the merchant's id (get_wb_merchants)."),
+    payee_contains: z.string().optional(),
+    description_contains: z.string().optional().describe("Checks the raw and the clean description."),
+    account_ids: z.array(z.string()).optional(),
+    amount_min: z.number().optional().describe("Absolute amount, inclusive."),
+    amount_max: z.number().optional().describe("Absolute amount, inclusive."),
+    kind: wbKind.optional(),
+  }).describe("All keys given must match. Case-insensitive substrings for *_contains.");
+
+  server.registerTool(
+    "get_wb_review_queue",
+    {
+      title: "Get Money Review Queue",
+      description:
+        "Transactions needing attention, newest first, each with its reason: no_kind (not processed yet), missing_required_tag (detail names the tag group, e.g. Category), transfer_candidate (looks like a transfer with no unique match), split_mismatch (splits do not add up). Returns counts by reason over the date range, and the items with the fields needed to decide. " +
+        WB_SIGN + "Tier 1.",
+      inputSchema: {
+        reason: z.enum(["no_kind", "missing_required_tag", "transfer_candidate", "split_mismatch"]).optional(),
+        from: wbDate("Transaction date on or after"),
+        to: wbDate("Transaction date on or before"),
+        limit: z.number().optional().describe("Max items, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbReviewQueueTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_tags",
+    {
+      title: "Get Money Tags",
+      description:
+        "Tag groups (Category, Who, Tax, Label) with their tags as a tree (children under parents) and how many splits carry each tag. An exclusive group allows one tag per split. Inactive tags are left out unless include_inactive. Tier 1.",
+      inputSchema: {
+        group: z.string().optional().describe("Only this group, by name."),
+        include_inactive: z.boolean().optional(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbTagsTool, args, token),
+  );
+
+  server.registerTool(
+    "create_wb_tag",
+    {
+      title: "Create Money Tag",
+      description:
+        "Create a tag in a group, optionally under a parent in the same group (reports roll children up to parents). Refuses a duplicate name in the group. Tier 1.",
+      inputSchema: {
+        group: z.string().describe("The group's name or id, e.g. 'Category'."),
+        name: z.string(),
+        parent_id: z.string().optional().describe("Parent tag id, same group."),
+        sort_order: z.number().optional(),
+        notes: z.string().optional(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createWbTagTool, args, token),
+  );
+
+  server.registerTool(
+    "update_wb_tag",
+    {
+      title: "Update Money Tag",
+      description:
+        "Rename, re-parent (same group, no cycles), deactivate (is_active false; used tags are deactivated, not deleted), reorder or annotate a tag. Audited. Tier 2.",
+      inputSchema: {
+        tag_id: z.string(),
+        name: z.string().optional(),
+        parent_id: z.string().nullable().optional().describe("null makes it top-level."),
+        is_active: z.boolean().optional(),
+        sort_order: z.number().optional(),
+        notes: z.string().nullable().optional(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateWbTagTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_merchants",
+    {
+      title: "Get Merchants",
+      description:
+        "Merchants: a clean name, the bank-text patterns that map to it (case-insensitive substrings of the payee, then the description), and an optional default_kind. Tier 1.",
+      inputSchema: {
+        search: z.string().optional().describe("Text in the merchant's name."),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbMerchantsTool, args, token),
+  );
+
+  server.registerTool(
+    "upsert_wb_merchant",
+    {
+      title: "Create or Update Merchant",
+      description:
+        "Create a merchant, or edit one by id or by name (case-insensitive). match_patterns replaces the list; each is a case-insensitive substring of at least 3 characters, matched against the payee first, then the raw description. Then reprocesses the transactions it touches (reprocess: false to skip). " +
+        WB_MANUAL + "Tier 2.",
+      inputSchema: {
+        id: z.string().optional(),
+        name: z.string().optional(),
+        match_patterns: z.array(z.string()).optional().describe("Required for a new merchant."),
+        default_kind: wbKind.nullable().optional().describe("Kind for this merchant's rows, unless an investment account or a person sets one."),
+        notes: z.string().nullable().optional(),
+        reprocess: z.boolean().optional().describe("Default true."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(upsertWbMerchantTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_rules",
+    {
+      title: "Get Money Rules",
+      description:
+        "Categorization rules in priority order (lower first), with tag and merchant names, hit_count (transactions matched now) and last_hit_at (newest matching transaction). " +
+        WB_RULES + "Tier 1.",
+      inputSchema: {
+        active: z.boolean().optional(),
+        merchant_id: z.string().optional().describe("Only rules matching this merchant."),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbRulesTool, args, token),
+  );
+
+  server.registerTool(
+    "create_wb_rule",
+    {
+      title: "Create Money Rule",
+      description:
+        "Create a rule (created_by claude) that sets a kind, a merchant and/or tags on matching posted transactions, then reprocesses what it matches (reprocess: false to skip). In an exclusive group the first rule by priority wins. " +
+        WB_RULES + WB_MANUAL + "For a fix to one transaction use create_wb_rule_from_transaction. Tier 2.",
+      inputSchema: {
+        name: z.string(),
+        match: wbMatch,
+        priority: z.number().optional().describe("Lower runs first. Default 100."),
+        set_kind: wbKind.optional(),
+        set_merchant_id: z.string().optional(),
+        add_tag_ids: z.array(z.string()).optional(),
+        notes: z.string().optional(),
+        reprocess: z.boolean().optional().describe("Default true."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createWbRuleTool, args, token),
+  );
+
+  server.registerTool(
+    "update_wb_rule",
+    {
+      title: "Update Money Rule",
+      description:
+        "Edit a rule (active: false deactivates it), then reprocess what it matched before and matches now. " +
+        WB_RULES + WB_MANUAL + "Audited. Tier 2.",
+      inputSchema: {
+        rule_id: z.string(),
+        name: z.string().optional(),
+        match: wbMatch.optional(),
+        priority: z.number().optional(),
+        set_kind: wbKind.nullable().optional(),
+        set_merchant_id: z.string().nullable().optional(),
+        add_tag_ids: z.array(z.string()).optional(),
+        notes: z.string().nullable().optional(),
+        active: z.boolean().optional(),
+        reprocess: z.boolean().optional().describe("Default true."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateWbRuleTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_rule_preview",
+    {
+      title: "Preview a Money Rule",
+      description:
+        "Dry run, writes nothing. With match: how many posted transactions a rule would catch, with samples. With transaction_id: the 'Always do this' plan for that transaction — its merchant (or the merchant to create, with a short pattern you can override), the dry-run count (too_narrow when 1 or fewer), and any existing rule for that merchant, which should be updated rather than duplicated. " +
+        WB_RULES + "Tier 1.",
+      inputSchema: {
+        match: wbMatch.optional(),
+        transaction_id: z.string().optional(),
+        pattern: z.string().optional().describe("With transaction_id: the merchant pattern to use instead of the suggested one."),
+        merchant_name: z.string().optional().describe("With transaction_id: name for a new merchant."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbRulePreviewTool, args, token),
+  );
+
+  server.registerTool(
+    "create_wb_rule_from_transaction",
+    {
+      title: "Always Do This (Rule From a Fix)",
+      description:
+        "Turn a fix to one transaction into a rule for its merchant. Without confirmed: true this returns a proposal: the merchant (created if needed, with a short pattern), the dry-run count, a too-narrow warning, and any existing rule for the merchant. Show Alex the proposal and call again with confirmed: true after he agrees. If a rule already exists for the merchant, pass update_rule_id to update it (preferred) or add_new_rule: true. The rule records the transaction it came from, then everything it touches is reprocessed. " +
+        WB_RULES + WB_MANUAL + "Tier 3.",
+      inputSchema: {
+        transaction_id: z.string(),
+        set_kind: wbKind.optional(),
+        add_tag_ids: z.array(z.string()).optional(),
+        pattern: z.string().optional().describe("Merchant pattern to use instead of the suggested one."),
+        merchant_name: z.string().optional().describe("Name for a new merchant."),
+        update_rule_id: z.string().optional().describe("Update this existing rule instead of adding one."),
+        add_new_rule: z.boolean().optional().describe("Add a rule even though the merchant has one."),
+        notes: z.string().optional(),
+        confirmed: z.boolean().optional().describe("true to apply, after Alex approves the proposal."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createWbRuleFromTransactionTool, args, token),
+  );
+
+  server.registerTool(
+    "tag_wb_transactions",
+    {
+      title: "Tag Money Transactions",
+      description:
+        "Add tags to, and/or remove tags from, up to 25 transactions (their single split; multi-split ones are skipped and listed — use split_wb_transaction). In an exclusive group the new tag replaces the old one. Bulk tagging is the job of rules. " +
+        WB_MANUAL + "Tier 2.",
+      inputSchema: {
+        transaction_ids: wbIds("Up to 25 transaction ids."),
+        tag_ids: z.array(z.string()).optional(),
+        remove_tag_ids: z.array(z.string()).optional(),
+        source: wbHandSource,
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(tagWbTransactionsTool, args, token),
+  );
+
+  server.registerTool(
+    "set_wb_transaction_kind",
+    {
+      title: "Set Transaction Kind",
+      description:
+        "Set the kind and/or merchant of up to 25 transactions, or pair two as a transfer (pair_with, one transaction), or unpair. The source is recorded so processing never changes them back, then they are reprocessed. A paired row must be unpaired before its kind can change from transfer. " +
+        WB_SIGN + WB_MANUAL + "Tier 2.",
+      inputSchema: {
+        transaction_ids: wbIds("Up to 25 transaction ids."),
+        kind: wbKind.optional(),
+        merchant_id: z.string().nullable().optional().describe("null clears it."),
+        pair_with: z.string().optional().describe("The other side of a transfer: opposite sign, another account."),
+        unpair: z.boolean().optional(),
+        source: wbHandSource,
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(setWbTransactionKindTool, args, token),
+  );
+
+  server.registerTool(
+    "split_wb_transaction",
+    {
+      title: "Split a Money Transaction",
+      description:
+        "Replace a transaction's splits, with their tags, in one step. Amounts are signed like the transaction and must add up to it exactly. tax_year is optional (default: the transaction's year). " +
+        WB_SIGN + "Tier 2.",
+      inputSchema: {
+        transaction_id: z.string(),
+        splits: z.array(z.object({
+          amount: z.number(),
+          description: z.string().optional(),
+          tax_year: z.number().optional(),
+          notes: z.string().optional(),
+          tag_ids: z.array(z.string()).optional(),
+        })).describe("1 to 20 parts."),
+        source: wbHandSource,
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(splitWbTransactionTool, args, token),
+  );
+
+  server.registerTool(
+    "mark_wb_reviewed",
+    {
+      title: "Mark Transactions Reviewed",
+      description:
+        "Mark up to 50 transactions reviewed (or not), which takes them out of the tag and transfer reasons of the review queue. Tier 2.",
+      inputSchema: {
+        transaction_ids: wbIds("Up to 50 transaction ids."),
+        reviewed: z.boolean().optional().describe("Default true."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(markWbReviewedTool, args, token),
+  );
+
+  server.registerTool(
+    "reprocess_wb_transactions",
+    {
+      title: "Reprocess Money Transactions",
+      description:
+        "Re-run cleaning, merchants, kinds, transfer pairing and rules over the given transactions or a posted-date range (at most 2000). Safe to repeat. " +
+        WB_MANUAL + "Tier 2.",
+      inputSchema: {
+        transaction_ids: z.array(z.string()).optional(),
+        from: wbDate("Posted on or after"),
+        to: wbDate("Posted on or before"),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(reprocessWbTransactionsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_spending",
+    {
+      title: "Get Spending by Tag",
+      description:
+        "Spending per month and tag for one group (default Category): level top rolls tags up to their top parent, leaf shows each tag. Kinds spend, refund and fee only; transfers, income and investments are excluded. Exclusive groups include an untagged row (tag_name null). " +
+        WB_SIGN + "So spending is negative and refunds are positive. Tier 1.",
+      inputSchema: {
+        from_month: wbMonth("First month"),
+        to_month: wbMonth("Last month"),
+        group: z.string().optional().describe("Tag group name. Default 'Category'."),
+        level: z.enum(["top", "leaf"]).optional().describe("Default top."),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbSpendingTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_cash_flow",
+    {
+      title: "Get Monthly Cash Flow",
+      description:
+        "Per month, newest first: income (income + interest), spending (spend + refund + fee), net, and how many rows are not processed yet. Transfers and investments are excluded. " +
+        WB_SIGN + "Tier 1.",
+      inputSchema: {
+        from_month: wbMonth("First month"),
+        to_month: wbMonth("Last month"),
+        limit: z.number().optional().describe("Max months, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbCashFlowTool, args, token),
   );
 
   // --- Drive Mix (docs/technical-spec-drive_mix-v7r.md §5) ---
