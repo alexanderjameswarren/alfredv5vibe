@@ -11,6 +11,20 @@ export function withoutStatus(table, dbValue) {
   return rest;
 }
 
+// Columns the app never writes, on insert or update: execution notes live in
+// the notes table (Restructure P2), and last_completed_at is set by triggers.
+export function withoutDbOwned(table, dbValue) {
+  if (table === "executions") {
+    const { notes, ...rest } = dbValue;
+    return rest;
+  }
+  if (STATUS_TABLES.has(table)) {
+    const { last_completed_at, ...rest } = dbValue;
+    return rest;
+  }
+  return dbValue;
+}
+
 /**
  * An Error to throw after `storage.set` returned false, inside withLoading so the
  * user sees it. The two named unique violations are the one-live-event and
@@ -103,7 +117,7 @@ export const storage = {
         return false;
       }
 
-      const dbValue = this.toSnakeCase(value);
+      const dbValue = withoutDbOwned(table, this.toSnakeCase(value));
 
       if (id) {
         // Try update first (works for both owned and shared records)
@@ -175,7 +189,7 @@ export const storage = {
       }
       const { data, error } = await supabase
         .from(table)
-        .update(this.toSnakeCase(fields))
+        .update(withoutDbOwned(table, this.toSnakeCase(fields)))
         .eq("id", id)
         .select()
         .maybeSingle();

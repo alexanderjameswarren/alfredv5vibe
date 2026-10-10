@@ -15,6 +15,8 @@ import RecurrenceQuickSelect from "../shared/recurrence/RecurrenceQuickSelect";
 import ScheduledLine from "../shared/ScheduledLine";
 import StatusPill from "../shared/StatusPill";
 import StatusPicker from "../shared/StatusPicker";
+import CardExecutionNotes from "../notes/CardExecutionNotes";
+import { shortDate } from "../notes/noteFormat";
 import { closedBlockTitle, recordActions, statusOf, statusOptionsFor } from "../utils/status";
 
 export default function IntentionCard({
@@ -417,11 +419,17 @@ export default function IntentionCard({
               Same format and same placement as ItemCard's: a text-xs muted span
               below the metadata row. No element count here — an intention has no
               elements — so it is the timestamp alone. */}
-          {intent.updatedAt && (
+          {(intent.updatedAt || intent.lastCompletedAt) && (
             <span className="text-xs text-muted-foreground mt-1 block">
-              {`last updated: ${new Date(intent.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`}
+              {/* last_completed_at is set by trigger (Restructure P2); shown only once done. */}
+              {[
+                intent.lastCompletedAt && `last done: ${shortDate(intent.lastCompletedAt)}`,
+                intent.updatedAt && `last updated: ${shortDate(intent.updatedAt)}`,
+              ].filter(Boolean).join(" · ")}
             </span>
           )}
+          {/* The open execution's latest notes, one line each (batched across the list). */}
+          {actions.open && <CardExecutionNotes executionId={actions.open.id} />}
         </div>
         {/* Row action strip — Step 12.1. Matches the one EventCard took in 8a:
             gap-3 because 8px is Material's documented FLOOR for adjacent targets
@@ -465,7 +473,8 @@ export default function IntentionCard({
                       initialDate={actions.liveDate || getTodayDate()}
                       onPick={(date) => onSchedule(intent.id, date)}
                       disabled={Boolean(closedTitle || actions.moveBlocked)}
-                      className="px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
+                      // Faded brown still read as live beside a faded Start Now; disabled is tan and flat.
+                      className="px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-secondary disabled:hover:bg-secondary disabled:text-foreground disabled:shadow-none disabled:hover:shadow-none"
                     />
                   </span>
                 )}

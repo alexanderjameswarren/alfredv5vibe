@@ -21,13 +21,13 @@ export default function ExecutionDetailScreen({
   toggleCollectionItem,
   saveMemberQuantity,
   refreshCollection,
-  updateExecutionNotes,
   closeExecution,
   pauseExecution,
   makeExecutionActive,
   onViewContext,
   onViewIntention,
   onViewItem,
+  onOpenExecution,
 }) {
   return (
     <>
@@ -44,9 +44,11 @@ export default function ExecutionDetailScreen({
       {/* Execution Detail View. Rendered from executionForRoute, not
           activeExecution: on the render after the URL changes to a different
           execution, state still holds the previous one, and drawing it under
-          the new address would show the wrong execution. */}
+          the new address would show the wrong execution. Keyed by id so each
+          execution's note loads and saves on its own. */}
       {executionForRoute && (
         <ExecutionDetailView
+          key={executionForRoute.id}
           execution={executionForRoute}
           intent={intents.find((i) => i.id === executionForRoute.intentId)}
           event={events.find((e) => e.id === executionForRoute.eventId)}
@@ -61,7 +63,6 @@ export default function ExecutionDetailScreen({
           onToggleCollectionItem={toggleCollectionItem}
           onUpdateCollectionItemQty={saveMemberQuantity}
           onRefreshCollection={refreshCollection}
-          onUpdateNotes={updateExecutionNotes}
           onComplete={() => closeExecution("done")}
           onPause={pauseExecution}
           onMakeActive={makeExecutionActive}
@@ -71,6 +72,7 @@ export default function ExecutionDetailScreen({
           onViewContext={onViewContext}
           onViewIntention={onViewIntention}
           onViewItem={onViewItem}
+          onOpenExecution={onOpenExecution}
         />
       )}
     </>

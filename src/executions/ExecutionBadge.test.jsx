@@ -24,6 +24,10 @@ test("an active run is teal, not brown", () => {
   expect(cls).not.toMatch(/primary/);
 });
 
+test("card radius follows the design-system rule (rounded-lg)", () => {
+  expect(card("active")).toMatch(/\brounded-lg\b/);
+});
+
 test("a paused run stays amber", () => {
   expect(card("paused")).toMatch(/border-warning/);
   render(

@@ -11,9 +11,13 @@ import SchedulePopover from "../shared/recurrence/SchedulePopover";
 import PendingReminder from "../inbox/PendingReminder";
 import OriginalCapture from "../inbox/OriginalCapture";
 import IntentionCard from "./IntentionCard";
-import ItemCard from "../items/ItemCard";
+import RecordLinks from "../shared/RecordLinks";
 import ScheduledLine from "../shared/ScheduledLine";
-import PreviousExecutions from "../executions/PreviousExecutions";
+import ExecutionBadge from "../executions/ExecutionBadge";
+import NoteTimeline from "../notes/NoteTimeline";
+import RecentCompletions from "../notes/RecentCompletions";
+import OpenExecutionNotes from "../notes/OpenExecutionNotes";
+import { useRecordNotes } from "../notes/useRecordNotes";
 import StatusMenu from "../shared/StatusMenu";
 import StatusEventsSheet from "../shared/StatusEventsSheet";
 import { liveEventsFor, closedBlockTitle, recordActions, STATUS_LABELS } from "../utils/status";
@@ -54,6 +58,10 @@ export default function IntentionDetailView({
   // `form` is the edit form's save riding along — and why a move was refused.
   const [pending, setPending] = useState(null);
   const [statusBlocked, setStatusBlocked] = useState(null);
+  const notesState = useRecordNotes({
+    target: { type: "intention", id: intention?.id },
+    intentionIds: intention ? [intention.id] : [],
+  });
 
   if (!intention) return null;
 
@@ -141,6 +149,7 @@ export default function IntentionDetailView({
     intention.contextId && contexts
       ? contexts.find((c) => c.id === intention.contextId)?.name
       : null;
+  const linkedItem = intention.itemId ? (items || []).find((i) => i.id === intention.itemId) : null;
 
   // If editing, show the IntentionCard in edit mode
   if (isEditing) {
@@ -222,7 +231,20 @@ export default function IntentionDetailView({
           </p>
         )}
 
-        <DetailMeta contextName={contextName} tags={intention.tags} />
+        {/* The execution page's link row: context pill, then the linked item. */}
+        <div className="mt-2">
+          <RecordLinks
+            context={contextName ? {
+              name: contextName,
+              onOpen: onViewContextDetail && (() => onViewContextDetail(intention.contextId)),
+            } : null}
+            item={linkedItem && onViewItemDetail ? {
+              name: linkedItem.name,
+              onOpen: () => onViewItemDetail(linkedItem.id),
+            } : null}
+          />
+        </div>
+        <DetailMeta tags={intention.tags} />
 
         <p className="text-sm text-muted-foreground mt-2">
           Recurrence: {getRecurrenceDisplayString(getRecurrenceConfig(intention), intention.endDate)}
@@ -299,34 +321,41 @@ export default function IntentionDetailView({
         )}
       </div>
 
-      {/* Linked Item Section */}
-      {intention.itemId && items && (
+      {/* The linked item is a header link now; the Linked Item card is gone. */}
+
+      {/* The open execution (at most one), with what has been noted so far. */}
+      {executions.some((ex) => ex.intentId === intention.id) && (
         <div className="mb-6">
-          <h3 className="text-lg font-medium mb-3">Linked Item</h3>
-          {(() => {
-            const linkedItem = items.find((i) => i.id === intention.itemId);
-            return linkedItem ? (
-              <ItemCard
-                tagPool={tagPool}
-                item={linkedItem}
-                contexts={contexts}
-                onUpdate={onUpdateItem}
-                onViewDetail={onViewItemDetail}
-                executions={executions.filter((ex) => ex.itemIds?.includes(linkedItem.id))}
-                // All of them: the item's run may belong to another of its intentions,
-                // and a badge that cannot find its intention reads "Execution".
+          <h3 className="text-lg font-medium mb-3">Current execution</h3>
+          {executions
+            .filter((ex) => ex.intentId === intention.id)
+            .map((exec) => (
+              <ExecutionBadge
+                key={exec.id}
+                exec={exec}
                 intents={intents || [intention]}
+                contexts={contexts || []}
                 getIntentDisplay={getIntentDisplay}
-                onOpenExecution={onOpenExecution}
-              />
-            ) : (
-              <p className="text-muted-foreground text-sm">Item not found</p>
-            );
-          })()}
+                onOpen={(ex) => onOpenExecution?.(ex)}
+              >
+                <OpenExecutionNotes executionId={exec.id} />
+              </ExecutionBadge>
+            ))}
         </div>
       )}
 
-      <PreviousExecutions intentId={intention.id} />
+      <RecentCompletions intentId={intention.id} onOpenExecution={onOpenExecution} />
+
+      <NoteTimeline
+        notesState={notesState}
+        archived={Boolean(intention.archived)}
+        sources={{
+          here: { type: "intention", id: intention.id },
+          itemName: (id) => (items || []).find((i) => i.id === id)?.name,
+          onViewItem: onViewItemDetail,
+          onOpenExecution,
+        }}
+      />
 
       {/* Last on the page, and only when this intention was filed from a capture. */}
       <OriginalCapture capturedText={capturedText} />
