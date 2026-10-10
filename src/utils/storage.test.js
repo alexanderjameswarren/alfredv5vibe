@@ -1,4 +1,5 @@
-// storage: status never rides on a whole-record UPDATE; patch sends only what it is given.
+// storage: status never rides on a whole-record UPDATE; patch sends only what it is given;
+// database-owned columns (execution notes, last_completed_at) are never sent.
 
 jest.mock("../supabaseClient", () => {
   const log = [];
@@ -74,6 +75,18 @@ test("writeError names the one-live-event rule for that violation only", () => {
   storage.lastError = { code: "42501", message: "permission denied" };
   expect(writeError("Scheduling").message).toBe("Scheduling was not saved.");
   storage.lastError = null;
+});
+
+test("execution writes never send notes, on update or insert", async () => {
+  mock.__state.updateRows = [];
+  await storage.set("execution:x", { id: "x", status: "active", notes: "old" });
+  expect(sent(mock.__log[0], "update")).toEqual({ id: "x", status: "active" });
+  expect(sent(mock.__log[1], "insert")).toEqual({ id: "x", status: "active" });
+});
+
+test("item writes never send last_completed_at", async () => {
+  await storage.set("item:x", { id: "x", name: "n", lastCompletedAt: "t" });
+  expect(sent(mock.__log[0], "update")).toEqual({ id: "x", name: "n" });
 });
 
 test("patch sends only the given fields", async () => {

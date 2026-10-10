@@ -4,6 +4,7 @@ import ObjectIcon from "../shared/ObjectIcon";
 import OverflowMenu from "../shared/OverflowMenu";
 import { ACTION_BUTTON } from "../shared/actionButton";
 import DetailMeta from "../shared/DetailMeta";
+import RecordLinks from "../shared/RecordLinks";
 import StatusMenu from "../shared/StatusMenu";
 import StatusFilterChips from "../shared/StatusFilterChips";
 import SchedulePopover from "../shared/recurrence/SchedulePopover";
@@ -24,6 +25,10 @@ import OriginalCapture from "../inbox/OriginalCapture";
 import ItemCard from "./ItemCard";
 import IntentionCard from "../intentions/IntentionCard";
 import ExecutionBadge from "../executions/ExecutionBadge";
+import NoteTimeline from "../notes/NoteTimeline";
+import RecentCompletions from "../notes/RecentCompletions";
+import OpenExecutionNotes from "../notes/OpenExecutionNotes";
+import { useRecordNotes } from "../notes/useRecordNotes";
 
 const CollectionIcon = (props) => <ObjectIcon type="collection" {...props} />;
 
@@ -58,6 +63,7 @@ export default function ItemDetailView({
   onArchiveIntention,
   onViewItem,
   onViewIntentionDetail,
+  onViewContextDetail,
   onClone,
   onSetStatus,
   collections = [],
@@ -73,8 +79,26 @@ export default function ItemDetailView({
   const [showCloneDialog, setShowCloneDialog] = useState(false);
   const [cloneName, setCloneName] = useState("");
   const [relatedStatus, setRelatedStatus] = useState(() => readStoredStatusFilter("item-related"));
+  // One timeline: the item's own notes plus every one of its intentions', archived ones included.
+  const notesIntentions = (intents || []).filter((i) => item && i.itemId === item.id);
+  const notesState = useRecordNotes({
+    target: { type: "item", id: item?.id },
+    itemIds: item ? [item.id] : [],
+    intentionIds: notesIntentions.map((i) => i.id),
+  });
 
   if (!item) return null;
+
+  // Note sources as links; the item itself is this page, so it is left out.
+  const noteSources = {
+    here: { type: "item", id: item.id },
+    intentionName: (id) => {
+      const intent = notesIntentions.find((i) => i.id === id);
+      return intent ? getIntentDisplay(intent) : null;
+    },
+    onViewIntention: onViewIntentionDetail,
+    onOpenExecution,
+  };
 
   function toggleRelatedStatus(status) {
     const next = toggleStatusFilter(relatedStatus, status);
@@ -176,7 +200,16 @@ export default function ItemDetailView({
           {onSetStatus && <StatusMenu row={item} onChoose={(status) => onSetStatus(item.id, status)} />}
         </div>
 
-        <DetailMeta contextName={contextName} tags={item.tags} />
+        {/* The execution page's link row: the context pill. */}
+        <div className="mt-2">
+          <RecordLinks
+            context={contextName ? {
+              name: contextName,
+              onOpen: onViewContextDetail && (() => onViewContextDetail(item.contextId)),
+            } : null}
+          />
+        </div>
+        <DetailMeta tags={item.tags} />
 
         {/* Reminders stay on the capture the item was filed from. */}
         {item.sourceInboxId && <PendingReminder inboxId={item.sourceInboxId} />}
@@ -494,7 +527,9 @@ export default function ItemDetailView({
                 contexts={contexts}
                 getIntentDisplay={getIntentDisplay}
                 onOpen={onOpenExecution}
-              />
+              >
+                <OpenExecutionNotes executionId={exec.id} />
+              </ExecutionBadge>
             ))}
           </div>
         </div>
@@ -553,6 +588,16 @@ export default function ItemDetailView({
             ))}
           </div>
         )}
+      </div>
+
+      <div className="mt-6">
+        {/* Across every intention of this item. */}
+        <RecentCompletions itemId={item.id} showIntention onOpenExecution={onOpenExecution} />
+        <NoteTimeline
+          notesState={notesState}
+          archived={Boolean(item.archived)}
+          sources={noteSources}
+        />
       </div>
 
       {/* Last on the page, and only when this item was filed from a capture. */}

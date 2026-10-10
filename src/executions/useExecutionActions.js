@@ -45,6 +45,12 @@ export function useExecutionActions({
     return watchStatus({ intents: [intent], items: carriedItems(intent, itemIds, items) });
   }
 
+  // A completed execution is read only: every write below refuses it (its
+  // notes go through the notes table, not here).
+  function writable(execution) {
+    return Boolean(execution) && execution.status !== "closed";
+  }
+
   // At most one open (active or paused) execution per intention.
   function openExecutionFor(intentId) {
     return [...activeExecutions, ...pausedExecutions].find((e) => e.intentId === intentId) || null;
@@ -76,7 +82,6 @@ export function useExecutionActions({
           itemIds: [],
           startedAt: new Date().toISOString(),
           status: "active",
-          notes: "",
           elements: [],
           completedItemIds: [],
           progress: [],
@@ -126,7 +131,6 @@ export function useExecutionActions({
         itemIds: event.itemIds,
         startedAt: new Date().toISOString(),
         status: "active",
-        notes: "",
         elements: itemElements,
         progress: [],
       };
@@ -230,7 +234,7 @@ export function useExecutionActions({
   }
 
   async function closeExecution(outcome) {
-    if (!activeExecution) return;
+    if (!writable(activeExecution)) return;
     return withLoading('Completing...', async () => {
       // Cancel = Delete: just remove active execution, don't archive anything
       if (outcome === "cancelled") {
@@ -242,6 +246,7 @@ export function useExecutionActions({
         await endNotificationChain(activeExecution.id);
         await storage.delete(`execution:${activeExecution.id}`);
         setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
+        setPausedExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
         setActiveExecution(null);
         setView(previousView);
         return;
@@ -254,7 +259,7 @@ export function useExecutionActions({
         status: "closed",
       };
 
-      // Archive the execution (notes and elements are preserved via spread)
+      // Archive the execution (elements are preserved via spread; notes live in the notes table)
       await storage.set(`execution:${closed.id}`, closed);
       await endNotificationChain(closed.id);
 
@@ -299,7 +304,10 @@ export function useExecutionActions({
         }
       }
 
+      // Paused too: a paused run can be completed directly, and left in the
+      // paused list it showed as a paused card until the next reload.
       setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
+      setPausedExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
       setActiveExecution(null);
       setView(previousView);
     });
@@ -323,7 +331,7 @@ export function useExecutionActions({
   }
 
   async function pauseExecution() {
-    if (!activeExecution) return;
+    if (!writable(activeExecution)) return;
     return withLoading('Pausing...', async () => {
       const paused = { ...activeExecution, status: "paused" };
       await storage.set(`execution:${paused.id}`, paused);
@@ -335,7 +343,7 @@ export function useExecutionActions({
   }
 
   async function makeExecutionActive() {
-    if (!activeExecution) return;
+    if (!writable(activeExecution)) return;
     return withLoading('Resuming...', async () => {
       const activated = { ...activeExecution, status: "active" };
       await storage.set(`execution:${activated.id}`, activated);
@@ -350,7 +358,7 @@ export function useExecutionActions({
   }
 
   async function toggleExecutionElement(elementIndex) {
-    if (!activeExecution) return;
+    if (!writable(activeExecution)) return;
     const updatedElements = [...activeExecution.elements];
     const el = updatedElements[elementIndex];
     updatedElements[elementIndex] = {
@@ -392,7 +400,7 @@ export function useExecutionActions({
   }
 
   async function updateExecutionElement(elementIndex, fields) {
-    if (!activeExecution) return;
+    if (!writable(activeExecution)) return;
     const updatedElements = [...activeExecution.elements];
     updatedElements[elementIndex] = { ...updatedElements[elementIndex], ...fields };
     const updated = { ...activeExecution, elements: updatedElements };
@@ -414,21 +422,8 @@ export function useExecutionActions({
     }
   }
 
-  async function updateExecutionNotes(notes) {
-    if (!activeExecution) return;
-    const updated = { ...activeExecution, notes };
-    await storage.set(`execution:${updated.id}`, updated);
-    setActiveExecution(updated);
-    setActiveExecutions((prev) =>
-      prev.map((e) => (e.id === updated.id ? updated : e))
-    );
-    setPausedExecutions((prev) =>
-      prev.map((e) => (e.id === updated.id ? updated : e))
-    );
-  }
-
   async function toggleCollectionItem(itemId) {
-    if (!activeExecution) return;
+    if (!writable(activeExecution)) return;
     const completed = activeExecution.completedItemIds || [];
     const isCompleted = completed.includes(itemId);
     const updatedIds = isCompleted
@@ -525,7 +520,6 @@ export function useExecutionActions({
         itemIds: [item.id],
         startedAt: new Date().toISOString(),
         status: "active",
-        notes: "",
         elements: itemElements,
         progress: [],
       };
@@ -600,7 +594,6 @@ export function useExecutionActions({
           itemIds: [],
           startedAt: new Date().toISOString(),
           status: "active",
-          notes: "",
           elements: [],
           completedItemIds: [],
           progress: [],
@@ -644,7 +637,6 @@ export function useExecutionActions({
         itemIds: linkedItem ? [linkedItem.id] : [],
         startedAt: new Date().toISOString(),
         status: "active",
-        notes: "",
         elements: itemElements,
         progress: [],
       };
@@ -667,7 +659,6 @@ export function useExecutionActions({
     makeExecutionActive,
     toggleExecutionElement,
     updateExecutionElement,
-    updateExecutionNotes,
     toggleCollectionItem,
     startNowFromItem,
     startNowFromIntention,

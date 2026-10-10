@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { ArrowLeft, Check, Pause, Pencil, Play, Timer, Trash2 } from "lucide-react";
-import { formatEventDate } from "../utils/eventDates";
+import { formatEventDate, toLocalDateString } from "../utils/eventDates";
 import ObjectIcon from "../shared/ObjectIcon";
 import {
   useNotificationChain,
@@ -9,7 +9,11 @@ import {
   ChainRemainingToggle,
 } from "../NotificationChainInline";
 import ItemNameLabel from "../items/ItemNameLabel";
-import EventMetaLink from "../schedule/EventMetaLink";
+import { useExecutionNotes } from "../notes/useExecutionNotes";
+import RecordLinks from "../shared/RecordLinks";
+import CompleteNoteDialog from "../notes/CompleteNoteDialog";
+import { NoteList, ARCHIVED_NOTICE } from "../notes/NoteTimeline";
+import { useRecordNotes } from "../notes/useRecordNotes";
 
 export const DELETE_EXECUTION_CONFIRM =
   "Delete this execution? Its notes and ticked steps are deleted. The scheduled date stays.";
@@ -27,7 +31,6 @@ export default function ExecutionDetailView({
   onToggleCollectionItem,
   onUpdateCollectionItemQty,
   onRefreshCollection,
-  onUpdateNotes,
   onEditItem,
   onComplete,
   onPause,
@@ -39,9 +42,13 @@ export default function ExecutionDetailView({
   onViewContext,
   onViewIntention,
   onViewItem,
+  onOpenExecution,
 }) {
-  const [localNotes, setLocalNotes] = useState(execution.notes || "");
   const [, setTick] = useState(0);
+  const [completing, setCompleting] = useState(false);
+  // A completed execution is a record: nothing on this page writes to it, apart
+  // from notes. useExecutionActions refuses the same writes for a closed run.
+  const closed = execution.status === "closed";
   // Notification state lives ON the elements now, so the chain is loaded here
   // and threaded into the element rows rather than rendered as its own list.
   const chain = useNotificationChain(execution.id, execution.elements);
@@ -58,10 +65,11 @@ export default function ExecutionDetailView({
   // reload. Awaiting the toggle removes the race entirely.
   const handleToggleElement = useCallback(
     async (elementIndex) => {
+      if (closed) return;
       await onToggleElement(elementIndex);
       await chain.reload();
     },
-    [onToggleElement, chain]
+    [onToggleElement, chain, closed]
   );
 
   // Poll collection every 5 seconds for collection-based executions
@@ -114,18 +122,45 @@ export default function ExecutionDetailView({
   // The intention's own item first, else the run's single item.
   const linkedItem = (intent?.itemId && items.find((i) => i.id === intent.itemId)) || soleItem || null;
 
+  // Notes live in the notes table: this user's one note for the run (the box),
+  // and every note on the intention and its item (the list) (Restructure P2).
+  const notes = useExecutionNotes({
+    executionId: execution.id,
+    intentId: execution.intentId,
+  });
+  const noteItemId = intent?.itemId || soleItemId;
+  const listNotes = useRecordNotes({
+    target: { type: "intention", id: execution.intentId },
+    itemIds: noteItemId ? [noteItemId] : [],
+    intentionIds: execution.intentId ? [execution.intentId] : [],
+  });
+
   function leaveTo(go) {
-    onUpdateNotes(localNotes);
+    notes.save();
     go();
+  }
+
+  // Note sources link out, except to this execution itself.
+  const noteSources = {
+    here: { type: "execution", id: execution.id },
+    itemName: (id) => items.find((i) => i.id === id)?.name,
+    intentionName: (id) => (intent && intent.id === id ? getIntentDisplay(intent) : null),
+    onViewItem: onViewItem && ((id) => leaveTo(() => onViewItem(id))),
+    onViewIntention: onViewIntention && ((id) => leaveTo(() => onViewIntention(id))),
+    onOpenExecution: onOpenExecution && ((exec) => leaveTo(() => onOpenExecution(exec))),
+  };
+
+  async function completeWithNote(text) {
+    notes.setDraft(text);
+    if (!(await notes.save(text))) return false;
+    onComplete();
+    return true;
   }
 
   return (
     <div>
       <button
-        onClick={() => {
-          onUpdateNotes(localNotes);
-          onBack();
-        }}
+        onClick={() => leaveTo(onBack)}
         className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="w-4 h-4" />
@@ -158,12 +193,9 @@ export default function ExecutionDetailView({
               Notes are flushed first, exactly as the Back button does — the
               textarea also saves on blur, but a click that lands on the link
               without blurring it would otherwise lose what was typed. */}
-          {editableItemId && onEditItem && (
+          {editableItemId && onEditItem && !closed && (
             <button
-              onClick={() => {
-                onUpdateNotes(localNotes);
-                onEditItem(editableItemId);
-              }}
+              onClick={() => leaveTo(() => onEditItem(editableItemId))}
               title={`Edit "${editableItemName}"`}
               className="flex items-center gap-1.5 shrink-0 min-h-[44px] px-2 text-sm text-muted-foreground hover:text-foreground underline underline-offset-4 decoration-border hover:decoration-foreground transition-colors"
             >
@@ -175,47 +207,30 @@ export default function ExecutionDetailView({
         {dateDisplay && (
           <p className="text-sm text-muted-foreground mt-1">{dateDisplay}</p>
         )}
+        {closed && (
+          <p className="text-sm font-medium text-foreground mt-1">
+            Completed{execution.closedAt ? ` ${formatEventDate(toLocalDateString(new Date(execution.closedAt)))}` : ""} · read only
+          </p>
+        )}
         {/* Linked records, the event edit form's pattern: context, intention and
             item, each tappable, so a running or paused run is never a dead end.
             Notes are flushed first, as Back does. */}
-        {(contextName || intent || linkedItem) && (
-          <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-xs mt-2" aria-label="Linked records">
-            {contextName &&
-              (onViewContext ? (
-                <button
-                  onClick={() => leaveTo(() => onViewContext(execution.contextId))}
-                  title={`Open context: ${contextName}`}
-                  className="inline-flex items-center gap-1 bg-warning-light hover:bg-warning text-foreground px-2 py-1 rounded transition-colors"
-                >
-                  <ObjectIcon type="context" className="w-3.5 h-3.5" />
-                  {contextName}
-                </button>
-              ) : (
-                <span className="inline-flex items-center gap-1 bg-warning-light text-foreground px-2 py-1 rounded">
-                  <ObjectIcon type="context" className="w-3.5 h-3.5" />
-                  {contextName}
-                </span>
-              ))}
-            {intent && onViewIntention && (
-              <EventMetaLink
-                icon={<ObjectIcon type="intention" className="w-3.5 h-3.5" />}
-                name={getIntentDisplay(intent)}
-                showName
-                onClick={() => leaveTo(() => onViewIntention(intent.id))}
-                title={`Open intention: ${getIntentDisplay(intent)}`}
-              />
-            )}
-            {linkedItem && onViewItem && (
-              <EventMetaLink
-                icon={<ObjectIcon type="item" className="w-3.5 h-3.5" />}
-                name={linkedItem.name}
-                showName
-                onClick={() => leaveTo(() => onViewItem(linkedItem.id))}
-                title={`Open item: ${linkedItem.name}`}
-              />
-            )}
-          </div>
-        )}
+        <div className="mt-2">
+          <RecordLinks
+            context={contextName ? {
+              name: contextName,
+              onOpen: onViewContext && (() => leaveTo(() => onViewContext(execution.contextId))),
+            } : null}
+            intention={intent && onViewIntention ? {
+              name: getIntentDisplay(intent),
+              onOpen: () => leaveTo(() => onViewIntention(intent.id)),
+            } : null}
+            item={linkedItem && onViewItem ? {
+              name: linkedItem.name,
+              onOpen: () => leaveTo(() => onViewItem(linkedItem.id)),
+            } : null}
+          />
+        </div>
       </div>
 
       {/* Collection-based execution view */}
@@ -248,8 +263,9 @@ export default function ExecutionDetailView({
                         className="flex items-center gap-3 py-2 px-3 rounded hover:bg-secondary/50"
                       >
                         <span
-                          onClick={() => onToggleCollectionItem(collItem.itemId)}
-                          className={`w-5 h-5 flex-shrink-0 rounded border-2 flex items-center justify-center cursor-pointer ${
+                          onClick={closed ? undefined : () => onToggleCollectionItem(collItem.itemId)}
+                          aria-disabled={closed || undefined}
+                          className={`w-5 h-5 flex-shrink-0 rounded border-2 flex items-center justify-center ${closed ? "cursor-default" : "cursor-pointer"} ${
                             isChecked
                               ? "bg-primary border-primary"
                               : "bg-white border-border"
@@ -272,9 +288,10 @@ export default function ExecutionDetailView({
                         <input
                           type="text"
                           value={collItem.quantity || ""}
-                          disabled={!linkedItem}
+                          disabled={!linkedItem || closed}
                           title={linkedItem ? undefined : "This item cannot be shown, so its quantity cannot be edited"}
                           onChange={(e) => {
+                            if (closed) return;
                             onUpdateCollectionItemQty(execution.collectionId, collItem.itemId, e.target.value);
                           }}
                           placeholder="Qty"
@@ -294,7 +311,7 @@ export default function ExecutionDetailView({
       {!execution.collectionId && execution.elements && execution.elements.length > 0 && (
         <div className="mb-6">
           <div className="border-t border-border pt-4 space-y-2">
-            <ChainUnreachableNotice chain={chain} onOpenSettings={onOpenSettings} />
+            {!closed && <ChainUnreachableNotice chain={chain} onOpenSettings={onOpenSettings} />}
             {(() => {
               let stepCounter = 0;
               return execution.elements.map((el, index) => {
@@ -351,16 +368,18 @@ export default function ExecutionDetailView({
                 const stepNum = stepCounter;
                 return (
                   <div key={index} style={{ marginLeft: indentPx }}>
-                    <ChainRemainingToggle chain={chain} index={index} />
+                    {!closed && <ChainRemainingToggle chain={chain} index={index} />}
                     <div
-                      className="flex items-start gap-3 py-2 px-3 rounded hover:bg-secondary/50"
+                      className={`flex items-start gap-3 py-2 px-3 rounded ${closed ? "" : "hover:bg-secondary/50"}`}
                     >
                       <span className={`font-medium min-w-[24px] mt-0.5 ${el.isCompleted ? "text-muted-foreground" : "text-muted-foreground"}`}>
                         {stepNum}.
                       </span>
                       <span
-                        onClick={() => handleToggleElement(index)}
-                        className={`mt-1 w-5 h-5 flex-shrink-0 rounded border-2 flex items-center justify-center cursor-pointer ${
+                        onClick={closed ? undefined : () => handleToggleElement(index)}
+                        aria-disabled={closed || undefined}
+                        data-testid="element-check"
+                        className={`mt-1 w-5 h-5 flex-shrink-0 rounded border-2 flex items-center justify-center ${closed ? "cursor-default" : "cursor-pointer"} ${
                           el.isCompleted
                             ? "bg-primary border-primary"
                             : el.inProgress
@@ -393,15 +412,17 @@ export default function ExecutionDetailView({
                               .join(" · ")}
                           </p>
                         )}
-                        <ElementNotification
-                          chain={chain}
-                          element={el}
-                          index={index}
-                          editing={editingStep}
-                          setEditing={setEditingStep}
-                        />
+                        {!closed && (
+                          <ElementNotification
+                            chain={chain}
+                            element={el}
+                            index={index}
+                            editing={editingStep}
+                            setEditing={setEditingStep}
+                          />
+                        )}
                       </div>
-                      {!el.isCompleted && !el.inProgress && (
+                      {!closed && !el.isCompleted && !el.inProgress && (
                         <button
                           onClick={() => onUpdateElement(index, { inProgress: true, startedAt: new Date().toISOString() })}
                           className="text-sm text-primary hover:text-primary-hover whitespace-nowrap"
@@ -409,7 +430,7 @@ export default function ExecutionDetailView({
                           Start
                         </button>
                       )}
-                      {el.inProgress && !el.isCompleted && (
+                      {!closed && el.inProgress && !el.isCompleted && (
                         <button
                           onClick={() => onUpdateElement(index, { inProgress: false, startedAt: null })}
                           className="text-sm text-muted-foreground hover:text-muted-foreground whitespace-nowrap"
@@ -418,7 +439,7 @@ export default function ExecutionDetailView({
                         </button>
                       )}
                     </div>
-                    {el.inProgress && el.startedAt && !el.isCompleted && (
+                    {!closed && el.inProgress && el.startedAt && !el.isCompleted && (
                       <div className="ml-16 pb-1 text-xs text-primary">
                         <Timer className="w-3.5 h-3.5 inline" /> Started {formatElapsed(el.startedAt)}
                       </div>
@@ -431,21 +452,51 @@ export default function ExecutionDetailView({
         </div>
       )}
 
-      <div className="mb-6">
-        <div className="border-t border-border pt-4">
-          <label className="block text-sm font-medium text-foreground mb-2">
-            Notes
-          </label>
-          <textarea
-            value={localNotes}
-            onChange={(e) => setLocalNotes(e.target.value)}
-            onBlur={() => onUpdateNotes(localNotes)}
-            placeholder="Add notes about this execution..."
-            className="w-full px-3 py-2 border border-border rounded min-h-[120px]"
+      {/* Notes, laid out as on item and intention detail: this execution's one
+          note (autosaving), then the grouped list of every other note on the
+          intention and its item. The same on a completed run. */}
+      <section className="mb-6 border-t border-border pt-4" aria-label="Notes">
+        <h3 className="text-lg font-medium mb-3">Notes</h3>
+        {intent?.archived && !notes.draft ? (
+          <p className="text-sm text-muted-foreground mb-3">{ARCHIVED_NOTICE}</p>
+        ) : (
+          <>
+            <textarea
+              aria-label="This execution's note"
+              value={notes.draft}
+              onChange={(e) => notes.setDraft(e.target.value)}
+              onBlur={() => notes.save()}
+              disabled={!notes.loaded}
+              placeholder={notes.loaded ? "Add notes about this execution..." : "Loading notes…"}
+              className="w-full px-3 py-2.5 border border-border rounded-lg text-base bg-input-background min-h-[120px] disabled:opacity-60"
+            />
+            {notes.saveState === "saving" && <p className="text-xs text-muted-foreground mt-1">Saving…</p>}
+            {notes.saveState === "error" && (
+              <p className="text-xs text-destructive mt-1">Note not saved. Tap outside the box to try again.</p>
+            )}
+          </>
+        )}
+        {listNotes.error && <p className="text-sm text-destructive mt-2">{listNotes.error}</p>}
+        <div className="mt-3">
+          <NoteList
+            notes={(listNotes.notes || []).filter((n) => n.id !== notes.mineId)}
+            userId={listNotes.userId}
+            edit={listNotes.edit}
+            remove={listNotes.remove}
+            sources={noteSources}
           />
         </div>
-      </div>
+      </section>
 
+      {completing && !closed && (
+        <CompleteNoteDialog
+          initialNote={notes.draft}
+          onComplete={completeWithNote}
+          onCancel={() => setCompleting(false)}
+        />
+      )}
+
+      {!closed && (
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-0 pt-4 border-t border-border">
         {/* Deletes the execution outright: no undo anywhere, so it asks first.
             Red outline, no fill, alone on the left. Pause is tinted, Complete the
@@ -477,13 +528,14 @@ export default function ExecutionDetailView({
           </button>
         )}
         <button
-          onClick={onComplete}
+          onClick={() => setCompleting(true)}
           className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
         >
           <Check className="w-5 h-5" />
           Complete
         </button>
       </div>
+      )}
     </div>
   );
 }

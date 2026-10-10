@@ -13,6 +13,7 @@ import {
   Timer,
   Gamepad2,
   Wallet,
+  MessageSquareText,
 } from "lucide-react";
 
 // --- Alfred's icon vocabulary (Step 12.10) ----------------------------------
@@ -45,6 +46,9 @@ export const OBJECT_ICONS = {
   // the title would put a near-twin of a control next to the thing the control
   // acts on. A pulse says "live" and collides with nothing.
   execution: Activity,
+  // A note on an item, intention or execution (Restructure P2). Not StickyNote:
+  // at 14px that reads as File, the item glyph (design-system.md, source icons).
+  note: MessageSquareText,
   timer: Timer,
   sam: Music,
   games: Gamepad2,

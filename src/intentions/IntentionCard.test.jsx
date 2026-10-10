@@ -1,6 +1,15 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import IntentionCard from "./IntentionCard";
+import * as notesApi from "../notes/notesApi";
+import { _resetCardNotesCache } from "../notes/useCardExecutionNotes";
+
+jest.mock("../notes/notesApi", () => ({ listNotesForExecutions: jest.fn(), onNotesChanged: jest.fn() }));
+
+beforeEach(() => {
+  _resetCardNotesCache();
+  notesApi.listNotesForExecutions.mockResolvedValue([]);
+});
 
 function renderCard(intent, props = {}) {
   const handlers = { onStartNow: jest.fn(), onSchedule: jest.fn(), onViewDetail: jest.fn() };
@@ -48,6 +57,10 @@ test("row: closed disables Start Now and Schedule with a reason", () => {
     expect(screen.getByRole("button", { name }).disabled).toBe(true);
   }
   expect(screen.getByRole("button", { name: "Start Now" }).title).toMatch(/closed/);
+  // Disabled Schedule drops the brown fill, so it cannot read as live.
+  expect(screen.getByRole("button", { name: "Schedule" }).className).toMatch(/disabled:bg-secondary/);
+  fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+  expect(document.querySelector('input[type="date"]')).toBeNull();
 });
 
 test("edit form: When offers Doesn't repeat / Repeat, and no raw date fields", () => {
@@ -110,6 +123,26 @@ test("edit form: an unchanged status is not sent", () => {
   renderCard({ status: "active" }, { isEditing: true, onCancel: jest.fn(), editableStatus: true, onUpdate });
   fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
   expect("status" in onUpdate.mock.calls[0][1]).toBe(false);
+});
+
+test("row: 'last done' shows only once completed, beside last updated", () => {
+  const { unmount } = render(
+    <IntentionCard intent={{ id: "i1", text: "t", status: "active", updatedAt: "2026-10-09T12:00:00Z", lastCompletedAt: "2026-10-05T12:00:00Z" }} contexts={[]} items={[]} getIntentDisplay={(i) => i.text} />,
+  );
+  expect(screen.getByText(/last done: Oct 5, 2026 · last updated: Oct 9, 2026/)).toBeTruthy();
+  unmount();
+  renderCard({ status: "active", updatedAt: "2026-10-09T12:00:00Z", lastCompletedAt: null });
+  expect(screen.queryByText(/last done/)).toBeNull();
+  expect(screen.getByText(/last updated/)).toBeTruthy();
+});
+
+test("row: an open execution's notes show as one-line note lines", async () => {
+  notesApi.listNotesForExecutions.mockResolvedValue([{ id: "n", executionId: "x", body: "halfway there" }]);
+  const onViewDetail = jest.fn();
+  renderCard({ status: "active" }, { executions: [{ id: "x", intentId: "i1", status: "active" }], onViewDetail });
+  const line = await screen.findByText("halfway there");
+  expect(line.className).toMatch(/truncate/);
+  expect(line.closest("button")).toBeNull();
 });
 
 test("edit mode on an existing intention: Save, Cancel and Archive only", () => {

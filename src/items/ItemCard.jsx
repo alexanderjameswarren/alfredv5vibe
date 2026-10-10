@@ -9,6 +9,8 @@ import InsertRowButton from "../shared/InsertRowButton";
 import RepeatBlockDialog from "../shared/RepeatBlockDialog";
 import ObjectIcon from "../shared/ObjectIcon";
 import ExecutionBadge from "../executions/ExecutionBadge";
+import CardExecutionNotes from "../notes/CardExecutionNotes";
+import { shortDate } from "../notes/noteFormat";
 import StatusPill from "../shared/StatusPill";
 import StatusPicker from "../shared/StatusPicker";
 import { statusOf, statusOptionsFor } from "../utils/status";
@@ -662,11 +664,14 @@ export default function ItemCard({
             : item.description}
         </p>
       )}
-      {((item.elements || item.components)?.length > 0 || item.updatedAt) && (
+      {((item.elements || item.components)?.length > 0 || item.updatedAt || item.lastCompletedAt) && (
           <span className="text-xs text-muted-foreground mt-1 block">
-            {(item.elements || item.components)?.length > 0 && `${(item.elements || item.components).length} elements`}
-            {(item.elements || item.components)?.length > 0 && item.updatedAt && ' · '}
-            {item.updatedAt && `last updated: ${new Date(item.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`}
+            {/* last_completed_at is set by trigger (Restructure P2); shown only once done. */}
+            {[
+              (item.elements || item.components)?.length > 0 && `${(item.elements || item.components).length} elements`,
+              item.lastCompletedAt && `last done: ${shortDate(item.lastCompletedAt)}`,
+              item.updatedAt && `last updated: ${shortDate(item.updatedAt)}`,
+            ].filter(Boolean).join(' · ')}
           </span>
         )}
       {executions.length > 0 && onOpenExecution && (
@@ -679,7 +684,9 @@ export default function ItemCard({
               contexts={contexts}
               getIntentDisplay={getIntentDisplay}
               onOpen={onOpenExecution}
-            />
+            >
+              <CardExecutionNotes executionId={exec.id} />
+            </ExecutionBadge>
           ))}
         </div>
       )}

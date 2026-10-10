@@ -354,7 +354,6 @@ export default function Alfred() {
     makeExecutionActive,
     toggleExecutionElement,
     updateExecutionElement,
-    updateExecutionNotes,
     toggleCollectionItem,
     startNowFromItem,
     startNowFromIntention,
@@ -1424,6 +1423,7 @@ export default function Alfred() {
             onStartNowIntention={startNowFromIntention}
             onArchiveIntention={archiveIntention}
             onViewItem={viewItemDetail}
+            onViewContextDetail={viewContextDetail}
             onViewIntentionDetail={(id) => viewIntentionDetail(id, "item-detail")}
             // Step 12.2: arrive already editing when the execution screen sent
             // us. Keyed on the item id so tapping through to a DIFFERENT item
@@ -1459,7 +1459,6 @@ export default function Alfred() {
             toggleCollectionItem={toggleCollectionItem}
             saveMemberQuantity={saveMemberQuantity}
             refreshCollection={refreshCollection}
-            updateExecutionNotes={updateExecutionNotes}
             closeExecution={closeExecution}
             pauseExecution={pauseExecution}
             makeExecutionActive={makeExecutionActive}
@@ -1470,6 +1469,12 @@ export default function Alfred() {
             onViewContext={(id) => {
               viewContextDetail(id);
               setPreviousView("home");
+            }}
+            // A note's execution link: switch runs without touching previousView,
+            // so Back still returns to where the first run was opened from.
+            onOpenExecution={(exec) => {
+              setActiveExecution(exec);
+              goToExecution(exec);
             }}
           />
         )}

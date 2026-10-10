@@ -2,7 +2,8 @@ import React from "react";
 import { Pause, Play } from "lucide-react";
 import ObjectIcon from "../shared/ObjectIcon";
 
-export default function ExecutionBadge({ exec, intents, contexts, getIntentDisplay, onOpen }) {
+// `children` render inside the card, below its state line (the run's notes on detail pages).
+export default function ExecutionBadge({ exec, intents, contexts, getIntentDisplay, onOpen, children }) {
   const intent = intents.find((i) => i.id === exec.intentId);
   const isActive = exec.status === "active";
 
@@ -15,7 +16,7 @@ export default function ExecutionBadge({ exec, intents, contexts, getIntentDispl
       // Teal means running, app-wide: the same colour as the Start and Continue
       // buttons that reach it. Paused stays amber, a different state.
       data-state={isActive ? "active" : "paused"}
-      className={`p-3 sm:p-4 rounded cursor-pointer shadow-sm hover:shadow-md transition-shadow duration-200 min-h-[44px] ${
+      className={`p-3 sm:p-4 rounded-lg cursor-pointer shadow-sm hover:shadow-md transition-shadow duration-200 min-h-[44px] ${
         isActive
           ? "bg-success-light border-2 border-success"
           : "bg-warning-light border-2 border-warning"
@@ -49,6 +50,7 @@ export default function ExecutionBadge({ exec, intents, contexts, getIntentDispl
           Paused — click to resume
         </p>
       )}
+      {children}
     </div>
   );
 }
