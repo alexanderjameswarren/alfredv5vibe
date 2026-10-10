@@ -1,3 +1,6 @@
+-- APPLIED 2026-10-10, before being numbered: run as
+-- _pending_restructure_p2-q7m_drop_execution_notes.sql. Do not run again.
+--
 -- Purpose: Restructure Phase 2, step 5. Retire executions.notes: copy any text
 --          the old app wrote there after migration 100's backfill into notes,
 --          then drop the column. Nothing else changes.

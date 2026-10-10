@@ -3,13 +3,15 @@
 Notes and execution history.
 Worktree / owner: `restructure_p2-q7m`
 
+**Phase 2 complete (2026-10-10).** Merged and deployed; `executions.notes` dropped (migration 111). Step 6 stays deferred.
+
 | Step | What | Status |
 |---|---|---|
 | 1 | Migration: `notes` table, sharing-aware RLS, target delete triggers, backfill of `executions.notes`, `last_completed_at` on items and intents, search functions, recent-completions function | done: `100_restructure_p2_notes_and_last_completed.sql` applied 2026-10-08, verified (4 notes backfilled, 96 intentions / 49 items with last_completed_at, 0 mismatches), CONFORMANT (52 tables) |
 | 2 | Execution page: previous notes at top, note field open while running, note box on Complete; stop writing `executions.notes` | done: phone-tested 2026-10-09; both new notes saved as target_type intention with execution_id. Migration 100 checkpointed, db: claims released |
 | 3 | `src/notes/` input and timeline (edit/delete, add on closed not archived); item detail timeline; intention detail history replaces `PreviousExecutions` (deleted) | done: phone-tested 2026-10-09 with all polish (grouped notes list, speech-bubble icon, "during an execution" link, caret-free completion cards) |
 | 4 | List cards: last-done date and the open execution's notes | done: phone-tested 2026-10-10 with all polish (header links, note source icons, single notes layout) |
-| 5 | Migration: copy any late `executions.notes`, then drop the column | drafted 2026-10-10 as `_pending_restructure_p2-q7m_drop_execution_notes.sql`; runs only after merge + Vercel deploy |
+| 5 | Migration: copy any late `executions.notes`, then drop the column | done: applied 2026-10-10 after merge + Vercel deploy (run as `_pending_`, then numbered `111_restructure_p2_drop_execution_notes.sql`). Verified: column gone, 7 notes with execution_id across 7 executions, no duplicate author+run, 0 conformance failures; CONFORMANT (58 tables) |
 | 6 | MCP tool descriptions (deferred; `mcp/index.ts` held by drive_mix-v7r) | deferred |
 
 ## Decisions (2026-10-08)
@@ -83,6 +85,7 @@ Worktree / owner: `restructure_p2-q7m`
   3. gitsync, number the migration, run it, then its VERIFICATION and `check_platform_conformance`.
 - Reference search (2026-10-10): nothing in `src/`, `supabase/functions/` (incl. `tool-handlers.ts`, `mcp/index.ts`, `notify-dispatch` selects only `id`), `scripts/` or tests reads or writes `executions.notes`. `storage.set`/`patch` strip it (`withoutDbOwned`). Only SQL reference: migration 100's one-off backfill. Live database functions and views are checked by the PRE-CHECK.
 - `StatusEventsSheet.test.jsx` (claimed): expected date built with `formatEventDate`, so it no longer fails on the day it names.
+- Done 2026-10-10: Alex ran the whole `_pending_` file after the Vercel deploy; it was then numbered 111 with a header saying so. Verification: `column_still_there` [], notes_with_execution 7, executions_with_notes 7, `two_notes_same_author_same_run` [], `conformance_failures` []. `check_platform_conformance`: CONFORMANT, 58 tables (the file's "52" predates other threads' tables).
 
 ## Later, not Phase 2
 - Card rule: a bordered card is something you tap; content you read sits in a list.
