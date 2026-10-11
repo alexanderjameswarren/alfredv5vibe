@@ -4,12 +4,14 @@
  * Renders nothing when there is neither, or when the read fails (logged): a missing
  * line is better than an error box on a detail page.
  *
- * `editable` (Restructure P3): pending reminders become a grouped list with Cancel,
- * and `addText` adds an "Add reminder" action that sets one on the intention.
+ * Restructure P3:
+ * - `editable` (inbox detail): pending reminders as a grouped list with Cancel.
+ * - `IntentionReminderLines` (intention detail): one small line per pending reminder
+ *   with a Cancel link, and an "Add reminder" link that opens date and time inline.
  */
 
-import { useEffect, useState } from "react";
-import { Bell, Plus, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Bell, X } from "lucide-react";
 import {
   cancelReminder,
   createIntentionReminder,
@@ -22,9 +24,12 @@ import { NOTE_LIST, NOTE_ROW } from "../notes/noteFormat";
 
 // The event scheduling form's input (SchedulePopover).
 const INPUT = "w-full px-3 py-2 min-h-[44px] border border-border rounded text-base";
+const LINK = "underline-offset-2 hover:underline disabled:opacity-50";
+const EMPTY = { scheduled: [], lastSent: null };
 
-export default function PendingReminder({ inboxId = null, intentId = null, editable = false, addText = null }) {
-  const [summary, setSummary] = useState({ scheduled: [], lastSent: null });
+/** { scheduled, lastSent, reload } for one inbox item or intention. */
+export function useReminderSummary({ inboxId = null, intentId = null }) {
+  const [summary, setSummary] = useState(EMPTY);
   const [version, setVersion] = useState(0);
 
   useEffect(() => {
@@ -33,35 +38,48 @@ export default function PendingReminder({ inboxId = null, intentId = null, edita
       .then((s) => live && setSummary(s))
       .catch((err) => {
         console.error("[PendingReminder]", err);
-        if (live) setSummary({ scheduled: [], lastSent: null });
+        if (live) setSummary(EMPTY);
       });
     return () => {
       live = false;
     };
   }, [inboxId, intentId, version]);
 
-  const { scheduled, lastSent } = summary;
-  const reload = () => setVersion((v) => v + 1);
+  const reload = useCallback(() => setVersion((v) => v + 1), []);
+  return { ...summary, reload };
+}
+
+/** Confirm, cancel, then reload; alerts on failure. Returns true when cancelled. */
+async function confirmCancel(reminder, onCancelled) {
+  const when = formatPacific(reminder.due_at);
+  if (!window.confirm(`Cancel the reminder for ${when}?`)) return false;
+  try {
+    await cancelReminder(reminder.id);
+    onCancelled();
+    return true;
+  } catch (err) {
+    console.error("[PendingReminder] cancel", err);
+    window.alert("Could not cancel that reminder. It is still scheduled.");
+    return false;
+  }
+}
+
+export default function PendingReminder({ inboxId = null, intentId = null, editable = false }) {
+  const { scheduled, lastSent, reload } = useReminderSummary({ inboxId, intentId });
 
   if (editable) {
+    if (scheduled.length === 0) return null;
     return (
       <div className="mt-3 space-y-2">
-        {scheduled.length > 0 && (
-          <>
-            <h3 className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-              <Bell className="w-4 h-4 text-primary" aria-hidden="true" />
-              Reminders
-            </h3>
-            <ul className={NOTE_LIST}>
-              {scheduled.map((r) => (
-                <ReminderRow key={r.id} reminder={r} onCancelled={reload} />
-              ))}
-            </ul>
-          </>
-        )}
-        {addText != null && intentId && (
-          <AddReminder intentId={intentId} text={addText} onAdded={reload} />
-        )}
+        <h3 className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+          <Bell className="w-4 h-4 text-primary" aria-hidden="true" />
+          Reminders
+        </h3>
+        <ul className={NOTE_LIST}>
+          {scheduled.map((r) => (
+            <ReminderRow key={r.id} reminder={r} onCancelled={reload} />
+          ))}
+        </ul>
       </div>
     );
   }
@@ -94,16 +112,8 @@ function ReminderRow({ reminder, onCancelled }) {
   const when = formatPacific(reminder.due_at);
 
   async function cancel() {
-    if (!window.confirm(`Cancel the reminder for ${when}?`)) return;
     setBusy(true);
-    try {
-      await cancelReminder(reminder.id);
-      onCancelled();
-    } catch (err) {
-      console.error("[PendingReminder] cancel", err);
-      window.alert("Could not cancel that reminder. It is still scheduled.");
-      setBusy(false);
-    }
+    if (!(await confirmCancel(reminder, onCancelled))) setBusy(false);
   }
 
   return (
@@ -123,7 +133,49 @@ function ReminderRow({ reminder, onCancelled }) {
   );
 }
 
-function AddReminder({ intentId, text, onAdded }) {
+/**
+ * Intention header lines, directly under the schedule line and in its text size:
+ * "Reminder · <PT time>  Cancel" per pending reminder, then "Add reminder".
+ * `scheduled` and `onChanged` come from the page's `useReminderSummary`.
+ */
+export function IntentionReminderLines({ intentId, text, scheduled = [], onChanged }) {
+  return (
+    <>
+      {scheduled.map((r) => (
+        <CompactReminder key={r.id} reminder={r} onCancelled={onChanged} />
+      ))}
+      <AddReminderLine intentId={intentId} text={text} onAdded={onChanged} />
+    </>
+  );
+}
+
+function CompactReminder({ reminder, onCancelled }) {
+  const [busy, setBusy] = useState(false);
+  const when = formatPacific(reminder.due_at);
+
+  async function cancel() {
+    setBusy(true);
+    if (!(await confirmCancel(reminder, onCancelled))) setBusy(false);
+  }
+
+  return (
+    <p className="text-sm mt-1 flex items-center gap-1.5 flex-wrap">
+      <Bell className="w-3.5 h-3.5 shrink-0 text-primary" aria-hidden="true" />
+      <span>Reminder · {when}</span>
+      <button
+        type="button"
+        onClick={cancel}
+        disabled={busy}
+        aria-label={`Cancel reminder: ${when}`}
+        className={`ml-1 text-destructive ${LINK}`}
+      >
+        Cancel
+      </button>
+    </p>
+  );
+}
+
+function AddReminderLine({ intentId, text, onAdded }) {
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
@@ -156,49 +208,45 @@ function AddReminder({ intentId, text, onAdded }) {
     }
   }
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={start}
-        className="inline-flex items-center gap-2 px-3 py-2 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm text-sm"
-      >
-        <Bell className="w-4 h-4" aria-hidden="true" />
-        Add reminder
-      </button>
-    );
-  }
-
   return (
-    <div className="space-y-2">
-      <div className="flex gap-2">
-        <label className="flex-1 text-xs font-medium text-muted-foreground">
-          Date
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={`${INPUT} mt-1`} />
-        </label>
-        <label className="flex-1 text-xs font-medium text-muted-foreground">
-          Time
-          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={`${INPUT} mt-1`} />
-        </label>
-      </div>
-      <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={save}
-          disabled={busy || !localInputToIso(date, time)}
-          className="inline-flex items-center gap-2 px-4 py-2 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg text-sm disabled:opacity-50"
-        >
-          <Plus className="w-4 h-4" aria-hidden="true" />
-          Set reminder
-        </button>
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="px-4 py-2 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg text-sm"
-        >
-          Cancel
-        </button>
-      </div>
+    <div className="mt-1">
+      <p className="text-sm flex items-center gap-1.5">
+        <Bell className="w-3.5 h-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        {open ? (
+          <span>Add reminder</span>
+        ) : (
+          <button type="button" onClick={start} className={`text-primary ${LINK}`}>
+            Add reminder
+          </button>
+        )}
+      </p>
+      {open && (
+        <div className="mt-2 space-y-2 max-w-sm">
+          <div className="flex gap-2">
+            <label className="flex-1 text-xs font-medium text-muted-foreground">
+              Date
+              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={`${INPUT} mt-1`} />
+            </label>
+            <label className="flex-1 text-xs font-medium text-muted-foreground">
+              Time
+              <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={`${INPUT} mt-1`} />
+            </label>
+          </div>
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy || !localInputToIso(date, time)}
+              className="px-4 py-2 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg text-sm disabled:opacity-50"
+            >
+              Set reminder
+            </button>
+            <button type="button" onClick={() => setOpen(false)} className={`text-sm text-muted-foreground ${LINK}`}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

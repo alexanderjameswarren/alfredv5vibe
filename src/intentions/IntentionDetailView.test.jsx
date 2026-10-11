@@ -4,7 +4,14 @@ import IntentionDetailView from "./IntentionDetailView";
 import * as notesApi from "../notes/notesApi";
 import { storage } from "../utils/storage";
 
-jest.mock("../inbox/PendingReminder", () => () => null);
+let mockScheduled = [];
+const mockReload = jest.fn();
+jest.mock("../inbox/PendingReminder", () => ({
+  __esModule: true,
+  default: () => null,
+  IntentionReminderLines: () => null,
+  useReminderSummary: () => ({ scheduled: mockScheduled, lastSent: null, reload: mockReload }),
+}));
 jest.mock("../notes/notesApi", () => ({
   currentUserId: jest.fn(),
   listNotesForTargets: jest.fn(),
@@ -158,6 +165,39 @@ test("title pill: Closed with live events opens the sheet; nothing saved yet", (
   fireEvent.click(screen.getByRole("menuitemradio", { name: "Closed" }));
   expect(screen.getByRole("dialog", { name: "Live events" })).toBeTruthy();
   expect(onSetStatus).not.toHaveBeenCalled();
+});
+
+describe("pending reminders and the status sheet (P3)", () => {
+  afterEach(() => {
+    mockScheduled = [];
+  });
+
+  test("reminders alone open the sheet for Background", () => {
+    mockScheduled = [{ id: "r1", due_at: "2026-10-12T16:00:00Z" }];
+    const { onSetStatus } = renderDetail({ events: [] });
+    fireEvent.click(screen.getByRole("button", { name: /^Status:/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Background" }));
+    expect(screen.getByText("1 reminder pending.")).toBeTruthy();
+    expect(onSetStatus).not.toHaveBeenCalled();
+  });
+
+  test("cancel answer cancels both and reloads the reminders", async () => {
+    mockScheduled = [{ id: "r1", due_at: "2026-10-12T16:00:00Z" }, { id: "r2", due_at: "2026-10-13T16:00:00Z" }];
+    const { onSetStatus } = renderDetail();
+    fireEvent.click(screen.getByRole("button", { name: /^Status:/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Background" }));
+    fireEvent.click(screen.getByRole("button", { name: "Archive the date and cancel the reminders" }));
+    await waitFor(() => expect(onSetStatus).toHaveBeenCalledWith("i1", "background", { archiveEvents: true }));
+    expect(mockReload).toHaveBeenCalled();
+  });
+
+  test("no event and no reminders: no sheet", () => {
+    const { onSetStatus } = renderDetail({ events: [] });
+    fireEvent.click(screen.getByRole("button", { name: /^Status:/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Background" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onSetStatus).toHaveBeenCalledWith("i1", "background");
+  });
 });
 
 test("notes: timeline, recent completions and the open execution load for this intention", async () => {

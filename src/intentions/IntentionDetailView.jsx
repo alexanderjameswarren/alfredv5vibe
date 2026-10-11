@@ -8,7 +8,7 @@ import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
 import ObjectIcon from "../shared/ObjectIcon";
 import DetailMeta from "../shared/DetailMeta";
 import SchedulePopover from "../shared/recurrence/SchedulePopover";
-import PendingReminder from "../inbox/PendingReminder";
+import { IntentionReminderLines, useReminderSummary } from "../inbox/PendingReminder";
 import OriginalCapture from "../inbox/OriginalCapture";
 import IntentionCard from "./IntentionCard";
 import RecordLinks from "../shared/RecordLinks";
@@ -62,6 +62,7 @@ export default function IntentionDetailView({
     target: { type: "intention", id: intention?.id },
     intentionIds: intention ? [intention.id] : [],
   });
+  const reminders = useReminderSummary({ intentId: intention?.id || null });
 
   if (!intention) return null;
 
@@ -80,7 +81,8 @@ export default function IntentionDetailView({
       );
       return false;
     }
-    if (liveEvents.length > 0) {
+    // Asked when there is a live event, pending reminders, or both (one answer for all).
+    if (liveEvents.length > 0 || reminders.scheduled.length > 0) {
       setPending({ status, form });
       return false;
     }
@@ -95,6 +97,7 @@ export default function IntentionDetailView({
   async function commit({ status, form }, archiveEvents = false) {
     if (form) await onUpdateIntention(form.id, form.fields, form.scheduledDate);
     if (status) await onSetStatus(intention.id, status, { archiveEvents });
+    if (status && archiveEvents) reminders.reload();
     if (form) setIsEditing(false);
   }
 
@@ -127,6 +130,7 @@ export default function IntentionDetailView({
         <StatusEventsSheet
           status={pending.status}
           event={liveEvents[0]}
+          reminderCount={reminders.scheduled.length}
           onArchive={() => answerSheet(true)}
           onKeep={() => answerSheet(false)}
           onCancel={cancelSheet}
@@ -254,7 +258,12 @@ export default function IntentionDetailView({
           <ScheduledLine actions={actions} />
         </p>
 
-        <PendingReminder intentId={intention.id} editable addText={intention.text || ""} />
+        <IntentionReminderLines
+          intentId={intention.id}
+          text={intention.text || ""}
+          scheduled={reminders.scheduled}
+          onChanged={reminders.reload}
+        />
 
         {statusNotices}
 

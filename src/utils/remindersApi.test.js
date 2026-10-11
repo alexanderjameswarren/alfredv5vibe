@@ -55,6 +55,21 @@ it("cancels one scheduled reminder as manual", async () => {
   expect(calls("eq")).toEqual([["eq", "id", "r1"], ["eq", "state", "scheduled"]]);
 });
 
+it("status move cancels scheduled reminders as intent_status and returns their ids", async () => {
+  const ids = await api.cancelRemindersForStatus("int1");
+  expect(calls("update")[0][1]).toEqual({ state: "cancelled", cancel_reason: "intent_status" });
+  expect(calls("eq")).toEqual([["eq", "intent_id", "int1"], ["eq", "state", "scheduled"]]);
+  expect(ids).toEqual(["r1"]);
+});
+
+it("status undo re-arms only those ids still in the future", async () => {
+  const now = new Date("2026-10-11T12:00:00Z");
+  await api.restoreRemindersAfterStatus(["r1", "r2"], now);
+  expect(calls("in")).toEqual([["in", "id", ["r1", "r2"]]]);
+  expect(calls("eq")).toEqual([["eq", "state", "cancelled"], ["eq", "cancel_reason", "intent_status"]]);
+  expect(calls("gt")).toEqual([["gt", "due_at", now.toISOString()]]);
+});
+
 it("defaults to the next whole hour, local time", () => {
   expect(api.nextWholeHour(new Date(2026, 9, 11, 13, 25))).toEqual({ date: "2026-10-11", time: "14:00" });
   expect(api.nextWholeHour(new Date(2026, 9, 11, 23, 5))).toEqual({ date: "2026-10-12", time: "00:00" });

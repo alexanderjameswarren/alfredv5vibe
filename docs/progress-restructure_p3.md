@@ -27,13 +27,20 @@ Spec: `docs/technical-spec-restructure_p3.md`
   - Each processed row has an outcome line using the RecordLinks pattern (EventMetaLink with ObjectIcon). Each record opens `/<id>`; a missing record reads "<Type> deleted".
   - `useOutcomeNames` makes one query per table.
   - Rows are unchanged otherwise: not cards, and they don't open the capture.
-- [x] 6. Intention detail: set a reminder at an exact date and time, list it, cancel it. The same cancel goes on inbox detail. (Built 2026-10-11; awaiting tests in Chrome and on the phone.)
-  - `PendingReminder` has an `editable` mode: a grouped list (NOTE_LIST) of pending reminders in Pacific time, with a red-outline Cancel (confirm, then state cancelled with reason manual). With `addText`, it shows "Add reminder": date and time inputs in the SchedulePopover style, defaulting to the next whole hour in local time, stored as UTC through the `create_reminder` RPC with `p_intent_id`.
-  - With none pending, only Add shows. The inbox page has Cancel and no Add.
+- [x] 6. Intention detail: set a reminder at an exact date and time, list it, cancel it. The same cancel goes on inbox detail. (Verified 2026-10-11 in Chrome and on the phone: the notification arrived and the tap opened the intention.)
+  - Inbox detail: `PendingReminder editable` shows a grouped list (NOTE_LIST) of pending reminders in Pacific time, with a red-outline Cancel (confirm, then state cancelled with reason manual). No Add.
   - The item page keeps the read-only line.
   - Tapping the notification opens `/intentions/detail/<id>` (notify-dispatch `reminderPath`).
-  - Not changed: archiving, closing or backgrounding an intention leaves its scheduled reminders firing. No trigger or app code touches them, and the dispatcher reads only state and due_at.
   - List-card reminder badges refresh on reload, not instantly after an add or cancel.
+  - **Follow-up A** (built 2026-10-11; awaiting a Chrome test): compact lines on the intention page, under the schedule line.
+    - `IntentionReminderLines` shows "Reminder · <PT time>" per pending reminder with a red Cancel link, then an "Add reminder" link.
+    - Add opens date and time inputs (SchedulePopover style, next whole hour, local time stored as UTC through `create_reminder` with `p_intent_id`), with Set reminder and a Cancel link.
+    - There's no grouped section on the intention page.
+  - **Follow-up B** (built 2026-10-11; 119 applied, CONFORMANT; awaiting a Chrome test):
+    - The Background and Closed sheet (`StatusEventsSheet`, `sheetWording`) counts the live event and pending reminders and appears for reminders alone. One answer covers both.
+    - "Cancel" sets cancel_reason `intent_status`, and Undo re-arms those that are still ahead (`cancelRemindersForStatus`, `restoreRemindersAfterStatus`).
+    - Migration `119_restructure_p3_reminders_follow_intent.sql` allows the `intent_status` and `intent_archived` reasons.
+    - Trigger `reminders_follow_intent_archive` (SECURITY DEFINER): archive cancels as `intent_archived`; un-archive re-arms only `intent_archived` reminders still in the future.
 - [ ] 7. Copy button on item and intention detail.
 - [ ] 8. After warren_buffet_p2-m4t finishes and gitsync:
   - tool changes, including a new tier-1 `get_apps` (tool count 113 → 114)
