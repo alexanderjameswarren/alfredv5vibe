@@ -13,10 +13,10 @@ Drive Mix is Alex's default car playlist: familiar pop, rock, alternative, a lit
 - Pool table `drive_mix_songs` (status pending / active / retired; decade; genre; artist_key). Only `active` songs are picked.
 - Slices: country_rap (genre country or rap, any decade), 1980s-and-earlier, 1990s-2000s, 2010s-2020s. Default shape for 50 songs: 6 / 10 / 22 / 12, scaled to any length.
 - Picker rules live in the database; do not reimplement them:
-  - Least recently HEARD first, and songs not heard since the last serving carry over.
+  - Least recently HEARD first. Songs served and not heard since carry over, but only inside their slice's familiar or new share; the rest wait in the pool.
   - The artist cap is ceil(count/25). An artist heard in the last 2 days gets no NEW songs unless they are needed to fill.
   - Thumbs-down songs are never picked.
-  - Familiar means heard on 5 or more days, or thumbs up; every 1980s-and-earlier song counts as familiar. NEW songs are at most 25% of a list (12 of 50).
+  - Familiar means heard on 5 or more days; every 1980s-and-earlier song counts as familiar. A thumbs up does NOT make a song familiar: a like means "I like it", not "I know it". NEW songs are at most 25% of a list (12 of 50).
   - A familiar song may break the 2-day artist cooldown rather than lose its slot to a new song. It never breaks the per-list artist cap.
   - A familiar song heard in the last 7 days waits, and a new song takes its slot.
   - Every slice, and the new songs, are spread evenly through the list.
@@ -40,7 +40,7 @@ Alex wants the songs he KNOWS, and play counts cannot predict which those are. F
    - Re-recordings and live versions when no original exists (Bryan Adams' "Classic Version"s): fine to add.
    - Heavy or out-of-place songs for a morning drive: ask.
 4. Add only the songs Alex picks: `create_drive_mix_songs` with source `artist_top`, every song with decade and genre so it lands active. Decade is the song's ORIGINAL release decade, re-recordings and remasters included; a genuine cover by another artist gets the cover's decade. Genre comes from the list below.
-5. Confirm in one line: how many were added, and the slices they went to. New songs start as NEW: they arrive gradually (at most 25% of a list) and become familiar after 5 play days. To make one familiar at once, record a thumbs up.
+5. Confirm in one line: how many were added, and the slices they went to. New songs start as NEW: they arrive gradually (at most 25% of a list) and become familiar after 5 play days. A thumbs up does not speed that up.
 
 **Several artists at once** (more than about three): do not do it in chat. Create a one-off scheduled task that only READS and posts a review list to the Alfred inbox (per artist: to add, already in pool, left out, flags). After Alex approves, create a second one-off task that adds the approved songs. Tell Alex he will get a notification.
 
@@ -59,7 +59,7 @@ Use `search_dj_music` (songs) and take the original studio recording by the righ
 
 Use `update_drive_mix_thumbs` with `{video_id, thumbs, at}`; `at` is when the thumb was given, or omit it for now. The latest thumb wins.
 - **down:** the song is never picked again until a later thumbs up. Its status does not change, so do NOT also retire it.
-- **up:** the song always counts as familiar. If it was retired as `cut by Alex` or `cut by Alex (not known)`, the up brings it back. It never revives a song retired as jazz, ambient or sleep, holiday or soundtrack, classical or kids or novelty; to bring one of those back, ask Alex and use `update_drive_mix_songs`.
+- **up:** overrides an earlier thumbs down, but does not make the song familiar. If it was retired as `cut by Alex` or `cut by Alex (not known)`, the up brings it back. It never revives a song retired as jazz, ambient or sleep, holiday or soundtrack, classical or kids or novelty; to bring one of those back, ask Alex and use `update_drive_mix_songs`.
 - **clear:** removes the thumb.
 - Find the video_id with `get_drive_mix_songs`. `thumbs: "down"` lists every thumbed-down song.
 
