@@ -12,7 +12,7 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 3 | wb-sync calls processing; one-time reprocess; verify transfer pairs, investment kinds, cleaned descriptions | done | 2026-10-09: wb-sync v5 processes new, changed and unprocessed rows. 105/106/107 applied; 394/394 processed, 16 genuine pairs, 0 candidates, no split mismatches |
 | 4 | Phase 2 MCP tools (except subscriptions); deploy; verify in a fresh chat | done | 2026-10-10: 18 tools plus the get_wb_transactions extension; 108 applied, 109 all checks true; CONFORMANT, 58 tables. mcp v146. claude.ai verification 10/10, plus the plain split refusal. 110 removed the test rule and tag |
 | 5 | Starter taxonomy, merchants and rules (in claude.ai) | done | 2026-10-11: taxonomy, merchants and rules set up in claude.ai; review queue at 0. Follow-up (tag exclusions, 114/115) done |
-| 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | not started | |
+| 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | in progress | Plan approved 2026-10-11 (decisions A–D). 6a: SQL for "always do this" plus `wb_transactions.notes`, 117 applied 2026-10-11 (CONFORMANT, 60 tables), 118 24/24. 6b (UI) next |
 | 7 | Migration B + tools: subscriptions, price history, monthly detection | not started | |
 | 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | not started | |
 | 9 | Phase 2 review and Phase 3 steps | not started | |
@@ -77,3 +77,11 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
   - Result: 114 applied 2026-10-11, conformance passed. 115: all 13 checks true, rolled back.
   - Real-world check in claude.ai on bcc82c61: the Subscription label was removed by hand and 1 exclusion recorded; Oct 1–11 was reprocessed (60 transactions); the label stayed off, and the tags are Home Services and Household. The other Newmans visits keep Subscription.
   - Step 6 carries the uncommitted `excluded_tags` tool code, the WB_MANUAL wording, and the mcp deploy that ships them.
+- Step 6 plan (2026-10-11), approved:
+  - A: "always do this" becomes invoker SQL functions `wb_fix_plan` (read) and `wb_apply_fix` (write), with `wb_suggest_pattern`; the MCP tool becomes a thin wrapper, so one implementation serves the tool and the app.
+  - B: `wb_transactions.notes` is added in the same 6a migration.
+  - C: the Review one-tap actions are approved as planned.
+  - D: verification on desktop, in a phone-sized window, as Elise, and once on Alex's real phone.
+  - Sub-steps 6a (SQL), 6b (UI) and 6c (tools, WB_MANUAL wording, mcp deploy) go one at a time.
+  - 6a: `_pending_warren_buffet_p2-m4t_step6_fix_functions.sql` and `_pending_…_step6_tests.sql`, 24 checks with invented fixtures; it rolls itself back. In PGlite: 24/24, 115 13/13, 104 85/85.
+  - Numbered after gitsync, with no drift (116 touches no wb_ object): `117_wb_phase2_step6_fix_functions.sql` and `118_wb_phase2_step6_tests.sql`. 117 applied 2026-10-11; check_platform_conformance CONFORMANT, 60 tables. 118: all 24 checks true, rolled back.
