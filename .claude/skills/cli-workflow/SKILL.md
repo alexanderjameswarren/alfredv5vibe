@@ -648,6 +648,18 @@ pastes into a CLI session or a new thread is in its own fenced code block**
 command ("if the file got deleted, run …") is its own numbered step with its
 own block. SQL checks here follow Rule 5 too.
 
+**Where UI testing happens.** Alex tests UI changes in desktop Chrome's mobile
+view, against the worktree's local dev server. Never tell him to checkpoint or
+deploy just so he can test.
+- A checkpoint before testing is needed only when a step must be tested on the
+  phone itself, such as push notifications or reminders that fire.
+- It is also needed when the work must reach main for another reason, such as a
+  database step that another thread depends on.
+- Every test step, or every group of them, opens by saying which mode it needs:
+  "Chrome mobile view, local dev server" or "on the phone, after checkpoint".
+  The label is something he reads, not types, so it stays inline. It is the one
+  exception to the copy-box rule.
+
 **5. Stop — or reply to the CLI, but only if there is no testing.** If part 4
 has any testing steps, end the message there. Do not write anything for Alex to
 paste into the CLI — no answers to its questions, no "proceed", no fixes, no next
