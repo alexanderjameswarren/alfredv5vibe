@@ -31,12 +31,14 @@ export function useContextActions({
     description = "",
     pinned = false,
     defaultCollectionId = null,
+    appId = null,
   ) {
     return withLoading('Saving context...', async () => {
       // The <select> uses "" for "none", but default_collection_id is a FK to
       // item_collections.id — an empty string would violate it. Normalise here,
       // at the single point every caller funnels through.
       const defaultCollection = defaultCollectionId || null;
+      const app = appId || null; // same rule: app_id is a FK to apps.id
 
       // `tags` is stripped, deliberately. Contexts carried a jsonb tags column
       // with a GIN index and no user interface; the tags project's Migration A
@@ -61,6 +63,7 @@ export function useContextActions({
             description,
             pinned,
             defaultCollectionId: defaultCollection,
+            appId: app,
           }
         : {
             id: uid(),
@@ -71,6 +74,7 @@ export function useContextActions({
             description,
             pinned,
             defaultCollectionId: defaultCollection,
+            appId: app,
             createdAt: new Date().toISOString(),
           };
 
@@ -100,6 +104,7 @@ export function useContextActions({
     description = "",
     pinned = false,
     defaultCollectionId = null,
+    appId = null,
   ) {
     await saveContextRecord(
       editingContext,
@@ -109,6 +114,7 @@ export function useContextActions({
       description,
       pinned,
       defaultCollectionId,
+      appId,
     );
     setShowContextForm(false);
     setEditingContext(null);

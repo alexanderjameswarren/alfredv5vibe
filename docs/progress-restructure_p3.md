@@ -13,7 +13,7 @@ Spec: `docs/technical-spec-restructure_p3.md`
   - source_metadata trigger and backfill
   - corrected archive_reason comment
   - conformance
-- [ ] 3. App picker on the context form.
+- [x] 3. App picker on the context form (built 2026-10-11; awaiting phone test). The form's native select is led by the chosen app's icon, with a "No app" option. The context page shows "App: <icon> <name>" under Keywords. The new `src/apps/` holds AppIcon, AppSelect, appsApi and useApps (one read per page load). `contextFormValues` is the single normaliser for both the initial state and the dirty check.
   - Test: link "Alex (body, mind, spirit)" to Arnold from the form; reopen it and the app is still Arnold.
 - [ ] 4. Inbox detail App picker; processing writes outcome and source_app.
 - [ ] 5. Inbox list: processed captures grouped under their app with its icon and an outcome line. Open captures stay grouped by source_type.

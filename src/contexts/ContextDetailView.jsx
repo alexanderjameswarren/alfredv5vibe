@@ -26,6 +26,9 @@ import ContextForm from "./ContextForm";
 import ItemCard from "../items/ItemCard";
 import IntentionCard from "../intentions/IntentionCard";
 import CollectionCard from "../collections/CollectionCard";
+import AppIcon from "../apps/AppIcon";
+import { findApp } from "../apps/appsApi";
+import useApps from "../apps/useApps";
 
 export default function ContextDetailView({
   tagPool = [],
@@ -89,9 +92,11 @@ export default function ContextDetailView({
   // this page silently moved you to a different screen — and browser Back left
   // the form open on a page that had not asked for it.
   const [isEditingContext, setIsEditingContext] = useState(false);
+  const apps = useApps();
   const searching = search.trim() !== "";
 
   if (!context) return null;
+  const app = findApp(apps, context.appId);
 
   // One sort and one search drive all three lists, each filtered on its own —
   // nothing is merged or ranked. Filters what is already loaded: elements come
@@ -202,6 +207,13 @@ export default function ContextDetailView({
         {context.keywords && (
           <p className="text-sm text-muted-foreground mt-1">
             Keywords: {context.keywords}
+          </p>
+        )}
+        {app && (
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground mt-1">
+            App:
+            <AppIcon icon={app.icon} className="w-4 h-4 text-primary" />
+            <span>{app.name}</span>
           </p>
         )}
       </div>
