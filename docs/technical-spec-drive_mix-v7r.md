@@ -58,7 +58,7 @@ Three parts:
 | status | text not null | check: pending, active, retired. Only `active` is picked |
 | source | text not null | check: playlist_seed, artist_top, history_sweep, manual |
 | retired_reason | text null | only allowed when status is retired |
-| thumbs | text null | step 10. check: up, down. Alex's latest thumb. `down` is never picked, whatever the status; `up` always counts as familiar |
+| thumbs | text null | step 10. check: up, down. Alex's latest thumb. `down` is never picked, whatever the status; `up` revives a cut song but does not make it familiar (step 12) |
 | thumbs_at | timestamptz null | step 10. When the latest thumb, or its clearing, happened. Required when thumbs is set. A thumb older than this is ignored, so the latest thumb wins |
 | added_at | timestamptz default now() | |
 
@@ -95,19 +95,20 @@ Consequence to know: if the daily history sync fails, recency does not advance, 
 ### Algorithm, for a given date and count (default 50)
 
 1. Eligible songs: `status = 'active'` with decade and genre set, and not thumbs down. Recency is computed for every pool song, whatever its status, because the cooldown in step 4 reads all of them.
-   - **Familiar or new (step 10).** A song is familiar when its canonical group was heard on at least `p_familiar_days` (5) distinct days, through the same canonical mapping as recency, or when it is thumbs up. Every other song is new. The day count is a `count(distinct played_on)` in the same aggregate as recency, so there is no extra scan.
-   - The rule is deliberately simple. Alex reviewed 20 songs with fewer than 5 play days and knew 8 of them. Era, source and 1-2 play days all failed to predict which; thumbs correct it over time.
+   - **Familiar or new (step 10).** A song is familiar when its canonical group was heard on at least `p_familiar_days` (5) distinct days, through the same canonical mapping as recency, or is in an exempt slice. Every other song is new. **Step 12: a thumbs up no longer counts.** A like means "I like it", not "I know it", and the daily job thumbs up every Liked Music song, so never-played liked songs were familiar and, never heard, sorted to the front of the familiar side, crowding out songs heard on 20+ days (Jelly Roll). The day count is a `count(distinct played_on)` in the same aggregate as recency, so there is no extra scan.
+   - The rule is deliberately simple. Alex reviewed 20 songs with fewer than 5 play days and knew 8 of them. Era, source and 1-2 play days all failed to predict which.
 2. All randomness is `md5` of the date and the song id, so a dry run and the real run for the same date return the same playlist, as long as no new plays or servings land in between.
-3. **Carry-over (step 7).** Take the most recent serving before D. Every song in it that is still eligible and has **not been heard since that serving's date** goes into today's list first, marked `carried`. "Not heard since" means no `dj_plays` for its canonical group on or after `served_on` and before D.
-   - Carried songs count toward their slice's quota and toward the artist cap, but are never dropped by either.
-   - They are exempt from the cooldown.
-   - If they alone exceed the count, the least recently heard are kept.
+3. **Carry-over (step 7, reworked in step 12).** Take the most recent serving before D. Every song in it that is still eligible and has **not been heard since the first serving of its current run** is a carry-over candidate. The run is the unbroken sequence of consecutive servings, ending at the latest one, that all contain the song. "Not heard since" means no `dj_plays` for its canonical group on or after the run start and before D.
+   - Why the run start (step 12): the 2026-10-09 serving repeated 10-08 after a missed history sync, so songs heard on 10-08 looked unheard against 10-09 and were served a third time on 10-10. Measuring from the run start makes the picker robust to a missed sync.
+   - Candidates are not taken up front. In each slice pass (step 4), the candidates of that slice and side (familiar or new) go first, marked `carried`, but only up to that pass's limit. A candidate that does not fit goes back to the pool as an ordinary song.
+   - Carried songs count toward the artist cap but are not stopped by it, and are exempt from the cooldown and the familiar gap.
    - Carried songs chain: one still unheard tomorrow was in today's serving, so it carries again.
-4. **Slices.** In this order — country and rap, 1980s and earlier, 2010s–2020s, 1990s–2000s — each slice is topped up to its quota, less what was carried, in recency order. New songs are skipped when:
+   - Why step 12 changed this: under 102 carried songs went in ahead of every share. The 2026-10-10 pick at 50 carried 37, 25 of them new and 13 over the new cap, and country_rap had 5 of 6 slots carried. Replaying 10-10 with both fixes gave 14 carried, 12 new, 0 over cap.
+4. **Slices.** In this order — country and rap, 1980s and earlier, 2010s–2020s, 1990s–2000s — each slice is topped up to its quota in recency order, carried candidates first within each pass. New songs are skipped when:
    - their `artist_key` has reached the artist cap (carried songs count), or
    - their artist is **cooling down**: any pool song by that artist_key, any status, was heard in the `p_cooldown_days` days before D, via the canonical-group mapping. With the default of 2, a play on D-1 or D-2 blocks new songs on D; 0 turns the cooldown off.
 
-   The list never goes past the count. So when carried songs push one slice over its quota, the remaining slices still fill only to the total count, and the slices filled last (1990s–2000s) give way. Every tagged song is in exactly one slice. Since step 6, "1980s and earlier" takes any decade ≤ 1980; before that it was 1960s–1980s, and older songs were fill only.
+   The list never goes past the count. Every tagged song is in exactly one slice. Since step 6, "1980s and earlier" takes any decade ≤ 1980; before that it was 1960s–1980s, and older songs were fill only.
 
    **The familiar/new blend (step 10).**
    - New songs fill at most floor(`p_new_share` × count) of the list: 12 of 50 at 0.25. That cap is split across slices in proportion to their quotas, by largest remainder like the quotas, which gives 2 / 2 / 3 / 5 for country_rap / 1980s / 2010s / 1990s at 50. The rest of each quota is that slice's familiar share.
@@ -116,11 +117,11 @@ Consequence to know: if the daily history sync fails, recency does not advance, 
      2. new songs, up to the new share;
      3. more familiar songs, if new ran short;
      4. more new songs, if familiar ran short. These are marked `new_over_cap`.
-   - Carried songs count against their side's share.
+   - Carried songs count against their side's share, and since step 12 never exceed it.
    - **Familiar gap.** A familiar song heard fewer than `p_familiar_gap_days` (7) days before D is skipped in every pass, so its slot goes to a new song in the same slice. 0 turns it off. Carried songs are exempt.
    - **Exempt slices (migration 102).** Every song in a `p_familiar_slices_exempt` slice counts as familiar: that slice takes no new share, and the cap is split over the other slices. The default is `{1980s-and-earlier}`, which gives 2 / 0 / 4 / 6 at 50. Alex expects to know unplayed oldies, and that slice had only 9 familiar songs of 281.
    - **Familiar breaks the cooldown (102).** With `p_familiar_breaks_cooldown` (default true), a slice tries familiar songs by cooling artists, up to the familiar share, before any new song. The fill pass does the same. They are marked `cooling`. The per-list artist cap is never broken.
-   - **new_over_cap (102)** marks every new song past its natural slice's new share, counted in selection order, so carried songs are counted first. Under 101 only the backfill passes set it, so carried new songs were never flagged.
+   - **new_over_cap (102)** marks every new song past its natural slice's new share, counted in selection order. Since step 12 a carried new song can no longer be over the cap, because it only takes a slot inside its slice's new share. Under 101 only the backfill passes set it, so carried new songs were never flagged.
    - **Why 102.** With 101 the new share averaged 0.469 in a 30-day simulation at 50. The reasons familiar songs were skipped, per day: mostly the artist cap (about 140), then the cooldown (about 20), then the 7-day gap (about 7). Familiar songs cluster by artist because they are heard album by album. Diagnostic simulations of the variants: as 101, 0.469; oldies exempt, 0.313; oldies exempt with familiar songs breaking the cooldown, 0.246 (chosen); oldies exempt with a 5-day gap, 0.277. A pick without carry-over was already exactly on target (12 new); today's real pick was high only because of 24 new songs carried over from the old picker's serving.
 5. If a slice runs short, the remaining slots are filled from all eligible songs in recency order (slice `fill`), familiar first, under the same artist cap, cooldown and familiar gap. The last resort then takes, in order: familiar songs by cooling artists, new songs by cooling artists, and finally familiar songs inside the gap. `cooling` is true when the artist really was cooling. A list can still come up short, and the shortfall is reported.
 6. **Order (step 10): spread, not shuffled.**

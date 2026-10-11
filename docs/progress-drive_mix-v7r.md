@@ -31,6 +31,11 @@ Spec: docs/technical-spec-drive_mix-v7r.md
   - CONFORMANT.
 - [x] Step 10e: MCP deployed 2026-10-09; the live get_drive_mix_pick returns new_cap, new_over_cap and cooling_breaks. Checkpoint next.
 - [ ] Step 10f: Daily task's thumbs step updated in chat.
+- [x] Step 12a: Read-only plan for the carry-over bugs (s12, 2026-10-11). The 10-10 pick carried 37: 25 new, 13 over the cap.
+- [ ] Step 12b: One migration with three fixes (s12b): carry-over measured from the run start; carried songs only within their side; thumbs up no longer familiar. Diagnostic replay of 10-10 with fixes 1+2: carried 14, new 12, over cap 0; all five thrice-served songs drop out. No MCP change.
+- [x] Step 12c: Diagnostic with all three fixes (10-10): carried 13, new 12, over cap 0; country_rap 4/2, 2010s-2020s 8/4, 1990s-2000s 16/6, 1980s-and-earlier 10/0; five songs out; Jelly Roll 0 (last heard 2026-05, more recent than most familiar country/rap). 12 active liked songs never played. gitsync: no drift. Numbered 112; timing check 113.
+- [x] Step 12d: 112 applied 2026-10-11; CONFORMANT. As authenticated (113): pick 50 in 1,175 ms (carried 17, new 12, over cap 0); pick 200 in 92 ms (carried 22, new 50, over cap 0); 30-day sim at 50 in 2,497 ms. The sim's new share was 0.24, 0.24 from day 2, with over cap 0. Carried averaged 0.6 a day, with 166 cooling breaks and no shortfalls. Repeat gap min 7, median 9. Slice average positions all 25.5. Familiar min repeat gap 7 (1980s-and-earlier 25).
+- [ ] Step 12e: Checkpoint of 112, 113, spec, progress and skill.
 
 ### Build log (CLI rounds after the plan steps)
 - **5d/5e (2026-10-07):** top-songs ranking reworked to YouTube Music play counts, with dedupe, variant flags, original_candidate and suggested thresholds. Then concurrent lookups with a time budget. Workshop tests 261.
@@ -56,7 +61,8 @@ Spec: docs/technical-spec-drive_mix-v7r.md
 - [x] Simulation numbers match the expected repeat interval — 60 days at heard 50: repeat_gap min 17, median 23
 
 ### Open items
-- **(a) Afternoon and evening plays count a day late.** The DJ history sync runs at 10 am, so plays after that only reach dj_plays the next morning, after the 4:54 am refresh. Recency, carry-over and the cooldown see them a day late. If it matters in practice, the fix is an extra history sync before 4:54 am.
+- **(a) Closed 2026-10-11.** The DJ history sync now runs at 4:30 am PT, before the 4:54 am refresh. The 10-08 → 10-09 repeat came from the one morning before it moved. Step 12's run-start carry-over also covers a missed sync.
+- **(c) The get_drive_mix_pick description in supabase/functions/mcp/index.ts is stale after step 12.** It says carried songs go first and are "never dropped", and that a thumbs up makes a song familiar. Update it once warren_buffet_p2-m4t releases mcp/index.ts; it needs an MCP deploy.
 - **(b) The register_table owner policy uses an unwrapped `auth.uid()`.** It reads `user_id = auth.uid()`, not `(select auth.uid())`, so Postgres may evaluate it per row. That is a platform-wide performance fix, to scope as its own project; not changed here.
 
 ### Notes
