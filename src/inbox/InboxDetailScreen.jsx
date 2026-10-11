@@ -54,7 +54,7 @@ export default function InboxDetailScreen({
         if (!clipId) return null;
         return <ClipboardCapture key={clipId} clipId={clipId} inboxItem={item} />;
       }}
-      renderReminders={(item) => <PendingReminder key={item.id} inboxId={item.id} />}
+      renderReminders={(item) => <PendingReminder key={item.id} inboxId={item.id} editable />}
     />
   );
 }

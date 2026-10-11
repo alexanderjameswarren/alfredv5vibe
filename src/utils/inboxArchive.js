@@ -117,6 +117,39 @@ export function archiveOutcome(inboxItem, { items = [], intents = [], events = [
   return { label, tone: "text-muted-foreground", reason: "processed" };
 }
 
+/**
+ * Archived rows grouped for the section (Restructure P3).
+ * - Processed captures go one group per app, in the order of `apps`, then "No app".
+ * - Discarded captures go last, under no app.
+ * - Pre-066 rows with no reason count as processed.
+ * - Only non-empty groups are returned, and rows keep their order.
+ * - An app id missing from `apps` (still loading) gets its own group, named by the id.
+ */
+export function groupArchived(rows, apps = []) {
+  const byApp = new Map();
+  const none = [];
+  const discarded = [];
+  for (const row of rows || []) {
+    if (row?.archiveReason === "discarded") discarded.push(row);
+    else if (row?.sourceApp) {
+      if (!byApp.has(row.sourceApp)) byApp.set(row.sourceApp, []);
+      byApp.get(row.sourceApp).push(row);
+    } else none.push(row);
+  }
+  const groups = [];
+  for (const app of apps || []) {
+    if (!byApp.has(app.id)) continue;
+    groups.push({ key: app.id, kind: "app", app, rows: byApp.get(app.id) });
+    byApp.delete(app.id);
+  }
+  for (const [id, appRows] of byApp) {
+    groups.push({ key: id, kind: "app", app: { id, name: id, icon: null }, rows: appRows });
+  }
+  if (none.length) groups.push({ key: "none", kind: "none", rows: none });
+  if (discarded.length) groups.push({ key: "discarded", kind: "discarded", rows: discarded });
+  return groups;
+}
+
 /** "an item", "an item and an intention", "an item, an intention and an event". */
 function joinPhrase(parts) {
   if (parts.length === 1) return parts[0];

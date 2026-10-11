@@ -119,9 +119,8 @@ export function useInboxActions({
    * writes when Claude has dealt with something). See spec decision 14 and
    * migration 066.
    *
-   * Human triage through the process/save flow (`handleInboxSave`) is NOT
-   * changed here and still deletes on success. Phase 3's one-tap process button
-   * is where that becomes an archive with 'processed'.
+   * Processing (`handleInboxSave`) archives too, with 'processed'. Discard leaves
+   * `sourceApp` as it is and writes no outcome.
    */
   async function discardInboxItem(inboxItemId) {
     const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
@@ -187,8 +186,8 @@ export function useInboxActions({
   /**
    * Edit a capture's text without triaging it — Step 12.7.
    *
-   * NOT triage. Step 10's disposal rule deletes a capture on successful triage;
-   * this one stays, with `triagedAt` still null. The row is spread rather than
+   * NOT triage. Triage archives a capture; this one stays in the inbox, with
+   * `triagedAt` still null. The row is spread rather than
    * rebuilt so every other column, that one included, is carried through
    * untouched.
    *
@@ -291,12 +290,20 @@ export function useInboxActions({
     }
   }
 
-  async function handleInboxSave(inboxItemId, triageData) {
+  /**
+   * Process a capture. `options.sourceApp` is the detail page's App picker
+   * ("" or null = no app); left out (one tap), the capture keeps its current app.
+   * Not atomic: each record saves on its own, then the archive below writes
+   * archive_reason, source_app and outcome in one update.
+   */
+  async function handleInboxSave(inboxItemId, triageData, options = {}) {
     const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
     if (!inboxItem) return;
     return withLoading('Saving...', async () => {
       let createdItemId = null;
       let createdItem = null;
+      // inbox.outcome: one {table, id} per record created here (migration 116).
+      const created = [];
 
       // "Delete only on success" needs an explicit check, because none of the
       // writers below throw. `storage.set` catches its own errors and returns
@@ -342,6 +349,7 @@ export function useInboxActions({
         setItems((prev) => [...prev, savedItem || newItem]);
         createdItemId = newItem.id;
         createdItem = savedItem || newItem;
+        if (savedItem) created.push({ table: "items", id: newItem.id });
 
         // "Attach this Item" — appending the new item as a bullet element of an
         // existing one — used to happen here, driven by `triageData.itemItemLinks`.
@@ -369,6 +377,7 @@ export function useInboxActions({
         const intentionItemId = newIntent.itemId;
         const savedIntent = wrote(await storage.set(`intent:${newIntent.id}`, newIntent));
         setIntents((prev) => [...prev, savedIntent || newIntent]);
+        if (savedIntent) created.push({ table: "intents", id: newIntent.id });
 
         // The capture's reminders follow it to the intention. Not a triage failure if
         // this fails: they stay on the archived capture and still fire.
@@ -406,6 +415,7 @@ export function useInboxActions({
           };
           const savedEvent = wrote(await storage.set(`event:${newEvent.id}`, newEvent));
           setEvents((prev) => [...prev, savedEvent || newEvent]);
+          if (savedEvent) created.push({ table: "events", id: newEvent.id });
           await settle();
         }
       }
@@ -472,6 +482,10 @@ export function useInboxActions({
         archived: true,
         triagedAt: new Date().toISOString(),
         archiveReason: 'processed',
+        sourceApp:
+          "sourceApp" in options ? options.sourceApp || null : inboxItem.sourceApp || null,
+        // Appended, so a capture put back and processed again keeps both outcomes.
+        outcome: [...(Array.isArray(inboxItem.outcome) ? inboxItem.outcome : []), ...created],
       };
       const disposed = await storage.set(`inbox:${inboxItem.id}`, processed);
       if (disposed === false) {

@@ -2,12 +2,44 @@ import { alfredSource } from "../testing/alfredSources";
 import {
   archivedAt,
   archiveOutcome,
+  groupArchived,
   olderArchivedCount,
   RECENT_ARCHIVE_DAYS,
   recentlyArchived,
   undoNeedsConfirming,
   undoWarning,
 } from "./inboxArchive";
+
+describe("groupArchived", () => {
+  const APPS = [{ id: "jobs", name: "Jobs" }, { id: "sam", name: "Sam" }];
+  const row = (id, archiveReason, sourceApp = null) => ({ id, archiveReason, sourceApp });
+
+  it("groups by app in apps order, then No app, then Discarded", () => {
+    const groups = groupArchived(
+      [row("1", "discarded", "jobs"), row("2", "processed", "sam"), row("3", "processed"), row("4", "processed", "jobs")],
+      APPS,
+    );
+    expect(groups.map((g) => [g.key, g.rows.map((r) => r.id)])).toEqual([
+      ["jobs", ["4"]],
+      ["sam", ["2"]],
+      ["none", ["3"]],
+      ["discarded", ["1"]],
+    ]);
+  });
+
+  it("returns only non-empty groups", () => {
+    expect(groupArchived([row("1", "processed")], APPS).map((g) => g.key)).toEqual(["none"]);
+  });
+
+  it("keeps an unknown app as its own group", () => {
+    const [g] = groupArchived([row("1", "processed", "arnold")], []);
+    expect(g).toMatchObject({ key: "arnold", app: { name: "arnold" } });
+  });
+
+  it("puts pre-066 rows with no reason under No app", () => {
+    expect(groupArchived([row("1", null)], APPS)[0].key).toBe("none");
+  });
+});
 
 // A fixed "now" so the seven-day boundary is a fact rather than a race.
 const NOW = new Date("2026-09-25T12:00:00.000Z");

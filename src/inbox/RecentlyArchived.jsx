@@ -32,10 +32,14 @@
  * than a link that sometimes works.
  */
 
-import { ChevronDown, Undo2 } from "lucide-react";
+import { ChevronDown, Trash2, Undo2 } from "lucide-react";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
 import { listTitleFor } from "../utils/inboxSuggestions";
-import { archivedAt, RECENT_ARCHIVE_DAYS } from "../utils/inboxArchive";
+import { archivedAt, groupArchived, RECENT_ARCHIVE_DAYS } from "../utils/inboxArchive";
+import { OUTCOME_TYPES, outcomeKey } from "./useOutcomeNames";
+import AppIcon from "../apps/AppIcon";
+import ObjectIcon from "../shared/ObjectIcon";
+import EventMetaLink from "../schedule/EventMetaLink";
 
 /**
  * @param {Array}    rows        The archived captures to show, already windowed and
@@ -50,6 +54,9 @@ import { archivedAt, RECENT_ARCHIVE_DAYS } from "../utils/inboxArchive";
  *   business knowing about any of them.
  * @param {Function} onUndo      (id) => void. Un-archives, and warns first where it has
  *   to — see `undoNeedsConfirming`.
+ * @param {Array}    apps         public.apps rows, in group order (Restructure P3).
+ * @param {object}   outcomeNames `useOutcomeNames` map, or null while loading.
+ * @param {Function} onOpenRecord (id) => void, opens /<id>.
  */
 export default function RecentlyArchived({
   rows = [],
@@ -60,6 +67,9 @@ export default function RecentlyArchived({
   onToggleExpanded,
   outcomeFor,
   onUndo,
+  apps = [],
+  outcomeNames = null,
+  onOpenRecord,
 }) {
   // Nothing archived and nothing hidden: no section at all. An empty "Recently archived
   // (0)" on a fresh account is a heading explaining a feature rather than using it.
@@ -101,55 +111,142 @@ export default function RecentlyArchived({
               Nothing archived in the last {RECENT_ARCHIVE_DAYS} days.
             </p>
           ) : (
-            rows.map((row) => {
-              const { label, tone } = outcomeFor(row);
-              return (
-                <div
-                  key={row.id}
-                  className="flex items-start gap-3 px-3 py-2 rounded-lg hover:bg-secondary/60 transition-colors"
-                >
-                  <span className="mt-0.5 shrink-0 text-muted-foreground">
-                    <SourceIcon sourceType={row.sourceType} />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    {/* One line, not two. These are not being triaged, and a history
-                        where every entry can run to two lines is a history you scroll
-                        past rather than read. */}
-                    <p className="m-0 text-sm text-muted-foreground truncate">
-                      {listTitleFor(row)}
-                    </p>
-                    <p className="m-0 flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
-                      <span>{sourceLabel(row.sourceType)}</span>
-                      <span aria-hidden="true">·</span>
-                      {/* The outcome carries its own colour — "Discarded" is the one
-                          thing on this row that is not muted, because it is the one an
-                          Undo is usually looking for. */}
-                      <span className={tone}>{label}</span>
-                      <span aria-hidden="true">·</span>
-                      {/* ⚠️ The DEPARTURE date, not `createdAt` — which is what every
-                          other inbox surface shows. A capture made in June and discarded
-                          this morning would otherwise read as three months old in a
-                          section titled "recently". `archivedAt` is the one place that
-                          chain is written. */}
-                      <span>{friendlyDate(archivedAt(row))}</span>
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onUndo(row.id)}
-                    aria-label={`Put back: ${listTitleFor(row)}`}
-                    title="Put this capture back in your inbox"
-                    className="inline-flex items-center gap-1.5 shrink-0 min-h-[44px] px-3 rounded-lg text-sm text-muted-foreground hover:text-primary hover:bg-secondary transition-colors"
-                  >
-                    <Undo2 className="w-4 h-4" aria-hidden="true" />
-                    Undo
-                  </button>
-                </div>
-              );
-            })
+            groupArchived(rows, apps).map((group) => (
+              <div key={group.key} className="pt-2 first:pt-0">
+                <GroupHeading group={group} />
+                {group.rows.map((row) => (
+                  <ArchivedRow
+                    key={row.id}
+                    row={row}
+                    outcome={outcomeFor(row)}
+                    outcomeNames={outcomeNames}
+                    onOpenRecord={onOpenRecord}
+                    onUndo={onUndo}
+                  />
+                ))}
+              </div>
+            ))
           )}
         </div>
       )}
     </section>
+  );
+}
+
+/** One archived capture: title, meta, what it became, and Undo. */
+function ArchivedRow({ row, outcome, outcomeNames, onOpenRecord, onUndo }) {
+  const { label, tone } = outcome;
+  return (
+    <div className="flex items-start gap-3 px-3 py-2 rounded-lg hover:bg-secondary/60 transition-colors">
+      <span className="mt-0.5 shrink-0 text-muted-foreground">
+        <SourceIcon sourceType={row.sourceType} />
+      </span>
+      <div className="min-w-0 flex-1">
+        {/* One line, not two. These are not being triaged, and a history
+            where every entry can run to two lines is a history you scroll
+            past rather than read. */}
+        <p className="m-0 text-sm text-muted-foreground truncate">
+          {listTitleFor(row)}
+        </p>
+        <p className="m-0 flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
+          <span>{sourceLabel(row.sourceType)}</span>
+          <span aria-hidden="true">·</span>
+          {/* The outcome carries its own colour — "Discarded" is the one
+              thing on this row that is not muted, because it is the one an
+              Undo is usually looking for. */}
+          <span className={tone}>{label}</span>
+          <span aria-hidden="true">·</span>
+          {/* ⚠️ The DEPARTURE date, not `createdAt` — which is what every
+              other inbox surface shows. A capture made in June and discarded
+              this morning would otherwise read as three months old in a
+              section titled "recently". `archivedAt` is the one place that
+              chain is written. */}
+          <span>{friendlyDate(archivedAt(row))}</span>
+        </p>
+        {row.archiveReason !== "discarded" && (
+          <OutcomeLine entries={row.outcome} names={outcomeNames} onOpenRecord={onOpenRecord} />
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={() => onUndo(row.id)}
+        aria-label={`Put back: ${listTitleFor(row)}`}
+        title="Put this capture back in your inbox"
+        className="inline-flex items-center gap-1.5 shrink-0 min-h-[44px] px-3 rounded-lg text-sm text-muted-foreground hover:text-primary hover:bg-secondary transition-colors"
+      >
+        <Undo2 className="w-4 h-4" aria-hidden="true" />
+        Undo
+      </button>
+    </div>
+  );
+}
+
+/** A group's heading: the app's icon and name, "No app", or "Discarded". */
+function GroupHeading({ group }) {
+  let icon = null;
+  let name = "No app";
+  if (group.kind === "app") {
+    icon = <AppIcon icon={group.app.icon} className="w-4 h-4 text-primary" />;
+    name = group.app.name;
+  } else if (group.kind === "discarded") {
+    icon = <Trash2 className="w-4 h-4 text-destructive" aria-hidden="true" />;
+    name = "Discarded";
+  }
+  return (
+    <h3 className="flex items-center gap-1.5 px-3 pb-1 text-sm font-medium text-foreground">
+      {icon}
+      {name}
+    </h3>
+  );
+}
+
+/**
+ * What a processed capture became: one link per outcome entry, led by the record
+ * type's icon (the RecordLinks pattern). A record that is gone reads "<Type> deleted".
+ * Nothing renders for an empty outcome.
+ */
+export function OutcomeLine({ entries, names, onOpenRecord }) {
+  const list = Array.isArray(entries) ? entries : [];
+  if (list.length === 0) return null;
+  return (
+    <p className="m-0 flex items-center gap-x-3 gap-y-0.5 flex-wrap text-xs" aria-label="What this became">
+      {list.map((entry) => {
+        const type = OUTCOME_TYPES[entry.table] || { word: entry.table };
+        const icon = type.icon ? (
+          <ObjectIcon type={type.icon} className="w-3.5 h-3.5" />
+        ) : (
+          <AppIcon icon={type.appIcon} className="w-3.5 h-3.5" />
+        );
+        const key = outcomeKey(entry.table, entry.id);
+        const name = names ? names[key] : undefined;
+        if (name === null) {
+          return (
+            <span key={key} className="inline-flex items-center gap-1 py-1 text-muted-foreground">
+              {icon}
+              {type.word} deleted
+            </span>
+          );
+        }
+        const shown = name || type.word;
+        if (!onOpenRecord) {
+          return (
+            <span key={key} className="inline-flex items-center gap-1 py-1 text-muted-foreground">
+              {icon}
+              {shown}
+            </span>
+          );
+        }
+        return (
+          <EventMetaLink
+            key={key}
+            icon={icon}
+            name={shown}
+            showName
+            onClick={() => onOpenRecord(entry.id)}
+            title={`Open ${type.word.toLowerCase()}: ${shown}`}
+          />
+        );
+      })}
+    </p>
   );
 }

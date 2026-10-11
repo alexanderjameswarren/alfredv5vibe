@@ -4,8 +4,12 @@ import ListToolbar, { NoMatches } from "../shared/ListToolbar";
 import { INBOX_SORT_OPTIONS } from "../utils/listSortOptions";
 import { reminderBadge } from "../utils/remindersApi";
 import { archiveOutcome } from "../utils/inboxArchive";
+import { useNavigate } from "react-router-dom";
 import InboxListCard from "./InboxListCard";
 import RecentlyArchived from "./RecentlyArchived";
+import useOutcomeNames from "./useOutcomeNames";
+import useApps from "../apps/useApps";
+import { recordPath } from "../viewPaths";
 
 // The inbox list, moved out of Alfred.jsx unchanged apart from the
 // `view === "inbox"` test, which stays in Alfred around this component.
@@ -36,6 +40,9 @@ export default function InboxScreen({
   setArchivedExpanded,
   unarchiveInboxItem,
 }) {
+  const navigate = useNavigate();
+  const apps = useApps();
+  const outcomeNames = useOutcomeNames(archivedInboxItems);
   return (
     <div>
       <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Inbox</h2>
@@ -106,6 +113,9 @@ export default function InboxScreen({
         onToggleExpanded={() => setArchivedExpanded((v) => !v)}
         outcomeFor={(row) => archiveOutcome(row, { items, intents, events })}
         onUndo={unarchiveInboxItem}
+        apps={apps}
+        outcomeNames={outcomeNames}
+        onOpenRecord={(id) => navigate(recordPath(id))}
       />
     </div>
   );

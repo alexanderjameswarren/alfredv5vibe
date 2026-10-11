@@ -23,6 +23,10 @@ jest.mock("../supabaseClient", () => {
         log.push(entry);
         return chain(entry);
       },
+      rpc: async (fn, args) => {
+        log.push([["rpc", fn, args]]);
+        return next;
+      },
     },
   };
 });
@@ -36,6 +40,30 @@ const calls = (k) => last().filter((c) => c[0] === k);
 beforeEach(() => {
   mock.__log.length = 0;
   mock.__next.error = null;
+});
+
+it("sets an intention reminder through create_reminder", async () => {
+  await api.createIntentionReminder({ intentId: "int1", text: "Call", dueAt: "2026-10-12T21:00:00.000Z" });
+  expect(calls("rpc")).toEqual([
+    ["rpc", "create_reminder", { p_text: "Call", p_due_at: "2026-10-12T21:00:00.000Z", p_intent_id: "int1", p_created_by: "app" }],
+  ]);
+});
+
+it("cancels one scheduled reminder as manual", async () => {
+  await api.cancelReminder("r1");
+  expect(calls("update")[0][1]).toEqual({ state: "cancelled", cancel_reason: "manual" });
+  expect(calls("eq")).toEqual([["eq", "id", "r1"], ["eq", "state", "scheduled"]]);
+});
+
+it("defaults to the next whole hour, local time", () => {
+  expect(api.nextWholeHour(new Date(2026, 9, 11, 13, 25))).toEqual({ date: "2026-10-11", time: "14:00" });
+  expect(api.nextWholeHour(new Date(2026, 9, 11, 23, 5))).toEqual({ date: "2026-10-12", time: "00:00" });
+});
+
+it("reads local date and time inputs as UTC", () => {
+  expect(api.localInputToIso("2026-10-11", "14:00")).toBe(new Date(2026, 9, 11, 14, 0).toISOString());
+  expect(api.localInputToIso("", "14:00")).toBeNull();
+  expect(api.localInputToIso("2026-10-11", "")).toBeNull();
 });
 
 it("moves every reminder on the capture to the intention", async () => {
