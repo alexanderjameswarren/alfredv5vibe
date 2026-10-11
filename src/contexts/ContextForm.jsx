@@ -1,28 +1,43 @@
 import React, { useState, useEffect } from "react";
 import EditCard from "../shared/EditCard";
 import PinnedFooter from "../shared/PinnedFooter";
+import AppSelect from "../apps/AppSelect";
+import useApps from "../apps/useApps";
+
+/**
+ * A context as the form holds it. The initial state and the dirty check both read
+ * this one function, so a field normalised in one place cannot read as dirty on open.
+ */
+export function contextFormValues(editing) {
+  return {
+    name: editing?.name || "",
+    shared: editing?.shared || false,
+    keywords: editing?.keywords || "",
+    description: editing?.description || "",
+    pinned: editing?.pinned || false,
+    defaultCollectionId: editing?.defaultCollectionId || "",
+    appId: editing?.appId || "",
+  };
+}
 
 export default function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = false, collections = [] }) {
-  const [name, setName] = useState(editing?.name || "");
-  const [shared, setShared] = useState(editing?.shared || false);
-  const [keywords, setKeywords] = useState(editing?.keywords || "");
-  const [description, setDescription] = useState(editing?.description || "");
-  const [pinned, setPinned] = useState(editing?.pinned || false);
-  const [defaultCollectionId, setDefaultCollectionId] = useState(
-    editing?.defaultCollectionId || "",
-  );
+  const initial = contextFormValues(editing);
+  const apps = useApps();
+  const [name, setName] = useState(initial.name);
+  const [shared, setShared] = useState(initial.shared);
+  const [keywords, setKeywords] = useState(initial.keywords);
+  const [description, setDescription] = useState(initial.description);
+  const [pinned, setPinned] = useState(initial.pinned);
+  const [defaultCollectionId, setDefaultCollectionId] = useState(initial.defaultCollectionId);
+  const [appId, setAppId] = useState(initial.appId);
 
   useEffect(() => {
     if (!onDirtyChange) return;
-    const isDirty =
-      name !== (editing?.name || "") ||
-      shared !== (editing?.shared || false) ||
-      keywords !== (editing?.keywords || "") ||
-      description !== (editing?.description || "") ||
-      pinned !== (editing?.pinned || false) ||
-      defaultCollectionId !== (editing?.defaultCollectionId || "");
+    const current = { name, shared, keywords, description, pinned, defaultCollectionId, appId };
+    const base = contextFormValues(editing);
+    const isDirty = Object.keys(base).some((k) => current[k] !== base[k]);
     onDirtyChange(isDirty, "this context");
-  }, [name, shared, keywords, description, pinned, defaultCollectionId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [name, shared, keywords, description, pinned, defaultCollectionId, appId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => { if (onDirtyChange) onDirtyChange(false); };
@@ -104,6 +119,8 @@ export default function ContextForm({ editing, onSave, onCancel, onDirtyChange, 
           </p>
         </div>
 
+        <AppSelect id="context-app" apps={apps} value={appId} onChange={setAppId} />
+
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -134,7 +151,7 @@ export default function ContextForm({ editing, onSave, onCancel, onDirtyChange, 
             onClick={() => {
               if (name.trim()) {
                 if (onDirtyChange) onDirtyChange(false);
-                onSave(name, shared, keywords, description, pinned, defaultCollectionId);
+                onSave(name, shared, keywords, description, pinned, defaultCollectionId, appId);
               }
             }}
             className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
