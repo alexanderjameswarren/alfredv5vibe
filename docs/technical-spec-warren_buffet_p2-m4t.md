@@ -117,7 +117,17 @@ Changing `exclusive` pushes the new value onto every `wb_split_tags` row of the 
 
 `id, split_id` (cascade), `tag_id` (restrict), `group_id` and `group_exclusive` (copied from the tag's group by BEFORE trigger, never typed), `source` check in (`rule`, `claude`, `manual`), `rule_id` nullable (on delete set null), `created_at`. Unique `(split_id, tag_id)`. Partial unique index `(split_id, group_id) where group_exclusive`. `replaced_rule_id` (Step 4, nullable, on delete set null; never on a `rule` tag) records the rule whose tag a hand tag replaced or took over, for rule health (Step 10).
 
-A hand removal of a rule tag is not remembered: the next reprocess adds it back. To stop a rule tagging something, change the rule, or tag the split by hand in that group.
+### 4.6a `wb_tag_exclusions` (audited; Step 5 follow-up)
+
+A tag removed by hand (or by Claude) from a transaction stays removed. One row per transaction and tag, keyed on the transaction, not the split, so `wb_replace_splits` and the default-split trigger cannot lose it:
+- columns: `transaction_id` (cascade), `tag_id` (cascade), `rule_id` (the rule that had applied it, if any), `source` (`claude`, `manual`), `removed_by` (the signed-in user), `created_at`, `notes`;
+- `user_id` and `context_id` are copied from the transaction by trigger;
+- written by `wb_apply_tags` on every removal;
+- deleted when the same tag is added back by hand, through `wb_apply_tags` or `wb_replace_splits`;
+- processing skips an excluded rule tag but still applies the rule's other tags;
+- `wb_transaction_list.excluded_tags` lists the exclusions (`tag_id`, `tag_name`, `rule_id`, `source`, `removed_at`), so the detail screen can show "removed by you" and undo it.
+
+Removing a tag from a required group (such as Category) is allowed, not refused. The tag is removed, the exclusion is written, and the transaction goes back into the review queue as `missing_required_tag` until another tag from that group is set.
 
 ### 4.7 `wb_rules` (audited)
 
@@ -199,6 +209,7 @@ For each transaction in `ids`, in order:
    - `set_merchant_id` applies unless the merchant is `claude`/`manual`; source `rule`.
    - Tags go on the default split only when the transaction has a single split; multi-split transactions are left to humans.
    - In an exclusive group, the first rule wins, and a group that already holds a tag (from any source) is skipped. Open-group tags accumulate. Inactive tags are skipped.
+   - A tag listed in `wb_tag_exclusions` for this transaction is skipped. The rule's other tags still apply.
    - Matching rule ids are stored in `matched_rule_ids`.
 6. Set `processed_at`. Finally, recompute `hit_count` and `last_hit_at` for every rule from `matched_rule_ids`, updating only rows whose values changed.
 

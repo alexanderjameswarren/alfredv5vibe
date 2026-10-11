@@ -11,12 +11,12 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 2 | Migration A: merchants, tag groups, tags, splits, split tags, rules, new transaction columns, triggers, `wb_process_transactions`, review/spending/cash-flow views | done | `103_wb_phase2_tables.sql` applied 2026-10-09; `104_wb_phase2_tests.sql` 69/69, every check true; CONFORMANT, 58 tables |
 | 3 | wb-sync calls processing; one-time reprocess; verify transfer pairs, investment kinds, cleaned descriptions | done | 2026-10-09: wb-sync v5 processes new, changed and unprocessed rows. 105/106/107 applied; 394/394 processed, 16 genuine pairs, 0 candidates, no split mismatches |
 | 4 | Phase 2 MCP tools (except subscriptions); deploy; verify in a fresh chat | done | 2026-10-10: 18 tools plus the get_wb_transactions extension; 108 applied, 109 all checks true; CONFORMANT, 58 tables. mcp v146. claude.ai verification 10/10, plus the plain split refusal. 110 removed the test rule and tag |
-| 5 | Starter taxonomy, merchants and rules (in claude.ai) | not started | |
+| 5 | Starter taxonomy, merchants and rules (in claude.ai) | done | 2026-10-11: taxonomy, merchants and rules set up in claude.ai; review queue at 0. Follow-up (tag exclusions, 114/115) done |
 | 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | not started | |
 | 7 | Migration B + tools: subscriptions, price history, monthly detection | not started | |
 | 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | not started | |
 | 9 | Phase 2 review and Phase 3 steps | not started | |
-| 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | not started | Added 2026-10-09 |
+| 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | not started | Added 2026-10-09. Also: a bulk-create tool for tags, merchants and rules (Step 5 hit the 60-calls-per-5-minutes limit creating them one call at a time) |
 
 ## Carried from Phase 1
 
@@ -56,4 +56,24 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
   - `110_wb_phase2_step4_test_cleanup.sql` deleted the ZZ test rule and tag.
   - Tests: functions 629, CLI 174.
   - Two app tests fail on 2026-10-10 only because they look for today's date: `PreviousExecutions.test.jsx` and `StatusEventsSheet.test.jsx`, from restructure_p1-h4nz. Not ours; Alfred item 49958c85.
-  - Known limit, accepted: a bare hand removal of a rule tag returns on reprocess.
+  - Known limit, accepted: a bare hand removal of a rule tag returns on reprocess. Fixed by the Step 5 follow-up below.
+- Step 5 (2026-10-11, claude.ai):
+  - The starter taxonomy (Category with parents, Who, Tax, Label), merchants and rules were set up through the tools, and the review queue is at 0.
+  - The Newmans rule's notes record that the standing price is rising (the amount is in the rule's notes, not here), to go into subscription price history at Step 7, and that the Oct 8 charge was a one-off service call.
+  - Creating tags, merchants and rules one call at a time hit the 60-calls-per-5-minutes limit, so a bulk-create tool is noted under Step 10.
+- Step 5 follow-up (2026-10-11), bug: manual tag removals did not survive a reprocess. **Done.**
+  - Found in claude.ai during Step 5. tag_wb_transactions removed a tag (source manual) and reported success, but the next wb_process_transactions put the rule's tag back. The same happened after a single-transaction reprocess and after a manual split, and nothing recorded the removal.
+  - Repro: transaction bcc82c61-9703-47e8-92e7-c6b473a8ecbf (a one-off, Oct 8). Remove the Subscription label, reprocess Oct 1–11, and Subscription is back.
+  - Fix, `_pending_warren_buffet_p2-m4t_tag_exclusions.sql`:
+    - new audited table `wb_tag_exclusions`, per transaction and tag, with the rule that had applied it, the source, who and when;
+    - `wb_process_transactions` skips an excluded rule tag and still applies the rule's other tags;
+    - `wb_apply_tags` writes an exclusion on removal and clears it when the tag is added back;
+    - `wb_replace_splits` clears exclusions for tags it adds;
+    - `wb_transaction_list.excluded_tags` shows them, and so does get_wb_transactions.
+  - Tests: `_pending_warren_buffet_p2-m4t_tag_exclusions_tests.sql`, 13 checks with invented fixtures; it rolls itself back. All passed in PGlite.
+  - Numbered after gitsync, with no drift (111–113 touch no wb_ object): `114_wb_phase2_tag_exclusions.sql` and `115_wb_phase2_tag_exclusions_tests.sql`.
+  - Decision: removing a required Category tag stays allowed. It sends the transaction back into the review queue; the spec says so in §4.6a.
+  - Ships as SQL only; the mcp function is not deployed in this step. The `excluded_tags` changes in `warren-buffet.ts` and `warren-buffet-p2.ts` stay uncommitted in this worktree and ship with Step 6. So does the WB_MANUAL description change in `mcp/index.ts`, which has to cover removals ("a tag removed by hand is never put back"); that one is not yet written, because the file was yielded to restructure_p3-x4n and drive_mix-v7r. Until then the deployed get_wb_transactions does not return `excluded_tags`, but the live tools already get the new behaviour, because the fix is in the database functions they call.
+  - Result: 114 applied 2026-10-11, conformance passed. 115: all 13 checks true, rolled back.
+  - Real-world check in claude.ai on bcc82c61: the Subscription label was removed by hand and 1 exclusion recorded; Oct 1–11 was reprocessed (60 transactions); the label stayed off, and the tags are Home Services and Household. The other Newmans visits keep Subscription.
+  - Step 6 carries the uncommitted `excluded_tags` tool code, the WB_MANUAL wording, and the mcp deploy that ships them.
