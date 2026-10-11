@@ -4,9 +4,20 @@ import { assertNoActiveRun } from "../utils/runGuard";
 import { getTodayDate, formatEventDate } from "../utils/eventDates";
 import { intentionUpdateRow } from "../utils/intentionRows";
 import { liveEventsFor, carriedItems, STATUS_LABELS } from "../utils/status";
+import { cancelRemindersForStatus, restoreRemindersAfterStatus } from "../utils/remindersApi";
+
+const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+/** " and archived 1 event and cancelled 2 reminders" for the status Undo toast. */
+export function statusUndoWhat(events, reminders) {
+  const parts = [];
+  if (events) parts.push(`archived ${plural(events, "event")}`);
+  if (reminders) parts.push(`cancelled ${plural(reminders, "reminder")}`);
+  return parts.length ? ` and ${parts.join(" and ")}` : "";
+}
 
 // Intention writers, moved out of Alfred.jsx unchanged. Holds no state: everything
-// it reads or sets is Alfred's, passed in.
+// it reads or sets is Alfred's, passed in. `refreshReminderIndex` is optional.
 export function useIntentionActions({
   user,
   intents,
@@ -21,6 +32,7 @@ export function useIntentionActions({
   withLoading,
   offerUndoFor,
   watchStatus,
+  refreshReminderIndex,
 }) {
   async function moveToPlanner(intentId, scheduledDate = "today") {
     return withLoading('Scheduling...', async () => {
@@ -217,7 +229,8 @@ export function useIntentionActions({
 
   // Status changes go through storage.patch only (storage.set drops status on
   // UPDATE). `archiveEvents` is the live-events sheet's answer: archive every
-  // live event, past-due and future. Undo puts both back; it never restores
+  // live event, past-due and future, and cancel every scheduled reminder
+  // (reason intent_status). Undo puts all of it back; it never restores
   // someday, which the database would refuse.
   async function setIntentionStatus(intentId, status, { archiveEvents = false } = {}) {
     const intent = intents.find((i) => i.id === intentId);
@@ -237,12 +250,21 @@ export function useIntentionActions({
         }
       }
 
+      let cancelledReminders = [];
+      if (archiveEvents) {
+        try {
+          cancelledReminders = await cancelRemindersForStatus(intentId);
+        } catch (err) {
+          console.error("[Reminders] cancel on status change failed:", err);
+          window.alert(`Moved to ${STATUS_LABELS[status]}, but its reminders could not be cancelled and may still fire.`);
+        }
+        refreshReminderIndex?.();
+      }
+
       const previous = intent.status;
       const canRestore = previous && previous !== "someday";
-      if (!canRestore && archivedEvents.length === 0) return;
-      const what = archivedEvents.length
-        ? ` and archived ${archivedEvents.length} ${archivedEvents.length === 1 ? "event" : "events"}`
-        : "";
+      if (!canRestore && archivedEvents.length === 0 && cancelledReminders.length === 0) return;
+      const what = statusUndoWhat(archivedEvents.length, cancelledReminders.length);
       offerUndoFor(`Moved to ${STATUS_LABELS[status]}${what}.`, async () => {
         if (canRestore) {
           const back = await storage.patch(`intent:${intentId}`, { status: previous });
@@ -251,6 +273,10 @@ export function useIntentionActions({
         for (const event of archivedEvents) {
           if (!(await storage.set(`event:${event.id}`, event))) throw writeError("Restoring its event");
           setEvents((prev) => prev.map((e) => (e.id === event.id ? event : e)));
+        }
+        if (cancelledReminders.length) {
+          await restoreRemindersAfterStatus(cancelledReminders);
+          refreshReminderIndex?.();
         }
       });
     });

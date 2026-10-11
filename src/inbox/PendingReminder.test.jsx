@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import PendingReminder from "./PendingReminder";
+import PendingReminder, { IntentionReminderLines } from "./PendingReminder";
 import { getReminderSummary, cancelReminder, createIntentionReminder } from "../utils/remindersApi";
 
 jest.mock("../utils/remindersApi", () => ({
@@ -64,18 +64,10 @@ describe("editable (Restructure P3)", () => {
   it("cancels and reloads", async () => {
     getReminderSummary.mockResolvedValue(PENDING);
     cancelReminder.mockResolvedValue([{ id: "r1" }]);
-    render(<PendingReminder intentId="int1" editable addText="Call" />);
+    render(<PendingReminder inboxId="in1" editable />);
     fireEvent.click(await screen.findByRole("button", { name: /Cancel reminder/ }));
     await waitFor(() => expect(cancelReminder).toHaveBeenCalledWith("r1"));
     await waitFor(() => expect(getReminderSummary).toHaveBeenCalledTimes(2));
-  });
-
-  it("shows only Add when there are none", async () => {
-    getReminderSummary.mockResolvedValue({ scheduled: [], lastSent: { id: "r0", sent_at: "2026-09-30T14:36:00Z" } });
-    render(<PendingReminder intentId="int1" editable addText="Call" />);
-    expect(await screen.findByRole("button", { name: "Add reminder" })).toBeInTheDocument();
-    expect(screen.queryByText("Reminders")).toBeNull();
-    expect(screen.queryByText(/Reminder sent/)).toBeNull();
   });
 
   it("has no Add on the inbox page", async () => {
@@ -85,12 +77,54 @@ describe("editable (Restructure P3)", () => {
     expect(screen.queryByRole("button", { name: "Add reminder" })).toBeNull();
     expect(container.querySelector("ul")).toBeNull();
   });
+});
+
+describe("IntentionReminderLines (P3)", () => {
+  beforeEach(() => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    jest.spyOn(window, "alert").mockImplementation(() => {});
+  });
+
+  it("one compact line per reminder with a Cancel link, then Add", () => {
+    render(
+      <IntentionReminderLines
+        intentId="int1"
+        text="Call"
+        scheduled={[{ id: "r1", due_at: "2026-10-01T16:00:00Z" }]}
+        onChanged={() => {}}
+      />,
+    );
+    expect(screen.getByText("Reminder · Thu, Oct 1, 9:00 AM PT")).toBeInTheDocument();
+    const cancel = screen.getByRole("button", { name: "Cancel reminder: Thu, Oct 1, 9:00 AM PT" });
+    expect(cancel).toHaveClass("text-destructive");
+    expect(cancel).not.toHaveClass("border-destructive");
+    expect(screen.getByRole("button", { name: "Add reminder" })).toBeInTheDocument();
+    expect(screen.queryByText("Reminders")).toBeNull();
+  });
+
+  it("cancel confirms, cancels and tells the page", async () => {
+    cancelReminder.mockResolvedValue([{ id: "r1" }]);
+    const onChanged = jest.fn();
+    render(
+      <IntentionReminderLines intentId="int1" text="Call" scheduled={[{ id: "r1", due_at: "2026-10-01T16:00:00Z" }]} onChanged={onChanged} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Cancel reminder/ }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(cancelReminder).toHaveBeenCalledWith("r1");
+  });
+
+  it("a Cancel link closes the inputs", () => {
+    render(<IntentionReminderLines intentId="int1" text="Call" scheduled={[]} onChanged={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add reminder" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByLabelText("Time")).toBeNull();
+  });
 
   it("adds at the next whole hour by default", async () => {
-    getReminderSummary.mockResolvedValue({ scheduled: [], lastSent: null });
     createIntentionReminder.mockResolvedValue({ id: "r2" });
-    render(<PendingReminder intentId="int1" editable addText="Call" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Add reminder" }));
+    const onChanged = jest.fn();
+    render(<IntentionReminderLines intentId="int1" text="Call" scheduled={[]} onChanged={onChanged} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add reminder" }));
     expect(screen.getByLabelText("Time").value).toMatch(/^\d{2}:00$/);
     fireEvent.click(screen.getByRole("button", { name: "Set reminder" }));
     await waitFor(() => expect(createIntentionReminder).toHaveBeenCalled());
@@ -98,12 +132,12 @@ describe("editable (Restructure P3)", () => {
     expect(intentId).toBe("int1");
     expect(text).toBe("Call");
     expect(new Date(dueAt).getUTCMinutes()).toBe(0);
+    expect(onChanged).toHaveBeenCalled();
   });
 
   it("refuses a time in the past", async () => {
-    getReminderSummary.mockResolvedValue({ scheduled: [], lastSent: null });
-    render(<PendingReminder intentId="int1" editable addText="Call" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Add reminder" }));
+    render(<IntentionReminderLines intentId="int1" text="Call" scheduled={[]} onChanged={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add reminder" }));
     fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2020-01-01" } });
     fireEvent.click(screen.getByRole("button", { name: "Set reminder" }));
     expect(window.alert).toHaveBeenCalledWith("Pick a time in the future.");

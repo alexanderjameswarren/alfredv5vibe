@@ -109,6 +109,36 @@ export async function cancelReminder(id) {
   return data || [];
 }
 
+/**
+ * Moving an intention to background or closed with "cancel": its scheduled
+ * reminders, marked intent_status so Undo can find them. Returns the cancelled ids.
+ */
+export async function cancelRemindersForStatus(intentId) {
+  const { data, error } = await supabase
+    .from(TABLE)
+    .update({ state: "cancelled", cancel_reason: "intent_status" })
+    .eq("intent_id", intentId)
+    .eq("state", "scheduled")
+    .select("id");
+  if (error) throw new Error(`Failed to cancel reminders: ${error.message}`);
+  return (data || []).map((r) => r.id);
+}
+
+/** Undo of that status move: re-arm those ids that are still ahead. */
+export async function restoreRemindersAfterStatus(ids, now = new Date()) {
+  if (!ids?.length) return [];
+  const { data, error } = await supabase
+    .from(TABLE)
+    .update({ state: "scheduled", cancel_reason: null })
+    .in("id", ids)
+    .eq("state", "cancelled")
+    .eq("cancel_reason", "intent_status")
+    .gt("due_at", now.toISOString())
+    .select("id");
+  if (error) throw new Error(`Failed to restore reminders: ${error.message}`);
+  return data || [];
+}
+
 const pad = (n) => String(n).padStart(2, "0");
 
 /** The next whole hour in device-local time, as date and time input values. */
