@@ -1,5 +1,6 @@
 import {
-  costBasisLabel, formatMoney, groupAccounts, holdingGain, parseAmountInput, rewardDisplay, syncStatus,
+  addMonths, costBasisLabel, exclusionLabel, formatMoney, formatMonth, groupAccounts, groupQueue, holdingGain,
+  monthOf, monthRange, parseAmountInput, rewardDisplay, spendingForMonth, splitRemainder, syncStatus, tagOptions, tagTops,
 } from "./moneyFormat";
 
 // Invented data only.
@@ -72,6 +73,69 @@ describe("syncStatus", () => {
       NOW,
     );
     expect(s.ok).toBe(true);
+  });
+});
+
+describe("months", () => {
+  it("works out month ranges and steps", () => {
+    expect(monthRange("2026-02")).toEqual({ from: "2026-02-01", to: "2026-02-28" });
+    expect(monthRange("2028-02").to).toBe("2028-02-29");
+    expect(addMonths("2026-01", -2)).toBe("2025-11");
+    expect(addMonths("2025-12", 1)).toBe("2026-01");
+    expect(formatMonth("2026-10-01")).toBe("Oct 2026");
+    expect(monthOf("2026-10-07")).toBe("2026-10");
+  });
+});
+
+describe("review, tags, spending, splits", () => {
+  it("groups the review queue by reason in a fixed order, newest first", () => {
+    const groups = groupQueue([
+      { reason: "no_kind", txn_date: "2026-01-01" },
+      { reason: "missing_required_tag", txn_date: "2026-01-01", transaction_id: "a" },
+      { reason: "missing_required_tag", txn_date: "2026-01-09", transaction_id: "b" },
+    ]);
+    expect(groups.map((g) => g.reason)).toEqual(["missing_required_tag", "no_kind"]);
+    expect(groups[0].rows.map((r) => r.transaction_id)).toEqual(["b", "a"]);
+    expect(groups[0].label).toBe("Needs a category");
+  });
+
+  const TAGS = [
+    { id: "food", group_id: "cat", parent_id: null, name: "Food", is_active: true },
+    { id: "coffee", group_id: "cat", parent_id: "food", name: "Coffee", is_active: true },
+    { id: "pets", group_id: "cat", parent_id: null, name: "Pets", is_active: true },
+    { id: "old", group_id: "cat", parent_id: null, name: "Old", is_active: false },
+    { id: "alex", group_id: "who", parent_id: null, name: "Alex", is_active: true },
+  ];
+
+  it("lists a group's tags with children under parents, active only", () => {
+    expect(tagOptions(TAGS, "cat").map((o) => o.label)).toEqual(["Food", "Food › Coffee", "Pets"]);
+    expect(tagTops(TAGS).get("coffee")).toBe("food");
+  });
+
+  it("builds a month's Category spending, children under their top tag", () => {
+    const rows = [
+      { month: "2026-01-01", level: "top", tag_id: "food", tag_name: "Food", amount: "-60.00" },
+      { month: "2026-01-01", level: "top", tag_id: "pets", tag_name: "Pets", amount: "-80.00" },
+      { month: "2026-01-01", level: "top", tag_id: null, tag_name: null, amount: "-5.00" },
+      { month: "2026-01-01", level: "leaf", tag_id: "coffee", tag_name: "Coffee", amount: "-20.00" },
+      { month: "2026-01-01", level: "leaf", tag_id: "food", tag_name: "Food", amount: "-40.00" },
+      { month: "2026-02-01", level: "top", tag_id: "food", tag_name: "Food", amount: "-1.00" },
+    ];
+    const v = spendingForMonth(rows, TAGS, "2026-01");
+    expect(v.groups.map((g) => g.name)).toEqual(["Pets", "Food"]);
+    expect(v.groups[1].children).toEqual([
+      { tagId: "food", name: "Food (general)", amount: -40 },
+      { tagId: "coffee", name: "Coffee", amount: -20 },
+    ]);
+    expect(v.untagged).toBe(-5);
+    expect(v.total).toBe(-145);
+  });
+
+  it("counts what is left to split, and labels removals", () => {
+    expect(splitRemainder("-60.00", [{ amount: -40 }, { amount: "-15.5" }])).toBe(-4.5);
+    expect(splitRemainder(-60, [{ amount: -60 }])).toBe(0);
+    expect(exclusionLabel({ source: "manual" })).toBe("removed by you");
+    expect(exclusionLabel({ source: "claude" })).toBe("removed by Claude");
   });
 });
 

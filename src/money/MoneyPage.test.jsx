@@ -11,6 +11,13 @@ jest.mock("./moneyApi", () => ({
   getNetWorth: jest.fn(),
   getAccount: jest.fn(),
   createManualAccount: jest.fn(),
+  getTagTree: jest.fn(),
+  listTransactions: jest.fn(),
+  getReviewQueue: jest.fn(),
+  getTransactionDetail: jest.fn(),
+  getSpending: jest.fn(),
+  getCashFlow: jest.fn(),
+  PAGE_SIZE: 50,
 }));
 const api = require("./moneyApi");
 const MoneyPage = require("./MoneyPage").default;
@@ -22,6 +29,27 @@ beforeEach(() => {
   api.getLatestSyncRun.mockResolvedValue(null);
   api.getNetWorth.mockResolvedValue([]);
   api.getAccount.mockResolvedValue(null);
+  api.getTagTree.mockResolvedValue({ groups: [], tags: [] });
+  api.listTransactions.mockResolvedValue({ rows: [], total: 0 });
+  api.getReviewQueue.mockResolvedValue([]);
+  api.getTransactionDetail.mockResolvedValue(null);
+  api.getSpending.mockResolvedValue([]);
+  api.getCashFlow.mockResolvedValue([]);
+});
+
+it("routes the Phase 2 tabs and a transaction by URL", async () => {
+  at("/money/transactions");
+  expect(await screen.findByText("0 transactions")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "Review" }));
+  expect(screen.getByTestId("where")).toHaveTextContent("/money/review");
+  expect(await screen.findByText(/Nothing to review/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "Spending" }));
+  expect(await screen.findByText(/No spending recorded/)).toBeInTheDocument();
+});
+
+it("opens a transaction by id", async () => {
+  at("/money/transactions/t-404");
+  expect(await screen.findByText("No such transaction.")).toBeInTheDocument();
 });
 
 function Where() {

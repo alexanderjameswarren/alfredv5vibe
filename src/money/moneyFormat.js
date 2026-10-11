@@ -171,6 +171,137 @@ export function daysBefore(day, n) {
   return d.toISOString().slice(0, 10);
 }
 
+// --- Phase 2: kinds, months, review, tags, spending (docs/technical-spec-warren_buffet_p2-m4t.md §7) ---
+
+export const KIND_LABELS = {
+  spend: "Spending", income: "Income", transfer: "Transfer", refund: "Refund",
+  investment: "Investment", interest: "Interest", fee: "Fee",
+};
+export const KIND_ORDER = ["spend", "refund", "fee", "income", "interest", "transfer", "investment"];
+
+export const REVIEW_LABELS = {
+  no_kind: "Not processed yet",
+  missing_required_tag: "Needs a category",
+  transfer_candidate: "Looks like a transfer",
+  split_mismatch: "Splits don't add up",
+};
+export const REVIEW_ORDER = ["missing_required_tag", "transfer_candidate", "split_mismatch", "no_kind"];
+
+/** "2026-10-07" -> "2026-10". */
+export function monthOf(day) {
+  return day ? day.slice(0, 7) : null;
+}
+
+/** "2026-10" -> { from: "2026-10-01", to: "2026-10-31" }. */
+export function monthRange(month) {
+  const [y, m] = month.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return { from: `${month}-01`, to: `${month}-${String(last).padStart(2, "0")}` };
+}
+
+/** "2026-01" plus -2 -> "2025-11". */
+export function addMonths(month, n) {
+  const [y, m] = month.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + n, 1));
+  return d.toISOString().slice(0, 7);
+}
+
+/** "2026-10" or "2026-10-01" -> "Oct 2026". */
+export function formatMonth(month) {
+  if (!month) return "—";
+  const [y, m] = month.slice(0, 7).split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+/** Review rows grouped by reason, in REVIEW_ORDER, newest first inside each group. */
+export function groupQueue(rows) {
+  const byReason = new Map();
+  for (const r of rows || []) {
+    if (!byReason.has(r.reason)) byReason.set(r.reason, []);
+    byReason.get(r.reason).push(r);
+  }
+  return REVIEW_ORDER.filter((reason) => byReason.has(reason)).map((reason) => ({
+    reason,
+    label: REVIEW_LABELS[reason],
+    rows: byReason.get(reason).slice().sort((a, b) => (b.txn_date || "").localeCompare(a.txn_date || "")),
+  }));
+}
+
+/** The top-level ancestor of each tag: Map(tagId -> topTagId). */
+export function tagTops(tags) {
+  const byId = new Map((tags || []).map((t) => [t.id, t]));
+  const tops = new Map();
+  for (const t of tags || []) {
+    let cur = t;
+    const seen = new Set();
+    while (cur.parent_id && byId.has(cur.parent_id) && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      cur = byId.get(cur.parent_id);
+    }
+    tops.set(t.id, cur.id);
+  }
+  return tops;
+}
+
+/** Picker options for one group: parents first, each followed by its children as "Parent › Child". */
+export function tagOptions(tags, groupId, { includeInactive = false } = {}) {
+  const inGroup = (tags || []).filter((t) => t.group_id === groupId && (includeInactive || t.is_active !== false));
+  const byName = (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name);
+  const out = [];
+  const walk = (parentId, prefix, depth) => {
+    for (const t of inGroup.filter((x) => (x.parent_id || null) === parentId).sort(byName)) {
+      if (depth > 10) return;
+      out.push({ id: t.id, label: prefix ? `${prefix} › ${t.name}` : t.name, name: t.name });
+      walk(t.id, prefix ? `${prefix} › ${t.name}` : t.name, depth + 1);
+    }
+  };
+  walk(null, "", 0);
+  return out;
+}
+
+/**
+ * A month's Category spending for the Spending tab: top-level tags, each with
+ * its leaf rows, most spent first; the untagged row last. Amounts are signed
+ * (spending negative), as the view stores them.
+ */
+export function spendingForMonth(rows, tags, month) {
+  const tops = tagTops(tags);
+  const names = new Map((tags || []).map((t) => [t.id, t.name]));
+  const inMonth = (rows || []).filter((r) => monthOf(r.month) === month);
+  const groups = inMonth.filter((r) => r.level === "top" && r.tag_id).map((r) => ({
+    tagId: r.tag_id,
+    name: r.tag_name,
+    amount: toNumber(r.amount) ?? 0,
+    // Splits tagged with the parent itself show as "<parent> (general)" beside its children.
+    children: inMonth
+      .filter((l) => l.level === "leaf" && l.tag_id && tops.get(l.tag_id) === r.tag_id)
+      .map((l) => ({
+        tagId: l.tag_id,
+        name: l.tag_id === r.tag_id ? `${r.tag_name} (general)` : l.tag_name || names.get(l.tag_id),
+        amount: toNumber(l.amount) ?? 0,
+      }))
+      .sort((a, b) => a.amount - b.amount),
+  })).sort((a, b) => a.amount - b.amount);
+  const untagged = inMonth.find((r) => r.level === "top" && !r.tag_id);
+  const total = groups.reduce((s, g) => s + g.amount, 0) + (untagged ? toNumber(untagged.amount) ?? 0 : 0);
+  return {
+    groups,
+    untagged: untagged ? toNumber(untagged.amount) ?? 0 : 0,
+    total: Math.round(total * 100) / 100,
+  };
+}
+
+/** What is left to place when splitting: transaction amount minus the parts entered so far. */
+export function splitRemainder(amount, parts) {
+  const total = (parts || []).reduce((s, p) => s + (toNumber(p.amount) ?? 0), 0);
+  return Math.round(((toNumber(amount) ?? 0) - total) * 100) / 100;
+}
+
+/** "removed by you" / "removed by Claude", for a wb_transaction_list excluded_tags entry. */
+export function exclusionLabel(exclusion) {
+  return exclusion?.source === "claude" ? "removed by Claude" : "removed by you";
+}
+
 /** A typed amount: "1,234.56", "-50", "$12". Returns a number rounded to cents, or null. */
 export function parseAmountInput(text) {
   if (typeof text !== "string") return null;

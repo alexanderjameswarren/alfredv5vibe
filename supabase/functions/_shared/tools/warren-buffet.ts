@@ -69,7 +69,7 @@ const NET_WORTH_COLUMNS =
 export const TXN_COLUMNS =
   "id, account_id, account_label, posted_at, transacted_at, txn_date, amount, description, clean_description, " +
   "payee, memo, mcc, pending, merchant_id, merchant_name, merchant_source, kind, kind_source, transfer_pair_id, " +
-  "transfer_candidate, reviewed, tag_names, split_count, needs_review, first_seen_at, last_seen_at";
+  "transfer_candidate, reviewed, tag_names, split_count, needs_review, excluded_tags, first_seen_at, last_seen_at";
 export const WB_KINDS = ["spend", "income", "transfer", "refund", "investment", "interest", "fee"] as const;
 const HOLDING_COLUMNS =
   "account_id, as_of, symbol, description, shares, market_value, cost_basis, purchase_price, " +

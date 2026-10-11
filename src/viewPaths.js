@@ -357,24 +357,45 @@ export const MONEY_PATH = "/money";
 export const MONEY_ACCOUNTS_PATH = "/money/accounts";
 export const MONEY_NEW_ACCOUNT_PATH = "/money/accounts/new";
 export const MONEY_NET_WORTH_PATH = "/money/net-worth";
+// Phase 2 (warren_buffet_p2-m4t, Step 6).
+export const MONEY_TRANSACTIONS_PATH = "/money/transactions";
+export const MONEY_REVIEW_PATH = "/money/review";
+export const MONEY_SPENDING_PATH = "/money/spending";
 
 export function moneyAccountPath(accountId) {
   return `${MONEY_ACCOUNTS_PATH}/${encodeURIComponent(accountId)}`;
 }
 
+export function moneyTransactionPath(transactionId) {
+  return `${MONEY_TRANSACTIONS_PATH}/${encodeURIComponent(transactionId)}`;
+}
+
+/** The single id after `${base}/`, or null when there is none or more than one segment. */
+function childId(path, base) {
+  if (!path.startsWith(`${base}/`)) return null;
+  const id = path.slice(base.length + 1);
+  return id && !id.includes("/") ? decodeURIComponent(id) : null;
+}
+
 /**
- * @returns {{tab: "overview"|"accounts"|"net-worth", accountId: string|null, adding: boolean}|null}
+ * @returns {{tab: "overview"|"accounts"|"transactions"|"review"|"spending"|"net-worth",
+ *            accountId: string|null, transactionId: string|null, adding: boolean}|null}
  */
 export function moneyRouteFromPath(pathname) {
   const path = normalizePath(pathname);
-  if (path === MONEY_PATH) return { tab: "overview", accountId: null, adding: false };
-  if (path === MONEY_NET_WORTH_PATH) return { tab: "net-worth", accountId: null, adding: false };
-  if (path === MONEY_ACCOUNTS_PATH) return { tab: "accounts", accountId: null, adding: false };
-  if (path === MONEY_NEW_ACCOUNT_PATH) return { tab: "accounts", accountId: null, adding: true };
-  if (!path.startsWith(`${MONEY_ACCOUNTS_PATH}/`)) return null;
-  const id = path.slice(MONEY_ACCOUNTS_PATH.length + 1);
-  if (!id || id.includes("/")) return null;
-  return { tab: "accounts", accountId: decodeURIComponent(id), adding: false };
+  const route = (tab, extra = {}) => ({ tab, accountId: null, transactionId: null, adding: false, ...extra });
+  if (path === MONEY_PATH) return route("overview");
+  if (path === MONEY_NET_WORTH_PATH) return route("net-worth");
+  if (path === MONEY_ACCOUNTS_PATH) return route("accounts");
+  if (path === MONEY_NEW_ACCOUNT_PATH) return route("accounts", { adding: true });
+  if (path === MONEY_TRANSACTIONS_PATH) return route("transactions");
+  if (path === MONEY_REVIEW_PATH) return route("review");
+  if (path === MONEY_SPENDING_PATH) return route("spending");
+  const accountId = childId(path, MONEY_ACCOUNTS_PATH);
+  if (accountId) return route("accounts", { accountId });
+  const transactionId = childId(path, MONEY_TRANSACTIONS_PATH);
+  if (transactionId) return route("transactions", { transactionId });
+  return null;
 }
 
 // --- Record links (record_links-r7k) -----------------------------------------

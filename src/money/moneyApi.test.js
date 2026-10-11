@@ -2,8 +2,14 @@
 // mockRespond(table, ops).
 let mockLog = [];
 let mockRespond = () => ({ data: [], error: null });
+let mockRpcs = [];
+let mockRpc = () => ({ data: {}, error: null });
 
 jest.mock("../supabaseClient", () => {
+  const rpc = (fn, params) => {
+    mockRpcs.push([fn, params]);
+    return Promise.resolve(mockRpc(fn, params));
+  };
   const from = (table) => {
     const ops = [];
     mockLog.push({ table, ops });
@@ -17,7 +23,7 @@ jest.mock("../supabaseClient", () => {
     });
     return b;
   };
-  return { supabase: { from } };
+  return { supabase: { from, rpc } };
 });
 
 const api = require("./moneyApi");
@@ -28,6 +34,9 @@ const writes = () => mockLog.filter((q) => has(q.ops, "insert") || has(q.ops, "u
 beforeEach(() => {
   mockLog = [];
   mockRespond = () => ({ data: [], error: null });
+  mockRpcs = [];
+  mockRpc = () => ({ data: {}, error: null });
+  jest.spyOn(console, "warn").mockImplementation(() => {});
 });
 
 describe("updateAccount", () => {
@@ -94,11 +103,71 @@ describe("recordBalance", () => {
 describe("reads", () => {
   it("never selects raw transactions", async () => {
     await api.getTransactions("a1");
-    expect(op("wb_transactions", "select")[0][1]).not.toMatch(/\braw\b/);
+    expect(op("wb_transaction_list", "select")[0][1]).not.toMatch(/\braw\b/);
   });
 
   it("returns null for the sync run when platform_runs is not readable", async () => {
     mockRespond = () => ({ data: null, error: { message: "permission denied" } });
     expect(await api.getLatestSyncRun()).toBeNull();
+  });
+});
+
+describe("plain errors", () => {
+  it("turns known refusals into sentences and never shows the raw message", () => {
+    const e = api.plainError("Couldn't save the splits", { message: "wb_replace_splits: splits sum to -57.31, but the transaction is -61.47" });
+    expect(e.message).toBe("The split amounts must add up to the transaction amount.");
+    expect(e.message).not.toMatch(/\d/);
+    expect(api.plainError("Couldn't load transactions", { message: "relation wb_x does not exist" }).message)
+      .toBe("Couldn't load transactions. Please try again.");
+    expect(api.plainError("x", { message: "new row violates row-level security policy" }).message).toMatch(/Sign in again/);
+  });
+});
+
+describe("listTransactions", () => {
+  it("filters before the page and pages 50 at a time", async () => {
+    mockRespond = () => ({ data: [{ id: "t1" }], error: null, count: 120 });
+    const out = await api.listTransactions(
+      { accountId: "a1", month: "2026-02", kind: "spend", tag: "Food", text: "corner,(cafe)", needsReview: true },
+      { offset: 50 });
+    expect(out).toEqual({ rows: [{ id: "t1" }], total: 120 });
+    const ops = mockLog[0].ops;
+    expect(mockLog[0].table).toBe("wb_transaction_list");
+    expect(ops.filter((o) => o[0] === "gte" || o[0] === "lte")).toEqual([["gte", "txn_date", "2026-02-01"], ["lte", "txn_date", "2026-02-28"]]);
+    expect(ops.find((o) => o[0] === "overlaps")).toEqual(["overlaps", "tag_names", ["Food"]]);
+    expect(ops.find((o) => o[0] === "or")[1]).toContain("clean_description.ilike.*corner cafe*");
+    expect(ops.find((o) => o[0] === "range")).toEqual(["range", 50, 99]);
+    expect(ops.findIndex((o) => o[0] === "range")).toBeGreaterThan(ops.findIndex((o) => o[0] === "eq" && o[1] === "needs_review"));
+  });
+});
+
+describe("hand edits", () => {
+  it("tags and untags with source manual", async () => {
+    await api.applyTags(["t1"], ["g1"], ["g2"]);
+    expect(mockRpcs).toEqual([["wb_apply_tags", { p_transaction_ids: ["t1"], p_tag_ids: ["g1"], p_source: "manual", p_remove_tag_ids: ["g2"] }]]);
+  });
+
+  it("sets the kind by hand, then reprocesses; refuses on a paired transfer", async () => {
+    await expect(api.setKind({ id: "t1", transfer_pair_id: "t2" }, "spend")).rejects.toThrow(/Unpair it first/);
+    expect(writes()).toHaveLength(0);
+    await api.setKind({ id: "t1", transfer_pair_id: null }, "fee");
+    expect(op("wb_transactions", "update")[0][1]).toEqual({ kind: "fee", kind_source: "manual" });
+    expect(mockRpcs).toEqual([["wb_process_transactions", { ids: ["t1"] }]]);
+  });
+
+  it("replaces splits in one call and shows a plain refusal", async () => {
+    mockRpc = (fn) => (fn === "wb_replace_splits"
+      ? { data: null, error: { message: "wb_replace_splits: splits sum to -5.00, but the transaction is -6.00" } }
+      : { data: {}, error: null });
+    await expect(api.replaceSplits("t1", [{ amount: -5, tag_ids: [] }])).rejects.toThrow("The split amounts must add up to the transaction amount.");
+    expect(mockRpcs.map((r) => r[0])).toEqual(["wb_replace_splits"]);
+  });
+
+  it("applies a fix as manual, updating the merchant's rule when asked", async () => {
+    await expect(api.applyFix({ transactionId: "t1" })).rejects.toThrow(/Choose a kind/);
+    await api.applyFix({ transactionId: "t1", tagIds: ["g1"], updateRuleId: "r1" });
+    expect(mockRpcs[0]).toEqual(["wb_apply_fix", {
+      p_transaction_id: "t1", p_set_kind: null, p_add_tag_ids: ["g1"], p_pattern: null, p_merchant_name: null,
+      p_update_rule_id: "r1", p_add_new_rule: false, p_notes: null, p_created_by: "manual",
+    }]);
   });
 });
