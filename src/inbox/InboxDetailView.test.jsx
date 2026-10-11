@@ -10,6 +10,14 @@ import { toSnakeCase } from "../utils/caseConvert";
 // here is the contract with Alfred.jsx: what `onProcess` receives, when Process
 // is allowed at all, and when the unsaved-changes guard is armed.
 
+jest.mock("../apps/useApps", () => ({
+  __esModule: true,
+  default: () => [
+    { id: "jobs", name: "Jobs", icon: "Briefcase" },
+    { id: "warren_buffet", name: "Warren Buffet", icon: "Wallet" },
+  ],
+}));
+
 const CONTEXTS = [
   { id: "ctx-alfred", name: "Alfred" },
   { id: "ctx-home", name: "Home" },
@@ -538,6 +546,18 @@ describe("the unsaved-changes guard", () => {
     expect(onDirtyChange).toHaveBeenCalledWith(false, "this capture");
   });
 
+  it("does not arm on open with an app set", () => {
+    const { onDirtyChange } = setup({ sourceApp: "jobs" });
+    expect(onDirtyChange).not.toHaveBeenCalledWith(true, "this capture");
+  });
+
+  it("arms on changing the app", () => {
+    const { onDirtyChange } = setup();
+    onDirtyChange.mockClear();
+    fireEvent.change(screen.getByLabelText("App"), { target: { value: "jobs" } });
+    expect(onDirtyChange).toHaveBeenCalledWith(true, "this capture");
+  });
+
   it("disarms on unmount, so a stale flag cannot block the next screen", () => {
     const { onDirtyChange, unmount } = setup({ suggestIntent: true, suggestedIntentText: "Fix it" });
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Changed" } });
@@ -880,5 +900,37 @@ describe("leaving", () => {
     const { onBack } = setup();
     fireEvent.click(screen.getByRole("button", { name: /Back/ }));
     expect(onBack).toHaveBeenCalled();
+  });
+});
+
+describe("App picker (Restructure P3)", () => {
+  it("shows the capture's app", () => {
+    setup({ sourceApp: "warren_buffet" });
+    expect(screen.getByLabelText("App")).toHaveValue("warren_buffet");
+  });
+
+  it("starts blank when nothing set it", () => {
+    setup({ suggestedContextId: "ctx-alfred" });
+    expect(screen.getByLabelText("App")).toHaveValue("");
+  });
+
+  it("is not filled from the context", () => {
+    setup({ suggestItem: true });
+    fireEvent.change(screen.getByLabelText(/Context/), { target: { value: "ctx-home" } });
+    expect(screen.getByLabelText("App")).toHaveValue("");
+  });
+
+  it("sends the picked app to Process", () => {
+    const { onProcess } = setup({ suggestItem: true });
+    fireEvent.change(screen.getByLabelText("App"), { target: { value: "jobs" } });
+    fireEvent.click(processButton());
+    expect(onProcess.mock.calls[0][2]).toEqual({ sourceApp: "jobs" });
+  });
+
+  it("sends null for No app", () => {
+    const { onProcess } = setup({ suggestItem: true, sourceApp: "jobs" });
+    fireEvent.change(screen.getByLabelText("App"), { target: { value: "" } });
+    fireEvent.click(processButton());
+    expect(onProcess.mock.calls[0][2]).toEqual({ sourceApp: null });
   });
 });

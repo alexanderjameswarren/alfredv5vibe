@@ -254,7 +254,7 @@ export default function IntentionDetailView({
           <ScheduledLine actions={actions} />
         </p>
 
-        <PendingReminder intentId={intention.id} />
+        <PendingReminder intentId={intention.id} editable addText={intention.text || ""} />
 
         {statusNotices}
 

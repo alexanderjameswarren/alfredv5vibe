@@ -62,7 +62,8 @@ describe("what it shows", () => {
     expect(screen.getByText("Retire the ai-enrich edge function")).toBeInTheDocument();
     expect(screen.getByText("Claude")).toBeInTheDocument();
     expect(screen.getByText("Processed into an item")).toBeInTheDocument();
-    expect(screen.getByText("Discarded")).toBeInTheDocument();
+    // "Discarded" is also the group heading (P3); this is the row's own label.
+    expect(screen.getByText("Discarded", { selector: "span" })).toBeInTheDocument();
   });
 
   it("dates the DEPARTURE, not the capture", () => {
@@ -81,7 +82,7 @@ describe("what it shows", () => {
 
   it("colours a discard and mutes the rest", () => {
     setup();
-    expect(screen.getByText("Discarded")).toHaveClass("text-destructive");
+    expect(screen.getByText("Discarded", { selector: "span" })).toHaveClass("text-destructive");
     expect(screen.getByText("Processed into an item")).toHaveClass("text-muted-foreground");
   });
 
@@ -168,6 +169,53 @@ describe("when there is nothing to show", () => {
     expect(header()).toHaveTextContent("Recently archived (0)");
     expect(screen.getByText(/Nothing archived in the last 7 days/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show all (9 older)" })).toBeInTheDocument();
+  });
+});
+
+describe("grouped by app (Restructure P3)", () => {
+  const APPS = [
+    { id: "jobs", name: "Jobs", icon: "Briefcase" },
+    { id: "warren_buffet", name: "Warren Buffet", icon: "Wallet" },
+  ];
+  const rows = [
+    { ...ROWS[0], id: "a", sourceApp: "warren_buffet", outcome: [{ table: "items", id: "item-1" }] },
+    { ...ROWS[0], id: "b", sourceApp: null, outcome: [] },
+    { ...ROWS[1], id: "c", sourceApp: "jobs" },
+    { ...ROWS[0], id: "d", sourceApp: "jobs", outcome: [{ table: "intents", id: "int-1" }, { table: "items", id: "gone" }] },
+  ];
+  const names = { "items:item-1": "Acme item", "intents:int-1": "Apply to Acme", "items:gone": null };
+  const headings = () => screen.getAllByRole("heading").map((h) => h.textContent);
+
+  it("orders app groups by the apps list, then No app, then Discarded", () => {
+    setup({ rows, apps: APPS, outcomeNames: names, onOpenRecord: jest.fn() });
+    expect(headings()).toEqual(["Jobs", "Warren Buffet", "No app", "Discarded"]);
+  });
+
+  it("puts a discarded capture under Discarded, not its app", () => {
+    setup({ rows: [rows[2]], apps: APPS });
+    expect(headings()).toEqual(["Discarded"]);
+  });
+
+  it("links each outcome record by name", () => {
+    const onOpenRecord = jest.fn();
+    setup({ rows, apps: APPS, outcomeNames: names, onOpenRecord });
+    fireEvent.click(screen.getByRole("button", { name: "Open intention: Apply to Acme" }));
+    expect(onOpenRecord).toHaveBeenCalledWith("int-1");
+  });
+
+  it("says deleted for a record that is gone", () => {
+    setup({ rows, apps: APPS, outcomeNames: names, onOpenRecord: jest.fn() });
+    expect(screen.getByText("Item deleted")).toBeInTheDocument();
+  });
+
+  it("shows no outcome line for an empty outcome", () => {
+    setup({ rows: [rows[1]], apps: APPS, outcomeNames: {} });
+    expect(screen.queryByLabelText("What this became")).toBeNull();
+  });
+
+  it("shows the type while names load", () => {
+    setup({ rows: [rows[0]], apps: APPS, outcomeNames: null, onOpenRecord: jest.fn() });
+    expect(screen.getByRole("button", { name: "Open item: Item" })).toBeInTheDocument();
   });
 });
 

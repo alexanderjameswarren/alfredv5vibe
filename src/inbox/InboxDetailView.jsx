@@ -66,7 +66,10 @@ import {
   Repeat,
   AlignLeft,
   Pencil,
+  LayoutGrid,
 } from "lucide-react";
+import AppSelect from "../apps/AppSelect";
+import useApps from "../apps/useApps";
 import ItemPicker, { PickedItem } from "../shared/ItemPicker";
 import TagPicker from "../shared/TagPicker";
 import PinnedFooter, { FooterSpacer } from "../shared/PinnedFooter";
@@ -79,6 +82,14 @@ import { splitCaptureName } from "../utils/captureName";
 import { isFirstStep } from "../utils/elementOffsets";
 import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
 import WhenButton from "../shared/WhenButton";
+
+/**
+ * This page's baseline: the shared triage baseline plus the capture's app. One
+ * object seeds the fields and is what the dirty check compares against.
+ */
+export function detailBaseline(inboxItem) {
+  return { ...computeBaseline(inboxItem), appId: inboxItem?.sourceApp || "" };
+}
 
 /**
  * A YYYY-MM-DD date, written the way the design shows it ("Sat, Sep 26").
@@ -234,13 +245,16 @@ export default function InboxDetailView({
    * So it advances only when something deliberately advances it — see
    * `handleSaveCapture`, the one place that does.
    */
-  const [baseline, setBaseline] = useState(() => computeBaseline(inboxItem));
+  const [baseline, setBaseline] = useState(() => detailBaseline(inboxItem));
+  const apps = useApps();
 
   // Shared by both sections — one Context, one set of Tags, as designed. The old
   // card had a pair per section, which meant filing one capture could put the
   // item in one context and its intention in another with nothing pointing that
   // out.
   const [contextId, setContextId] = useState(baseline.contextId);
+  // The capture's app (116). Never filled from the context's app_id.
+  const [appId, setAppId] = useState(baseline.appId);
   const [tags, setTags] = useState(baseline.tags);
   // What the filed item and intention start as (088): someday or active.
   const [status, setStatus] = useState(baseline.status);
@@ -301,6 +315,7 @@ export default function InboxDetailView({
   const dirty =
     captureDirty ||
     contextId !== baseline.contextId ||
+    appId !== baseline.appId ||
     !sameStrings(tags, baseline.tags) ||
     status !== baseline.status ||
     itemOn !== baseline.itemOn ||
@@ -608,7 +623,7 @@ export default function InboxDetailView({
       // Collections are hidden on this page for now — README, Rules.
       addToCollection: false,
       collectionData: null,
-    });
+    }, { sourceApp: appId || null });
   }
 
   function handleCancel() {
@@ -678,6 +693,21 @@ export default function InboxDetailView({
                 </option>
               ))}
             </select>
+          </div>
+
+          <div>
+            <label htmlFor="inbox-detail-app" className={LABEL}>
+              <LayoutGrid className="w-4 h-4" aria-hidden="true" />
+              App
+            </label>
+            <AppSelect
+              id="inbox-detail-app"
+              apps={apps}
+              value={appId}
+              onChange={setAppId}
+              label={null}
+              className={FIELD}
+            />
           </div>
 
           <div>

@@ -82,6 +82,55 @@ export function reminderBadge(entry, now = new Date()) {
   return { text: `Sent ${formatSentShort(entry.at, now)}`, muted: true };
 }
 
+/**
+ * A reminder on an intention, through the create_reminder RPC (084), which checks
+ * the intention is visible, the time is in the future and the text is not blank.
+ */
+export async function createIntentionReminder({ intentId, text, dueAt }) {
+  const { data, error } = await supabase.rpc("create_reminder", {
+    p_text: text,
+    p_due_at: dueAt,
+    p_intent_id: intentId,
+    p_created_by: "app",
+  });
+  if (error) throw new Error(`Failed to set reminder: ${error.message}`);
+  return data;
+}
+
+/** Cancel one scheduled reminder by hand. Returns the rows changed ([] if it had already gone). */
+export async function cancelReminder(id) {
+  const { data, error } = await supabase
+    .from(TABLE)
+    .update({ state: "cancelled", cancel_reason: "manual" })
+    .eq("id", id)
+    .eq("state", "scheduled")
+    .select("id");
+  if (error) throw new Error(`Failed to cancel reminder: ${error.message}`);
+  return data || [];
+}
+
+const pad = (n) => String(n).padStart(2, "0");
+
+/** The next whole hour in device-local time, as date and time input values. */
+export function nextWholeHour(now = new Date()) {
+  const d = new Date(now);
+  d.setMinutes(0, 0, 0);
+  d.setHours(d.getHours() + 1);
+  return {
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+  };
+}
+
+/** Local date ("2026-10-11") and time ("14:00") inputs → UTC ISO, or null when invalid. */
+export function localInputToIso(date, time) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "") || !/^\d{2}:\d{2}$/.test(time || "")) return null;
+  const [y, m, d] = date.split("-").map(Number);
+  const [hh, mm] = time.split(":").map(Number);
+  const local = new Date(y, m - 1, d, hh, mm);
+  return Number.isNaN(local.getTime()) ? null : local.toISOString();
+}
+
 /** Processing into an intention: every reminder on the capture follows it. */
 export async function moveRemindersToIntention(inboxId, intentId) {
   const { data, error } = await supabase
