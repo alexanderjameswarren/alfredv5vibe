@@ -23,6 +23,7 @@ import {
   RECORD_VIEW,
   moneyAccountPath,
   moneyRouteFromPath,
+  moneyTransactionPath,
 } from "./viewPaths";
 import { uid } from "./utils/flattenElements";
 
@@ -470,18 +471,24 @@ describe("record links (/<id>)", () => {
 
 describe("money sub-routes", () => {
   it("resolves every Money screen to the money view", () => {
-    expect(moneyRouteFromPath("/money")).toEqual({ tab: "overview", accountId: null, adding: false });
-    expect(moneyRouteFromPath("/money/net-worth/")).toEqual({ tab: "net-worth", accountId: null, adding: false });
+    const none = { accountId: null, transactionId: null, adding: false };
+    expect(moneyRouteFromPath("/money")).toEqual({ tab: "overview", ...none });
+    expect(moneyRouteFromPath("/money/net-worth/")).toEqual({ tab: "net-worth", ...none });
     expect(moneyRouteFromPath("/money/accounts/new").adding).toBe(true);
-    expect(moneyRouteFromPath(moneyAccountPath("abc-1"))).toEqual({ tab: "accounts", accountId: "abc-1", adding: false });
-    for (const p of ["/money", "/money/accounts", "/money/accounts/abc-1", "/money/net-worth"]) {
+    expect(moneyRouteFromPath(moneyAccountPath("abc-1"))).toEqual({ tab: "accounts", ...none, accountId: "abc-1" });
+    expect(moneyRouteFromPath("/money/transactions")).toEqual({ tab: "transactions", ...none });
+    expect(moneyRouteFromPath(moneyTransactionPath("t-9"))).toEqual({ tab: "transactions", ...none, transactionId: "t-9" });
+    expect(moneyRouteFromPath("/money/review").tab).toBe("review");
+    expect(moneyRouteFromPath("/money/spending").tab).toBe("spending");
+    for (const p of ["/money", "/money/accounts", "/money/accounts/abc-1", "/money/net-worth",
+                     "/money/transactions", "/money/transactions/t-9", "/money/review", "/money/spending"]) {
       expect(pathToView(p)).toBe("money");
       expect(isKnownPath(p)).toBe(true);
     }
   });
 
   it("rejects malformed Money paths", () => {
-    for (const p of ["/money/x", "/money/accounts/a/b", "/moneybags"]) {
+    for (const p of ["/money/x", "/money/accounts/a/b", "/money/transactions/a/b", "/moneybags"]) {
       expect(moneyRouteFromPath(p)).toBeNull();
       expect(isKnownPath(p)).toBe(false);
     }

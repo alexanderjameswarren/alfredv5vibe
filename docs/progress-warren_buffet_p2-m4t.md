@@ -12,7 +12,7 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 3 | wb-sync calls processing; one-time reprocess; verify transfer pairs, investment kinds, cleaned descriptions | done | 2026-10-09: wb-sync v5 processes new, changed and unprocessed rows. 105/106/107 applied; 394/394 processed, 16 genuine pairs, 0 candidates, no split mismatches |
 | 4 | Phase 2 MCP tools (except subscriptions); deploy; verify in a fresh chat | done | 2026-10-10: 18 tools plus the get_wb_transactions extension; 108 applied, 109 all checks true; CONFORMANT, 58 tables. mcp v146. claude.ai verification 10/10, plus the plain split refusal. 110 removed the test rule and tag |
 | 5 | Starter taxonomy, merchants and rules (in claude.ai) | done | 2026-10-11: taxonomy, merchants and rules set up in claude.ai; review queue at 0. Follow-up (tag exclusions, 114/115) done |
-| 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | in progress | Plan approved 2026-10-11 (decisions A–D). 6a: SQL for "always do this" plus `wb_transactions.notes`, 117 applied 2026-10-11 (CONFORMANT, 60 tables), 118 24/24. 6b (UI) next |
+| 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | done 2026-10-11 | Plan approved 2026-10-11 (decisions A–D). 6a: SQL for "always do this" plus `wb_transactions.notes`, 117 applied 2026-10-11 (CONFORMANT, 60 tables), 118 24/24. 6b (UI) verified by Alex: all 26 steps passed on desktop, a phone-sized window, his real phone and as Elise. 6c: tool wrapper, `excluded_tags` and WB_MANUAL; mcp v147 deployed, and the fresh-thread check passed |
 | 7 | Migration B + tools: subscriptions, price history, monthly detection | not started | |
 | 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | not started | |
 | 9 | Phase 2 review and Phase 3 steps | not started | |
@@ -85,3 +85,23 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
   - Sub-steps 6a (SQL), 6b (UI) and 6c (tools, WB_MANUAL wording, mcp deploy) go one at a time.
   - 6a: `_pending_warren_buffet_p2-m4t_step6_fix_functions.sql` and `_pending_…_step6_tests.sql`, 24 checks with invented fixtures; it rolls itself back. In PGlite: 24/24, 115 13/13, 104 85/85.
   - Numbered after gitsync, with no drift (116 touches no wb_ object): `117_wb_phase2_step6_fix_functions.sql` and `118_wb_phase2_step6_tests.sql`. 117 applied 2026-10-11; check_platform_conformance CONFORMANT, 60 tables. 118: all 24 checks true, rolled back.
+  - 6b (2026-10-11): new Money tabs Transactions, Review and Spending, plus the transaction detail screen, all in `src/money/`, with routes in `viewPaths.js`.
+    - Transactions: filters and 50 at a time.
+    - Detail: kind; tags per group, with "removed by you" and undo; the split editor; transfer pair, unpair or find; notes; reviewed.
+    - The "Always do this" sheet runs on `wb_fix_plan` / `wb_apply_fix`, defaults to updating the merchant's rule, and warns when too narrow.
+    - Review: one-tap fixes. Spending: a month view expandable to children, and a 6-month cash-flow strip.
+    - Account detail's transactions now come from `wb_transaction_list`.
+    - Reads and writes go under RLS, with hand edits as `manual`. Database errors show as plain sentences (`plainError`).
+    - Tests: app 2334/2334, CLI 174/174, `CI=true npm run build` compiled.
+    - Verified by Alex on 2026-10-11: all 26 test steps passed, on desktop, in a phone-sized window, on his real phone and as Elise. That includes a tag removed by hand staying removed after a reload, with a working undo.
+  - 6c (2026-10-11):
+    - `create_wb_rule_from_transaction` is now a thin wrapper over `wb_fix_plan` / `wb_apply_fix`. Its parameters and envelope are unchanged, and database refusals go through `dbError`.
+    - `get_wb_transactions` returns `excluded_tags`.
+    - WB_MANUAL says a tag removed by hand or by Claude is never put back by rules, and adding it back by hand clears that.
+    - Tests: functions 628/628, CLI 174/174, app 2334/2334.
+    - After gitsync there was no drift, since nothing in supabase/ came in. mcp was deployed as v147; an unauthenticated POST gets a 401.
+  - The fresh-thread check passed on v147:
+    - 113 tools.
+    - `excluded_tags` on bcc82c61 lists Subscription, linked to its rule.
+    - The `create_wb_rule_from_transaction` dry run returned `confirmation_required`: existing merchant, 3 past matches, not too narrow, a warning to update the existing rule, and an empty pattern because the merchant already exists.
+    - No writes.

@@ -59,7 +59,7 @@ const RULE_COLUMNS =
 const TAG_COLUMNS = "id, group_id, parent_id, name, is_active, sort_order, notes";
 const LIST_COLUMNS =
   "id, account_label, txn_date, amount, description, clean_description, payee, merchant_id, merchant_name, " +
-  "kind, kind_source, transfer_pair_id, reviewed, tag_names, split_count, needs_review";
+  "kind, kind_source, transfer_pair_id, reviewed, tag_names, split_count, needs_review, excluded_tags";
 
 // ---------------------------------------------------------------------------
 // Database errors: known ones become plain sentences, never amounts or internals
@@ -85,6 +85,11 @@ export const KNOWN_DB_ERRORS: Array<[RegExp, string]> = [
   [/wb_tags_group_name_key/, "A tag with that name already exists in that group."],
   [/wb_merchants_patterns_check/, "Merchant patterns cannot be empty."],
   [/pass exactly one of p_match or p_pattern/, "Pass a match or a pattern, not both."],
+  [/rule already exists/, "A rule already exists for this merchant: pass update_rule_id to update it (preferred), or add_new_rule: true."],
+  [/at least 3 characters/, "A match pattern needs at least 3 characters."],
+  [/no distinctive word/, "There is no distinctive word to match on: pass pattern."],
+  [/say what the rule does/, "Say what the rule does: set_kind and/or add_tag_ids."],
+  [/no rule .* that you can see/, "No rule with that id that you can see."],
 ];
 
 /** A known database refusal as a plain sentence; anything else as the platform's operational error. */
@@ -180,32 +185,6 @@ export function parsePatterns(T: string, v: unknown): string[] {
   return out;
 }
 
-// Words that say nothing about who was paid.
-export const STOP_WORDS = new Set([
-  "the", "and", "inc", "llc", "ltd", "corp", "company", "www", "com", "net", "org", "online", "payment", "payments",
-  "purchase", "pos", "debit", "credit", "card", "visa", "mastercard", "direct", "recurring", "autopay", "bill",
-  "pay", "store", "shop", "market", "usa", "transfer", "deposit", "withdrawal", "mktp", "mktpl", "help", "check",
-]);
-
-/**
- * The short merchant pattern a fix proposes (spec §6.1): among the first three
- * words of the payee, else of the clean description, the shortest that is at
- * least 4 letters and not a stop word. Editable before saving.
- */
-export function suggestPattern(payee: unknown, clean: unknown): string | null {
-  for (const text of [payee, clean]) {
-    if (typeof text !== "string") continue;
-    const words = text.toLowerCase().split(/[^a-z0-9&'.-]+/).filter(Boolean).slice(0, 3)
-      .map((w) => w.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, ""))
-      .filter((w) => /^[a-z][a-z&'.-]{3,}$/.test(w) && !STOP_WORDS.has(w));
-    if (words.length) return words.reduce((a, b) => (b.length < a.length ? b : a));
-  }
-  return null;
-}
-
-export function titleCase(s: string): string {
-  return s.replace(/\S+/g, (w) => w[0].toUpperCase() + w.slice(1));
-}
 
 /** Groups and tags as a tree; usage is the number of splits carrying each tag. */
 export function buildTagTree(groups: Obj[], tags: Obj[], usage: Map<string, number>) {
@@ -328,60 +307,24 @@ function fixArgs(T: string, args: Obj): FixInput {
   };
 }
 
+/**
+ * The plan, from wb_fix_plan (migration 117): the one implementation the Money
+ * app uses too. Existing rules gain tag names; warnings gain the tool's own
+ * parameter names.
+ */
 export async function fixPlan(T: string, db: Db, input: FixInput) {
-  const { data: txn, error } = await db.from("wb_transaction_list").select(LIST_COLUMNS)
-    .eq("id", input.transactionId).maybeSingle();
+  const { data, error } = await db.rpc("wb_fix_plan", {
+    p_transaction_id: input.transactionId, p_pattern: input.pattern, p_merchant_name: input.merchantName,
+  });
   if (error) throw new Error(dbError(T, error));
-  if (!txn) throw new Error(`${T}: no transaction ${input.transactionId} that you can see. Nothing was changed.`);
-  const t = txn as Obj;
-
-  let merchant: Obj;
-  let pattern: string | null = null;
-  if (t.merchant_id && !input.pattern) {
-    merchant = { id: t.merchant_id, name: t.merchant_name, exists: true, add_pattern: null };
-  } else {
-    pattern = input.pattern ?? suggestPattern(t.payee, t.clean_description);
-    if (!pattern) {
-      throw new Error(`${T}: no distinctive word to match on in ${JSON.stringify(t.payee ?? t.clean_description)}; pass pattern. Nothing was changed.`);
-    }
-    let found: Obj | null = null;
-    if (t.merchant_id) {
-      const { data: own, error: oe } = await db.from("wb_merchants").select(MERCHANT_COLUMNS).eq("id", t.merchant_id).maybeSingle();
-      if (oe) throw new Error(dbError(T, oe));
-      found = (own ?? null) as Obj | null;
-    }
-    const name = input.merchantName ?? (t.merchant_name as string | null) ?? titleCase(pattern);
-    found = found ?? await merchantByName(T, db, name);
-    const patterns = (found?.match_patterns as string[] | undefined) ?? [];
-    merchant = found
-      ? { id: found.id, name: found.name, exists: true, add_pattern: patterns.includes(pattern) ? null : pattern }
-      : { id: null, name, exists: false, add_pattern: pattern };
-  }
-
-  const dry = pattern
-    ? await preview(T, db, null, pattern)
-    : await preview(T, db, { merchant_id: merchant.id }, null);
-  const existing = merchant.id ? await describeRules(T, db, await rulesForMerchant(T, db, merchant.id as string)) : [];
-  const warnings: string[] = [];
-  if (dry.too_narrow) {
-    warnings.push(`This would catch only ${dry.count} past transaction(s): probably too narrow. Try a shorter pattern.`);
-  }
-  if (existing.length) {
-    warnings.push(`A rule already exists for ${merchant.name}: pass update_rule_id to update it instead of adding another, or add_new_rule: true.`);
-  }
-  return {
-    transaction: {
-      id: t.id, txn_date: t.txn_date, amount: t.amount, account_label: t.account_label, payee: t.payee,
-      clean_description: t.clean_description, kind: t.kind, tag_names: t.tag_names,
-    },
-    merchant,
-    pattern,
-    rule_match: merchant.id ? { merchant_id: merchant.id } : { merchant_id: "(the new merchant)" },
-    dry_run: { count: dry.count, too_narrow: dry.too_narrow, samples: dry.samples },
-    existing_rules: existing,
-    warnings,
-    ids: dry.ids,
+  const plan = data as Obj & {
+    merchant: Obj; dry_run: { count: number; too_narrow: boolean; samples: Obj[] };
+    existing_rules: Obj[]; warnings: string[]; ids: string[]; transaction: Obj;
   };
+  const existing = plan.existing_rules?.length ? await describeRules(T, db, plan.existing_rules) : [];
+  const warnings = (plan.warnings ?? []).map((w) => (/^A rule already exists/.test(w)
+    ? `${w} Pass update_rule_id to update it (preferred), or add_new_rule: true.` : w));
+  return { ...plan, existing_rules: existing, warnings, ids: plan.ids ?? [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -754,60 +697,32 @@ export const createWbRuleFromTransactionTool = defineTool({
     ];
     return { ...plan, steps };
   },
+  // All of it runs in wb_apply_fix (migration 117): merchant, then the merchant
+  // rule (an existing one's tags are merged), then reprocessing, in one transaction.
   handler: async (args: Obj, ctx) => {
     const T = "create_wb_rule_from_transaction";
     const action = fixAction(T, args);
-    const plan = await fixPlan(T, ctx.db, fixArgs(T, args));
-    if (plan.existing_rules.length && !action.updateRuleId && !action.addNew) {
-      throw new Error(`${T}: a rule already exists for ${plan.merchant.name} (${plan.existing_rules.map((r) => r.id).join(", ")}). Pass update_rule_id to update it, or add_new_rule: true. Nothing was changed.`);
-    }
-
-    // 1. The merchant: create it, or add the pattern.
-    let merchantId = plan.merchant.id as string | null;
-    if (!merchantId) {
-      const { data, error } = await ctx.db.from("wb_merchants")
-        .insert({ name: plan.merchant.name, match_patterns: [plan.merchant.add_pattern], context_id: MONEY_CONTEXT_ID })
-        .select("id").single();
-      if (error) throw new Error(dbError(T, error));
-      merchantId = (data as Obj).id as string;
-    } else if (plan.merchant.add_pattern) {
-      const { data: m, error: me } = await ctx.db.from("wb_merchants").select("match_patterns").eq("id", merchantId).single();
-      if (me) throw new Error(dbError(T, me));
-      const patterns = [...new Set([...(((m as Obj).match_patterns as string[]) ?? []), plan.merchant.add_pattern as string])];
-      const { error } = await ctx.db.from("wb_merchants").update({ match_patterns: patterns, context_id: MONEY_CONTEXT_ID }).eq("id", merchantId);
-      if (error) throw new Error(dbError(T, error));
-    }
-
-    // 2. The rule, matching on the merchant.
-    const match = { merchant_id: merchantId };
-    const ruleFieldsOut: Obj = { match, ...(action.setKind ? { set_kind: action.setKind } : {}),
-      ...(action.tagIds.length ? { add_tag_ids: action.tagIds } : {}), ...(action.notes ? { notes: action.notes } : {}) };
-    let rule: Obj;
-    const before = action.updateRuleId ? await idsMatchedBy(T, ctx.db, action.updateRuleId) : [];
-    if (action.updateRuleId) {
-      const { data, error } = await ctx.db.from("wb_rules").update({ ...ruleFieldsOut, context_id: MONEY_CONTEXT_ID })
-        .eq("id", action.updateRuleId).select(RULE_COLUMNS).maybeSingle();
-      if (error) throw new Error(dbError(T, error));
-      if (!data) throw new Error(`${T}: no rule ${action.updateRuleId} that you can see. The merchant step was kept; no rule was changed.`);
-      rule = data as unknown as Obj;
-    } else {
-      const { data, error } = await ctx.db.from("wb_rules").insert({
-        name: `${plan.merchant.name}`, priority: 100, ...ruleFieldsOut, created_by: "claude",
-        created_from_transaction_id: plan.transaction.id, context_id: MONEY_CONTEXT_ID,
-      }).select(RULE_COLUMNS).single();
-      if (error) throw new Error(dbError(T, error));
-      rule = data as unknown as Obj;
-    }
-
-    // 3. Reprocess everything the merchant and the rule now touch.
-    const { data: own, error: oe } = await ctx.db.from("wb_transactions").select("id").eq("merchant_id", merchantId).limit(5000);
-    if (oe) throw new Error(dbError(T, oe));
-    const reprocessed = await reprocess(T, ctx.db, [
-      plan.transaction.id as string, ...plan.ids, ...before, ...((own ?? []) as Obj[]).map((r) => r.id as string),
-    ]);
-    const after = await preview(T, ctx.db, match, null, 0);
-    const [described] = await describeRules(T, ctx.db, [rule]);
-    return { merchant_id: merchantId, rule: described, matched_now: after.count, reprocessed };
+    const input = fixArgs(T, args);
+    const { data, error } = await ctx.db.rpc("wb_apply_fix", {
+      p_transaction_id: input.transactionId,
+      p_set_kind: action.setKind,
+      p_add_tag_ids: action.tagIds,
+      p_pattern: input.pattern,
+      p_merchant_name: input.merchantName,
+      p_update_rule_id: action.updateRuleId,
+      p_add_new_rule: action.addNew,
+      p_notes: action.notes,
+      p_created_by: "claude",
+    });
+    if (error) throw new Error(dbError(T, error));
+    const res = data as Obj;
+    const { data: rule, error: re } = await ctx.db.from("wb_rules").select(RULE_COLUMNS).eq("id", res.rule_id).maybeSingle();
+    if (re) throw new Error(dbError(T, re));
+    const [described] = rule ? await describeRules(T, ctx.db, [rule as unknown as Obj]) : [null];
+    return {
+      merchant_id: res.merchant_id, merchant_created: res.merchant_created, rule: described,
+      rule_updated: res.rule_updated, matched_now: res.matched_now, reprocessed: res.reprocessed,
+    };
   },
 });
 

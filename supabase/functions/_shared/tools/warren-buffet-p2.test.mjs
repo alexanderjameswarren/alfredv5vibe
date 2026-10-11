@@ -79,14 +79,6 @@ test("parsePatterns lower-cases, dedupes and refuses short patterns", () => {
   assert.throws(() => m.parsePatterns("t", []), /non-empty/);
 });
 
-test("suggestPattern picks the shortest distinctive word, payee first", () => {
-  assert.equal(m.suggestPattern("Corner Coffee Roasters", null), "corner");
-  assert.equal(m.suggestPattern(null, "SQ CORNER COFFEE"), "corner");
-  assert.equal(m.suggestPattern("PetStore", "PET STORE AZ"), "petstore");
-  assert.equal(m.suggestPattern("Online Payment", "CARD PAYMENT"), null);
-  assert.equal(m.suggestPattern("Bookshop Mktp", null), "bookshop");
-});
-
 test("idList dedupes, caps and checks ids", () => {
   assert.deepEqual(m.idList("t", "ids", [id(1), id(1), id(2)], 25), [id(1), id(2)]);
   assert.throws(() => m.idList("t", "ids", [], 25), /non-empty/);
@@ -237,63 +229,72 @@ test("mark_wb_reviewed reports ids it could not see", async () => {
 
 // --- "Always do this" (spec §6.1) ------------------------------------------
 
-const TXN = { id: id(1), payee: "Corner Coffee", clean_description: "SQ CORNER COFFEE", merchant_id: null, merchant_name: null };
+// The plan and the write run in the database (wb_fix_plan, wb_apply_fix, migration
+// 117), shared with the Money app; the tool only validates, calls and describes.
+const PLAN = {
+  transaction: { id: id(1) }, pattern: "corner",
+  merchant: { id: null, name: "Corner", exists: false, add_pattern: "corner" },
+  rule_match: { merchant_id: "(the new merchant)" },
+  dry_run: { count: 1, too_narrow: true, samples: [] }, existing_rules: [],
+  warnings: ["This would catch only 1 past transaction(s): probably too narrow. Try a shorter pattern."], ids: [id(1)],
+};
 
-function fixDb({ txn = TXN, merchant = null, rules = [], count = 1 } = {}) {
+function fixDb({ plan = PLAN, apply = null, applyError = null } = {}) {
   return fakeDb(
-    (t, ops) => {
-      if (t === "wb_transaction_list") return { data: txn, error: null };
-      if (t === "wb_merchants" && has(ops, "insert")) return { data: { id: id(50) }, error: null };
-      if (t === "wb_merchants") return { data: merchant, error: null };
-      if (t === "wb_rules" && has(ops, "insert")) return { data: { id: id(60), match: { merchant_id: id(50) }, add_tag_ids: [] }, error: null };
-      if (t === "wb_rules") return { data: rules, error: null };
-      return { data: [], error: null };
+    (t) => (t === "wb_rules"
+      ? { data: { id: id(60), match: { merchant_id: id(50) }, add_tag_ids: [id(7)] }, error: null }
+      : { data: [], error: null }),
+    (fn) => {
+      if (fn === "wb_fix_plan") return { data: plan, error: null };
+      if (fn === "wb_apply_fix") {
+        return applyError ? { data: null, error: applyError }
+          : { data: apply ?? { merchant_id: id(50), merchant_created: true, rule_id: id(60), rule_updated: false,
+            matched_now: 3, reprocessed: { processed: 3 } }, error: null };
+      }
+      return { data: {}, error: null };
     },
-    (fn) => fn === "wb_rule_preview"
-      ? { data: { count, too_narrow: count <= 1, samples: [], ids: [id(1)] }, error: null }
-      : { data: { processed: 1 }, error: null },
   );
 }
 
-test("the fix proposal suggests a pattern and a new merchant, and flags a count of 1", async () => {
+test("the fix proposal comes from wb_fix_plan and writes nothing", async () => {
   const db = fixDb();
-  const out = await m.createWbRuleFromTransactionTool.propose({ transaction_id: id(1), set_kind: "spend" }, { db });
-  assert.equal(out.pattern, "corner");
-  assert.deepEqual(out.merchant, { id: null, name: "Corner", exists: false, add_pattern: "corner" });
+  const out = await m.createWbRuleFromTransactionTool.propose({ transaction_id: id(1), set_kind: "spend", pattern: "Corner" }, { db });
+  assert.deepEqual(db.rpcs[0], ["wb_fix_plan", { p_transaction_id: id(1), p_pattern: "corner", p_merchant_name: null }]);
+  assert.equal(out.merchant.name, "Corner");
   assert.match(out.warnings[0], /too narrow/);
-  assert.equal(writes(db).length, 0, "a proposal never writes");
-  assert.deepEqual(db.rpcs[0], ["wb_rule_preview", { p_match: null, p_pattern: "corner", p_samples: 5 }]);
-});
-
-test("the fix uses the transaction's merchant when it has one", async () => {
-  const db = fixDb({ txn: { ...TXN, merchant_id: id(50), merchant_name: "Corner Coffee" }, count: 4 });
-  const out = await m.getWbRulePreviewTool.handler({ transaction_id: id(1) }, { db });
-  assert.deepEqual(out.rule_match, { merchant_id: id(50) });
-  assert.equal(out.dry_run.count, 4);
-  assert.deepEqual(out.warnings, []);
+  assert.equal(out.steps.length, 3);
   assert.ok(!("ids" in out));
+  assert.equal(writes(db).length, 0, "a proposal never writes");
+  assert.equal(db.rpcs.length, 1);
 });
 
-test("the fix refuses to add a second rule for a merchant unless told", async () => {
-  const db = fixDb({ txn: { ...TXN, merchant_id: id(50), merchant_name: "Corner Coffee" },
-    rules: [{ id: id(60), match: { merchant_id: id(50) }, add_tag_ids: [] }], count: 4 });
-  await assert.rejects(
-    m.createWbRuleFromTransactionTool.handler({ transaction_id: id(1), set_kind: "spend", confirmed: true }, { db }),
-    /update_rule_id/);
-  assert.equal(writes(db).length, 0);
+test("an existing rule's warning names the tool's parameters", async () => {
+  const db = fixDb({ plan: { ...PLAN, existing_rules: [{ id: id(60), add_tag_ids: [] }],
+    warnings: ["A rule already exists for Corner: update it instead of adding another."] } });
+  const out = await m.getWbRulePreviewTool.handler({ transaction_id: id(1) }, { db });
+  assert.match(out.warnings[0], /pass update_rule_id to update it \(preferred\), or add_new_rule: true/i);
+  assert.equal(out.existing_rules[0].id, id(60));
 });
 
-test("the confirmed fix creates the merchant, then a merchant rule from the transaction", async () => {
-  const db = fixDb({ count: 3 });
+test("the confirmed fix calls wb_apply_fix as claude and returns the described rule", async () => {
+  const db = fixDb();
   const out = await m.createWbRuleFromTransactionTool.handler(
-    { transaction_id: id(1), pattern: "Corner Coffee", add_tag_ids: [id(7)], confirmed: true }, { db });
-  assert.deepEqual(db.op("wb_merchants", "insert")[0][1],
-    { name: "Corner Coffee", match_patterns: ["corner coffee"], context_id: MONEY });
-  const rule = db.op("wb_rules", "insert")[0][1];
-  assert.deepEqual(rule.match, { merchant_id: id(50) });
-  assert.equal(rule.created_from_transaction_id, id(1));
-  assert.equal(rule.created_by, "claude");
-  assert.deepEqual(rule.add_tag_ids, [id(7)]);
+    { transaction_id: id(1), pattern: "Corner Coffee", add_tag_ids: [id(7)], update_rule_id: id(60), confirmed: true }, { db });
+  assert.deepEqual(db.rpcs[0], ["wb_apply_fix", {
+    p_transaction_id: id(1), p_set_kind: null, p_add_tag_ids: [id(7)], p_pattern: "corner coffee", p_merchant_name: null,
+    p_update_rule_id: id(60), p_add_new_rule: false, p_notes: null, p_created_by: "claude",
+  }]);
   assert.equal(out.merchant_id, id(50));
+  assert.equal(out.rule.id, id(60));
+  assert.equal(out.matched_now, 3);
+  assert.equal(writes(db).length, 0, "the database function does the writing");
   await assert.rejects(m.createWbRuleFromTransactionTool.handler({ transaction_id: id(1), confirmed: true }, { db }), /set_kind and\/or add_tag_ids/);
+});
+
+test("a second rule without a choice is refused in plain words", async () => {
+  const db = fixDb({ applyError: { message: "wb_apply_fix: a rule already exists for Corner; update it or add another", code: "23505" } });
+  const err = await m.createWbRuleFromTransactionTool.handler({ transaction_id: id(1), set_kind: "spend", confirmed: true }, { db })
+    .then(() => null, (e) => e);
+  assert.equal(err.message,
+    "create_wb_rule_from_transaction: A rule already exists for this merchant: pass update_rule_id to update it (preferred), or add_new_rule: true. Nothing was changed.");
 });

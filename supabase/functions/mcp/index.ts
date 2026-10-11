@@ -2836,7 +2836,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get Money Transactions",
       description:
-        "Bank transactions, newest first (pending ones without a posted date come first): amount, dates, the raw description and payee as SimpleFIN reported them, plus the Phase 2 fields: clean_description, merchant_name, kind (spend, income, transfer, refund, investment, interest, fee) with kind_source, transfer_pair_id, reviewed, tag_names, split_count and needs_review, and the account_label. " +
+        "Bank transactions, newest first (pending ones without a posted date come first): amount, dates, the raw description and payee as SimpleFIN reported them, plus the Phase 2 fields: clean_description, merchant_name, kind (spend, income, transfer, refund, investment, interest, fee) with kind_source, transfer_pair_id, reviewed, tag_names, split_count, needs_review, excluded_tags (tags removed by hand or by Claude, which rules never put back) and the account_label. " +
         WB_SIGN + "from/to filter the posted date in Pacific time, so a pending charge with no posted date only appears when no date range is given. Tier 1.",
       inputSchema: {
         account_id: z.string().optional().describe("Only this account (get_wb_accounts, field account_id)."),
@@ -2945,7 +2945,8 @@ export function createMcpServer(token: string) {
 
   // --- Warren Buffet, Phase 2 (docs/technical-spec-warren_buffet_p2-m4t.md §6, §6.1) ---
   const WB_MANUAL =
-    "Tags, kinds and merchants set by hand (source manual) or by Claude (source claude) are never overwritten by rules; a rule only replaces its own tags. ";
+    "Tags, kinds and merchants set by hand (source manual) or by Claude (source claude) are never overwritten by rules; a rule only replaces its own tags. " +
+    "A tag removed by hand or by Claude is never put back by rules, through any reprocess or re-split; adding that tag back by hand clears the removal. ";
   const WB_RULES =
     "Rules match on merchants (match.merchant_id), not on exact descriptions: put the messy bank text in a merchant's match_patterns, then write the rule against the merchant. ";
   const wbHandSource = z.enum(["claude", "manual"]).optional()

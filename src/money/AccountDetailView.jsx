@@ -3,6 +3,7 @@ import { ArrowLeft, Pencil } from "lucide-react";
 import EditCard from "../shared/EditCard";
 import LineChart from "./LineChart";
 import RecordBalanceForm from "./RecordBalanceForm";
+import { TransactionRow } from "./TransactionsScreen";
 import AccountFields, { fromForm, toForm } from "./AccountFields";
 import {
   getAccount, getBalanceHistory, getHoldings, getTransactions, updateAccount,
@@ -16,22 +17,11 @@ import {
 const INVESTMENT_ROLES = ["retirement", "taxable_investment"];
 const SECTION = "bg-card border border-border rounded-lg p-4";
 
-function Transactions({ rows }) {
+function Transactions({ rows, onOpen }) {
   if (rows.length === 0) return <p className="text-sm text-muted-foreground">No transactions stored yet.</p>;
   return (
     <ul className="divide-y divide-border">
-      {rows.map((t) => (
-        <li key={t.id} className={`flex items-start justify-between gap-3 py-2 ${t.pending ? "text-muted-foreground" : ""}`}>
-          <span className="min-w-0">
-            <span className="block break-words">{t.payee || t.description || "—"}</span>
-            <span className="block text-xs text-muted-foreground">
-              {formatDay((t.posted_at || t.transacted_at || "").slice(0, 10))}
-              {t.pending && <span className="ml-2 font-medium">pending</span>}
-            </span>
-          </span>
-          <span className="tabular-nums shrink-0">{formatMoney(t.amount)}</span>
-        </li>
-      ))}
+      {rows.map((t) => <TransactionRow key={t.id} t={t} onOpen={onOpen} showAccount={false} />)}
     </ul>
   );
 }
@@ -127,7 +117,7 @@ function EditAccount({ account, onSaved, onCancel }) {
   );
 }
 
-export default function AccountDetailView({ accountId, onBack }) {
+export default function AccountDetailView({ accountId, onBack, onOpenTransaction = () => {} }) {
   const [editing, setEditing] = useState(false);
   const { data, error, loading, reload } = useLoad(async () => {
     const account = await getAccount(accountId);
@@ -215,7 +205,7 @@ export default function AccountDetailView({ accountId, onBack }) {
         {account.source === "simplefin" && (
           <section className={SECTION}>
             <h4 className="font-medium mb-2">Recent transactions</h4>
-            <Transactions rows={transactions} />
+            <Transactions rows={transactions} onOpen={onOpenTransaction} />
           </section>
         )}
       </div>

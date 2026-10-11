@@ -404,7 +404,9 @@ test("Warren Buffet Phase 2 descriptions state the sign rule, the manual rule an
   }
   for (const n of ["upsert_wb_merchant", "create_wb_rule", "update_wb_rule", "create_wb_rule_from_transaction", "tag_wb_transactions", "set_wb_transaction_kind", "reprocess_wb_transactions"]) {
     assert.match(desc(n), /never overwritten by rules/, n);
+    assert.match(desc(n), /removed by hand or by Claude is never put back by rules/, n);
   }
+  assert.match(desc("get_wb_transactions"), /excluded_tags/);
   for (const n of ["get_wb_rules", "create_wb_rule", "update_wb_rule", "get_wb_rule_preview", "create_wb_rule_from_transaction"]) {
     assert.match(desc(n), /match on merchants/, n);
   }
