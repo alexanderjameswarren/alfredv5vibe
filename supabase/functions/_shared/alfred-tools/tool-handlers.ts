@@ -606,6 +606,8 @@ export async function updateInboxItem(
     suggested_tags?: string[];
     suggested_collection_id?: string;
     suggested_status?: "someday" | "active";
+    // Restructure P3. Validated by the caller (checkSourceApp); null clears it.
+    source_app?: string | null;
     ai_status?: string;
   }
 ): Promise<ToolResult> {
@@ -653,6 +655,7 @@ export async function updateInboxItem(
     if (params.suggested_tags !== undefined) updates.suggested_tags = normaliseTags(params.suggested_tags);
     if (params.suggested_collection_id !== undefined) updates.suggested_collection_id = params.suggested_collection_id;
     if (params.suggested_status !== undefined) updates.suggested_status = params.suggested_status;
+    if (params.source_app !== undefined) updates.source_app = params.source_app;
 
     const { data, error } = await client
       .from("inbox")

@@ -38,6 +38,7 @@
 // ============================================================================
 
 import { clampLimit, defineTool, envelope, type Context } from "../platform.ts";
+import { checkSourceApp } from "./apps.ts";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
 
 const BUCKET = "clipboard";
@@ -580,12 +581,30 @@ export const getClipSlicesTool = defineTool({
 // that can be put back, which is the definition of tier 2. It is audited, so
 // platform.rollback_audit_entry can undo it too.
 //
-// ⚠️ THIS REVIVES A COLUMN THE APP STOPPED WRITING. Human triage in the Alfred
-// UI hard-deletes inbox rows (a capture that does not make it through never
-// happened), which left `archived` and `triaged_at` written by nothing. Spec
-// decision 9 deliberately reverses that FOR THIS ONE PURPOSE: Claude handling a
-// clip should not destroy it, so it archives instead. Human triage is unchanged
-// and still deletes.
+// Nothing deletes inbox rows: the app's Process and discard archive too, with
+// 'processed' and 'discarded'. Restructure P3 adds `outcome` (the records this
+// capture became, appended to any already recorded) and `source_app`, written in
+// the same update, and stamps source_inbox_id on outcome records that lack one.
+
+/** Tables whose rows carry source_inbox_id back to the capture (068, 116). */
+const LINKED_TABLES = ["items", "intents", "events", "job_applications"];
+
+/** outcome as given: a non-empty list of { table, id } with non-empty strings. */
+export function parseOutcome(T: string, value: unknown): { table: string; id: string }[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  const bad = () =>
+    new Error(
+      `${T}: outcome must be a list of { table, id } — e.g. [{ "table": "job_applications", "id": "<uuid>" }]. ` +
+        `Got ${JSON.stringify(value)}.`,
+    );
+  if (!Array.isArray(value)) throw bad();
+  return value.map((e) => {
+    const table = typeof e?.table === "string" ? e.table.trim() : "";
+    const id = typeof e?.id === "string" ? e.id.trim() : "";
+    if (!table || !id) throw bad();
+    return { table, id };
+  });
+}
 
 export const archiveInboxItemTool = defineTool({
   name: "archive_inbox_item",
@@ -620,34 +639,71 @@ export const archiveInboxItemTool = defineTool({
       );
     }
     const reason = args.reason === undefined || args.reason === null ? "processed" : (args.reason as string);
+    const outcome = parseOutcome(T, args.outcome);
+    const sourceApp = await checkSourceApp(T, args.source_app, ctx.db);
+    if (outcome && !archived) {
+      throw new Error(`${T}: outcome is recorded when archiving; it cannot go with archived: false.`);
+    }
+
+    const notFound = () =>
+      // RLS makes "not yours" and "not there" indistinguishable, and saying so
+      // is better than implying the row definitely does not exist.
+      new Error(`${T}: no inbox item ${inboxId} that you can write to — it may not be yours. Nothing was changed.`);
+
+    // Appended, so an outcome the app already recorded is kept.
+    let mergedOutcome: { table: string; id: string }[] | undefined;
+    if (outcome) {
+      const { data: row, error: readErr } = await ctx.db
+        .from("inbox")
+        .select("outcome")
+        .eq("id", inboxId)
+        .maybeSingle();
+      if (readErr) throw new Error(`${T}: ${readErr.message}`);
+      if (!row) throw notFound();
+      const existing = Array.isArray(row.outcome) ? row.outcome : [];
+      const seen = new Set(existing.map((e: { table: string; id: string }) => `${e.table}:${e.id}`));
+      mergedOutcome = [...existing, ...outcome.filter((e) => !seen.has(`${e.table}:${e.id}`))];
+    }
 
     // All three move together: stamped when hiding, cleared when putting back.
     // Leaving a stale timestamp or reason on an un-archived row would make it
     // look dispositioned while it sat in the inbox, and
     // inbox_archive_reason_needs_archived refuses that pairing anyway.
+    const update: Record<string, unknown> = {
+      archived,
+      triaged_at: archived ? new Date().toISOString() : null,
+      archive_reason: archived ? reason : null,
+    };
+    if (mergedOutcome) update.outcome = mergedOutcome;
+    if (sourceApp !== undefined) update.source_app = sourceApp;
+
     const { data, error } = await ctx.db
       .from("inbox")
-      .update({
-        archived,
-        triaged_at: archived ? new Date().toISOString() : null,
-        archive_reason: archived ? reason : null,
-      })
+      .update(update)
       .eq("id", inboxId)
-      .select("id, source_type, captured_text, archived, triaged_at, archive_reason")
+      .select("id, source_type, captured_text, archived, triaged_at, archive_reason, source_app, outcome")
       .maybeSingle();
 
     if (error) throw new Error(`${T}: ${error.message}`);
-    if (!data) {
-      // RLS makes "not yours" and "not there" indistinguishable, and saying so
-      // is better than implying the row definitely does not exist.
-      throw new Error(
-        `${T}: no inbox item ${inboxId} that you can write to — it may have been ` +
-          `deleted by triage in the app, or it may not be yours. Nothing was changed.`,
-      );
+    if (!data) throw notFound();
+
+    // The reverse link: each outcome record that can point back, and does not yet.
+    const linked: string[] = [];
+    for (const e of outcome ?? []) {
+      if (!LINKED_TABLES.includes(e.table)) continue;
+      const { data: rows, error: linkErr } = await ctx.db
+        .from(e.table)
+        .update({ source_inbox_id: inboxId })
+        .eq("id", e.id)
+        .is("source_inbox_id", null)
+        .select("id");
+      if (linkErr) throw new Error(`${T}: archived, but linking ${e.table} ${e.id} back failed: ${linkErr.message}`);
+      if ((rows ?? []).length) linked.push(`${e.table}:${e.id}`);
     }
 
     return {
       ...data,
+      linked_back: linked,
       result: archived
         ? `Archived with reason '${reason}'. It has left the Alfred inbox screen ` +
           "immediately. Nothing was deleted — un-archive with archived: false."

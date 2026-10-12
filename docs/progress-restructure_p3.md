@@ -45,16 +45,19 @@ Spec: `docs/technical-spec-restructure_p3.md`
     - "Cancel" sets cancel_reason `intent_status`, and Undo re-arms those that are still ahead (`cancelRemindersForStatus`, `restoreRemindersAfterStatus`).
     - Migration `119_restructure_p3_reminders_follow_intent.sql` allows the `intent_status` and `intent_archived` reasons.
     - Trigger `reminders_follow_intent_archive` (SECURITY DEFINER): archive cancels as `intent_archived`; un-archive re-arms only `intent_archived` reminders still in the future.
-- [x] 7. Copy button on item and intention detail. (Built 2026-10-12; awaiting a Chrome test.)
+- [x] 7. Copy button on item and intention detail. (Verified and checkpointed 2026-10-12.)
   - Copy (ClipboardCopy icon, beige, `ACTION_BUTTON`) sits just before ⋯ on both pages and stays enabled when closed. It copies `recordCopyText` (`src/shared/copyRecord.js`): the title, then the description (left out when empty), then the link, separated by blank lines.
   - The pages report through `onNotify(message, { error })`. Alfred passes `notify`: the short toast with no Undo, red for an error. A clipboard failure is a red toast, not an alert.
   - `UndoMessage` shows Undo only when there is a restore, and has `tone: "error"` (bg-destructive). `offerUndoFor(msg, null)` no longer wraps the null, which fixes the inbox "Copied" toast whose Undo failed with "Operation failed".
-- [ ] 8. After warren_buffet_p2-m4t finishes and gitsync:
-  - tool changes, including a new tier-1 `get_apps` (tool count 113 → 114)
-  - index.test.mjs schema checks
-  - alfred-enrich skill text
-  - re-register `public.clips` to correct its registry note, which still says triage hard-deletes inbox rows
-  - mcp deploy
+- [x] 8. Tools, skills and deploy (2026-10-12, mcp v149, CONFORMANT 62 tables; awaiting a claude.ai test):
+  - create_inbox_item `source_app` (checked against apps); get_inbox returns `source_app` and `outcome`; update_inbox_item `source_app`
+  - archive_inbox_item `outcome` (appended) and `source_app`, stamping `source_inbox_id` on outcome items, intents, events and job_applications (`linked_back`); the stale wording is fixed
+  - create_job_application `inbox_id` → `source_inbox_id`; get_contexts returns `app_id`
+  - new tier-1 `get_apps` (`_shared/tools/apps.ts`), tool count 116 → 117
+  - index.test.mjs: count, get_apps and archive_inbox_item schema parity, source_app advertised
+  - skills: alfred-enrich chooses an app from get_apps; job-search passes inbox_id and archives with an outcome
+  - `122_restructure_p3_clips_registry_note.sql`: notes-only update of public.clips' registry row, not a re-register
+  - deployed with verify_jwt false (checked)
 
 ## Decisions (2026-10-11)
 - App descriptions approved: alfred, workshop and arnold rewritten by Alex; the rest kept as drafted.
