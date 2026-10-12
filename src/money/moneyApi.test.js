@@ -171,3 +171,37 @@ describe("hand edits", () => {
     }]);
   });
 });
+
+describe("subscriptions in review", () => {
+  it("attaches subscription_id to subscription rows only", async () => {
+    mockRespond = (table) => (table === "wb_review_queue"
+      ? { data: [{ reason: "new_recurring", transaction_id: "t1" }, { reason: "no_kind", transaction_id: "t2" }], error: null }
+      : { data: [{ id: "t1", subscription_id: "s1" }], error: null });
+    const rows = await api.getReviewQueue();
+    expect(rows[0].subscription_id).toBe("s1");
+    expect(rows[1]).not.toHaveProperty("subscription_id");
+    expect(op("wb_transactions", "in")[0]).toEqual(["in", "id", ["t1"]]);
+  });
+
+  it("records the charge's amount as a positive price from its date", async () => {
+    await api.recordSubscriptionPrice("s1", { transaction_id: "t1", txn_date: "2026-01-05", amount: -12.5 });
+    expect(op("wb_subscription_prices", "upsert")[0]).toEqual(["upsert",
+      { subscription_id: "s1", effective_on: "2026-01-05", amount: 12.5, source: "manual", transaction_id: "t1" },
+      { onConflict: "subscription_id,effective_on" }]);
+  });
+
+  it("dismisses a watching row: flags the merchant, then deletes the row", async () => {
+    mockRespond = (table, ops) => (table === "wb_subscriptions" && has(ops, "maybeSingle")
+      ? { data: { id: "s1", merchant_id: "m1", status: "watching" }, error: null } : { data: null, error: null });
+    await api.dismissSubscription("s1");
+    expect(op("wb_merchants", "update")[0]).toEqual(["update", { not_subscription: true }]);
+    expect(op("wb_subscriptions", "delete")).toHaveLength(1);
+  });
+
+  it("refuses to dismiss an active subscription, writing nothing", async () => {
+    mockRespond = () => ({ data: { id: "s1", merchant_id: "m1", status: "active" }, error: null });
+    await expect(api.dismissSubscription("s1")).rejects.toThrow("Only a detected subscription can be dismissed here.");
+    expect(writes()).toHaveLength(0);
+    expect(op("wb_subscriptions", "delete")).toHaveLength(0);
+  });
+});

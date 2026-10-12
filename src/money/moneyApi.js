@@ -53,6 +53,7 @@ const KNOWN_ERRORS = [
   [/at least 3 characters/, "The match pattern needs at least 3 characters."],
   [/no distinctive word/, "There is no distinctive word to match on: type a pattern."],
   [/say what the rule does/, "Choose a kind or at least one tag for the rule."],
+  [/wb_subscription_prices_amount_check/, "A price must be more than zero."],
   [/that you can see|not found/, "That record no longer exists, or you can't see it."],
   [/jwt|permission denied|row-level security/i, "You're signed out or not allowed to change this. Sign in again."],
   [/failed to fetch|networkerror|network request/i, "Couldn't reach the server. Check the connection and try again."],
@@ -374,11 +375,47 @@ export async function applyFix({ transactionId, setKind: kind = null, tagIds = [
   return data;
 }
 
+const SUB_REASONS = ["price_change", "new_recurring"];
+
+/** The queue, newest first; subscription rows also carry their subscription_id. */
 export async function getReviewQueue() {
   const { data, error } = await supabase.from("wb_review_queue").select(QUEUE_COLUMNS)
     .order("txn_date", { ascending: false }).limit(500);
   if (error) fail("Couldn't load the review queue", error);
-  return data || [];
+  const rows = data || [];
+  const ids = [...new Set(rows.filter((r) => SUB_REASONS.includes(r.reason)).map((r) => r.transaction_id))];
+  if (!ids.length) return rows;
+  const { data: links, error: e2 } = await supabase.from("wb_transactions").select("id, subscription_id").in("id", ids);
+  if (e2) fail("Couldn't load the review queue", e2);
+  const subOf = new Map((links || []).map((l) => [l.id, l.subscription_id]));
+  return rows.map((r) => (SUB_REASONS.includes(r.reason) ? { ...r, subscription_id: subOf.get(r.transaction_id) || null } : r));
+}
+
+/** Accept a charge's amount as the subscription's price from that day (clears price_change). */
+export async function recordSubscriptionPrice(subscriptionId, row) {
+  const { error } = await supabase.from("wb_subscription_prices").upsert({
+    subscription_id: subscriptionId, effective_on: row.txn_date, amount: Math.abs(Number(row.amount)),
+    source: "manual", transaction_id: row.transaction_id,
+  }, { onConflict: "subscription_id,effective_on" });
+  if (error) fail("Couldn't record the new price", error);
+}
+
+/**
+ * Not a subscription: mark the merchant so detection skips it, then delete the
+ * watching row (its charges unlink). Only a watching row can be dismissed.
+ */
+export async function dismissSubscription(subscriptionId) {
+  const { data: sub, error } = await supabase.from("wb_subscriptions").select("id, merchant_id, status")
+    .eq("id", subscriptionId).maybeSingle();
+  if (error) fail("Couldn't dismiss it", error);
+  if (!sub) throw new Error("That record no longer exists, or you can't see it.");
+  if (sub.status !== "watching") throw new Error("Only a detected subscription can be dismissed here.");
+  if (sub.merchant_id) {
+    const { error: me } = await supabase.from("wb_merchants").update({ not_subscription: true }).eq("id", sub.merchant_id);
+    if (me) fail("Couldn't dismiss it", me);
+  }
+  const { error: de } = await supabase.from("wb_subscriptions").delete().eq("id", subscriptionId).eq("status", "watching");
+  if (de) fail("Couldn't dismiss it", de);
 }
 
 /** Category spending rows (both levels) for months from..to ("YYYY-MM"). */

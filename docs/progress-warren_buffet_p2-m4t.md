@@ -13,7 +13,7 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 4 | Phase 2 MCP tools (except subscriptions); deploy; verify in a fresh chat | done | 2026-10-10: 18 tools plus the get_wb_transactions extension; 108 applied, 109 all checks true; CONFORMANT, 58 tables. mcp v146. claude.ai verification 10/10, plus the plain split refusal. 110 removed the test rule and tag |
 | 5 | Starter taxonomy, merchants and rules (in claude.ai) | done | 2026-10-11: taxonomy, merchants and rules set up in claude.ai; review queue at 0. Follow-up (tag exclusions, 114/115) done |
 | 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | done 2026-10-11 | Plan approved 2026-10-11 (decisions A–D). 6a: SQL for "always do this" plus `wb_transactions.notes`, 117 applied 2026-10-11 (CONFORMANT, 60 tables), 118 24/24. 6b (UI) verified by Alex: all 26 steps passed on desktop, a phone-sized window, his real phone and as Elise. 6c: tool wrapper, `excluded_tags` and WB_MANUAL; mcp v147 deployed, and the fresh-thread check passed |
-| 7 | Migration B + tools: subscriptions, price history, monthly detection | in progress | Plan approved 2026-10-11 (D1–D6). 7a: 120 applied 2026-10-12 (conformant), 121 39/39. 7b done: wb-sync v6, whose first run detected 19 watching rows. 7c done: mcp v148, 116 tools, fresh-thread check passed. 7d (Review tab) in progress |
+| 7 | Migration B + tools: subscriptions, price history, monthly detection | done 2026-10-12 | Plan approved 2026-10-11 (D1–D6). 7d done: Review tab actions, and 122/123 ("Keep watching") applied. 7a: 120 applied 2026-10-12 (conformant), 121 39/39. 7b done: wb-sync v6, whose first run detected 19 watching rows. 7c done: mcp v148, 116 tools, fresh-thread check passed. |
 | 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | not started | |
 | 9 | Phase 2 review and Phase 3 steps | not started | |
 | 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | not started | Added 2026-10-09. Also: a bulk-create tool for tags, merchants and rules (Step 5 hit the 60-calls-per-5-minutes limit creating them one call at a time) |
@@ -151,4 +151,18 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
     - "Not a subscription" flags the merchant `not_subscription`, then deletes the watching row. Only a watching row can be dismissed.
     - "Keep watching" marks the charge reviewed. Under 120's SQL that does **not** take the row out of `new_recurring`, which ignores reviewed. This is raised with Alex.
     - Tests: app 2406/2406, and `CI=true npm run build` compiled.
+    - Alex verified it on 2026-10-12, on desktop and in a phone-sized window.
+      - NV Energy was dismissed: 19 became 18, it stays gone after a reload, and its charges are clean.
+      - Southwest Gas "Keep watching" gave no error, but the row stayed.
+    - Fix, approved: `new_recurring` skips a watching subscription whose newest charge is reviewed, and `needs_review` stays in step. The next charge brings the row back; `price_change` is unchanged.
+      - Files: `_pending_warren_buffet_p2-m4t_step7d_keep_watching.sql` (both views replaced) and `_pending_…_step7d_tests.sql` (15 checks, rolled back).
+      - PGlite: 15/15. 121 39/39, 118, 115 and 104 still pass.
+      - No UI change is needed.
+      - After gitsync (2026-10-12) there was no drift; the last migration was still 121. The db items were claimed, and the files numbered `122_wb_phase2_step7d_keep_watching.sql` and `123_wb_phase2_step7d_tests.sql`. PGlite still passes.
+      - Alex ran both on 2026-10-12: 122 "Success. No rows returned", and 123 15/15, rolled back. Live: `new_recurring` shows 17 items, and Southwest Gas cleared after "Keep watching".
+- **Step 7 done (2026-10-12).**
+  - Detection found 19 monthly subscriptions.
+  - NV Energy was dismissed during 7d testing (not_subscription).
+  - Southwest Gas is on "Keep watching" and comes back with its next charge.
+  - Step 8 still has to dismiss the two HOAs (Barrington Monterossa, Summerlin West) and Southwest Gas, and confirm or cancel the rest.
     - From 120: deleting a watching row sets its charges' `subscription_id` to null (on delete set null). `new_recurring` reads only existing watching rows, so dismissed charges leave the queue.

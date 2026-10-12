@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import AlwaysDoThisSheet from "./AlwaysDoThisSheet";
-import { applyTags, getReviewQueue, getTagTree, reprocess, setKind, setReviewed } from "./moneyApi";
+import {
+  applyTags, dismissSubscription, getReviewQueue, getTagTree, recordSubscriptionPrice, reprocess, setKind, setReviewed,
+} from "./moneyApi";
 import { useLoad } from "./useMoneyData";
 import { formatDay, formatMoney, groupQueue, tagOptions } from "./moneyFormat";
 
@@ -10,7 +12,8 @@ const SMALL = "min-h-[44px] px-3 rounded-lg border border-border text-sm";
  * The review queue (spec §7.3), newest first, grouped by reason, with one tap
  * per fix: reprocess an unprocessed row; pick a Category (then offer "always do
  * this"); "Not a transfer", or open it to find the other side; open the split
- * editor; or mark it reviewed.
+ * editor; or mark it reviewed. Subscription rows: record a changed price, or
+ * say whether a detected subscription is one ("Keep watching") or not.
  */
 export default function ReviewScreen({ onOpen }) {
   const { data, error, loading, reload } = useLoad(async () => {
@@ -70,6 +73,7 @@ export default function ReviewScreen({ onOpen }) {
                       <span className="block text-xs text-muted-foreground break-words">
                         {formatDay(r.txn_date)} · {r.account_label}{r.merchant_name ? ` · ${r.merchant_name}` : ""}
                         {r.detail && r.reason === "missing_required_tag" ? ` · needs ${r.detail}` : ""}
+                        {r.detail && (r.reason === "price_change" || r.reason === "new_recurring") ? ` · ${r.detail}` : ""}
                       </span>
                     </span>
                     <span className="tabular-nums shrink-0">{formatMoney(r.amount)}</span>
@@ -101,7 +105,28 @@ export default function ReviewScreen({ onOpen }) {
                     {r.reason === "split_mismatch" && (
                       <button type="button" onClick={() => onOpen(r.transaction_id)} className={SMALL}>Fix the parts</button>
                     )}
-                    {r.reason !== "no_kind" && r.reason !== "split_mismatch" && (
+                    {r.reason === "price_change" && r.subscription_id && (
+                      <button type="button" disabled={busy}
+                        onClick={() => act(r.transaction_id, () => recordSubscriptionPrice(r.subscription_id, r))}
+                        className={SMALL}>
+                        Record new price
+                      </button>
+                    )}
+                    {r.reason === "new_recurring" && r.subscription_id && (
+                      <>
+                        <button type="button" disabled={busy}
+                          onClick={() => act(r.transaction_id, () => dismissSubscription(r.subscription_id))}
+                          className={SMALL}>
+                          Not a subscription
+                        </button>
+                        <button type="button" disabled={busy}
+                          onClick={() => act(r.transaction_id, () => setReviewed([r.transaction_id], true))}
+                          className={SMALL}>
+                          Keep watching
+                        </button>
+                      </>
+                    )}
+                    {!["no_kind", "split_mismatch", "new_recurring"].includes(r.reason) && (
                       <button type="button" disabled={busy} onClick={() => act(r.transaction_id, () => setReviewed([r.transaction_id], true))} className={SMALL}>
                         Mark reviewed
                       </button>
