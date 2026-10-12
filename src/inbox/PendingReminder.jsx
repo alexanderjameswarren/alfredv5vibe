@@ -181,13 +181,14 @@ function CompactReminder({ reminder, onCancelled }) {
 function AddReminderLine({ intentId, text, onAdded, disabledReason }) {
   const next = nextWholeHour();
 
+  function validate(date, time) {
+    const dueAt = localInputToIso(date, time);
+    if (!dueAt) return "Pick a date and time.";
+    return new Date(dueAt) <= new Date() ? "Pick a time in the future." : null;
+  }
+
   async function save(date, time) {
     const dueAt = localInputToIso(date, time);
-    if (!dueAt) return;
-    if (new Date(dueAt) <= new Date()) {
-      window.alert("Pick a time in the future.");
-      return;
-    }
     try {
       await createIntentionReminder({ intentId, text: (text || "").trim() || "Reminder", dueAt });
       onAdded();
@@ -207,6 +208,7 @@ function AddReminderLine({ intentId, text, onAdded, disabledReason }) {
         initialDate={next.date}
         initialTime={next.time}
         onPick={save}
+        validate={validate}
         disabled={Boolean(disabledReason)}
         title={disabledReason || undefined}
         className={`text-primary ${LINK} disabled:cursor-not-allowed disabled:no-underline`}

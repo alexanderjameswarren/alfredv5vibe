@@ -38,7 +38,8 @@ Spec: `docs/technical-spec-restructure_p3.md`
     - Add is disabled, with the closed title, when Start Now and Schedule are. Pending lines and their Cancel still show on a closed intention.
     - Cancel is confirm only, with no toast and no Undo.
     - There's no grouped section on the intention page.
-    - Testing 2026-10-12: the compact line and the Background and Closed sheets passed. The archive trigger is still unverified.
+    - Testing 2026-10-12: the compact line, the Background and Closed sheets, archive (cancelled as intent_archived) and restore (back to scheduled) all passed. **Step 6 verified.**
+    - A past time shows an inline red error inside the popover (`SchedulePopover` `validate` prop), not an alert. The popover stays open with what was entered, and changing either input clears the error. Schedule's own popover had no alert, only a disabled button with no date.
   - **Follow-up B** (built 2026-10-11; 119 applied, CONFORMANT; awaiting a Chrome test):
     - The Background and Closed sheet (`StatusEventsSheet`, `sheetWording`) counts the live event and pending reminders and appears for reminders alone. One answer covers both.
     - "Cancel" sets cancel_reason `intent_status`, and Undo re-arms those that are still ahead (`cancelRemindersForStatus`, `restoreRemindersAfterStatus`).
