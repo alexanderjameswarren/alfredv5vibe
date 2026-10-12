@@ -299,12 +299,15 @@ test("the tool count is 72 after the job-search tools", () => {
     "get_wb_merchants", "upsert_wb_merchant", "get_wb_rules", "create_wb_rule", "update_wb_rule",
     "get_wb_rule_preview", "create_wb_rule_from_transaction", "tag_wb_transactions", "set_wb_transaction_kind",
     "split_wb_transaction", "mark_wb_reviewed", "reprocess_wb_transactions", "get_wb_spending", "get_wb_cash_flow"];
+  // 2026-10-12, +3 for Warren Buffet subscriptions (Step 7c).
+  const EXPECTED_ADDED_WB_SUBS = ["get_wb_subscriptions", "upsert_wb_subscription", "record_wb_subscription_price"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
-                      ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2]) {
+                      ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
+                      ...EXPECTED_ADDED_WB_SUBS]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 113,
-    `expected 113 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 116,
+    `expected 116 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -376,7 +379,7 @@ test("Warren Buffet Phase 2 schemas advertise exactly the args their handlers re
     rest = rest.replace(body, "");
   }
   const blocks = rest.split("defineTool({").slice(1);
-  assert.equal(blocks.length, 18, `expected 18 tools in warren-buffet-p2.ts, found ${blocks.length}`);
+  assert.equal(blocks.length, 21, `expected 21 tools in warren-buffet-p2.ts, found ${blocks.length}`);
   const tiers = {};
   for (const b of blocks) {
     const name = /name:\s*"([^"]+)"/.exec(b)[1];
@@ -393,6 +396,7 @@ test("Warren Buffet Phase 2 schemas advertise exactly the args their handlers re
     upsert_wb_merchant: 2, get_wb_rules: 1, create_wb_rule: 2, update_wb_rule: 2, get_wb_rule_preview: 1,
     create_wb_rule_from_transaction: 3, tag_wb_transactions: 2, set_wb_transaction_kind: 2, split_wb_transaction: 2,
     mark_wb_reviewed: 2, reprocess_wb_transactions: 2, get_wb_spending: 1, get_wb_cash_flow: 1,
+    get_wb_subscriptions: 1, upsert_wb_subscription: 2, record_wb_subscription_price: 2,
   });
 });
 
@@ -407,6 +411,13 @@ test("Warren Buffet Phase 2 descriptions state the sign rule, the manual rule an
     assert.match(desc(n), /removed by hand or by Claude is never put back by rules/, n);
   }
   assert.match(desc("get_wb_transactions"), /excluded_tags/);
+  for (const n of ["get_wb_subscriptions", "upsert_wb_subscription", "record_wb_subscription_price"]) {
+    assert.match(desc(n), /never accepted automatically/, n);
+    assert.match(desc(n), /Insurance label, not a subscription/, n);
+  }
+  assert.match(desc("upsert_wb_subscription"), /not_subscription: true/);
+  assert.match(desc("record_wb_subscription_price"), /record the old price too/);
+  assert.match(desc("get_wb_review_queue"), /price_change.*new_recurring/);
   for (const n of ["get_wb_rules", "create_wb_rule", "update_wb_rule", "get_wb_rule_preview", "create_wb_rule_from_transaction"]) {
     assert.match(desc(n), /match on merchants/, n);
   }
