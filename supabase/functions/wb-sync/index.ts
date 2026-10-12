@@ -129,6 +129,19 @@ async function processTransactions(db: SupabaseClient, ids: string[]): Promise<c
   return totals;
 }
 
+/**
+ * Subscription detection over all transactions, after processing. Never throws:
+ * an error is recorded on the run and never changes its status.
+ */
+async function detectSubscriptions(db: SupabaseClient): Promise<core.DetectResult> {
+  try {
+    const { data, error } = await db.rpc("wb_detect_subscriptions", {});
+    return core.detectResult((data ?? null) as Obj | null, error ? `detection: ${error.message}` : null);
+  } catch (err) {
+    return core.detectResult(null, `detection: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function sync(
   db: SupabaseClient,
   body: Obj,
@@ -136,7 +149,7 @@ async function sync(
   now: Date,
   windowStart: Date,
   hasBlockingErrors: boolean,
-): Promise<{ counts: Counts; processing: core.ProcessTotals }> {
+): Promise<{ counts: Counts; processing: core.ProcessTotals; detection: core.DetectResult | null }> {
   const nowIso = now.toISOString();
   const asOf = core.localDate(now);
   const accounts = (Array.isArray(body.accounts) ? body.accounts : []) as Obj[];
@@ -151,7 +164,7 @@ async function sync(
     pending_deleted: 0,
     transactions_processed: 0,
   };
-  if (accounts.length === 0) return { counts, processing: core.emptyProcessTotals() };
+  if (accounts.length === 0) return { counts, processing: core.emptyProcessTotals(), detection: null };
 
   // 1. Accounts. Only sync-owned columns are in the payload, so human columns
   //    are never touched by the upsert's update.
@@ -296,7 +309,10 @@ async function sync(
   if (unprocessedError) processing = core.addProcessResult(processing, null, unprocessedError);
   counts.transactions_processed = processing.processed;
 
-  return { counts, processing };
+  // 7. Subscription detection: monthly charges of similar size become watching rows.
+  const detection = await detectSubscriptions(db);
+
+  return { counts, processing, detection };
 }
 
 /** Trimmed env value; a pasted secret can carry a trailing space or newline. */
@@ -418,8 +434,8 @@ Deno.serve(async (req) => {
       ? { errors: [core.SIMULATED_MESSAGE], accounts: [] }
       : await fetchSimplefin(accessUrl!, windowStart);
     const { informational, blocking } = core.classifyErrors(core.errorMessages(body));
-    const { counts, processing } = await sync(db, body, owner, now, windowStart, blocking.length > 0);
-    // Processing problems are recorded but never change the status.
+    const { counts, processing, detection } = await sync(db, body, owner, now, windowStart, blocking.length > 0);
+    // Processing and detection problems are recorded but never change the status.
     const status = core.runStatus(blocking);
     const blockingSafe = blocking.map((m) => core.redact(m, secrets));
 
@@ -432,9 +448,16 @@ Deno.serve(async (req) => {
           paired: processing.paired,
           transfer_candidates: processing.transfer_candidates,
           rule_tags: processing.rule_tags,
+          subscriptions_linked: processing.subscriptions_linked,
         },
         ...(processing.errors.length
           ? { processing_errors: processing.errors.map((m) => core.redact(m, secrets)) }
+          : {}),
+        ...(detection
+          ? {
+            detection: { created: detection.created, linked: detection.linked },
+            ...(detection.error ? { detection_error: core.redact(detection.error, secrets) } : {}),
+          }
           : {}),
         simplefin_errors: blockingSafe,
         simplefin_notices: informational.map((m) => core.redact(m, secrets)),
@@ -453,7 +476,9 @@ Deno.serve(async (req) => {
         `txn_new=${counts.transactions_new} txn_updated=${counts.transactions_updated} ` +
         `txn_unchanged=${counts.transactions_unchanged} notices=${informational.length} ` +
         `pending_deleted=${counts.pending_deleted} processed=${counts.transactions_processed} ` +
-        `processing_errors=${processing.errors.length} errors=${blocking.length} ` +
+        `processing_errors=${processing.errors.length} ` +
+        `subscriptions_detected=${detection?.created ?? 0} detection_error=${detection?.error ? "yes" : "no"} ` +
+        `errors=${blocking.length} ` +
         `alerts_created=${alerts.created} alerts_open=${alerts.already_open}`,
     );
     return json({
@@ -462,6 +487,8 @@ Deno.serve(async (req) => {
       status,
       ...counts,
       processing_errors: processing.errors.length,
+      subscriptions_detected: detection?.created ?? 0,
+      detection_error: Boolean(detection?.error),
       simplefin_errors: blocking.length,
       alerts,
       ...(simulate ? { simulated: true } : {}),

@@ -13,7 +13,7 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 4 | Phase 2 MCP tools (except subscriptions); deploy; verify in a fresh chat | done | 2026-10-10: 18 tools plus the get_wb_transactions extension; 108 applied, 109 all checks true; CONFORMANT, 58 tables. mcp v146. claude.ai verification 10/10, plus the plain split refusal. 110 removed the test rule and tag |
 | 5 | Starter taxonomy, merchants and rules (in claude.ai) | done | 2026-10-11: taxonomy, merchants and rules set up in claude.ai; review queue at 0. Follow-up (tag exclusions, 114/115) done |
 | 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | done 2026-10-11 | Plan approved 2026-10-11 (decisions A–D). 6a: SQL for "always do this" plus `wb_transactions.notes`, 117 applied 2026-10-11 (CONFORMANT, 60 tables), 118 24/24. 6b (UI) verified by Alex: all 26 steps passed on desktop, a phone-sized window, his real phone and as Elise. 6c: tool wrapper, `excluded_tags` and WB_MANUAL; mcp v147 deployed, and the fresh-thread check passed |
-| 7 | Migration B + tools: subscriptions, price history, monthly detection | in progress | Plan approved 2026-10-11 (D1–D6). 7a: 120 applied 2026-10-12 (conformant), 121 39/39. 7b (wb-sync detection) in progress |
+| 7 | Migration B + tools: subscriptions, price history, monthly detection | in progress | Plan approved 2026-10-11 (D1–D6). 7a: 120 applied 2026-10-12 (conformant), 121 39/39. 7b done: wb-sync v6, whose first run detected 19 watching rows. 7c (tools) in progress |
 | 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | not started | |
 | 9 | Phase 2 review and Phase 3 steps | not started | |
 | 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | not started | Added 2026-10-09. Also: a bulk-create tool for tags, merchants and rules (Step 5 hit the 60-calls-per-5-minutes limit creating them one call at a time) |
@@ -123,4 +123,19 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
     - Like processing errors, a detection error is recorded on the run (`detection_error`) and never changes its status.
     - Run details gain `detection {created, linked}` and `processing.subscriptions_linked`.
     - A run with no accounts (including a simulated one) skips detection.
-    - Tests: functions 637/637, CLI 174/174. `deno check` passes. Not yet deployed.
+    - Tests: functions 637/637, CLI 174/174. `deno check` passes.
+    - After gitsync (2026-10-12) there was no drift. wb-sync was deployed as v6.
+    - A simulated run was not sent: the CLI has no `WB_SYNC_SECRET`, and that switch creates an inbox alert and skips detection. Alex triggered a real run instead, from the cron job's own command.
+    - **7b done (2026-10-12):** the real run on v6 was ok.
+      - Detection created 19 watching rows and linked 57 charges, with no detection error and no processing errors.
+      - The 19: Adobe, Anthropic (Claude), Audible, Barrington Monterossa HOA, CenturyLink, ChatGPT, Google Fi, Google One, Google Workspace, HBO Max, Hulu, Hyundai Blink, Kindle Unlimited, Life Time, Medium, NV Energy, Southwest Gas, Summerlin West HOA, YouTube Premium.
+      - The two HOAs and two utilities get `not_subscription` in Step 8.
+  - 7c (2026-10-12), written and tested, not deployed:
+    - `get_wb_subscriptions` (tier 1): status, merchant, search, overdue_only, include_prices.
+    - `upsert_wb_subscription` (tier 2):
+      - creates as active, edits, and reprocesses the merchant so charges link;
+      - `not_subscription: true` dismisses only a watching row: it flags the merchant and deletes the row;
+      - `false` restores detection.
+    - `record_wb_subscription_price` (tier 2): one price per day; with a `transaction_id`, it uses that charge's date and hand-links the charge.
+    - `get_wb_review_queue` accepts `price_change` and `new_recurring`, and merchants show `not_subscription`.
+    - Tests: functions 642/642, CLI 174/174. `deno check` finds no errors in the changed files. Tool count goes to 116.
