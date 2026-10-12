@@ -184,8 +184,12 @@ export const REVIEW_LABELS = {
   missing_required_tag: "Needs a category",
   transfer_candidate: "Looks like a transfer",
   split_mismatch: "Splits don't add up",
+  price_change: "Subscription price changed",
+  new_recurring: "Looks like a subscription",
 };
-export const REVIEW_ORDER = ["missing_required_tag", "transfer_candidate", "split_mismatch", "no_kind"];
+export const REVIEW_ORDER = [
+  "missing_required_tag", "transfer_candidate", "price_change", "new_recurring", "split_mismatch", "no_kind",
+];
 
 /** "2026-10-07" -> "2026-10". */
 export function monthOf(day) {
