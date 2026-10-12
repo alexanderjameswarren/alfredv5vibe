@@ -302,10 +302,19 @@ test("idsToProcess: unchanged rows are skipped unless never processed", () => {
 
 test("addProcessResult: sums counts, keeps errors, treats missing fields as 0", () => {
   let t = core.emptyProcessTotals();
-  t = core.addProcessResult(t, { processed: 100, paired: 2, transfer_candidates: 1, rule_tags: 5 }, null);
+  t = core.addProcessResult(t, { processed: 100, paired: 2, transfer_candidates: 1, rule_tags: 5, subscriptions_linked: 3 }, null);
   t = core.addProcessResult(t, null, "chunk 2: statement timeout");
   t = core.addProcessResult(t, { processed: 7 }, null);
   assert.deepEqual(t, {
-    processed: 107, paired: 2, transfer_candidates: 1, rule_tags: 5, errors: ["chunk 2: statement timeout"],
+    processed: 107, paired: 2, transfer_candidates: 1, rule_tags: 5, subscriptions_linked: 3,
+    errors: ["chunk 2: statement timeout"],
   });
+});
+
+test("detectResult: counts, missing fields as 0, error kept and capped", () => {
+  assert.deepEqual(core.detectResult({ created: 2, linked: 7 }, null), { created: 2, linked: 7, error: null });
+  assert.deepEqual(core.detectResult({}, null), { created: 0, linked: 0, error: null });
+  assert.deepEqual(core.detectResult(null, null), { created: 0, linked: 0, error: null });
+  const r = core.detectResult({ created: 9 }, "x".repeat(400));
+  assert.deepEqual([r.created, r.linked, r.error.length], [0, 0, 300]);
 });

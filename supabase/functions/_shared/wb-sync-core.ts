@@ -412,11 +412,12 @@ export interface ProcessTotals {
   paired: number;
   transfer_candidates: number;
   rule_tags: number;
+  subscriptions_linked: number;
   errors: string[];
 }
 
 export function emptyProcessTotals(): ProcessTotals {
-  return { processed: 0, paired: 0, transfer_candidates: 0, rule_tags: 0, errors: [] };
+  return { processed: 0, paired: 0, transfer_candidates: 0, rule_tags: 0, subscriptions_linked: 0, errors: [] };
 }
 
 /** Adds one wb_process_transactions result, or its error, to the totals. */
@@ -428,8 +429,24 @@ export function addProcessResult(totals: ProcessTotals, result: Obj | null, erro
     paired: totals.paired + n("paired"),
     transfer_candidates: totals.transfer_candidates + n("transfer_candidates"),
     rule_tags: totals.rule_tags + n("rule_tags"),
+    subscriptions_linked: totals.subscriptions_linked + n("subscriptions_linked"),
     errors: totals.errors,
   };
+}
+
+// ── Subscription detection (spec §4.8, Step 7) ──────────────────────────────
+
+export interface DetectResult {
+  created: number;
+  linked: number;
+  error: string | null;
+}
+
+/** The wb_detect_subscriptions result, or its error; missing counts are 0. */
+export function detectResult(result: Obj | null, error: string | null): DetectResult {
+  if (error) return { created: 0, linked: 0, error: error.slice(0, 300) };
+  const n = (k: string) => (typeof result?.[k] === "number" ? (result[k] as number) : 0);
+  return { created: n("created"), linked: n("linked"), error: null };
 }
 
 /** Alerts to create: one per distinct key, none whose key already has an open item. */
