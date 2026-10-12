@@ -117,7 +117,7 @@ function main() {
   }
 
   if (!stageAndCommit(ctx.root, staging.map((f) => f.path), message)) {
-    process.exit(1);
+    stop("The stage or commit failed. See git's message above.");
   }
 
   say(`\nCommitted ${staging.length} file(s) as ${ctx.owner}.`);

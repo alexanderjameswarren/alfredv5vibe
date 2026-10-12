@@ -16,7 +16,6 @@ const ROOT = path.resolve(HERE, "..", "..");
 const CLI = path.join(ROOT, "scripts", "claims.mjs");
 const GUARD = path.join(ROOT, ".claude", "hooks", "claims-guard.mjs");
 const REAL_CLAIMS = resolveRepo(ROOT).file;
-const REAL_LOG = path.join(ROOT, ".clip", "claims-guard.log");
 
 const snapshot = (f) => (existsSync(f) ? readFileSync(f, "utf8") : null);
 const fwd = (p) => p.replace(/\\/g, "/");
@@ -59,11 +58,14 @@ function scratch() {
     return { code: r.status, out: r.stdout + r.stderr };
   };
   const guard = (cwd, tool, input) => {
+    const lines = (snapshot(log) ?? "").split("\n").length;
     const r = spawnSync(process.execPath, [GUARD], {
       input: JSON.stringify({ tool_name: tool, tool_input: input, cwd }),
       env: { ...process.env, CLAUDE_PROJECT_DIR: cwd, CLAIMS_GUARD_LOG: log, CLAIMS_GUARD: "" },
       encoding: "utf8",
     });
+    // One line per run, to one file: here means not the real log.
+    assert.equal((snapshot(log) ?? "").split("\n").length, lines + 1, "the guard did not write its scratch log");
     return { code: r.status, out: r.stderr };
   };
   const edit = (cwd, rel) => guard(cwd, "Write", { file_path: path.join(cwd, rel), content: "y" });
@@ -71,10 +73,10 @@ function scratch() {
   return { main, wt, seed, items, cli, edit, sh, guard };
 }
 
-const before = { claims: snapshot(REAL_CLAIMS), log: snapshot(REAL_LOG) };
+// Live threads write the real claims file at any time, so look only for this
+// file's scratch owner. The log is proven by each guard run writing its scratch one.
 test.after(() => {
-  assert.equal(snapshot(REAL_CLAIMS), before.claims, "the real claims file was written to");
-  assert.equal(snapshot(REAL_LOG), before.log, "the real guard log was written to");
+  assert.doesNotMatch(snapshot(REAL_CLAIMS) ?? "", /"wtB"/, "the real claims file was written to");
 });
 
 const ALLOW = 0;

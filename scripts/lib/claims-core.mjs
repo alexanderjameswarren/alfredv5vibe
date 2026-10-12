@@ -370,9 +370,12 @@ export function heldBy(state, item, owner) {
 const word = (alternatives) =>
   new RegExp(String.raw`(?<![-\w.])(?:${alternatives})\b(?!-|/|\.(?!exe\b)\w)`);
 
+// A third element is the kind, when it is not "command". A copy writes only its
+// destination, so its source is not checked; mv deletes its source, so both are.
 const COMMAND_INDICATORS = [
   [word("tee"), "tee"],
-  [word("mv|cp|rsync|install|ln"), "mv/cp"],
+  [word("mv"), "mv/cp"],
+  [word("cp|rsync|install|ln"), "mv/cp", "copy"],
   [word("rm|rmdir|unlink|shred|truncate|touch|mkdir"), "rm/touch/mkdir"],
   [/(?<![-\w])(?:sed|perl|ruby)\b[^|;&\n]*\s-i\b/, "in-place sed/perl"],
   [/(?<![-\w])dd\b[^|;&\n]*\bof=/, "dd of="],
@@ -472,6 +475,130 @@ function writableText(command, shell) {
   return splitCommand(command, shell, { pipes: true })
     .filter((element) => !isReadOnly(element, shell))
     .join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// quoted arguments and the payloads of shell wrappers
+// ---------------------------------------------------------------------------
+//
+// A quoted argument is data, not a command: `clip.mjs --title "bash -c cp
+// blocked"` was blocked as a cp. But a quoted payload handed to a wrapper —
+// `bash -c "…"`, `powershell -Command "…"`, `node -e "…"` — is run, so it is
+// judged as a command of its own.
+
+const WRAPPERS = /^(?:bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|node|python3?|py|perl|ruby|deno|bun)$/;
+const SHELL_WRAPPERS = /^(?:bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd)$/;
+const PAYLOAD_FLAG = /^(?:-[a-z]*[ce]|-p|--eval|--print|-command|\/c|\/k)$/i;
+const EVAL_WORDS = /^(?:eval|iex|invoke-expression)$/i;
+// Quoted values these flags take are programs to run (`rg --pre 'x'`, `git -c
+// core.pager='x'`, `find -exec`), so they are read as they are, not blanked.
+const RUNS_FLAG = /^(?:--pre|-O|--open-files-in-pager|-c|-exec|-execdir|-ok|--exec)$/;
+const RUNS_PREFIX = /^(?:-O|--pre=|--open-files-in-pager=|.*(?:pager|editor|command|cmd|exec|program)=)$/i;
+const programOf = (w) => w.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, "");
+
+/**
+ * The text a command actually runs: everything outside quoted arguments, plus
+ * each wrapper payload, one per line. `grep "claims.mjs claim" x` runs no claim;
+ * `bash -c "node scripts/claims.mjs claim x"` does.
+ */
+export function runText(command, depth = 0) {
+  const { masked, payloads } = splitPayloads(command);
+  if (depth > 3) return String(command);
+  return [masked, ...payloads.map((p) => runText(p.text, depth + 1))].join("\n");
+}
+
+/**
+ * Where a cp, rsync, install or ln part writes: `-t DIR`, else its last operand.
+ * Null when that cannot be told — fewer than two operands, or the part goes on
+ * past a redirect or pipe — and the caller then falls back to every path.
+ */
+export function copyDestination(part) {
+  const sinks = /\d?>&\d|\d?>>?\s*(?:\/dev\/null|nul|\$null)(?=\s|$)/gi;
+  if (/[<>|]/.test(splitPayloads(part).masked.replace(sinks, ""))) return null;
+  const words = shellWords(part.replace(sinks, ""));
+  // At command position only: `npm install a b` is not a copy to b.
+  let at = 0;
+  while (at < words.length && (/^(?:sudo|command|time|env)$/.test(words[at]) || /^\w+=/.test(words[at]))) at += 1;
+  if (!/^(?:cp|rsync|install|ln)$/.test(programOf(words[at] ?? ""))) return null;
+  const args = words.slice(at + 1);
+  // rsync's -t keeps times; for the others it names the target folder.
+  for (let i = 0; programOf(words[at]) !== "rsync" && i < args.length; i += 1) {
+    const a = args[i];
+    if (a === "-t" || a === "--target-directory") return args[i + 1] ?? null;
+    const m = /^(?:--target-directory=|-t)(.+)$/.exec(a);
+    if (m) return m[1];
+  }
+  const operands = args.filter((a) => !a.startsWith("-"));
+  return operands.length >= 2 ? operands[operands.length - 1] : null;
+}
+
+/**
+ * `{ masked, payloads }`: the command with quoted argument text blanked out,
+ * and the wrapper payloads found, each `{ text, shell, code }` (`code` for an
+ * interpreter's source rather than a shell's). Left as written: a quoted
+ * program name, and double quotes holding `$(…)` or backticks, which run.
+ */
+export function splitPayloads(command) {
+  const s = String(command);
+  const payloads = [];
+  let masked = "";
+  let words = [];
+  let cur = "";
+  const endWord = () => {
+    if (cur) words.push(cur);
+    cur = "";
+  };
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s[i];
+    if ((c === "\\" || c === "`") && (s[i + 1] === '"' || s[i + 1] === "'")) {
+      masked += c + s[i + 1];
+      cur += s[i + 1];
+      i += 1;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      let inner = "";
+      for (; j < s.length && s[j] !== c; j += 1) {
+        if (c === '"' && (s[j] === "\\" || s[j] === "`") && s[j + 1] === '"') {
+          inner += '"';
+          j += 1;
+          continue;
+        }
+        inner += s[j];
+      }
+      const whole = cur === "";
+      const prev = words[words.length - 1] ?? "";
+      const wrapper = words.map(programOf).find((w) => WRAPPERS.test(w));
+      const payload = whole && ((wrapper && PAYLOAD_FLAG.test(prev)) || EVAL_WORDS.test(prev));
+      const runs = c === '"' && /\$\(|`/.test(inner);
+      const keep =
+        !payload && (runs || (whole && words.length === 0) || RUNS_FLAG.test(prev) || RUNS_PREFIX.test(cur));
+      if (payload) {
+        payloads.push({
+          text: inner,
+          // cmd's del/copy/move/rd/md are PowerShell's DOS aliases too.
+          shell: /^(?:pwsh|powershell|cmd)$/.test(wrapper ?? "") ? "powershell" : "bash",
+          code: !!wrapper && !SHELL_WRAPPERS.test(wrapper),
+        });
+      }
+      masked += c + (keep ? inner : inner.replace(/[^\n]/g, " ")) + (j < s.length ? c : "");
+      cur += keep ? inner : "_";
+      i = j;
+      continue;
+    }
+    if (/\s/.test(c)) {
+      endWord();
+      if (c === "\n") words = [];
+    } else if (/[;|&(){}]/.test(c)) {
+      endWord();
+      words = [];
+    } else {
+      cur += c;
+    }
+    masked += c;
+  }
+  return { masked, payloads };
 }
 
 /**
@@ -625,8 +752,12 @@ function expandVars(target) {
     .replace(/%([A-Za-z_][A-Za-z0-9_]*)%/g, (m, n) => process.env[n] ?? m);
 }
 
-/** Everything that says this command writes, redirections first. */
-export function writeIndicators(command, shell = "bash") {
+/**
+ * Everything that says this command writes, redirections first. `code` is an
+ * interpreter's source (`node -e "…"`): its quotes are its own, so it is read
+ * as it is, and a heredoc body is too.
+ */
+export function writeIndicators(command, shell = "bash", { code = false } = {}) {
   const found = [];
   const redirects = scanRedirects(command, shell).filter(
     (r) => !NULL_SINKS.has(fold(r.target)),
@@ -638,18 +769,23 @@ export function writeIndicators(command, shell = "bash") {
       targets: redirects.map((r) => r.target),
     });
   }
+  const { masked, payloads } = code || /<</.test(command) ? { masked: command, payloads: [] } : splitPayloads(command);
   // Redirections above are read from the whole command; write words only from
-  // the elements that are not read-only programs.
-  const c = writableText(command, shell);
+  // the elements that are not read-only programs, outside quoted arguments.
+  const c = writableText(masked, shell);
   const indicators =
     shell === "powershell"
       ? [...COMMAND_INDICATORS, PS_ALIAS_INDICATOR]
       : COMMAND_INDICATORS;
-  for (const [re, label] of indicators) {
-    if (re.test(c)) found.push({ label, kind: "command" });
+  for (const [re, label, kind = "command"] of indicators) {
+    if (re.test(c)) found.push({ label, kind });
   }
   for (const [re, label, destRe] of EXTRACT_INDICATORS) {
     if (re.test(c)) found.push({ label, kind: "extract", destRe });
+  }
+  for (const payload of payloads) {
+    const inner = writeIndicators(payload.text, payload.shell, { code: payload.code });
+    if (inner.length) found.push({ label: inner[0].label, kind: "payload", payload });
   }
   return found;
 }
@@ -694,9 +830,9 @@ export function writeIndicator(command, shell = "bash") {
  * `checkout` (a resolveRepo result) also collects `foreign`: the paths, relative
  * to main, that a worktree's command would write in main or another worktree.
  */
-export function writeCheck(command, root, shell = "bash", { redirectsOnly = false, checkout = null } = {}) {
+export function writeCheck(command, root, shell = "bash", { redirectsOnly = false, checkout = null, code = false } = {}) {
   const kinds = (c) =>
-    writeIndicators(c, shell).filter((f) => !redirectsOnly || f.kind === "redirect");
+    writeIndicators(c, shell, { code }).filter((f) => !redirectsOnly || f.kind === "redirect");
   if (!kinds(command).length) return null;
 
   const paths = new Set();
@@ -731,11 +867,33 @@ export function writeCheck(command, root, shell = "bash", { redirectsOnly = fals
     }
     if (CHANGES_DIR.test(raw)) afterCd = true;
     const local = expandLocal(raw, vars);
-    const found = kinds(local);
-    if (!found.length) continue;
+    const all = kinds(local);
+    if (!all.length) continue;
     const part = expandVars(local);
 
-    const strong = found.find((f) => f.kind === "command") ?? found.find((f) => f.kind === "extract");
+    // A wrapper's payload is a command of its own, judged by these same rules.
+    const payloads = all.filter((f) => f.kind === "payload");
+    if (payloads.length) {
+      if (afterCd || FROM_INPUT.test(part) || unreadable(part)) {
+        strictLabel ??= payloads[0].label;
+        whole = true;
+        break;
+      }
+      for (const { payload } of payloads) {
+        const inner = writeCheck(payload.text, root, payload.shell, { checkout, code: payload.code });
+        if (!inner) continue;
+        strictLabel ??= inner.indicator;
+        for (const rel of inner.paths) paths.add(rel);
+        for (const rel of inner.foreign) foreign.add(rel);
+      }
+    }
+    const found = all.filter((f) => f.kind !== "payload");
+    if (!found.length) continue;
+
+    const strong =
+      found.find((f) => f.kind === "command") ??
+      found.find((f) => f.kind === "extract") ??
+      found.find((f) => f.kind === "copy");
     if (!strong) {
       redirectLabel ??= found[0].label;
       for (const target of found[0].targets) add(expandVars(target));
@@ -745,6 +903,16 @@ export function writeCheck(command, root, shell = "bash", { redirectsOnly = fals
     if (afterCd || FROM_INPUT.test(part) || unreadable(part)) {
       whole = true;
       break;
+    }
+    if (strong.kind === "copy") {
+      // Only where it copies TO is written. Unreadable, it is strict like the rest.
+      const to = copyDestination(part);
+      if (to !== null) {
+        if (!to.startsWith("~")) add(to);
+        for (const r of found.filter((f) => f.kind === "redirect"))
+          for (const target of r.targets) add(expandVars(target));
+        continue;
+      }
     }
     const dest = strong.kind === "extract" ? strong.destRe.exec(part)?.[1].replace(/^["']|["']$/g, "") : null;
     if (dest && path.resolve(root, dest) !== path.resolve(root)) {
@@ -855,56 +1023,123 @@ export function splitCommand(command, shell = "bash", { pipes = false } = {}) {
  * system is asking for anyway, and CLAIMS_GUARD=off is there for the rest.
  */
 export function repoPathsIn(command, root, onOutside = null) {
-  // `,` is in there for PowerShell, whose path parameters take arrays:
-  // `Remove-Item -Path src\a.js,src\b.js` is two paths in one token otherwise.
-  const tokens = String(command).split(/[\s"'`|&;,()<>{}]+/);
   const found = new Set();
-
-  for (const raw of tokens) {
-    // PowerShell also writes a parameter as `-Name:Value`, so a path can be
-    // hiding inside something that looks like a flag and would be skipped.
-    const unflagged =
-      raw.startsWith("-") && raw.includes(":") ? raw.slice(raw.indexOf(":") + 1) : raw;
-    const token = unflagged.replace(/^[=~]+/, "").trim();
-    if (!token || token.startsWith("-") || token.includes("://")) continue;
-
-    // A bare word is not a path — `npm test` must not resolve to <root>/test.
-    const hasExtension = /\.[A-Za-z0-9]{1,6}$/.test(token);
-    // A backslash counts on its own, because PowerShell paths are full of them
-    // and plenty have no extension: `Remove-Item -Recurse .claude\worktrees\x`.
-    // The debris that lets in — `printf "x\n"`, a `\d+` out of a regex — is
-    // caught by the existence check below, which is what it is there for.
-    const looksLikePath =
-      token.includes("/") || /^[A-Za-z]:[\\/]/.test(token) || token.includes("\\");
-    if (!looksLikePath && !hasExtension) continue;
-
-    let rel;
-    try {
-      rel = toRepoRelative(token, root);
-    } catch {
-      continue;
+  const visit = (text, depth, report) => {
+    // Past a few levels of quotes-in-quotes, fall back to splitting on everything.
+    const words = depth > 3 ? String(text).split(/[\s"'`|&;,()<>{}]+/) : shellWords(text);
+    for (const word of words) {
+      const kind = pathWord(word, root, report, found);
+      // A quoted word that is not a repo path may be a payload — `bash -c "cp
+      // a.js b.js"`, `node -e "fs.writeFileSync('src/a.js')"` — with the paths
+      // inside it. Its fragments are searched for repo paths only: a piece of
+      // an outside path is not one.
+      if (kind !== "repo" && /[\s"'`(),;|&<>{}]/.test(word)) visit(word, depth + 1, kind === "outside" ? null : report);
     }
-    // Outside this checkout: the caller decides whether it is someone else's.
-    if (rel === null && onOutside && looksLikePath) onOutside(token);
-    if (!rel || isExempt(rel)) continue;
-
-    // Drop the debris that survives tokenising. A path with a slash needs its
-    // parent folder to exist, which every real write target has — that removes
-    // `s/a/b/` out of `sed -i "s/a/b/" src/x.js`. A BARE filename has to exist
-    // outright, because its "parent" is the repo root, which always does — that
-    // removes `console.log` and `claims.mjs` out of surrounding prose and code.
-    const abs = path.resolve(root, rel);
-    try {
-      const ok = rel.includes("/")
-        ? existsSync(abs) || existsSync(path.dirname(abs))
-        : existsSync(abs);
-      if (!ok) continue;
-    } catch {
-      continue;
-    }
-    found.add(rel);
-  }
+  };
+  visit(command, 0, onOutside);
   return [...found];
+}
+
+/**
+ * A command split into words the way a shell would: quotes group, and a
+ * backslash or PowerShell backtick before a space escapes it. Any other
+ * backslash is a Windows path separator and stays.
+ *
+ * `,` separates too, for PowerShell, whose path parameters take arrays:
+ * `Remove-Item -Path src\a.js,src\b.js` is two paths in one token otherwise.
+ */
+export function shellWords(command) {
+  const s = String(command);
+  const words = [];
+  let cur = "";
+  let started = false;
+  const end = () => {
+    if (started) words.push(cur);
+    cur = "";
+    started = false;
+  };
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s[i];
+    if (c === "'" || c === '"') {
+      let j = i + 1;
+      for (; j < s.length && s[j] !== c; j += 1) {
+        // Inside double quotes, \" and `" are a literal quote.
+        if (c === '"' && (s[j] === "\\" || s[j] === "`") && s[j + 1] === '"') j += 1;
+        cur += s[j];
+      }
+      started = true;
+      i = j;
+      continue;
+    }
+    if ((c === "\\" || c === "`") && /[ \t()'"]/.test(s[i + 1] ?? "")) {
+      cur += s[i + 1];
+      started = true;
+      i += 1;
+      continue;
+    }
+    if (/[\s|&;,()<>{}`]/.test(c)) {
+      end();
+      continue;
+    }
+    cur += c;
+    started = true;
+  }
+  end();
+  return words;
+}
+
+/**
+ * Add `raw` to `found` if it is a repo path. Returns "repo", "outside" (named a
+ * path outside this checkout) or "none".
+ */
+function pathWord(raw, root, onOutside, found) {
+  // PowerShell writes a parameter as `-Name:Value`, and a quoted `--file="x"`
+  // arrives as `--file=x`, so a path can hide inside something like a flag.
+  const sep = raw.startsWith("-") ? raw.search(/[:=]/) : -1;
+  const unflagged = sep > 0 ? raw.slice(sep + 1) : raw;
+  const token = unflagged.replace(/^[=~]+/, "").trim();
+  if (!token || token.startsWith("-") || token.includes("://")) return "none";
+
+  // A bare word is not a path — `npm test` must not resolve to <root>/test.
+  const hasExtension = /\.[A-Za-z0-9]{1,6}$/.test(token);
+  // A backslash counts on its own, because PowerShell paths are full of them
+  // and plenty have no extension: `Remove-Item -Recurse .claude\worktrees\x`.
+  // The debris that lets in — `printf "x\n"`, a `\d+` out of a regex — is
+  // caught by the existence check below, which is what it is there for.
+  const looksLikePath =
+    token.includes("/") || /^[A-Za-z]:[\\/]/.test(token) || token.includes("\\");
+  if (!looksLikePath && !hasExtension) return "none";
+
+  let rel;
+  try {
+    rel = toRepoRelative(token, root);
+  } catch {
+    return "none";
+  }
+  // Outside this checkout: the caller decides whether it is someone else's.
+  if (rel === null && looksLikePath) {
+    if (onOutside) onOutside(token);
+    return "outside";
+  }
+  if (!rel) return "none";
+  if (isExempt(rel)) return "repo";
+
+  // Drop the debris that survives tokenising. A path with a slash needs its
+  // parent folder to exist, which every real write target has — that removes
+  // `s/a/b/` out of `sed -i "s/a/b/" src/x.js`. A BARE filename has to exist
+  // outright, because its "parent" is the repo root, which always does — that
+  // removes `console.log` and `claims.mjs` out of surrounding prose and code.
+  const abs = path.resolve(root, rel);
+  try {
+    const ok = rel.includes("/")
+      ? existsSync(abs) || existsSync(path.dirname(abs))
+      : existsSync(abs);
+    if (!ok) return "none";
+  } catch {
+    return "none";
+  }
+  found.add(rel);
+  return "repo";
 }
 
 // ---------------------------------------------------------------------------

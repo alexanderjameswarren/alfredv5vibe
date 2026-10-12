@@ -123,7 +123,7 @@ Expect("denial tile not red", TileField("cli:main", "color") != "red", true)
 ; --- pause ------------------------------------------------------------------
 PauseClick("main")
 Expect("pause button pauses", ms.paused, true)
-Expect("paused tile in paused group", TileField("cli:main", "group"), 2)
+Expect("paused tile keeps its place", TileField("cli:main", "group"), 0)
 Expect("paused tile has its own darker colour", TileField("cli:main", "color"), "paused")
 Expect("paused tile wording", SubStr(TileField("cli:main", "action"), 1, 7), "Paused ")
 Refresh()

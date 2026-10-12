@@ -127,7 +127,7 @@ function main() {
     } else {
       say(`The merge failed. To back out: git -C "${ctx.root}" merge --abort`);
     }
-    process.exit(1);
+    stop(`The merge of ${BASE} into ${branch} stopped part-way. See above.`);
   }
 
   say(`\nMerged ${BASE} into ${branch}.`);

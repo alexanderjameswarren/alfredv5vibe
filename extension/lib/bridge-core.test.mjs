@@ -14,9 +14,15 @@ test("watcher: unknown unless the box and the stop/send area are found", () => {
   assert.equal(decideState({ composer: true, send: true }), "finished");
 });
 
-test("watcher: only a whole tag on its own Run tag line, the last one wins", () => {
+test("watcher: only a prompt header counts, the last one wins", () => {
   assert.equal(extractTag("Run tag: a-b1c-s9-c8tv\nWindow: x\n\nbody\n\nRun tag: a-b1c-s9-c8tv"), "a-b1c-s9-c8tv");
-  assert.equal(extractTag("Run tag: a-b1c-s3-aaaa\nlater\nRun tag: a-b1c-s4-bbbb"), "a-b1c-s4-bbbb");
+  assert.equal(
+    extractTag("Run tag: a-b1c-s3-aaaa\nWindow: x\nlater\nRun tag: a-b1c-s4-bbbb\n\nWindow: x"),
+    "a-b1c-s4-bbbb",
+  );
+  // A chat reply that only quotes a tag is not a prompt to paste.
+  assert.equal(extractTag("The CLI finished.\nRun tag: a-b1c-s4-bbbb\nNext, test it."), null);
+  assert.equal(extractTag("Run tag: a-b1c-s3-aaaa\nlater\nRun tag: a-b1c-s4-bbbb"), null);
   assert.equal(extractTag("see Run tag: a-b1c-s3-aaaa inline"), null);
   assert.equal(extractTag("Run tag: <project-code>-s<step>-<4 chars>"), null);
   assert.equal(extractTag(""), null);
@@ -48,7 +54,7 @@ Do it.
   assert.equal(latestMessage(document).by, "streamingAttr");
   assert.equal(readTag(document), "proj-abc-s2-bbbb");
 
-  const classOnly = new JSDOM(`<body><div class="font-claude-response"><pre>Run tag: proj-abc-s3-cccc</pre></div></body>`).window.document;
+  const classOnly = new JSDOM(`<body><div class="font-claude-response"><pre>Run tag: proj-abc-s3-cccc\nWindow: main</pre></div></body>`).window.document;
   assert.deepEqual([readTag(classOnly), latestMessage(classOnly).by], ["proj-abc-s3-cccc", "responseClass"]);
   const empty = new JSDOM("<body><p>nothing</p></body>").window.document;
   assert.deepEqual([readTag(empty), latestMessage(empty).by], [null, "none"]);

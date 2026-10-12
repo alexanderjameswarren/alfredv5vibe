@@ -5,7 +5,8 @@
 // subagent's report.
 //
 // Every run writes to a scratch log via CLAIMS_GUARD_LOG, and every test
-// asserts the real log and the real project binding are untouched. The earlier
+// asserts nothing of its own reached the real log, status, binding or blocks.
+// Live sessions write those files too, so "unchanged" is not the test. The earlier
 // hand-testing of these hooks wrote into .clip/claims-guard.log, which is the
 // evidence trail it is supposed to be checking.
 
@@ -23,13 +24,26 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..", "..");
 const HOOK = path.join(ROOT, ".claude", "hooks", "prompt-check.mjs");
 const GUARD = path.join(ROOT, ".claude", "hooks", "claims-guard.mjs");
-const REAL_LOG = path.join(ROOT, ".clip", "claims-guard.log");
 const REAL_BINDING = path.join(ROOT, ".git", "alfred-project-code.json");
 const REAL_STATUS = path.join(ROOT, ".clip", "session-status.json");
 const REAL_BLOCKS = resolveRepo(ROOT).blocksFile;
 
 const snapshot = (file) => (existsSync(file) ? readFileSync(file, "utf8") : null);
 const scratchDir = () => mkdtempSync(path.join(tmpdir(), "hooks-test-"));
+
+// Every payload carries this as its session, so a write that escapes to a real
+// file is recognisable there. A full-run child inherits its parent's.
+const MARKER = process.env.HOOKS_TEST_MARKER || `hooks-test-${process.pid}-${Date.now().toString(36)}`;
+
+// The real files are shared with live sessions, which write them at any moment,
+// so a check looks only for what this run could have put there, never the whole file.
+const blockShapes = (text) => {
+  try {
+    return JSON.parse(text).blocks.map((b) => JSON.stringify([b.waiter, b.item, b.holder, b.via]));
+  } catch {
+    return [];
+  }
+};
 
 /**
  * A scratch MAIN checkout: a `.git` folder git accepts, made with fs, no `git
@@ -46,7 +60,7 @@ function scratchMain() {
 
 /**
  * Drive a hook for real, with its log and its binding file pointed at scratch
- * copies, and prove afterwards that neither real one moved.
+ * copies, and prove afterwards that nothing of this run reached the real ones.
  *
  * Both overrides matter. The log is the evidence trail the guard exists to
  * leave, and the binding decides which prompts reach Alex's main window — the
@@ -54,16 +68,13 @@ function scratchMain() {
  * that drives that path would otherwise rebind his window.
  */
 function drive(hook, payload, { binding, statusFile, env = {} } = {}) {
-  const before = {
-    log: snapshot(REAL_LOG),
-    binding: snapshot(REAL_BINDING),
-    status: snapshot(REAL_STATUS),
-    blocks: snapshot(REAL_BLOCKS),
-  };
+  const before = { binding: snapshot(REAL_BINDING), blocks: snapshot(REAL_BLOCKS) };
   const dir = scratchDir();
   const log = path.join(dir, "guard.log");
   const bindingFile = binding ?? path.join(dir, "project-code.json");
   const status = statusFile ?? path.join(dir, "session-status.json");
+  const blocksFile = path.join(dir, "blocks.json");
+  payload = { session_id: MARKER, transcript_path: path.join(dir, `${MARKER}.jsonl`), ...payload };
 
   const result = spawnSync(process.execPath, [hook], {
     input: JSON.stringify(payload),
@@ -72,7 +83,7 @@ function drive(hook, payload, { binding, statusFile, env = {} } = {}) {
       CLAIMS_GUARD_LOG: log,
       CLAIMS_PROJECT_FILE: bindingFile,
       SESSION_STATUS_FILE: status,
-      CLAIMS_BLOCKS_FILE: path.join(dir, "blocks.json"),
+      CLAIMS_BLOCKS_FILE: blocksFile,
       // The hooks prefer the project dir to the cwd, and a suite run from a
       // Claude session inherits that session's, so pin it to the payload's.
       CLAUDE_PROJECT_DIR: payload.cwd,
@@ -81,10 +92,19 @@ function drive(hook, payload, { binding, statusFile, env = {} } = {}) {
     encoding: "utf8",
   });
 
-  assert.equal(snapshot(REAL_LOG), before.log, "the real log was written to");
-  assert.equal(snapshot(REAL_BINDING), before.binding, "the real binding was written to");
-  assert.equal(snapshot(REAL_STATUS), before.status, "the real status file was written to");
-  assert.equal(snapshot(REAL_BLOCKS), before.blocks, "the real blocks file was written to");
+  // Every hook run logs exactly one line, to one file: here means not there.
+  const line = snapshot(log) ?? "";
+  assert.ok(line, "the hook wrote no scratch log line, so it wrote the real one");
+  assert.ok(!(snapshot(REAL_STATUS) ?? "").includes(MARKER), "the real status file was written to");
+  const boundNow = snapshot(REAL_BINDING);
+  const boundHere = snapshot(bindingFile);
+  assert.ok(!(boundNow !== before.binding && boundHere && boundNow === boundHere), "the real binding was written to");
+  const oldBlocks = new Set(blockShapes(before.blocks));
+  const ourBlocks = new Set(blockShapes(snapshot(blocksFile)));
+  assert.ok(
+    !blockShapes(snapshot(REAL_BLOCKS)).some((b) => !oldBlocks.has(b) && ourBlocks.has(b)),
+    "the real blocks file was written to",
+  );
 
   let parsed = null;
   try {
@@ -95,7 +115,7 @@ function drive(hook, payload, { binding, statusFile, env = {} } = {}) {
   return {
     code: result.status,
     stderr: result.stderr ?? "",
-    line: snapshot(log) ?? "",
+    line,
     binding: snapshot(bindingFile),
     bindingFile,
     status: parsed,
@@ -187,7 +207,7 @@ test("the wrong-window message names bind and unbind", () => {
   const binding = path.join(dir, "project-code.json");
   writeFileSync(binding, JSON.stringify({ code: "other-project" }), "utf8");
 
-  const run = runHook("Run tag: rem-k4q-s1-t6v2\n\nDo the thing.", { binding, cwd: scratchMain() });
+  const run = runHook("Run tag: rem-k4q-s1-t6v2\nWindow: main\n\nDo the thing.", { binding, cwd: scratchMain() });
   assert.equal(run.code, 2);
   assert.match(run.stderr, /WRONG WINDOW/);
   assert.match(run.stderr, /claims\.mjs bind rem-k4q/);
@@ -197,7 +217,7 @@ test("the wrong-window message names bind and unbind", () => {
 test("the binding write lands on the scratch copy, not the real one", () => {
   // No code recorded, so the first tagged prompt sets one — the one path in
   // either hook that writes outside the log.
-  const run = runHook("Run tag: scratch-proj-s1-ab12\n\nDo the thing.", { cwd: scratchMain() });
+  const run = runHook("Run tag: scratch-proj-s1-ab12\nWindow: main\n\nDo the thing.", { cwd: scratchMain() });
   assert.equal(run.code, 0);
   assert.match(run.line, /set main project=scratch-proj/);
   assert.match(run.binding ?? "", /"code": "scratch-proj"/);
@@ -209,11 +229,11 @@ test("an underscore tag reaches the window it belongs to", () => {
   writeFileSync(binding, JSON.stringify({ code: "parallel_threads" }), "utf8");
 
   const cwd = scratchMain();
-  const right = runHook("Run tag: parallel_threads-s5-f2mz\n\nDo the thing.", { binding, cwd });
+  const right = runHook("Run tag: parallel_threads-s5-f2mz\nWindow: main\n\nDo the thing.", { binding, cwd });
   assert.equal(right.code, 0);
   assert.match(right.line, /matches parallel_threads/);
 
-  const wrong = runHook("Run tag: parallel-threads-s5-f2mz\n\nDo the thing.", { binding, cwd });
+  const wrong = runHook("Run tag: parallel-threads-s5-f2mz\nWindow: main\n\nDo the thing.", { binding, cwd });
   assert.equal(wrong.code, 2, "a hyphen is a different project, not the same one");
 });
 
@@ -236,11 +256,20 @@ test("an allowed prompt writes processing with the session id", () => {
   assert.equal(run.status.red, false);
 });
 
-test("a blocked prompt writes blocked, and red", () => {
+test("a refused prompt writes its own wrong state, not the red latch", () => {
   const run = runHook(wrap(TASK_PROMPT));
   assert.equal(run.code, 2);
-  assert.equal(run.status.state, "blocked");
-  assert.equal(run.status.red, true);
+  assert.equal(run.status.state, "wrong");
+  assert.equal(run.status.red, false);
+});
+
+test("a typed prompt sets prompt_at; a hand-back does not move it", () => {
+  const statusFile = path.join(scratchDir(), "session-status.json");
+  const typed = runHook("yes", { statusFile });
+  assert.match(typed.status.prompt_at, /^\d{4}-\d\d-\d\dT/);
+  const after = runHook(handback(), { statusFile });
+  assert.equal(after.code, 0);
+  assert.equal(after.status.prompt_at, typed.status.prompt_at);
 });
 
 test("an allowed tagged prompt records run_tag; replies and blocks keep it", () => {
@@ -252,12 +281,12 @@ test("an allowed tagged prompt records run_tag; replies and blocks keep it", () 
   const tag = "scratch-proj-s3-ab12";
 
   // The tag repeated as the last line, as the cli-workflow skill asks.
-  const run = runHook(`Run tag: ${tag}\n\nDo the thing.\n\nRun tag: ${tag}`, { binding, cwd, statusFile });
+  const run = runHook(`Run tag: ${tag}\nWindow: main\n\nDo the thing.\n\nRun tag: ${tag}`, { binding, cwd, statusFile });
   assert.equal(run.code, 0);
   assert.equal(run.status.run_tag, tag);
 
   assert.equal(runHook("yes", { binding, cwd, statusFile }).status.run_tag, tag);
-  const wrong = runHook("Run tag: other-proj-s1-cd34\n\nDo it.", { binding, cwd, statusFile });
+  const wrong = runHook("Run tag: other-proj-s1-cd34\nWindow: main\n\nDo it.", { binding, cwd, statusFile });
   assert.equal(wrong.code, 2);
   assert.equal(wrong.status.run_tag, tag);
 });
@@ -266,7 +295,7 @@ test("the first of two different tags wins", () => {
   const dir = scratchDir();
   const binding = path.join(dir, "project-code.json");
   writeFileSync(binding, JSON.stringify({ code: "scratch-proj" }), "utf8");
-  const run = runHook("Run tag: scratch-proj-s4-ab12\n\nx\n\nRun tag: scratch-proj-s5-cd34", { binding, cwd: scratchMain() });
+  const run = runHook("Run tag: scratch-proj-s4-ab12\nWindow: main\n\nx\n\nRun tag: scratch-proj-s5-cd34", { binding, cwd: scratchMain() });
   assert.equal(run.status.run_tag, "scratch-proj-s4-ab12");
 });
 
@@ -280,7 +309,7 @@ test("IDE context ahead of the text is ignored for the tag", () => {
     `<ide_opened_file>The user opened SKILL.md. Run tag: jobs-ax4-s3-p1m9</ide_opened_file>\n`;
   const tag = "scratch-proj-s5-ab12";
 
-  const run = runHook(`${selection}${wrap(`Run tag: ${tag}\n\nDo it.\n\nRun tag: ${tag}`)}`, { binding, cwd });
+  const run = runHook(`${selection}${wrap(`Run tag: ${tag}\nWindow: main\n\nDo it.\n\nRun tag: ${tag}`)}`, { binding, cwd });
   assert.equal(run.code, 0, run.stderr);
   assert.equal(run.status.run_tag, tag);
 
@@ -305,6 +334,60 @@ test("the tool guard writes to the scratch log too", () => {
   const allowed = runGuard("Read", { file_path: "docs/anything.md" });
   assert.equal(allowed.code, 0);
   assert.match(allowed.line, /ALLOW/);
+});
+
+test("a block on a path with spaces names it whole and quotes the claim hint", () => {
+  const rel = "docs/guard probe (1).md";
+  const blocked = runGuard("Write", { file_path: path.join(ROOT, rel), content: "x" });
+  assert.equal(blocked.code, 2);
+  assert.ok(blocked.stderr.includes(`claim "${rel}"`), blocked.stderr);
+  const shell = runGuard("Bash", { command: `cp x "${rel}"` });
+  assert.equal(shell.code, 2);
+  assert.ok(shell.stderr.includes(rel), shell.stderr);
+  assert.doesNotMatch(shell.stderr, /docs\/guard\s*$|docs\/guard\n/m);
+});
+
+test("step 5: a quoted tag is not a CLI prompt; a harness notice is machine traffic", () => {
+  const dir = scratchDir();
+  const binding = path.join(dir, "project-code.json");
+  writeFileSync(binding, JSON.stringify({ code: "scratch-proj" }), "utf8");
+  const cwd = scratchMain();
+  // Quoting another project's tag mid-reply is not a wrong-window prompt.
+  const quoted = runHook("ok, that matches\nRun tag: other-proj-s1-cd34", { binding, cwd });
+  assert.equal(quoted.code, 0, quoted.stderr);
+  assert.match(quoted.line, /short untagged reply/);
+  const notice = runHook(`<system-reminder>\n${TASK_PROMPT}\n</system-reminder>`, { binding, cwd });
+  assert.equal(notice.code, 0, notice.stderr);
+  assert.match(notice.line, /machine envelope <system-reminder>/);
+});
+
+test("step 5: the three false blocks are allowed", () => {
+  // A search for the words, chained: no claim runs.
+  const search = runGuard("Bash", { command: 'grep -n "claims.mjs claim" scripts/lib/hooks.test.mjs | head -5' });
+  assert.equal(search.code, 0, search.stderr);
+  // cp reads its source: a claimed-nothing copy out of the repo is fine.
+  const copy = runGuard("Bash", { command: `cp package.json "${tmpdir().replaceAll("\\", "/")}/p.json"` });
+  assert.equal(copy.code, 0, copy.stderr);
+  // Command words inside a quoted title, in a push that is not "lone" (it has brackets).
+  const push = runGuard("Bash", {
+    command: 'node scripts/clip.mjs --title "guard test (bash -c cp blocked)" .clip/last-report.md && echo ok',
+  });
+  assert.equal(push.code, 0, push.stderr);
+});
+
+test("step 5: real writes and claims through a wrapper are still blocked", () => {
+  for (const command of [
+    'bash -c "echo x > docs/guard-probe-x.md"',
+    "sh -c 'rm package.json'",
+    'powershell -Command "Set-Content docs/guard-probe-x.md x"',
+    `node -e "require('fs').writeFileSync('docs/guard-probe-x.md','x')"`,
+  ]) {
+    const run = runGuard("Bash", { command });
+    assert.equal(run.code, 2, command);
+  }
+  const claim = runGuard("Bash", { command: 'bash -c "node scripts/claims.mjs claim docs/x.md" && echo hi' });
+  assert.equal(claim.code, 2);
+  assert.match(claim.stderr, /chains a claim/);
 });
 
 test("the guard allows the three switchboard_fixes false positives", () => {
@@ -352,7 +435,7 @@ test("a cd out of the repo does not get an edit past the guard", () => {
 test("a cd out of the repo still leaves the prompt guard in its checkout", () => {
   const run = drive(
     HOOK,
-    { hook_event_name: "UserPromptSubmit", cwd: tmpdir(), prompt: "Run tag: scratch-proj-s1-ab12\n\nx" },
+    { hook_event_name: "UserPromptSubmit", cwd: tmpdir(), prompt: "Run tag: scratch-proj-s1-ab12\nWindow: main\n\nx" },
     { env: { CLAUDE_PROJECT_DIR: ROOT } },
   );
   // Decided on the tag, whichever checkout ROOT is; never waved through.
@@ -461,20 +544,14 @@ test("main reads Git Bash /c/ paths as repo paths", { skip: process.platform !==
   assert.equal(guardIn(main, "Bash", { command: `rm ${gitBash(path.join(outside, "x.txt"))}` }).code, 0);
 });
 
-test("a full test run leaves the real log and the real binding untouched", {
+test("a full test run leaves no trace in the real files", {
   // The child runs this same file, so it skips this test rather than recursing.
   skip: process.env.HOOKS_TEST_CHILD === "1" ? "inner run" : false,
 }, () => {
-  const before = {
-    log: snapshot(REAL_LOG),
-    binding: snapshot(REAL_BINDING),
-    status: snapshot(REAL_STATUS),
-    blocks: snapshot(REAL_BLOCKS),
-  };
-
   // Without dropping NODE_TEST_CONTEXT the child sees itself as a runner's
   // child, runs nothing and exits 0, so this test could never fail.
-  const env = { ...process.env, HOOKS_TEST_CHILD: "1" };
+  // Every drive in the child checks its own writes; the marker lets this one look too.
+  const env = { ...process.env, HOOKS_TEST_CHILD: "1", HOOKS_TEST_MARKER: MARKER };
   delete env.NODE_TEST_CONTEXT;
   const run = spawnSync(process.execPath, ["--test", "scripts/lib/*.test.mjs"], {
     cwd: ROOT,
@@ -484,8 +561,8 @@ test("a full test run leaves the real log and the real binding untouched", {
 
   assert.equal(run.status, 0, `the suite failed inside itself:\n${run.stdout}`);
   assert.match(run.stdout, /ℹ pass [1-9]/, "the inner suite ran no tests");
-  assert.equal(snapshot(REAL_LOG), before.log, ".clip/claims-guard.log was written to");
-  assert.equal(snapshot(REAL_BINDING), before.binding, ".git/alfred-project-code.json was written to");
-  assert.equal(snapshot(REAL_STATUS), before.status, ".clip/session-status.json was written to");
-  assert.equal(snapshot(REAL_BLOCKS), before.blocks, ".git/alfred-claim-blocks.json was written to");
+  assert.ok(!(snapshot(REAL_STATUS) ?? "").includes(MARKER), ".clip/session-status.json was written to");
+  // wtB is the claims tests' scratch worktree; no real thread has that name.
+  assert.doesNotMatch(snapshot(resolveRepo(ROOT).file) ?? "", /"wtB"/, ".git/alfred-claims.json was written to");
+  assert.doesNotMatch(snapshot(REAL_BLOCKS) ?? "", /"wtB"/, ".git/alfred-claim-blocks.json was written to");
 });

@@ -71,6 +71,13 @@ Check("view chat unknown", V(P("waiting", "unknown")), "grey / chat unknown")
 Check("view unpaired", V(P("waiting", "")), "grey / chat unknown")
 Check("view paused", V(P("processing", , {paused: true})), "paused / paused")
 Check("view no status", V(P("none")), "none / no status")
+Check("view wrong window", V(P("wrong")), "red / Wrong window")
+Check("kind wrong beats red", KindOf(true, "wrong", true, false), "wrong")
+; Reported means pushed after the last typed prompt, tagged or not.
+Check("view prompt, no report since", V(P("waiting", , {promptAt: "2026-10-03T10:01:00.000Z"})), "red / Check CLI")
+Check("view tagged report since", V(P("waiting", , {promptAt: "2026-10-03T09:00:00.000Z"})), "yellow / Your turn")
+Check("view untagged reply", V(P("waiting", , {promptAt: "2026-10-03T09:00:00.000Z", reportTag: ""})), "orange / Reply (untagged)")
+Check("view untagged reply, next message sent", V(P("processing", , {promptAt: "2026-10-03T10:30:00.000Z", reportTag: ""})), "green / CLI working")
 
 centre := WindowCentre(-8, -8, 1936, 1056)
 Check("centre, monitor 1", centre.x "," centre.y, "960,520")
@@ -217,9 +224,20 @@ Ids(list) {
 }
 Tl(id, group, color) => {id: id, group: group, color: color}
 mixed := [Tl("a", 0, "green"), Tl("b", 0, "red"), Tl("c", 1, "yellow"), Tl("d", 2, "grey"), Tl("e", 0, "grey"), Tl("f", 0, "purple"), Tl("g", 3, "grey"), Tl("h", 0, "orange"), Tl("i", 0, "yellow")]
-Check("sort: group, then colour", Ids(TileSort(mixed, Map())), "bhfiaecdg")
+Check("sort: group, then arrival, never colour", Ids(TileSort(mixed, Map())), "abefhicdg")
+Check("sort: a colour change does not move a tile", Ids(TileSort([Tl("x", 0, "red"), Tl("y", 0, "green")], Map("y", 1, "x", 2))), "yx")
+Check("sort: a removed tile closes the gap", Ids(TileSort([Tl("a", 0, "red"), Tl("c", 0, "red")], Map("a", 1, "b", 2, "c", 3))), "ac")
 Check("sort: ties keep previous order", Ids(TileSort([Tl("x", 0, "yellow"), Tl("y", 0, "yellow")], Map("y", 1, "x", 2))), "yx")
 Check("sort: new tiles after known", Ids(TileSort([Tl("n", 0, "yellow"), Tl("k", 0, "yellow")], Map("k", 1))), "kn")
+Codes(list) {
+    s := ""
+    for c in list
+        s .= c " "
+    return Trim(s)
+}
+startsX := Map("b-1", "20261012090000", "c-2", "20261011090000", "a-3", "", "main", "20261010090000")
+Check("startup: main, then oldest session first, then unknown by name", Codes(StartupOrder(["main", "a-3", "b-1", "c-2", "d-4"], startsX)), "main c-2 b-1 a-3 d-4")
+Check("startup: no starts known, by name", Codes(StartupOrder(["main", "z-1", "m-2"], Map())), "main m-2 z-1")
 Check("tile name worktree", TileName("switchboard_touch-t4n", ""), "switchboard_touch")
 Check("tile name free main", TileName("main", ""), "main")
 Check("tile name bound main", TileName("main", "rem-j7p"), "main · rem")
@@ -230,7 +248,10 @@ Check("tap cli", Cmd("tap", "cli:switchboard_touch-t4n"), "click:switchboard_tou
 Check("tap chat", Cmd("tap", "chat:1477446406"), "chat:1477446406")
 Check("hold cli pauses", Cmd("hold", "cli:main"), "pause:main")
 Check("hold chat ignored", Cmd("hold", "chat:9"), "none:")
-Check("tap orphan ignored", Cmd("tap", "orphan:gone-x1y"), "none:")
+Check("tap orphan: the page opens its panel", Cmd("tap", "orphan:gone-x1y"), "none:")
+Check("release orphan", Cmd("release", "orphan:gone-x1y"), "release:gone-x1y")
+Check("release a cli tile ignored", Cmd("release", "cli:main"), "none:")
+Check("release a strange owner ignored", Cmd("release", 'orphan:x" & del'), "none:")
 Check("refresh git", Cmd("git", ""), "git:")
 Check("unknown ignored", Cmd("jump", ""), "none:")
 Check("top bar moves", Cmd("move", ""), "move:")
@@ -268,6 +289,8 @@ Check("action free", CliAction(ActionArgs("free", "free")), "Free")
 Check("chat action ready", ChatAction("finished") "|" ChatAction("Claude writing") "|" ChatAction("seen"), "Reply ready|Writing|Seen")
 oo := OrphanOwners([Map("owner", "gone-x1y"), Map("owner", "main"), Map("owner", "live-a1b")], [Map("owner", "gone-x1y")], ["live-a1b"])
 Check("orphan owners", oo.Length = 1 ? oo[1].owner " " oo[1].n : oo.Length, "gone-x1y 2")
+oi := OrphanOwners([Map("owner", "gone-x1y", "item", "docs/a.md")], [Map("owner", "gone-x1y", "item", "db:deploy")], [])
+Check("orphan items for the panel", oi[1].items[1] "|" oi[1].items[2], "docs/a.md|db:deploy (reserved)")
 Check("idle under 3 days", IdleDays("20261001000000", "20261003000000"), 0)
 Check("idle over 3 days", IdleDays("20261001000000", "20261005120000"), 4)
 Check("json", ToJson(Map("a", 1, "b", ["q", 2], "c", 'say "hi"`n'))

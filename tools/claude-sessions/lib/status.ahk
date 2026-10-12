@@ -36,11 +36,14 @@ FormatEntered(iso, offset, today := "") {
     return FormatTime(t, SubStr(t, 1, 8) = today ? "HH:mm" : "d MMM HH:mm")
 }
 
-; What a button shows: "none", "red", "waiting" or "processing".
+; What a button shows: "none", "wrong", "red", "waiting" or "processing".
 ; An interrupt shows as waiting with red cleared; red otherwise wins.
+; "wrong": prompt-check refused a prompt in this window; a tap clears it.
 KindOf(hasStatus, state, red, interrupted) {
     if !hasStatus
         return "none"
+    if state = "wrong"
+        return "wrong"
     if interrupted
         return "waiting"
     if red
@@ -118,12 +121,22 @@ ViewOf(p) {
         return {color: "none", label: "no status"}
     if p.kind = "red"
         return {color: "red", label: "Approve"}
+    if p.kind = "wrong"
+        return {color: "red", label: "Wrong window"}
     cliIdle := p.kind = "waiting"
-    if cliIdle && p.runTag != "" && p.reportTag != p.runTag
+    ; Reported: something was pushed after the last prompt Alex typed. A status file
+    ; from before prompt_at existed falls back to matching the run tag.
+    promptAt := p.HasOwnProp("promptAt") ? p.promptAt : ""
+    reported := promptAt != "" ? p.reportAt != "" && StrCompare(p.reportAt, promptAt) > 0
+        : p.runTag = "" || p.reportTag = p.runTag
+    if cliIdle && !reported
         return {color: "red", label: "Check CLI"}
     writing := p.chatState = "responding"
     if !cliIdle || writing
         return {color: "green", label: !cliIdle && writing ? "Both working" : writing ? "Claude writing" : "CLI working"}
+    ; A reply pushed with no run tag: answered, but not a step report.
+    if promptAt != "" && p.reportTag = ""
+        return {color: "orange", label: "Reply (untagged)"}
     if p.chatState != "finished"
         return {color: "grey", label: "chat unknown"}
     if p.reportAt != "" && StrCompare(p.chatSince, p.reportAt) <= 0
@@ -372,17 +385,14 @@ FenceBox(monitors) {
 
 ; Colours the page draws; everything else is grey.
 TileColor(c) => c ~= "^(red|orange|purple|yellow|green)$" ? c : "grey"
-TileColorRank(c) {
-    static ranks := Map("red", 0, "orange", 1, "purple", 2, "yellow", 3, "green", 4)
-    return ranks.Get(c, 5)
-}
 
-; Sorted by group (0 active CLI, 1 chats, 2 paused CLI, 3 orphans), then colour.
-; Ties keep the previous order (`prev`: id -> position); new tiles follow, in input order.
+; Sorted by group (0 CLI, paused ones included, 1 chats, 3 orphans), then by the
+; previous order (`prev`: id -> position), so a colour or status change never moves
+; a tile. New tiles go at the end of their group, in input order.
 TileSort(tiles, prev) {
     keyed := []
     for t in tiles
-        keyed.Push({t: t, k: Format("{}{}{:06}{:06}", t.group, TileColorRank(t.color), prev.Get(t.id, 999999), A_Index)})
+        keyed.Push({t: t, k: Format("{}{:06}{:06}", t.group, prev.Get(t.id, 999999), A_Index)})
     out := []
     for e in keyed {           ; insertion sort: a dozen tiles
         i := out.Length + 1
@@ -392,6 +402,26 @@ TileSort(tiles, prev) {
     }
     for i, e in out
         out[i] := e.t
+    return out
+}
+
+; The CLI tiles' first order, before TileSort has a previous one: main, then the
+; worktrees by session start (`starts`: code -> stamp), oldest first; unknown starts last, by name.
+StartupOrder(codes, starts) {
+    keyed := []
+    for code in codes {
+        st := starts.Get(code, "")
+        keyed.Push({c: code, k: (code = "main" ? "0" : st != "" ? "1" st : "2") "|" code})
+    }
+    out := []
+    for e in keyed {           ; insertion sort, as above
+        i := out.Length + 1
+        while i > 1 && StrCompare(out[i - 1].k, e.k) > 0
+            i--
+        out.InsertAt(i, e)
+    }
+    for i, e in out
+        out[i] := e.c
     return out
 }
 
@@ -421,6 +451,9 @@ TouchCommand(type, id) {
         return {do: "chat", key: key}
     if type = "hold" && kind = "cli"
         return {do: "pause", key: key}
+    ; The orphan panel's "Release all". The owner is checked, as it reaches a command line.
+    if type = "release" && kind = "orphan" && key ~= "^[\w.-]+$"
+        return {do: "release", key: key}
     return {do: "none", key: ""}
 }
 
@@ -487,17 +520,21 @@ CliAction(p) {
 ChatAction(label) => label = "Claude writing" ? "Writing" : label = "finished" ? "Reply ready"
     : label = "seen" ? "Seen" : "Unknown"
 
-; Owners of claims or reservations with no checkout, as [{owner, n}].
+; Owners of claims or reservations with no checkout, as [{owner, n, items}]:
+; `items` is what the release panel lists, claims then reservations.
 OrphanOwners(claims, reservations, worktrees) {
-    known := Map("main", true), counts := Map(), out := []
+    known := Map("main", true), held := Map(), out := []
     for w in worktrees
         known[w] := true
     for list in [claims, reservations]
         for c in list
-            if !known.Has(owner := c.Get("owner", ""))
-                counts[owner] := counts.Get(owner, 0) + 1
-    for owner, n in counts
-        out.Push({owner: owner, n: n})
+            if !known.Has(owner := c.Get("owner", "")) {
+                if !held.Has(owner)
+                    held[owner] := []
+                held[owner].Push(c.Get("item", "") (list == reservations ? " (reserved)" : ""))
+            }
+    for owner, items in held
+        out.Push({owner: owner, n: items.Length, items: items})
     return out
 }
 

@@ -4,10 +4,13 @@
 
 import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { PROJECT_FILE } from "./project-code.mjs";
 
 export const STATUS_RELATIVE = ".clip/session-status.json";
-export const STATES = ["processing", "approval", "waiting", "blocked"];
+// "wrong": prompt-check refused a prompt in this window (wrong window, bad or
+// missing tag). Its own state, not a red latch, so Switchboard can clear it.
+export const STATES = ["processing", "approval", "waiting", "blocked", "wrong"];
 
 export const APPROVAL_TYPES = [
   "permission_prompt",
@@ -64,9 +67,14 @@ export function projectFor(root, prev) {
   return (typeof prev?.project === "string" && prev.project) || "main";
 }
 
-/** The next record: red latches on approval/blocked and clears only on processing. */
-export function nextStatus(prev, state, { root, sessionId, transcriptPath, runTag, event, now = new Date() }) {
-  const red = state === "approval" || state === "blocked" ? true : state === "processing" ? false : !!prev?.red;
+/**
+ * The next record: red latches on approval/blocked and clears on processing or
+ * wrong. `promptAt` is set by a prompt Alex typed, never by machine traffic:
+ * Switchboard counts a report pushed after it as the answer to it.
+ */
+export function nextStatus(prev, state, { root, sessionId, transcriptPath, runTag, event, promptAt, now = new Date() }) {
+  const red =
+    state === "approval" || state === "blocked" ? true : state === "processing" || state === "wrong" ? false : !!prev?.red;
   return {
     state,
     since: prev?.state === state && prev?.since ? prev.since : now.toISOString(),
@@ -76,9 +84,51 @@ export function nextStatus(prev, state, { root, sessionId, transcriptPath, runTa
     transcript_path: transcriptPath || prev?.transcript_path || null,
     // The CLI's current run: set by a tagged prompt, carried over by every other write.
     run_tag: runTag || prev?.run_tag || null,
+    prompt_at: promptAt || prev?.prompt_at || null,
     red,
     event: event ?? null,
   };
+}
+
+// A background agent or shell this session started, and the notice that it ended.
+const LAUNCH = [
+  /Async agent launched successfully[\s\S]{0,400}?agentId: ([a-z0-9]+)/g,
+  /running in background with ID: ([a-z0-9]+)/g,
+];
+const ENDED = /<task-id>([a-z0-9]+)<\/task-id>[\s\S]{0,400}?<status>(?!running)[a-z_]+<\/status>/g;
+/** Launches older than this are assumed over, notice or not. */
+export const BACKGROUND_MAX_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * The ids of background tasks this session's transcript (JSONL) shows started
+ * and not yet ended. A turn that stops while one runs is not the session
+ * waiting for Alex: the hand-back will start the next turn by itself.
+ */
+export function pendingBackground(transcript, now = Date.now()) {
+  const started = new Set();
+  const ended = new Set();
+  for (const line of String(transcript ?? "").split("\n")) {
+    if (line.includes("<task-id>")) for (const m of line.matchAll(ENDED)) ended.add(m[1]);
+    if (!line.includes("agentId: ") && !line.includes("running in background with ID: ")) continue;
+    let at = NaN;
+    try {
+      at = Date.parse(JSON.parse(line).timestamp);
+    } catch {
+      /* not a JSON line: no age, so it counts */
+    }
+    if (now - at > BACKGROUND_MAX_MS) continue;
+    for (const re of LAUNCH) for (const m of line.matchAll(re)) started.add(m[1]);
+  }
+  return [...started].filter((id) => !ended.has(id));
+}
+
+/** pendingBackground for a transcript file; [] when it cannot be read. */
+export function pendingBackgroundIn(file, now = Date.now()) {
+  try {
+    return file ? pendingBackground(readFileSync(file, "utf8"), now) : [];
+  } catch {
+    return [];
+  }
 }
 
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -110,16 +160,26 @@ export function writeAtomic(file, text) {
  * Record `state` for the checkout at `root`. Returns the record written, or
  * null if nothing was written. Never throws.
  */
-export function writeSessionStatus(root, state, { sessionId, transcriptPath, runTag, event, file, onlyIf } = {}) {
+export function writeSessionStatus(root, state, { sessionId, transcriptPath, runTag, event, promptAt, file, onlyIf } = {}) {
   try {
     if (!STATES.includes(state)) return null;
     const target = file ?? statusFile(root);
     const prev = readStatus(target);
     if (onlyIf && !onlyIf(prev)) return null;
-    const record = nextStatus(prev, state, { root, sessionId, transcriptPath, runTag, event });
+    const record = nextStatus(prev, state, { root, sessionId, transcriptPath, runTag, event, promptAt });
     writeAtomic(target, `${JSON.stringify(record, null, 2)}\n`);
     return record;
   } catch {
     return null;
   }
+}
+
+/** Switchboard's tap on a "Wrong window" tile: back to waiting, only if it is still wrong. */
+export function clearWrong(root) {
+  return writeSessionStatus(root, "waiting", { event: "cleared on Switchboard", onlyIf: (prev) => prev?.state === "wrong" });
+}
+
+// `node scripts/lib/session-status.mjs clear-wrong <checkout>`, run by Switchboard.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) && process.argv[2] === "clear-wrong") {
+  process.exitCode = process.argv[3] && clearWrong(path.resolve(process.argv[3])) ? 0 : 1;
 }

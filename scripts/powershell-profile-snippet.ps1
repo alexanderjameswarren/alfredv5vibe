@@ -40,14 +40,16 @@ function Invoke-AlfredGit {
 
     $root = git rev-parse --show-toplevel
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($root)) {
-        Write-Host "Not inside a git repository." -ForegroundColor Yellow
+        Write-Host "STOPPED: not inside a git repository." -ForegroundColor Red
+        $global:LASTEXITCODE = 1
         return
     }
 
     $path = Join-Path $root ("scripts/" + $Script)
     if (-not (Test-Path -LiteralPath $path)) {
-        Write-Host "Not found: $path" -ForegroundColor Yellow
+        Write-Host "STOPPED: not found: $path" -ForegroundColor Red
         Write-Host "This checkout may predate the claims scripts, or they are not committed yet."
+        $global:LASTEXITCODE = 1
         return
     }
 
@@ -56,6 +58,12 @@ function Invoke-AlfredGit {
     }
     else {
         node $path
+    }
+    # The script's own code, for `$LASTEXITCODE` after the command. Never `exit`:
+    # in a profile function that would close the PowerShell window.
+    $global:LASTEXITCODE = $LASTEXITCODE
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "($Script exited with code $LASTEXITCODE)" -ForegroundColor Red
     }
 }
 

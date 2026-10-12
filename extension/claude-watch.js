@@ -37,13 +37,19 @@
     return stop || streaming ? "responding" : "finished";
   }
 
-  /** The last whole run tag on a line of its own beginning "Run tag:", or null. */
+  const WINDOW_LINE = new RegExp(`^${SPACE}*Window:`, "i");
+
+  /**
+   * The tag of the last CLI prompt header: a "Run tag:" line whose next
+   * non-blank line starts "Window:". A tag quoted anywhere else is not a prompt.
+   */
   function extractTag(text) {
+    const lines = String(text ?? "").split(/\r?\n/).filter((l) => l.replace(new RegExp(SPACE, "g"), ""));
     let tag = null;
-    for (const line of String(text ?? "").split(/\r?\n/)) {
+    lines.forEach((line, i) => {
       const m = TAG_LINE.exec(line);
-      if (m) tag = m[1];
-    }
+      if (m && WINDOW_LINE.test(lines[i + 1] ?? "")) tag = m[1];
+    });
     return tag;
   }
 

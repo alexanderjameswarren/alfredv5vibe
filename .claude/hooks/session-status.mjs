@@ -27,15 +27,25 @@ try {
     if (current !== "approval") process.exit(0);
   }
 
-  const { writeSessionStatus, stateForNotification } = await import("../../scripts/lib/session-status.mjs");
+  const { writeSessionStatus, stateForNotification, pendingBackgroundIn } = await import(
+    "../../scripts/lib/session-status.mjs"
+  );
   const opts = { sessionId: payload.session_id, transcriptPath: payload.transcript_path, event, file };
+  // A turn that ends while this session's own subagents or background shells
+  // still run is not waiting for Alex: their hand-back starts the next turn.
+  // Recording "waiting" then showed red "Check CLI" mid-run (bug 11).
+  const waiting = () =>
+    pendingBackgroundIn(payload.transcript_path).length
+      ? writeSessionStatus(root, "processing", { ...opts, event: `${event} (background running)` })
+      : writeSessionStatus(root, "waiting", opts);
 
-  if (event === "Stop") writeSessionStatus(root, "waiting", opts);
+  if (event === "Stop") waiting();
   else if (event === "PostToolUse")
     writeSessionStatus(root, "processing", { ...opts, onlyIf: (prev) => prev?.state === "approval" });
   else if (event === "Notification") {
     const state = stateForNotification(payload);
-    if (state) writeSessionStatus(root, state, opts);
+    if (state === "waiting") waiting();
+    else if (state) writeSessionStatus(root, state, opts);
   }
 } catch {
   // A status write is never worth failing a hook over.

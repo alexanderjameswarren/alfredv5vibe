@@ -22,7 +22,7 @@
 // the reason the claims system exists.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readSync, rmdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readSync, renameSync, rmdirSync } from "node:fs";
 import path from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -481,11 +481,17 @@ const NUMERIC = /^\d+(?:-\d+)?$/;
  * breaking a path that happens to contain one.
  */
 export function parseSelection(answer, count = 0) {
-  const text = String(answer ?? "").trim();
-  if (!text) return { blank: true, all: false, indexes: [], words: [], bad: [] };
+  // An array is argv (`--paths`): the shell already split it, so each token is
+  // whole, spaces and all. A typed answer splits on spaces outside quotes.
+  const raws = Array.isArray(answer)
+    ? answer.map((t) => String(t).trim()).filter(Boolean)
+    : [...String(answer ?? "").matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)]
+        .map((m) => m[1] ?? m[2] ?? m[3])
+        .filter(Boolean);
+  if (!raws.length) return { blank: true, all: false, indexes: [], words: [], bad: [] };
 
   const tokens = [];
-  for (const raw of text.split(/\s+/).filter(Boolean)) {
+  for (const raw of raws) {
     const parts = raw.split(",").filter(Boolean);
     if (parts.length > 1 && parts.every((p) => NUMERIC.test(p))) tokens.push(...parts);
     else tokens.push(raw);
@@ -635,8 +641,245 @@ export function choose(question, choices, { blank } = {}) {
   }
 }
 
-/** Stop, with a reason. Nothing has been changed by the time this is called. */
+/** The red box a refusal prints, so it can never pass for a run that worked. */
+export function refusalBanner(message, { color = false } = {}) {
+  const bar = "━".repeat(60);
+  const body = String(message).trim().split(/\r?\n/).map((l) => `  ${l}`.trimEnd());
+  // The body says what did and did not happen; a partial Finish has already pushed.
+  const lines = [bar, "  🛑 STOPPED — this did not run to the end", bar, ...body, bar];
+  return color ? lines.map((l) => `\x1b[1;31m${l}\x1b[0m`).join("\n") : lines.join("\n");
+}
+
+/**
+ * Stop, with a reason. Code 0 is a plain line on stdout: help, a cancel Alex
+ * chose, nothing to do. Anything else is a refusal: a red banner on stderr.
+ */
 export function stop(message, code = 1) {
-  say(`\n${message}`);
+  if (code === 0) {
+    say(`\n${String(message).replace(/^\n+/, "")}`);
+  } else {
+    const color = !!process.stderr.isTTY && !process.env.NO_COLOR;
+    process.stderr.write(`\n${refusalBanner(message, { color })}\n`);
+  }
   process.exit(code);
+}
+
+// ---------------------------------------------------------------------------
+// gitpush decisions, pure so they can be tested without a repo
+// ---------------------------------------------------------------------------
+
+const MODE_KEYS = { push: "p", finish: "f", checkpoint: "c", skip: "s" };
+export const MODE_NAME = { p: "push", f: "finish", c: "checkpoint", s: "skip" };
+
+/** A mode word as its key. Throws a UsageError when it does not fit the checkout. */
+export function modeKey(word, w) {
+  const key = MODE_KEYS[String(word).toLowerCase()];
+  if (!key) {
+    throw new UsageError(`"${word}" is not a mode. Use push, finish, checkpoint or skip.`);
+  }
+  if (w.isMain && key === "c") {
+    throw new UsageError(`Checkpoint is for a worktree. main takes push or finish.`);
+  }
+  if (!w.isMain && key === "p") {
+    throw new UsageError(`Push is for the main checkout. ${w.owner} takes checkpoint or finish.`);
+  }
+  return key;
+}
+
+/** The refusal for options the chosen mode will not read, or null. */
+export function misplacedOptions(mode, w, opts) {
+  if (mode === "s") return null;
+  const misplaced = [];
+  if (mode !== "c") {
+    for (const name of ["paths", "all", "release-db", "keep-db"]) {
+      if (opts[name] !== undefined) misplaced.push(`--${name}`);
+    }
+  }
+  if (!w.isMain && opts["include-unclaimed"] !== undefined) misplaced.push("--include-unclaimed");
+  if (!misplaced.length) return null;
+  return (
+    `${misplaced.join(", ")} ${misplaced.length > 1 ? "are" : "is"} not used by ` +
+    `${MODE_NAME[mode]}${w.isMain ? " on main" : ` on ${w.owner}`}.\nNothing was changed.`
+  );
+}
+
+/** A checkout named on the command line, by name or list number: { checkout } or { refusal }. */
+export function findCheckout(word, trees) {
+  const hit =
+    trees.find((t) => t.owner.toLowerCase() === word.toLowerCase()) ??
+    (/^\d+$/.test(word) ? trees[Number(word) - 1] : undefined);
+  if (hit) return { checkout: hit };
+  const isMode = MODE_KEYS[word.toLowerCase()] !== undefined;
+  return {
+    refusal:
+      `"${word}" is not a checkout here.\n` +
+      (isMode ? `It is a mode — the checkout comes first: gitpush main ${word}\n` : "") +
+      `Open: ${trees.map((t) => t.owner).join(", ")}\n\nNothing was changed.`,
+  };
+}
+
+/** The answer to "Which?": { cancel }, { refusal }, or { chosen, unrecognised }. */
+export function pickCheckouts(answer, trees) {
+  const sel = parseSelection(answer, trees.length);
+  if (sel.blank) return { cancel: "Cancelled. Nothing changed." };
+  const named = [];
+  const unrecognised = [...sel.bad];
+  for (const word of sel.words) {
+    const hit = trees.find((t) => t.owner.toLowerCase() === word.toLowerCase());
+    if (hit) named.push(hit);
+    else unrecognised.push(word);
+  }
+  const chosen = sel.all ? trees : [...new Set([...sel.indexes.map((n) => trees[n - 1]), ...named])];
+  if (!chosen.length) {
+    return {
+      refusal:
+        `Nothing recognised in "${String(answer).trim()}".\n` +
+        `Open: ${trees.map((t) => t.owner).join(", ")}\n\nNothing was changed.`,
+    };
+  }
+  return { chosen, unrecognised };
+}
+
+const norm = (p) => {
+  const s = path.resolve(p).replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? s.toLowerCase() : s;
+};
+
+/** Whether `dir` is `tree` or anywhere inside it. */
+export function isInside(dir, tree) {
+  const d = norm(dir);
+  const t = norm(tree);
+  return d === t || d.startsWith(`${t}/`);
+}
+
+/**
+ * The refusal for a Finish run from inside the worktree it would remove, or
+ * null. Windows will not delete a folder a terminal is standing in, and by the
+ * time removal fails the merge, push and release have already happened.
+ */
+export function finishFromInside(w, { cwd, mainPath }) {
+  if (w.isMain || !(w.isCurrent || isInside(cwd, w.path))) return null;
+  const win = (p) => p.replace(/\//g, "\\");
+  return (
+    `This terminal is inside ${w.owner}, the worktree Finish would remove:\n` +
+    `  ${win(w.path)}\n` +
+    `Windows cannot delete a folder a terminal is standing in.\n\n` +
+    `Run it from a terminal in the main checkout instead:\n` +
+    `  cd "${win(mainPath)}"\n` +
+    `  gitpush ${w.owner} finish\n\n` +
+    `Nothing was changed.`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// close-out: the project's spec and progress docs go to docs/history/
+// ---------------------------------------------------------------------------
+
+/** The two docs a project keeps in docs/ while it runs, named by its code. */
+export const projectDocs = (code) => [`docs/technical-spec-${code}.md`, `docs/progress-${code}.md`];
+
+/**
+ * What Finish would move: { moves: [{from, to}], missing, clashes }. A clash is
+ * a docs/history/ file of the same name, in the worktree or in main, which
+ * Finish refuses rather than overwrite.
+ */
+export function planDocsMove(code, treeRoot, mainRoot) {
+  const moves = [];
+  const missing = [];
+  const clashes = [];
+  for (const from of projectDocs(code)) {
+    if (!existsSync(path.join(treeRoot, from))) {
+      missing.push(from);
+      continue;
+    }
+    const to = `docs/history/${path.basename(from)}`;
+    if ([treeRoot, mainRoot].some((r) => existsSync(path.join(r, to)))) clashes.push(to);
+    moves.push({ from, to });
+  }
+  return { moves, missing, clashes };
+}
+
+/** Move the files on disk. git sees a deletion and a new file, staged together. */
+export function applyDocsMove(treeRoot, moves) {
+  for (const { from, to } of moves) {
+    mkdirSync(path.dirname(path.join(treeRoot, to)), { recursive: true });
+    renameSync(path.join(treeRoot, from), path.join(treeRoot, to));
+  }
+}
+
+/** The changed files minus the docs Finish moves, so no plan lists a doc twice. */
+export function withoutMoved(files, moves) {
+  return files.filter((f) => !moves.some((m) => m.from === f.path));
+}
+
+/**
+ * The refusal for a Finish that would leave changes uncommitted, or null.
+ * Removing the worktree deletes them, and they were never in main.
+ */
+export function leftBehindRefusal(owner, files) {
+  if (!files.length) return null;
+  return (
+    `${owner} has ${files.length} change(s) Finish would not commit:\n` +
+    `${files.map((f) => `  ${f.status.trim()} ${f.path}`).join("\n")}\n` +
+    `Removing the worktree would delete them, and they are not in main.\n\n` +
+    `Commit them with gitcom in that worktree, or delete them, then run Finish again.\n\n` +
+    `Nothing was changed for ${owner}.`
+  );
+}
+
+/**
+ * Whether a refused plain `git worktree remove` may be forced: only when git
+ * status is clean, so --force can only take ignored files (node_modules, build
+ * output), never work. `{ force, why }`.
+ */
+export function forceDecision(changed) {
+  if (changed.length) {
+    return {
+      force: false,
+      why:
+        `git status is not clean, so --force would delete work:\n` +
+        changed.map((f) => `    ${f.status.trim()} ${f.path}`).join("\n"),
+    };
+  }
+  return {
+    force: true,
+    why: "git status is clean, so what refused was ignored files or a file held open; --force removes only those.",
+  };
+}
+
+/** The refusal for a docs/history/ clash, or null. */
+export function docsClashRefusal(plan, who) {
+  if (!plan.clashes.length) return null;
+  return (
+    `docs/history/ already has:\n${plan.clashes.map((c) => `  ${c}`).join("\n")}\n` +
+    `Finish would overwrite it when moving ${who}'s docs there.\n` +
+    `Rename or remove the old one first.\n\nNothing was changed for ${who}.`
+  );
+}
+
+/**
+ * The paths to stage for the move, given changedFiles after it: every new
+ * path, and an old one only if git lists it (one never committed is just gone).
+ */
+export function docsMovePaths(moves, changed) {
+  const listed = new Set(changed.map((f) => f.path));
+  return [...moves.map((m) => m.to), ...moves.filter((m) => listed.has(m.from)).map((m) => m.from)];
+}
+
+/**
+ * How the run ends after one checkout's result: null to carry on, or
+ * { code, message } to stop. A cancel exits 0 and stops: nothing after it runs.
+ */
+export function resultExit(result, owner, { done = [], remaining = [] } = {}) {
+  if (result === "failed") return { code: 1, message: `Stopped at ${owner}. Nothing further was attempted.` };
+  if (result === "partial") {
+    return { code: 1, message: `${owner} is merged and pushed but not fully cleaned up. Stopping.` };
+  }
+  if (result === "cancelled") {
+    const lines = [`Cancelled ${owner}. Nothing changed for it.`];
+    if (done.length) lines.push(`Already done before it: ${done.join(", ")}.`);
+    if (remaining.length) lines.push(`Not attempted: ${remaining.join(", ")}.`);
+    return { code: 0, message: lines.join("\n") };
+  }
+  return null;
 }

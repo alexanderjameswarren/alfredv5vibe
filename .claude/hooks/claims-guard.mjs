@@ -73,6 +73,7 @@ import {
   readState,
   recordBlocks,
   resolveCheckout,
+  runText,
   toRepoRelative,
   writeCheck,
   writeIndicator,
@@ -220,8 +221,9 @@ function isDeploy(command) {
   return DEPLOY_PATTERNS.some((p) => flat.includes(p));
 }
 
+// A path with a space or bracket is quoted, so the hint can be pasted as it is.
 const claimHint = (items) =>
-  `  node scripts/claims.mjs claim ${items.join(" ")}`;
+  `  node scripts/claims.mjs claim ${items.map((i) => (/[\s()'&;]/.test(i) ? `"${i}"` : i)).join(" ")}`;
 
 // The claims.mjs commands that change who owns what. Two things happen to these
 // and to nothing else: they must not be chained onto another command, and a
@@ -365,7 +367,8 @@ function main() {
   const filePath = targetPath(toolName, input);
   const shell = SHELL_TOOLS.get(toolName) ?? null;
   const command = shell ? String(input.command ?? "") : "";
-  const isClaimsCommand = command !== "" && CLAIMS_COMMAND.test(command);
+  // Only a claim the command runs: not the words inside a quoted search or title.
+  const isClaimsCommand = command !== "" && CLAIMS_COMMAND.test(runText(command));
 
   // The deploy gate reads the command text, so it covers `npx supabase functions
   // deploy mcp` in either shell the moment the command is read at all.
