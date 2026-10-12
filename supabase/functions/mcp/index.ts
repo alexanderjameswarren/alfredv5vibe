@@ -104,6 +104,9 @@ import {
   reprocessWbTransactionsTool,
   getWbSpendingTool,
   getWbCashFlowTool,
+  getWbSubscriptionsTool,
+  upsertWbSubscriptionTool,
+  recordWbSubscriptionPriceTool,
 } from "../_shared/tools/warren-buffet-p2.ts";
 import {
   getDriveMixSongsTool,
@@ -2968,10 +2971,10 @@ export function createMcpServer(token: string) {
     {
       title: "Get Money Review Queue",
       description:
-        "Transactions needing attention, newest first, each with its reason: no_kind (not processed yet), missing_required_tag (detail names the tag group, e.g. Category), transfer_candidate (looks like a transfer with no unique match), split_mismatch (splits do not add up). Returns counts by reason over the date range, and the items with the fields needed to decide. " +
+        "Transactions needing attention, newest first, each with its reason: no_kind (not processed yet), missing_required_tag (detail names the tag group, e.g. Category), transfer_candidate (looks like a transfer with no unique match), split_mismatch (splits do not add up), price_change (a charge on an active subscription that differs from its price by more than its tolerance; record_wb_subscription_price accepts it, mark_wb_reviewed dismisses a one-off), new_recurring (the newest charge of a detected, watching subscription; confirm or dismiss it with upsert_wb_subscription). Returns counts by reason over the date range, and the items with the fields needed to decide. " +
         WB_SIGN + "Tier 1.",
       inputSchema: {
-        reason: z.enum(["no_kind", "missing_required_tag", "transfer_candidate", "split_mismatch"]).optional(),
+        reason: z.enum(["no_kind", "missing_required_tag", "transfer_candidate", "split_mismatch", "price_change", "new_recurring"]).optional(),
         from: wbDate("Transaction date on or after"),
         to: wbDate("Transaction date on or before"),
         limit: z.number().optional().describe("Max items, default 20, cap 50."),
@@ -3281,6 +3284,81 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(getWbCashFlowTool, args, token),
+  );
+
+  const WB_SUBS =
+    "A subscription is the record of a recurring service; the Subscription Label tag stays the per-transaction marker, and insurance gets the Insurance label, not a subscription. " +
+    "Prices are positive dollars. Charges link to their merchant's subscription by processing (by price within amount_tolerance when a merchant has several). " +
+    "A charge that differs from the price is flagged price_change for review, never accepted automatically. ";
+  const wbSubStatus = z.enum(["watching", "active", "paused", "cancelled"]);
+
+  server.registerTool(
+    "get_wb_subscriptions",
+    {
+      title: "Get Subscriptions",
+      description:
+        "Subscriptions with merchant, cadence, current_price (today), previous_price and last_change_on, amount_tolerance, term_end_date, auto_renew, review_date, last_charged_on, next_expected_on, charge_count, billed-through and bundle names, and overdue (active, more than 7 days past the expected charge, and not inside a prepaid term). watching = detected by the daily sync from monthly charges of similar size, not yet confirmed. " +
+        WB_SUBS + "Tier 1.",
+      inputSchema: {
+        status: wbSubStatus.optional(),
+        merchant_id: z.string().optional(),
+        search: z.string().optional().describe("Part of the subscription's name."),
+        overdue_only: z.boolean().optional().describe("Only subscriptions whose expected charge is missing."),
+        include_prices: z.boolean().optional().describe("Add each subscription's price history, newest first."),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbSubscriptionsTool, args, token),
+  );
+
+  server.registerTool(
+    "upsert_wb_subscription",
+    {
+      title: "Create or Update Subscription",
+      description:
+        "Create a subscription (default status active), or edit one by id: confirm a detected one with status active, pause or cancel, set plan, cadence, prepaid term_end_date, auto_renew, review_date, billed_through_id (billed through another subscription, e.g. via a bundle provider) and bundle_id (part of a bundle). Only given fields change; null clears. Then reprocesses the merchant's transactions so charges link (reprocess: false to skip). " +
+        "To dismiss a detection that is not a subscription (a utility, HOA, insurance or store), pass id and not_subscription: true alone: the merchant is marked not_subscription, so detection skips it, and the watching row is deleted. not_subscription: false restores detection for that merchant. " +
+        WB_SUBS + "Tier 2.",
+      inputSchema: {
+        id: z.string().optional().describe("Omit to create."),
+        name: z.string().optional().describe("Required to create."),
+        plan: z.string().nullable().optional(),
+        merchant_id: z.string().nullable().optional().describe("The charging merchant (get_wb_merchants)."),
+        cadence: z.enum(["monthly", "quarterly", "annual", "other"]).optional(),
+        expected_amount: z.number().nullable().optional().describe("Expected price, positive dollars."),
+        amount_tolerance: z.number().optional().describe("Dollars a charge may differ and still count as the price. Default 0 (exact cents)."),
+        term_end_date: wbDate("End of a prepaid term (no charge is expected or overdue before it)").nullable(),
+        auto_renew: z.boolean().nullable().optional(),
+        review_date: wbDate("When to review it, e.g. about 30 days before renewal").nullable(),
+        billed_through_id: z.string().nullable().optional().describe("Another subscription this one is billed through."),
+        bundle_id: z.string().nullable().optional().describe("The bundle subscription this one belongs to."),
+        status: wbSubStatus.optional(),
+        owner: z.enum(["alex", "elise", "joint"]).nullable().optional(),
+        notes: z.string().nullable().optional(),
+        not_subscription: z.boolean().optional().describe("With id only: true dismisses a watching row and stops detection for its merchant; false restores detection."),
+        reprocess: z.boolean().optional().describe("Default true."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(upsertWbSubscriptionTool, args, token),
+  );
+
+  server.registerTool(
+    "record_wb_subscription_price",
+    {
+      title: "Record Subscription Price",
+      description:
+        "Record a subscription's price from a date (one price per day; the same day again replaces it). A charge is compared with the price on its date, so record the old price too when a price changed within the history. With transaction_id, effective_on defaults to that charge's date and the charge is linked to the subscription by hand. Recording the new price clears price_change on charges at that price. " +
+        WB_SUBS + "Tier 2.",
+      inputSchema: {
+        subscription_id: z.string(),
+        amount: z.number().describe("The price, positive dollars."),
+        effective_on: wbDate("First day of this price; required unless transaction_id is given"),
+        transaction_id: z.string().optional().describe("The charge that showed the new price."),
+        source: wbHandSource,
+        notes: z.string().optional(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(recordWbSubscriptionPriceTool, args, token),
   );
 
   // --- Drive Mix (docs/technical-spec-drive_mix-v7r.md §5) ---

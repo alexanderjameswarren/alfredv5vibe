@@ -13,7 +13,7 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 4 | Phase 2 MCP tools (except subscriptions); deploy; verify in a fresh chat | done | 2026-10-10: 18 tools plus the get_wb_transactions extension; 108 applied, 109 all checks true; CONFORMANT, 58 tables. mcp v146. claude.ai verification 10/10, plus the plain split refusal. 110 removed the test rule and tag |
 | 5 | Starter taxonomy, merchants and rules (in claude.ai) | done | 2026-10-11: taxonomy, merchants and rules set up in claude.ai; review queue at 0. Follow-up (tag exclusions, 114/115) done |
 | 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | done 2026-10-11 | Plan approved 2026-10-11 (decisions A–D). 6a: SQL for "always do this" plus `wb_transactions.notes`, 117 applied 2026-10-11 (CONFORMANT, 60 tables), 118 24/24. 6b (UI) verified by Alex: all 26 steps passed on desktop, a phone-sized window, his real phone and as Elise. 6c: tool wrapper, `excluded_tags` and WB_MANUAL; mcp v147 deployed, and the fresh-thread check passed |
-| 7 | Migration B + tools: subscriptions, price history, monthly detection | in progress | Plan approved 2026-10-11 (D1–D6). 7a: 120 applied 2026-10-12 (conformant), 121 39/39. 7b done: wb-sync v6, whose first run detected 19 watching rows. 7c (tools) in progress |
+| 7 | Migration B + tools: subscriptions, price history, monthly detection | in progress | Plan approved 2026-10-11 (D1–D6). 7a: 120 applied 2026-10-12 (conformant), 121 39/39. 7b done: wb-sync v6, whose first run detected 19 watching rows. 7c done: mcp v148, 116 tools, fresh-thread check passed. 7d (Review tab) in progress |
 | 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | not started | |
 | 9 | Phase 2 review and Phase 3 steps | not started | |
 | 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | not started | Added 2026-10-09. Also: a bulk-create tool for tags, merchants and rules (Step 5 hit the 60-calls-per-5-minutes limit creating them one call at a time) |
@@ -139,3 +139,16 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
     - `record_wb_subscription_price` (tier 2): one price per day; with a `transaction_id`, it uses that charge's date and hand-links the charge.
     - `get_wb_review_queue` accepts `price_change` and `new_recurring`, and merchants show `not_subscription`.
     - Tests: functions 642/642, CLI 174/174. `deno check` finds no errors in the changed files. Tool count goes to 116.
+    - Deploy attempted 2026-10-12, after gitsync with no drift. It failed three times with Supabase's "Function deploy failed due to an internal error", during Supabase's live "Edge Function Degradation" incident. mcp is still v147, and the 401 check passes. A retry after the incident cleared succeeded: **mcp v148**, with the unauthenticated 401 confirmed.
+    - **7c done (2026-10-12):** the fresh-thread check on v148 passed.
+      - 116 tools, with the three subscription tools listed.
+      - 19 watching rows, the same set as the 7b run.
+      - 19 `new_recurring` queue items, one per watching row.
+      - No writes.
+  - 7d (2026-10-12), written and tested, not yet verified by Alex:
+    - The Review tab labels the new reasons "Subscription price changed" and "Looks like a subscription".
+    - "Record new price" upserts the charge's amount as the price from its date, source manual.
+    - "Not a subscription" flags the merchant `not_subscription`, then deletes the watching row. Only a watching row can be dismissed.
+    - "Keep watching" marks the charge reviewed. Under 120's SQL that does **not** take the row out of `new_recurring`, which ignores reviewed. This is raised with Alex.
+    - Tests: app 2406/2406, and `CI=true npm run build` compiled.
+    - From 120: deleting a watching row sets its charges' `subscription_id` to null (on delete set null). `new_recurring` reads only existing watching rows, so dismissed charges leave the queue.

@@ -19,6 +19,9 @@
 //   mark_wb_reviewed                 tier 2 — reviewed flag
 //   reprocess_wb_transactions        tier 2 — re-run processing over ids or dates
 //   get_wb_spending / get_wb_cash_flow  tier 1 — the two report views
+//   get_wb_subscriptions             tier 1 — subscriptions with current price and overdue (Step 7)
+//   upsert_wb_subscription           tier 2 — create, edit, confirm or dismiss a subscription
+//   record_wb_subscription_price     tier 2 — a price change, optionally from a charge
 //
 // Multi-row writes go through the invoker functions from the Step 4 migration,
 // so each is one transaction. Sign rule: money in positive, money out negative.
@@ -35,7 +38,12 @@ type Obj = Record<string, unknown>;
 type Db = any;
 
 export const HAND_SOURCES = ["claude", "manual"] as const;
-export const REVIEW_REASONS = ["no_kind", "missing_required_tag", "transfer_candidate", "split_mismatch"] as const;
+export const REVIEW_REASONS = [
+  "no_kind", "missing_required_tag", "transfer_candidate", "split_mismatch", "price_change", "new_recurring",
+] as const;
+export const SUB_CADENCES = ["monthly", "quarterly", "annual", "other"] as const;
+export const SUB_STATUSES = ["watching", "active", "paused", "cancelled"] as const;
+export const SUB_OWNERS = ["alex", "elise", "joint"] as const;
 export const SPENDING_LEVELS = ["top", "leaf"] as const;
 export const MATCH_KEYS = [
   "merchant_id", "payee_contains", "description_contains", "account_ids", "amount_min", "amount_max", "kind",
@@ -52,7 +60,13 @@ const QUEUE_COLUMNS =
   "reason, detail, transaction_id, account_id, account_label, txn_date, amount, description, clean_description, " +
   "payee, merchant_id, merchant_name, merchant_source, kind, kind_source, pending, reviewed, transfer_candidate, " +
   "transfer_pair_id, tag_names";
-const MERCHANT_COLUMNS = "id, name, match_patterns, default_kind, notes, created_at, updated_at";
+const MERCHANT_COLUMNS = "id, name, match_patterns, default_kind, not_subscription, notes, created_at, updated_at";
+const SUB_COLUMNS =
+  "id, name, plan, status, cadence, merchant_id, merchant_name, merchant_not_subscription, billed_through_id, " +
+  "billed_through_name, bundle_id, bundle_name, current_price, previous_price, last_change_on, price_count, " +
+  "expected_amount, amount_tolerance, term_end_date, auto_renew, review_date, last_charged_on, next_expected_on, " +
+  "charge_count, overdue, days_past_expected, owner, notes";
+const PRICE_COLUMNS = "id, subscription_id, effective_on, amount, source, transaction_id, notes, created_at";
 const RULE_COLUMNS =
   "id, name, priority, active, match, set_kind, set_merchant_id, add_tag_ids, created_by, " +
   "created_from_transaction_id, hit_count, last_hit_at, notes, created_at, updated_at";
@@ -90,6 +104,12 @@ export const KNOWN_DB_ERRORS: Array<[RegExp, string]> = [
   [/no distinctive word/, "There is no distinctive word to match on: pass pattern."],
   [/say what the rule does/, "Say what the rule does: set_kind and/or add_tag_ids."],
   [/no rule .* that you can see/, "No rule with that id that you can see."],
+  [/no subscription .* that you can see/, "No subscription with that id that you can see."],
+  [/wb_subscriptions_merchant_id_fkey/, "No merchant with that id."],
+  [/wb_subscriptions_(billed_through|bundle)_id_fkey/, "No subscription with that id for billed_through_id or bundle_id."],
+  [/wb_subscriptions_(billed_through|bundle)_check/, "A subscription cannot be billed through or bundled with itself."],
+  [/wb_subscriptions_name_check/, "A subscription needs a name."],
+  [/wb_subscription_prices_transaction_id_fkey/, "No transaction with that id."],
 ];
 
 /** A known database refusal as a plain sentence; anything else as the platform's operational error. */
@@ -205,7 +225,7 @@ export function buildTagTree(groups: Obj[], tags: Obj[], usage: Map<string, numb
 
 /** wb_process_transactions over ids, in chunks. Returns summed counts. */
 export async function reprocess(T: string, db: Db, ids: string[]) {
-  const totals = { processed: 0, paired: 0, transfer_candidates: 0, rule_tags: 0 };
+  const totals = { processed: 0, paired: 0, transfer_candidates: 0, rule_tags: 0, subscriptions_linked: 0 };
   const unique = [...new Set(ids)];
   for (let i = 0; i < unique.length; i += PROCESS_CHUNK) {
     const { data, error } = await db.rpc("wb_process_transactions", { ids: unique.slice(i, i + PROCESS_CHUNK) });
@@ -932,5 +952,187 @@ export const getWbCashFlowTool = defineTool({
     const { data, error, count } = await q.order("month", { ascending: false }).limit(LIMIT);
     if (error) throw new Error(dbError(T, error));
     return listResult(data ?? [], count, LIMIT);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Subscriptions (spec §4.8, Step 7). Amounts here are positive prices.
+// ---------------------------------------------------------------------------
+
+async function subscriptionById(T: string, db: Db, subId: string): Promise<Obj | null> {
+  const { data, error } = await db.from("wb_subscription_overview").select(SUB_COLUMNS).eq("id", subId).maybeSingle();
+  if (error) throw new Error(dbError(T, error));
+  return (data ?? null) as Obj | null;
+}
+
+/** Reprocess merchants' transactions, so charges link to (or leave) their subscriptions. */
+async function reprocessMerchants(T: string, db: Db, merchantIds: string[]) {
+  const { data, error } = await db.from("wb_transactions").select("id").in("merchant_id", merchantIds).limit(MAX_REPROCESS);
+  if (error) throw new Error(dbError(T, error));
+  return await reprocess(T, db, ((data ?? []) as Obj[]).map((r) => r.id as string));
+}
+
+function positiveMoney(T: string, key: string, v: unknown): number | null {
+  const n = parseMoney(T, key, v);
+  if (n !== null && n <= 0) throw new Error(`${T}: ${key} must be a positive price in dollars. Nothing was changed.`);
+  return n;
+}
+
+// get_wb_subscriptions — tier 1
+
+export const getWbSubscriptionsTool = defineTool({
+  name: "get_wb_subscriptions",
+  tier: 1,
+  handler: async (args: Obj, ctx) => {
+    const T = "get_wb_subscriptions";
+    const status = oneOf(T, "status", args.status, SUB_STATUSES);
+    const merchantId = optUuid(T, "merchant_id", args.merchant_id);
+    const search = searchTerm(T, args.search);
+    const overdueOnly = optBool(T, "overdue_only", args.overdue_only) ?? false;
+    const includePrices = optBool(T, "include_prices", args.include_prices) ?? false;
+    const LIMIT = limitOf(T, args.limit);
+    let q = ctx.db.from("wb_subscription_overview").select(SUB_COLUMNS, { count: "exact" });
+    if (status) q = q.eq("status", status);
+    if (merchantId) q = q.eq("merchant_id", merchantId);
+    if (search) q = q.ilike("name", `%${escapeLike(search)}%`);
+    if (overdueOnly) q = q.eq("overdue", true);
+    const { data, error, count } = await q.order("status").order("name").limit(LIMIT);
+    if (error) throw new Error(dbError(T, error));
+    let rows = (data ?? []) as unknown as Obj[];
+    if (includePrices && rows.length) {
+      const { data: prices, error: pe } = await ctx.db.from("wb_subscription_prices").select(PRICE_COLUMNS)
+        .in("subscription_id", rows.map((r) => r.id)).order("effective_on", { ascending: false });
+      if (pe) throw new Error(dbError(T, pe));
+      const bySub = new Map<string, Obj[]>();
+      for (const p of (prices ?? []) as Obj[]) {
+        const k = p.subscription_id as string;
+        bySub.set(k, [...(bySub.get(k) ?? []), p]);
+      }
+      rows = rows.map((r) => ({ ...r, prices: bySub.get(r.id as string) ?? [] }));
+    }
+    return listResult(rows, count, LIMIT);
+  },
+});
+
+// upsert_wb_subscription — tier 2
+
+export const upsertWbSubscriptionTool = defineTool({
+  name: "upsert_wb_subscription",
+  tier: 2,
+  handler: async (args: Obj, ctx) => {
+    const T = "upsert_wb_subscription";
+    const subId = optUuid(T, "id", args.id);
+    const doReprocess = optBool(T, "reprocess", args.reprocess) ?? true;
+
+    // Dismiss or restore detection for the subscription's merchant.
+    const notSub = optBool(T, "not_subscription", args.not_subscription);
+    if (notSub !== null) {
+      if (!subId) throw new Error(`${T}: not_subscription needs the subscription's id. Nothing was changed.`);
+      const sub = await subscriptionById(T, ctx.db, subId);
+      if (!sub) throw new Error(`${T}: no subscription ${subId} that you can see. Nothing was changed.`);
+      if (!sub.merchant_id) throw new Error(`${T}: this subscription has no merchant to mark. Nothing was changed.`);
+      if (notSub && sub.status !== "watching") {
+        throw new Error(`${T}: only a watching (detected) subscription can be dismissed; to stop one, set status cancelled. Nothing was changed.`);
+      }
+      const { error: me } = await ctx.db.from("wb_merchants").update({ not_subscription: notSub }).eq("id", sub.merchant_id);
+      if (me) throw new Error(dbError(T, me));
+      let dismissed = false;
+      if (notSub) {
+        const { error: de } = await ctx.db.from("wb_subscriptions").delete().eq("id", subId);
+        if (de) throw new Error(dbError(T, de));
+        dismissed = true;
+      }
+      return { merchant_id: sub.merchant_id, merchant_name: sub.merchant_name, not_subscription: notSub, dismissed };
+    }
+
+    const fields: Obj = {};
+    const name = args.name === undefined ? undefined : optText(T, "name", args.name);
+    if (name !== undefined) fields.name = name;
+    if (args.plan !== undefined) fields.plan = optText(T, "plan", args.plan);
+    if (args.merchant_id !== undefined) fields.merchant_id = optUuid(T, "merchant_id", args.merchant_id);
+    if (args.cadence !== undefined) fields.cadence = oneOf(T, "cadence", args.cadence, SUB_CADENCES) ?? "monthly";
+    if (args.expected_amount !== undefined) fields.expected_amount = positiveMoney(T, "expected_amount", args.expected_amount);
+    if (args.amount_tolerance !== undefined) {
+      const tol = parseMoney(T, "amount_tolerance", args.amount_tolerance) ?? 0;
+      if (tol < 0) throw new Error(`${T}: amount_tolerance cannot be negative. Nothing was changed.`);
+      fields.amount_tolerance = tol;
+    }
+    if (args.term_end_date !== undefined) fields.term_end_date = parseDate(T, "term_end_date", args.term_end_date);
+    if (args.auto_renew !== undefined) fields.auto_renew = optBool(T, "auto_renew", args.auto_renew);
+    if (args.review_date !== undefined) fields.review_date = parseDate(T, "review_date", args.review_date);
+    if (args.billed_through_id !== undefined) fields.billed_through_id = optUuid(T, "billed_through_id", args.billed_through_id);
+    if (args.bundle_id !== undefined) fields.bundle_id = optUuid(T, "bundle_id", args.bundle_id);
+    if (args.status !== undefined) fields.status = oneOf(T, "status", args.status, SUB_STATUSES) ?? "active";
+    if (args.owner !== undefined) fields.owner = oneOf(T, "owner", args.owner, SUB_OWNERS);
+    if (args.notes !== undefined) fields.notes = optText(T, "notes", args.notes);
+
+    let before: Obj | null = null;
+    let savedId: string;
+    if (subId) {
+      before = await subscriptionById(T, ctx.db, subId);
+      if (!before) throw new Error(`${T}: no subscription ${subId} that you can see. Nothing was changed.`);
+      if (fields.name === null) throw new Error(`${T}: a subscription needs a name. Nothing was changed.`);
+      if (Object.keys(fields).length === 0) throw new Error(`${T}: nothing to change. Nothing was changed.`);
+      const { error } = await ctx.db.from("wb_subscriptions").update(fields).eq("id", subId);
+      if (error) throw new Error(dbError(T, error));
+      savedId = subId;
+    } else {
+      if (!fields.name) throw new Error(`${T}: a new subscription needs a name. Nothing was created.`);
+      const { data, error } = await ctx.db.from("wb_subscriptions")
+        .insert({ context_id: MONEY_CONTEXT_ID, status: "active", ...fields }).select("id").single();
+      if (error) throw new Error(dbError(T, error));
+      savedId = (data as Obj).id as string;
+    }
+
+    // Linking happens in processing: reprocess the merchant(s) whose charges may move.
+    const merchants = [...new Set([before?.merchant_id, fields.merchant_id].filter(Boolean))] as string[];
+    const reprocessed = doReprocess && merchants.length ? await reprocessMerchants(T, ctx.db, merchants) : null;
+    return { subscription: await subscriptionById(T, ctx.db, savedId), created: !subId, reprocessed };
+  },
+});
+
+// record_wb_subscription_price — tier 2
+
+export const recordWbSubscriptionPriceTool = defineTool({
+  name: "record_wb_subscription_price",
+  tier: 2,
+  handler: async (args: Obj, ctx) => {
+    const T = "record_wb_subscription_price";
+    const subId = uuidOf(T, "subscription_id", args.subscription_id);
+    const amount = positiveMoney(T, "amount", args.amount);
+    if (amount === null) throw new Error(`${T}: amount (the new price, positive dollars) is required. Nothing was changed.`);
+    const txnId = optUuid(T, "transaction_id", args.transaction_id);
+    let effectiveOn = parseDate(T, "effective_on", args.effective_on);
+    const source = oneOf(T, "source", args.source, HAND_SOURCES) ?? "claude";
+    const notes = optText(T, "notes", args.notes);
+
+    const sub = await subscriptionById(T, ctx.db, subId);
+    if (!sub) throw new Error(`${T}: no subscription ${subId} that you can see. Nothing was changed.`);
+    let txn: Obj | null = null;
+    if (txnId) {
+      const { data, error } = await ctx.db.from("wb_transaction_list").select("id, txn_date, subscription_id")
+        .eq("id", txnId).maybeSingle();
+      if (error) throw new Error(dbError(T, error));
+      if (!data) throw new Error(`${T}: no transaction ${txnId} that you can see. Nothing was changed.`);
+      txn = data as Obj;
+      effectiveOn = effectiveOn ?? (txn.txn_date as string);
+    }
+    if (!effectiveOn) throw new Error(`${T}: pass effective_on (YYYY-MM-DD), or transaction_id to use its date. Nothing was changed.`);
+
+    // One price per subscription and day: recording the same day again replaces it.
+    const { data: price, error } = await ctx.db.from("wb_subscription_prices")
+      .upsert({ subscription_id: subId, effective_on: effectiveOn, amount, source, transaction_id: txnId, notes },
+        { onConflict: "subscription_id,effective_on" })
+      .select(PRICE_COLUMNS).single();
+    if (error) throw new Error(dbError(T, error));
+
+    let linked = false;
+    if (txn && txn.subscription_id !== subId) {
+      const { error: le } = await ctx.db.rpc("wb_link_subscription",
+        { p_transaction_ids: [txnId], p_subscription_id: subId, p_source: source });
+      if (le) throw new Error(dbError(T, le));
+      linked = true;
+    }
+    return { price, linked, subscription: await subscriptionById(T, ctx.db, subId) };
   },
 });

@@ -291,6 +291,83 @@ test("the confirmed fix calls wb_apply_fix as claude and returns the described r
   await assert.rejects(m.createWbRuleFromTransactionTool.handler({ transaction_id: id(1), confirmed: true }, { db }), /set_kind and\/or add_tag_ids/);
 });
 
+// --- subscriptions (Step 7) -------------------------------------------------
+
+const SUB = { id: id(70), name: "ZZ Stream", status: "watching", merchant_id: id(50), merchant_name: "ZZ Stream" };
+
+/** Subscriptions fake: the overview answers with `sub`; transactions with `txn`. */
+function subDb({ sub = SUB, txn = null, prices = [] } = {}) {
+  return fakeDb((table, ops) => {
+    if (table === "wb_subscription_overview") {
+      return has(ops, "maybeSingle") ? { data: sub, error: null } : { data: [sub], error: null, count: 1 };
+    }
+    if (table === "wb_subscription_prices") {
+      return has(ops, "single") ? { data: { id: id(80), amount: 6 }, error: null } : { data: prices, error: null };
+    }
+    if (table === "wb_transaction_list") return { data: txn, error: null };
+    if (table === "wb_subscriptions" && has(ops, "single")) return { data: { id: id(71) }, error: null };
+    if (table === "wb_transactions") return { data: [{ id: id(1) }, { id: id(2) }], error: null };
+    return { data: null, error: null };
+  }, (fn) => ({ data: fn === "wb_process_transactions" ? { processed: 2, subscriptions_linked: 1 } : {}, error: null }));
+}
+
+test("get_wb_subscriptions filters and attaches price history on request", async () => {
+  const db = subDb({ prices: [{ subscription_id: id(70), effective_on: "2026-09-01", amount: 6 }] });
+  const out = await m.getWbSubscriptionsTool.handler({ status: "watching", overdue_only: true, include_prices: true }, { db });
+  const ops = db.log.find((q) => q.table === "wb_subscription_overview").ops;
+  assert.deepEqual(ops.filter((o) => o[0] === "eq"), [["eq", "status", "watching"], ["eq", "overdue", true]]);
+  assert.equal(out.data[0].prices.length, 1);
+  await assert.rejects(m.getWbSubscriptionsTool.handler({ status: "gone" }, { db }), /status must be one of/);
+});
+
+test("upsert_wb_subscription creates as active in the Money context, then reprocesses the merchant", async () => {
+  const db = subDb();
+  const out = await m.upsertWbSubscriptionTool.handler(
+    { name: "ZZ Stream", merchant_id: id(50), cadence: "annual", expected_amount: 60, amount_tolerance: 0.5 }, { db });
+  const [, row] = db.op("wb_subscriptions", "insert")[0];
+  assert.deepEqual(row, { context_id: MONEY, status: "active", name: "ZZ Stream", merchant_id: id(50), cadence: "annual",
+    expected_amount: 60, amount_tolerance: 0.5 });
+  assert.deepEqual(db.rpcs[0], ["wb_process_transactions", { ids: [id(1), id(2)] }]);
+  assert.equal(out.created, true);
+  assert.equal(out.reprocessed.subscriptions_linked, 1);
+  await assert.rejects(m.upsertWbSubscriptionTool.handler({ plan: "x" }, { db }), /needs a name/);
+  await assert.rejects(m.upsertWbSubscriptionTool.handler({ name: "x", expected_amount: -5 }, { db }), /positive price/);
+});
+
+test("not_subscription dismisses only a watching row: merchant flagged, row deleted", async () => {
+  const db = subDb();
+  const out = await m.upsertWbSubscriptionTool.handler({ id: id(70), not_subscription: true }, { db });
+  assert.deepEqual(db.op("wb_merchants", "update")[0], ["update", { not_subscription: true }]);
+  assert.equal(db.op("wb_subscriptions", "delete").length, 1);
+  assert.equal(out.dismissed, true);
+  const active = subDb({ sub: { ...SUB, status: "active" } });
+  await assert.rejects(m.upsertWbSubscriptionTool.handler({ id: id(70), not_subscription: true }, { db: active }),
+    /only a watching/);
+  assert.equal(writes(active).length, 0);
+});
+
+test("record_wb_subscription_price uses the charge's date and links the charge by hand", async () => {
+  const db = subDb({ txn: { id: id(1), txn_date: "2026-10-01", subscription_id: null } });
+  const out = await m.recordWbSubscriptionPriceTool.handler(
+    { subscription_id: id(70), amount: 6, transaction_id: id(1) }, { db });
+  const [, row, opts] = db.op("wb_subscription_prices", "upsert")[0];
+  assert.deepEqual(row, { subscription_id: id(70), effective_on: "2026-10-01", amount: 6, source: "claude",
+    transaction_id: id(1), notes: null });
+  assert.deepEqual(opts, { onConflict: "subscription_id,effective_on" });
+  assert.deepEqual(db.rpcs[0], ["wb_link_subscription",
+    { p_transaction_ids: [id(1)], p_subscription_id: id(70), p_source: "claude" }]);
+  assert.equal(out.linked, true);
+  await assert.rejects(m.recordWbSubscriptionPriceTool.handler({ subscription_id: id(70), amount: 6 }, { db }), /pass effective_on/);
+  await assert.rejects(m.recordWbSubscriptionPriceTool.handler({ subscription_id: id(70), amount: 0, effective_on: "2026-10-01" }, { db }),
+    /positive price/);
+});
+
+test("subscription database refusals are plain sentences", () => {
+  assert.equal(m.dbError("t", { message: 'violates check constraint "wb_subscriptions_bundle_check"' }),
+    "t: A subscription cannot be billed through or bundled with itself. Nothing was changed.");
+  assert.ok(m.REVIEW_REASONS.includes("price_change") && m.REVIEW_REASONS.includes("new_recurring"));
+});
+
 test("a second rule without a choice is refused in plain words", async () => {
   const db = fixDb({ applyError: { message: "wb_apply_fix: a rule already exists for Corner; update it or add another", code: "23505" } });
   const err = await m.createWbRuleFromTransactionTool.handler({ transaction_id: id(1), set_kind: "spend", confirmed: true }, { db })
