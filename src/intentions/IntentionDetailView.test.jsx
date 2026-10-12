@@ -167,6 +167,26 @@ test("title pill: Closed with live events opens the sheet; nothing saved yet", (
   expect(onSetStatus).not.toHaveBeenCalled();
 });
 
+describe("Copy (P3)", () => {
+  test("sits before ⋯ and copies text then link when there is no description", async () => {
+    const writeText = jest.fn().mockResolvedValue();
+    Object.assign(navigator, { clipboard: { writeText } });
+    const onNotify = jest.fn();
+    renderDetail({ onNotify });
+    const names = screen.getAllByRole("button").map((b) => b.textContent || b.getAttribute("aria-label"));
+    expect(names.indexOf("Copy")).toBe(names.indexOf("More actions") - 1);
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(onNotify).toHaveBeenCalledWith("Copied"));
+    expect(writeText).toHaveBeenCalledWith("Water plants\n\nhttps://alfredv5vibe.vercel.app/i1");
+  });
+
+  test("stays enabled on a closed intention", () => {
+    renderDetail({ intention: { id: "i1", text: "Water plants", status: "closed" }, events: [] });
+    expect(screen.getByRole("button", { name: "Copy" }).disabled).toBe(false);
+    expect(screen.getByRole("button", { name: /Start Now|Continue/ }).disabled).toBe(true);
+  });
+});
+
 describe("pending reminders and the status sheet (P3)", () => {
   afterEach(() => {
     mockScheduled = [];

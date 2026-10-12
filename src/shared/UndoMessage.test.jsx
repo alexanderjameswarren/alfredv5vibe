@@ -52,6 +52,35 @@ describe("the message", () => {
   });
 });
 
+describe("notices with nothing to restore (P3)", () => {
+  function NoticeHarness() {
+    const { pendingUndo, offerUndo, runUndo, dismissUndo } = useUndo();
+    return (
+      <div>
+        <button onClick={() => offerUndo("Copied", null)}>notice</button>
+        <button onClick={() => offerUndo("Could not copy", null, { tone: "error" })}>error</button>
+        <UndoMessage pendingUndo={pendingUndo} onUndo={runUndo} onDismiss={dismissUndo} />
+      </div>
+    );
+  }
+
+  it("shows no Undo without a restore", () => {
+    render(<NoticeHarness />);
+    fireEvent.click(screen.getByText("notice"));
+    expect(screen.getByText("Copied")).toBeInTheDocument();
+    expect(screen.queryByText("Undo")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveClass("bg-foreground");
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+  });
+
+  it("shows an error notice in red", () => {
+    render(<NoticeHarness />);
+    fireEvent.click(screen.getByText("error"));
+    expect(screen.getByRole("status")).toHaveClass("bg-destructive");
+    expect(screen.queryByText("Undo")).not.toBeInTheDocument();
+  });
+});
+
 describe("expiry", () => {
   it("stays up for the full duration", () => {
     render(<Harness onRestore={jest.fn()} />);

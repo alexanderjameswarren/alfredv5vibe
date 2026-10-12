@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { Archive, ArrowLeft, CalendarPlus, Copy, Play, Plus, Settings } from "lucide-react";
+import { Archive, ArrowLeft, CalendarPlus, ClipboardCopy, Copy, Play, Plus, Settings } from "lucide-react";
+import { copyRecord } from "../shared/copyRecord";
 import ObjectIcon from "../shared/ObjectIcon";
 import OverflowMenu from "../shared/OverflowMenu";
 import { ACTION_BUTTON } from "../shared/actionButton";
@@ -34,6 +35,8 @@ const CollectionIcon = (props) => <ObjectIcon type="collection" {...props} />;
 
 export default function ItemDetailView({
   tagPool = [],
+  // (message, { error }) => void, the app's short toast. Copy reports through it.
+  onNotify,
   // As IntentionDetailView: the capture this item was filed from, or null.
   capturedText,
   // Step 12.6. Takes the item id so the add page can seed the intention against
@@ -254,6 +257,13 @@ export default function ItemDetailView({
           >
             <Settings className="w-4 h-4" />
             Edit
+          </button>
+          <button
+            onClick={() => copyRecord({ title: item.name, description: item.description, id: item.id }, onNotify)}
+            className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
+          >
+            <ClipboardCopy className="w-4 h-4" />
+            Copy
           </button>
           <OverflowMenu
             actions={[

@@ -45,7 +45,10 @@ Spec: `docs/technical-spec-restructure_p3.md`
     - "Cancel" sets cancel_reason `intent_status`, and Undo re-arms those that are still ahead (`cancelRemindersForStatus`, `restoreRemindersAfterStatus`).
     - Migration `119_restructure_p3_reminders_follow_intent.sql` allows the `intent_status` and `intent_archived` reasons.
     - Trigger `reminders_follow_intent_archive` (SECURITY DEFINER): archive cancels as `intent_archived`; un-archive re-arms only `intent_archived` reminders still in the future.
-- [ ] 7. Copy button on item and intention detail.
+- [x] 7. Copy button on item and intention detail. (Built 2026-10-12; awaiting a Chrome test.)
+  - Copy (ClipboardCopy icon, beige, `ACTION_BUTTON`) sits just before ⋯ on both pages and stays enabled when closed. It copies `recordCopyText` (`src/shared/copyRecord.js`): the title, then the description (left out when empty), then the link, separated by blank lines.
+  - The pages report through `onNotify(message, { error })`. Alfred passes `notify`: the short toast with no Undo, red for an error. A clipboard failure is a red toast, not an alert.
+  - `UndoMessage` shows Undo only when there is a restore, and has `tone: "error"` (bg-destructive). `offerUndoFor(msg, null)` no longer wraps the null, which fixes the inbox "Copied" toast whose Undo failed with "Operation failed".
 - [ ] 8. After warren_buffet_p2-m4t finishes and gitsync:
   - tool changes, including a new tier-1 `get_apps` (tool count 113 → 114)
   - index.test.mjs schema checks
