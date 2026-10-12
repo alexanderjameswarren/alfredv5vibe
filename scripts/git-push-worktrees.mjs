@@ -64,9 +64,22 @@ import {
   changedFiles,
   choose,
   exclusive,
+  applyDocsMove,
+  docsClashRefusal,
+  docsMovePaths,
+  forceDecision,
+  leftBehindRefusal,
+  planDocsMove,
+  withoutMoved,
+  findCheckout,
+  finishFromInside,
+  misplacedOptions,
+  modeKey,
   parseArgs,
   parseSelection,
+  pickCheckouts,
   removeEmptyDir,
+  resultExit,
   commitsAhead,
   confirm,
   describeFile,
@@ -109,9 +122,6 @@ const USAGE = `gitpush — bring work into main and push it.
 /** The command line, resolved. Read by the three mode functions below. */
 let OPTS = {};
 
-const MODE_KEYS = { push: "p", finish: "f", checkpoint: "c", skip: "s" };
-const MODE_NAME = { p: "push", f: "finish", c: "checkpoint", s: "skip" };
-
 /**
  * Refuse an option the chosen mode will not read.
  *
@@ -121,39 +131,14 @@ const MODE_NAME = { p: "push", f: "finish", c: "checkpoint", s: "skip" };
  * line and pick another at the prompt.
  */
 function checkOptionsFor(mode, w) {
-  if (mode === "s") return;
-  const misplaced = [];
-  if (mode !== "c") {
-    for (const name of ["paths", "all", "release-db", "keep-db"]) {
-      if (OPTS[name] !== undefined) misplaced.push(`--${name}`);
-    }
-  }
-  if (!w.isMain && OPTS["include-unclaimed"] !== undefined) {
-    misplaced.push("--include-unclaimed");
-  }
-  if (misplaced.length) {
-    stop(
-      `\n${misplaced.join(", ")} ${misplaced.length > 1 ? "are" : "is"} not used by ` +
-        `${MODE_NAME[mode]}${w.isMain ? " on main" : ` on ${w.owner}`}.\n` +
-        `Nothing was changed.`,
-      2,
-    );
-  }
+  const refusal = misplacedOptions(mode, w, OPTS);
+  if (refusal) stop(refusal, 2);
 }
 
-/** Turn a mode word into the key the rest of this file uses. */
-function modeKey(word, w) {
-  const key = MODE_KEYS[String(word).toLowerCase()];
-  if (!key) {
-    throw new UsageError(`"${word}" is not a mode. Use push, finish, checkpoint or skip.`);
-  }
-  if (w.isMain && key === "c") {
-    throw new UsageError(`Checkpoint is for a worktree. main takes push or finish.`);
-  }
-  if (!w.isMain && key === "p") {
-    throw new UsageError(`Push is for the main checkout. ${w.owner} takes checkpoint or finish.`);
-  }
-  return key;
+/** Refuse a Finish run from inside the worktree it removes, before anything is asked. */
+function checkFinishFrom(mode, w, mainPath) {
+  const refusal = mode === "f" ? finishFromInside(w, { cwd: process.cwd(), mainPath }) : null;
+  if (refusal) stop(refusal, 1);
 }
 
 /** Claims and reservations held by one worktree name. */
@@ -253,17 +238,24 @@ function mergeAndPush(w, root) {
 function doMain(w, ctx, release) {
   heading(`${release ? "Finish" : "Push only"} — main checkout`);
 
+  // Finish closes main's project: its docs go to docs/history/, as a worktree's do.
+  const code = release ? readMainCode(ctx) : null;
+  const docs = code ? planDocsMove(code, w.path, w.path) : { moves: [], missing: [], clashes: [] };
+  const clash = docsClashRefusal(docs, `main (${code})`);
+  if (clash) stop(clash, 1);
+  const dirty = withoutMoved(w.dirty, docs.moves);
+
   let staging = [];
-  if (w.dirty.length) {
+  if (dirty.length) {
     const state = readState(ctx.file);
-    const parts = partitionByClaims(state, "main", w.dirty);
+    const parts = partitionByClaims(state, "main", dirty);
     staging = selectByClaims({
       owner: "main",
       ...parts,
       include: OPTS["include-unclaimed"],
     });
   } else {
-    say("\nNothing is uncommitted here.");
+    say(`\nNothing ${docs.moves.length ? "else " : ""}is uncommitted here.`);
   }
 
   const all = [...w.files, ...w.db];
@@ -271,9 +263,12 @@ function doMain(w, ctx, release) {
   if (staging.length) {
     say(`Commit  ${staging.length} file(s):`);
     for (const f of staging) say(`          ${describeFile(f)}`);
-  } else {
+  } else if (!docs.moves.length) {
     say("Commit  nothing — no changes selected.");
   }
+  for (const m of docs.moves) say(`Move    ${m.from} → ${m.to}  (in the same commit)`);
+  for (const f of docs.missing) say(`  No ${f} here — nothing to move for it.`);
+  if (release && !code) say(`  main has no project code, so there are no project docs to move.`);
   say(
     w.ahead.hasUpstream
       ? `Push    ${w.branch} to ${w.ahead.upstream}.`
@@ -287,10 +282,22 @@ function doMain(w, ctx, release) {
 
   if (!confirm("\nDo all of that?")) return "cancelled";
 
-  if (staging.length) {
+  let toCommit = staging.map((f) => f.path);
+  if (docs.moves.length) {
+    try {
+      applyDocsMove(w.path, docs.moves);
+    } catch (err) {
+      say(`\n  Could not move the docs: ${err.message}`);
+      return "failed";
+    }
+    toCommit = [...new Set([...toCommit, ...docsMovePaths(docs.moves, changedFiles(w.path))])];
+    say(`\n  Moved ${docs.moves.length} doc(s) into docs/history/.`);
+  }
+
+  if (toCommit.length) {
     const message =
       OPTS.message ?? askMessage(readMainCode(ctx) ?? "main", release ? "finish" : "push");
-    if (!stageAndCommit(w.path, staging.map((f) => f.path), message)) return "failed";
+    if (!stageAndCommit(w.path, toCommit, message)) return "failed";
   }
 
   if (!gitLive(["push"], w.path)) {
@@ -351,7 +358,17 @@ function removeWorktree(w, ctx) {
     return false;
   }
 
-  say(`\n  Plain removal refused. Trying --force (the work is already in ${BASE}).`);
+  // --force deletes uncommitted work too, so only when git status is clean.
+  const forcing = forceDecision(changedFiles(w.path));
+  say(`\n  Plain removal refused. ${forcing.why}`);
+  if (!forcing.force) {
+    say(`\n  Not forcing. The merge, the push and the claim release all succeeded;`);
+    say(`  commit those with gitcom in the worktree, or delete them, then remove it:`);
+    say(`    git -C "${winPath(ctx.root)}" worktree remove "${winPath(w.path)}"`);
+    say(`    git -C "${winPath(ctx.root)}" branch -d ${w.branch}`);
+    return false;
+  }
+  say(`  Trying --force.`);
   if (gitLive(["worktree", "remove", "--force", w.path], ctx.root)) return clearLeftover(w);
 
   // git can fail after emptying the folder, when only the folder itself is held
@@ -394,20 +411,28 @@ const winPath = (p) => p.replace(/\//g, "\\");
 function doFinish(w, ctx) {
   heading(`Finish — ${w.owner}`);
 
+  // The project's spec and progress go to docs/history/ in the Finish commit.
+  // A same-named file already there is refused now, before anything changes.
+  const docs = planDocsMove(w.owner, w.path, ctx.root);
+  const clash = docsClashRefusal(docs, w.owner);
+  if (clash) stop(clash, 1);
+
   // Finish commits what this worktree claimed and has changed. Anything it did
   // not claim is left where it is; gitcom is where unclaimed files get decided.
-  const claimedChanges = w.dirty.filter((f) =>
+  // The docs it moves are listed once, as moves, whoever claimed them.
+  const dirty = withoutMoved(w.dirty, docs.moves);
+  const claimedChanges = dirty.filter((f) =>
     w.files.some((item) => f.path === item || (item.endsWith("/") && f.path.startsWith(item))),
   );
-  const leftBehind = w.dirty.filter((f) => !claimedChanges.includes(f));
+  const leftBehind = dirty.filter((f) => !claimedChanges.includes(f));
+  // Anything left uncommitted dies with the worktree, so it is refused now.
+  const kept = leftBehindRefusal(w.owner, leftBehind);
+  if (kept) stop(kept, 1);
 
   say(`Commit  ${claimedChanges.length} claimed change(s):`);
   for (const f of claimedChanges) say(`          ${f.status.trim()} ${f.path}`);
-  if (leftBehind.length) {
-    say(`\n  Leaving ${leftBehind.length} unclaimed change(s) uncommitted:`);
-    for (const f of leftBehind) say(`          ${f.status.trim()} ${f.path}`);
-    say("  Run gitcom in that worktree first if they should go too.");
-  }
+  for (const m of docs.moves) say(`Move    ${m.from} → ${m.to}  (in the same commit)`);
+  for (const f of docs.missing) say(`  No ${f} here — nothing to move for it.`);
   say(`\nMerge   ${w.branch} into ${BASE}, then push.`);
   say(`Release all ${w.files.length + w.db.length} claim(s) held by ${w.owner}.`);
   say(`Remove  the worktree, then delete branch ${w.branch}.`);
@@ -422,17 +447,25 @@ function doFinish(w, ctx) {
     say(`   git says it is LOCKED: ${w.lockReason || "(no reason given)"}`);
     say(`   A running Claude session holds that lock until it exits.`);
   }
-  if (w.isCurrent) {
-    say(`   That includes THIS terminal, which is inside it. Removal will fail`);
-    say(`   from here — the merge, push and release will still work, and the`);
-    say(`   recovery commands will be printed.`);
-  }
+  // A terminal inside the worktree was refused before this: checkFinishFrom.
 
   if (!confirm("\nClosed? Do all of that?")) return "cancelled";
 
-  if (claimedChanges.length) {
+  let toCommit = claimedChanges.map((f) => f.path);
+  if (docs.moves.length) {
+    try {
+      applyDocsMove(w.path, docs.moves);
+    } catch (err) {
+      say(`\n  Could not move the docs: ${err.message}`);
+      return "failed";
+    }
+    toCommit = [...new Set([...toCommit, ...docsMovePaths(docs.moves, changedFiles(w.path))])];
+    say(`\n  Moved ${docs.moves.length} doc(s) into docs/history/.`);
+  }
+
+  if (toCommit.length) {
     const message = OPTS.message ?? askMessage(w.owner, "finish");
-    if (!commitIn(w, claimedChanges.map((f) => f.path), message)) return "failed";
+    if (!commitIn(w, toCommit, message)) return "failed";
   }
   if (!mergeAndPush(w, ctx.root)) return "failed";
 
@@ -469,7 +502,7 @@ function doCheckpoint(w, ctx) {
     // Given on the command line, so a path that is not here is a typo, and a
     // typo'd migration path silently dropped is the whole reason this is an
     // error rather than a shrug.
-    const sel = parseSelection(OPTS.paths.join(" "), w.dirty.length);
+    const sel = parseSelection(OPTS.paths, w.dirty.length);
     const named = [...sel.words, ...sel.bad].filter(
       (p) => !w.dirty.some((f) => f.path === p),
     );
@@ -628,24 +661,15 @@ function main() {
   // as the command not having run, which is what it is.
   let named = null;
   if (wantedCheckout) {
-    named =
-      summarised.find((t) => t.owner.toLowerCase() === wantedCheckout.toLowerCase()) ??
-      (/^\d+$/.test(wantedCheckout) ? summarised[Number(wantedCheckout) - 1] : undefined) ??
-      null;
-    if (!named) {
-      const isMode = MODE_KEYS[wantedCheckout.toLowerCase()] !== undefined;
-      stop(
-        `"${wantedCheckout}" is not a checkout here.\n` +
-          (isMode ? `It is a mode — the checkout comes first: gitpush main ${wantedCheckout}\n` : "") +
-          `Open: ${summarised.map((t) => t.owner).join(", ")}\n\n` +
-          `Nothing was changed.`,
-        2,
-      );
-    }
+    const found = findCheckout(wantedCheckout, summarised);
+    if (found.refusal) stop(found.refusal, 2);
+    named = found.checkout;
     if (wantedMode) {
       // Throws a UsageError for checkpoint-on-main and push-on-a-worktree,
       // caught below, before a single line of the listing is printed.
-      checkOptionsFor(modeKey(wantedMode, named), named);
+      const mode = modeKey(wantedMode, named);
+      checkOptionsFor(mode, named);
+      checkFinishFrom(mode, named, ctx.root);
     }
   }
 
@@ -660,27 +684,17 @@ function main() {
     // The one blank answer that still cancels, because the prompt says so and
     // because this is the question before anything has been decided — there is
     // no earlier answer for it to throw away.
-    const sel = parseSelection(
+    const picked = pickCheckouts(
       ask("\nWhich? (numbers, ranges, names, 'all', or enter to cancel): "),
-      summarised.length,
+      summarised,
     );
-    if (sel.blank) stop("Cancelled. Nothing changed.", 0);
-
-    const named = [];
-    const unrecognised = [...sel.bad];
-    for (const word of sel.words) {
-      const hit = summarised.find((t) => t.owner.toLowerCase() === word.toLowerCase());
-      if (hit) named.push(hit);
-      else unrecognised.push(word);
-    }
-    if (unrecognised.length) say(`\n  Not a checkout here: ${unrecognised.join(", ")}`);
-
-    chosen = sel.all
-      ? summarised
-      : [...new Set([...sel.indexes.map((n) => summarised[n - 1]), ...named])];
-
-    if (!chosen.length) stop("Nothing recognised in that. Nothing changed.", 0);
+    if (picked.cancel) stop(picked.cancel, 0);
+    if (picked.refusal) stop(picked.refusal, 2);
+    if (picked.unrecognised.length) say(`\n  Not a checkout here: ${picked.unrecognised.join(", ")}`);
+    chosen = picked.chosen;
   }
+
+  const done = [];
 
   // One at a time, stopping at the first problem: a half-done merge queue is
   // much harder to reason about than one that stopped where it broke.
@@ -729,18 +743,16 @@ function main() {
       continue;
     }
     checkOptionsFor(mode, w);
+    checkFinishFrom(mode, w, ctx.root);
 
     let result;
     if (w.isMain) result = doMain(w, ctx, mode === "f");
     else result = mode === "f" ? doFinish(w, ctx) : doCheckpoint(w, ctx);
 
-    if (result === "failed") {
-      stop(`\nStopped at ${w.owner}. Nothing further was attempted.`, 1);
-    }
-    if (result === "cancelled") say(`  Cancelled ${w.owner}. Nothing changed for it.`);
-    if (result === "partial") {
-      stop(`\n${w.owner} is merged and pushed but not fully cleaned up. Stopping.`, 1);
-    }
+    const remaining = chosen.slice(chosen.indexOf(w) + 1).map((t) => t.owner);
+    const end = resultExit(result, w.owner, { done, remaining });
+    if (end) stop(end.message, end.code);
+    done.push(w.owner);
   }
 
   say("\nDone.");

@@ -5,7 +5,15 @@ import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { APPROVAL_TYPES, readStatus, stateForNotification, writeSessionStatus } from "./session-status.mjs";
+import {
+  APPROVAL_TYPES,
+  BACKGROUND_MAX_MS,
+  clearWrong,
+  pendingBackground,
+  readStatus,
+  stateForNotification,
+  writeSessionStatus,
+} from "./session-status.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOOK = path.resolve(HERE, "..", "..", ".claude", "hooks", "session-status.mjs");
@@ -104,6 +112,67 @@ test("Stop hook writes waiting, silently", () => {
   assert.equal(run.stdout, "");
   assert.equal(readStatus(file).state, "waiting");
   assert.equal(readStatus(file).session_id, "sid-1");
+});
+
+// Transcript lines shaped like the real ones: a launch result, then its notice.
+const jsonl = (text, at = new Date().toISOString()) => JSON.stringify({ timestamp: at, content: text });
+const AGENT = (id) => jsonl(`Async agent launched successfully. (internal)\nagentId: ${id} (internal ID)`);
+const SHELL = (id) => jsonl(`Command running in background with ID: ${id}. Output is being written`);
+const DONE = (id) => jsonl(`<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>`);
+
+test("pendingBackground: started and not ended, agents and shells alike", () => {
+  const t = [AGENT("a1"), SHELL("b2"), AGENT("c3"), DONE("a1")].join("\n");
+  assert.deepEqual(pendingBackground(t), ["b2", "c3"]);
+  assert.deepEqual(pendingBackground([t, DONE("b2"), DONE("c3")].join("\n")), []);
+  assert.deepEqual(pendingBackground(""), []);
+});
+
+test("pendingBackground: a still-running notice does not end it; an old launch is over", () => {
+  const running = jsonl(`<task-id>a1</task-id>\n<status>running</status>`);
+  assert.deepEqual(pendingBackground([AGENT("a1"), running].join("\n")), ["a1"]);
+  const old = new Date(Date.now() - BACKGROUND_MAX_MS - 60000).toISOString();
+  assert.deepEqual(pendingBackground(jsonl("agentId: z9 (internal ID)", old).replace("agentId", "Async agent launched successfully agentId")), []);
+});
+
+test("Stop with a subagent still running stays processing, never red", () => {
+  const { root, file } = checkout({ worktree: true, name: "k8w" });
+  const transcript = path.join(root, "t.jsonl");
+  writeFileSync(transcript, AGENT("a1"));
+  const stop = () =>
+    runHook(JSON.stringify({ hook_event_name: "Stop", session_id: "s", transcript_path: transcript }), root);
+  assert.equal(stop().status, 0);
+  assert.equal(readStatus(file).state, "processing");
+  assert.equal(readStatus(file).red, false);
+  assert.match(readStatus(file).event, /background running/);
+  // An idle notice mid-run is the same case.
+  runHook(JSON.stringify({ hook_event_name: "Notification", notification_type: "idle_prompt", transcript_path: transcript }), root);
+  assert.equal(readStatus(file).state, "processing");
+  // Once the hand-back has arrived, the next Stop is a real wait.
+  writeFileSync(transcript, [AGENT("a1"), DONE("a1")].join("\n"));
+  stop();
+  assert.equal(readStatus(file).state, "waiting");
+});
+
+test("wrong is its own state: not red, cleared only while still wrong", () => {
+  const { root, file } = checkout({ worktree: true, name: "w1x" });
+  writeSessionStatus(root, "wrong", { promptAt: "2026-10-12T10:00:00.000Z" });
+  assert.equal(readStatus(file).state, "wrong");
+  assert.equal(readStatus(file).red, false);
+  assert.ok(clearWrong(root));
+  assert.equal(readStatus(file).state, "waiting");
+  assert.equal(readStatus(file).prompt_at, "2026-10-12T10:00:00.000Z");
+  writeSessionStatus(root, "processing");
+  assert.equal(clearWrong(root), null, "a tap on a tile that is no longer wrong changes nothing");
+  assert.equal(readStatus(file).state, "processing");
+});
+
+test("clear-wrong from the command line, as Switchboard runs it", () => {
+  const { root, file } = checkout({ worktree: true, name: "w2x" });
+  writeSessionStatus(root, "wrong");
+  const script = path.resolve(HERE, "session-status.mjs");
+  const r = spawnSync(process.execPath, [script, "clear-wrong", root], { env: cleanEnv, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(readStatus(file).state, "waiting");
 });
 
 test("notification mapping", () => {

@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import {
   classifyPrompt,
   CODE_SHAPE,
+  headerTag,
+  machineEnvelope,
   parseTag,
   projectOfTag,
   stripPasteWrappers,
@@ -19,6 +21,7 @@ const wrap = (body, id = "c70a") =>
   `<pasted_content id="${id}">${body}</pasted_content id="${id}">`;
 
 const TASK = `Run tag: claims-wq7-s7f-p8wz
+Window: the claims-wq7 worktree
 
 Some context about what happened.
 
@@ -54,7 +57,7 @@ test("a wrapped tag is invisible without stripping — this is the bug", () => {
 });
 
 test("wrapped untagged task prompt still blocks", () => {
-  const c = classifyPrompt(wrap(TASK.replace(/^Run tag:.*\n/, "")));
+  const c = classifyPrompt(wrap(TASK.replace(/^Run tag:.*\nWindow:.*\n/, "")));
   assert.equal(c.tag, null);
   assert.equal(c.pasted, "has a '# Your Task' heading");
 });
@@ -128,6 +131,28 @@ test("every existing hyphenated tag reads exactly as before", () => {
 test("the underscore is allowed only in the name, not in step or suffix", () => {
   assert.equal(projectOfTag("rem-k4q-s1_b-t6v2"), null);
   assert.equal(projectOfTag("rem-k4q-s1-t6v_"), null);
+});
+
+test("only a header makes a CLI prompt: Run tag first, then Window", () => {
+  assert.equal(tagInPrompt("\n  Run tag: a-b1c-s2-ab12\n\nWindow: x\nbody"), "a-b1c-s2-ab12");
+  assert.equal(tagInPrompt("Run tag: a-b1c-s2-ab12\nbody"), null);
+  assert.equal(tagInPrompt("About the last step:\nRun tag: a-b1c-s2-ab12\nWindow: x"), null);
+  assert.equal(tagInPrompt("Window: x\nRun tag: a-b1c-s2-ab12"), null);
+});
+
+test("a header counts at the top of a pasted block, with typed text before it", () => {
+  assert.equal(headerTag(`please run this:\n${wrap(TASK)}`), "claims-wq7-s7f-p8wz");
+  assert.equal(classifyPrompt(`please run this:\n${wrap(TASK)}`).tag, "claims-wq7-s7f-p8wz");
+  // A chat reply that quotes a tag mid-text is not a CLI prompt.
+  const chat = "The CLI said it was done.\n\nRun tag: claims-wq7-s7f-p8wz\nWindow: the claims-wq7 worktree";
+  assert.equal(classifyPrompt(chat).tag, null);
+  assert.equal(classifyPrompt(wrap(chat)).tag, null);
+});
+
+test("harness notices are machine traffic", () => {
+  assert.equal(machineEnvelope("<system-reminder>\nA task finished.</system-reminder>"), "system-reminder");
+  assert.equal(machineEnvelope('<task-notification>\n<task-id>x</task-id>'), "task-notification");
+  assert.equal(machineEnvelope(wrap("<system-reminder>typed</system-reminder>")), null);
 });
 
 test("an underscore tag is found in a prompt", () => {

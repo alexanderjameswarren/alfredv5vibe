@@ -230,7 +230,7 @@ NewSession(code, root) {
         reportFile: root "\.clip\last-report.md",
         reportMetaFile: root "\.clip\last-report.json",
         raw: "", hasStatus: false,
-        state: "", since: "", red: false, project: "", transcript: "", sessionId: "", runTag: "",
+        state: "", since: "", red: false, project: "", transcript: "", sessionId: "", runTag: "", promptAt: "",
         metaRaw: "", reportTag: "", reportAt: "",
         tKey: "", interruptAt: "",
         kind: "", color: "", label: "", step: "",
@@ -265,7 +265,7 @@ ReadStatus(s) {
     s.state := data.Get("state", ""), s.since := data.Get("since", "")
     s.red := !!data.Get("red", 0), s.project := data.Get("project", "")
     s.transcript := data.Get("transcript_path", ""), s.sessionId := data.Get("session_id", "")
-    s.runTag := data.Get("run_tag", "")
+    s.runTag := data.Get("run_tag", ""), s.promptAt := data.Get("prompt_at", "")
     return true
 }
 
@@ -625,7 +625,7 @@ Refresh() {
         s.kind := kind
         issued := chat ? chat.Get("issuedTag", "") : ""
         v := ViewOf({free: s.free, closed: s.closed, paused: s.paused, kind: kind, runTag: s.runTag
-            , reportTag: s.reportTag, reportAt: s.reportAt, chatState: chat ? chat.Get("state", "") : ""
+            , promptAt: s.promptAt, reportTag: s.reportTag, reportAt: s.reportAt, chatState: chat ? chat.Get("state", "") : ""
             , chatSince: chat ? chat.Get("since", "") : "", issuedTag: issued, project: project})
         if v.color != s.color {
             s.unseen := false
@@ -866,6 +866,8 @@ ButtonClick(code, *) {
     s := sessions[code]
     s.lastClick := A_Now, s.unread := false
     IniWrite(s.lastClick, SETTINGS_INI, "lastclick", code)
+    if s.state = "wrong"
+        ClearWrong(s)
     if s.closed {
         Paint(s)
         if MsgBox("No VS Code window is open for " s.folder ".`n`nReopen it and resume its last conversation?"
@@ -1052,11 +1054,32 @@ TouchDo(type, id) {
             try touchCore.PostWebMessageAsJson('{"type":"gitDone"}')   ; the button goes back to its icon
         case "move": TouchMove()
         case "status": OpenClaimsStatus()
+        case "release": ReleaseOrphan(c.key)
         case "menu":       ; right-click: main screen mode only, the old button's menu
             if touchPlace != "" && touchPlace.mode = "main" && sessions.Has(c.key)
                 ButtonMenu(c.key)
     }
     TouchSend()
+}
+
+; The orphan panel's "Release all": `claims.mjs cleanup <owner>` in the main checkout,
+; hidden. The claims file changes, and the next poll drops the tile.
+ReleaseOrphan(owner) {
+    try code := RunWait('node scripts\claims.mjs cleanup "' owner '"', REPO, "Hide")
+    catch as err {
+        MsgBox("Could not release " owner "'s claims.`n`n" err.Message, "Switchboard", "Icon! T30")
+        return
+    }
+    if code != 0
+        MsgBox("claims.mjs cleanup " owner " exited " code ". Its claims may still be held.", "Switchboard", "Icon! T30")
+    ReadClaims()
+}
+
+; A "Wrong window" tile clears when tapped: back to waiting, by the session-status
+; script beside this one. Not waited for, so the jump to the window is not held up.
+ClearWrong(s) {
+    script := A_ScriptDir "\..\..\scripts\lib\session-status.mjs"
+    try Run('node "' script '" clear-wrong "' s.root '"', s.root, "Hide")
 }
 
 ; The status button: a PowerShell console in the main checkout running `claims.mjs status`
@@ -1107,7 +1130,7 @@ TouchState() {
     worktrees := []
     view :=BlockView(LiveBlocks(blocksList, claimsState["claims"]))
     names := BlockNames(order, mainProject)
-    for code in order {
+    for code in touchOrder.Count ? order : StartupOrder(order, SessionStarts()) {
         s := sessions[code]
         stamp := s.since != "" ? IsoToStamp(s.since) : nowUtc
         action := CliAction({color: s.color, label: s.label, kind: s.kind, free: s.free, closed: s.closed
@@ -1124,7 +1147,8 @@ TouchState() {
         if idle                ; on the action line, so the bottom line keeps the git counts
             action .= " · idle " idle "d"
         bl := BlockLine({owner: code, view: view, names: names, step: TileStep(s.step), git: git})
-        tiles.Push({id: "cli:" code, kind: "cli", icon: bl.icon != "" ? bl.icon : TileIcon("cli", s.hasChat), group: s.paused ? 2 : 0
+        ; A paused tile keeps its place (group 0), only dimmed.
+        tiles.Push({id: "cli:" code, kind: "cli", icon: bl.icon != "" ? bl.icon : TileIcon("cli", s.hasChat), group: 0
             , color: s.paused ? "paused" : TileColor(s.color), name: TileName(code, mainProject), action: action
             , step: bl.step, git: bl.git, note: bl.note, blocked: bl.blocked})
     }
@@ -1135,9 +1159,10 @@ TouchState() {
     }
     for o in OrphanOwners(claimsState["claims"], claimsState["reservations"], worktrees) {
         bl := BlockLine({owner: o.owner, view: view, names: names, step: o.n " held", git: ""})
-        tiles.Push({id: "orphan:" o.owner, kind: "orphan", icon: bl.icon != "" ? bl.icon : TileIcon("orphan", false), group: 3, color: "grey", name: o.owner
-            , action: "No worktree", step: "", git: "", note: bl.blocked ? bl.note : bl.step (bl.note != "" ? " " bl.note : "")
-            , blocked: bl.blocked})
+        ; Red: claims nobody can release by finishing. A tap opens the release panel.
+        tiles.Push({id: "orphan:" o.owner, kind: "orphan", icon: bl.icon != "" ? bl.icon : TileIcon("orphan", false), group: 3, color: "red", name: o.owner
+            , action: "No worktree · tap", step: "", git: "", note: bl.blocked ? bl.note : bl.step (bl.note != "" ? " " bl.note : "")
+            , blocked: bl.blocked, items: o.items})
     }
     tiles := TileSort(tiles, touchOrder)
     touchOrder := Map()
@@ -1146,6 +1171,17 @@ TouchState() {
     db := DbStrip(claimsState["claims"], nowUtc)
     return {type: "state", main: MainStrip(mainProject), db: db.text, dbRed: db.red ? 1 : 0, tiles: tiles
         , mode: touchPlace = "" ? "touch" : touchPlace.mode, noTouch: touchPlace = "" ? 0 : touchPlace.noTouch}
+}
+
+; code -> when its CLI session started: the transcript's creation time, or "" when unknown.
+SessionStarts() {
+    starts := Map()
+    for code in order {
+        st := ""
+        try st := sessions[code].transcript != "" ? FileGetTime(sessions[code].transcript, "C") : ""
+        starts[code] := st
+    }
+    return starts
 }
 
 ; Blank clears the override, and matching falls back to the folder or project code.

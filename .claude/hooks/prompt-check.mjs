@@ -106,6 +106,8 @@ function status(state) {
       transcriptPath: entry.transcriptPath,
       // Only an allowed prompt moves the CLI to a new run.
       runTag: state === "processing" ? entry.tag : undefined,
+      // Only a prompt Alex typed is something a report answers; a hand-back is not.
+      promptAt: state === "processing" && !entry.machine ? new Date().toISOString() : undefined,
       event: "UserPromptSubmit",
     });
   } catch {
@@ -122,7 +124,8 @@ function allow(detail, note) {
 
 function block(detail, message) {
   log("block", detail);
-  status("blocked");
+  // Its own state: Switchboard shows "Wrong window" and a tap clears it.
+  status("wrong");
   process.stderr.write(`${message}\n`);
   process.exit(BLOCK);
 }
@@ -134,6 +137,7 @@ function main() {
     // anything piped to a native command, and JSON.parse refuses it.
     payload = JSON.parse(readFileSync(0, "utf8").replace(/^﻿/, ""));
   } catch {
+    entry.machine = true;
     allow("unparseable payload");
   }
   entry.sessionId = payload?.session_id;
@@ -143,7 +147,10 @@ function main() {
   // Only interactive prompts. Loop and schedule wake-ups, SDK and system
   // messages are machinery, and blocking those would wedge the session.
   const source = payload?.source ?? "user";
-  if (source !== "user") allow(`source=${source}`);
+  if (source !== "user") {
+    entry.machine = true;
+    allow(`source=${source}`);
+  }
 
   // The panel's paste wrappers come off first: the run tag and a typed
   // "override:" both sit inside or after them.
@@ -161,7 +168,10 @@ function main() {
   // guarded correctly, and its report was then silently eaten, with the parent
   // told it had been delivered. A run tag cannot help here: nothing Alex types
   // reaches the envelope.
-  if (prompt.machine) allow(`machine envelope <${prompt.machine}>`);
+  if (prompt.machine) {
+    entry.machine = true;
+    allow(`machine envelope <${prompt.machine}>`);
+  }
 
   if (prompt.override) {
     allow(

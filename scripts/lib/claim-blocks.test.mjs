@@ -76,10 +76,10 @@ function scratch() {
   return { main, wt, file, seed, blocks, cli, edit, notice, ctx: () => resolveRepo(main) };
 }
 
-const before = { claims: snapshot(REAL.file), blocks: snapshot(REAL.blocksFile) };
+// Live threads write both real files at any time, so look only for this file's scratch owner.
 test.after(() => {
-  assert.equal(snapshot(REAL.file), before.claims, "the real claims file was written to");
-  assert.equal(snapshot(REAL.blocksFile), before.blocks, "the real blocks file was written to");
+  assert.doesNotMatch(snapshot(REAL.file) ?? "", /"wtB"/, "the real claims file was written to");
+  assert.doesNotMatch(snapshot(REAL.blocksFile) ?? "", /"wtB"/, "the real blocks file was written to");
 });
 
 const shape = (b) => [b.waiter, b.item, b.holder, b.holder_item, b.via];

@@ -78,10 +78,30 @@ export function projectOfTag(tag) {
   return parseTag(tag)?.project ?? null;
 }
 
-/** The `Run tag: <tag>` line of a prompt, or null. */
+/**
+ * The tag of a CLI prompt's header, or null. The header is the first non-blank
+ * line, `Run tag: <tag>`, with `Window: …` as the next non-blank line. A tag
+ * anywhere else — quoted in a chat reply, a report, a discussion of the last
+ * step — does not make the text a CLI prompt.
+ */
 export function tagInPrompt(prompt) {
-  const m = String(prompt).match(/^[ \t]*Run tag:[ \t]*([A-Za-z0-9_-]{1,60})[ \t]*$/m);
-  return m ? m[1] : null;
+  const lines = String(prompt).split(/\r?\n/).filter((l) => l.trim());
+  const m = /^[ \t]*Run tag:[ \t]*([A-Za-z0-9_-]{1,60})[ \t]*$/.exec(lines[0] ?? "");
+  return m && /^[ \t]*Window:/i.test(lines[1] ?? "") ? m[1] : null;
+}
+
+const PASTE_OPEN = /<pasted[_-](?:content|text)\b[^>]*>/i;
+
+/**
+ * The header tag of a prompt as it arrives: at the top of what Alex typed, or
+ * at the top of a block he pasted, with typed text before it.
+ */
+export function headerTag(raw) {
+  for (const segment of String(raw).split(PASTE_OPEN)) {
+    const tag = tagInPrompt(stripPasteWrappers(segment));
+    if (tag) return tag;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +169,9 @@ export function looksPasted(prompt) {
 // named from the SendMessage and background-task documentation and are not
 // verified, but a hand-back proved the shape, and blocking those would break the
 // same way.
-const MACHINE_ENVELOPES = /^<(agent-message|cross-session-message|task-notification)\b[^>]*>/;
+// `system-reminder` is the harness's own wrapper for notices it injects, named
+// from the transcript and likewise not seen in a hook payload yet.
+const MACHINE_ENVELOPES = /^<(agent-message|cross-session-message|task-notification|system-reminder)\b[^>]*>/;
 
 /**
  * The envelope tag if this prompt is machine traffic, else null.
@@ -182,7 +204,7 @@ export function classifyPrompt(prompt) {
     wrapped: text !== raw,
     override,
     machine: machineEnvelope(raw),
-    tag: tagInPrompt(text),
+    tag: headerTag(raw),
     pasted: looksPasted(text),
   };
 }

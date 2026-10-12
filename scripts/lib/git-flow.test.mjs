@@ -13,13 +13,28 @@ import { fileURLToPath } from "node:url";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import {
+  applyDocsMove,
+  docsClashRefusal,
+  docsMovePaths,
+  forceDecision,
+  leftBehindRefusal,
+  planDocsMove,
+  withoutMoved,
   defaultMessage,
   exclusive,
+  findCheckout,
+  finishFromInside,
+  isInside,
+  misplacedOptions,
+  modeKey,
   parseArgs,
   parseSelection,
   pathsToAdd,
+  pickCheckouts,
+  refusalBanner,
   removeEmptyDir,
   resolveUnclaimed,
+  resultExit,
   today,
   UsageError,
 } from "./git-flow.mjs";
@@ -233,7 +248,240 @@ test("stdin closing ends the run instead of spinning the re-ask loop", () => {
   const r = withInput([], `choose("q", [{key:"a",label:"all"}]); console.log("REACHED");`);
   assert.equal(r.code, 1);
   assert.doesNotMatch(r.out, /REACHED/);
-  assert.match(r.out, /stdin closed/);
+  assert.match(r.err, /STOPPED[\s\S]*stdin closed/);
+});
+
+/** Run a snippet with git-flow's stop() and friends in scope. */
+function flow(body) {
+  const r = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", `import { stop } from "file:///${FLOW}";\n${body}`],
+    { input: "", encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } },
+  );
+  return { out: r.stdout ?? "", err: r.stderr ?? "", code: r.status };
+}
+
+test("a refusal: banner on stderr, non-zero, nothing on stdout", () => {
+  const r = flow(`stop("Not today.", 2); console.log("Done.");`);
+  assert.equal(r.code, 2);
+  assert.equal(r.out, "");
+  assert.match(r.err, /━+\n  🛑 STOPPED[^\n]*\n━+\n  Not today\.\n━+/);
+  assert.equal(flow(`stop("x");`).code, 1);
+});
+
+test("a chosen cancel: plain line on stdout, exit 0, no banner, no Done", () => {
+  const r = flow(`stop("Cancelled. Nothing changed.", 0); console.log("Done.");`);
+  assert.equal(r.code, 0);
+  assert.equal(r.err, "");
+  assert.match(r.out, /^\nCancelled\. Nothing changed\.\n$/);
+});
+
+test("the banner is red only when asked", () => {
+  assert.doesNotMatch(refusalBanner("x"), /\x1b/);
+  assert.match(refusalBanner("x", { color: true }), /\x1b\[1;31m/);
+});
+
+const TREES = [
+  { owner: "main", isMain: true, path: "C:/r" },
+  { owner: "wt-a", isMain: false, path: "C:/r/.claude/worktrees/wt-a" },
+  { owner: "wt-b", isMain: false, path: "C:/r/.claude/worktrees/wt-b" },
+];
+
+test("findCheckout: by name or number; a stranger or a mode word is refused", () => {
+  assert.equal(findCheckout("WT-A", TREES).checkout, TREES[1]);
+  assert.equal(findCheckout("3", TREES).checkout, TREES[2]);
+  assert.match(findCheckout("nope", TREES).refusal, /"nope" is not a checkout[\s\S]*Open: main, wt-a, wt-b/);
+  assert.match(findCheckout("finish", TREES).refusal, /It is a mode/);
+  assert.ok(findCheckout("9", TREES).refusal);
+});
+
+test("pickCheckouts: blank cancels, nothing recognised refuses, the rest is chosen", () => {
+  assert.ok(pickCheckouts("", TREES).cancel);
+  assert.match(pickCheckouts("zz 9", TREES).refusal, /Nothing recognised in "zz 9"/);
+  const p = pickCheckouts("1 wt-b zz", TREES);
+  assert.deepEqual(p.chosen.map((t) => t.owner), ["main", "wt-b"]);
+  assert.deepEqual(p.unrecognised, ["zz"]);
+  assert.equal(pickCheckouts("all", TREES).chosen.length, 3);
+});
+
+test("modeKey and misplacedOptions refuse what does not fit", () => {
+  assert.equal(modeKey("Finish", TREES[1]), "f");
+  assert.throws(() => modeKey("checkpoint", TREES[0]), UsageError);
+  assert.throws(() => modeKey("push", TREES[1]), UsageError);
+  assert.throws(() => modeKey("go", TREES[1]), UsageError);
+  assert.match(misplacedOptions("f", TREES[1], { paths: ["a"] }), /--paths is not used by finish on wt-a/);
+  assert.match(misplacedOptions("p", TREES[0], { all: true, "keep-db": true }), /--all, --keep-db are not used/);
+  assert.equal(misplacedOptions("c", TREES[1], { paths: ["a"] }), null);
+  assert.equal(misplacedOptions("s", TREES[1], { paths: ["a"] }), null);
+});
+
+test("finish from inside the worktree is refused, by checkout or by directory", () => {
+  const opts = (cwd) => ({ cwd, mainPath: "C:/r" });
+  const r = finishFromInside({ ...TREES[1], isCurrent: true }, opts("C:/elsewhere"));
+  assert.match(r, /inside wt-a[\s\S]*cd "C:\\r"[\s\S]*gitpush wt-a finish/);
+  assert.ok(finishFromInside(TREES[1], opts("C:/r/.claude/worktrees/wt-a/src/deep")));
+  assert.equal(finishFromInside(TREES[1], opts("C:/r")), null);
+  assert.equal(finishFromInside(TREES[1], opts("C:/r/.claude/worktrees/wt-ab")), null);
+  assert.equal(finishFromInside({ ...TREES[0], isCurrent: true }, opts("C:/r")), null);
+});
+
+test("isInside ignores case on Windows and trailing slashes", { skip: process.platform !== "win32" }, () => {
+  assert.ok(isInside("c:\\R\\.Claude\\worktrees\\WT-A\\", "C:/r/.claude/worktrees/wt-a"));
+});
+
+test("resultExit: failure and partial refuse; a cancel exits 0 and stops the run", () => {
+  assert.equal(resultExit("failed", "wt-a").code, 1);
+  assert.equal(resultExit("partial", "wt-a").code, 1);
+  assert.equal(resultExit("done", "wt-a"), null);
+  const c = resultExit("cancelled", "wt-b", { done: ["wt-a"], remaining: ["main"] });
+  assert.equal(c.code, 0);
+  assert.match(c.message, /^Cancelled wt-b\. Nothing changed for it\.\nAlready done before it: wt-a\.\nNot attempted: main\.$/);
+});
+
+test("--paths keeps each argv token whole, spaces and all", () => {
+  const w7b = "docs/progress-warren_buffet-w7b (1).md";
+  const { options } = parseArgs(["--paths", w7b, "2", "src/a.js"], { paths: { kind: "list" } });
+  const sel = parseSelection(options.paths, 3);
+  assert.deepEqual(sel.words, [w7b, "src/a.js"]);
+  assert.deepEqual(sel.indexes, [2]);
+  assert.deepEqual(parseSelection(["1,3"], 3).indexes, [1, 3]);
+  assert.ok(parseSelection([" ", ""], 3).blank);
+});
+
+test("a typed answer can quote a path with spaces", () => {
+  const sel = parseSelection(`1 "docs/a (1).md" 'b c.md' d.md`, 3);
+  assert.deepEqual(sel.words, ["docs/a (1).md", "b c.md", "d.md"]);
+  assert.deepEqual(sel.indexes, [1]);
+});
+
+/** A throwaway main checkout and worktree, plain folders: the docs move is fs only. */
+function closeout({ spec = true, progress = true, inMain = [], inTree = [] } = {}) {
+  const base = mkdtempSync(path.join(os.tmpdir(), "closeout-"));
+  const main = path.join(base, "main");
+  const tree = path.join(main, ".claude", "worktrees", "proj-x1y");
+  for (const r of [main, tree]) mkdirSync(path.join(r, "docs", "history"), { recursive: true });
+  if (spec) writeFileSync(path.join(tree, "docs", "technical-spec-proj-x1y.md"), "spec");
+  if (progress) writeFileSync(path.join(tree, "docs", "progress-proj-x1y.md"), "progress");
+  for (const f of inMain) writeFileSync(path.join(main, f), "old");
+  for (const f of inTree) writeFileSync(path.join(tree, f), "old");
+  return { main, tree };
+}
+
+test("planDocsMove: both docs go to docs/history/ under the same names", () => {
+  const { main, tree } = closeout();
+  assert.deepEqual(planDocsMove("proj-x1y", tree, main), {
+    moves: [
+      { from: "docs/technical-spec-proj-x1y.md", to: "docs/history/technical-spec-proj-x1y.md" },
+      { from: "docs/progress-proj-x1y.md", to: "docs/history/progress-proj-x1y.md" },
+    ],
+    missing: [],
+    clashes: [],
+  });
+});
+
+test("planDocsMove: a missing doc is reported, not refused", () => {
+  const { main, tree } = closeout({ spec: false });
+  const plan = planDocsMove("proj-x1y", tree, main);
+  assert.deepEqual(plan.missing, ["docs/technical-spec-proj-x1y.md"]);
+  assert.equal(plan.moves.length, 1);
+  assert.deepEqual(plan.clashes, []);
+});
+
+test("planDocsMove: a same-named history file in main or the worktree is a clash", () => {
+  const inMain = closeout({ inMain: ["docs/history/progress-proj-x1y.md"] });
+  assert.deepEqual(planDocsMove("proj-x1y", inMain.tree, inMain.main).clashes, ["docs/history/progress-proj-x1y.md"]);
+  const inTree = closeout({ inTree: ["docs/history/technical-spec-proj-x1y.md"] });
+  assert.deepEqual(planDocsMove("proj-x1y", inTree.tree, inTree.main).clashes, [
+    "docs/history/technical-spec-proj-x1y.md",
+  ]);
+});
+
+test("applyDocsMove moves the files, making docs/history/ if needed", () => {
+  const { main, tree } = closeout();
+  rmSync(path.join(tree, "docs", "history"), { recursive: true });
+  const { moves } = planDocsMove("proj-x1y", tree, main);
+  applyDocsMove(tree, moves);
+  assert.ok(!existsSync(path.join(tree, "docs", "progress-proj-x1y.md")));
+  assert.ok(existsSync(path.join(tree, "docs", "history", "progress-proj-x1y.md")));
+  assert.ok(existsSync(path.join(tree, "docs", "history", "technical-spec-proj-x1y.md")));
+});
+
+test("docsMovePaths stages the new paths, and an old one only if git lists it", () => {
+  const moves = [
+    { from: "docs/a.md", to: "docs/history/a.md" },
+    { from: "docs/b.md", to: "docs/history/b.md" },
+  ];
+  // a.md was committed, so its removal shows; b.md never was, so it is just gone.
+  const changed = [
+    { path: "docs/a.md", status: " D" },
+    { path: "docs/history/a.md", status: "??" },
+    { path: "docs/history/b.md", status: "??" },
+  ];
+  assert.deepEqual(docsMovePaths(moves, changed), ["docs/history/a.md", "docs/history/b.md", "docs/a.md"]);
+});
+
+test("Finish lists the docs it moves as moves only, never as left behind", () => {
+  const { main, tree } = closeout();
+  const plan = planDocsMove("proj-x1y", tree, main);
+  const dirty = [
+    { path: "docs/technical-spec-proj-x1y.md", status: "??" },
+    { path: "docs/progress-proj-x1y.md", status: "??" },
+    { path: "src/a.js", status: " M" },
+  ];
+  assert.deepEqual(withoutMoved(dirty, plan.moves).map((f) => f.path), ["src/a.js"]);
+});
+
+test("main's Finish plans its docs in its own checkout, by its project code", () => {
+  const { tree } = closeout();
+  // A main checkout is just a root with the docs in it; both roots are the same.
+  const plan = planDocsMove("proj-x1y", tree, tree);
+  assert.equal(plan.moves.length, 2);
+  assert.equal(docsClashRefusal(plan, "main (proj-x1y)"), null);
+  writeFileSync(path.join(tree, "docs", "history", "progress-proj-x1y.md"), "old");
+  const clash = docsClashRefusal(planDocsMove("proj-x1y", tree, tree), "main (proj-x1y)");
+  assert.match(clash, /docs\/history\/progress-proj-x1y\.md[\s\S]*Nothing was changed for main \(proj-x1y\)\./);
+});
+
+test("Finish refuses anything it would leave uncommitted, naming it", () => {
+  assert.equal(leftBehindRefusal("wt-a", []), null);
+  const r = leftBehindRefusal("wt-a", [{ path: "notes.txt", status: "??" }]);
+  assert.match(r, /wt-a has 1 change\(s\) Finish would not commit:\n  \?\? notes\.txt/);
+  assert.match(r, /gitcom[\s\S]*Nothing was changed for wt-a\./);
+});
+
+test("--force only when git status is clean, and it says why", () => {
+  const clean = forceDecision([]);
+  assert.equal(clean.force, true);
+  assert.match(clean.why, /ignored files/);
+  const dirty = forceDecision([{ path: "notes.txt", status: "??" }]);
+  assert.equal(dirty.force, false);
+  assert.match(dirty.why, /would delete work:\n    \?\? notes\.txt/);
+});
+
+// gitpush itself, only on command lines it refuses while parsing — before it runs any git at all.
+const GITPUSH = path.join(HERE, "..", "git-push-worktrees.mjs");
+const gitpush = (...args) => {
+  const r = spawnSync(process.execPath, [GITPUSH, ...args], {
+    input: "",
+    encoding: "utf8",
+    cwd: os.tmpdir(),
+    env: { ...process.env, NO_COLOR: "1" },
+  });
+  return { out: r.stdout ?? "", err: r.stderr ?? "", code: r.status };
+};
+
+test("gitpush: a bad command line is a loud refusal with exit 2", () => {
+  const r = gitpush("--paths", "a.js", "--all");
+  assert.equal(r.code, 2);
+  assert.match(r.err, /STOPPED[\s\S]*--paths/);
+  assert.doesNotMatch(r.out, /Done\./);
+});
+
+test("gitpush: --help is plain and exits 0", () => {
+  const r = gitpush("--help");
+  assert.equal(r.code, 0);
+  assert.equal(r.err, "");
+  assert.match(r.out, /gitpush — bring work into main/);
 });
 
 test("removeEmptyDir deletes only an empty folder", () => {

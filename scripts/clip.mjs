@@ -25,6 +25,7 @@
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isCheckoutReport, writeLastReport } from "./lib/last-report.mjs";
 
 const MIN_SECRET_LENGTH = 32;
@@ -125,9 +126,27 @@ function loadSettings() {
 // Arguments and input
 // ---------------------------------------------------------------------------
 
+class ClipFailure extends Error {}
+
+// Thrown, not process.exit: exiting while fetch's sockets were still closing
+// aborted Node on Windows with a libuv assertion (exit 127). main's catch
+// prints it and sets the exit code, and Node then winds down by itself.
 function fail(message) {
-  console.error(`\nclip.mjs: ${message}\n`);
-  process.exit(1);
+  throw new ClipFailure(message);
+}
+
+/** A non-2xx body worth printing: the JSON error, or an HTML page's title, never the page. */
+export function describeFailure(status, body, json) {
+  if (json?.error) return `/finish failed (${status}): ${json.error}`;
+  const text = String(body ?? "");
+  if (/^\s*<(?:!doctype|html)/i.test(text)) {
+    const title = /<title>([^<]*)<\/title>/i.exec(text)?.[1]?.trim() || "no title";
+    return (
+      `/finish failed (${status}): the answer was an HTML page ("${title}"), not the function.\n` +
+      `Something in front of it — a firewall such as Cloudflare's — refused the request.`
+    );
+  }
+  return `/finish failed (${status}): ${text.slice(0, 400) || "empty response"}`;
 }
 
 const USAGE = `
@@ -263,31 +282,39 @@ async function main() {
 
   // A cli clip skips /start entirely: there are no slices to upload, so there is
   // nothing for an upload link to be for. /finish mints the id itself.
-  let res;
-  try {
-    res = await fetch(`${cfg.baseUrl}/finish`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-clipboard-secret": cfg.secret },
-      body: JSON.stringify({
-        source: "cli",
-        title,
-        page_text: text,
-        links: [],
-        run_tag: args.tag,
-        repo,
-        branch,
-      }),
-    });
-  } catch (e) {
-    fail(
-      `could not reach ${cfg.baseUrl}/finish: ${e.message}\n\n` +
-        `CLIPBOARD_URL came from the ${cfg.urlSource}. Check the address and that you are online.`,
-    );
-  }
+  // The title and text go base64-encoded: a report full of shell commands read,
+  // to Cloudflare's firewall, like an attack, and it answered 403.
+  const post = async (fields) => {
+    let res;
+    try {
+      res = await fetch(`${cfg.baseUrl}/finish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-clipboard-secret": cfg.secret },
+        body: JSON.stringify({ source: "cli", ...fields, links: [], run_tag: args.tag, repo, branch }),
+      });
+    } catch (e) {
+      fail(
+        `could not reach ${cfg.baseUrl}/finish: ${e.message}\n\n` +
+          `CLIPBOARD_URL came from the ${cfg.urlSource}. Check the address and that you are online.`,
+      );
+    }
+    const body = await res.text();
+    let json = null;
+    try { json = JSON.parse(body); } catch { /* fall through to the raw text */ }
+    return { res, body, json };
+  };
+  const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
+  let { res, body, json } = await post({ title_b64: b64(title), page_text_b64: b64(text) });
 
-  const body = await res.text();
-  let json = null;
-  try { json = JSON.parse(body); } catch { /* fall through to the raw text */ }
+  // A clip-capture deployed before the encoding refuses a body with no
+  // page_text. Say so, and send it once the old way rather than lose the report.
+  if (res.status === 400 && /page_text must be a string/.test(json?.error ?? "")) {
+    console.error(
+      `\nclip.mjs: clip-capture is older than this script and cannot read the encoded report.\n` +
+        `Sending it unencoded. To fix: npx supabase functions deploy clip-capture\n`,
+    );
+    ({ res, body, json } = await post({ title, page_text: text }));
+  }
 
   if (!res.ok || json?.ok === false) {
     if (res.status === 401) {
@@ -298,7 +325,7 @@ async function main() {
           `\`supabase secrets set CLIPBOARD_SECRET\` exactly. The value is not printed here.`,
       );
     }
-    fail(`/finish failed (${res.status}): ${json?.error || body.slice(0, 400)}`);
+    fail(describeFailure(res.status, body, json));
   }
   if (!json?.clip_id) fail(`/finish returned no clip id: ${body.slice(0, 400)}`);
 
@@ -362,4 +389,10 @@ function readFileOrDie(file) {
   }
 }
 
-main().catch((e) => fail(`unexpected error: ${e?.message || e}`));
+// Only when run, so the tests can import describeFailure.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((e) => {
+    console.error(`\nclip.mjs: ${e instanceof ClipFailure ? e.message : `unexpected error: ${e?.message || e}`}\n`);
+    process.exitCode = 1;
+  });
+}

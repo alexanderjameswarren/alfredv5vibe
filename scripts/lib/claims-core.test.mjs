@@ -17,8 +17,13 @@ import {
   overlaps,
   parseClaimsCommand,
   resolveCheckout,
+  copyDestination,
+  repoPathsIn,
   resolveRepo,
+  runText,
   scanRedirects,
+  shellWords,
+  splitPayloads,
   splitCommand,
   staleDbClaims,
   toRepoRelative,
@@ -431,7 +436,8 @@ test("a lone clip.mjs push with cp, mv and rm in its title writes nothing", () =
   const push =
     'node scripts/clip.mjs --tag a-s1-ab12 --title "cp the docs, mv the spec, rm the probe" ' +
     ".clip/last-report.md";
-  assert.ok(writeCheck(push, ROOT), "judged in full, the title reads as a write");
+  // Judged in full too, now: a quoted title is data, not a command.
+  assert.equal(writeCheck(push, ROOT), null);
   assert.ok(isLoneScriptCommand(push));
   assert.equal(writeCheck(push, ROOT, "bash", { redirectsOnly: true }), null);
   // Still a write when it is wrapped in a shell that runs the quoted text.
@@ -584,4 +590,120 @@ test("the checkout comes from the project dir, then the cwd", () => {
   assert.equal(resolveCheckout(undefined, ROOT).owner, resolveRepo(ROOT).owner);
   assert.equal(resolveCheckout(outside, ROOT).root, resolveRepo(ROOT).root);
   assert.throws(() => resolveCheckout(undefined, outside), (e) => e.code === "no-git");
+});
+
+// ---------------------------------------------------------------------------
+// step 5: quoted arguments, wrapper payloads, cp
+// ---------------------------------------------------------------------------
+
+test("cp writes only its destination; mv writes both ends", () => {
+  assert.deepEqual(writes("cp package.json docs/out.md"), ["docs/out.md"]);
+  assert.deepEqual(writes("cp -r src/ docs/copy/"), ["docs/copy"]);
+  assert.deepEqual(writes("cp -t docs package.json"), ["docs"]);
+  assert.equal(writes(`cp package.json "${tmpdir().replaceAll("\\", "/")}/x.json"`), null);
+  assert.deepEqual(writes("cp package.json docs/out.md 2>/dev/null"), ["docs/out.md"]);
+  assert.deepEqual(writes("mv package.json docs/out.md").sort(), ["docs/out.md", "package.json"]);
+  // Past a pipe the destination cannot be told, so every path counts again.
+  assert.deepEqual(writes("cp package.json docs/out.md | cat").sort(), ["docs/out.md", "package.json"]);
+  assert.deepEqual(writes("cp package.json newfile"), ["newfile"]);
+  assert.equal(copyDestination("cp onlyone"), null);
+  assert.equal(copyDestination("npm install a b"), null);
+  assert.equal(writes("npm install left-pad right-pad"), null);
+});
+
+test("quoted argument text is data, not a command", () => {
+  assert.equal(writes('node scripts/clip.mjs --title "bash -c cp blocked" .clip/last-report.md'), null);
+  assert.equal(writes('git commit -m "rm src/App.js, mv the rest"'), null);
+  assert.equal(writes(`echo 'cp package.json docs/x.md'`), null);
+  assert.equal(writeIndicator('Write-Host "Remove-Item is risky"', "powershell"), null);
+});
+
+test("a write through every wrapper is still found", () => {
+  const cases = [
+    ['bash -c "echo x > src/App.js"', "bash"],
+    ["sh -c 'printf x >> src/App.js'", "bash"],
+    ['bash -lc "rm src/App.js"', "bash"],
+    ['zsh -c "cp package.json src/App.js"', "bash"],
+    ['powershell -NoProfile -Command "Set-Content src/App.js x"', "bash"],
+    ["pwsh -c 'Remove-Item src/App.js'", "powershell"],
+    ['cmd /c "del src\\App.js"', "powershell"],
+    [`node -e "require('fs').writeFileSync('src/App.js','x')"`, "bash"],
+    [`python -c "open('src/App.js','w').write('x')"`, "bash"],
+    ['eval "rm src/App.js"', "bash"],
+    ['git commit -m "$(rm src/App.js)"', "bash"],
+    [`bash -c 'powershell -c "Set-Content src/App.js x"'`, "bash"],
+    ['"C:/Program Files/Git/usr/bin/rm.exe" src/App.js', "bash"],
+  ];
+  for (const [command, shell] of cases) {
+    assert.deepEqual(writeCheck(command, ROOT, shell)?.paths, ["src/App.js"], command);
+  }
+  // The payload's own cp rule holds too: its source is not a write.
+  assert.deepEqual(writes(`bash -c "cp package.json 'docs/x y.md'"`), ["docs/x y.md"]);
+});
+
+test("runText: the claim a command runs, not one it quotes", () => {
+  assert.doesNotMatch(runText('grep -n "claims.mjs claim" scripts/x.mjs'), /claims\.mjs\s+claim/);
+  assert.match(runText('bash -c "node scripts/claims.mjs claim db:deploy"'), /claims\.mjs\s+claim/);
+  assert.match(runText("node scripts/claims.mjs claim 'docs/a b.md'"), /claims\.mjs\s+claim/);
+});
+
+test("splitPayloads blanks quoted arguments but keeps what runs", () => {
+  const { masked, payloads } = splitPayloads(`git commit -m "rm x" && bash -c 'rm y'`);
+  assert.doesNotMatch(masked, /rm/);
+  assert.deepEqual(payloads, [{ text: "rm y", shell: "bash", code: false }]);
+  assert.match(splitPayloads(`rg --pre 'rm -rf' x`).masked, /rm -rf/);
+  assert.match(splitPayloads(`"C:/bin/cp.exe" a b`).masked, /cp\.exe/);
+});
+
+// ---------------------------------------------------------------------------
+// paths with spaces
+// ---------------------------------------------------------------------------
+
+test("shellWords: quotes group, escaped spaces join, Windows backslashes stay", () => {
+  assert.deepEqual(shellWords(`rm "a b.md" 'c d.md' e\\ f.md`), ["rm", "a b.md", "c d.md", "e f.md"]);
+  assert.deepEqual(shellWords("Remove-Item docs\\x.md,src\\y.js"), ["Remove-Item", "docs\\x.md", "src\\y.js"]);
+  assert.deepEqual(shellWords("rm a` b.md"), ["rm", "a b.md"]);
+  assert.deepEqual(shellWords(`echo "say \\"hi\\"" docs/"x y".md`), ["echo", 'say "hi"', "docs/x y.md"]);
+  assert.deepEqual(shellWords(`a && b|c > "d e"`), ["a", "b", "c", "d e"]);
+});
+
+const W7B = "docs/progress-warren_buffet-w7b (1).md";
+function spaced() {
+  const root = mkdtempSync(path.join(tmpdir(), "spaced-"));
+  mkdirSync(path.join(root, "docs"));
+  writeFileSync(path.join(root, W7B), "x");
+  return root;
+}
+
+test("a quoted path with spaces is one path, never a shorter phantom", () => {
+  const root = spaced();
+  for (const cmd of [
+    `rm "${W7B}"`,
+    `rm '${W7B}'`,
+    `rm docs/progress-warren_buffet-w7b\\ \\(1\\).md`,
+    `Remove-Item -LiteralPath 'docs\\progress-warren_buffet-w7b (1).md'`,
+    `Remove-Item -LiteralPath:"${W7B}"`,
+  ]) {
+    assert.deepEqual(repoPathsIn(cmd, root), [W7B], cmd);
+  }
+});
+
+test("a new file with spaces in an existing folder is found", () => {
+  assert.deepEqual(repoPathsIn(`cp x "docs/brand new file.md"`, spaced()), ["docs/brand new file.md"]);
+});
+
+test("paths inside a quoted payload are still found", () => {
+  const root = spaced();
+  mkdirSync(path.join(root, "src"));
+  writeFileSync(path.join(root, "src", "a.js"), "x");
+  assert.deepEqual(repoPathsIn(`bash -c "cp src/a.js '${W7B}'"`, root).sort(), [W7B, "src/a.js"]);
+  assert.deepEqual(repoPathsIn(`pwsh -c "C:/tools/x.exe src/a.js"`, root), ["src/a.js"]);
+  // An unbalanced quote swallows the rest, and the rest is still searched.
+  assert.deepEqual(repoPathsIn(`echo "it's done" && rm src/a.js`, root), ["src/a.js"]);
+});
+
+test("the guard reads the spaced path whole", () => {
+  const root = spaced();
+  const r = writeCheck(`rm "${W7B}"`, root);
+  assert.deepEqual(r?.paths, [W7B]);
 });

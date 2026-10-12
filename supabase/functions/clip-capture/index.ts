@@ -67,7 +67,8 @@ import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts"
 //     fails and writes nothing.
 //
 //   CLI clips skip `start` entirely and POST straight to `finish` with
-//   source "cli" and no slices.
+//   source "cli" and no slices, sending page_text and title base64-encoded as
+//   page_text_b64 and title_b64.
 //
 // Oversized page text and link lists are truncated HERE, not refused — losing a
 // clip because a page was large would be worse than clipping most of it. The
@@ -290,6 +291,18 @@ async function handleFinish(
   userId: string,
   body: Record<string, unknown>,
 ): Promise<Response> {
+  // clip.mjs sends page_text and title base64-encoded (page_text_b64,
+  // title_b64): Cloudflare's firewall answered 403 to reports full of shell
+  // commands. Decoded here, before anything reads them.
+  for (const field of ["page_text", "title"]) {
+    const encoded = body[`${field}_b64`];
+    if (typeof encoded !== "string") continue;
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+      return fail(req, 400, `${field}_b64 is not base64.`);
+    }
+    body[field] = Buffer.from(encoded, "base64").toString("utf8");
+  }
+
   // --- source ---
   const source = typeof body.source === "string" ? body.source.trim() : "";
   if (!VALID_SOURCES.includes(source)) {
