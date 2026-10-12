@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { Archive, ArrowLeft, CalendarPlus, CalendarX, Play, Settings } from "lucide-react";
+import { Archive, ArrowLeft, CalendarPlus, CalendarX, ClipboardCopy, Play, Settings } from "lucide-react";
+import { copyRecord } from "../shared/copyRecord";
 import OverflowMenu from "../shared/OverflowMenu";
 import { ACTION_BUTTON } from "../shared/actionButton";
 import { getTodayDate } from "../utils/eventDates";
@@ -25,6 +26,8 @@ import { liveEventsFor, closedBlockTitle, recordActions, STATUS_LABELS } from ".
 export default function IntentionDetailView({
   tagPool = [],
   intention,
+  // (message, { error }) => void, the app's short toast. Copy reports through it.
+  onNotify,
   // The capture this intention was filed from, resolved by the caller from
   // `sourceInboxId`. Null for one created by hand. See OriginalCapture.
   capturedText,
@@ -302,6 +305,16 @@ export default function IntentionDetailView({
           >
             <Settings className="w-4 h-4" />
             Edit
+          </button>
+          {/* Enabled even when closed: copying changes nothing. */}
+          <button
+            onClick={() =>
+              copyRecord({ title: intention.text, description: intention.description, id: intention.id }, onNotify)
+            }
+            className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
+          >
+            <ClipboardCopy className="w-4 h-4" />
+            Copy
           </button>
           <OverflowMenu
             actions={[

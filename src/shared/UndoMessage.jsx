@@ -65,11 +65,13 @@ export function useUndo(durationMs = UNDO_DURATION_MS) {
    * `restore` may be async and may do as much work as it needs to; it runs
    * inside the caller's own loading wrapper, not here.
    */
-  function offerUndo(message, restore) {
+  // `restore` null = a plain notice with no Undo (e.g. "Copied"). `tone: "error"`
+  // shows it red (Restructure P3).
+  function offerUndo(message, restore, { tone = null } = {}) {
     // Cleared before the new timer is scheduled, so exactly one timer is ever
     // live. That is what makes a stale timer unable to expire a fresh offer.
     clearTimer();
-    setPendingUndo({ message, restore });
+    setPendingUndo({ message, restore: restore || null, tone });
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
       setPendingUndo(null);
@@ -82,7 +84,7 @@ export function useUndo(durationMs = UNDO_DURATION_MS) {
   }
 
   async function runUndo() {
-    if (!pendingUndo) return;
+    if (!pendingUndo?.restore) return;
     const { restore } = pendingUndo;
     // Taken down first: the work can take a moment, and leaving an Undo button
     // live during it invites a second click that would restore twice.
@@ -112,17 +114,22 @@ export default function UndoMessage({ pendingUndo, onUndo, onDismiss }) {
       <div
         role="status"
         aria-live="polite"
-        className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 bg-foreground text-white rounded-lg shadow-lg"
+        data-tone={pendingUndo.tone || "default"}
+        className={`flex items-center justify-between gap-2 px-3 sm:px-4 py-2 ${
+          pendingUndo.tone === "error" ? "bg-destructive" : "bg-foreground"
+        } text-white rounded-lg shadow-lg`}
       >
         <span className="text-sm min-w-0 truncate">{pendingUndo.message}</span>
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            onClick={onUndo}
-            className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] text-sm font-medium rounded-lg hover:bg-white/15 transition-colors"
-          >
-            <Undo2 className="w-4 h-4" />
-            Undo
-          </button>
+          {pendingUndo.restore && (
+            <button
+              onClick={onUndo}
+              className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] text-sm font-medium rounded-lg hover:bg-white/15 transition-colors"
+            >
+              <Undo2 className="w-4 h-4" />
+              Undo
+            </button>
+          )}
           <button
             onClick={onDismiss}
             title="Dismiss"

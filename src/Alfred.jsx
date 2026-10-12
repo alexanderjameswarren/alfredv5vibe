@@ -707,8 +707,14 @@ export default function Alfred() {
 
   // Undo restores are written where the state setters live, and they need the
   // same "Saving…" overlay and error handling as the action they reverse.
+  // A null restore is a plain notice: no Undo (the old wrapper gave it a broken one).
   function offerUndoFor(message, restore) {
-    offerUndo(message, () => withLoading("Restoring...", restore));
+    offerUndo(message, restore ? () => withLoading("Restoring...", restore) : null);
+  }
+
+  // The short toast with no Undo; `error` shows it red. Detail pages' Copy uses it.
+  function notify(message, { error = false } = {}) {
+    offerUndo(message, null, { tone: error ? "error" : null });
   }
 
   useEffect(() => {
@@ -1329,6 +1335,7 @@ export default function Alfred() {
         {view === "intention-detail" && effectiveIntentionId && (
           <IntentionDetailView
             tagPool={tagPool}
+            onNotify={notify}
             intention={intents.find((i) => i.id === effectiveIntentionId)}
             capturedText={capturedTextFor(intents.find((i) => i.id === effectiveIntentionId))}
             intents={intents}
@@ -1393,6 +1400,7 @@ export default function Alfred() {
         {view === "item-detail" && selectedItemId && (
           <ItemDetailView
             tagPool={tagPool}
+            onNotify={notify}
             capturedText={capturedTextFor(items.find((i) => i.id === selectedItemId))}
             onOpenAddIntention={(itemId) =>
               openAddPage("intention-add", { kind: "item", id: itemId })

@@ -55,7 +55,7 @@ function renderItem(item, props = {}) {
   return handlers;
 }
 
-const ROW = ["Start Now", "Schedule", "Edit", "More actions"];
+const ROW = ["Start Now", "Schedule", "Edit", "Copy", "More actions"];
 
 test("notes: one timeline across the item and both its intentions, recent completions by item", async () => {
   notesApi.listNotesForTargets.mockResolvedValue([
@@ -166,15 +166,26 @@ test("notes: adding a general note targets the item; an archived item has no inp
   await screen.findByText("None yet");
 });
 
-test("row: Start Now, Schedule, Edit, ⋯ — labels, no icon-only", () => {
+test("row: Start Now, Schedule, Edit, Copy, ⋯ — labels, no icon-only", () => {
   renderItem({ status: "active" });
   const names = screen.getAllByRole("button").map((b) => b.textContent || b.getAttribute("aria-label"));
   expect(names.filter((n) => ROW.includes(n))).toEqual([
     "Start Now",
     "Schedule",
     "Edit",
+    "Copy",
     "More actions",
   ]);
+});
+
+test("Copy: name, description and link, then the toast", async () => {
+  const writeText = jest.fn().mockResolvedValue();
+  Object.assign(navigator, { clipboard: { writeText } });
+  const onNotify = jest.fn();
+  renderItem({ status: "active", description: "Front and back" }, { onNotify });
+  fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+  await waitFor(() => expect(onNotify).toHaveBeenCalledWith("Copied"));
+  expect(writeText).toHaveBeenCalledWith("Water plants\n\nFront and back\n\nhttps://alfredv5vibe.vercel.app/it1");
 });
 
 test("menu: Create Intention, Clone, Add to Collection, Archive", () => {
