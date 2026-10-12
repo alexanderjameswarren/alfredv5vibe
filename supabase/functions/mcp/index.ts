@@ -75,6 +75,7 @@ import {
   getRemindersTool,
   updateReminderTool,
 } from "../_shared/tools/reminders.ts";
+import { getAppsTool, checkSourceApp } from "../_shared/tools/apps.ts";
 import {
   getWbAccountsTool,
   getWbBalanceHistoryTool,
@@ -180,7 +181,7 @@ const getContextsTool = defineTool({
       // No `tags` — see the note on the twin select in
       // _shared/alfred-tools/tool-handlers.ts. The column is dropped by
       // Migration A and selecting it afterwards is a hard PostgREST error.
-      .select("id, name, description, keywords, shared, pinned, created_at")
+      .select("id, name, description, keywords, shared, pinned, app_id, created_at")
       .order("pinned", { ascending: false })
       .order("name")
       .limit(LIMIT);
@@ -332,6 +333,9 @@ const createInboxItemTool = defineTool({
     const suggestedTags = normaliseTags(args.suggested_tags);
     const suggestedCollectionId = (args.suggested_collection_id as string) || null;
     const suggestedStatus = checkSuggestedStatus("create_inbox_item", args.suggested_status) ?? "someday";
+    // Restructure P3: set only when the caller knows the app. Left null, the insert
+    // trigger copies source_metadata.app when it names an app.
+    const sourceApp = await checkSourceApp("create_inbox_item", args.source_app, ctx.db);
 
     /**
      * Did anything actually get suggested?
@@ -377,6 +381,7 @@ const createInboxItemTool = defineTool({
       user_id: ctx.userId,
       source_type: sourceType,
       source_metadata: sourceMetadata,
+      source_app: sourceApp ?? null,
       // ⚠️ "enriched" MEANS SOMETHING WAS SUGGESTED. Two ways to fail that:
       //
       // A TASK has had no conversation at all — it captured something for a Claude
@@ -578,7 +583,7 @@ const getInboxTool = defineTool({
     // not.
     let q = ctx.db.from("inbox")
       .select(
-        "id, captured_text, source_type, source_metadata, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_description, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id, suggested_status, ai_status, ai_confidence, ai_reasoning, created_at"
+        "id, captured_text, source_type, source_metadata, source_app, outcome, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_description, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id, suggested_status, ai_status, ai_confidence, ai_reasoning, created_at"
       )
       .eq("archived", false)
       .is("triaged_at", null)
@@ -660,8 +665,10 @@ const updateInboxItemTool = defineTool({
     };
     const itemName = await split("suggested_item_text", "suggested_item_description");
     const intentName = await split("suggested_intent_text", "suggested_intent_description");
+    const sourceApp = await checkSourceApp("update_inbox_item", args.source_app, ctx.db);
 
     const result = await updateInboxItem(ctx.db, {
+      source_app: sourceApp,
       inbox_id: args.inbox_id as string,
       ai_confidence: args.ai_confidence as number,
       ai_reasoning: args.ai_reasoning as string,
@@ -1029,12 +1036,23 @@ export function createMcpServer(token: string) {
     {
       title: "Get Contexts",
       description:
-        "List all GTD contexts (areas of focus) for the user. Contexts organize items, intents, and events. Examples: 'Home', 'Work - ActBlue', 'Recipes', 'Health'.",
+        "List all GTD contexts (areas of focus) for the user. Contexts organize items, intents, and events. Examples: 'Home', 'Work - ActBlue', 'Recipes', 'Health'. Each carries app_id, the app it belongs to (see get_apps), or null.",
       inputSchema: {
         shared: z.boolean().optional().describe("Filter by shared status"),
       },
     },
     async ({ shared }) => runToolForMcp(getContextsTool, { shared }, token),
+  );
+
+  server.registerTool(
+    "get_apps",
+    {
+      title: "Get Apps",
+      description:
+        "List the apps Alfred is made of (Alfred, Warren Buffet, Sam, Jobs, DJ, Ken, Arnold, ...): id, name, description, icon, path and button_name. Path and button_name are null for apps with no screen. Use the descriptions to choose an inbox capture's source_app when enriching; pass the id to create_inbox_item, update_inbox_item or archive_inbox_item. Tier 1.",
+      inputSchema: {},
+    },
+    async () => runToolForMcp(getAppsTool, {}, token),
   );
 
   server.registerTool(
@@ -1140,7 +1158,8 @@ export function createMcpServer(token: string) {
       title: "Get Inbox",
       description:
         "Get pending inbox items that haven't been triaged yet. The inbox is a universal capture bucket where thoughts, emails, and tasks land before being organized into contexts. Results are capped (default 20, max 50) — the response NOTE tells you when there's more. " +
-        "Archived items are never returned; use get_recent_clips with include_archived to look at handled clips.",
+        "Archived items are never returned; use get_recent_clips with include_archived to look at handled clips. " +
+        "Each row carries source_app (its app id, see get_apps, or null) and outcome (the records it became; empty while open).",
       inputSchema: {
         ai_status: z
           .string()
@@ -1194,6 +1213,7 @@ export function createMcpServer(token: string) {
           .describe(
             "Extra facts about where the capture came from. REQUIRED for source_type 'task', which needs { task_name: string } — the name of the task that ran, because the inbox has nothing else to say what produced the row — and accepts { run_date: 'YYYY-MM-DD' }. Ignored shape-wise for 'mcp'.",
           ),
+        source_app: z.string().optional().describe("The app this capture belongs to, as an id from get_apps (e.g. 'jobs', 'warren_buffet'). Pass it only when you KNOW the app — a job posting from the job-search flow, a scheduled task for one app. Never guess; leave it out and enrichment chooses later."),
         suggested_context_id: z.string().optional().describe("ID of an existing context to suggest (use get_contexts to find the right one)"),
         suggest_item: z.boolean().optional().describe("Should this become a reusable Item? (true for recipes, checklists, reference material)"),
         suggested_item_text: z.string().optional().describe("Suggested name for the new item"),
@@ -1227,6 +1247,7 @@ export function createMcpServer(token: string) {
         ai_confidence: z.number().describe("Confidence score 0.0-1.0"),
         ai_reasoning: z.string().describe("Brief explanation of suggestions"),
         ai_status: z.enum(["enriched", "re_enriched"]).optional().describe("Set to 'enriched' for initial enrichment, 're_enriched' for re-enrichment"),
+        source_app: z.string().nullable().optional().describe("The app this capture belongs to, as an id from get_apps, chosen from the app descriptions. Leave it out when nothing fits; null clears it."),
         suggested_context_id: z.string().optional().describe("ID of an existing context (use get_contexts to find it)"),
         suggest_item: z.boolean().optional().describe("Should this become a reusable Item? (true for recipes, checklists, reference material)"),
         suggested_item_text: z.string().optional().describe("Name for the new item"),
@@ -2576,6 +2597,7 @@ export function createMcpServer(token: string) {
         notes: z.string().optional().describe("Free text about this application."),
         posting_url: z.string().optional().describe("Where the posting lives. Not unique and never a reason to refuse a write: if another row already has it, the response lists that row in posting_url_matches and this one is still created. Take it from a clipped page's url, or from the clip's links list for a posting on a job board."),
         duplicate_of: z.string().optional().describe("The UUID of the MAIN application this one duplicates — pass it when Alex applied to the SAME job twice and both applications are worth keeping. Doing so SKIPS the same-org-and-role duplicate guard, because passing it says the repeat is deliberate. Must point at a row whose own duplicate_of is null; chains are refused."),
+        inbox_id: z.string().optional().describe("The inbox capture this application came from (a clipped posting, a forwarded alert), from get_inbox or get_recent_clips. Saved as source_inbox_id. Then archive the capture with archive_inbox_item, outcome [{ table: 'job_applications', id: <this row's id> }]."),
       },
     },
     async (args) => runToolForMcp(createJobApplicationTool, args, token),
@@ -2704,9 +2726,15 @@ export function createMcpServer(token: string) {
         "Hide a handled inbox item. Call this once you have DEALT WITH a clip or a CLI report — read it, answered it, filed what it needed — so it leaves Alex's inbox screen instead of sitting there looking unread. It disappears from the app live. " +
         "Records archive_reason 'processed' by default, which is what distinguishes it in Alex's archive from something binned as unwanted. Pass reason: 'discarded' instead when the item should NOT have been captured at all — a duplicate, a mistake, or something you and Alex agreed is not worth keeping. The two read very differently in his archive, so choose deliberately: 'processed' says you dealt with it, 'discarded' says it should never have been there. " +
         "Reversible in one call: pass archived: false to put it back, untriaged, with the reason cleared. Nothing is deleted either way, and the change is audited. " +
-        "Takes the inbox_id, NOT the clip id — get_recent_clips returns both. Archiving does not touch the clip itself, which keeps its text and screenshot. Tier 2, no confirmation needed.",
+        "Takes the inbox_id, NOT the clip id — get_recent_clips returns both. Archiving does not touch the clip itself, which keeps its text and screenshot. Tier 2, no confirmation needed. " +
+        "When you turned the capture into records (a job application, an item, an intention), pass outcome listing each { table, id }: it is appended to the capture's outcome, and items, intents, events and job_applications without a source_inbox_id are linked back to the capture (linked_back in the result). Pass source_app (an id from get_apps) when you know which app it belongs to.",
       inputSchema: {
         inbox_id: z.string().describe("The inbox item's id, from get_recent_clips (field: inbox_id) or get_inbox (field: id). Not the clip id."),
+        outcome: z
+          .array(z.object({ table: z.string(), id: z.string() }))
+          .optional()
+          .describe("Every record this capture became, e.g. [{ table: 'job_applications', id: '<uuid>' }]. Tables: items, intents, events, job_applications, or another table's name. Only with archiving."),
+        source_app: z.string().nullable().optional().describe("The app this capture belongs to, an id from get_apps. Leave it out to keep the current value; null clears it."),
         archived: z
           .boolean()
           .optional()

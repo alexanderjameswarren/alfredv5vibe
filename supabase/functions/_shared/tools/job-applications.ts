@@ -23,7 +23,7 @@ import { clampLimit, defineTool, envelope } from "../platform.ts";
 // echoing a uuid nobody can act on is noise in every response.
 const APP_COLS =
   "id, applied_on, org, role, source, fit, effort, status, deadline, " +
-  "next_action, next_action_due, notes, posting_url, duplicate_of, created_at";
+  "next_action, next_action_due, notes, posting_url, duplicate_of, source_inbox_id, created_at";
 
 // Mirrors job_applications_status_check / _fit_check / _effort_check.
 // Duplicated on purpose: a CHECK violation surfaces as an unreadable
@@ -573,6 +573,22 @@ export const createJobApplicationTool = defineTool({
       posting_url: postingUrl,
       duplicate_of: duplicateOf,
     };
+
+    // Restructure P3: the capture this came from (job_applications.source_inbox_id,
+    // migration 116). Checked first so a wrong id reads as a sentence, not a key name.
+    if (args.inbox_id !== undefined && args.inbox_id !== null) {
+      const inboxId = requireText(T, "inbox_id", args.inbox_id);
+      const { data: capture, error: inboxErr } = await ctx.db
+        .from("inbox")
+        .select("id")
+        .eq("id", inboxId)
+        .maybeSingle();
+      if (inboxErr) throw dbError(T, "inbox lookup", inboxErr);
+      if (!capture) {
+        throw fail(T, `no inbox item ${inboxId} that you can see. Nothing was written. Pass the id from get_inbox or get_recent_clips (inbox_id), or leave inbox_id out.`);
+      }
+      row.source_inbox_id = inboxId;
+    }
 
     const { data, error } = await ctx.db
       .from("job_applications")

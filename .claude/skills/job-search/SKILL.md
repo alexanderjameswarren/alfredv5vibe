@@ -112,7 +112,13 @@ every row is a decision he actually made.
 
 ## Recording a clipped or emailed job
 
-Everything in "Logging an application" below still applies. Three additions:
+Everything in "Logging an application" below still applies. Four additions:
+
+### Pass `inbox_id` so the application points back at its capture
+
+Give `create_job_application` the capture's `inbox_id` (from `get_recent_clips`, or the `id` from `get_inbox`; **not** the clip id). It is saved as the application's `source_inbox_id`.
+
+If one capture yields several applications (a board page listing more than one job), pass the same `inbox_id` to each.
 
 ### Include `posting_url` when you know it
 
@@ -162,6 +168,14 @@ When a clip or an email has been dealt with — read, evaluated, filed or
 dismissed — call `archive_inbox_item` with its `inbox_id` (from
 `get_recent_clips`, or the `id` from `get_inbox`; **not** the clip id). It leaves
 his inbox screen immediately and stops coming back to new conversations.
+
+When the capture became one or more applications, archive it with them:
+- `outcome`: one `{ "table": "job_applications", "id": "<the new row's id>" }` per application.
+- `source_app: "jobs"`.
+
+The capture then shows under Jobs in Alfred's archive, with links to what it became.
+
+A capture you only read or dismissed gets no outcome.
 
 Archiving is reversible and deletes nothing. Do it when the work is done, not
 when you start.

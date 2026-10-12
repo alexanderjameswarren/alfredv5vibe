@@ -87,6 +87,7 @@ thread, never a reason to record it.
 **Always do this research for EVERY item before writing suggestions.** Do not guess — look up real data.
 
 1. **Call `get_contexts` first** to understand the user's organizational structure
+1a. **Call `get_apps` once per session** and keep the list: each app's `description` says what belongs to it. You use it to choose every capture's app (see "App" below)
 2. **Search for existing items** via `search_items` to avoid creating duplicates. If the captured text references something that already exists (like "make chicken tikka tonight"), find the existing item and use `suggested_item_id` to link to it rather than creating a new one
 3. **Check `get_tags`** and reuse the existing taxonomy. Read the counts as well as the names — a tag used many times is a real axis the user filters on; a tag used once is a mistake waiting to be cleaned up, not a precedent to follow
 4. **If the captured text contains a URL**, note this in your reasoning (you can't fetch URLs via MCP, but flag it for the user)
@@ -99,6 +100,12 @@ Do not call `get_collections`. Collections are not part of enrichment any more �
 For each inbox item, determine:
 
 **Context**: Which existing context does this belong to? Always map to an existing context.
+
+**App**: Which app does this capture belong to? Choose from the `get_apps` descriptions, the same way a context description chooses a context, and write the app's `id` as `source_app` with `update_inbox_item`.
+- Do it for every capture you enrich, including ones you otherwise leave alone.
+- If `source_app` is already set, keep it unless it is clearly wrong.
+- **When nothing fits, leave `source_app` out.** An empty app is honest; a guessed one files the capture under the wrong app once it is processed.
+- Do not take the app from the context's `app_id`; judge the capture itself.
 
 **Item vs. Intent vs. Both**:
 - **Item** (`suggest_item: true`): Reusable reference material — recipes, checklists, project notes, how-tos. Things you'd want to find and use again.

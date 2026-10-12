@@ -301,13 +301,15 @@ test("the tool count is 72 after the job-search tools", () => {
     "split_wb_transaction", "mark_wb_reviewed", "reprocess_wb_transactions", "get_wb_spending", "get_wb_cash_flow"];
   // 2026-10-12, +3 for Warren Buffet subscriptions (Step 7c).
   const EXPECTED_ADDED_WB_SUBS = ["get_wb_subscriptions", "upsert_wb_subscription", "record_wb_subscription_price"];
+  // 2026-10-12, +1 for Restructure P3: get_apps (enrichment chooses inbox.source_app).
+  const EXPECTED_ADDED_P3 = ["get_apps"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
-                      ...EXPECTED_ADDED_WB_SUBS]) {
+                      ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 116,
-    `expected 116 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 117,
+    `expected 117 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -331,6 +333,25 @@ test("the job-search surface is registered, and its schemas match its handlers",
     const advertised = Object.keys(t.cfg.inputSchema ?? {}).sort();
     assert.deepEqual(advertised, [...read].sort(),
       `${name}: schema advertises [${advertised}] but the handler reads [${[...read].sort()}]`);
+  }
+});
+
+test("Restructure P3: get_apps and archive_inbox_item schemas match their handlers", () => {
+  for (const [file, name] of [["apps.ts", "get_apps"], ["clipboard.ts", "archive_inbox_item"]]) {
+    const src = readFileSync(join(TOOLS, file), "utf-8");
+    const block = src.split("defineTool({").slice(1).find((b) => b.includes(`name: "${name}"`));
+    assert.ok(block, `${name} not found in ${file}`);
+    const read = new Set([...block.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
+  }
+});
+
+test("Restructure P3: source_app is advertised where it is accepted", () => {
+  for (const name of ["create_inbox_item", "update_inbox_item", "archive_inbox_item"]) {
+    const t = registered.find((r) => r.name === name);
+    assert.ok("source_app" in (t.cfg.inputSchema ?? {}), `${name} lacks source_app`);
   }
 });
 
