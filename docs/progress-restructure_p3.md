@@ -34,8 +34,11 @@ Spec: `docs/technical-spec-restructure_p3.md`
   - List-card reminder badges refresh on reload, not instantly after an add or cancel.
   - **Follow-up A** (built 2026-10-11; awaiting a Chrome test): compact lines on the intention page, under the schedule line.
     - `IntentionReminderLines` shows "Reminder · <PT time>" per pending reminder with a red Cancel link, then an "Add reminder" link.
-    - Add opens date and time inputs (SchedulePopover style, next whole hour, local time stored as UTC through `create_reminder` with `p_intent_id`), with Set reminder and a Cancel link.
+    - Add opens `SchedulePopover` in its new time mode (`initialTime`, `fieldLabel` "Remind me at", `onPick(date, time)`), anchored like Schedule. It shows date and time inputs at the next whole hour, with a brown Set reminder and a beige Cancel. Local time is stored as UTC through `create_reminder` with `p_intent_id`.
+    - Add is disabled, with the closed title, when Start Now and Schedule are. Pending lines and their Cancel still show on a closed intention.
+    - Cancel is confirm only, with no toast and no Undo.
     - There's no grouped section on the intention page.
+    - Testing 2026-10-12: the compact line and the Background and Closed sheets passed. The archive trigger is still unverified.
   - **Follow-up B** (built 2026-10-11; 119 applied, CONFORMANT; awaiting a Chrome test):
     - The Background and Closed sheet (`StatusEventsSheet`, `sheetWording`) counts the live event and pending reminders and appears for reminders alone. One answer covers both.
     - "Cancel" sets cancel_reason `intent_status`, and Undo re-arms those that are still ahead (`cancelRemindersForStatus`, `restoreRemindersAfterStatus`).

@@ -33,9 +33,16 @@ export default function SchedulePopover({
   placement = "bottom",
   disabled = false,
   confirmLabel = "Schedule",
+  // Restructure P3 reminders: a time input beside the date when initialTime is
+  // given (not null), and onPick(date, time).
+  fieldLabel = "Schedule for",
+  initialTime = null,
+  title,
 }) {
+  const withTime = initialTime !== null;
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState(initialDate);
+  const [time, setTime] = useState(initialTime || "");
   const [align, setAlign] = useState("left");
   const ref = useRef(null);
 
@@ -56,14 +63,23 @@ export default function SchedulePopover({
     setOpen((wasOpen) => {
       // Reset on every open, so Do Today always offers today even after the
       // popover was left holding some other date from a previous visit.
-      if (!wasOpen) setDate(initialDate);
+      if (!wasOpen) {
+        setDate(initialDate);
+        setTime(initialTime || "");
+      }
       return !wasOpen;
     });
   }
 
+  const ready = Boolean(date) && (!withTime || Boolean(time));
+
   function commit() {
-    if (!date) return;
+    if (!ready) return;
     setOpen(false);
+    if (withTime) {
+      onPick(date, time);
+      return;
+    }
     onPick(date);
   }
 
@@ -73,6 +89,7 @@ export default function SchedulePopover({
         type="button"
         onClick={toggle}
         disabled={disabled}
+        title={title}
         className={className}
       >
         {icon}
@@ -80,16 +97,19 @@ export default function SchedulePopover({
       </button>
       {open && (
         <div
+          role="dialog"
+          aria-label={fieldLabel}
           data-align={align}
           className={`absolute ${align === "right" ? "right-0" : "left-0"} z-30 w-60 p-3 bg-card border border-border rounded-lg shadow-lg ${
             placement === "top" ? "bottom-full mb-2" : "top-full mt-2"
           }`}
         >
           <label className="block text-xs font-medium text-muted-foreground mb-1">
-            Schedule for
+            {fieldLabel}
           </label>
           <input
             type="date"
+            aria-label="Date"
             value={date}
             onChange={(e) => setDate(e.target.value)}
             onKeyDown={(e) => {
@@ -101,11 +121,20 @@ export default function SchedulePopover({
             className="w-full px-3 py-2 min-h-[44px] border border-border rounded text-base mb-2"
             autoFocus
           />
+          {withTime && (
+            <input
+              type="time"
+              aria-label="Time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              className="w-full px-3 py-2 min-h-[44px] border border-border rounded text-base mb-2"
+            />
+          )}
           <div className="flex gap-2">
             <button
               type="button"
               onClick={commit}
-              disabled={!date}
+              disabled={!ready}
               className="flex-1 px-3 py-2 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {confirmLabel}

@@ -7,7 +7,8 @@
  * Restructure P3:
  * - `editable` (inbox detail): pending reminders as a grouped list with Cancel.
  * - `IntentionReminderLines` (intention detail): one small line per pending reminder
- *   with a Cancel link, and an "Add reminder" link that opens date and time inline.
+ *   with a Cancel link (confirm only, no Undo), and an "Add reminder" link that opens
+ *   the Schedule popover in its time mode.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -21,9 +22,8 @@ import {
   nextWholeHour,
 } from "../utils/remindersApi";
 import { NOTE_LIST, NOTE_ROW } from "../notes/noteFormat";
+import SchedulePopover from "../shared/recurrence/SchedulePopover";
 
-// The event scheduling form's input (SchedulePopover).
-const INPUT = "w-full px-3 py-2 min-h-[44px] border border-border rounded text-base";
 const LINK = "underline-offset-2 hover:underline disabled:opacity-50";
 const EMPTY = { scheduled: [], lastSent: null };
 
@@ -137,14 +137,16 @@ function ReminderRow({ reminder, onCancelled }) {
  * Intention header lines, directly under the schedule line and in its text size:
  * "Reminder · <PT time>  Cancel" per pending reminder, then "Add reminder".
  * `scheduled` and `onChanged` come from the page's `useReminderSummary`.
+ * `disabledReason` (the page's closed title) disables Add, as it does Start Now
+ * and Schedule; pending lines and their Cancel stay.
  */
-export function IntentionReminderLines({ intentId, text, scheduled = [], onChanged }) {
+export function IntentionReminderLines({ intentId, text, scheduled = [], onChanged, disabledReason = null }) {
   return (
     <>
       {scheduled.map((r) => (
         <CompactReminder key={r.id} reminder={r} onCancelled={onChanged} />
       ))}
-      <AddReminderLine intentId={intentId} text={text} onAdded={onChanged} />
+      <AddReminderLine intentId={intentId} text={text} onAdded={onChanged} disabledReason={disabledReason} />
     </>
   );
 }
@@ -175,78 +177,40 @@ function CompactReminder({ reminder, onCancelled }) {
   );
 }
 
-function AddReminderLine({ intentId, text, onAdded }) {
-  const [open, setOpen] = useState(false);
-  const [date, setDate] = useState("");
-  const [time, setTime] = useState("");
-  const [busy, setBusy] = useState(false);
+/** "Add reminder" opens the Schedule popover in its time mode ("Remind me at"). */
+function AddReminderLine({ intentId, text, onAdded, disabledReason }) {
+  const next = nextWholeHour();
 
-  function start() {
-    const next = nextWholeHour();
-    setDate(next.date);
-    setTime(next.time);
-    setOpen(true);
-  }
-
-  async function save() {
+  async function save(date, time) {
     const dueAt = localInputToIso(date, time);
     if (!dueAt) return;
     if (new Date(dueAt) <= new Date()) {
       window.alert("Pick a time in the future.");
       return;
     }
-    setBusy(true);
     try {
       await createIntentionReminder({ intentId, text: (text || "").trim() || "Reminder", dueAt });
-      setOpen(false);
       onAdded();
     } catch (err) {
       console.error("[PendingReminder] add", err);
       window.alert("Could not set that reminder.");
-    } finally {
-      setBusy(false);
     }
   }
 
   return (
-    <div className="mt-1">
-      <p className="text-sm flex items-center gap-1.5">
-        <Bell className="w-3.5 h-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        {open ? (
-          <span>Add reminder</span>
-        ) : (
-          <button type="button" onClick={start} className={`text-primary ${LINK}`}>
-            Add reminder
-          </button>
-        )}
-      </p>
-      {open && (
-        <div className="mt-2 space-y-2 max-w-sm">
-          <div className="flex gap-2">
-            <label className="flex-1 text-xs font-medium text-muted-foreground">
-              Date
-              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={`${INPUT} mt-1`} />
-            </label>
-            <label className="flex-1 text-xs font-medium text-muted-foreground">
-              Time
-              <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={`${INPUT} mt-1`} />
-            </label>
-          </div>
-          <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={save}
-              disabled={busy || !localInputToIso(date, time)}
-              className="px-4 py-2 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg text-sm disabled:opacity-50"
-            >
-              Set reminder
-            </button>
-            <button type="button" onClick={() => setOpen(false)} className={`text-sm text-muted-foreground ${LINK}`}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
+    <div className="text-sm mt-1 flex items-center gap-1.5">
+      <Bell className="w-3.5 h-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <SchedulePopover
+        label="Add reminder"
+        fieldLabel="Remind me at"
+        confirmLabel="Set reminder"
+        initialDate={next.date}
+        initialTime={next.time}
+        onPick={save}
+        disabled={Boolean(disabledReason)}
+        title={disabledReason || undefined}
+        className={`text-primary ${LINK} disabled:cursor-not-allowed disabled:no-underline`}
+      />
     </div>
   );
 }

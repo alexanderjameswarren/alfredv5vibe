@@ -263,6 +263,7 @@ export default function IntentionDetailView({
           text={intention.text || ""}
           scheduled={reminders.scheduled}
           onChanged={reminders.reload}
+          disabledReason={closedTitle}
         />
 
         {statusNotices}
