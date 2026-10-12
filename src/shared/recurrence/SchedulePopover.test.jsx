@@ -29,6 +29,22 @@ test("date-only by default", () => {
   expect(onPick).toHaveBeenCalledWith("2026-10-07");
 });
 
+test("validate: an error shows inside, the popover stays open, and editing clears it", () => {
+  const onPick = jest.fn();
+  render(
+    <SchedulePopover label="Schedule" initialDate="2026-10-07" onPick={onPick} validate={(d) => (d < "2026-10-08" ? "Too early" : null)} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Schedule" })[1]);
+  expect(screen.getByRole("alert").textContent).toBe("Too early");
+  expect(screen.getByDisplayValue("2026-10-07")).toBeTruthy();
+  expect(onPick).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2026-10-09" } });
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.click(screen.getAllByRole("button", { name: "Schedule" })[1]);
+  expect(onPick).toHaveBeenCalledWith("2026-10-09");
+});
+
 test("time mode: its own label, a time input, onPick(date, time)", () => {
   const onPick = jest.fn();
   render(

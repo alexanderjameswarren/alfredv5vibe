@@ -38,11 +38,15 @@ export default function SchedulePopover({
   fieldLabel = "Schedule for",
   initialTime = null,
   title,
+  // (date, time) => error text or null. An error shows inside the popover, which
+  // stays open with what was entered; changing either input clears it.
+  validate = null,
 }) {
   const withTime = initialTime !== null;
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState(initialDate);
   const [time, setTime] = useState(initialTime || "");
+  const [error, setError] = useState(null);
   const [align, setAlign] = useState("left");
   const ref = useRef(null);
 
@@ -66,6 +70,7 @@ export default function SchedulePopover({
       if (!wasOpen) {
         setDate(initialDate);
         setTime(initialTime || "");
+        setError(null);
       }
       return !wasOpen;
     });
@@ -75,6 +80,11 @@ export default function SchedulePopover({
 
   function commit() {
     if (!ready) return;
+    const problem = validate ? validate(date, withTime ? time : undefined) : null;
+    if (problem) {
+      setError(problem);
+      return;
+    }
     setOpen(false);
     if (withTime) {
       onPick(date, time);
@@ -111,7 +121,10 @@ export default function SchedulePopover({
             type="date"
             aria-label="Date"
             value={date}
-            onChange={(e) => setDate(e.target.value)}
+            onChange={(e) => {
+              setDate(e.target.value);
+              setError(null);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -126,9 +139,17 @@ export default function SchedulePopover({
               type="time"
               aria-label="Time"
               value={time}
-              onChange={(e) => setTime(e.target.value)}
+              onChange={(e) => {
+                setTime(e.target.value);
+                setError(null);
+              }}
               className="w-full px-3 py-2 min-h-[44px] border border-border rounded text-base mb-2"
             />
+          )}
+          {error && (
+            <p role="alert" className="text-sm text-destructive mb-2">
+              {error}
+            </p>
           )}
           <div className="flex gap-2">
             <button

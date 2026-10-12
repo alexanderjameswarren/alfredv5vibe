@@ -157,7 +157,19 @@ describe("IntentionReminderLines (P3)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add reminder" }));
     fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2020-01-01" } });
     fireEvent.click(screen.getByRole("button", { name: "Set reminder" }));
-    expect(window.alert).toHaveBeenCalledWith("Pick a time in the future.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Pick a time in the future.");
+    expect(screen.getByRole("dialog", { name: "Remind me at" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Date")).toHaveValue("2020-01-01");
+    expect(window.alert).not.toHaveBeenCalled();
     expect(createIntentionReminder).not.toHaveBeenCalled();
+  });
+
+  it("clears the past-time error when an input changes", () => {
+    render(<IntentionReminderLines intentId="int1" text="Call" scheduled={[]} onChanged={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add reminder" }));
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2020-01-01" } });
+    fireEvent.click(screen.getByRole("button", { name: "Set reminder" }));
+    fireEvent.change(screen.getByLabelText("Time"), { target: { value: "10:00" } });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
