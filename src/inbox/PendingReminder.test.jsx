@@ -113,11 +113,28 @@ describe("IntentionReminderLines (P3)", () => {
     expect(cancelReminder).toHaveBeenCalledWith("r1");
   });
 
-  it("a Cancel link closes the inputs", () => {
+  it("Add opens the Remind me at popover; its Cancel closes it", () => {
     render(<IntentionReminderLines intentId="int1" text="Call" scheduled={[]} onChanged={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Add reminder" }));
+    expect(screen.getByRole("dialog", { name: "Remind me at" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByLabelText("Time")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("Add is disabled when the page's actions are, but lines and Cancel stay", () => {
+    render(
+      <IntentionReminderLines
+        intentId="int1"
+        text="Call"
+        scheduled={[{ id: "r1", due_at: "2026-10-01T16:00:00Z" }]}
+        onChanged={() => {}}
+        disabledReason="Closed intentions cannot be scheduled"
+      />,
+    );
+    const add = screen.getByRole("button", { name: "Add reminder" });
+    expect(add).toBeDisabled();
+    expect(add).toHaveAttribute("title", "Closed intentions cannot be scheduled");
+    expect(screen.getByRole("button", { name: /Cancel reminder/ })).toBeEnabled();
   });
 
   it("adds at the next whole hour by default", async () => {
