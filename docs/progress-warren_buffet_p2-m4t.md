@@ -13,7 +13,7 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 4 | Phase 2 MCP tools (except subscriptions); deploy; verify in a fresh chat | done | 2026-10-10: 18 tools plus the get_wb_transactions extension; 108 applied, 109 all checks true; CONFORMANT, 58 tables. mcp v146. claude.ai verification 10/10, plus the plain split refusal. 110 removed the test rule and tag |
 | 5 | Starter taxonomy, merchants and rules (in claude.ai) | done | 2026-10-11: taxonomy, merchants and rules set up in claude.ai; review queue at 0. Follow-up (tag exclusions, 114/115) done |
 | 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | done 2026-10-11 | Plan approved 2026-10-11 (decisions A–D). 6a: SQL for "always do this" plus `wb_transactions.notes`, 117 applied 2026-10-11 (CONFORMANT, 60 tables), 118 24/24. 6b (UI) verified by Alex: all 26 steps passed on desktop, a phone-sized window, his real phone and as Elise. 6c: tool wrapper, `excluded_tags` and WB_MANUAL; mcp v147 deployed, and the fresh-thread check passed |
-| 7 | Migration B + tools: subscriptions, price history, monthly detection | not started | |
+| 7 | Migration B + tools: subscriptions, price history, monthly detection | in progress | Plan approved 2026-10-11 (D1–D6). 7a: 120 applied 2026-10-12 (conformant), 121 39/39. 7b (wb-sync detection) in progress |
 | 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | not started | |
 | 9 | Phase 2 review and Phase 3 steps | not started | |
 | 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | not started | Added 2026-10-09. Also: a bulk-create tool for tags, merchants and rules (Step 5 hit the 60-calls-per-5-minutes limit creating them one call at a time) |
@@ -105,3 +105,22 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
     - `excluded_tags` on bcc82c61 lists Subscription, linked to its rule.
     - The `create_wb_rule_from_transaction` dry run returned `confirmation_required`: existing merchant, 3 past matches, not too narrow, a warning to update the existing rule, and an empty pattern because the merchant already exists.
     - No writes.
+- Step 7 plan (2026-10-11), approved:
+  - D1: `wb_merchants.not_subscription`, set when a detection is dismissed.
+  - D2: `wb_transactions.subscription_source`; claude and manual links are never overwritten.
+  - D3: exact cents, plus a per-subscription `amount_tolerance` (default 0), used for linking and for `price_change`.
+  - D4: missing charges live in `wb_subscription_overview`, not the review queue.
+  - D5: detection runs in wb-sync after processing. It needs 3 or more charges 26–35 days apart, each within 10% of their median.
+  - D6: the Review tab labels and "Record new price" are part of Step 7.
+  - Sub-steps go one at a time: 7a SQL, 7b wb-sync, 7c tools, 7d Review tab.
+  - 7a: `_pending_warren_buffet_p2-m4t_step7_subscriptions.sql` and `_pending_…_step7_tests.sql` (39 checks, invented fixtures, rolled back).
+    - PGlite: 39/39. 118 24/24, 115 13/13 and 104 85/85 still pass.
+    - Beyond the plan: helpers `wb_subscription_price_on` and `wb_refresh_subscriptions`; price source `claude` alongside detected and manual; `subscription_*` columns in `wb_transaction_list`. Alex approved these on 2026-10-12.
+    - After gitsync (2026-10-12) there was no drift: 119 touches no wb_ object. The 7a db items were claimed, and the files numbered `120_wb_phase2_step7_subscriptions.sql` and `121_wb_phase2_step7_tests.sql`. PGlite still passes.
+    - Spec Step 8 now records the old-price rule: seeding records both prices.
+    - Alex ran both on 2026-10-12: 120 conformant, with no failures; 121 39/39, rolled back.
+  - 7b (2026-10-12): wb-sync calls `wb_detect_subscriptions` after processing.
+    - Like processing errors, a detection error is recorded on the run (`detection_error`) and never changes its status.
+    - Run details gain `detection {created, linked}` and `processing.subscriptions_linked`.
+    - A run with no accounts (including a simulated one) skips detection.
+    - Tests: functions 637/637, CLI 174/174. `deno check` passes. Not yet deployed.
