@@ -36,6 +36,9 @@ yarn-error.log*
 # not committed - it is a message, not source.
 /.clip
 
+# Local scratch: pasted payloads and other private test data. Never committed.
+/.scratch/
+
 # Supabase CLI scratch state. Machine-local and rewritten by the CLI itself — the
 # linked project ref, the pooler URL, and the versions of the services it last saw.
 # `cli-latest` in particular is bumped by any `supabase` command, so it turned up as a

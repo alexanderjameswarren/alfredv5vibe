@@ -46,6 +46,289 @@ test("unique violation", () => {
   assert.equal(p.isUniqueViolation(null), false);
 });
 
+// --- Trusted auto-forward. Real data: input A (Idealist alert, 2026-10-07). ---
+const PM = "22edead6c8585c5cdd11b72d6d1b3e01";
+const caf = (local, domain) => `${local}+caf_=${PM}=inbound.postmarkapp.com@${domain}`;
+const postmarkSpf = (envelope, domain, result = "pass") =>
+  `${result} (${domain}: Sender is authorized to use '${envelope}' in 'mfrom' identity (mechanism 'include:dc-aa8e722993._spfm.secorus.com' matched)) receiver=p-pm-inboundg04a-aws-useast1a; identity=mailfrom; envelope-from="${envelope}"; helo=mail-yw1-f178.google.com; client-ip=209.85.128.178`;
+const GOOGLE_SPF =
+  "pass (google.com: domain of pm_bounces@pm-bounces.idealist.org designates 104.245.209.235 as permitted sender) client-ip=104.245.209.235;";
+
+function forwardHeaders(local, domain, { spf, xff, extra = [] } = {}) {
+  const envelope = caf(local, domain);
+  return [
+    { Name: "Return-Path", Value: `<${envelope}>` },
+    { Name: "Received", Value: "by p-pm-inboundg04a-aws-useast1a.inbound.postmarkapp.com (Postfix, from userid 996)" },
+    { Name: "Received-SPF", Value: spf ?? postmarkSpf(envelope, domain) },
+    { Name: "X-Forwarded-To", Value: `${PM}@inbound.postmarkapp.com` },
+    { Name: "X-Forwarded-For", Value: xff ?? `${local}@${domain} ${PM}@inbound.postmarkapp.com` },
+    { Name: "Delivered-To", Value: `${local}@${domain}` },
+    ...extra,
+    { Name: "Received-SPF", Value: GOOGLE_SPF },
+    { Name: "Message-Id", Value: "<3f518020-2e8f-4e57-803e-5a4cd8a2e406@mtasv.net>" },
+  ];
+}
+const INPUT_A = forwardHeaders("alex.warren", "secorus.com");
+const IDEALIST_TO = ["alex.warren@secorus.com", "alex.warren@secorus.com", `${PM}@inbound.postmarkapp.com`];
+
+test("input A: trusted, maps to Alex", () => {
+  assert.deepEqual(p.checkAutoForward(INPUT_A), { trusted: true, account: "alex.warren@secorus.com" });
+  const d = p.decideCapture("no-reply@idealist.org", IDEALIST_TO, INPUT_A);
+  assert.equal(d.accept, true);
+  assert.equal(d.userEmail, "alexanderjameswarren@gmail.com");
+  assert.equal(d.via, "forward");
+  assert.equal(d.captureAddress, undefined);
+});
+
+test("stranger's Return-Path with forged X-Forwarded-For: rejected", () => {
+  const h = forwardHeaders("stranger", "gmail.com", {
+    xff: `alex.warren@secorus.com ${PM}@inbound.postmarkapp.com`,
+  });
+  const d = p.decideCapture("no-reply@idealist.org", IDEALIST_TO, h);
+  assert.deepEqual(d, { accept: false, reason: "sender_not_allowed:forwarder_not_allowed", domain: "idealist.org" });
+});
+
+test("injected second Postmark-looking SPF: rejected", () => {
+  const fake = { Name: "Received-SPF", Value: postmarkSpf(caf("alex.warren", "secorus.com"), "secorus.com") };
+  const h = forwardHeaders("alex.warren", "secorus.com", { extra: [fake] });
+  assert.equal(p.checkAutoForward(h).reason, "second_postmark_spf");
+  assert.equal(p.decideCapture("no-reply@idealist.org", IDEALIST_TO, h).accept, false);
+});
+
+test("Postmark SPF not first: rejected", () => {
+  const h = INPUT_A.filter((x) => x.Name !== "Received-SPF");
+  h.splice(1, 0, { Name: "Received-SPF", Value: GOOGLE_SPF });
+  h.push({ Name: "Received-SPF", Value: postmarkSpf(caf("alex.warren", "secorus.com"), "secorus.com") });
+  assert.equal(p.checkAutoForward(h).reason, "first_spf_not_postmark");
+});
+
+test("SPF not pass: rejected", () => {
+  for (const result of ["softfail", "fail", "neutral", "none"]) {
+    const h = forwardHeaders("alex.warren", "secorus.com", {
+      spf: postmarkSpf(caf("alex.warren", "secorus.com"), "secorus.com", result),
+    });
+    assert.equal(p.checkAutoForward(h).reason, "spf_not_pass", result);
+  }
+});
+
+test("envelope-from differs from Return-Path: rejected", () => {
+  const h = forwardHeaders("alex.warren", "secorus.com", {
+    spf: postmarkSpf(caf("stranger", "gmail.com"), "gmail.com"),
+  });
+  assert.equal(p.checkAutoForward(h).reason, "envelope_mismatch");
+});
+
+test("X-Forwarded-For naming another account: rejected", () => {
+  const h = forwardHeaders("alex.warren", "secorus.com", { xff: "enhdesigns@gmail.com x@y" });
+  assert.equal(p.checkAutoForward(h).reason, "xff_mismatch");
+});
+
+test("plain Return-Path, no SPF, no headers: not trusted", () => {
+  assert.equal(p.checkAutoForward([{ Name: "Return-Path", Value: "<bounce@idealist.org>" }]).reason, "return_path_not_caf");
+  assert.equal(p.checkAutoForward([{ Name: "Return-Path", Value: `<${caf("alex.warren", "secorus.com")}>` }]).reason, "no_spf");
+  assert.equal(p.checkAutoForward(undefined).reason, "no_return_path");
+});
+
+const ELISE = forwardHeaders("enhdesigns", "gmail.com");
+
+test("Elise auto-forward, no capture address: maps to Elise", () => {
+  const d = p.decideCapture("hello@shop.example", ["enhdesigns@gmail.com"], ELISE);
+  assert.equal(d.accept, true);
+  assert.equal(d.userEmail, "enhdesigns@gmail.com");
+  assert.equal(d.label, "Elise");
+});
+
+// Real data: .scratch payloads 2026-10-13 (hand forwards through the secorus
+// filter). Domain of the non-allowlisted account anonymised.
+const viaSecorus = (deliveredTo) => [
+  ...forwardHeaders("alex.warren", "secorus.com").filter((h) => h.Name !== "Delivered-To"),
+  { Name: "Delivered-To", Value: deliveredTo },
+];
+
+test("payload katieporter: capture address, From not allowlisted → rule 1 reject", () => {
+  const d = p.decideCapture("alex.warren@other.example", ["alfred@secorus.com", "alfred@secorus.com"],
+    viaSecorus("alfred@secorus.com"));
+  assert.deepEqual(d, {
+    accept: false,
+    reason: "capture_address_sender_not_allowed",
+    domain: "other.example",
+    captureHit: "alfred@secorus.com",
+  });
+});
+
+test("payload alexanderjames: accepted, maps to Alex", () => {
+  const d = p.decideCapture("alexanderjameswarren@gmail.com",
+    ["alex.warren+alfred@secorus.com", '"Alfred" <alex.warren+alfred@secorus.com>'],
+    viaSecorus("alex.warren+alfred@secorus.com"));
+  assert.equal(d.accept, true);
+  assert.equal(d.userEmail, "alexanderjameswarren@gmail.com");
+  assert.equal(d.via, "from");
+});
+
+test("stranger Bcc'ing a capture address: Delivered-To catches it", () => {
+  const d = p.decideCapture("x@other.example", ["someone@else.example"], viaSecorus("recipes@secorus.com"));
+  assert.equal(d.reason, "capture_address_sender_not_allowed");
+});
+
+test("capture address in Cc counts", () => {
+  const d = p.decideCapture("x@other.example", ["a@b.example", "alfred@secorus.com"], viaSecorus("alex.warren@secorus.com"));
+  assert.equal(d.reason, "capture_address_sender_not_allowed");
+});
+
+test("stranger's own Gmail rule forwarding in: rule 2 reject", () => {
+  const h = [
+    ...forwardHeaders("alex.warren", "secorus.com"),
+    { Name: "X-Forwarded-For", Value: "stranger@gmail.com alex.warren@secorus.com" },
+  ];
+  const d = p.decideCapture("news@shop.example", ["stranger@gmail.com"], h);
+  assert.equal(d.accept, false);
+  assert.equal(d.reason, "forwarded_by_unknown_account");
+  assert.equal(d.domain, "gmail.com");
+});
+
+test("Elise to recipes@ through the secorus filter: Alex, recipes", () => {
+  const d = p.decideCapture("enhdesigns@gmail.com", ["recipes@secorus.com"], viaSecorus("recipes@secorus.com"));
+  assert.equal(d.accept, true);
+  assert.equal(d.userEmail, "alexanderjameswarren@gmail.com");
+  assert.equal(d.captureAddress, "recipes");
+});
+
+test("a stranger's mail auto-forwarded to recipes@: rule 1 reject", () => {
+  const d = p.decideCapture("hello@cooking.example", ["recipes@secorus.com"], ELISE);
+  assert.equal(d.reason, "capture_address_sender_not_allowed");
+});
+
+// Rule 1(b): an earlier Gmail hop into a capture address. Earlier hops sit
+// below the secorus → Postmark hop, as Gmail prepends each new hop.
+const earlierHop = (account, captureAddress) => [
+  ...viaSecorus(captureAddress),
+  { Name: "X-Forwarded-To", Value: captureAddress },
+  { Name: "X-Forwarded-For", Value: `${account} ${captureAddress}` },
+  { Name: "Delivered-To", Value: account },
+];
+
+test("1(b): Alex's Gmail rule forwarding LifeTime to alfred@ → Alex, auto-forwarded", () => {
+  const d = p.decideCapture("noreply@lifetime.example", ["alexanderjameswarren@gmail.com"],
+    earlierHop("alexanderjameswarren@gmail.com", "alfred@secorus.com"));
+  assert.equal(d.accept, true);
+  assert.equal(d.userEmail, "alexanderjameswarren@gmail.com");
+  assert.equal(d.via, "forward");
+  assert.equal(d.captureAddress, undefined);
+});
+
+test("1(b): Elise's rule forwarding NYT Cooking to recipes@ → Alex, recipes", () => {
+  const d = p.decideCapture("cooking@nytimes.example", ["enhdesigns@gmail.com"],
+    earlierHop("enhdesigns@gmail.com", "recipes@secorus.com"));
+  assert.equal(d.accept, true);
+  assert.equal(d.userEmail, "alexanderjameswarren@gmail.com");
+  assert.equal(d.captureAddress, "recipes");
+  assert.equal(d.via, "forward");
+});
+
+test("1(b): a stranger's earlier hop into recipes@ → rejected", () => {
+  const d = p.decideCapture("cooking@nytimes.example", ["stranger@gmail.com"],
+    earlierHop("stranger@gmail.com", "recipes@secorus.com"));
+  assert.equal(d.accept, false);
+  assert.equal(d.reason, "forwarded_by_unknown_account");
+});
+
+test("1(b): forged hop naming Alex but forwarded elsewhere → rejected", () => {
+  const h = [
+    ...viaSecorus("alfred@secorus.com"),
+    { Name: "X-Forwarded-For", Value: "alexanderjameswarren@gmail.com other@else.example" },
+  ];
+  const d = p.decideCapture("noreply@lifetime.example", ["alexanderjameswarren@gmail.com"], h);
+  assert.equal(d.reason, "capture_address_sender_not_allowed");
+});
+
+test("1(b): the secorus → Postmark hop alone never counts", () => {
+  const d = p.decideCapture("x@other.example", ["alfred@secorus.com"], viaSecorus("alfred@secorus.com"));
+  assert.equal(d.reason, "capture_address_sender_not_allowed");
+});
+
+// --- Rejection notices ---
+
+function fakeStore() {
+  const rows = [];
+  return {
+    rows,
+    async countNotices(from, day) {
+      return rows.filter((r) => r.meta.from_address === from && r.meta.notice_day === day).length;
+    },
+    async insertNotice(text, meta) {
+      rows.push({ text, meta });
+    },
+  };
+}
+const REJ = {
+  reason: "capture_address_sender_not_allowed",
+  fromAddress: "alex.warren@other.example",
+  captureAddress: "alfred@secorus.com",
+  postmarkMessageId: "eee5fb97-e045-4e06-a0f0-e55fb91d2afa",
+};
+
+test("notice: text, metadata, no messageId key", () => {
+  const n = p.buildNotice(REJ, new Date("2026-10-13T21:00:00Z"));
+  assert.equal(
+    n.capturedText,
+    "Email blocked from alex.warren@other.example: the sender is not on the allowlist. View it in Postmark: " +
+      "https://account.postmarkapp.com/servers/18272581/streams/inbound/messages/eee5fb97-e045-4e06-a0f0-e55fb91d2afa" +
+      " (also still in your secorus Gmail inbox).",
+  );
+  assert.deepEqual(n.sourceMetadata, {
+    rejected: true,
+    reason: "capture_address_sender_not_allowed",
+    from_address: "alex.warren@other.example",
+    postmark_message_id: "eee5fb97-e045-4e06-a0f0-e55fb91d2afa",
+    notice_day: "2026-10-13",
+    capture_address: "alfred@secorus.com",
+  });
+  assert.equal("messageId" in n.sourceMetadata, false);
+});
+
+test("notice: once per sender per Pacific day", async () => {
+  const s = fakeStore();
+  const morning = new Date("2026-10-13T16:00:00Z");
+  assert.equal(await p.sendRejectionNotice(s, REJ, morning, true), "sent");
+  assert.equal(await p.sendRejectionNotice(s, REJ, new Date("2026-10-14T06:59:00Z"), true), "capped"); // 23:59 PDT
+  assert.equal(await p.sendRejectionNotice(s, { ...REJ, fromAddress: "b@other.example" }, morning, true), "sent");
+  assert.equal(await p.sendRejectionNotice(s, REJ, new Date("2026-10-14T07:01:00Z"), true), "sent"); // next day
+  assert.equal(s.rows.length, 3);
+});
+
+test("notice switch", async () => {
+  assert.equal(await p.sendRejectionNotice(fakeStore(), REJ, new Date(), false), "disabled");
+  assert.equal(p.noticesEnabled(undefined), true);
+  assert.equal(p.noticesEnabled("on"), true);
+  assert.equal(p.noticesEnabled(" OFF "), false);
+});
+
+test("hand forward from an allowlisted From: unchanged", () => {
+  const d = p.decideCapture("alex.warren@secorus.com", ["alex.warren+alfred@secorus.com"], []);
+  assert.equal(d.accept, true);
+  assert.equal(d.via, "from");
+  const elise = p.decideCapture("enhdesigns@gmail.com", ["alex.warren+elise+alfred@secorus.com"], []);
+  assert.equal(elise.userEmail, "enhdesigns@gmail.com");
+});
+
+test("unknown sender, no forward: rejected with domain only", () => {
+  assert.deepEqual(p.decideCapture("spam@bad.example", ["someone@else.example"], []), {
+    accept: false,
+    reason: "sender_not_allowed:no_return_path",
+    domain: "bad.example",
+  });
+});
+
+test("allowlisted From, no capture address, no forward: no_mapping", () => {
+  const d = p.decideCapture("alex.warren@secorus.com", ["someone@else.example"], []);
+  assert.deepEqual(d, { accept: false, reason: "no_mapping", domain: "else.example" });
+});
+
+test("alfred@ mapping still last", () => {
+  assert.equal(p.findMapping(["alex.warren+elise+alfred@secorus.com"]).label, "Elise");
+  assert.equal(p.findMapping(["alfred@secorus.com"]).label, "Alex");
+});
+
 test("subject prefixes", () => {
   assert.equal(p.cleanSubject("Fwd: New Jobs Alert"), "New Jobs Alert");
   assert.equal(p.cleanSubject("FW: Fwd: Re: Lunch"), "Lunch");
