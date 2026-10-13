@@ -172,6 +172,46 @@ describe("hand edits", () => {
   });
 });
 
+describe("subscriptions screen", () => {
+  it("saves edits, relinks both merchants' charges when the merchant changes, then refreshes the dates", async () => {
+    mockRespond = (table) => ({ data: table === "wb_transactions" ? [{ id: "t1" }, { id: "t2" }] : null, error: null });
+    await api.updateSubscription({ id: "s1", merchant_id: "m1" }, { merchant_id: "m2", notes: "n" });
+    expect(op("wb_subscriptions", "update")[0]).toEqual(["update", { merchant_id: "m2", notes: "n" }]);
+    expect(op("wb_transactions", "in")[0]).toEqual(["in", "merchant_id", ["m1", "m2"]]);
+    expect(mockRpcs.map((r) => r[0])).toEqual(["wb_process_transactions", "wb_refresh_subscriptions"]);
+    expect(mockRpcs[1][1]).toEqual({ p_ids: ["s1"] });
+  });
+
+  it("does not reprocess when the merchant is unchanged", async () => {
+    await api.updateSubscription({ id: "s1", merchant_id: "m1" }, { notes: "n" });
+    expect(mockRpcs.map((r) => r[0])).toEqual(["wb_refresh_subscriptions"]);
+  });
+
+  it("records a manual price, refusing zero", async () => {
+    await api.recordPrice("s1", 9.5, "2026-02-01");
+    expect(op("wb_subscription_prices", "upsert")[0][1]).toEqual(
+      { subscription_id: "s1", effective_on: "2026-02-01", amount: 9.5, source: "manual" });
+    await expect(api.recordPrice("s1", 0, "2026-02-01")).rejects.toThrow("A price must be more than zero.");
+  });
+
+  it("links and unlinks by hand", async () => {
+    await api.linkCharges(["t1"], null);
+    expect(mockRpcs[0]).toEqual(["wb_link_subscription", { p_transaction_ids: ["t1"], p_subscription_id: null, p_source: "manual" }]);
+  });
+
+  it("finds unlinked spend for the merchant, or by search across merchants, and nothing without either", async () => {
+    await api.findLinkCandidates({ merchant_id: "m1" }, "");
+    expect(op("wb_transaction_list", "eq")).toEqual([["eq", "kind", "spend"], ["eq", "merchant_id", "m1"]]);
+    expect(op("wb_transaction_list", "is")[0]).toEqual(["is", "subscription_id", null]);
+    mockLog = [];
+    await api.findLinkCandidates({ merchant_id: "m1" }, "pool");
+    expect(op("wb_transaction_list", "or")).toHaveLength(1);
+    expect(op("wb_transaction_list", "eq")).toEqual([["eq", "kind", "spend"]]);
+    mockLog = [];
+    expect(await api.findLinkCandidates({ merchant_id: null }, "")).toEqual([]);
+  });
+});
+
 describe("subscriptions in review", () => {
   it("attaches subscription_id to subscription rows only", async () => {
     mockRespond = (table) => (table === "wb_review_queue"

@@ -1,4 +1,8 @@
 import {
+  billingChoice, billingFields, groupSubscriptions, intervalLabel, monthlyEquivalent, multiplierLabel, reviewSoon,
+  subscriptionBreakdown, subscriptionTotals,
+} from "./moneyFormat";
+import {
   addMonths, costBasisLabel, exclusionLabel, formatMoney, formatMonth, groupAccounts, groupQueue, holdingGain,
   monthOf, monthRange, parseAmountInput, rewardDisplay, spendingForMonth, splitRemainder, syncStatus, tagOptions, tagTops,
 } from "./moneyFormat";
@@ -146,5 +150,91 @@ describe("amounts", () => {
     expect(parseAmountInput("abc")).toBeNull();
     expect(formatMoney(-12.5)).toBe("-$12.50");
     expect(formatMoney(null)).toBe("—");
+  });
+});
+
+describe("subscriptions", () => {
+  const sub = (over) => ({ status: "active", cadence: "monthly", interval_count: 1, interval_unit: "month",
+    current_price: "12", owner: null, name: "Test", ...over });
+
+  it("labels the billing interval", () => {
+    expect(intervalLabel(sub())).toBe("Monthly");
+    expect(intervalLabel(sub({ cadence: "annual", interval_count: 12 }))).toBe("Annual");
+    expect(intervalLabel(sub({ cadence: "other", interval_count: 2, interval_unit: "week" }))).toBe("Every 2 weeks");
+    expect(intervalLabel(sub({ cadence: "other", interval_count: 1, interval_unit: "week" }))).toBe("Weekly");
+    expect(intervalLabel(sub({ cadence: "other", interval_count: null, interval_unit: null }))).toBe("Irregular");
+  });
+
+  it("turns any interval into a monthly cost", () => {
+    expect(monthlyEquivalent(sub({ cadence: "annual", interval_count: 12, current_price: "120" }))).toBe(10);
+    expect(monthlyEquivalent(sub({ cadence: "other", interval_count: 2, interval_unit: "month", current_price: 90 }))).toBe(45);
+    expect(monthlyEquivalent(sub({ cadence: "other", interval_count: 2, interval_unit: "week", current_price: 60 }))).toBe(130);
+    expect(monthlyEquivalent(sub({ cadence: "other", interval_count: null, interval_unit: null }))).toBeNull();
+    expect(monthlyEquivalent(sub({ current_price: null }))).toBeNull();
+  });
+
+  it("totals active rows only, by owner, listing what cannot be counted", () => {
+    const t = subscriptionTotals([
+      sub({ owner: "alex", current_price: 10 }), sub({ owner: "joint", current_price: 20 }), sub({ current_price: 5 }),
+      sub({ status: "paused", current_price: 100 }), sub({ status: "watching", current_price: 100 }),
+      sub({ name: "Odd", cadence: "other", interval_count: null, interval_unit: null }),
+    ]);
+    expect(t.total).toBe(35);
+    expect(t.byOwner).toEqual({ alex: 10, elise: 0, joint: 20, unassigned: 5 });
+    expect(t.notCounted.map((s) => s.name)).toEqual(["Odd"]);
+  });
+
+  it("labels the monthly multiplier plainly", () => {
+    expect(multiplierLabel(sub())).toBe("×1");
+    expect(multiplierLabel(sub({ cadence: "annual", interval_count: 12 }))).toBe("÷12");
+    expect(multiplierLabel(sub({ cadence: "other", interval_count: 2, interval_unit: "month" }))).toBe("÷2");
+    expect(multiplierLabel(sub({ cadence: "other", interval_count: 2, interval_unit: "week" }))).toBe("×2.17");
+    expect(multiplierLabel(sub({ cadence: "other", interval_count: 1, interval_unit: "week" }))).toBe("×4.33");
+  });
+
+  it("breaks the total down high to low, rows rounded first so they sum exactly", () => {
+    const thirds = [1, 2, 3].map((i) => sub({ id: `a${i}`, name: `Annual ${i}`, cadence: "annual", interval_count: 12, current_price: 100, owner: "elise" }));
+    const b = subscriptionBreakdown([
+      ...thirds, sub({ id: "w", name: "Weekly", cadence: "other", interval_count: 2, interval_unit: "week", current_price: 30, owner: "joint" }),
+      sub({ id: "x", name: "Odd", cadence: "other", interval_count: null, interval_unit: null }),
+      sub({ id: "y", name: "Unpriced", current_price: null }),
+      sub({ id: "z", name: "Paused", status: "paused" }),
+    ]);
+    expect(b.rows.map((r) => [r.sub.name, r.multiplier, r.monthly])).toEqual([
+      ["Weekly", "×2.17", 65], ["Annual 1", "÷12", 8.33], ["Annual 2", "÷12", 8.33], ["Annual 3", "÷12", 8.33],
+    ]);
+    expect(b.total).toBe(89.99);
+    expect(b.rows.reduce((s, r) => s + Math.round(r.monthly * 100), 0)).toBe(Math.round(b.total * 100));
+    expect(b.byOwner).toEqual({ alex: 0, elise: 24.99, joint: 65, unassigned: 0 });
+    expect(b.notCounted.map((n) => [n.sub.name, n.reason])).toEqual([
+      ["Odd", "No regular billing interval"], ["Unpriced", "No price recorded"],
+    ]);
+  });
+
+  it("groups by status with overdue first and names A to Z", () => {
+    const g = groupSubscriptions([
+      sub({ name: "B" }), sub({ name: "A" }), sub({ name: "Late", overdue: true }),
+      sub({ name: "C", status: "cancelled" }), sub({ name: "W", status: "watching" }),
+    ]);
+    expect(g.map((x) => x.key)).toEqual(["overdue", "active", "watching", "cancelled"]);
+    expect(g[1].rows.map((s) => s.name)).toEqual(["A", "B"]);
+  });
+
+  it("flags a review date within 30 days or past", () => {
+    expect(reviewSoon({ review_date: "2026-04-09" }, "2026-03-10")).toBe(true);
+    expect(reviewSoon({ review_date: "2026-04-10" }, "2026-03-10")).toBe(false);
+    expect(reviewSoon({ review_date: "2026-01-01" }, "2026-03-10")).toBe(true);
+    expect(reviewSoon({ review_date: null }, "2026-03-10")).toBe(false);
+  });
+
+  it("maps the billing choice to cadence and interval and back", () => {
+    expect(billingFields("weeks", "2")).toEqual({ cadence: "other", interval_count: 2, interval_unit: "week" });
+    expect(billingFields("months", "3")).toEqual({ cadence: "quarterly" });
+    expect(billingFields("months", "2")).toEqual({ cadence: "other", interval_count: 2, interval_unit: "month" });
+    expect(billingFields("irregular", "")).toEqual({ cadence: "other", interval_count: null, interval_unit: null });
+    expect(billingFields("weeks", "0")).toBeNull();
+    expect(billingFields("weeks", "1.5")).toBeNull();
+    expect(billingChoice(sub({ cadence: "other", interval_count: 2, interval_unit: "week" }))).toEqual({ choice: "weeks", count: "2" });
+    expect(billingChoice(sub({ cadence: "annual" }))).toEqual({ choice: "annual", count: "" });
   });
 });

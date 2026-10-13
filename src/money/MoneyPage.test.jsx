@@ -17,6 +17,8 @@ jest.mock("./moneyApi", () => ({
   getTransactionDetail: jest.fn(),
   getSpending: jest.fn(),
   getCashFlow: jest.fn(),
+  getSubscriptions: jest.fn(),
+  getSubscriptionDetail: jest.fn(),
   PAGE_SIZE: 50,
 }));
 const api = require("./moneyApi");
@@ -35,6 +37,20 @@ beforeEach(() => {
   api.getTransactionDetail.mockResolvedValue(null);
   api.getSpending.mockResolvedValue([]);
   api.getCashFlow.mockResolvedValue([]);
+  api.getSubscriptions.mockResolvedValue([]);
+  api.getSubscriptionDetail.mockResolvedValue(null);
+});
+
+it("routes the Subscriptions tab and a subscription by URL", async () => {
+  at("/money/spending");
+  fireEvent.click(await screen.findByRole("tab", { name: "Subscriptions" }));
+  expect(screen.getByTestId("where")).toHaveTextContent("/money/subscriptions");
+  expect(await screen.findByText("No subscriptions yet.")).toBeInTheDocument();
+});
+
+it("opens a subscription by id", async () => {
+  at("/money/subscriptions/s-404");
+  expect(await screen.findByText("No such subscription.")).toBeInTheDocument();
 });
 
 it("routes the Phase 2 tabs and a transaction by URL", async () => {

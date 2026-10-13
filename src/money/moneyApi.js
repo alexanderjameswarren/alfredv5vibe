@@ -1,5 +1,5 @@
 import { supabase } from "../supabaseClient";
-import { pacificToday } from "./moneyFormat";
+import { daysBefore, pacificToday } from "./moneyFormat";
 
 /**
  * Warren Buffet persistence for the Money section. Spec:
@@ -433,5 +433,113 @@ export async function getCashFlow(fromMonth) {
     .select("month, income, spending, net, unprocessed").gte("month", `${fromMonth}-01`)
     .order("month", { ascending: true }).limit(60);
   if (error) fail("Couldn't load cash flow", error);
+  return data || [];
+}
+
+// --- Subscriptions (spec §4.8, §7.5, Step 8) ---
+
+const SUB_COLUMNS =
+  "id, name, plan, status, cadence, interval_count, interval_unit, merchant_id, merchant_name, billed_through_id, " +
+  "billed_through_name, bundle_id, bundle_name, current_price, previous_price, last_change_on, price_count, " +
+  "expected_amount, amount_tolerance, term_end_date, auto_renew, review_date, last_charged_on, next_expected_on, " +
+  "charge_count, overdue, days_past_expected, owner, notes";
+const CHARGE_COLUMNS =
+  "id, account_label, txn_date, amount, clean_description, payee, merchant_name, subscription_id, subscription_source";
+export const LINK_LOOKBACK_DAYS = 180;
+
+export async function getSubscriptions() {
+  const { data, error } = await supabase.from("wb_subscription_overview").select(SUB_COLUMNS).order("name").limit(500);
+  if (error) fail("Couldn't load subscriptions", error);
+  return data || [];
+}
+
+/** One subscription with its price history (newest first) and linked charges (newest first); null if not visible. */
+export async function getSubscriptionDetail(id) {
+  const { data: sub, error } = await supabase.from("wb_subscription_overview").select(SUB_COLUMNS).eq("id", id).maybeSingle();
+  if (error) fail("Couldn't load the subscription", error);
+  if (!sub) return null;
+  const [{ data: prices, error: pe }, { data: charges, error: ce }] = await Promise.all([
+    supabase.from("wb_subscription_prices").select("id, effective_on, amount, source, transaction_id, notes")
+      .eq("subscription_id", id).order("effective_on", { ascending: false }),
+    supabase.from("wb_transaction_list").select(CHARGE_COLUMNS)
+      .eq("subscription_id", id).order("txn_date", { ascending: false }).limit(200),
+  ]);
+  if (pe) fail("Couldn't load the price history", pe);
+  if (ce) fail("Couldn't load the linked charges", ce);
+  return { sub, prices: prices || [], charges: charges || [] };
+}
+
+/** Choices for the edit form: merchants, and other subscriptions for bundle and billed-through. */
+export async function getSubscriptionChoices() {
+  const [{ data: merchants, error: me }, { data: subs, error: se }] = await Promise.all([
+    supabase.from("wb_merchants").select("id, name").order("name").limit(2000),
+    supabase.from("wb_subscriptions").select("id, name, status").order("name").limit(500),
+  ]);
+  if (me) fail("Couldn't load merchants", me);
+  if (se) fail("Couldn't load subscriptions", se);
+  return { merchants: merchants || [], subscriptions: subs || [] };
+}
+
+async function refreshSubscription(id) {
+  const { error } = await supabase.rpc("wb_refresh_subscriptions", { p_ids: [id] });
+  if (error) fail("Couldn't refresh the subscription's dates", error);
+}
+
+async function reprocessMerchants(merchantIds) {
+  const ids = merchantIds.filter(Boolean);
+  if (!ids.length) return;
+  const { data, error } = await supabase.from("wb_transactions").select("id").in("merchant_id", ids).limit(2000);
+  if (error) fail("Couldn't relink the charges", error);
+  await reprocess((data || []).map((r) => r.id));
+}
+
+/** Save edited fields; a new merchant reprocesses both merchants' charges so they relink. Dates refresh after. */
+export async function updateSubscription(sub, patch) {
+  const { error } = await supabase.from("wb_subscriptions").update(patch).eq("id", sub.id);
+  if (error) fail("Couldn't save the subscription", error);
+  if ("merchant_id" in patch && patch.merchant_id !== sub.merchant_id) {
+    await reprocessMerchants([sub.merchant_id, patch.merchant_id]);
+  }
+  await refreshSubscription(sub.id);
+}
+
+/** Confirm (active), pause, cancel or reactivate. */
+export async function setSubscriptionStatus(id, status) {
+  const { error } = await supabase.from("wb_subscriptions").update({ status }).eq("id", id);
+  if (error) fail("Couldn't change the status", error);
+}
+
+/** A price from a date, by hand; the same day again replaces it. */
+export async function recordPrice(subscriptionId, amount, effectiveOn) {
+  if (!(amount > 0)) throw new Error("A price must be more than zero.");
+  if (!effectiveOn) throw new Error("Choose the date the price starts.");
+  const { error } = await supabase.from("wb_subscription_prices").upsert(
+    { subscription_id: subscriptionId, effective_on: effectiveOn, amount, source: "manual" },
+    { onConflict: "subscription_id,effective_on" });
+  if (error) fail("Couldn't record the price", error);
+}
+
+/** Link charges to a subscription, or unlink them (subscriptionId null), by hand: processing never moves them again. */
+export async function linkCharges(transactionIds, subscriptionId) {
+  const { error } = await supabase.rpc("wb_link_subscription", {
+    p_transaction_ids: transactionIds, p_subscription_id: subscriptionId, p_source: "manual",
+  });
+  if (error) fail(subscriptionId ? "Couldn't link the charges" : "Couldn't unlink the charge", error);
+}
+
+/**
+ * Charges that could be linked: unlinked spend from the last 180 days, the
+ * subscription's merchant only unless text is given (text searches every merchant).
+ */
+export async function findLinkCandidates(sub, text) {
+  let q = supabase.from("wb_transaction_list").select(CHARGE_COLUMNS)
+    .eq("kind", "spend").lt("amount", 0).is("subscription_id", null)
+    .gte("txn_date", daysBefore(pacificToday(), LINK_LOOKBACK_DAYS));
+  const s = searchText(text);
+  if (s) q = q.or(`clean_description.ilike.*${s}*,description.ilike.*${s}*,payee.ilike.*${s}*,merchant_name.ilike.*${s}*`);
+  else if (sub.merchant_id) q = q.eq("merchant_id", sub.merchant_id);
+  else return [];
+  const { data, error } = await q.order("txn_date", { ascending: false }).limit(50);
+  if (error) fail("Couldn't look for charges", error);
   return data || [];
 }

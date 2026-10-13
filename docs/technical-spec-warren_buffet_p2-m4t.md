@@ -149,9 +149,22 @@ As designed in Phase 1 §5, finalized:
 
 `wb_subscriptions`: `id, name, plan, merchant_id, billed_through_id` (self), `bundle_id` (self), `cadence` (`monthly`, `quarterly`, `annual`, `other`), `expected_amount`, `term_end_date`, `auto_renew`, `review_date`, `last_charged_on`, `next_expected_on`, `status` (`watching`, `active`, `paused`, `cancelled`), `owner`, `notes`.
 
-`wb_subscription_prices`: `id, subscription_id, effective_on, amount, source` (`detected`, `manual`), `transaction_id` nullable, `notes`.
+`wb_subscription_prices`: `id, subscription_id, effective_on, amount, source` (`detected`, `claude`, `manual`), `transaction_id` nullable, `notes`.
 
 Transactions link to a subscription through `wb_transactions.subscription_id` (nullable, added in Step 7's migration).
+
+As built in Steps 7 and 8a (migrations 120, 122 and 124):
+
+- `wb_subscriptions` also has:
+  - `amount_tolerance` (dollars, default 0): a charge within it counts as the price, for linking and for `price_change`.
+  - `interval_count` + `interval_unit` (week or month), the billing interval. A named cadence has a fixed interval (monthly 1 month, quarterly 3, annual 12); this is kept by trigger and checked by a constraint. Cadence `other` takes any interval. With no interval, a subscription has no next date and is never overdue.
+- `wb_transactions.subscription_source` is `default`, `claude` or `manual`. Processing never changes a `claude` or `manual` link, including a hand unlink.
+- `wb_merchants.not_subscription`: detection skips the merchant, and its watching row leaves the review queue. It is set when a detection is dismissed; insurance, HOAs and utilities get it.
+- Processing links a posted spend charge to its merchant's one non-cancelled subscription. When the merchant has several, it uses the one whose price is within tolerance; if none fits, the charge stays unlinked.
+  - `last_charged_on` is the newest linked charge. `next_expected_on` is that plus the interval, or `term_end_date` when that is later.
+  - Both are written only when they change.
+- `wb_detect_subscriptions` runs in wb-sync after processing. Three or more posted spend charges in the last 120 days, each 26–35 days apart and within 10% of their median, become a `watching` row with a `detected` price.
+- The price on a date is the newest price row on or before it, else the oldest row, else `expected_amount`. So seeding records the old price too when a price changed within the history (Step 8).
 
 ### 4.9 Views (`security_invoker = true`)
 
@@ -162,7 +175,9 @@ All three use the Pacific date of `coalesce(posted_at, transacted_at)`; amounts 
   - `missing_required_tag` — a split has no tag from a group whose `required_for_kinds` holds the kind; `detail` names the group. Posted, unreviewed rows only.
   - `transfer_candidate` — `transfer_candidate` is true and the row is unpaired. Posted, unreviewed rows only.
   - `split_mismatch` — splits do not sum to the amount (shown even when reviewed).
-  - `price_change`, `new_recurring` — added in Step 7.
+  - `price_change` (Step 7) — a posted, unreviewed charge on an active subscription that differs from the price on its date by more than `amount_tolerance`. It is never accepted automatically: recording the new price clears it, and marking the charge reviewed dismisses a one-off.
+  - `new_recurring` (Step 7, 122) — the newest charge of a `watching` subscription while that charge is unreviewed. "Keep watching" marks it reviewed, and the next charge brings it back; confirming or dismissing the subscription ends it.
+- `wb_subscription_overview` (Step 7, 124) — one row per subscription with merchant, bundle and billed-through names, `current_price`, `previous_price`, `last_change_on`, `charge_count`, the interval, and `overdue`. A subscription is overdue when it is active, more than 7 days past `next_expected_on`, and not before `term_end_date` (after the term, only when it renews). Missing charges live here, not in the review queue.
 - `wb_spending_by_tag` — per month, per group, per tag at `leaf` level and rolled up to the `top` parent, the sum of split amounts for kinds `spend`, `refund` and `fee`. Exclusive groups also get an untagged row (`tag_id` null), so a group's rows add up to total spending. Posted rows only; transfers, income and investments excluded by construction.
 - `wb_cash_flow_monthly` — per month: `income` (kinds `income` and `interest`), `spending` (`spend` + `refund` + `fee`), `net`. Transfers and investments excluded; posted rows only. (Phase 3 builds burn rate and free cash on top of this.)
 - `wb_transaction_list` (Step 4) — every transaction with `account_label`, `merchant_name`, `tag_names text[]` (filtered with overlaps), `split_count` and `needs_review` (true when the row is in the review queue; computed inline, kept in step with `wb_review_queue`). No `raw`. What `get_wb_transactions` and the UI list.
@@ -242,7 +257,8 @@ Platform contract as in Phase 1 (`ctx.db` only, list default 20 cap 50, filters 
 | `reprocess_wb_transactions` | 2 | Re-run processing over a date range or ids. |
 | `get_wb_spending` | read | Spending by tag group, month range, rolled up or leaf level. |
 | `get_wb_cash_flow` | read | Monthly income, spending, net. |
-| `get_wb_subscriptions` / `upsert_wb_subscription` / `record_wb_subscription_price` | read / 2 / 2 | Step 7. |
+| `get_wb_subscriptions` / `upsert_wb_subscription` / `record_wb_subscription_price` | read / 2 / 2 | Step 7, with the interval since 8a. `upsert_wb_subscription` with `not_subscription: true` dismisses a watching row (it flags the merchant and deletes the row). |
+| `set_wb_transaction_subscription` | 2 | Step 8a. Link or unlink up to 25 charges by hand, through `wb_link_subscription` with source `manual`; the dates refresh. |
 | `get_wb_rule_health` | read | Rows from `wb_rule_health`. Step 10. |
 
 Tool descriptions state the sign rule and that manual tags are never overwritten by rules, and the rule tools say that rules match on merchants, not on exact descriptions. The new tools go in `_shared/tools/warren-buffet-p2.ts`; the Phase 1 file keeps its eight.
@@ -266,7 +282,18 @@ Used by the transaction detail UI (Step 6) and by the tools (Step 4).
 2. **Transaction detail**: raw and clean description, kind (editable), tags per group (exclusive groups as a single picker), split editor, transfer pair link, notes. After a manual change, offer **"Always do this for <merchant>"**, which follows §6.1 (merchant match, dry-run count, update an existing rule rather than add one), creates or updates the rule (`created_by` `manual`) and reprocesses matching rows.
 3. **Review tab**: the review queue, newest first, grouped by reason, with one-tap actions.
 4. **Spending tab**: a month picker, totals by Category (top level, expandable to children), and a cash-flow strip (income, spending, net) for the last 6 months. Desktop first; mobile must work.
-5. **Subscriptions tab** (Step 8): active and watching subscriptions with cadence, current price, last price change, next expected charge, review date, bundle and billed-through relationships, notes.
+5. **Subscriptions tab** (Step 8b): every subscription, grouped by status.
+   - Order: Overdue first (active and overdue), then Active, Watching, Paused, and Cancelled (collapsed).
+   - Each row shows the billing interval, current price, next expected charge, owner, and badges for overdue, review soon (within 30 days or past) and prepaid.
+   - On top: the monthly-equivalent cost of active subscriptions at today's price, split by owner. Months divide by the count; weeks multiply by 52 ÷ 12 ÷ count. Subscriptions with no interval are listed as not counted.
+   - "Show breakdown" opens a table of every counted subscription, monthly amount high to low: name, owner, current price, billing, the multiplier (÷12, ×2.17, ÷2) and the monthly amount.
+     - Below it: per-owner subtotals, a total row, and the rows not counted with the reason.
+     - Each row is rounded to the cent first, and the totals are sums of those rounded rows, so the rows add up exactly to the total shown.
+     - On a phone, the owner, price, billing and multiplier fold into a line under the name.
+   - Watching rows: Confirm or "Not a subscription", here as in Review.
+   - Detail: price, interval, last and next charge, prepaid term, auto-renew, review date, merchant, owner, tolerance, bundle and billed-through (as links), notes; the price history; and the linked charges, each opening the transaction.
+   - Detail actions: Edit (only changed fields are saved, then the dates refresh; a new merchant relinks both merchants' charges), Pause, Cancel, Reactivate, Record price, Unlink a charge, and Link charges.
+   - Link charges picks from the merchant's unlinked spend in the last 180 days, or by text search across merchants; search is the only route for a subscription with no merchant. Hand links and unlinks use source `manual`.
 
 Elise sees and edits everything, as in Phase 1.
 
