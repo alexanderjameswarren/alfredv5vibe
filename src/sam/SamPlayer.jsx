@@ -44,6 +44,7 @@ import useAudioSync from "./lib/useAudioSync";
 import useNumericInput from "./lib/useNumericInput";
 import { DEFAULTS } from "./lib/samConstants";
 import { matchChord, findClosestBeat, nearestBeat, elapsedAt } from "./lib/noteMatching";
+import { isNextCycleBeat } from "./lib/loopBoundary";
 import { accuracyOf, onScreenTally, scoreableBeatsPerPass } from "./lib/practiceScoring";
 import { colorBeatEls, midiDisplayName } from "./lib/vexflowHelpers";
 import { normalizeMeasure } from "./lib/measureUtils";
@@ -862,6 +863,25 @@ export default function SamPlayer({ onBack }) {
     practiceResume();
   }, [practiceResume]);
 
+  // Early presses on the next pass's beats, waiting for the loop wrap
+  // (loopBoundary.js). Flushed by handleLoopCount once the counters rotate.
+  const earlyPressesRef = useRef([]);
+
+  // One graded press into the on-screen counters and the session.
+  const countGraded = useCallback(({ beat, played, timingDeltaMs, result }) => {
+    // On-screen Hits counts full hits only, like sam_passes.hits; a partial
+    // adds to neither counter (recordEvent still tallies it as a partial).
+    const tally = onScreenTally(result);
+    if (tally === "hit") {
+      hitCountRef.current++;
+      setHitCount(hitCountRef.current);
+    } else if (tally === "miss") {
+      missCountRef.current++;
+      setMissCount(missCountRef.current);
+    }
+    recordEvent({ beatEvent: beat, played, timingDeltaMs, result });
+  }, [recordEvent]);
+
   // `pressedAtMs` is a performance.now() reading from when the chord's FIRST
   // key arrived, carried through useMIDI's chord buffer. Every timing decision
   // below uses it, so nothing is measured at flush time any more.
@@ -943,8 +963,14 @@ export default function SamPlayer({ onBack }) {
       // If the player corrects it in time, the beat is consumed as a hit or a
       // partial and the held notes are dropped unused, which is right: nothing
       // was missed.
-      const held = attemptedNotesRef.current.get(beat) || [];
-      attemptedNotesRef.current.set(beat, [...held, ...played]);
+      // A beat of the NEXT pass would carry these into a pass that has not
+      // started, so they are recorded as an extra here instead.
+      if (isNextCycleBeat(beat)) {
+        recordExtra({ measure: beat.meas, beat: beat.beat, played, timingDeltaMs: null });
+      } else {
+        const held = attemptedNotesRef.current.get(beat) || [];
+        attemptedNotesRef.current.set(beat, [...held, ...played]);
+      }
       // In PRACTICE this is a wrong note and the scroll stops on it now, rather
       // than waiting the full timing window for the miss scanner to time the
       // beat out. The beat is deliberately LEFT PENDING, exactly as it is under
@@ -977,22 +1003,17 @@ export default function SamPlayer({ onBack }) {
       colorBeatEls({ svgEls: activeEls }, "#dc2626");
     }
 
-    // On-screen Hits counts full hits only, like sam_passes.hits; a partial
-    // adds to neither counter (recordEvent still tallies it as a partial).
-    const tally = onScreenTally(result);
-    if (tally === "hit") {
-      hitCountRef.current++;
-      setHitCount(hitCountRef.current);
-    } else if (tally === "miss") {
-      missCountRef.current++;
-      setMissCount(missCountRef.current);
-    }
-
     console.log(
       `[CONSUME] m${beat.meas} beat=${beat.beat} → ${result}`
     );
 
-    recordEvent({ beatEvent: beat, played, timingDeltaMs, result });
+    // An early first note of the next pass: graded and painted now, counted
+    // only once the loop wraps and the counters belong to that pass.
+    if (isNextCycleBeat(beat)) {
+      earlyPressesRef.current.push({ beat, played, timingDeltaMs, result });
+    } else {
+      countGraded({ beat, played, timingDeltaMs, result });
+    }
 
     // PRACTICE: stop on anything that is not a full hit — a partial counts,
     // because an incomplete chord is precisely what this mode exists to drill.
@@ -1006,7 +1027,7 @@ export default function SamPlayer({ onBack }) {
       timingMs: Math.round(timingDeltaMs),
       noteName: `${sign}${Math.round(timingDeltaMs)}ms`,
     });
-  }, [playbackState, recordEvent, recordExtra, timingWindowMs.value, snippet?.handMode, practiceStopAt]);
+  }, [playbackState, countGraded, recordExtra, timingWindowMs.value, snippet?.handMode, practiceStopAt]);
 
   const {
     connected: midiConnected, deviceName: midiDevice, lastNote,
@@ -1186,6 +1207,11 @@ export default function SamPlayer({ onBack }) {
     // Detection is unchanged: the same signal credits the same passes, at the
     // same instant.
     setLoopIteration(n);
+    // Early first notes of the pass starting now count toward it, never the
+    // one that just ended. A fresh run (0) drops any left from the last one.
+    const early = earlyPressesRef.current;
+    earlyPressesRef.current = [];
+    if (n > 0) for (const press of early) countGraded(press);
     if (n > 0) setPausedMeasure(null);
     // A fresh run (n === 0) restarts the pass numbering, so the credit guard
     // has to restart with it — otherwise the first pass of the new run would
@@ -1203,7 +1229,7 @@ export default function SamPlayer({ onBack }) {
     // Guarded on n > 0 because setting the tempo re-runs ScrollEngine's scroll
     // effect, which re-emits 0; a pending tempo must not be taken by its own echo.
     if (n > 0) applyRungTempo(takeWarmupTempo());
-  }, [setLoopIteration, takeWarmupTempo, applyRungTempo]);
+  }, [setLoopIteration, takeWarmupTempo, applyRungTempo, countGraded]);
 
   // The music of one playthrough has finished — the moment the pass is banked.
   //
