@@ -1,6 +1,6 @@
 import React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { ClipboardCheck, LayoutDashboard, List, PieChart, Receipt, TrendingUp } from "lucide-react";
+import { ClipboardCheck, LayoutDashboard, List, PieChart, Receipt, Repeat, TrendingUp } from "lucide-react";
 import UnderlineTabs from "../shared/UnderlineTabs";
 import OverviewScreen from "./OverviewScreen";
 import AccountsScreen from "./AccountsScreen";
@@ -11,9 +11,12 @@ import TransactionsScreen from "./TransactionsScreen";
 import TransactionDetailView from "./TransactionDetailView";
 import ReviewScreen from "./ReviewScreen";
 import SpendingScreen from "./SpendingScreen";
+import SubscriptionsScreen from "./SubscriptionsScreen";
+import SubscriptionDetailView from "./SubscriptionDetailView";
 import {
   MONEY_ACCOUNTS_PATH, MONEY_NET_WORTH_PATH, MONEY_NEW_ACCOUNT_PATH, MONEY_PATH, MONEY_REVIEW_PATH,
-  MONEY_SPENDING_PATH, MONEY_TRANSACTIONS_PATH, moneyAccountPath, moneyRouteFromPath, moneyTransactionPath,
+  MONEY_SPENDING_PATH, MONEY_SUBSCRIPTIONS_PATH, MONEY_TRANSACTIONS_PATH, moneyAccountPath, moneyRouteFromPath,
+  moneySubscriptionPath, moneyTransactionPath,
 } from "../viewPaths";
 
 const TABS = [
@@ -22,6 +25,7 @@ const TABS = [
   { key: "transactions", label: "Transactions", icon: Receipt, path: MONEY_TRANSACTIONS_PATH },
   { key: "review", label: "Review", icon: ClipboardCheck, path: MONEY_REVIEW_PATH },
   { key: "spending", label: "Spending", icon: PieChart, path: MONEY_SPENDING_PATH },
+  { key: "subscriptions", label: "Subscriptions", icon: Repeat, path: MONEY_SUBSCRIPTIONS_PATH },
   { key: "net-worth", label: "Net worth", icon: TrendingUp, path: MONEY_NET_WORTH_PATH },
 ];
 
@@ -32,10 +36,13 @@ export default function MoneyPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const route = moneyRouteFromPath(location.pathname)
-    || { tab: "overview", accountId: null, transactionId: null, adding: false };
+    || { tab: "overview", accountId: null, transactionId: null, subscriptionId: null, adding: false };
   const go = (path) => navigate(path);
-  // A transaction opened from Review goes back to Review.
-  const backFromTransaction = location.state?.from === "review" ? MONEY_REVIEW_PATH : MONEY_TRANSACTIONS_PATH;
+  // A transaction opened from Review or a subscription goes back there.
+  const from = location.state?.from;
+  const backFromTransaction = from === "review" ? MONEY_REVIEW_PATH
+    : location.state?.subscriptionId ? moneySubscriptionPath(location.state.subscriptionId)
+    : MONEY_TRANSACTIONS_PATH;
 
   let body;
   if (route.adding) {
@@ -46,6 +53,11 @@ export default function MoneyPage() {
   } else if (route.transactionId) {
     body = <TransactionDetailView transactionId={route.transactionId} onBack={() => go(backFromTransaction)}
       onOpenTransaction={(id) => go(moneyTransactionPath(id))} />;
+  } else if (route.subscriptionId) {
+    body = <SubscriptionDetailView key={route.subscriptionId} subscriptionId={route.subscriptionId}
+      onBack={() => go(MONEY_SUBSCRIPTIONS_PATH)}
+      onOpenSubscription={(id) => go(moneySubscriptionPath(id))}
+      onOpenTransaction={(id) => navigate(moneyTransactionPath(id), { state: { subscriptionId: route.subscriptionId } })} />;
   } else if (route.tab === "accounts") {
     body = <AccountsScreen onOpen={(id) => go(moneyAccountPath(id))} onAdd={() => go(MONEY_NEW_ACCOUNT_PATH)} />;
   } else if (route.tab === "transactions") {
@@ -54,6 +66,8 @@ export default function MoneyPage() {
     body = <ReviewScreen onOpen={(id) => navigate(moneyTransactionPath(id), { state: { from: "review" } })} />;
   } else if (route.tab === "spending") {
     body = <SpendingScreen />;
+  } else if (route.tab === "subscriptions") {
+    body = <SubscriptionsScreen onOpen={(id) => go(moneySubscriptionPath(id))} />;
   } else if (route.tab === "net-worth") {
     body = <NetWorthScreen />;
   } else {

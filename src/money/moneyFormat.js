@@ -313,3 +313,124 @@ export function parseAmountInput(text) {
   if (!/^-?\d+(\.\d+)?$/.test(s)) return null;
   return Math.round(Number(s) * 100) / 100;
 }
+
+// --- Subscriptions (spec §4.8, §7.5, Step 8) ---
+
+export const SUB_STATUS_LABELS = {
+  overdue: "Overdue", active: "Active", watching: "Watching", paused: "Paused", cancelled: "Cancelled",
+};
+export const SUB_GROUP_ORDER = ["overdue", "active", "watching", "paused", "cancelled"];
+export const REVIEW_SOON_DAYS = 30;
+
+/** "Monthly", "Every 2 weeks", "Irregular" — from cadence and the billing interval. */
+export function intervalLabel(sub) {
+  const named = { monthly: "Monthly", quarterly: "Quarterly", annual: "Annual" }[sub?.cadence];
+  if (named) return named;
+  const n = sub?.interval_count;
+  if (!n || !sub?.interval_unit) return "Irregular";
+  if (n === 1) return sub.interval_unit === "week" ? "Weekly" : "Monthly";
+  return `Every ${n} ${sub.interval_unit}s`;
+}
+
+/** Today's price as a monthly cost: months ÷ count, weeks × 52 ÷ 12 ÷ count; null when it cannot be known. */
+export function monthlyEquivalent(sub) {
+  const price = toNumber(sub?.current_price);
+  const n = sub?.interval_count;
+  if (price === null || !n) return null;
+  if (sub.interval_unit === "month") return price / n;
+  if (sub.interval_unit === "week") return (price * 52) / 12 / n;
+  return null;
+}
+
+/** The monthly multiplier in plain words: "×1", "÷12", "÷2", "×4.33", "×2.17". */
+export function multiplierLabel(sub) {
+  const n = sub?.interval_count;
+  if (!n) return null;
+  if (sub.interval_unit === "month") return n === 1 ? "×1" : `÷${n}`;
+  if (sub.interval_unit === "week") return `×${(52 / 12 / n).toFixed(2)}`;
+  return null;
+}
+
+/**
+ * Every active subscription's monthly cost, high to low, with the total and the
+ * per-owner subtotals. Each row is rounded to the cent first and the totals are
+ * sums of those rounded rows (in whole cents), so the rows add up to the total
+ * exactly. Rows that cannot be counted are listed with the reason.
+ */
+export function subscriptionBreakdown(subs) {
+  const rows = [];
+  const notCounted = [];
+  for (const s of subs || []) {
+    if (s.status !== "active") continue;
+    if (toNumber(s.current_price) === null) { notCounted.push({ sub: s, reason: "No price recorded" }); continue; }
+    const m = monthlyEquivalent(s);
+    if (m === null) { notCounted.push({ sub: s, reason: "No regular billing interval" }); continue; }
+    rows.push({ sub: s, owner: OWNER_LABELS[s.owner] ? s.owner : "unassigned", cents: Math.round(m * 100) });
+  }
+  rows.sort((a, b) => b.cents - a.cents || (a.sub.name || "").localeCompare(b.sub.name || ""));
+  const ownerCents = { alex: 0, elise: 0, joint: 0, unassigned: 0 };
+  let totalCents = 0;
+  for (const r of rows) { ownerCents[r.owner] += r.cents; totalCents += r.cents; }
+  return {
+    rows: rows.map((r) => ({ sub: r.sub, owner: r.owner, multiplier: multiplierLabel(r.sub), monthly: r.cents / 100 })),
+    total: totalCents / 100,
+    byOwner: Object.fromEntries(Object.entries(ownerCents).map(([k, v]) => [k, v / 100])),
+    notCounted,
+  };
+}
+
+/** Monthly-equivalent total of active subscriptions, split by owner, and the ones that cannot be counted. */
+export function subscriptionTotals(subs) {
+  const b = subscriptionBreakdown(subs);
+  return { total: b.total, byOwner: b.byOwner, notCounted: b.notCounted.map((n) => n.sub) };
+}
+
+/** Groups in SUB_GROUP_ORDER; an overdue active subscription goes to Overdue. Names A–Z inside each. */
+export function groupSubscriptions(subs) {
+  const groups = new Map(SUB_GROUP_ORDER.map((k) => [k, []]));
+  for (const s of subs || []) {
+    const key = s.status === "active" && s.overdue ? "overdue" : s.status;
+    if (groups.has(key)) groups.get(key).push(s);
+  }
+  return SUB_GROUP_ORDER.filter((k) => groups.get(k).length).map((k) => ({
+    key: k, label: SUB_STATUS_LABELS[k],
+    rows: groups.get(k).slice().sort((a, b) => (a.name || "").localeCompare(b.name || "")),
+  }));
+}
+
+/** A review date within REVIEW_SOON_DAYS of today, or past. */
+export function reviewSoon(sub, today) {
+  if (!sub?.review_date || !today) return false;
+  const d = new Date(`${today}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + REVIEW_SOON_DAYS);
+  return sub.review_date <= d.toISOString().slice(0, 10);
+}
+
+export const BILLING_CHOICES = [
+  { key: "monthly", label: "Monthly" },
+  { key: "quarterly", label: "Quarterly" },
+  { key: "annual", label: "Annual" },
+  { key: "weeks", label: "Every N weeks" },
+  { key: "months", label: "Every N months" },
+  { key: "irregular", label: "Irregular (no next date)" },
+];
+
+/** The billing choice and N shown in the edit form for a subscription. */
+export function billingChoice(sub) {
+  if (["monthly", "quarterly", "annual"].includes(sub?.cadence)) return { choice: sub.cadence, count: "" };
+  if (sub?.interval_count && sub?.interval_unit) {
+    return { choice: sub.interval_unit === "week" ? "weeks" : "months", count: String(sub.interval_count) };
+  }
+  return { choice: "irregular", count: "" };
+}
+
+/** The cadence and interval columns for a billing choice; null when N is not a whole number from 1 to 104. */
+export function billingFields(choice, countText) {
+  if (choice === "monthly" || choice === "quarterly" || choice === "annual") return { cadence: choice };
+  if (choice === "irregular") return { cadence: "other", interval_count: null, interval_unit: null };
+  const n = Number(countText);
+  if (!Number.isInteger(n) || n < 1 || n > 104) return null;
+  const unit = choice === "weeks" ? "week" : "month";
+  const named = unit === "month" && { 1: "monthly", 3: "quarterly", 12: "annual" }[n];
+  return named ? { cadence: named } : { cadence: "other", interval_count: n, interval_unit: unit };
+}

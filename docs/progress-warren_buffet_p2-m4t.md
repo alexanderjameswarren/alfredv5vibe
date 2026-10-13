@@ -14,7 +14,7 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 5 | Starter taxonomy, merchants and rules (in claude.ai) | done | 2026-10-11: taxonomy, merchants and rules set up in claude.ai; review queue at 0. Follow-up (tag exclusions, 114/115) done |
 | 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | done 2026-10-11 | Plan approved 2026-10-11 (decisions A–D). 6a: SQL for "always do this" plus `wb_transactions.notes`, 117 applied 2026-10-11 (CONFORMANT, 60 tables), 118 24/24. 6b (UI) verified by Alex: all 26 steps passed on desktop, a phone-sized window, his real phone and as Elise. 6c: tool wrapper, `excluded_tags` and WB_MANUAL; mcp v147 deployed, and the fresh-thread check passed |
 | 7 | Migration B + tools: subscriptions, price history, monthly detection | done 2026-10-12 | Plan approved 2026-10-11 (D1–D6). 7d done: Review tab actions, and 122/123 ("Keep watching") applied. 7a: 120 applied 2026-10-12 (conformant), 121 39/39. 7b done: wb-sync v6, whose first run detected 19 watching rows. 7c done: mcp v148, 116 tools, fresh-thread check passed. |
-| 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | in progress | Seeding nearly done: 32 active. 8a (billing intervals, hand unlink tool) written and passing in PGlite; awaiting gitsync |
+| 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | done 2026-10-13 | Seeding nearly done (35 active). 8a done: billing intervals and the hand-unlink tool, 124/125 applied, mcp v150. 8b (Subscriptions screen) verified by Alex on 2026-10-13; the breakdown table was added after |
 | 9 | Phase 2 review and Phase 3 steps | not started | |
 | 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | not started | Added 2026-10-09. Also: a bulk-create tool for tags, merchants and rules (Step 5 hit the 60-calls-per-5-minutes limit creating them one call at a time) |
 
@@ -185,4 +185,38 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
     - 124: conformant. By cadence: annual 12 months (8 rows), monthly 1 month (23), quarterly 3 months (1), other with no interval (4).
     - 125: 22/22, rolled back.
     - The two 122 files stay as they are; Alex logged the collision as an Alfred bug.
-  - The mcp deploy, after a check that main had not moved, is **v150**, with the unauthenticated 401 confirmed. The fresh-thread check is next.
+  - The mcp deploy, after a check that main had not moved, is **v150**, with the unauthenticated 401 confirmed.
+  - **8a done (2026-10-13):** the fresh-thread check on v150 passed.
+    - 118 tools, with `set_wb_transaction_subscription` listed.
+    - All 35 active subscriptions carry the interval fields: 22 monthly, 8 annual, 1 quarterly, and 4 other with no interval yet.
+    - No writes. Checkpointed.
+- Step 8b plan (2026-10-13), approved, with D1–D5:
+  - D1: monthly equivalent of active rows at today's price; months ÷ count, weeks × 52 ÷ 12 ÷ count; rows with no merchant included; a per-owner split.
+  - D2: the link picker shows the merchant's unlinked spend from the last 180 days, plus text search.
+  - D3: Confirm and "Not a subscription" here too.
+  - D4: a review-soon badge within 30 days or past.
+  - D5: Elise edits everything.
+  - The list groups every status, with Cancelled collapsed.
+- 8b (2026-10-13), UI only, built:
+  - Files: `SubscriptionsScreen.jsx`, `SubscriptionDetailView.jsx` and `SubscriptionForm.jsx` (new, with tests), plus `MoneyPage.jsx`, `moneyApi.js`, `moneyFormat.js` and `viewPaths.js`.
+  - It adds a 7th Money tab with routes `/money/subscriptions` and `/money/subscriptions/:id`.
+  - The spec catches up on Steps 7, 8a and 8b in §4.8, §4.9, §6 and §7.5.
+  - Tests: app 2441/2441, and `CI=true npm run build` compiled.
+  - **8b verified by Alex (2026-10-13):** every test step passed, on desktop, in a phone-sized window and on his real phone.
+    - Covered: the list and groups, the Newmans detail, editing notes, the charge back-navigation, and the billed-through link.
+    - Sep 21 was unlinked and then relinked by hand, and the dates restored.
+  - Addition: a "Show breakdown" table under the monthly total.
+    - Rows go high to low, with the multiplier shown plainly (÷12, ×2.17, ÷2), per-owner subtotals, and a total row.
+    - Rows are rounded to the cent first and the totals summed from them, so they add up exactly.
+    - The rows not counted are listed with the reason.
+    - On a phone, the columns fold under the name.
+    - "Yearly" is now "Annual".
+    - Tests: app 2444/2444, and `CI=true npm run build` compiled. One run had a load flake in `src/sam/SamPlayer.plan.test.jsx`, which is not this project's file; it passed alone and on the rerun.
+    - Breakdown verified by Alex (2026-10-13) on desktop and in a phone-sized window.
+      - Highest first, with the multipliers shown (×2.17 for every 2 weeks, ÷12 for annual).
+      - The total row equals the headline total, and the subtotals add up.
+      - "Not counted" is empty now that every interval is set.
+      - Two columns on a phone, and hide works.
+- **Step 8 done (2026-10-13).**
+  - Seeding is finished in claude.ai. The two HOAs and Southwest Gas are dismissed, and both Mounjaros, Newmans Pest Control and Mamas Cleaning have intervals.
+  - 8a (intervals, the hand-unlink tool, mcp v150) and 8b (the Subscriptions screen with its breakdown) are verified.
