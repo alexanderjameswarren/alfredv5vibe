@@ -22,6 +22,7 @@
 //   get_wb_subscriptions             tier 1 — subscriptions with current price and overdue (Step 7)
 //   upsert_wb_subscription           tier 2 — create, edit, confirm or dismiss a subscription
 //   record_wb_subscription_price     tier 2 — a price change, optionally from a charge
+//   set_wb_transaction_subscription  tier 2 — link or unlink charges by hand (Step 8)
 //
 // Multi-row writes go through the invoker functions from the Step 4 migration,
 // so each is one transaction. Sign rule: money in positive, money out negative.
@@ -44,6 +45,10 @@ export const REVIEW_REASONS = [
 export const SUB_CADENCES = ["monthly", "quarterly", "annual", "other"] as const;
 export const SUB_STATUSES = ["watching", "active", "paused", "cancelled"] as const;
 export const SUB_OWNERS = ["alex", "elise", "joint"] as const;
+export const SUB_INTERVAL_UNITS = ["week", "month"] as const;
+export const MAX_LINK_ROWS = 25;
+/** The fixed interval of each named cadence; anything else is cadence other. */
+const NAMED_INTERVALS: Array<[string, number, string]> = [["monthly", 1, "month"], ["quarterly", 3, "month"], ["annual", 12, "month"]];
 export const SPENDING_LEVELS = ["top", "leaf"] as const;
 export const MATCH_KEYS = [
   "merchant_id", "payee_contains", "description_contains", "account_ids", "amount_min", "amount_max", "kind",
@@ -65,7 +70,7 @@ const SUB_COLUMNS =
   "id, name, plan, status, cadence, merchant_id, merchant_name, merchant_not_subscription, billed_through_id, " +
   "billed_through_name, bundle_id, bundle_name, current_price, previous_price, last_change_on, price_count, " +
   "expected_amount, amount_tolerance, term_end_date, auto_renew, review_date, last_charged_on, next_expected_on, " +
-  "charge_count, overdue, days_past_expected, owner, notes";
+  "charge_count, overdue, days_past_expected, owner, notes, interval_count, interval_unit";
 const PRICE_COLUMNS = "id, subscription_id, effective_on, amount, source, transaction_id, notes, created_at";
 const RULE_COLUMNS =
   "id, name, priority, active, match, set_kind, set_merchant_id, add_tag_ids, created_by, " +
@@ -110,6 +115,8 @@ export const KNOWN_DB_ERRORS: Array<[RegExp, string]> = [
   [/wb_subscriptions_(billed_through|bundle)_check/, "A subscription cannot be billed through or bundled with itself."],
   [/wb_subscriptions_name_check/, "A subscription needs a name."],
   [/wb_subscription_prices_transaction_id_fkey/, "No transaction with that id."],
+  [/wb_subscriptions_interval_check/, "monthly, quarterly and annual have fixed intervals; for any other interval use cadence other with interval_count (1 to 104) and interval_unit (week or month)."],
+  [/a transaction id does not exist or you cannot see it/, "One of the transaction ids does not exist, or you cannot see it."],
 ];
 
 /** A known database refusal as a plain sentence; anything else as the platform's operational error. */
@@ -1051,6 +1058,21 @@ export const upsertWbSubscriptionTool = defineTool({
     if (args.plan !== undefined) fields.plan = optText(T, "plan", args.plan);
     if (args.merchant_id !== undefined) fields.merchant_id = optUuid(T, "merchant_id", args.merchant_id);
     if (args.cadence !== undefined) fields.cadence = oneOf(T, "cadence", args.cadence, SUB_CADENCES) ?? "monthly";
+    if (args.interval_count !== undefined || args.interval_unit !== undefined) {
+      // Every N weeks or months. A named cadence's own interval keeps that name; anything else is cadence other.
+      const count = optInt(T, "interval_count", args.interval_count, 1, 104);
+      const unit = oneOf(T, "interval_unit", args.interval_unit, SUB_INTERVAL_UNITS);
+      if ((count === null) !== (unit === null)) {
+        throw new Error(`${T}: pass interval_count and interval_unit together (both null clears the interval). Nothing was changed.`);
+      }
+      const named = NAMED_INTERVALS.find(([, c, u]) => c === count && u === unit)?.[0] ?? "other";
+      if (fields.cadence && fields.cadence !== "other" && fields.cadence !== named) {
+        throw new Error(`${T}: cadence ${fields.cadence} has a fixed interval; for every ${count} ${unit}(s) use cadence other. Nothing was changed.`);
+      }
+      fields.cadence = fields.cadence === "other" ? "other" : named;
+      fields.interval_count = count;
+      fields.interval_unit = unit;
+    }
     if (args.expected_amount !== undefined) fields.expected_amount = positiveMoney(T, "expected_amount", args.expected_amount);
     if (args.amount_tolerance !== undefined) {
       const tol = parseMoney(T, "amount_tolerance", args.amount_tolerance) ?? 0;
@@ -1087,7 +1109,31 @@ export const upsertWbSubscriptionTool = defineTool({
     // Linking happens in processing: reprocess the merchant(s) whose charges may move.
     const merchants = [...new Set([before?.merchant_id, fields.merchant_id].filter(Boolean))] as string[];
     const reprocessed = doReprocess && merchants.length ? await reprocessMerchants(T, ctx.db, merchants) : null;
+    // Interval, cadence or term changes move next_expected_on even with no charge to reprocess.
+    const { error: re } = await ctx.db.rpc("wb_refresh_subscriptions", { p_ids: [savedId] });
+    if (re) throw new Error(dbError(T, re));
     return { subscription: await subscriptionById(T, ctx.db, savedId), created: !subId, reprocessed };
+  },
+});
+
+// set_wb_transaction_subscription — tier 2: link or unlink charges by hand
+
+export const setWbTransactionSubscriptionTool = defineTool({
+  name: "set_wb_transaction_subscription",
+  tier: 2,
+  handler: async (args: Obj, ctx) => {
+    const T = "set_wb_transaction_subscription";
+    const ids = idList(T, "transaction_ids", args.transaction_ids, MAX_LINK_ROWS);
+    const unlink = optBool(T, "unlink", args.unlink) ?? false;
+    const subId = optUuid(T, "subscription_id", args.subscription_id);
+    if (unlink === !!subId) {
+      throw new Error(`${T}: pass subscription_id to link, or unlink: true to unlink, not both. Nothing was changed.`);
+    }
+    // Source manual: processing never relinks these, and the dates refresh in the same call.
+    const { data, error } = await ctx.db.rpc("wb_link_subscription",
+      { p_transaction_ids: ids, p_subscription_id: subId, p_source: "manual" });
+    if (error) throw new Error(dbError(T, error));
+    return { ...((data ?? {}) as Obj), subscription: subId ? await subscriptionById(T, ctx.db, subId) : null };
   },
 });
 

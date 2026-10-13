@@ -108,6 +108,7 @@ import {
   getWbSubscriptionsTool,
   upsertWbSubscriptionTool,
   recordWbSubscriptionPriceTool,
+  setWbTransactionSubscriptionTool,
 } from "../_shared/tools/warren-buffet-p2.ts";
 import {
   getDriveMixSongsTool,
@@ -3325,7 +3326,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get Subscriptions",
       description:
-        "Subscriptions with merchant, cadence, current_price (today), previous_price and last_change_on, amount_tolerance, term_end_date, auto_renew, review_date, last_charged_on, next_expected_on, charge_count, billed-through and bundle names, and overdue (active, more than 7 days past the expected charge, and not inside a prepaid term). watching = detected by the daily sync from monthly charges of similar size, not yet confirmed. " +
+        "Subscriptions with merchant, cadence and billing interval (interval_count + interval_unit), current_price (today), previous_price and last_change_on, amount_tolerance, term_end_date, auto_renew, review_date, last_charged_on, next_expected_on, charge_count, billed-through and bundle names, and overdue (active, more than 7 days past the expected charge, and not inside a prepaid term). watching = detected by the daily sync from monthly charges of similar size, not yet confirmed. " +
         WB_SUBS + "Tier 1.",
       inputSchema: {
         status: wbSubStatus.optional(),
@@ -3344,7 +3345,7 @@ export function createMcpServer(token: string) {
     {
       title: "Create or Update Subscription",
       description:
-        "Create a subscription (default status active), or edit one by id: confirm a detected one with status active, pause or cancel, set plan, cadence, prepaid term_end_date, auto_renew, review_date, billed_through_id (billed through another subscription, e.g. via a bundle provider) and bundle_id (part of a bundle). Only given fields change; null clears. Then reprocesses the merchant's transactions so charges link (reprocess: false to skip). " +
+        "Create a subscription (default status active), or edit one by id: confirm a detected one with status active, pause or cancel, set plan, cadence or billing interval (interval_count + interval_unit: every 2 months is 2 + month, every 2 weeks is 2 + week; monthly, quarterly and annual are 1, 3 and 12 months, and any other interval sets cadence other; cadence other with no interval has no next date and is never overdue), prepaid term_end_date, auto_renew, review_date, billed_through_id (billed through another subscription, e.g. via a bundle provider) and bundle_id (part of a bundle). Only given fields change; null clears. Then reprocesses the merchant's transactions so charges link (reprocess: false to skip). " +
         "To dismiss a detection that is not a subscription (a utility, HOA, insurance or store), pass id and not_subscription: true alone: the merchant is marked not_subscription, so detection skips it, and the watching row is deleted. not_subscription: false restores detection for that merchant. " +
         WB_SUBS + "Tier 2.",
       inputSchema: {
@@ -3353,6 +3354,8 @@ export function createMcpServer(token: string) {
         plan: z.string().nullable().optional(),
         merchant_id: z.string().nullable().optional().describe("The charging merchant (get_wb_merchants)."),
         cadence: z.enum(["monthly", "quarterly", "annual", "other"]).optional(),
+        interval_count: z.number().nullable().optional().describe("Every N units, 1 to 104; pass with interval_unit (both null clears)."),
+        interval_unit: z.enum(["week", "month"]).nullable().optional(),
         expected_amount: z.number().nullable().optional().describe("Expected price, positive dollars."),
         amount_tolerance: z.number().optional().describe("Dollars a charge may differ and still count as the price. Default 0 (exact cents)."),
         term_end_date: wbDate("End of a prepaid term (no charge is expected or overdue before it)").nullable(),
@@ -3387,6 +3390,22 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(recordWbSubscriptionPriceTool, args, token),
+  );
+
+  server.registerTool(
+    "set_wb_transaction_subscription",
+    {
+      title: "Link or Unlink Charges",
+      description:
+        "Link charges to a subscription by hand (subscription_id), or unlink them (unlink: true), e.g. a one-off charge from the same merchant that processing linked to a standing subscription. Source manual: processing never relinks or moves these charges again. An unlinked charge gets no price_change. The subscriptions' last_charged_on and next_expected_on refresh in the same call. " +
+        WB_SUBS + "Tier 2.",
+      inputSchema: {
+        transaction_ids: wbIds("Charges to link or unlink, at most 25."),
+        subscription_id: z.string().optional().describe("Link to this subscription (get_wb_subscriptions)."),
+        unlink: z.boolean().optional().describe("true to unlink instead; do not pass subscription_id."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(setWbTransactionSubscriptionTool, args, token),
   );
 
   // --- Drive Mix (docs/technical-spec-drive_mix-v7r.md §5) ---
