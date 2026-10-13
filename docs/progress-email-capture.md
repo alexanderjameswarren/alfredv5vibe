@@ -7,8 +7,8 @@ Spec: docs/technical-spec-email-capture.md.
 | 1 | Plan, claims, docs | done 2026-10-13 |
 | 2 | Postmark payload (input A) + diag query (input B) | done 2026-10-13 |
 | 3 | Text clean-up + webhook secret (parse.ts, index.ts, config.toml comment) | v18 18:25 UTC; test failed on row 59ecd744 (forward of a forward: second signature and inner block left in, outer block's headers recorded). Fixed: signature stripped repeatedly and tolerantly, every block's headers removed, innermost block → original_*. v19 deployed 18:41 UTC (verify_jwt false, no-token → 401); checkpointed to main at bebb8ec |
-| 4 | Dedupe index + 23505 handling + original_message_id | migration 126 applied by Alex 2026-10-13 (conformant, index present); v20 deployed 20:13 UTC (verify_jwt false, no-token → 401); awaiting live duplicate tests |
-| 5 | Trusted auto-forward acceptance, forwarder → user | – |
+| 4 | Dedupe index + 23505 handling + original_message_id | migration 126 applied by Alex 2026-10-13 (conformant, index present); v20 deployed 20:13 UTC (verify_jwt false, no-token → 401); checkpointed to main at 06e68a0 |
+| 5 | Trusted auto-forward acceptance, forwarder → user | v21 deployed 20:29 UTC; gap found by Alex (anyone accepted via the secorus filter's caf_ forward). 5c: rule 1 (capture address → allowlisted From, Delivered-To counts), X-Forwarded-For scan, rejection notices. parse 41/41, CLI 224/224, app 2465/2465. v22 deployed 21:20 UTC; live tests passed (gmail hand-forward captured; katieporter blocked with notice, Postmark URL pattern confirmed). 5d: rule 1(b) for Gmail rules forwarding into capture addresses (option A, decided risk). parse 46/46; v23 deployed 22:25 UTC (verify_jwt false, no-token → 401); awaiting real Gmail-rule forwards |
 | 6 | Finish (gitpush Finish) | – |
 
 ## Decisions
@@ -35,3 +35,8 @@ Spec: docs/technical-spec-email-capture.md.
 - A replayed delivery hits the original_message_id check before the index
   (its Message-Id is already stored), so it answers `reason: original_message_id`;
   the index path (`postmark_message_id`) is proven by the rolled-back SQL test.
+- Step 5 drift check: gitsync to 3615e2b brought Money/SAM front-end, docs, and
+  two intents-only edits in alfred-tools (getIntents select and recurring filter,
+  Intent type). Nothing touches inbox or email-capture.
+- Step 5 removed the pre-decision debug logs (full From/To/Subject); logs now
+  carry domains and a rejection reason only.

@@ -15,15 +15,63 @@ using the alfred-enrich skill, not ai-enrich.
    time with the `EMAIL_CAPTURE_SECRET` function secret. Wrong/missing → 401;
    secret not set → 500. Both make Postmark retry, so nothing is lost while
    config catches up.
-2. **Sender.** Accepted if the From is on FROM_ALLOWLIST, or (step 5) the mail is a
-   trusted Gmail auto-forward by an allowlisted account. Otherwise 200, no row,
-   no retry.
-3. **User.** A To address matching a capture address (USER_MAPPINGS: the two
-   plus-tags, recipes@, alfred@) decides the user, as before. Only when none
-   matches does the forwarding account decide (D2).
+2. **Sender** — see "Who gets in". Otherwise 200, no capture row, no retry, and
+   a rejection notice in Alex's inbox.
+3. **User.** A capture address (USER_MAPPINGS: the two plus-tags, recipes@,
+   alfred@) decides the user, as before. Only when none matches does the
+   forwarding account decide (D2).
 4. **Dedupe** (step 4). Unique per user on the Postmark `MessageID`; the original
    `Message-ID` header is also stored and checked. A duplicate gets 200
    `duplicate`, so Postmark stops.
+
+## Who gets in (step 5c, v22)
+
+v21 trusted every caf_ forward. But every capture reaches Postmark through the
+secorus account's own filter, so every mail carried `alex.warren+caf_…@secorus.com`
+and a passing Postmark SPF line, and v21 accepted mail from anyone (proven with a
+hand-forward from a non-allowlisted account, 2026-10-13).
+
+Payload comparison (two hand-forwards vs input A): Return-Path, Postmark's SPF
+line, one X-Forwarded-For (`alex.warren@secorus.com <postmark>`) and one
+X-Forwarded-To at the same positions in all three. Cc empty, Bcc is Postmark.
+The difference is Gmail's first `Delivered-To`: the capture address on a mail
+sent to one, `alex.warren@secorus.com` on input A.
+
+`decideCapture`, in order:
+
+- **Any** `X-Forwarded-For` whose first address is not allowlisted → reject
+  `forwarded_by_unknown_account` (a stranger's own Gmail rule forwarding in).
+- **Rule 1.** A capture address in ToFull, To, CcFull, Cc, or Gmail's first
+  `Delivered-To` (so Bcc counts) → accept if (a) the From is allowlisted, or
+  (b) (step 5d, v23, option A) an `X-Forwarded-For` hop names an allowlisted
+  account and forwards to that same capture address — an earlier Gmail rule,
+  since the capture address's own hop forwards to Postmark. (b) rows carry
+  `auto_forwarded: true`; the capture address still decides the user (D2).
+  Else reject `capture_address_sender_not_allowed`.
+- **Decided risk, 2026-10-13:** rule 1(b) trusts an X-Forwarded-For header that
+  a stranger could write into their own message, so a stranger who knows an
+  allowlisted address and a capture address can get a row in. Alex accepted
+  this to allow Gmail rules forwarding into alfred@ and recipes@.
+- **Rule 2.** Otherwise a trusted auto-forward (below) → the forwarding
+  account's user. Else `sender_not_allowed:<why>` or `no_mapping`.
+
+Still not caught: a forged From of an allowlisted address sent to a capture
+address. The payloads show Google's own `Authentication-Results` (dkim/spf
+for the From domain) at a fixed position, so a From-authentication check is
+possible later; not built.
+
+## Rejection notices (step 5c)
+
+Every rejection after the secret check also writes one inbox row for Alex:
+`source_type email`, `captured_text` "Email blocked from <from>: <reason>. View
+it in Postmark: https://account.postmarkapp.com/servers/18272581/streams/inbound/messages/<MessageID>
+(also still in your secorus Gmail inbox)." — never the subject or body.
+`source_metadata`: `rejected: true`, `reason`, `from_address`, `capture_address`
+(if any), `postmark_message_id`, `notice_day` (Pacific). No `messageId` key, so
+the dedupe index never sees a notice. At most one per `from_address` per Pacific
+day; later ones only log. Switch: function secret `EMAIL_CAPTURE_NOTICES=off`
+turns them off; unset or anything else is on. A failed notice is logged and
+never changes the 200.
 
 ## Trusted auto-forward (step 5)
 
@@ -54,6 +102,13 @@ junk row, the same as a forged From before the secret.
 
 Forwarder → user: alex.warren@secorus.com and alexanderjameswarren@gmail.com →
 Alex; enhdesigns@gmail.com (Return-Path `enhdesigns+caf_=…@gmail.com`) → Elise.
+
+Built in step 5 as `checkAutoForward` / `decideCapture` in parse.ts. If an
+X-Forwarded-For is present, its first address must be the forwarding account.
+Rows accepted via a forward carry
+`source_metadata.auto_forwarded: true`. Every rejection logs one line,
+`Rejected: <reason> (domain <d>)`, e.g. `sender_not_allowed:forwarder_not_allowed`
+or `sender_not_allowed:spf_not_pass` — no content, no full addresses.
 
 ## Dedupe (step 4)
 
