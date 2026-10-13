@@ -19,6 +19,7 @@ export const DEFAULTS = {
 export const SCROLL_GEOMETRY = {
   targetLinePct: 0.15,         // 15% from left edge
   leadInPct: 0.25,             // 25% of viewport for first-note approach
+  leadInMinMs: 3000,           // whole beats are added until the lead-in lasts this long (leadIn.js)
   staffHeight: 350,
   fallbackViewportWidth: 800,
 };

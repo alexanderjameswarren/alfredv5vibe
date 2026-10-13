@@ -8,6 +8,8 @@ import { drawFingeringOverlay } from "../lib/fingeringOverlay";
 import { SCROLL_GEOMETRY, METRONOME_GAIN, SCORE_SCALE } from "../lib/samConstants";
 import { sweepUnplayedTail } from "../lib/passTail";
 import { restStartIndex, contentEndTime } from "../lib/contentEnd";
+import { leadInPx as computeLeadIn } from "../lib/leadIn";
+import { snapshotIncoming, applyCarryOver, activeEls, STATE_COLORS } from "../lib/loopBoundary";
 
 // The teleport log, off the teleport frame (2026-09-19).
 //
@@ -121,6 +123,8 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       if (meta.bassSvgEl) svgEls.push(meta.bassSvgEl);
       return {
         globalIdx,
+        // Which rendering this is; copy 0 is always the pass in progress.
+        copy: copyIdx,
         meas: meta.meas,
         beat: meta.beat,
         baseBeat: meta.musicalBeatInCopy,
@@ -247,9 +251,14 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     }
 
     // Origin: position so that the startEvtIdx beat starts 25% of viewport width
-    // to the right of the target line (short lead-in before first note arrives).
+    // to the right of the target line, plus whole beats until the lead-in lasts
+    // at least 3 real seconds (leadIn.js; useAudioSync uses the same call).
     const startBeatX = events[startEvtIdx]?.xPx || events[0]?.xPx || 0;
-    const leadInPx = viewportWidth * SCROLL_GEOMETRY.leadInPct;
+    const scrollRate = audioElement ? (audioElement.playbackRate || 1) : 1;
+    const leadIn = computeLeadIn({ viewportWidth, pxPerBeat, msPerBeat, rate: scrollRate });
+    const leadInPx = leadIn.px;
+    console.log(`[LeadIn] ${Math.round(leadIn.wallMs)}ms to the first note`,
+      `| +${leadIn.extraBeats} beats | ${bpm} BPM x rate ${scrollRate}`);
     const originPx = startBeatX - targetX - leadInPx;
 
     // Approach time adjusted for the start offset so that
@@ -488,7 +497,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       lastAudioMs: null,     // tracks audioElement.currentTime across frames; gates audioSyncOffset commit
       audioEndMs,            // audio file timestamp where snippet's real measures end
       audioRestPaused: false, // true when audio paused for rest measures
-      playbackRate: audioElement ? (audioElement.playbackRate || 1) : 1,
+      playbackRate: scrollRate,
     };
     if (scrollStateExtRef) scrollStateExtRef.current = scrollStateRef.current;
 
@@ -681,6 +690,8 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         const numCopiesForLoop = 3;
         const beatsPerCopy = beatEventsRef.current.length / numCopiesForLoop;
         const totalMusicalBeats = totalMusicalBeatsPerCopy;
+        // An early first note was graded on copy 1 before this wrap; keep it.
+        const incoming = snapshotIncoming(beatEventsRef.current, beatsPerCopy);
         for (let c = 0; c < numCopiesForLoop; c++) {
           const passOffset = (loopCount + c) * totalMusicalBeats;
           for (let i = 0; i < beatsPerCopy; i++) {
@@ -693,6 +704,10 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
               evt.targetTimeMs = (evt.xPx - state.originPx - targetX) / pxPerMs;
             }
           }
+        }
+        for (const evt of applyCarryOver(beatEventsRef.current, incoming)) {
+          const color = STATE_COLORS[evt.state];
+          if (color) colorBeatEls({ svgEls: activeEls(evt, handMode) }, color);
         }
         // The teleport log used to live here, mapping over every event object
         // inside the frame. It is deferred to a macrotask now (2026-09-19):
