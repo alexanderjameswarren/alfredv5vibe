@@ -2,7 +2,13 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts";
-import { buildCapture, checkWebhookToken } from "./parse.ts";
+import {
+  buildCapture,
+  checkWebhookToken,
+  isUniqueViolation,
+  originalMessageId,
+  type PostmarkHeader,
+} from "./parse.ts";
 
 // --- User Mapping ---
 // Maps the To address pattern to a user email for lookup in auth.users
@@ -140,6 +146,20 @@ interface PostmarkInboundPayload {
   OriginalRecipient: string;
   Tag: string;
   StrippedTextReply: string;
+  Headers: PostmarkHeader[];
+}
+
+function duplicateResponse(reason: string, inboxId?: string): Response {
+  console.log(`[email-capture] Duplicate (${reason}), no row created`);
+  return new Response(JSON.stringify({
+    success: true,
+    duplicate: true,
+    reason,
+    inbox_id: inboxId ?? null,
+  }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 // --- Main Handler ---
@@ -263,6 +283,26 @@ Deno.serve(async (req) => {
     sourceMetadata.capture_address = userResult.captureAddress;
   }
 
+  // Same mail auto-forwarded twice: same Message-Id, different Postmark
+  // MessageID. Checked in code, not indexed; a lookup failure never blocks
+  // the capture.
+  const originalId = originalMessageId(payload.Headers);
+  if (originalId) {
+    sourceMetadata.original_message_id = originalId;
+    const { data: existing, error: lookupError } = await serviceClient
+      .from("inbox")
+      .select("id")
+      .eq("user_id", userResult.userId)
+      .eq("source_type", "email")
+      .eq("source_metadata->>original_message_id", originalId)
+      .limit(1);
+    if (lookupError) {
+      console.error("[email-capture] original_message_id lookup failed:", lookupError.message);
+    } else if (existing?.length) {
+      return duplicateResponse("original_message_id", existing[0].id);
+    }
+  }
+
   // Insert inbox record
   const inboxRecord = {
     id: crypto.randomUUID(),
@@ -294,6 +334,12 @@ Deno.serve(async (req) => {
     .insert(inboxRecord)
     .select()
     .single();
+
+  // A Postmark retry of a delivery already stored: the unique index on
+  // (user_id, messageId) refuses it. 200 so Postmark stops retrying.
+  if (isUniqueViolation(error)) {
+    return duplicateResponse("postmark_message_id");
+  }
 
   if (error) {
     console.error("[email-capture] Failed to insert inbox record:", error.message);

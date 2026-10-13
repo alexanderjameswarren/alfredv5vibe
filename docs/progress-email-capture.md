@@ -6,8 +6,8 @@ Spec: docs/technical-spec-email-capture.md.
 |---|---|---|
 | 1 | Plan, claims, docs | done 2026-10-13 |
 | 2 | Postmark payload (input A) + diag query (input B) | done 2026-10-13 |
-| 3 | Text clean-up + webhook secret (parse.ts, index.ts, config.toml comment) | v18 18:25 UTC; test failed on row 59ecd744 (forward of a forward: second signature and inner block left in, outer block's headers recorded). Fixed: signature stripped repeatedly and tolerantly, every block's headers removed, innermost block → original_*. v19 deployed 18:41 UTC (verify_jwt false, no-token → 401); awaiting retest |
-| 4 | Dedupe index + 23505 handling + original_message_id | – |
+| 3 | Text clean-up + webhook secret (parse.ts, index.ts, config.toml comment) | v18 18:25 UTC; test failed on row 59ecd744 (forward of a forward: second signature and inner block left in, outer block's headers recorded). Fixed: signature stripped repeatedly and tolerantly, every block's headers removed, innermost block → original_*. v19 deployed 18:41 UTC (verify_jwt false, no-token → 401); checkpointed to main at bebb8ec |
+| 4 | Dedupe index + 23505 handling + original_message_id | migration 126 applied by Alex 2026-10-13 (conformant, index present); v20 deployed 20:13 UTC (verify_jwt false, no-token → 401); awaiting live duplicate tests |
 | 5 | Trusted auto-forward acceptance, forwarder → user | – |
 | 6 | Finish (gitpush Finish) | – |
 
@@ -30,3 +30,8 @@ Spec: docs/technical-spec-email-capture.md.
 - Step 3 drift check: gitsync to 9b5dfb7 brought only Warren Buffet step 8a
   (mcp, wb tools, migrations 124–125); nothing touches email-capture or inbox.
 - EMAIL_CAPTURE_SECRET is set; the Postmark webhook URL carries `?token=`.
+- Step 4 drift check: gitsync to bebb8ec brought only SAM front-end files and
+  sam_play_tweaks-h3n docs. Migration numbered 126.
+- A replayed delivery hits the original_message_id check before the index
+  (its Message-Id is already stored), so it answers `reason: original_message_id`;
+  the index path (`postmark_message_id`) is proven by the rolled-back SQL test.
