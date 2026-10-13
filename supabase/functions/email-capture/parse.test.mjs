@@ -19,6 +19,33 @@ test("no secret configured", () => {
   assert.equal(p.checkWebhookToken(`${URL_BASE}?token=`, ""), "missing_config");
 });
 
+// Real data: input A, Idealist alert auto-forwarded 2026-10-07.
+const HEADERS = [
+  { Name: "Return-Path", Value: "<alex.warren+caf_=22edead6c8585c5cdd11b72d6d1b3e01=inbound.postmarkapp.com@secorus.com>" },
+  { Name: "X-Forwarded-For", Value: "alex.warren@secorus.com 22edead6c8585c5cdd11b72d6d1b3e01@inbound.postmarkapp.com" },
+  { Name: "Message-Id", Value: "<3f518020-2e8f-4e57-803e-5a4cd8a2e406@mtasv.net>" },
+];
+
+test("original message id", () => {
+  assert.equal(p.originalMessageId(HEADERS), "3f518020-2e8f-4e57-803e-5a4cd8a2e406@mtasv.net");
+  assert.equal(p.originalMessageId([{ Name: "MESSAGE-ID", Value: " <a@b> " }]), "a@b");
+  assert.equal(p.originalMessageId([{ Name: "Message-Id", Value: "<>" }]), null);
+  assert.equal(p.originalMessageId(undefined), null);
+  assert.equal(p.originalMessageId([]), null);
+});
+
+test("getHeader first match", () => {
+  const h = [{ Name: "Received-SPF", Value: "one" }, { Name: "received-spf", Value: "two" }];
+  assert.equal(p.getHeader(h, "Received-SPF"), "one");
+  assert.equal(p.getHeader(h, "X-None"), null);
+});
+
+test("unique violation", () => {
+  assert.equal(p.isUniqueViolation({ code: "23505" }), true);
+  assert.equal(p.isUniqueViolation({ code: "23502" }), false);
+  assert.equal(p.isUniqueViolation(null), false);
+});
+
 test("subject prefixes", () => {
   assert.equal(p.cleanSubject("Fwd: New Jobs Alert"), "New Jobs Alert");
   assert.equal(p.cleanSubject("FW: Fwd: Re: Lunch"), "Lunch");

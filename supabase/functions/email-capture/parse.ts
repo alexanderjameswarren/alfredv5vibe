@@ -26,6 +26,36 @@ export function checkWebhookToken(url: string, secret: string | undefined): Secr
   return safeEqual(token, secret) ? "ok" : "bad_token";
 }
 
+// --- Dedupe ---
+
+export interface PostmarkHeader {
+  Name: string;
+  Value: string;
+}
+
+/** First header with this name, case-insensitive. */
+export function getHeader(headers: PostmarkHeader[] | null | undefined, name: string): string | null {
+  const want = name.toLowerCase();
+  const h = (headers ?? []).find((x) => x?.Name?.toLowerCase() === want);
+  return h ? h.Value : null;
+}
+
+/**
+ * The mail's own Message-Id, without angle brackets. Gmail auto-forwards keep
+ * the original's, so it catches the same mail forwarded twice; a hand forward
+ * has its own new one.
+ */
+export function originalMessageId(headers: PostmarkHeader[] | null | undefined): string | null {
+  const raw = getHeader(headers, "Message-Id");
+  const id = raw?.trim().replace(/^<|>$/g, "").trim();
+  return id || null;
+}
+
+/** Postgres unique_violation: the dedupe index caught a second delivery. */
+export function isUniqueViolation(error: { code?: string } | null | undefined): boolean {
+  return error?.code === "23505";
+}
+
 // --- Subject ---
 
 /** Strips every leading Fwd:/FW:/Fw:/Re: prefix, including stacked ones. */
