@@ -161,7 +161,6 @@ export function useContextActions({
         text: text || "New Intention",
         createdAt: new Date().toISOString(),
         isIntention: true,
-        isItem: false,
         archived: false,
         itemId: itemId,
         contextId: contextId,

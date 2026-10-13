@@ -173,7 +173,7 @@ export async function getIntents(
     let query = client
       .from("intents")
       .select(
-        "id, text, is_intention, is_item, item_id, context_id, tags, collection_id, recurrence_config, target_start_date, end_date, status, status_changed_at, created_at, updated_at",
+        "id, text, is_intention, item_id, context_id, tags, collection_id, recurrence_config, target_start_date, end_date, status, status_changed_at, created_at, updated_at",
         // Counted, so truncation is measured rather than inferred from
         // "we got exactly `limit` rows back".
         { count: "exact" }
@@ -192,7 +192,10 @@ export async function getIntents(
       query = query.ilike("text", `%${params.search_text}%`);
     }
     if (params.recurring_only) {
-      query = query.not("recurrence_config", "is", null);
+      // {"type":"once"} is a stored config that does not recur.
+      query = query
+        .not("recurrence_config", "is", null)
+        .or("recurrence_config->>type.is.null,recurrence_config->>type.neq.once");
     }
     if (params.status && params.status.length > 0) {
       query = query.in("status", params.status);

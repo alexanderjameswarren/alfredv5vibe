@@ -84,7 +84,6 @@ export function intentionRowFromTriage({
     description: detailsForStorage(data.description),
     createdAt,
     isIntention: true,
-    isItem: !!itemId,
     archived: false,
     itemId,
     contextId: data.contextId,
@@ -123,7 +122,8 @@ export function intentionUpdateRow(intent, updates = {}) {
     description: pick("description", intent.description ?? null),
     createdAt: intent.createdAt,
     isIntention: pick("isIntention", intent.isIntention || false),
-    isItem: pick("isItem", intent.isItem || false),
+    // No isItem: intents.is_item is being dropped (Restructure P4). An item link
+    // is item_id being set.
     archived: pick("archived", intent.archived || false),
     itemId: pick("itemId", intent.itemId),
     contextId: pick("contextId", intent.contextId),

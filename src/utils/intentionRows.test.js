@@ -91,7 +91,6 @@ describe("intentionRowFromTriage — the rest of the row", () => {
       description: "Five minutes.",
       createdAt: "2026-09-24T10:00:00.000Z",
       isIntention: true,
-      isItem: false,
       archived: false,
       itemId: null,
       contextId: "ctx-1",
@@ -126,7 +125,6 @@ describe("intentionRowFromTriage — the rest of the row", () => {
       createdItemId: "item-new",
     });
     expect(row.itemId).toBe("item-new");
-    expect(row.isItem).toBe(true);
   });
 
   it("lets an explicitly chosen existing item win", () => {
@@ -142,8 +140,12 @@ describe("intentionRowFromTriage — the rest of the row", () => {
 
   it("is not an item when there is no item", () => {
     const row = intentionRowFromTriage({ ...base, intentionData: { text: "x" } });
-    expect(row.isItem).toBe(false);
     expect(row.itemId).toBeNull();
+  });
+
+  it("never writes isItem (is_item is being dropped)", () => {
+    const row = intentionRowFromTriage({ ...base, intentionData: { text: "x" }, createdItemId: "i" });
+    expect(row).not.toHaveProperty("isItem");
   });
 
   it("starts unarchived", () => {
@@ -184,7 +186,6 @@ const existing = {
   description: null,
   createdAt: "2026-09-01T00:00:00.000Z",
   isIntention: true,
-  isItem: false,
   archived: false,
   itemId: null,
   contextId: "ctx-home",
@@ -262,7 +263,6 @@ describe("intentionUpdateRow — everything else it must not break", () => {
     const sparse = { id: "i", userId: "u", text: "x", createdAt: "t" };
     const row = intentionUpdateRow(sparse, {});
     expect(row.isIntention).toBe(false);
-    expect(row.isItem).toBe(false);
     expect(row.archived).toBe(false);
     expect(row.tags).toEqual([]);
     expect(row.collectionId).toBeNull();
