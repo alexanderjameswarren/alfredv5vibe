@@ -41,7 +41,6 @@ export default function IntentionAddScreen({
             ? addTargetItem.contextId || null
             : addTargetContext?.id || null,
           isIntention: true,
-          isItem: false,
           archived: false,
           itemId: addTargetItem?.id || null,
         }}

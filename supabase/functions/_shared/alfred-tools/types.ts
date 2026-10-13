@@ -32,7 +32,6 @@ export interface Intent {
   text: string;
   created_at: number;
   is_intention: boolean;
-  is_item: boolean;
   archived: boolean;
   status: Status;
   status_changed_at: string;

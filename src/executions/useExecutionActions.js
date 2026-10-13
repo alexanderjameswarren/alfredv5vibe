@@ -466,7 +466,6 @@ export function useExecutionActions({
         text: item.name,
         createdAt: new Date().toISOString(),
         isIntention: true,
-        isItem: false,
         archived: false,
         itemId: item.id,
         contextId: item.contextId || null,
