@@ -2,6 +2,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts";
+import { buildCapture, checkWebhookToken } from "./parse.ts";
 
 // --- User Mapping ---
 // Maps the To address pattern to a user email for lookup in auth.users
@@ -60,17 +61,11 @@ const USER_MAPPINGS: UserMapping[] = [
 // Mail is accepted only from these addresses. Matched case-insensitively
 // against the sender, so add entries in whatever case reads best.
 //
-// This is a backstop, not the main gate. Gmail filters already route only these
-// senders to the capture addresses, so in normal operation nothing reaches this
-// check that would fail it. It exists because the endpoint has no shared secret
-// (see the note on [functions.email-capture] in config.toml): anyone who learns
-// the URL and an address shape could post a row into the inbox, and this turns
-// that from "any stranger" into "any stranger who can also forge one of three
-// From addresses".
+// This is a backstop, not the main gate. The main gate is the `token` in the
+// Postmark webhook URL (EMAIL_CAPTURE_SECRET), checked first. Behind it, Gmail
+// filters already route only these senders to the capture addresses.
 //
-// Forging a From header is easy, so this is a speed bump rather than
-// authentication. If real protection is ever wanted, put a shared secret in the
-// Postmark webhook URL — that is the cheap fix, and this list is not it.
+// Forging a From header is easy, so this list is a filter, not authentication.
 const FROM_ALLOWLIST: string[] = [
   "alexanderjameswarren@gmail.com",
   "alex.warren@secorus.com",
@@ -129,39 +124,6 @@ async function resolveUserId(
   return null;
 }
 
-// --- Helper: Clean up forwarded email text ---
-function cleanEmailText(subject: string, textBody: string): string {
-  let text = textBody || "";
-
-  // Remove common forwarding headers
-  text = text.replace(/^-+\s*Forwarded message\s*-+\s*/im, "");
-  text = text.replace(/^From:.*$/im, "");
-  text = text.replace(/^Date:.*$/im, "");
-  text = text.replace(/^Subject:.*$/im, "");
-  text = text.replace(/^To:.*$/im, "");
-  text = text.replace(/^Cc:.*$/im, "");
-
-  // Remove Gmail forwarding artifacts
-  text = text.replace(/^>+\s*/gm, ""); // quoted lines
-  text = text.replace(/\n{3,}/g, "\n\n"); // collapse multiple newlines
-
-  text = text.trim();
-
-  // Combine subject + body if both are meaningful
-  const cleanSubject = subject
-    ?.replace(/^(Fwd?|Fw):\s*/i, "") // strip Fwd: prefix
-    ?.replace(/^(Re):\s*/i, "")       // strip Re: prefix
-    ?.trim();
-
-  if (cleanSubject && text) {
-    return `${cleanSubject}\n\n${text}`;
-  } else if (cleanSubject) {
-    return cleanSubject;
-  } else {
-    return text || "(empty email)";
-  }
-}
-
 // --- Postmark Webhook JSON shape (relevant fields) ---
 interface PostmarkInboundPayload {
   From: string;
@@ -196,6 +158,18 @@ Deno.serve(async (req) => {
 
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
+  }
+
+  // Webhook secret, before anything else. Both failures answer non-2xx so a
+  // genuine Postmark delivery is retried, not lost, while config catches up.
+  const tokenVerdict = checkWebhookToken(req.url, Deno.env.get("EMAIL_CAPTURE_SECRET"));
+  if (tokenVerdict === "missing_config") {
+    console.error("[email-capture] EMAIL_CAPTURE_SECRET is not set");
+    return new Response("Not configured", { status: 500 });
+  }
+  if (tokenVerdict === "bad_token") {
+    console.warn("[email-capture] Rejected: missing or wrong token");
+    return new Response("Unauthorized", { status: 401 });
   }
 
   // Parse Postmark webhook payload
@@ -268,13 +242,14 @@ Deno.serve(async (req) => {
 
   console.log(`[email-capture] Mapped to user: ${userResult.label} (${userResult.userId})`);
 
-  // Build captured_text from subject + body
-  const capturedText = cleanEmailText(payload.Subject, payload.TextBody);
+  // Build captured_text from subject + body. The forwarded block's headers come
+  // back as `original`, so they land in source_metadata instead of being lost.
+  const { capturedText, original } = buildCapture(payload.Subject, payload.TextBody);
 
-  // Build source_metadata. `capture_address` is added only for mappings that
-  // name one, so rows from the existing addresses keep exactly the shape they
-  // have always had.
+  // Build source_metadata. `capture_address` and the original_* keys are added
+  // only when present. `subject` stays raw, Fwd: and all.
   const sourceMetadata: Record<string, unknown> = {
+    ...original,
     from: payload.From,
     fromName: payload.FromName,
     subject: payload.Subject,
@@ -300,7 +275,8 @@ Deno.serve(async (req) => {
     source_metadata: sourceMetadata,
     ai_status: "not_started",
     // All suggested_* fields left as defaults (null/false/empty). Nothing here
-    // has been enriched yet — ai_status says so, and ai-enrich fills them in.
+    // has been enriched yet — ai_status says so, and the hourly alfred-enrich
+    // task fills them in.
     //
     // `suggested_tags` is sent explicitly rather than left to the column
     // default, so the shape of a fresh capture is readable here rather than in
@@ -333,7 +309,7 @@ Deno.serve(async (req) => {
 
   console.log(`[email-capture] Inbox record created: ${data.id} for ${userResult.label}`);
 
-  // Return 200 — ai-enrich will be triggered manually via the UI Enrich button
+  // Return 200 — enrichment is the hourly alfred-enrich task, not this function
   return new Response(JSON.stringify({
     success: true,
     inbox_id: data.id,
