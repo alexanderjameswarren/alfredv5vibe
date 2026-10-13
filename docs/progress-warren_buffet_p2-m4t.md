@@ -14,7 +14,7 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 5 | Starter taxonomy, merchants and rules (in claude.ai) | done | 2026-10-11: taxonomy, merchants and rules set up in claude.ai; review queue at 0. Follow-up (tag exclusions, 114/115) done |
 | 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | done 2026-10-11 | Plan approved 2026-10-11 (decisions A–D). 6a: SQL for "always do this" plus `wb_transactions.notes`, 117 applied 2026-10-11 (CONFORMANT, 60 tables), 118 24/24. 6b (UI) verified by Alex: all 26 steps passed on desktop, a phone-sized window, his real phone and as Elise. 6c: tool wrapper, `excluded_tags` and WB_MANUAL; mcp v147 deployed, and the fresh-thread check passed |
 | 7 | Migration B + tools: subscriptions, price history, monthly detection | done 2026-10-12 | Plan approved 2026-10-11 (D1–D6). 7d done: Review tab actions, and 122/123 ("Keep watching") applied. 7a: 120 applied 2026-10-12 (conformant), 121 39/39. 7b done: wb-sync v6, whose first run detected 19 watching rows. 7c done: mcp v148, 116 tools, fresh-thread check passed. |
-| 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | not started | |
+| 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | in progress | Seeding nearly done: 32 active. 8a (billing intervals, hand unlink tool) written and passing in PGlite; awaiting gitsync |
 | 9 | Phase 2 review and Phase 3 steps | not started | |
 | 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | not started | Added 2026-10-09. Also: a bulk-create tool for tags, merchants and rules (Step 5 hit the 60-calls-per-5-minutes limit creating them one call at a time) |
 
@@ -166,3 +166,23 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
   - Southwest Gas is on "Keep watching" and comes back with its next charge.
   - Step 8 still has to dismiss the two HOAs (Barrington Monterossa, Summerlin West) and Southwest Gas, and confirm or cancel the rest.
     - From 120: deleting a watching row sets its charges' `subscription_id` to null (on delete set null). `new_recurring` reads only existing watching rows, so dismissed charges leave the queue.
+- Step 8 (2026-10-13): seeding in claude.ai is nearly done, with 32 active subscriptions. It found two gaps, which 8a fixes before the Subscriptions screen (8b).
+  - **Billing interval.** `interval_count` + `interval_unit` (week or month), backfilled from cadence (monthly 1, quarterly 3, annual 12 months).
+    - A named cadence's interval is fixed, by trigger and constraint. Cadence other is free; with no interval it has no next date and is never overdue.
+    - `wb_refresh_subscriptions` uses the interval.
+    - Rows waiting on it: Mounjaro (Alex), Mounjaro (Elise), Newmans Pest Control (every 2 months) and Mamas Cleaning (every 2 weeks).
+  - **Hand unlink of one-off charges** (Newmans, The Pool Doctor), through the new tool `set_wb_transaction_subscription`, which wraps `wb_link_subscription` with source manual. Processing never relinks the charge, and the dates refresh.
+  - `upsert_wb_subscription` accepts the interval: a named interval keeps its cadence, any other means cadence other. It refreshes the dates afterwards. `get_wb_subscriptions` returns the interval.
+  - Files: `_pending_warren_buffet_p2-m4t_step8_interval_links.sql` and `_pending_…_step8_tests.sql` (22 checks, rolled back).
+  - PGlite: 22/22, and the backfill tail is right. 123, 121, 118, 115 and 104 still pass.
+  - The tool code in `warren-buffet-p2.ts` passes 28/28. Its mcp registration waits for gitsync, because main has newer restructure_p3 changes to `mcp/index.ts`.
+  - After gitsync (2026-10-13) there was no drift: the only new migration, `122_restructure_p3_clips_registry_note.sql`, touches no wb_ object.
+    - Main now has two files numbered 122: that one and `122_wb_phase2_step7d_keep_watching.sql`. Both are applied and independent; this is raised with Alex, and neither was renamed.
+  - Numbered `124_wb_phase2_step8_interval_links.sql` and `125_wb_phase2_step8_tests.sql`. PGlite still passes.
+  - `mcp/index.ts` and its test were claimed. `set_wb_transaction_subscription` and the interval fields are registered, so the count goes from 117 to 118 (main had added `get_apps`).
+  - Tests: functions 652/652, CLI 224/224, app 2417/2417. `deno check` finds no errors in the changed files. Not deployed; live mcp is v149.
+  - Alex ran both on 2026-10-13.
+    - 124: conformant. By cadence: annual 12 months (8 rows), monthly 1 month (23), quarterly 3 months (1), other with no interval (4).
+    - 125: 22/22, rolled back.
+    - The two 122 files stay as they are; Alex logged the collision as an Alfred bug.
+  - The mcp deploy, after a check that main had not moved, is **v150**, with the unauthenticated 401 confirmed. The fresh-thread check is next.

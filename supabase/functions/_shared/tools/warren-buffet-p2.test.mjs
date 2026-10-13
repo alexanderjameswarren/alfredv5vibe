@@ -362,7 +362,41 @@ test("record_wb_subscription_price uses the charge's date and links the charge b
     /positive price/);
 });
 
+test("an interval of every 2 months makes cadence other, and the dates are refreshed", async () => {
+  const db = subDb();
+  await m.upsertWbSubscriptionTool.handler({ id: id(70), interval_count: 2, interval_unit: "month" }, { db });
+  assert.deepEqual(db.op("wb_subscriptions", "update")[0], ["update", { cadence: "other", interval_count: 2, interval_unit: "month" }]);
+  assert.deepEqual(db.rpcs.at(-1), ["wb_refresh_subscriptions", { p_ids: [id(70)] }]);
+});
+
+test("a named cadence's own interval keeps its name; a clash or half a pair is refused", async () => {
+  const db = subDb();
+  await m.upsertWbSubscriptionTool.handler({ id: id(70), interval_count: 3, interval_unit: "month", reprocess: false }, { db });
+  assert.equal(db.op("wb_subscriptions", "update")[0][1].cadence, "quarterly");
+  await assert.rejects(m.upsertWbSubscriptionTool.handler(
+    { id: id(70), cadence: "monthly", interval_count: 2, interval_unit: "week" }, { db }), /fixed interval; for every 2 week/);
+  await assert.rejects(m.upsertWbSubscriptionTool.handler({ id: id(70), interval_count: 2 }, { db }), /together/);
+  await assert.rejects(m.upsertWbSubscriptionTool.handler({ id: id(70), interval_count: 0, interval_unit: "week" }, { db }),
+    /from 1 to 104/);
+});
+
+test("set_wb_transaction_subscription links or unlinks by hand through wb_link_subscription", async () => {
+  const db = subDb();
+  await m.setWbTransactionSubscriptionTool.handler({ transaction_ids: [id(1), id(1)], unlink: true }, { db });
+  assert.deepEqual(db.rpcs[0], ["wb_link_subscription", { p_transaction_ids: [id(1)], p_subscription_id: null, p_source: "manual" }]);
+  const out = await m.setWbTransactionSubscriptionTool.handler({ transaction_ids: [id(2)], subscription_id: id(70) }, { db });
+  assert.deepEqual(db.rpcs[1][1].p_subscription_id, id(70));
+  assert.equal(out.subscription.id, id(70));
+  await assert.rejects(m.setWbTransactionSubscriptionTool.handler({ transaction_ids: [id(1)] }, { db }), /not both/);
+  await assert.rejects(m.setWbTransactionSubscriptionTool.handler(
+    { transaction_ids: [id(1)], subscription_id: id(70), unlink: true }, { db }), /not both/);
+  const many = Array.from({ length: 26 }, (_, i) => id(100 + i));
+  await assert.rejects(m.setWbTransactionSubscriptionTool.handler({ transaction_ids: many, unlink: true }, { db }), /at most 25/);
+});
+
 test("subscription database refusals are plain sentences", () => {
+  assert.match(m.dbError("t", { message: 'violates check constraint "wb_subscriptions_interval_check"' }),
+    /fixed intervals; for any other interval use cadence other/);
   assert.equal(m.dbError("t", { message: 'violates check constraint "wb_subscriptions_bundle_check"' }),
     "t: A subscription cannot be billed through or bundled with itself. Nothing was changed.");
   assert.ok(m.REVIEW_REASONS.includes("price_change") && m.REVIEW_REASONS.includes("new_recurring"));
