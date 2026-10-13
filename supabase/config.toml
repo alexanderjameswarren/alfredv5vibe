@@ -45,23 +45,12 @@ enabled = true
 # 🛑 JWT verification OFF. Called by Postmark's inbound webhook, which has no
 # user token and cannot present one — same situation as notify-dispatch below.
 #
-# ⚠️ BUT NOT THE SAME PROTECTION. notify-dispatch is guarded by a shared secret
-# in the x-dispatch-secret header, checked before any work. THIS FUNCTION HAS NO
-# SECRET. There are two hard-coded gates in the function source, and neither is
-# authentication: the To address must match a pattern in USER_MAPPINGS, and the
-# From address must appear in FROM_ALLOWLIST (added 2026-09-25). Since a From
-# header is trivially forged, the endpoint is still effectively public — anyone
-# who learns the URL, an address shape and one of three sender addresses can put
-# a row in the inbox. The allowlist narrows the door; it does not lock it.
-#
-# recipes@secorus.com and alfred@secorus.com (both 2026-09-25) are plain
-# addresses rather than plus-tags, so they are easier to guess than the others.
-# Same blast radius, slightly wider door.
-#
-# That is survivable rather than fine, and worth knowing rather than
-# discovering: the inbox is the human-approval gate, so the blast radius is junk
-# to triage, not data written anywhere that matters. If this ever needs
-# hardening, a shared secret in the Postmark webhook URL is the cheap fix.
+# The secret (email_capture-f4m): Postmark cannot send a custom header, so the
+# secret rides in the webhook URL as `?token=`, checked against the
+# EMAIL_CAPTURE_SECRET function secret before any work. Wrong or missing token
+# → 401; secret not set → 500. Both make Postmark retry, so mail is delayed, not
+# lost. FROM_ALLOWLIST and USER_MAPPINGS still apply behind it, as filters.
+# See docs/technical-spec-email-capture.md.
 #
 # ⚠️ ADDED 2026-09-21, and the reason matters. There was NO entry here at all,
 # while production ran with verify_jwt = false. The CLI defaults the flag to
