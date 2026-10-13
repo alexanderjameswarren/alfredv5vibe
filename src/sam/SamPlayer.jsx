@@ -262,6 +262,18 @@ export default function SamPlayer({ onBack }) {
     return Number.isFinite(scaled) && scaled > 0 ? scaled : bpm.value;
   }, [bpm.value, playbackSpeed.value]);
 
+  // A song without audio has no Speed % control: the BPM box is the tempo. A
+  // speed arriving from the saved song, a plan item, or Set tempo is folded into
+  // the box, so the box, Play and Practice all mean the same tempo.
+  useEffect(() => {
+    if (!song || song.audioFilePath) return;
+    const speed = playbackSpeed.value;
+    if (!Number.isFinite(speed) || speed === 100) return;
+    const folded = Math.round((bpm.value * speed) / 100);
+    if (Number.isFinite(folded) && folded > 0) bpm.set(folded);
+    playbackSpeed.set(100);
+  }, [song, playbackSpeed.value]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const beatEventsRef = useRef([]);
   // Beat event -> the pitches struck at it in an all-wrong attempt, waiting for
   // the miss scanner to claim them. See handleChord's all-wrong branch.
