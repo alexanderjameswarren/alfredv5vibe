@@ -15,7 +15,7 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 6 | UI: Transactions, transaction detail with "always do this", Review, Spending | done 2026-10-11 | Plan approved 2026-10-11 (decisions A–D). 6a: SQL for "always do this" plus `wb_transactions.notes`, 117 applied 2026-10-11 (CONFORMANT, 60 tables), 118 24/24. 6b (UI) verified by Alex: all 26 steps passed on desktop, a phone-sized window, his real phone and as Elise. 6c: tool wrapper, `excluded_tags` and WB_MANUAL; mcp v147 deployed, and the fresh-thread check passed |
 | 7 | Migration B + tools: subscriptions, price history, monthly detection | done 2026-10-12 | Plan approved 2026-10-11 (D1–D6). 7d done: Review tab actions, and 122/123 ("Keep watching") applied. 7a: 120 applied 2026-10-12 (conformant), 121 39/39. 7b done: wb-sync v6, whose first run detected 19 watching rows. 7c done: mcp v148, 116 tools, fresh-thread check passed. |
 | 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | done 2026-10-13 | Seeding nearly done (35 active). 8a done: billing intervals and the hand-unlink tool, 124/125 applied, mcp v150. 8b (Subscriptions screen) verified by Alex on 2026-10-13; the breakdown table was added after |
-| 9 | Phase 2 review and Phase 3 steps | not started | |
+| 9 | Phase 2 review and Phase 3 steps | not started | Runs last: Step 10 goes first (decided 2026-10-13), and the Step 9 review closes Phase 2 |
 | 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | not started | Added 2026-10-09. Also: a bulk-create tool for tags, merchants and rules (Step 5 hit the 60-calls-per-5-minutes limit creating them one call at a time) |
 
 ## Carried from Phase 1
@@ -220,3 +220,30 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 - **Step 8 done (2026-10-13).**
   - Seeding is finished in claude.ai. The two HOAs and Southwest Gas are dismissed, and both Mounjaros, Newmans Pest Control and Mamas Cleaning have intervals.
   - 8a (intervals, the hand-unlink tool, mcp v150) and 8b (the Subscriptions screen with its breakdown) are verified.
+- Step 10 plan (2026-10-13), approved, run before Step 9:
+  - C1: four findings (never_fires, too_broad, often_overridden, duplicate_rules) plus the spec's rule_missing and merchant_no_category.
+  - C2: the bulk tool is tier 3 with propose.
+  - D1: too_broad is merchant-level: a merchant with a rule whose transactions carry 3 or more distinct payees (the payee, else the clean description).
+  - D2: often_overridden needs at least 2 hits overridden and at least 25% of hits.
+  - D3: never_fires waits 14 days, and skips quarterly/annual notes and long-interval subscriptions.
+  - D5: the weekly task runs Sunday 18:00 America/Los_Angeles.
+  - D6: overdue subscriptions and reviews due go in the same weekly item.
+  - D7: a quiet week records the run only.
+- Step 10 SQL (10a + 10b combined), written:
+  - `_pending_…_step10_rule_health.sql` (view `wb_rule_health`) and `_pending_…_step10_bulk_create.sql` (function `wb_bulk_create`: one transaction; a dry run or any item error writes nothing).
+  - Tests, rolled back: rule health 16/16, bulk create 17/17. 125, 123, 121, 118, 115 and 104 still pass.
+- 10c tool code in `warren-buffet-p2.ts` (34/34): `get_wb_rule_health` (tier 1) and `bulk_create_wb_taxonomy` (tier 3, the proposal is the dry run). Registration in `mcp/index.ts` waits for gitsync.
+- After gitsync (2026-10-13), no drift: the sync brought only the Step 8 merge.
+  - too_broad now normalizes payees (lowercase, cut at the first "*", no digits, spaces collapsed). A test checks that "AMAZON MKTPL*AB12" and "*CD34" count as one payee; rule health is now 17/17.
+  - Numbered:
+    - `127_wb_phase2_step10_rule_health.sql`
+    - `128_…_rule_health_tests.sql`
+    - `129_wb_phase2_step10_bulk_create.sql`
+    - `130_…_bulk_create_tests.sql`
+  - `mcp/index.ts` and its test were claimed; `get_wb_rule_health` and `bulk_create_wb_taxonomy` are registered, so the count goes from 118 to 120.
+  - Tests: functions 676/676, CLI 224/224, app 2465/2465. `deno check` finds no errors in the changed files. Not deployed.
+  - Alex ran 127 and 129 ("Success. No rows returned"), 128 (17/17) and 130 (17/17) on 2026-10-13. The headers say applied.
+- 10d (2026-10-13): `docs/wb-weekly-cleanup-task-prompt.md`, prompt version 2026-10-13a. It is set up as a claude.ai scheduled task, Sunday 18:00 Pacific, with a `platform_schedules` row: warren_buffet / wb_weekly_cleanup / claude / weekly / day 0 / 18:00 / grace 12.
+  - It reads rule health, the review queue, overdue subscriptions and reviews due within 30 days.
+  - It writes ONE inbox item, "Money cleanup — week of <date>", where each proposal carries its exact tool call. A quiet week records the run only, and a failure raises a FAILED item.
+  - It never writes rules, tags, merchants, subscriptions or reminders.
