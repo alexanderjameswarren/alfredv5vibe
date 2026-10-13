@@ -296,18 +296,17 @@ test("Practice hands ScrollEngine the same range but no audio and no synth", asy
 test("Practice folds playbackSpeed into the bpm, since no audio carries the rate", async () => {
   songOverrides = { playbackSpeed: 70 };
   await start(/^Practice$/);
-  // 65 bpm at 70% is what Play would sound like through the audio element.
-  expect(mockScrollProps.bpm).toBeCloseTo(45.5);
+  // No audio: 65 bpm at 70% is folded into the BPM box as round(45.5) = 46.
+  expect(mockScrollProps.bpm).toBe(46);
 });
 
-test("Play is untouched: full audio wiring, and the speed stays on the element", async () => {
+test("Play on a song without audio scrolls at the same folded tempo as Practice", async () => {
   songOverrides = { playbackSpeed: 70 };
   await start(/^Play$/);
 
   expect(mockScrollProps.scorePlayback).toBe("off"); // the default, not Practice's override
   expect(mockScrollProps.onScrollStart).toEqual(expect.any(Function));
-  // NOT scaled — Play's rate rides on audioElement.playbackRate.
-  expect(mockScrollProps.bpm).toBe(65);
+  expect(mockScrollProps.bpm).toBe(46);
 });
 
 // --- the control ------------------------------------------------------------

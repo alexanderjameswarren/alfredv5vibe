@@ -66,6 +66,24 @@ and then reset. The new cycle then marks it missed.
 **Stats.** The new cycle loses its false miss and the old cycle its surplus
 hit. Early offsets of up to one beat now enter the average timing.
 
+## Step 3b: speed % on songs without audio
+
+**Gap.** On a song without audio the rail shows only the BPM box; there is no
+Speed % control. A speed other than 100 could still arrive from the saved
+song, a plan item's target speed, or Set tempo. Practice then scrolled at
+BPM × speed, while Play scrolled at plain BPM. Neither matched what the box
+showed.
+
+**Fix.** On a song without audio, SamPlayer folds any speed other than 100
+into the BPM box: BPM becomes round(BPM × speed / 100), and speed becomes 100.
+The box, Play and Practice then all mean the same tempo. ScrollEngine gets
+that BPM at rate 1, so the lead-in is timed from it.
+
+**Side effects.** The heard tempo is unchanged, apart from rounding to a whole
+BPM, so pass rows and plan credit read the same. If the song's saved speed was
+not 100, Save appears on load, and saving stores the folded BPM with 100%.
+Songs with audio are untouched.
+
 ## Files
 
 New:

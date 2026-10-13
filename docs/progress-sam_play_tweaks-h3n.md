@@ -5,8 +5,9 @@ Spec: docs/technical-spec-sam_play_tweaks-h3n.md
 | Step | What | Status |
 |---|---|---|
 | 1 | Lead-in helper (whole beats) and tests, shared by ScrollEngine and useAudioSync | complete, verified 2026-10-13 (Fly Me v3: 3162 ms at 120 BPM +5 beats, 3052 ms at 85 +3, 3323 ms at 60 +2; loops wrap with no gap) |
-| 2 | Carry-over at the loop wrap; credit the early press to the new cycle | done, awaiting Alex's check |
-| 3 | Wider first-note early window with the two safety rules | not started |
+| 2 | Carry-over at the loop wrap; credit the early press to the new cycle | complete, verified on the Surface at the piano after checkpoint 2026-10-13 |
+| 3 | Wider first-note early window with the two safety rules | on hold, Alex to decide |
+| 3b | Speed % on songs without audio folded into the BPM box, so Play = Practice = the box | code and tests done (two SamPlayer.practice.test.jsx tests updated to 46); awaiting checkpoint and Surface test |
 | 4 | Full test suites; finish docs | not started |
 | 5 | Alex checks the lead-in timing on his Surface after a checkpoint, before the project closes | not started |
 
@@ -14,6 +15,7 @@ Spec: docs/technical-spec-sam_play_tweaks-h3n.md
 - Lead-in adds whole beats, not bars.
 - No countdown or overlay.
 - The speed % gap in Play on songs without audio is not fixed here.
+  Superseded the same day: fixed as step 3b.
 
 ## Step 2 notes
 - Beat events carry `copy`; copy 0 is always the pass in progress.
