@@ -409,3 +409,123 @@ test("a second rule without a choice is refused in plain words", async () => {
   assert.equal(err.message,
     "create_wb_rule_from_transaction: A rule already exists for this merchant: pass update_rule_id to update it (preferred), or add_new_rule: true. Nothing was changed.");
 });
+
+// --- rule health and bulk create (Step 10) ----------------------------------
+
+const HEALTH_ALL = [
+  { finding: "too_broad", acknowledged: false }, { finding: "never_fires", acknowledged: false },
+  { finding: "never_fires", acknowledged: false }, { finding: "often_overridden", acknowledged: true },
+];
+function healthDb(rows) {
+  return fakeDb((table, ops) => (has(ops, "maybeSingle") ? { data: rows[0] ?? null, error: null }
+    : has(ops, "limit") && !has(ops, "order") ? { data: HEALTH_ALL, error: null }
+    : { data: rows, error: null, count: rows.length }));
+}
+
+test("get_wb_rule_health returns counts by finding and items in the payload, acknowledged ones hidden", async () => {
+  const db = healthDb([{ finding: "too_broad", merchant_name: "ZZ Shop", n: 3 }]);
+  const out = await m.getWbRuleHealthTool.handler({ finding: "too_broad" }, { db });
+  assert.deepEqual(db.op("wb_rule_health", "eq")[0], ["eq", "finding", "too_broad"]);
+  assert.equal(out.data.items.length, 1);
+  assert.deepEqual(out.data.counts_by_finding, { too_broad: 1, never_fires: 2 });
+  assert.equal(out.data.acknowledged_hidden, 1);
+  await assert.rejects(m.getWbRuleHealthTool.handler({ finding: "broken" }, { db }), /finding must be one of/);
+});
+
+test("get_wb_rule_health can include acknowledged findings, with their reason", async () => {
+  const db = healthDb([]);
+  const out = await m.getWbRuleHealthTool.handler({ include_acknowledged: true }, { db });
+  assert.equal(db.log.filter((q) => q.table === "wb_rule_health").length, 0);
+  assert.match(db.log.find((q) => q.table === "wb_rule_health_all").ops.find((o) => o[0] === "select")[1], /ack_reason/);
+  assert.deepEqual(out.data.counts_by_finding, { too_broad: 1, never_fires: 2, often_overridden: 1 });
+  assert.equal(out.data.acknowledged_hidden, 0);
+});
+
+test("acknowledge_wb_rule_health stores the current n and reason for a rule finding", async () => {
+  const db = healthDb([{ finding: "often_overridden", n: 4, rule_name: "ZZ ATM", merchant_name: null }]);
+  const out = await m.acknowledgeWbRuleHealthTool.handler(
+    { finding: "often_overridden", rule_id: id(60), reason: "Gardener re-split, on purpose" }, { db });
+  const [, row, opts] = db.op("wb_rule_health_acks", "upsert")[0];
+  assert.deepEqual(row, { context_id: MONEY, finding: "often_overridden", subject_id: id(60), acked_n: 4, reason: "Gardener re-split, on purpose" });
+  assert.deepEqual(opts, { onConflict: "context_id,finding,subject_id" });
+  assert.equal(out.acknowledged_at_n, 4);
+});
+
+test("acknowledge_wb_rule_health checks the subject, the reason and that the finding exists", async () => {
+  const db = healthDb([]);
+  await assert.rejects(m.acknowledgeWbRuleHealthTool.handler({ finding: "often_overridden", merchant_id: id(50), reason: "x" }, { db }),
+    /about a rule: pass rule_id/);
+  await assert.rejects(m.acknowledgeWbRuleHealthTool.handler({ finding: "too_broad", rule_id: id(60), reason: "x" }, { db }),
+    /about a merchant: pass merchant_id/);
+  await assert.rejects(m.acknowledgeWbRuleHealthTool.handler({ finding: "too_broad", merchant_id: id(50) }, { db }), /say why/);
+  await assert.rejects(m.acknowledgeWbRuleHealthTool.handler({ finding: "too_broad", merchant_id: id(50), reason: "x" }, { db }),
+    /no current too_broad finding/);
+  assert.equal(writes(db).length, 0);
+});
+
+test("unacknowledge deletes the acknowledgement", async () => {
+  const db = fakeDb(() => ({ data: [{ id: id(90) }], error: null }));
+  const out = await m.acknowledgeWbRuleHealthTool.handler({ finding: "too_broad", merchant_id: id(50), unacknowledge: true }, { db });
+  assert.equal(db.op("wb_rule_health_acks", "delete").length, 1);
+  assert.deepEqual(db.op("wb_rule_health_acks", "eq"), [["eq", "finding", "too_broad"], ["eq", "subject_id", id(50)]]);
+  assert.equal(out.unacknowledged, true);
+});
+
+const BULK = {
+  tags: [{ group: "Category", name: "ZZ Pets" }],
+  merchants: [{ name: "ZZ Shop", match_patterns: ["zz shop"] }],
+  rules: [{ name: "ZZ Shop rule", merchant: "ZZ Shop", tags: ["Category/ZZ Pets"] }],
+};
+const bulkResult = (applied, errorItem) => ({
+  applied, counts: { created: 3 },
+  results: [
+    { kind: "tag", name: "Category/ZZ Pets", status: "created", id: id(80) },
+    { kind: "merchant", name: "ZZ Shop", status: "created", id: id(81) },
+    errorItem ?? { kind: "rule", name: "ZZ Shop rule", status: "created", id: id(82) },
+  ],
+});
+
+function bulkDb(result) {
+  return fakeDb((table) => (table === "wb_rules"
+    ? { data: [{ match: { merchant_id: id(81) } }], error: null }
+    : { data: [{ id: id(1) }], error: null }),
+  (fn, p) => ({ data: fn === "wb_bulk_create" ? result(p) : { processed: 1 }, error: null }));
+}
+
+test("the bulk proposal is a dry run in the Money context and writes nothing", async () => {
+  const db = bulkDb(() => bulkResult(false));
+  const out = await m.bulkCreateWbTaxonomyTool.propose(BULK, { db });
+  assert.deepEqual(db.rpcs[0], ["wb_bulk_create", { p_payload: BULK, p_context_id: MONEY, p_dry_run: true, p_created_by: "claude" }]);
+  assert.equal(out.results.length, 3);
+  assert.equal(out.errors, undefined);
+  assert.equal(writes(db).length, 0);
+});
+
+test("a proposal with item errors says confirming would write nothing", async () => {
+  const db = bulkDb(() => bulkResult(false, { kind: "rule", name: "ZZ x", status: "error", error: 'no merchant "ZZ Nowhere"' }));
+  const out = await m.bulkCreateWbTaxonomyTool.propose(BULK, { db });
+  assert.deepEqual(out.errors, ['rule "ZZ x": no merchant "ZZ Nowhere"']);
+  assert.match(out.note, /writes nothing/);
+});
+
+test("the confirmed bulk create writes, then reprocesses the new merchants once", async () => {
+  const db = bulkDb((p) => bulkResult(!p.p_dry_run));
+  const out = await m.bulkCreateWbTaxonomyTool.handler({ ...BULK, source: "manual", confirmed: true }, { db });
+  assert.deepEqual(db.rpcs[0][1], { p_payload: BULK, p_context_id: MONEY, p_dry_run: false, p_created_by: "manual" });
+  assert.deepEqual(db.op("wb_transactions", "in")[0], ["in", "merchant_id", [id(81)]]);
+  assert.deepEqual(db.rpcs[1], ["wb_process_transactions", { ids: [id(1)] }]);
+  assert.equal(out.reprocessed.processed, 1);
+});
+
+test("a confirmed bulk create that is not applied is refused in plain words", async () => {
+  const db = bulkDb(() => bulkResult(false, { kind: "rule", name: "ZZ x", status: "error", error: 'no merchant "ZZ Nowhere"' }));
+  await assert.rejects(m.bulkCreateWbTaxonomyTool.handler({ ...BULK, confirmed: true }, { db }),
+    /nothing was written, because: rule "ZZ x": no merchant "ZZ Nowhere"/);
+});
+
+test("bulkPayload checks the lists and the cap", () => {
+  assert.throws(() => m.bulkPayload("t", undefined, undefined, undefined), /at least one/);
+  assert.throws(() => m.bulkPayload("t", "x", [], []), /list of objects/);
+  assert.throws(() => m.bulkPayload("t", Array.from({ length: 51 }, () => ({})), [], []), /at most 50 tags/);
+  assert.deepEqual(m.bulkPayload("t", [{ a: 1 }], null, undefined), { tags: [{ a: 1 }], merchants: [], rules: [] });
+});

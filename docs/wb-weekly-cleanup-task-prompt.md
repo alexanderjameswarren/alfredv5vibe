@@ -6,7 +6,8 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
 - **Schedule:** weekly, **Sunday 18:00 America/Los_Angeles**. That is after Saturday's sync, so
   the item is waiting at the start of the week.
 - **App / job:** `warren_buffet` / `wb_weekly_cleanup`.
-- **Tools:** Alfred connector only. It needs **mcp v151 or later**, which has `get_wb_rule_health`.
+- **Tools:** Alfred connector only. It needs **mcp v153 or later**, which has
+  `get_wb_rule_health` returning `{ counts_by_finding, items }` and `acknowledge_wb_rule_health`.
 - **Spec:** `docs/technical-spec-warren_buffet_p2-m4t.md`, Step 10 and §4.9.
 - **Edit rule:** change this file, then paste it into the task. Never edit the task alone.
 
@@ -16,7 +17,7 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
 > version, and Step 9 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-10-13a`
+> ### `PROMPT VERSION: 2026-10-13b`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -40,7 +41,7 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
    Step 8 adds `manual: true`. Check three things:
    - a `platform_runs` row for `warren_buffet` / `wb_weekly_cleanup` closed `ok`;
    - one inbox item, or none on a quiet week;
-   - a final report that shows `PROMPT VERSION: 2026-10-13a`.
+   - a final report that shows `PROMPT VERSION: 2026-10-13b`.
 
 ## The record and the notification are SEPARATE
 
@@ -59,7 +60,7 @@ A quiet week raises nothing. A signal that fires on the normal case teaches its 
 ---
 
 You are running the weekly Money cleanup for Alex and Elise's household finances in Alfred.
-`PROMPT VERSION: 2026-10-13a`. Follow these steps in order. **Do not improvise.**
+`PROMPT VERSION: 2026-10-13b`. Follow these steps in order. **Do not improvise.**
 
 ### The rules that override everything else
 
@@ -91,11 +92,14 @@ plus 30 days.
 
 ### Step 3 — Read, and only read
 
-1. **Rule health:** `get_wb_rule_health` with `limit: 50`.
-   - Keep every row: `finding`, `rule_id`, `rule_name`, `merchant_id`, `merchant_name`, `n`,
-     `of_n`, `detail`. Also keep `meta.counts_by_finding`.
-   - If `meta.truncated` is true, call it again **once per finding** in `meta.counts_by_finding`,
-     with `finding` set and `limit: 50`, and use those rows instead.
+1. **Rule health:** `get_wb_rule_health` with `limit: 50`. The response is
+   `{ counts_by_finding, acknowledged_hidden, items }`.
+   - Keep every item: `finding`, `rule_id`, `rule_name`, `merchant_id`, `merchant_name`, `n`,
+     `of_n`, `detail`. Also keep `counts_by_finding` and `acknowledged_hidden`.
+   - Findings acknowledged as deliberate are already left out. **Never** pass
+     `include_acknowledged`.
+   - If the response says it is truncated, call it again **once per finding** in
+     `counts_by_finding`, with `finding` set and `limit: 50`, and use those items instead.
    - If it errors, STOP with `failure_kind: "rule_health_read"`.
 2. **Review queue:** `get_wb_review_queue` with `limit: 50`.
    - Keep the counts by reason.
@@ -131,9 +135,18 @@ Call `get_inbox` with `limit: 50`. Look for an item whose `captured_text` **begi
 
 ### Step 6 — Write the proposals
 
-**One line per finding**, each followed by the exact tool call Alex would approve. Fill in every
+**One line per finding**, each followed by the exact tool calls Alex would approve. Fill in every
 id you were given. Write `<…>` only where a person must choose. Merchant and rule names are
 copied, never paraphrased.
+
+**Every finding also gets an "If this is fine" line**, so a deliberate pattern can be silenced
+instead of fixed:
+- for never_fires and often_overridden:
+  `acknowledge_wb_rule_health({"finding": "<finding>", "rule_id": "<rule_id>", "reason": "<why it is fine>"})`;
+- for the other four:
+  `acknowledge_wb_rule_health({"finding": "<finding>", "merchant_id": "<merchant_id>", "reason": "<why it is fine>"})`.
+
+It hides the finding until its count grows past today's. **Never call it yourself.**
 
 - **never_fires** — "Rule **<rule_name>** (<merchant_name>) has never matched since <date in
   detail>."
@@ -171,8 +184,9 @@ Money cleanup — week of <local_date>
 <one line: how many findings, queue items, overdue and reviews due>
 <if previous_item_id: "Last week's item is still open: <previous_item_id>.">
 
-RULE FIXES (<count>)
-<Step 6 lines, grouped by finding in this order: often_overridden, duplicate_rules, too_broad, rule_missing, merchant_no_category, never_fires>
+RULE FIXES (<count>)<if acknowledged_hidden > 0: " — <acknowledged_hidden> acknowledged, not shown">
+<Step 6 lines, grouped by finding in this order: often_overridden, duplicate_rules, too_broad, rule_missing, merchant_no_category, never_fires;
+ each with its fix call(s), then "If this is fine: <acknowledge call>">
 
 REVIEW QUEUE (<total>)
 <count by reason, one line each>. Oldest: <the 5 oldest, date · merchant · reason>.
@@ -204,7 +218,7 @@ errors, STOP with `failure_kind: "inbox_write"`.
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `ok` unless a step said STOP; then `failed`.
 - **`details`**, always:
-  - `local_date` and `prompt_version: "2026-10-13a"`;
+  - `local_date` and `prompt_version: "2026-10-13b"`;
   - `rule_health` (the counts by finding), `review_queue_total`, `overdue_count`,
     `reviews_due_count`;
   - then one of `inbox_item_id` or `quiet: true`;
@@ -227,7 +241,7 @@ Run: <run id>
 ### Step 9 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-13a`;
+- `PROMPT VERSION: 2026-10-13b`;
 - the run id and its status;
 - the counts from Step 8;
 - the inbox item id, or "quiet week, no item";

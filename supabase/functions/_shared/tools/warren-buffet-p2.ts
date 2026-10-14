@@ -23,6 +23,9 @@
 //   upsert_wb_subscription           tier 2 — create, edit, confirm or dismiss a subscription
 //   record_wb_subscription_price     tier 2 — a price change, optionally from a charge
 //   set_wb_transaction_subscription  tier 2 — link or unlink charges by hand (Step 8)
+//   get_wb_rule_health               tier 1 — rule and merchant findings for cleanup (Step 10)
+//   acknowledge_wb_rule_health       tier 2 — mark a finding deliberate, or undo that
+//   bulk_create_wb_taxonomy          tier 3 — tags, merchants and rules in one call; the proposal is a dry run
 //
 // Multi-row writes go through the invoker functions from the Step 4 migration,
 // so each is one transaction. Sign rule: money in positive, money out negative.
@@ -47,6 +50,10 @@ export const SUB_STATUSES = ["watching", "active", "paused", "cancelled"] as con
 export const SUB_OWNERS = ["alex", "elise", "joint"] as const;
 export const SUB_INTERVAL_UNITS = ["week", "month"] as const;
 export const MAX_LINK_ROWS = 25;
+export const RULE_HEALTH_FINDINGS = [
+  "never_fires", "too_broad", "often_overridden", "duplicate_rules", "rule_missing", "merchant_no_category",
+] as const;
+export const MAX_BULK_ITEMS = 50;
 /** The fixed interval of each named cadence; anything else is cadence other. */
 const NAMED_INTERVALS: Array<[string, number, string]> = [["monthly", 1, "month"], ["quarterly", 3, "month"], ["annual", 12, "month"]];
 export const SPENDING_LEVELS = ["top", "leaf"] as const;
@@ -1180,5 +1187,162 @@ export const recordWbSubscriptionPriceTool = defineTool({
       linked = true;
     }
     return { price, linked, subscription: await subscriptionById(T, ctx.db, subId) };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// get_wb_rule_health — tier 1 (Step 10)
+// ---------------------------------------------------------------------------
+
+export const getWbRuleHealthTool = defineTool({
+  name: "get_wb_rule_health",
+  tier: 1,
+  handler: async (args: Obj, ctx) => {
+    const T = "get_wb_rule_health";
+    const finding = oneOf(T, "finding", args.finding, RULE_HEALTH_FINDINGS);
+    const merchantId = optUuid(T, "merchant_id", args.merchant_id);
+    const withAcked = optBool(T, "include_acknowledged", args.include_acknowledged) ?? false;
+    const LIMIT = limitOf(T, args.limit);
+    // Acknowledged findings live only in wb_rule_health_all; wb_rule_health leaves them out.
+    const view = withAcked ? "wb_rule_health_all" : "wb_rule_health";
+    const cols = "finding, rule_id, rule_name, merchant_id, merchant_name, n, of_n, detail" +
+      (withAcked ? ", acknowledged, acked_n, ack_reason, acked_at" : "");
+    let q = ctx.db.from(view).select(cols, { count: "exact" });
+    if (finding) q = q.eq("finding", finding);
+    if (merchantId) q = q.eq("merchant_id", merchantId);
+    const { data, error, count } = await q.order("finding").order("n", { ascending: false }).limit(LIMIT);
+    if (error) throw new Error(dbError(T, error));
+    // Counts over everything, so a page of one finding still shows the whole picture.
+    const { data: all, error: ae } = await ctx.db.from("wb_rule_health_all").select("finding, acknowledged").limit(2000);
+    if (ae) throw new Error(dbError(T, ae));
+    const counts: Record<string, number> = {};
+    let acknowledged = 0;
+    for (const r of (all ?? []) as Obj[]) {
+      if (r.acknowledged) { acknowledged += 1; if (!withAcked) continue; }
+      counts[r.finding as string] = (counts[r.finding as string] ?? 0) + 1;
+    }
+    const items = data ?? [];
+    const total = count ?? items.length;
+    const truncated = total > items.length;
+    return envelope(
+      { counts_by_finding: counts, acknowledged_hidden: withAcked ? 0 : acknowledged, items },
+      { count: total, limit_applied: LIMIT, truncated, ...(truncated ? { total } : {}) },
+    );
+  },
+});
+
+// ---------------------------------------------------------------------------
+// acknowledge_wb_rule_health — tier 2 (Step 10)
+// ---------------------------------------------------------------------------
+
+/** Findings about a rule; the rest are about a merchant. */
+export const RULE_FINDINGS = ["never_fires", "often_overridden"];
+
+export const acknowledgeWbRuleHealthTool = defineTool({
+  name: "acknowledge_wb_rule_health",
+  tier: 2,
+  handler: async (args: Obj, ctx) => {
+    const T = "acknowledge_wb_rule_health";
+    const finding = oneOf(T, "finding", args.finding, RULE_HEALTH_FINDINGS);
+    if (!finding) throw new Error(`${T}: finding is required.`);
+    const ruleId = optUuid(T, "rule_id", args.rule_id);
+    const merchantId = optUuid(T, "merchant_id", args.merchant_id);
+    const byRule = RULE_FINDINGS.includes(finding);
+    const subject = byRule ? ruleId : merchantId;
+    if (!subject || (byRule ? merchantId : ruleId)) {
+      throw new Error(`${T}: ${finding} is about a ${byRule ? "rule: pass rule_id" : "merchant: pass merchant_id"} (and not the other). Nothing was changed.`);
+    }
+    const undo = optBool(T, "unacknowledge", args.unacknowledge) ?? false;
+    if (undo) {
+      const { data, error } = await ctx.db.from("wb_rule_health_acks").delete()
+        .eq("finding", finding).eq("subject_id", subject).select("id");
+      if (error) throw new Error(dbError(T, error));
+      return { finding, subject_id: subject, unacknowledged: ((data ?? []) as Obj[]).length > 0 };
+    }
+    const reason = optText(T, "reason", args.reason);
+    if (!reason) throw new Error(`${T}: say why it is fine in reason (a few words). Nothing was changed.`);
+    const { data: row, error: re } = await ctx.db.from("wb_rule_health_all").select("finding, n, rule_name, merchant_name")
+      .eq("finding", finding).eq("subject_id", subject).maybeSingle();
+    if (re) throw new Error(dbError(T, re));
+    if (!row) throw new Error(`${T}: there is no current ${finding} finding for that ${byRule ? "rule" : "merchant"}. Nothing was changed.`);
+    const r = row as Obj;
+    const { error } = await ctx.db.from("wb_rule_health_acks").upsert(
+      { context_id: MONEY_CONTEXT_ID, finding, subject_id: subject, acked_n: r.n, reason },
+      { onConflict: "context_id,finding,subject_id" });
+    if (error) throw new Error(dbError(T, error));
+    return {
+      finding, subject_id: subject, rule_name: r.rule_name ?? null, merchant_name: r.merchant_name ?? null,
+      acknowledged_at_n: r.n, reason,
+      note: `Hidden from rule health until its count grows past ${r.n}.`,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// bulk_create_wb_taxonomy — tier 3 with a proposal (Step 10)
+// ---------------------------------------------------------------------------
+
+/** The payload for wb_bulk_create: three lists of objects, at most 50 each. */
+export function bulkPayload(T: string, tags: unknown, merchants: unknown, rules: unknown): Obj {
+  const list = (key: string, v: unknown) => {
+    if (absent(v)) return [];
+    if (!Array.isArray(v) || v.some((x) => typeof x !== "object" || x === null || Array.isArray(x))) {
+      throw new Error(`${T}: ${key} must be a list of objects. Nothing was changed.`);
+    }
+    if (v.length > MAX_BULK_ITEMS) throw new Error(`${T}: at most ${MAX_BULK_ITEMS} ${key} per call; got ${v.length}. Nothing was changed.`);
+    return v;
+  };
+  const payload = { tags: list("tags", tags), merchants: list("merchants", merchants), rules: list("rules", rules) };
+  if (!payload.tags.length && !payload.merchants.length && !payload.rules.length) {
+    throw new Error(`${T}: pass at least one of tags, merchants or rules.`);
+  }
+  return payload;
+}
+
+async function bulkCreate(T: string, db: Db, payload: Obj, dryRun: boolean, source: string): Promise<Obj> {
+  const { data, error } = await db.rpc("wb_bulk_create", {
+    p_payload: payload, p_context_id: MONEY_CONTEXT_ID, p_dry_run: dryRun, p_created_by: source,
+  });
+  if (error) throw new Error(dbError(T, error));
+  return (data ?? {}) as Obj;
+}
+
+const bulkErrors = (res: Obj) =>
+  ((res.results ?? []) as Obj[]).filter((r) => r.status === "error").map((r) => `${r.kind} "${r.name}": ${r.error}`);
+
+export const bulkCreateWbTaxonomyTool = defineTool({
+  name: "bulk_create_wb_taxonomy",
+  tier: 3,
+  // The proposal is the dry run: what would be created, reused or refused. Nothing is written.
+  propose: async (args: Obj, ctx) => {
+    const T = "bulk_create_wb_taxonomy";
+    const source = oneOf(T, "source", args.source, HAND_SOURCES) ?? "claude";
+    const res = await bulkCreate(T, ctx.db, bulkPayload(T, args.tags, args.merchants, args.rules), true, source);
+    const errors = bulkErrors(res);
+    return {
+      counts: res.counts, results: res.results,
+      ...(errors.length ? { errors, note: "Fix these items first: with any error, confirming writes nothing." } : {}),
+    };
+  },
+  handler: async (args: Obj, ctx) => {
+    const T = "bulk_create_wb_taxonomy";
+    const source = oneOf(T, "source", args.source, HAND_SOURCES) ?? "claude";
+    const res = await bulkCreate(T, ctx.db, bulkPayload(T, args.tags, args.merchants, args.rules), false, source);
+    if (!res.applied) {
+      throw new Error(`${T}: nothing was written, because: ${bulkErrors(res).join("; ")}.`);
+    }
+    // New merchants, new patterns and new rules change what processing does: reprocess those merchants.
+    const results = (res.results ?? []) as Obj[];
+    const merchantIds = results.filter((r) => r.kind === "merchant" && (r.status === "created" || r.status === "updated"))
+      .map((r) => r.id as string);
+    const newRules = results.filter((r) => r.kind === "rule" && r.status === "created").map((r) => r.id as string);
+    if (newRules.length) {
+      const { data, error } = await ctx.db.from("wb_rules").select("match").in("id", newRules);
+      if (error) throw new Error(dbError(T, error));
+      for (const r of (data ?? []) as Obj[]) merchantIds.push((r.match as Obj)?.merchant_id as string);
+    }
+    const ids = [...new Set(merchantIds.filter(Boolean))];
+    const reprocessed = ids.length ? await reprocessMerchants(T, ctx.db, ids) : null;
+    return { counts: res.counts, results, reprocessed };
   },
 });

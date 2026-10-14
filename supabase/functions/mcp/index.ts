@@ -109,6 +109,9 @@ import {
   upsertWbSubscriptionTool,
   recordWbSubscriptionPriceTool,
   setWbTransactionSubscriptionTool,
+  getWbRuleHealthTool,
+  acknowledgeWbRuleHealthTool,
+  bulkCreateWbTaxonomyTool,
 } from "../_shared/tools/warren-buffet-p2.ts";
 import {
   getDriveMixSongsTool,
@@ -3406,6 +3409,69 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(setWbTransactionSubscriptionTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_rule_health",
+    {
+      title: "Get Rule Health",
+      description:
+        "Cleanup findings for rules and merchants. Returns { counts_by_finding, acknowledged_hidden, items }, one item per finding (finding, rule_id, rule_name, merchant_id, merchant_name, n, of_n, detail). " +
+        "Findings acknowledged as deliberate (acknowledge_wb_rule_health) are left out until their n grows past the acknowledged n; include_acknowledged: true shows them too, with ack_reason. " +
+        "never_fires: an active rule with no match, older than 14 days (quarterly or annual rules and long-interval subscriptions are skipped). " +
+        "too_broad: a merchant with a rule whose charges carry 3 or more distinct payees (normalized: lowercase, cut at the first *, no digits), listed in detail; maybe two merchants share it. " +
+        "often_overridden: a rule beaten by hand on at least 2 and at least 25% of its hits (tag swapped, tag removed, kind changed, re-split). " +
+        "duplicate_rules: a merchant with 2 or more active rules. rule_missing: a merchant tagged by hand 3 or more times with no rule. merchant_no_category: spend at a merchant never carries a Category. " +
+        WB_RULES + "Read-only: propose fixes, do not apply them unasked. Tier 1.",
+      inputSchema: {
+        finding: z.enum(["never_fires", "too_broad", "often_overridden", "duplicate_rules", "rule_missing", "merchant_no_category"]).optional(),
+        merchant_id: z.string().optional(),
+        include_acknowledged: z.boolean().optional().describe("Also return acknowledged findings, with acknowledged, acked_n and ack_reason."),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbRuleHealthTool, args, token),
+  );
+
+  server.registerTool(
+    "acknowledge_wb_rule_health",
+    {
+      title: "Acknowledge Rule Health Finding",
+      description:
+        "Mark a rule-health finding as deliberate, so it stops being proposed (e.g. a charge re-split on purpose every month, or one-off charges at a merchant with a rule). Stores the finding's current n and a short reason; the finding comes back by itself if its n grows past that. " +
+        "never_fires and often_overridden are about a rule (pass rule_id); too_broad, duplicate_rules, rule_missing and merchant_no_category are about a merchant (pass merchant_id). unacknowledge: true removes the acknowledgement. " +
+        "Only acknowledge what Alex or Elise said is fine. Tier 2.",
+      inputSchema: {
+        finding: z.enum(["never_fires", "too_broad", "often_overridden", "duplicate_rules", "rule_missing", "merchant_no_category"]),
+        rule_id: z.string().optional().describe("For never_fires and often_overridden."),
+        merchant_id: z.string().optional().describe("For the merchant-level findings."),
+        reason: z.string().optional().describe("Why it is fine, a few words. Required to acknowledge."),
+        unacknowledge: z.boolean().optional().describe("true to remove the acknowledgement instead."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(acknowledgeWbRuleHealthTool, args, token),
+  );
+
+  const wbBulkItems = z.array(z.record(z.string(), z.unknown()));
+  server.registerTool(
+    "bulk_create_wb_taxonomy",
+    {
+      title: "Bulk Create Tags, Merchants and Rules",
+      description:
+        "Create up to 50 tags, 50 merchants and 50 merchant rules in one call and one transaction, instead of one call each. Items refer to each other by name: a tag's parent, a rule's merchant, a rule's tags as \"Group/Tag\". " +
+        "Existing names are reused (an existing merchant gets any new patterns added) and a merchant that already has an active rule keeps it; nothing is duplicated. " +
+        "Without confirmed: true this is a dry run: it returns what would be created, reused or refused, and writes nothing. With any item error, confirming writes nothing either. " +
+        "After a confirmed run, the new or changed merchants' transactions are reprocessed. " +
+        WB_RULES + WB_MANUAL + "Tier 3.",
+      inputSchema: {
+        tags: wbBulkItems.optional().describe('[{group: "Category", name, parent?: "<tag name>", notes?}]'),
+        merchants: wbBulkItems.optional().describe("[{name, match_patterns: [\"case-insensitive substring, 3+ chars\"], default_kind?, notes?}]"),
+        rules: wbBulkItems.optional().describe('[{name, merchant: "<merchant name>", set_kind?, tags?: ["Category/Food"], priority?, notes?}]'),
+        source: wbHandSource,
+        confirmed: z.boolean().optional().describe("true to write, after reviewing the dry run."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(bulkCreateWbTaxonomyTool, args, token),
   );
 
   // --- Drive Mix (docs/technical-spec-drive_mix-v7r.md §5) ---
