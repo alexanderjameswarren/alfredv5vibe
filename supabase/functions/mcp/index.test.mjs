@@ -305,13 +305,15 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_P3 = ["get_apps"];
   // 2026-10-13, +1 for Warren Buffet Step 8a: link or unlink charges by hand.
   const EXPECTED_ADDED_WB_8A = ["set_wb_transaction_subscription"];
+  // 2026-10-13, +2 for Warren Buffet Step 10: rule health and bulk create.
+  const EXPECTED_ADDED_WB_10 = ["get_wb_rule_health", "bulk_create_wb_taxonomy", "acknowledge_wb_rule_health"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
-                      ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A]) {
+                      ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 118,
-    `expected 118 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 121,
+    `expected 121 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -402,7 +404,7 @@ test("Warren Buffet Phase 2 schemas advertise exactly the args their handlers re
     rest = rest.replace(body, "");
   }
   const blocks = rest.split("defineTool({").slice(1);
-  assert.equal(blocks.length, 22, `expected 22 tools in warren-buffet-p2.ts, found ${blocks.length}`);
+  assert.equal(blocks.length, 25, `expected 25 tools in warren-buffet-p2.ts, found ${blocks.length}`);
   const tiers = {};
   for (const b of blocks) {
     const name = /name:\s*"([^"]+)"/.exec(b)[1];
@@ -420,7 +422,7 @@ test("Warren Buffet Phase 2 schemas advertise exactly the args their handlers re
     create_wb_rule_from_transaction: 3, tag_wb_transactions: 2, set_wb_transaction_kind: 2, split_wb_transaction: 2,
     mark_wb_reviewed: 2, reprocess_wb_transactions: 2, get_wb_spending: 1, get_wb_cash_flow: 1,
     get_wb_subscriptions: 1, upsert_wb_subscription: 2, record_wb_subscription_price: 2,
-    set_wb_transaction_subscription: 2,
+    set_wb_transaction_subscription: 2, get_wb_rule_health: 1, bulk_create_wb_taxonomy: 3, acknowledge_wb_rule_health: 2,
   });
 });
 
@@ -437,6 +439,11 @@ test("Warren Buffet Phase 2 descriptions state the sign rule, the manual rule an
   assert.match(desc("get_wb_transactions"), /excluded_tags/);
   assert.match(desc("upsert_wb_subscription"), /every 2 weeks is 2 \+ week/);
   assert.match(desc("set_wb_transaction_subscription"), /never relinks/);
+  assert.match(desc("get_wb_rule_health"), /propose fixes, do not apply them/);
+  assert.match(desc("get_wb_rule_health"), /counts_by_finding, acknowledged_hidden, items/);
+  assert.match(desc("acknowledge_wb_rule_health"), /comes back by itself if its n grows/);
+  assert.match(desc("bulk_create_wb_taxonomy"), /dry run: it returns what would be created/);
+  assert.match(desc("bulk_create_wb_taxonomy"), /removed by hand or by Claude is never put back by rules/);
   for (const n of ["get_wb_subscriptions", "upsert_wb_subscription", "record_wb_subscription_price", "set_wb_transaction_subscription"]) {
     assert.match(desc(n), /never accepted automatically/, n);
     assert.match(desc(n), /Insurance label, not a subscription/, n);
@@ -444,7 +451,8 @@ test("Warren Buffet Phase 2 descriptions state the sign rule, the manual rule an
   assert.match(desc("upsert_wb_subscription"), /not_subscription: true/);
   assert.match(desc("record_wb_subscription_price"), /record the old price too/);
   assert.match(desc("get_wb_review_queue"), /price_change.*new_recurring/);
-  for (const n of ["get_wb_rules", "create_wb_rule", "update_wb_rule", "get_wb_rule_preview", "create_wb_rule_from_transaction"]) {
+  for (const n of ["get_wb_rules", "create_wb_rule", "update_wb_rule", "get_wb_rule_preview", "create_wb_rule_from_transaction",
+                   "get_wb_rule_health", "bulk_create_wb_taxonomy"]) {
     assert.match(desc(n), /match on merchants/, n);
   }
 });

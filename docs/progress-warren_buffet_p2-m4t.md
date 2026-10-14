@@ -16,7 +16,7 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 7 | Migration B + tools: subscriptions, price history, monthly detection | done 2026-10-12 | Plan approved 2026-10-11 (D1–D6). 7d done: Review tab actions, and 122/123 ("Keep watching") applied. 7a: 120 applied 2026-10-12 (conformant), 121 39/39. 7b done: wb-sync v6, whose first run detected 19 watching rows. 7c done: mcp v148, 116 tools, fresh-thread check passed. |
 | 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | done 2026-10-13 | Seeding nearly done (35 active). 8a done: billing intervals and the hand-unlink tool, 124/125 applied, mcp v150. 8b (Subscriptions screen) verified by Alex on 2026-10-13; the breakdown table was added after |
 | 9 | Phase 2 review and Phase 3 steps | not started | Runs last: Step 10 goes first (decided 2026-10-13), and the Step 9 review closes Phase 2 |
-| 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | not started | Added 2026-10-09. Also: a bulk-create tool for tags, merchants and rules (Step 5 hit the 60-calls-per-5-minutes limit creating them one call at a time) |
+| 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | build done 2026-10-14; weekly task setup and first run to do | Migrations 127–132 applied. mcp v153 (121 tools): `get_wb_rule_health`, `acknowledge_wb_rule_health`, `bulk_create_wb_taxonomy`. Weekly task prompt `docs/wb-weekly-cleanup-task-prompt.md` v2026-10-13b, not set up yet; Alex will report back after setup |
 
 ## Carried from Phase 1
 
@@ -247,3 +247,33 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
   - It reads rule health, the review queue, overdue subscriptions and reviews due within 30 days.
   - It writes ONE inbox item, "Money cleanup — week of <date>", where each proposal carries its exact tool call. A quiet week records the run only, and a failure raises a FAILED item.
   - It never writes rules, tags, merchants, subscriptions or reminders.
+- 10c deploy (2026-10-13), after gitsync with main unmoved: **mcp v152**, with the unauthenticated 401 confirmed.
+  - The live version before this deploy was v151 (restructure_p4's step 1); this tree includes that change.
+  - The task prompt's prerequisite now reads mcp v152 or later.
+- Fresh-thread check on v152 (2026-10-13): 120 tools, the bulk dry run and no writes all passed. Two problems were found:
+  - `get_wb_rule_health` put its counts in `meta`, which never reaches Claude;
+  - the bulk dry run returned real-looking ids for items it did not create.
+  - Alex also asked for acknowledgements: ATM withdrawal (a monthly gardener re-split) and The Pool Doctor (one-off filter cleanings) are deliberate. Quill Health (Mounjaro) is a real finding.
+- Step 10 follow-up, written:
+  - `_pending_…_step10_acks.sql`:
+    - table `wb_rule_health_acks`;
+    - view `wb_rule_health_all`;
+    - `wb_rule_health` rebuilt on it, hiding a finding until its n grows past the acknowledged n;
+    - `wb_bulk_create` now gives a null id when it wrote nothing.
+  - `_pending_…_step10_acks_tests.sql`: 19 checks, rolled back. PGlite: 19/19, and 128, 130, 125, 123, 121, 118, 115 and 104 still pass.
+  - Tools:
+    - `get_wb_rule_health` now returns `{ counts_by_finding, acknowledged_hidden, items }` and takes `include_acknowledged`;
+    - new `acknowledge_wb_rule_health` (tier 2);
+    - the count goes to 121.
+  - The task prompt is now version 2026-10-13b: each finding offers its fix call and an acknowledge call, and it needs v153.
+  - The spec's §4.9 and §6 now record all of Step 10. That covers C1 and C2 from the plan, which I had missed until now.
+  - Tests: functions 708/708, CLI 224/224. `deno check` finds no errors in the changed files.
+  - After gitsync (2026-10-14), no drift: main was still 0f38789. The 4 db items were claimed, and the files numbered `131_wb_phase2_step10_acks.sql` and `132_wb_phase2_step10_acks_tests.sql`. PGlite still passes.
+  - Alex ran both on 2026-10-14: 131 conformant, and 132 19/19, rolled back.
+  - mcp redeployed as **v153** (main unmoved), with the unauthenticated 401 confirmed.
+  - **Fresh-thread check on v153 passed (2026-10-14):**
+    - 121 tools;
+    - `get_wb_rule_health` returns `counts_by_finding`, `acknowledged_hidden` and `items` in the payload;
+    - the dry-run id is null.
+    - ATM withdrawal and The Pool Doctor were acknowledged (often_overridden, by rule). Only Quill Health remains, with `acknowledged_hidden` 2.
+- **Step 10 build done (2026-10-14).** Still to do: set up the weekly task (schedule row and claude.ai scheduled task) and check its first run. Alex will report back.

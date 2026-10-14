@@ -181,12 +181,17 @@ All three use the Pacific date of `coalesce(posted_at, transacted_at)`; amounts 
 - `wb_spending_by_tag` — per month, per group, per tag at `leaf` level and rolled up to the `top` parent, the sum of split amounts for kinds `spend`, `refund` and `fee`. Exclusive groups also get an untagged row (`tag_id` null), so a group's rows add up to total spending. Posted rows only; transfers, income and investments excluded by construction.
 - `wb_cash_flow_monthly` — per month: `income` (kinds `income` and `interest`), `spending` (`spend` + `refund` + `fee`), `net`. Transfers and investments excluded; posted rows only. (Phase 3 builds burn rate and free cash on top of this.)
 - `wb_transaction_list` (Step 4) — every transaction with `account_label`, `merchant_name`, `tag_names text[]` (filtered with overlaps), `split_count` and `needs_review` (true when the row is in the review queue; computed inline, kept in step with `wb_review_queue`). No `raw`. What `get_wb_transactions` and the UI list.
-- `wb_rule_health` (Step 10) — one row per finding, with `finding`, merchant, rule and counts:
-  - `duplicate_rules`: a merchant with two or more active rules;
-  - `one_hit_rule`: a rule that matched once and never again in 30 days;
-  - `overridden_rule`: a rule whose tags were overridden by hand two or more times;
-  - `rule_missing`: a merchant tagged by hand three or more times with no rule;
-  - `merchant_no_category`: a merchant with no category.
+- `wb_rule_health` (Step 10, migration 127) — one row per finding: `finding`, `rule_id`, `rule_name`, `merchant_id`, `merchant_name`, `n`, `of_n`, `detail`.
+  - `never_fires`: an active rule with no match, older than 14 days. It is skipped when its notes say quarterly, annual or yearly, or when its merchant's subscription interval is 3 months or more.
+  - `too_broad`: a merchant with an active rule whose charges carry 3 or more distinct payees, which are listed in `detail`. Rules match on one merchant, so breadth is measured on the merchant. Payees are normalized first: lowercase, cut at the first "*", no digits, spaces collapsed.
+  - `often_overridden`: a rule beaten by hand on at least 2 of its hits and at least 25% of them. An override is a hand tag in the rule tag's exclusive group, a removal of the rule's tag, a hand kind against the rule's kind, or a re-split.
+  - `duplicate_rules`: a merchant with two or more active rules.
+  - `rule_missing`: a merchant tagged by hand or by Claude three or more times with no rule.
+  - `merchant_no_category`: a merchant whose spend never carries a Category tag.
+- **Acknowledgements** (Step 10 follow-up):
+  - `wb_rule_health_acks` (audited) holds one row per finding and subject. The subject is the rule for never_fires and often_overridden, and the merchant otherwise. Each row keeps the `n` at the time and a reason.
+  - `wb_rule_health_all` has every finding with its acknowledgement.
+  - `wb_rule_health` leaves out an acknowledged finding until its `n` grows past the acknowledged `n`. Deleting the row un-acknowledges it.
 
 ---
 
@@ -259,7 +264,9 @@ Platform contract as in Phase 1 (`ctx.db` only, list default 20 cap 50, filters 
 | `get_wb_cash_flow` | read | Monthly income, spending, net. |
 | `get_wb_subscriptions` / `upsert_wb_subscription` / `record_wb_subscription_price` | read / 2 / 2 | Step 7, with the interval since 8a. `upsert_wb_subscription` with `not_subscription: true` dismisses a watching row (it flags the merchant and deletes the row). |
 | `set_wb_transaction_subscription` | 2 | Step 8a. Link or unlink up to 25 charges by hand, through `wb_link_subscription` with source `manual`; the dates refresh. |
-| `get_wb_rule_health` | read | Rows from `wb_rule_health`. Step 10. |
+| `get_wb_rule_health` | read | Step 10. Returns `{ counts_by_finding, acknowledged_hidden, items }` from `wb_rule_health`; `include_acknowledged` reads `wb_rule_health_all` instead, with the acknowledgement fields. |
+| `acknowledge_wb_rule_health` | 2 | Step 10. Acknowledge a finding as deliberate (`finding`, `rule_id` or `merchant_id`, `reason`), storing its current `n`; `unacknowledge: true` removes it. |
+| `bulk_create_wb_taxonomy` | 3 (with `propose`) | Step 10. Up to 50 tags, 50 merchants and 50 merchant rules in one transaction (`wb_bulk_create`), referring to each other by name. The proposal is the dry run, which writes nothing, and items it would create carry a null id. Any item error writes nothing. Confirming reprocesses the new or changed merchants. This is the bulk form for setting up a taxonomy; bulk tagging stays the job of rules. |
 
 Tool descriptions state the sign rule and that manual tags are never overwritten by rules, and the rule tools say that rules match on merchants, not on exact descriptions. The new tools go in `_shared/tools/warren-buffet-p2.ts`; the Phase 1 file keeps its eight.
 
