@@ -40,12 +40,6 @@ import AppChrome from "./shared/AppChrome";
 import BottomDock from "./shared/BottomDock";
 import { useNotice } from "./shared/Notice";
 import { useStatusSync } from "./alfred/useStatusSync";
-import {
-  statusCounts,
-  filterByStatus,
-  rankByActivity,
-  withTag,
-} from "./utils/status";
 import GamesPage from "./games/GamesPage";
 import MoneyPage from "./money/MoneyPage";
 import { sortRows } from "./utils/sortOrders";
@@ -59,7 +53,6 @@ import { getTodayDate } from "./utils/eventDates";
 import {
   NAMED_RECORD_ACCESSORS,
   itemSearchFields,
-  INTENTION_ACCESSORS,
   INBOX_ACCESSORS,
 } from "./utils/listSortOptions";
 import { TAG_TOGGLE_ATTR } from "./utils/tagFilterViews";
@@ -240,6 +233,8 @@ export default function Alfred() {
   const [captureText, setCaptureText] = useState("");
   const [showContextForm, setShowContextForm] = useState(false);
   const [editingContext, setEditingContext] = useState(null);
+  // A context card's gear opens context detail straight on its edit page.
+  const [editContextOnOpen, setEditContextOnOpen] = useState(false);
   // "Moved to active" after a write the 088 triggers may answer. Before the
   // action hooks, which take `watchStatus`.
   const { notice, showNotice } = useNotice();
@@ -1027,11 +1022,8 @@ export default function Alfred() {
   // Intentions: every live intention. Which of them show is the status chips'
   // call (088), not a hidden "no live event" rule, which this used to be.
   const liveIntentions = intents.filter((i) => i.isIntention && !i.archived);
-  // Counted before tags and search, like the inbox source tabs, so a chip's
-  // number does not move as you type.
-  // Counts only rows passing the tag filter, as the tag chips count only rows
-  // passing the status chips. Every chip still shows, zero included.
-  const intentionStatusCounts = statusCounts(withTag(liveIntentions, filterTag));
+  // Restructure P4: the list itself (one row per item, filters, counts, sort) is
+  // built in IntentionsScreen with the shared row model, as context detail does.
 
   const memoriesWithoutContext = items.filter((i) => !i.contextId && !i.archived);
 
@@ -1077,19 +1069,6 @@ export default function Alfred() {
   ).filter((c) =>
     matchesQuery(searchFor("contexts"), c.name, c.description, c.keywords),
   );
-  // What is happening now first (rankByActivity); the chosen sort orders within each group.
-  const visibleIntentions = rankByActivity(
-    sortRows(
-      filterByStatus(liveIntentions, intentionsStatus.selected).filter(
-        (intent) => !filterTag || (intent.tags && intent.tags.includes(filterTag)),
-      ),
-      intentionsSort.sortKey,
-      INTENTION_ACCESSORS,
-      intentionsSort.sortDir,
-    ),
-    validEvents,
-    allLiveExecutions,
-  ).filter((intent) => matchesQuery(searchFor("intentions"), getIntentDisplay(intent)));
   const visibleMemories = sortRows(
     memoriesWithoutContext.filter(
       (item) => !filterTag || (item.tags && item.tags.includes(filterTag)),
@@ -1261,6 +1240,10 @@ export default function Alfred() {
             setSearchFor={setSearchFor}
             contextsSort={contextsSort}
             viewContextDetail={viewContextDetail}
+            onEditContext={(id) => {
+              setEditContextOnOpen(true);
+              viewContextDetail(id);
+            }}
           />
         )}
 
@@ -1276,6 +1259,8 @@ export default function Alfred() {
             }
             contextId={selectedContextId}
             context={contexts.find((c) => c.id === selectedContextId)}
+            openInEdit={editContextOnOpen}
+            onEditOpened={() => setEditContextOnOpen(false)}
             // Unsorted on purpose: the page sorts all three of its lists with
             // its own control, whose default (Last modified, newest first) is
             // the fixed order Items used to get here.
@@ -1518,9 +1503,7 @@ export default function Alfred() {
         {view === "intentions" && (
           <IntentionsScreen
             liveIntentions={liveIntentions}
-            intentionStatusCounts={intentionStatusCounts}
             intentionsStatus={intentionsStatus}
-            visibleIntentions={visibleIntentions}
             validEvents={validEvents}
             allLiveExecutions={allLiveExecutions}
             reminderIndex={reminderIndex}
@@ -1545,7 +1528,10 @@ export default function Alfred() {
             activate={activate}
             openExecution={openExecution}
             cancelExecutionForEvent={cancelExecutionForEvent}
-            archiveIntention={archiveIntention}
+            viewItemDetail={viewItemDetail}
+            startNowFromItem={startNowFromItem}
+            scheduleFromItem={scheduleFromItem}
+            closeRecords={closeRecords}
           />
         )}
 

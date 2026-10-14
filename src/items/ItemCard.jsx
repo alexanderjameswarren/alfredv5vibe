@@ -49,8 +49,10 @@ export default function ItemCard({
   // Schedule `(item, date)`.
   onStartNow = null,
   onSchedule = null,
+  showContext = false,
 }) {
   const closedTitle = closedBlockTitle(item, "item");
+  const contextName = item?.contextId ? (contexts || []).find((c) => c.id === item.contextId)?.name : null;
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(item.name);
   const [description, setDescription] = useState(item.description || "");
@@ -647,9 +649,16 @@ export default function ItemCard({
         <ObjectIcon type="item" className="w-4 h-4 text-primary" align="first-line" />
         <span className="min-w-0">{item.name}</span>
       </p>
-      <div className="flex items-center gap-2 mb-2">
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
         <StatusPill row={item} />
         {scheduleLine && <span className="text-xs text-foreground">{scheduleLine}</span>}
+        {/* List rows: the same context label as IntentionCard's. */}
+        {showContext && contextName && (
+          <span className="inline-flex items-center gap-1 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
+            <ObjectIcon type="context" className="w-3.5 h-3.5" />
+            {contextName}
+          </span>
+        )}
       </div>
       {reminder && (
         <p

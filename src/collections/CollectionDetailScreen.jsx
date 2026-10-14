@@ -552,7 +552,7 @@ export default function CollectionDetailScreen({
               setSelectedCollectionId(null);
               setView("collections");
             }}
-            className="px-4 py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg text-sm"
+            className="px-4 py-2.5 min-h-[44px] border-2 border-destructive text-destructive hover:bg-destructive/10 rounded-lg text-sm transition-colors"
           >
             Archive Collection
           </button>

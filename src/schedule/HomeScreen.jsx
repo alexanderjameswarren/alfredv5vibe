@@ -3,7 +3,7 @@ import { Activity, Pause, Sun } from "lucide-react";
 import UnderlineTabs from "../shared/UnderlineTabs";
 import ListToolbar, { NoMatches } from "../shared/ListToolbar";
 import { EVENT_SORT_OPTIONS } from "../utils/listSortOptions";
-import ExecutionBadge from "../executions/ExecutionBadge";
+import { ExecutionList } from "../executions/InProgressSection";
 import CollectionCard from "../collections/CollectionCard";
 import ContextCard from "../contexts/ContextCard";
 import EventCard from "./EventCard";
@@ -76,42 +76,27 @@ export default function HomeScreen({
           ]}
         />
 
+        {/* Shared with the lists' In progress section (Restructure P4). */}
         {executionTab === "active" && (
-          <div className="space-y-2">
-            {activeExecutions.length > 0 ? (
-              activeExecutions.map((exec) => (
-                <ExecutionBadge
-                  key={exec.id}
-                  exec={exec}
-                  intents={intents}
-                  contexts={contexts}
-                  getIntentDisplay={getIntentDisplay}
-                  onOpen={openExecution}
-                />
-              ))
-            ) : (
-              <p className="text-muted-foreground text-sm">No active executions.</p>
-            )}
-          </div>
+          <ExecutionList
+            executions={activeExecutions}
+            intents={intents}
+            contexts={contexts}
+            getIntentDisplay={getIntentDisplay}
+            onOpen={openExecution}
+            emptyText="No active executions."
+          />
         )}
 
         {executionTab === "paused" && (
-          <div className="space-y-2">
-            {pausedExecutions.length > 0 ? (
-              pausedExecutions.map((exec) => (
-                <ExecutionBadge
-                  key={exec.id}
-                  exec={exec}
-                  intents={intents}
-                  contexts={contexts}
-                  getIntentDisplay={getIntentDisplay}
-                  onOpen={openExecution}
-                />
-              ))
-            ) : (
-              <p className="text-muted-foreground text-sm">No paused executions.</p>
-            )}
-          </div>
+          <ExecutionList
+            executions={pausedExecutions}
+            intents={intents}
+            contexts={contexts}
+            getIntentDisplay={getIntentDisplay}
+            onOpen={openExecution}
+            emptyText="No paused executions."
+          />
         )}
 
         {executionTab === "today" && (

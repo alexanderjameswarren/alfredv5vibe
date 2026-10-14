@@ -1,7 +1,9 @@
 // One row per thing (Restructure P4): an item and its intentions are one row;
 // an intention with no item on the page is a row of its own. Pure.
 import { itemActionTarget } from "./runNow";
-import { liveEventsFor, statusOf } from "./status";
+import { filterByStatus, liveEventsFor, statusCounts, statusOf, withTag } from "./status";
+import { sortRows } from "./sortOrders";
+import { matchesQuery } from "./search";
 
 const unique = (values) => [...new Set(values)];
 
@@ -79,22 +81,29 @@ export function rowSearchFields(row, itemFields) {
   return [...(row.item ? itemFields(row.item) : []), ...row.intents.map((i) => i.text)];
 }
 
+/** True while the row's item or any of its intentions has an open (active or paused) run. */
+export function hasOpenRun(row, openExecutions) {
+  const ids = new Set(row.intents.map((i) => i.id));
+  return openExecutions.some((x) => ids.has(x.intentId) || (row.item && x.itemIds?.includes(row.item.id)));
+}
+
 /**
- * Rows in order of what is happening now, as rankByActivity orders intentions:
- * open run (active, then paused), scheduled (soonest first), unscheduled,
- * background, closed. Stable within a group.
+ * One list's filters, sort and counts. Rows with an open run are left out: they
+ * show in the In progress section instead. Every other row follows the chosen
+ * sort exactly (bug a). Each filter's counts apply every other filter: status
+ * counts under search and tag, tag counts (`tagCountRows`, for TagFilter) under
+ * search and status. Merged rows count once. `total` is the list before filters.
  */
-export function rankRows(rows) {
-  const tier = (row) => {
-    if (row.open) return row.open.status === "paused" ? 1 : 0;
-    if (row.status === "closed") return 5;
-    if (row.status === "background") return 4;
-    return row.event ? 2 : 3;
+export function listRows({ rows, openExecutions = [], search = "", itemFields, filterTag = null, statuses, sortKey, sortDir }) {
+  const listed = rows.filter((row) => !hasOpenRun(row, openExecutions));
+  const searched = listed.filter((row) => matchesQuery(search, ...rowSearchFields(row, itemFields)));
+  const tagged = withTag(searched, filterTag);
+  return {
+    visibleRows: sortRows(filterByStatus(tagged, statuses), sortKey, ROW_ACCESSORS, sortDir),
+    statusCounts: statusCounts(tagged),
+    tagCountRows: filterByStatus(searched, statuses),
+    total: listed.length,
   };
-  return rows
-    .map((row, i) => ({ row, i, t: tier(row), d: String(row.event?.time || "") }))
-    .sort((a, b) => a.t - b.t || (a.t === 2 ? a.d.localeCompare(b.d) : 0) || a.i - b.i)
-    .map(({ row }) => row);
 }
 
 function attributes(intent, events, openExecutions) {

@@ -21,6 +21,7 @@ export default function ContextsScreen({
   setSearchFor,
   contextsSort,
   viewContextDetail,
+  onEditContext,
 }) {
   return (
     <div>
@@ -81,10 +82,8 @@ export default function ContextsScreen({
                 key={context.id}
                 context={context}
                 onClick={() => viewContextDetail(context.id)}
-                onEdit={() => {
-                  setEditingContext(context);
-                  setShowContextForm(true);
-                }}
+                // The one edit page lives on context detail (Restructure P4).
+                onEdit={() => onEditContext(context.id)}
                 showSettings={true}
               />
             ))

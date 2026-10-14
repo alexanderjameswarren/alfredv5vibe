@@ -126,6 +126,74 @@ and intention detail pages. `src/shared/useRowClose.jsx` (hook + `CloseRowButton
   menu), and `CircleCheckBig` is not used elsewhere in the app (`CheckCircle2` is Money's
   "all good" mark).
 
+## Shared list rules (Step 4)
+Context detail and the Intentions list share `listRows` (rowModel) and `src/shared/RowList.jsx`.
+- **In progress section** (`src/executions/InProgressSection.jsx`, whose `ExecutionList` is
+  also Home's Active and Paused lists): every running, then paused, execution in scope, as
+  Home's teal ExecutionBadge cards, above the search box. Scope: all on Intentions; on a
+  context page, runs whose context is this one plus any run that takes one of its rows out.
+  Ignores search, tags, chips and sort. Hidden when empty.
+- A row with an open run (`hasOpenRun`: any of its intentions, or a run carrying the item) is
+  in the section and not in the list; the list's chips, tags, Tags (n) and "x of y" count only
+  the list. No pin-to-top: every list row follows the chosen sort.
+- Item rows (no pick) show the same context label as intention rows.
+
+## Context and collection archive (Step 4 follow-up)
+- Context detail has no Archive at the top. "Archive Context" is at the bottom of the context
+  edit form, below a divider (as the collection form), red outline (`border-2
+  border-destructive text-destructive`, `rounded-lg`).
+- It stays disabled, with the reason, while the context holds any item, intention, event or
+  collection (contexts never cascade), so the live-events question can never arise; tapping
+  it asks "Archive this context?" (Archive / Cancel). Archiving returns to the previous page
+  and the toast keeps its existing Undo (un-archiving is one write).
+- "Archive Collection" uses the same red outline; nothing else on that form changed.
+
+## Context edit page (Step 4 follow-up, as built)
+One context edit form, as a whole page, the way item detail's edit is: context detail's
+Edit and a context card's gear (Contexts list) both open it; Save and Cancel return to where
+you came from (detail, or the list). Archive Context sits on it. No inline form on context
+detail and no "Close" label. Not its own URL: a new route needs `src/viewPaths.js`, held by
+warren_buffet_p2-m4t; the page is a mode of `/contexts/detail`, as item edit is of item
+detail. "Add Context" on the Contexts list is unchanged (inline create form).
+
+## Close reason (DESIGN, not built)
+Every close records why. Labels **Completed** / **Won't do**; stored in a new column
+`closed_reason` on `items` and `intents`: `'done'` | `'wont_do'` (`'done'` matches
+`executions.outcome`). Null = unknown (closed before this, or not backfilled).
+
+**One pop-up, always**, in all six places Closed can be chosen: item detail status pill;
+intention detail status pill; item edit form status buttons (on Save, not on tap);
+intention edit form status buttons (on Save); item / merged row Close; intention row Close.
+It holds the two-way choice, an optional note box, and, when relevant, the existing question
+about future events and reminders, all in ONE pop-up. Completed is preselected when a
+completed execution already exists. This replaces today's no-pop-up close (those tests change).
+
+What each choice writes:
+| Case | Writes |
+|---|---|
+| Completed, no completed execution yet | a closed execution, `outcome='done'` (on the event if live, else a new event dated today, archived); the note becomes its note. On a merged row or item covering several intentions: ONLY on the picked intention; every closed record gets the same reason |
+| Completed, item with no intention | the note as a standalone note on the item; no execution, no invented intention |
+| Completed, a completed execution already exists | the note as a standalone note on the record; no second execution |
+| Won't do | the note as a standalone note; no execution |
+The note is optional. An execution created at close must NOT generate a next event, even on a
+recurring intention (closing also stops the repeat via end_date) — explicit test.
+
+**Undo** removes what the close created (execution or note), restores every status, end
+date, archived event and cancelled reminder (as today), and `last_completed_at` falls back to
+its earlier value by itself (the 100 triggers recalculate on execution delete). Undo may
+return a record to Someday (needs the Step 11 guard exception).
+
+**Disabled rule**, all six places: Closed cannot be chosen while an execution is open (for an
+item, an open execution on any of its intentions or one carrying the item). Pills and edit
+buttons show Closed disabled with "Finish the execution first", as the row Close does.
+
+**Database (Step 11):** `closed_reason` on items and intents (check constraint, comment);
+`status_guard` exception allowing closed → someday within a few minutes of
+`status_changed_at` (so Undo works; must not open a general way back to someday);
+`get_intents` and `get_items` return `closed_reason`; a backfill of existing closed records
+from a list Alex reviews (Claude proposes each row's reason, Alex confirms, rows not listed
+stay null).
+
 ## Extra: inbox Context picker
 The inbox detail "Context" select is sorted by name, case-insensitive. The App picker uses the
 apps list, not the context list, and is unchanged; no other inbox picker uses contexts.
@@ -147,8 +215,11 @@ Alex at that point; nothing is claimed or deployed early.
 
 ## Bugs — causes and fixes
 - (a) `rankByActivity` (status.js) re-tiers after `sortRows`, and orders the scheduled tier by
-  event date; the card's first date is "last done". Fix: an explicit sort orders strictly, and
-  the card shows the date the list is sorted by.
+  event date; the card's first date is "last done". Fix (as built, Step 4): `rankRows` lifts
+  only rows with an open run (active, then paused, which read "In progress"/"Paused"); every
+  other row keeps the chosen sort exactly. Scheduled, background and closed rows no longer
+  re-tier. Applies to context detail and the Intentions list (shared `listRows`). The card
+  already shows "last updated"; a merged row's date is the latest of its item and intentions.
 - (b) No realtime on `reminders`; the index refreshes only on view change to three lists.
   Fix: reminders join the realtime publication (database step); `useRealtime` subscribes and
   refreshes the reminder index on change. A refresh after detail Add/Cancel stays only if the

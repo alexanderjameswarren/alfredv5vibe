@@ -20,8 +20,13 @@ export function contextFormValues(editing) {
   };
 }
 
-export default function ContextForm({ editing, onSave, onCancel, onDirtyChange, stickyFooter = false, collections = [] }) {
+export default function ContextForm({
+  editing, onSave, onCancel, onDirtyChange, stickyFooter = false, collections = [],
+  // Edit form only: archive, and what stops it (contexts never cascade).
+  onArchive = null, archiveBlockers = [],
+}) {
   const initial = contextFormValues(editing);
+  const [confirmArchive, setConfirmArchive] = useState(false);
   const apps = useApps();
   const [name, setName] = useState(initial.name);
   const [shared, setShared] = useState(initial.shared);
@@ -165,7 +170,59 @@ export default function ContextForm({ editing, onSave, onCancel, onDirtyChange, 
             Cancel
           </button>
         </PinnedFooter>
+
+        {/* Restructure P4: Archive lives here, below a divider, as on the
+            collection edit form. Only when nothing is left in the context. */}
+        {editing && onArchive && (
+          <div className="pt-4 border-t border-border">
+            {archiveBlockers.length > 0 && (
+              <p className="text-sm text-muted-foreground mb-2">
+                Cannot archive: still holds {archiveBlockers.join(", ")}.
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => setConfirmArchive(true)}
+              disabled={archiveBlockers.length > 0}
+              className="px-4 py-2.5 min-h-[44px] border-2 border-destructive text-destructive hover:bg-destructive/10 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Archive Context
+            </button>
+          </div>
+        )}
       </div>
+      {confirmArchive && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={() => setConfirmArchive(false)}>
+          <div
+            role="dialog"
+            aria-label="Archive context"
+            className="bg-background border border-border rounded-lg shadow-xl p-5 w-full max-w-sm mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-sm mb-4">Archive this context?</p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmArchive(false);
+                  if (onDirtyChange) onDirtyChange(false);
+                  onArchive();
+                }}
+                className="px-4 py-2 min-h-[44px] text-sm border-2 border-destructive text-destructive hover:bg-destructive/10 rounded-lg"
+              >
+                Archive
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmArchive(false)}
+                className="px-4 py-2 min-h-[44px] text-sm text-muted-foreground rounded-lg hover:bg-muted"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </EditCard>
   );
 }

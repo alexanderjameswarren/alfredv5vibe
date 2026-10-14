@@ -3,18 +3,18 @@ import { Plus } from "lucide-react";
 import TagFilter from "../shared/TagFilter";
 import StatusFilterChips from "../shared/StatusFilterChips";
 import ListToolbar, { NoMatches } from "../shared/ListToolbar";
-import { INTENTION_SORT_OPTIONS } from "../utils/listSortOptions";
+import RowList from "../shared/RowList";
+import InProgressSection from "../executions/InProgressSection";
+import { INTENTION_SORT_OPTIONS, itemSearchFields } from "../utils/listSortOptions";
 import { reminderBadge } from "../utils/remindersApi";
-import { filterByStatus } from "../utils/status";
-import IntentionCard from "./IntentionCard";
+import { buildRows, listRows } from "../utils/rowModel";
 
-// The Intentions list screen, moved out of Alfred.jsx unchanged. Everything it reads
-// comes in as props from Alfred.
+// The Intentions list. Restructure P4: one row per item, built and filtered by the
+// same row model as context detail (buildRows, listRows, RowList), so the two
+// screens read and act alike. Items with no intention are not listed here.
 export default function IntentionsScreen({
   liveIntentions,
-  intentionStatusCounts,
   intentionsStatus,
-  visibleIntentions,
   validEvents,
   allLiveExecutions,
   reminderIndex,
@@ -35,12 +35,40 @@ export default function IntentionsScreen({
   moveToPlanner,
   startNowFromIntention,
   viewIntentionDetail,
+  viewItemDetail,
+  startNowFromItem,
+  scheduleFromItem,
+  closeRecords,
   updateEvent,
   activate,
   openExecution,
   cancelExecutionForEvent,
-  archiveIntention,
 }) {
+  const search = searchFor("intentions");
+  const rows = buildRows({
+    items: (items || []).filter((i) => !i.archived),
+    intents: liveIntentions,
+    events: validEvents,
+    openExecutions: allLiveExecutions,
+    itemsWithoutIntents: false,
+  });
+  const { visibleRows, statusCounts, tagCountRows, total } = listRows({
+    rows,
+    openExecutions: allLiveExecutions,
+    search,
+    itemFields: itemSearchFields,
+    filterTag,
+    statuses: intentionsStatus.selected,
+    sortKey: intentionsSort.sortKey,
+    sortDir: intentionsSort.sortDir,
+  });
+  // The picked intention's reminder, else any of the row's intentions'.
+  const reminderFor = (row) => {
+    const ids = [row.intent?.id, ...row.intents.map((i) => i.id)].filter(Boolean);
+    const hit = ids.find((id) => reminderIndex.byIntent[id]);
+    return hit ? reminderBadge(reminderIndex.byIntent[hit]) : null;
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-3 sm:mb-4">
@@ -54,16 +82,24 @@ export default function IntentionsScreen({
         </button>
       </div>
 
+      {/* Every running and paused run, above the filters, which it ignores. */}
+      <InProgressSection
+        executions={allLiveExecutions}
+        intents={liveIntentions}
+        contexts={contexts}
+        getIntentDisplay={getIntentDisplay}
+        onOpen={openExecution}
+      />
+
       <StatusFilterChips
-        counts={intentionStatusCounts}
+        counts={statusCounts}
         selected={intentionsStatus.selected}
         onToggle={intentionsStatus.toggle}
       />
 
-      {/* Counts only the rows the status chips let through, so a tag with
-          none of them is gone rather than counting a list you cannot see. */}
+      {/* Counts rows the search and status chips let through. */}
       <TagFilter
-        entities={filterByStatus(liveIntentions, intentionsStatus.selected)}
+        entities={tagCountRows}
         activeTag={filterTag}
         onFilter={setFilterTag}
         collapsed={tagsCollapsedFor("intentions")}
@@ -73,9 +109,9 @@ export default function IntentionsScreen({
       {/* Step 12.8. This page was missed by Step 9b, so until now it had no
           sort control AND no ordering — a bare `.filter()` over a query with
           no ORDER BY, which is arbitrary rather than merely undocumented. */}
-      {liveIntentions.length > 0 && (
+      {total > 0 && (
         <ListToolbar
-          query={searchFor("intentions")}
+          query={search}
           onQueryChange={setSearchFor("intentions")}
           searchLabel="Search intentions"
           sortId="intentions-sort"
@@ -85,43 +121,41 @@ export default function IntentionsScreen({
         />
       )}
 
-      {liveIntentions.length === 0 ? (
+      {total === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
-          <p>No intentions yet.</p>
+          <p>{rows.length === 0 ? "No intentions yet." : "Everything here is in progress."}</p>
         </div>
-      ) : searchFor("intentions").trim() && visibleIntentions.length === 0 ? (
-        <NoMatches noun="intentions" query={searchFor("intentions")} />
-      ) : visibleIntentions.length === 0 ? (
+      ) : search.trim() && visibleRows.length === 0 ? (
+        <NoMatches noun="intentions" query={search} />
+      ) : visibleRows.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
-          <p>Nothing matches the chips above.</p>
+          <p>Nothing matches the filters above.</p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {visibleIntentions.map((intent) => (
-            <IntentionCard
-              tagPool={tagPool}
-              key={intent.id}
-              intent={intent}
-              contexts={contexts}
-              items={items}
-              collections={activeCollections}
-              onUpdate={updateIntent}
-              onSchedule={moveToPlanner}
-              onStartNow={startNowFromIntention}
-              getIntentDisplay={getIntentDisplay}
-              showScheduling={true}
-              onViewDetail={(id) => viewIntentionDetail(id, "intentions")}
-              reminder={reminderBadge(reminderIndex.byIntent[intent.id])}
-              events={validEvents}
-              onUpdateEvent={updateEvent}
-              onActivate={activate}
-              executions={allLiveExecutions}
-              onOpenExecution={openExecution}
-              onCancelExecution={cancelExecutionForEvent}
-              onArchive={archiveIntention}
-            />
-          ))}
-        </div>
+        <RowList
+          rows={visibleRows}
+          events={validEvents}
+          executions={allLiveExecutions}
+          contexts={contexts}
+          allItems={items || []}
+          allIntents={liveIntentions}
+          collections={activeCollections}
+          tagPool={tagPool}
+          getIntentDisplay={getIntentDisplay}
+          onUpdateIntent={updateIntent}
+          onSchedule={moveToPlanner}
+          onStartNow={startNowFromIntention}
+          onStartNowItem={startNowFromItem}
+          onScheduleItem={scheduleFromItem}
+          onViewItemDetail={(id) => viewItemDetail?.(id, "intentions")}
+          onViewIntentionDetail={(id) => viewIntentionDetail(id, "intentions")}
+          onUpdateEvent={updateEvent}
+          onActivate={activate}
+          onOpenExecution={openExecution}
+          onCancelExecution={cancelExecutionForEvent}
+          onCloseRecords={closeRecords}
+          reminderFor={reminderFor}
+        />
       )}
     </div>
   );
