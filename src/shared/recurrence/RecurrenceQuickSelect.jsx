@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { ChevronDown } from "lucide-react";
-import { getRecurrenceDisplayString } from "../../utils/recurrenceDisplay";
+import { repeatPattern } from "../../utils/recurrenceDisplay";
 import CustomRecurrenceDialog from "./CustomRecurrenceDialog";
 import IntervalRecurrenceDialog from "./IntervalRecurrenceDialog";
 
@@ -26,64 +26,21 @@ export default function RecurrenceQuickSelect({ value, onChange, onOpenInterval,
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
-  // Dynamic labels based on today
+  // Presets based on today. Labels come from the shared formatter (Restructure
+  // P4), so the picker reads exactly as the repeat line will.
   const today = new Date();
-  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  const todayName = dayNames[today.getDay()];
   const todayIsoDay = today.getDay() === 0 ? 7 : today.getDay();
   const todayDom = today.getDate();
 
-  function suffix(n) {
-    const m = n % 100;
-    if (m >= 11 && m <= 13) return `${n}th`;
-    switch (n % 10) {
-      case 1: return `${n}st`;
-      case 2: return `${n}nd`;
-      case 3: return `${n}rd`;
-      default: return `${n}th`;
-    }
-  }
-
   const options = [
-    {
-      label: "Does not repeat",
-      config: { type: "once" },
-    },
-    {
-      label: "Daily",
-      config: { type: "fixed", frequency: "daily", interval: 1 },
-    },
-    {
-      label: `Weekly on ${todayName}`,
-      config: { type: "fixed", frequency: "weekly", interval: 1, daysOfWeek: [todayIsoDay] },
-    },
-    {
-      label: `Monthly on the ${suffix(todayDom)}`,
-      config: { type: "fixed", frequency: "monthly", interval: 1, dayOfMonth: todayDom },
-    },
-    {
-      label: "Every weekday (Mon\u2013Fri)",
-      config: { type: "fixed", frequency: "weekly", interval: 1, daysOfWeek: [1, 2, 3, 4, 5] },
-    },
-  ];
+    { type: "once" },
+    { type: "fixed", frequency: "daily", interval: 1 },
+    { type: "fixed", frequency: "weekly", interval: 1, daysOfWeek: [todayIsoDay] },
+    { type: "fixed", frequency: "monthly", interval: 1, dayOfMonth: todayDom },
+    { type: "fixed", frequency: "weekly", interval: 1, daysOfWeek: [1, 2, 3, 4, 5] },
+  ].map((config) => ({ label: repeatPattern(config), config }));
 
-  // Determine display label from current value
-  function getDisplayLabel() {
-    if (!value || value.type === "once") return "Does not repeat";
-    // Check if it matches a quick option (use quick label for those)
-    if (value.type === "fixed") {
-      const match = options.find((o) =>
-        o.config.type === value.type &&
-        o.config.frequency === value.frequency &&
-        o.config.interval === value.interval &&
-        JSON.stringify(o.config.daysOfWeek || null) === JSON.stringify(value.daysOfWeek || null) &&
-        (o.config.dayOfMonth || null) === (value.dayOfMonth || null)
-      );
-      if (match) return match.label;
-    }
-    // For custom configs and interval configs, use the display string helper
-    return getRecurrenceDisplayString(value);
-  }
+  const getDisplayLabel = () => repeatPattern(value);
 
   function select(option) {
     onChange(option.config);

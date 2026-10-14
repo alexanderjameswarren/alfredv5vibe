@@ -8,8 +8,8 @@ Test every step in desktop Chrome's mobile view against the local dev server.
 | 1 | is_item out of the code; MCP select, types, recurring_only | Done, checkpointed c018a23 |
 | 2 | Row model (pure, tested) + extra: inbox Context picker sorted | Done, tested 2026-10-13 |
 | 3 | Context detail: merged rows + bug (c); Close replaces Archive on rows; fixes from testing | Done, checkpointed d00dfcf |
-| 4 | Intentions list: merged rows + bug (a); follow-ups (In progress section, context edit page, archive buttons, duplicate run card) | Done, tested 2026-10-14; awaiting Checkpoint |
-| 5 | Recurrence in plain words | |
+| 4 | Intentions list: merged rows + bug (a); follow-ups (In progress section, context edit page, archive buttons, duplicate run card) | Done, checkpointed 59a700b |
+| 5 | Recurrence in plain words; follow-ups: four-line rows, Related Intentions close, name clamp, one-line line 2 | Done, tested 2026-10-14; awaiting Checkpoint |
 | 6 | Next-date function + `triggerRecurrence` takes a date | |
 | 7 | Completion dialog: next-date field | |
 | 8 | Done control | |
@@ -87,6 +87,28 @@ Test: add a reminder on detail, go back, the card badge is there without reload.
 ## Log
 - 2026-10-13 Step 1 code done. Related tests pass (intentionRows, intentions, contexts).
   `deno check` not run: the local deno cache lacks the supabase-js npm packages.
+- 2026-10-14 Step 5 COMPLETE, all testing passed. In full: one repeat formatter
+  (`recurrenceDisplay.js`) everywhere, with next on intention detail only and honest wording
+  for legacy no-day shapes; picker presets read as the repeat line; rows are four lines
+  (name clamped to two with a tooltip / one-line status, context, fitted tags / when with
+  the repeat / dates); Related Intentions use RowList with Close. Last fixes: a row with
+  a tag always shows at least one (the context label shrinks to leave room, `minTagWidth`);
+  item detail's "Executions (n)" is now the shared InProgressSection, "In progress (n)",
+  with its run notes kept under each card (`extraFor`).
+- 2026-10-14 Step 5 follow-ups 2 (four-line rows part 1 passed): row names clamp to two
+  lines with a tooltip; line 2 is one line (RowMetaLine), context label truncates, tags fit
+  the width by measurement (fallback two). New `TagChips.test.jsx`.
+- 2026-10-14 Step 5 follow-ups: rows are four lines (name / status, context, tags / when
+  with schedule state and, if repeating, the Repeat icon and text / dates); no "Does not
+  repeat" on rows; new shared `src/shared/TagChips.jsx`. Item detail's Related Intentions
+  go through RowList: Close not Archive, same rules. Alex agreed the three Step 5 decisions.
+- 2026-10-14 Step 5 built: one formatter, `src/utils/recurrenceDisplay.js` (`repeatPattern`,
+  `describeRepeat`, `getRecurrenceDisplayString` kept for the picker and triage), used by
+  rows (IntentionCard, so context detail, Intentions and item detail's intention list),
+  intention detail ("Repeats: …"), the repeat picker's preset labels and selected label,
+  inbox triage and the recycle bin. "Next" is the live event's date, shown on intention
+  detail only when it is today or later (rows already show it in the schedule line). Ended
+  = end date today or earlier. New `recurrenceDisplay.test.js`.
 - 2026-10-14 Step 4 COMPLETE, all testing passed. In full: the Intentions list on the shared
   row model (`listRows`, `RowList`) with merged rows, item status, Close not Archive, item
   rows with Start Now/Schedule; bug (a) fixed (every row follows the chosen sort); context

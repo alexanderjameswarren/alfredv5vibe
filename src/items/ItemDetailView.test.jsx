@@ -254,3 +254,29 @@ test("edit form: status waits for Save", async () => {
   await waitFor(() => expect(onSetStatus).toHaveBeenCalledWith("it1", "background"));
   expect(onUpdateItem.mock.calls[0][1].status).toBeUndefined();
 });
+
+test("a running execution sits under In progress, as on every other screen", () => {
+  renderItem({ status: "active" }, { executions: [{ id: "x", intentId: "a", status: "active", itemIds: ["it1"] }] });
+  expect(screen.getByText("In progress (1)")).toBeTruthy();
+  expect(screen.queryByText(/^Executions \(/)).toBeNull();
+});
+
+test("related intentions close rather than archive, and Close waits for a run", () => {
+  renderItem(
+    { status: "active" },
+    {
+      onCloseRecords: jest.fn(),
+      onViewIntentionDetail: jest.fn(),
+      intents: [
+        { id: "a", text: "First", itemId: "it1", status: "active", tags: [] },
+        { id: "b", text: "Second", itemId: "it1", status: "active", tags: [] },
+      ],
+      executions: [{ id: "x", intentId: "b", status: "active", itemIds: [] }],
+    },
+  );
+  const closes = screen.getAllByRole("button", { name: "Close" });
+  expect(closes).toHaveLength(2);
+  expect(closes.filter((b) => b.disabled)).toHaveLength(1);
+  expect(screen.getByText("Finish the execution first")).toBeTruthy();
+  expect(screen.queryByTitle(/Archive this intention/)).toBeNull();
+});

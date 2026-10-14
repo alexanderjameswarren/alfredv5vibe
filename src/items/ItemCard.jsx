@@ -16,6 +16,7 @@ import { shortDate } from "../notes/noteFormat";
 import StatusPill from "../shared/StatusPill";
 import StatusPicker from "../shared/StatusPicker";
 import { CloseRowButton } from "../shared/useRowClose";
+import TagChips, { RowMetaLine } from "../shared/TagChips";
 import { closedBlockTitle, statusOf, statusOptionsFor } from "../utils/status";
 
 export default function ItemCard({
@@ -40,7 +41,7 @@ export default function ItemCard({
   reminder = null,
   // Edit form only: a status picker whose choice goes out with Save, as `status`.
   editableStatus = false,
-  // A merged row whose intentions are all closed: "Not scheduled" (Restructure P4).
+  // List rows: the when line ("Not scheduled"), Restructure P4.
   scheduleLine = null,
   // List rows (useRowClose): Close, and why it is disabled.
   onClose = null,
@@ -49,8 +50,10 @@ export default function ItemCard({
   // Schedule `(item, date)`.
   onStartNow = null,
   onSchedule = null,
+  // RowList rows: the shared row layout (context label, one line per kind of information).
   showContext = false,
 }) {
+  const asRow = showContext;
   const closedTitle = closedBlockTitle(item, "item");
   const contextName = item?.contextId ? (contexts || []).find((c) => c.id === item.contextId)?.name : null;
   const [isEditing, setIsEditing] = useState(initialEditing);
@@ -645,21 +648,29 @@ export default function ItemCard({
     >
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
       <div className="flex-1 min-w-0">
-      <p className="flex items-start gap-1.5 font-medium mb-2">
+      <p className={`flex items-start gap-1.5 font-medium ${asRow ? "" : "mb-2"}`}>
         <ObjectIcon type="item" className="w-4 h-4 text-primary" align="first-line" />
-        <span className="min-w-0">{item.name}</span>
+        {/* Rows: at most two lines; the detail page has the whole name. */}
+        <span className={`min-w-0 ${asRow ? "line-clamp-2" : ""}`} title={asRow ? item.name : undefined}>
+          {item.name}
+        </span>
       </p>
-      <div className="flex items-center gap-2 mb-2 flex-wrap">
-        <StatusPill row={item} />
-        {scheduleLine && <span className="text-xs text-foreground">{scheduleLine}</span>}
-        {/* List rows: the same context label as IntentionCard's. */}
-        {showContext && contextName && (
-          <span className="inline-flex items-center gap-1 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
-            <ObjectIcon type="context" className="w-3.5 h-3.5" />
-            {contextName}
-          </span>
-        )}
-      </div>
+      {asRow ? (
+        <>
+          {/* List rows (Restructure P4), as IntentionCard: what it is, then when. */}
+          <RowMetaLine statusRow={item} contextName={contextName} tags={item.tags || []} />
+          {scheduleLine && (
+            <div className="flex items-center gap-1 mt-1 text-xs text-foreground">
+              <ObjectIcon type="event" className="w-3.5 h-3.5 text-muted-foreground" />
+              {scheduleLine}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="mb-2">
+          <StatusPill row={item} />
+        </div>
+      )}
       {reminder && (
         <p
           className={`text-xs text-muted-foreground mb-2${reminder.muted ? " opacity-70" : ""}`}
@@ -668,21 +679,12 @@ export default function ItemCard({
           🔔 {reminder.text}
         </p>
       )}
-      {item.tags && item.tags.length > 0 && (
+      {!asRow && item.tags && item.tags.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-2">
-          {item.tags.slice(0, 3).map((tag) => (
-            <span key={tag} className="px-2 py-0.5 bg-warning-light text-accent-foreground text-xs rounded-full">
-              {tag}
-            </span>
-          ))}
-          {item.tags.length > 3 && (
-            <span className="px-2 py-0.5 bg-secondary/50 text-muted-foreground text-xs rounded-full">
-              +{item.tags.length - 3} more
-            </span>
-          )}
+          <TagChips tags={item.tags} />
         </div>
       )}
-      {item.description && (
+      {!asRow && item.description && (
         <p className="text-sm text-muted-foreground mt-1">
           {item.description.length > 80
             ? item.description.substring(0, 80) + "..."

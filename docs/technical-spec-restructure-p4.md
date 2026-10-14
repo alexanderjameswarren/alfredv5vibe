@@ -148,6 +148,47 @@ Context detail and the Intentions list share `listRows` (rowModel) and `src/shar
   and the toast keeps its existing Undo (un-archiving is one write).
 - "Archive Collection" uses the same red outline; nothing else on that form changed.
 
+## Repeat line (Step 5, as built)
+`src/utils/recurrenceDisplay.js` is the only formatter. Fixed schedules read "Every …";
+interval repeats read "N units after you last did it". `{type:"once"}`, null and unknown
+shapes read "Does not repeat". Weekly with no days, and monthly with neither a day nor an
+ordinal (legacy shapes the engine never repeats), read "…, with no day chosen". An end date
+ahead adds "· until October 20"; one today or earlier reads "Ended October 13". "· next
+Wednesday, October 15" is the live event's date, shown only when it is today or later and
+not past the end date, and not on rows, whose schedule line already shows it. Dates gain
+the year when it is not the current one.
+
+## Row layout (Step 5 follow-up, as built)
+Every row card in the shared layout (RowList: context page, Intentions list, item detail's
+Related Intentions) is four lines, one kind of information each:
+1. Name.
+2. What it is: status chip, context label, tags (first three, then "+N more"; `TagChips`).
+3. When: the event icon (`CalendarClock`, Alfred's event icon) with the schedule state
+   ("Scheduled · Friday, October 23", "Overdue · …", "In progress · …", "Not scheduled"),
+   then, on repeating rows only, lucide `Repeat` (the icon the edit form's Repeat button
+   already uses) with the repeat text. The reminder badge sits at the end of this line.
+   Rows never say "Does not repeat"; intention detail still does.
+4. last done · last updated (item rows keep their element count first).
+Item rows drop the description in this layout. Line 3 wraps; the buttons are untouched.
+
+**Limits (Step 5 follow-up 2):**
+- The name is clamped to two lines (`line-clamp-2`) ending in "…", with the full name as
+  its `title` tooltip; tapping the row opens the detail page, which shows it whole.
+- Line 2 (`RowMetaLine` in `src/shared/TagChips.jsx`) is ONE line, never wrapping: the
+  status chip (never truncates), the context label (at most 45% of the line, "…" beyond,
+  full name as tooltip), then the tags in the rest. `TagChips fit` measures an off-screen
+  copy with ResizeObserver and shows as many tags as fit, the rest as "+N more", so the count
+  follows the screen width. Where widths cannot be measured (no ResizeObserver, or nothing
+  laid out) it shows two tags plus "+N more". A row with a tag always shows at least one:
+  the tag area's minimum width is one tag plus "+N more" (`minTagWidth`), and the context
+  label shrinks (to 3.5rem at least, still "…") to leave it.
+- Item detail's running and paused runs use the same `InProgressSection` ("In progress (n)"),
+  with each run's notes under its card.
+
+**Related Intentions** on item detail now render through RowList as intention-only rows:
+Close instead of Archive, same rules (hidden on Closed, disabled with "Finish the execution
+first" during a run, one pop-up when pending, Undo). Collection cards keep Archive (Phase 6).
+
 ## Context edit page (Step 4 follow-up, as built)
 One context edit form, as a whole page, the way item detail's edit is: context detail's
 Edit and a context card's gear (Contexts list) both open it; Save and Cancel return to where
