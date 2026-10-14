@@ -188,3 +188,26 @@ describe("ContextDetailView app line", () => {
     expect(screen.queryByText("App:")).toBeNull();
   });
 });
+
+describe("ContextDetailView edit page", () => {
+  it("Edit opens the form as the whole page, with Archive Context, and Cancel returns to the list", () => {
+    renderRows({ onArchiveContext: jest.fn(), onBack: jest.fn() });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByText("Edit Context")).toBeInTheDocument();
+    expect(screen.queryByText(/Items and intentions/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Archive Context" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText(/Items and intentions/)).toBeInTheDocument();
+  });
+
+  it("opened from the gear, it says so once and Cancel goes back", () => {
+    const onBack = jest.fn();
+    const onEditOpened = jest.fn();
+    renderRows({ openInEdit: true, onEditOpened, onBack });
+    expect(screen.getByText("Edit Context")).toBeInTheDocument();
+    expect(onEditOpened).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onBack).toHaveBeenCalled();
+  });
+});

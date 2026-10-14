@@ -169,7 +169,9 @@ describe("IntentionReminderLines (P3)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add reminder" }));
     fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2020-01-01" } });
     fireEvent.click(screen.getByRole("button", { name: "Set reminder" }));
-    fireEvent.change(screen.getByLabelText("Time"), { target: { value: "10:00" } });
+    // Never a whole hour, so it always differs from the default (the next whole hour)
+    // and the change fires whatever the clock says.
+    fireEvent.change(screen.getByLabelText("Time"), { target: { value: "10:30" } });
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });

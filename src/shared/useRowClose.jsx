@@ -4,6 +4,7 @@ import StatusEventsSheet from "./StatusEventsSheet";
 import { getReminderSummary } from "../utils/remindersApi";
 import { getTodayDate } from "../utils/eventDates";
 import { liveEventsFor, statusOf } from "../utils/status";
+import { hasOpenRun } from "../utils/rowModel";
 
 export const CLOSE_BLOCKED = "Finish the execution first";
 
@@ -16,10 +17,7 @@ export function closeTargets(row) {
 }
 
 /** True while the row's item or any of its intentions has an open (active or paused) run. */
-export function closeBlocked(row, openExecutions) {
-  const ids = new Set(row.intents.map((i) => i.id));
-  return openExecutions.some((x) => ids.has(x.intentId) || (row.item && x.itemIds?.includes(row.item.id)));
-}
+export const closeBlocked = hasOpenRun;
 
 /**
  * Close on list rows (Restructure P4). `closeProps(row)` feeds a card's Close

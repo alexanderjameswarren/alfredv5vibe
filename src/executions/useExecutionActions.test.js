@@ -1,5 +1,5 @@
 // A completed (closed) execution is read only: no writer touches it.
-import { useExecutionActions } from "./useExecutionActions";
+import { useExecutionActions, withActive } from "./useExecutionActions";
 import { storage } from "../utils/storage";
 import * as chainApi from "../utils/notificationStepsApi";
 
@@ -79,4 +79,11 @@ test("an open execution still writes", async () => {
   storage.set.mockResolvedValue({});
   await actionsFor({ ...closedRun, status: "active" }).pauseExecution();
   expect(storage.set).toHaveBeenCalled();
+});
+
+test("a run realtime already added is not added twice", () => {
+  const run = { id: "x" };
+  const list = [run, { id: "y" }];
+  expect(withActive(list, { id: "x" })).toBe(list);
+  expect(withActive([{ id: "y" }], run)).toEqual([run, { id: "y" }]);
 });

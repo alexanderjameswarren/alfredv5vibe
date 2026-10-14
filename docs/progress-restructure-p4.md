@@ -7,15 +7,17 @@ Test every step in desktop Chrome's mobile view against the local dev server.
 |---|---|---|
 | 1 | is_item out of the code; MCP select, types, recurring_only | Done, checkpointed c018a23 |
 | 2 | Row model (pure, tested) + extra: inbox Context picker sorted | Done, tested 2026-10-13 |
-| 3 | Context detail: merged rows + bug (c); Close replaces Archive on rows; fixes from testing | Done, tested 2026-10-14; awaiting Checkpoint |
-| 4 | Intentions list: merged rows + bug (a) | |
+| 3 | Context detail: merged rows + bug (c); Close replaces Archive on rows; fixes from testing | Done, checkpointed d00dfcf |
+| 4 | Intentions list: merged rows + bug (a); follow-ups (In progress section, context edit page, archive buttons, duplicate run card) | Done, tested 2026-10-14; awaiting Checkpoint |
 | 5 | Recurrence in plain words | |
 | 6 | Next-date function + `triggerRecurrence` takes a date | |
 | 7 | Completion dialog: next-date field | |
 | 8 | Done control | |
 | 9 | Skip control (+ EventCard Archive Event → Skip; audit closed-as-done readers) | |
 | 10 | Stop control | |
-| 11 | Database step (waits on warren_buffet_p2-m4t) | |
+| 10a | Close reason, front end: one Close pop-up in all six places (choice, note, events/reminders question), execution/note creation, disabled rule | |
+| 11 | Database step (waits on warren_buffet_p2-m4t), incl. `closed_reason`, status_guard Undo exception, MCP fields, backfill list | |
+| 11a | Close reason, finish: write `closed_reason`, Undo back to Someday, review and apply the backfill | |
 | 12 | Reminder badges via realtime | |
 
 ## Steps and testing
@@ -56,8 +58,25 @@ Test: Skip; last done does not move; next date by rule; Undo restores.
 **10. Stop.** end_date = today, background, Cancel/Keep question when needed.
 Test: Stop with and without a live event/reminder; row reads "Ended".
 
+**10a. Close reason, front end** (spec "Close reason"). One pop-up wherever Closed can be
+chosen (item and intention status pills, both edit forms on Save, item/merged row Close,
+intention row Close): Completed / Won't do, optional note, and the events/reminders question.
+Completed creates the closed `done` execution on the picked intention only when none exists
+(no next event, even recurring); otherwise notes are standalone. Disabled while a run is
+open. Reuses Step 8's no-run Done execution code. `closed_reason` is held, not written, until
+11a. Test: each of the six places shows the pop-up; Completed on a recurring intention
+makes no next event; Won't do makes no execution; Undo removes what was created.
+
 **11. Database step.** Migration (recent completions + skipped, drop is_item, reminders in
-realtime) and mcp deploy. Starts only after warren's mcp work is in main and `gitsync` here.
+realtime, `closed_reason` on items and intents, status_guard exception for closed → someday
+shortly after a close, `get_intents`/`get_items` return `closed_reason`) and mcp deploy.
+The backfill list of existing closed records is proposed here for Alex to review.
+
+**11a. Close reason, finish.** Write `closed_reason` from the pop-up; Undo may return a
+record to Someday; apply Alex's reviewed backfill (unlisted rows stay null).
+Test: close with each reason, check the column; Undo a close of a Someday record.
+
+**11 (continued).** Migration and mcp deploy. Starts only after warren's mcp work is in main and `gitsync` here.
 Before the drop: stale-tab guard, `withoutDbOwned` in `src/utils/storage.js` strips `is_item`
 on intents writes (approved, claimed 2026-10-13).
 Test: SQL verification; skipped line visible; reload the app after the drop.
@@ -68,6 +87,36 @@ Test: add a reminder on detail, go back, the card badge is there without reload.
 ## Log
 - 2026-10-13 Step 1 code done. Related tests pass (intentionRows, intentions, contexts).
   `deno check` not run: the local deno cache lacks the supabase-js npm packages.
+- 2026-10-14 Step 4 COMPLETE, all testing passed. In full: the Intentions list on the shared
+  row model (`listRows`, `RowList`) with merged rows, item status, Close not Archive, item
+  rows with Start Now/Schedule; bug (a) fixed (every row follows the chosen sort); context
+  labels on item rows; the "In progress" section (shared `InProgressSection`, also Home's
+  list) above the search on Intentions and context detail, its rows out of the list and
+  counts; one full-page context edit form from Edit and the Contexts gear, Archive Context on
+  it (red outline, confirm, empty-context rule, Undo); Archive Collection red outline; the
+  duplicate run card fixed (`withActive`); close reason designed (spec; steps 10a, 11, 11a).
+  Also: `PendingReminder.test.jsx` "clears the past-time error" no longer depends on the clock.
+- 2026-10-14 Step 4 follow-ups 2: one context edit page (full page on context detail,
+  reached from Edit and from the Contexts gear; returns to where you came from; no inline
+  form, no "Close"); not its own URL because `src/viewPaths.js` is held by
+  warren_buffet_p2-m4t. Start Now and resume no longer add a run realtime already added
+  (`withActive`). Close reason designed (spec), steps 10a, 11, 11a.
+- 2026-10-14 Step 4 follow-ups (testing passed parts 1-4 first): context label on item rows;
+  "In progress" section (shared `InProgressSection`, Home now uses its `ExecutionList`)
+  above the search on Intentions and context detail, its rows out of the list and counts,
+  pin-to-top removed (`rankRows` deleted); Archive Context moved to the edit form with a
+  confirm, red outline; Archive Collection red outline. Found: Home's two "p4 test" cards
+  are ONE execution held twice in browser state (see report s5b), not a database breach.
+- 2026-10-14 Step 4: the Intentions list uses the same row model and rendering as context
+  detail. Shared: `listRows` (rowModel: search, tag, status, sort, counts that apply every
+  other filter) and `src/shared/RowList.jsx` (row rendering + Close), both used by
+  ContextDetailView and IntentionsScreen; Alfred no longer builds the Intentions list.
+  Intentions list: one row per item (items with no intention left out), item status on
+  merged rows, Close not Archive, item rows with no pick get item detail's Start Now and
+  Schedule, merged rows open item detail. Bug (a): `rankRows` now lifts only open runs
+  (active, then paused) and keeps the chosen sort for every other row, on both screens, so
+  "Last modified" orders by the date the card shows. Merged rows' reminder badge: the picked
+  intention's, else any of its intentions'.
 - 2026-10-14 Step 3 COMPLETE. Last fix: tag counts ignored the search (TagFilter was fed
   rows filtered by status only; "Tags (n)" counts distinct tags among those rows). Now fed
   rows filtered by search and status chips, so each tag counts the rows it would show and

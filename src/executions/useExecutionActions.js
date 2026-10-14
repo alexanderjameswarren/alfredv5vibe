@@ -12,6 +12,12 @@ import {
   resumeNotificationSteps,
 } from "../utils/notificationStepsApi";
 
+// The realtime INSERT can land while a start is still awaiting, so the local add
+// must not add the same run a second time (two "p4 test" cards, Restructure P4).
+export function withActive(list, execution) {
+  return list.some((x) => x.id === execution.id) ? list : [execution, ...list];
+}
+
 // Execution writers and the notification chain, moved out of Alfred.jsx unchanged.
 // Holds no state: everything it reads or sets is Alfred's, passed in.
 // The three string-to-element mappers (activate, startNowFromItem,
@@ -90,7 +96,7 @@ export function useExecutionActions({
         await settle();
         await startNotificationChain(execution);
         setActiveExecution(execution);
-        setActiveExecutions((prev) => [execution, ...prev]);
+        setActiveExecutions((prev) => withActive(prev, execution));
         setPreviousView(view);
         goToExecution(execution);
         return;
@@ -139,7 +145,7 @@ export function useExecutionActions({
       await settle();
       await startNotificationChain(execution);
       setActiveExecution(execution);
-      setActiveExecutions((prev) => [execution, ...prev]);
+      setActiveExecutions((prev) => withActive(prev, execution));
       setPreviousView(view);
       goToExecution(execution);
     });
@@ -352,7 +358,7 @@ export function useExecutionActions({
       // due time that passed during the pause does not fire for a moment gone by.
       await rescheduleNotificationChain(activated.id);
       setPausedExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
-      setActiveExecutions((prev) => [activated, ...prev]);
+      setActiveExecutions((prev) => withActive(prev, activated));
       setActiveExecution(activated);
     });
   }
@@ -527,7 +533,7 @@ export function useExecutionActions({
       await settle();
       await startNotificationChain(execution);
       setActiveExecution(execution);
-      setActiveExecutions((prev) => [execution, ...prev]);
+      setActiveExecutions((prev) => withActive(prev, execution));
       setPreviousView(view);
       goToExecution(execution);
     });
@@ -601,7 +607,7 @@ export function useExecutionActions({
         await settle();
         await startNotificationChain(execution);
         setActiveExecution(execution);
-        setActiveExecutions((prev) => [execution, ...prev]);
+        setActiveExecutions((prev) => withActive(prev, execution));
         setPreviousView(view);
         goToExecution(execution);
         return;
@@ -644,7 +650,7 @@ export function useExecutionActions({
       await settle();
       await startNotificationChain(execution);
       setActiveExecution(execution);
-      setActiveExecutions((prev) => [execution, ...prev]);
+      setActiveExecutions((prev) => withActive(prev, execution));
       setPreviousView(view);
       goToExecution(execution);
     });

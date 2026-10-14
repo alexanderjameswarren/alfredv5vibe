@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Archive, ArrowLeft, ChevronDown, Plus, Settings } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { ArrowLeft, ChevronDown, Plus, Settings } from "lucide-react";
 import { sortRows } from "../utils/sortOrders";
 import { matchesQuery } from "../utils/search";
 import {
@@ -7,24 +7,20 @@ import {
   NAMED_RECORD_ACCESSORS,
   itemSearchFields,
 } from "../utils/listSortOptions";
-import { buildRows, rankRows, rowSearchFields, ROW_ACCESSORS } from "../utils/rowModel";
-import useRowClose from "../shared/useRowClose";
+import { buildRows, hasOpenRun, listRows } from "../utils/rowModel";
+import RowList from "../shared/RowList";
+import InProgressSection from "../executions/InProgressSection";
 import ObjectIcon from "../shared/ObjectIcon";
 import StatusFilterChips from "../shared/StatusFilterChips";
 import {
   DEFAULT_STATUS_FILTER,
   STATUS_LABELS,
   statusOf,
-  statusCounts,
-  filterByStatus,
   rankByStatus,
-  withTag,
 } from "../utils/status";
 import ListToolbar, { NoMatches } from "../shared/ListToolbar";
 import TagFilter from "../shared/TagFilter";
 import ContextForm from "./ContextForm";
-import ItemCard from "../items/ItemCard";
-import IntentionCard from "../intentions/IntentionCard";
 import CollectionCard from "../collections/CollectionCard";
 import AppIcon from "../apps/AppIcon";
 import { findApp } from "../apps/appsApi";
@@ -86,20 +82,60 @@ export default function ContextDetailView({
   // This context's archived records: the record of what has shipped.
   archivedItems = [],
   archivedIntents = [],
+  // Arrived from a context card's gear: open on the edit page, and say so once.
+  openInEdit = false,
+  onEditOpened,
 }) {
   const [rowsExpanded, setRowsExpanded] = useState(true);
-  const rowClose = useRowClose({ events, executions, onCloseRecords });
   const [archivedExpanded, setArchivedExpanded] = useState(false);
-  // Editing happens here now. It used to set two pieces of Alfred state and
-  // then navigate to the Contexts list to render the form there, so "Edit" on
-  // this page silently moved you to a different screen — and browser Back left
-  // the form open on a page that had not asked for it.
-  const [isEditingContext, setIsEditingContext] = useState(false);
+  // The one context edit form (Restructure P4): a full page, as item detail's
+  // edit is, reached from Edit here or from a context card's gear (`openInEdit`).
+  // Leaving it returns to where you came from.
+  const [isEditingContext, setIsEditingContext] = useState(Boolean(openInEdit));
+  const [cameFromList] = useState(Boolean(openInEdit));
+  useEffect(() => {
+    if (openInEdit) onEditOpened?.();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const apps = useApps();
   const searching = search.trim() !== "";
 
   if (!context) return null;
   const app = findApp(apps, context.appId);
+  const leaveEdit = () => (cameFromList ? onBack() : setIsEditingContext(false));
+
+  if (isEditingContext) {
+    return (
+      <div>
+        <button
+          onClick={leaveEdit}
+          className="flex items-center gap-2 mb-3 sm:mb-4 min-h-[44px] text-primary hover:text-primary-hover"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Back
+        </button>
+        {/* onSave forwards with (...args), so it is positionally transparent. */}
+        <ContextForm
+          editing={context}
+          collections={collections}
+          stickyFooter
+          onSave={async (...args) => {
+            await onSaveContext(context, ...args);
+            leaveEdit();
+          }}
+          onCancel={leaveEdit}
+          onDirtyChange={onDirtyChange}
+          onArchive={
+            onArchiveContext &&
+            (async () => {
+              await onArchiveContext(context.id);
+              onBack();
+            })
+          }
+          archiveBlockers={archiveBlockers}
+        />
+      </div>
+    );
+  }
 
   // One row per thing (Restructure P4): an item and its intentions are one row.
   // Status chips, tag filter, sort and search all apply to the same rows, so the
@@ -107,17 +143,16 @@ export default function ContextDetailView({
   const sortBy = (rows, accessors) =>
     rankByStatus(sortRows(rows, sort.sortKey, accessors, sort.sortDir));
   const rows = buildRows({ items, intents, events, openExecutions: executions });
-  // Tag and search first, so each chip counts the rows it would show on its own.
-  // Each filter's counts apply every other filter: tags count under search and
-  // status chips, status chips under search and tag.
-  const searched = rows.filter((row) => matchesQuery(search, ...rowSearchFields(row, itemSearchFields)));
-  const matching = withTag(searched, filterTag);
-  const statusCountsHere = statusCounts(matching);
-  const tagCountRows = filterByStatus(searched, statusFilter.selected);
-  // What is happening now first, the chosen sort within each group.
-  const visibleRows = rankRows(
-    sortRows(filterByStatus(matching, statusFilter.selected), sort.sortKey, ROW_ACCESSORS, sort.sortDir),
-  );
+  const { visibleRows, statusCounts: statusCountsHere, tagCountRows, total } = listRows({
+    rows,
+    openExecutions: executions,
+    search,
+    itemFields: itemSearchFields,
+    filterTag,
+    statuses: statusFilter.selected,
+    sortKey: sort.sortKey,
+    sortDir: sort.sortDir,
+  });
   // "n of m" whenever anything is hidden, by search or by a chip.
   const countLabel = (shown, total) => (shown === total ? `${total}` : `${shown} of ${total}`);
   const archivedRows = [
@@ -143,65 +178,23 @@ export default function ContextDetailView({
         Back
       </button>
 
-      {isEditingContext && (
-        <div className="mb-4 sm:mb-6">
-          {/* onSave below forwards with (...args), so it is positionally
-              transparent: the new defaultCollectionId argument flows through
-              without an edit here. The other three layers are explicit and all
-              had to change. */}
-          <ContextForm
-            editing={context}
-            collections={collections}
-            onSave={async (...args) => {
-              await onSaveContext(context, ...args);
-              setIsEditingContext(false);
-            }}
-            onCancel={() => setIsEditingContext(false)}
-            onDirtyChange={onDirtyChange}
-          />
-        </div>
-      )}
-
       <div className="mb-4 sm:mb-6">
         <div className="flex items-start justify-between gap-2 mb-2">
           <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold">
             <ObjectIcon type="context" className="w-6 h-6 text-primary" align="first-line" />
             <span className="min-w-0">{context.name}</span>
           </h2>
-          {/* Record actions, top right: Edit · Archive. */}
+          {/* Record actions, top right: Edit. */}
           <div className="flex flex-wrap justify-end gap-2 shrink-0">
             <button
-              onClick={() => setIsEditingContext((v) => !v)}
+              onClick={() => setIsEditingContext(true)}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
             >
               <Settings className="w-4 h-4" />
-              {isEditingContext ? "Close" : "Edit"}
+              Edit
             </button>
-            {/* Only while the context is empty. Contexts are taxonomy: nothing
-                cascades, so archiving one that still holds records would strand
-                them under a parent the UI no longer shows — and an archived
-                child would be strandable in a way nothing could reach.
-                Disabled-with-a-reason, reading the same way as the
-                active-execution guards on EventCard and IntentionCard. */}
-            {onArchiveContext && (
-              <button
-                onClick={() => onArchiveContext(context.id)}
-                disabled={archiveBlockers.length > 0}
-                title={
-                  archiveBlockers.length > 0
-                    ? `Cannot archive: still holds ${archiveBlockers.join(", ")}`
-                    : "Archive this context"
-                }
-                className={`flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base ${
-                  archiveBlockers.length > 0
-                    ? "bg-secondary text-muted-foreground cursor-not-allowed"
-                    : "bg-destructive hover:bg-destructive-hover text-white"
-                }`}
-              >
-                <Archive className="w-4 h-4" />
-                Archive
-              </button>
-            )}
+            {/* Archive moved to the edit form (Restructure P4). Still only while
+                the context is empty: contexts are taxonomy and nothing cascades. */}
           </div>
         </div>
         {context.description && (
@@ -220,6 +213,18 @@ export default function ContextDetailView({
           </p>
         )}
       </div>
+
+      {/* Above the search: runs here ignore search, tags, chips and sort. */}
+      <InProgressSection
+        // This context's runs, and any run that takes one of its rows out of the list.
+        executions={executions.filter(
+          (x) => x.contextId === contextId || rows.some((r) => hasOpenRun(r, [x])),
+        )}
+        intents={allIntents || intents}
+        contexts={contexts}
+        getIntentDisplay={getIntentDisplay}
+        onOpen={onOpenExecution}
+      />
 
       {(items.length > 0 || intents.length > 0 || contextCollections.length > 0) && (
         <ListToolbar
@@ -248,7 +253,7 @@ export default function ContextDetailView({
               className="flex items-center gap-2 text-base sm:text-lg font-medium text-foreground"
             >
               <ChevronDown className={`w-4 h-4 transition-transform ${rowsExpanded ? "" : "-rotate-90"}`} />
-              Items and intentions ({countLabel(visibleRows.length, rows.length)})
+              Items and intentions ({countLabel(visibleRows.length, total)})
             </button>
             <div className="flex gap-2">
               <button
@@ -278,66 +283,40 @@ export default function ContextDetailView({
                 collapsed={tagsCollapsed}
                 onToggleCollapsed={onToggleTags}
               />
-              {rows.length === 0 ? (
-                <p className="text-muted-foreground text-sm">Nothing in this context yet</p>
+              {total === 0 ? (
+                <p className="text-muted-foreground text-sm">
+                  {rows.length === 0 ? "Nothing in this context yet" : "Everything here is in progress"}
+                </p>
               ) : searching && visibleRows.length === 0 ? (
                 <NoMatches noun="items or intentions" query={search} />
               ) : visibleRows.length === 0 ? (
                 <p className="text-muted-foreground text-sm">Nothing matches the filters above</p>
               ) : (
-                <div className="space-y-2">
-                  {visibleRows.map((row) =>
-                    row.intent ? (
-                      <IntentionCard
-                        tagPool={tagPool}
-                        key={row.key}
-                        row={row}
-                        intent={row.intent}
-                        contexts={contexts}
-                        items={items}
-                        collections={collections}
-                        getIntentDisplay={getIntentDisplay}
-                        onUpdate={onUpdateIntent}
-                        onSchedule={onSchedule}
-                        onStartNow={onStartNow}
-                        showScheduling={true}
-                        // A merged row is the item: it opens item detail, and has no
-                        // Archive, which would archive only the intention.
-                        onViewDetail={row.item ? () => onViewItemDetail?.(row.item.id) : onViewIntentionDetail}
-                        events={events}
-                        onUpdateEvent={onUpdateEvent}
-                        onActivate={onActivate}
-                        executions={executions}
-                        onOpenExecution={onOpenExecution}
-                        onCancelExecution={onCancelExecution}
-                        // Rows close; Archive is on the detail pages.
-                        {...rowClose.closeProps(row)}
-                      />
-                    ) : (
-                      <ItemCard
-                        tagPool={tagPool}
-                        key={row.key}
-                        item={row.item}
-                        contexts={contexts}
-                        onUpdate={onUpdateItem}
-                        onViewDetail={onViewItemDetail}
-                        allItems={allItems}
-                        executions={executions.filter((ex) => ex.itemIds?.includes(row.item.id))}
-                        // Every intention, not this context's: a run's intention may
-                        // live elsewhere, and a badge that cannot find it reads "Execution".
-                        intents={allIntents || intents}
-                        getIntentDisplay={getIntentDisplay}
-                        onOpenExecution={onOpenExecution}
-                        scheduleLine={row.intents.length > 0 ? "Not scheduled" : null}
-                        onStartNow={onStartNowItem}
-                        onSchedule={onScheduleItem}
-                        {...rowClose.closeProps(row)}
-                      />
-                    ),
-                  )}
-                </div>
+                <RowList
+                  rows={visibleRows}
+                  events={events}
+                  executions={executions}
+                  contexts={contexts}
+                  allItems={allItems.length ? allItems : items}
+                  allIntents={allIntents || intents}
+                  collections={collections}
+                  tagPool={tagPool}
+                  getIntentDisplay={getIntentDisplay}
+                  onUpdateIntent={onUpdateIntent}
+                  onUpdateItem={onUpdateItem}
+                  onSchedule={onSchedule}
+                  onStartNow={onStartNow}
+                  onStartNowItem={onStartNowItem}
+                  onScheduleItem={onScheduleItem}
+                  onViewItemDetail={onViewItemDetail}
+                  onViewIntentionDetail={onViewIntentionDetail}
+                  onUpdateEvent={onUpdateEvent}
+                  onActivate={onActivate}
+                  onOpenExecution={onOpenExecution}
+                  onCancelExecution={onCancelExecution}
+                  onCloseRecords={onCloseRecords}
+                />
               )}
-              {rowClose.sheet}
             </>
           )}
         </div>

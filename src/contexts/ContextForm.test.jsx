@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import ContextForm, { contextFormValues } from "./ContextForm";
 
@@ -77,5 +77,37 @@ describe("ContextForm app picker", () => {
     fireEvent.change(screen.getByLabelText("App"), { target: { value: "" } });
     fireEvent.click(screen.getByText("Save"));
     expect(onSave.mock.calls[0][6]).toBe("");
+  });
+});
+
+describe("Archive Context", () => {
+  it("asks first, then archives", () => {
+    const onArchive = jest.fn();
+    renderForm(CONTEXT, { onArchive });
+    fireEvent.click(screen.getByRole("button", { name: "Archive Context" }));
+    expect(screen.getByText("Archive this context?")).toBeInTheDocument();
+    expect(onArchive).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(onArchive).toHaveBeenCalledTimes(1);
+  });
+
+  it("Cancel archives nothing", () => {
+    const onArchive = jest.fn();
+    renderForm(CONTEXT, { onArchive });
+    fireEvent.click(screen.getByRole("button", { name: "Archive Context" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Archive this context?")).toBeNull();
+    expect(onArchive).not.toHaveBeenCalled();
+  });
+
+  it("is disabled, with the reason, while the context holds anything", () => {
+    renderForm(CONTEXT, { onArchive: jest.fn(), archiveBlockers: ["2 items"] });
+    expect(screen.getByRole("button", { name: "Archive Context" })).toBeDisabled();
+    expect(screen.getByText("Cannot archive: still holds 2 items.")).toBeInTheDocument();
+  });
+
+  it("is not on the new-context form", () => {
+    renderForm(null, { onArchive: jest.fn() });
+    expect(screen.queryByRole("button", { name: "Archive Context" })).toBeNull();
   });
 });

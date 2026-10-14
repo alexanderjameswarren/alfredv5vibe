@@ -1,4 +1,4 @@
-import { buildRows, pickIntentionForItem, rankRows, rowSearchFields, ROW_ACCESSORS } from "./rowModel";
+import { buildRows, listRows, pickIntentionForItem, rowSearchFields, ROW_ACCESSORS } from "./rowModel";
 
 const DAILY = { type: "fixed", frequency: "daily", interval: 1 };
 const ONCE = { type: "once" };
@@ -130,21 +130,49 @@ describe("row sort, rank and search", () => {
     expect(ROW_ACCESSORS.title(row)).toBe("fan");
   });
 
-  it("ranks open runs, then scheduled by date, then unscheduled, background, closed", () => {
+  it("listRows: leaves rows with an open run out of the list and its counts", () => {
+    const open = [
+      { id: "x", intentId: "running", status: "active" },
+      { id: "y", intentId: "other", itemIds: ["fan"], status: "paused" },
+    ];
     const rows = buildRows({
-      items: [],
-      intents: [
-        intent("closed", null, { status: "closed" }),
-        intent("bg", null, { status: "background" }),
-        intent("none", null),
-        intent("later", null),
-        intent("sooner", null),
-        intent("running", null),
-      ],
-      events: [event("e1", "later", "2026-10-20"), event("e2", "sooner", "2026-10-14")],
-      openExecutions: [{ id: "x", intentId: "running", status: "active" }],
+      items: [item("fan")],
+      intents: [intent("running", null), intent("idle", null)],
+      openExecutions: open,
     });
-    expect(rankRows(rows).map((r) => r.intent.id)).toEqual(["running", "sooner", "later", "none", "bg", "closed"]);
+    const out = listRows({
+      rows, openExecutions: open, itemFields: (i) => [i.name], statuses: ["active"], sortKey: "title", sortDir: "asc",
+    });
+    expect(out.visibleRows.map((r) => r.key)).toEqual(["intent:idle"]);
+    expect(out.statusCounts.active).toBe(1);
+    expect(out.total).toBe(1);
+  });
+
+  it("listRows: Last modified orders by the date the card shows", () => {
+    const rows = buildRows({
+      items: [item("fan", { updatedAt: "2026-10-01" })],
+      intents: [
+        intent("a", "fan", { updatedAt: "2026-10-12" }),
+        intent("b", null, { updatedAt: "2026-10-05" }),
+      ],
+      events: [event("e", "b", "2026-10-14")],
+    });
+    const { visibleRows } = listRows({
+      rows, itemFields: (i) => [i.name], statuses: ["active", "someday"], sortKey: "updated", sortDir: "desc",
+    });
+    expect(visibleRows.map((r) => r.key)).toEqual(["item:fan", "intent:b"]);
+  });
+
+  it("listRows: each filter's counts apply the others", () => {
+    const rows = buildRows({
+      items: [item("fan", { tags: ["home"] })],
+      intents: [intent("call", null, { tags: ["home"], status: "closed" }), intent("buy", null, { tags: ["shop"] })],
+    });
+    const out = listRows({
+      rows, search: "a", itemFields: (i) => [i.name], filterTag: "home", statuses: ["active"], sortKey: "title", sortDir: "asc",
+    });
+    expect(out.statusCounts).toMatchObject({ active: 1, closed: 1 });
+    expect(out.tagCountRows.map((r) => r.key)).toEqual(["item:fan"]);
   });
 
   it("searches the item's fields and every intention's text", () => {
