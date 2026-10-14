@@ -382,6 +382,8 @@ pushed text and the printed text must be identical: do not push a summary
 and then say more, and do not add anything after the push. If you realize
 you need to say more, write a new message, push it, and print it.
 
+Writing .clip/last-report.md and pushing it with clip.mjs is always allowed, even when a prompt says to write or change no files. It is how the report reaches Alex, not a change to the project.
+
 **Titles** name the task and what this particular message is, for
 example "Clipboard Step 10: migration written, awaiting run", then
 "Clipboard Step 10: deployed, awaiting fresh-thread test", or "Step 10:
