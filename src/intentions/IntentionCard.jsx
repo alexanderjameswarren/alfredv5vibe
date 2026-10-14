@@ -15,6 +15,7 @@ import RecurrenceQuickSelect from "../shared/recurrence/RecurrenceQuickSelect";
 import ScheduledLine from "../shared/ScheduledLine";
 import StatusPill from "../shared/StatusPill";
 import StatusPicker from "../shared/StatusPicker";
+import { CloseRowButton } from "../shared/useRowClose";
 import CardExecutionNotes from "../notes/CardExecutionNotes";
 import { shortDate } from "../notes/noteFormat";
 import { closedBlockTitle, recordActions, statusOf, statusOptionsFor } from "../utils/status";
@@ -51,6 +52,12 @@ export default function IntentionCard({
   editableStatus = false,
   // Shown inside the form, e.g. why Save was refused.
   formNotice = null,
+  // A merged row from rowModel.buildRows (Restructure P4): the card reads as the
+  // item, with this intention's status, schedule and recurrence.
+  row = null,
+  // List rows (useRowClose): Close in place of Archive, and why it is disabled.
+  onClose = null,
+  closeBlocked = null,
 }) {
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(intent.text);
@@ -158,6 +165,10 @@ export default function IntentionCard({
 
   const closedTitle = closedBlockTitle(intent, "intention");
   const actions = recordActions(intent, events, executions);
+  const asItem = Boolean(row?.item);
+  const title = asItem ? row.item.name : getIntentDisplay?.(intent);
+  const shownTags = asItem ? row.tags : intent.tags || [];
+  const shownUpdatedAt = asItem ? row.updatedAt : intent.updatedAt;
 
   if (isEditing) {
     return (
@@ -374,13 +385,14 @@ export default function IntentionCard({
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div className="flex-1 min-w-0">
           <p className="flex items-start gap-1.5 font-medium">
-            <ObjectIcon type="intention" className="w-4 h-4 text-primary" align="first-line" />
-            <span className="min-w-0">{getIntentDisplay(intent)}</span>
+            <ObjectIcon type={asItem ? "item" : "intention"} className="w-4 h-4 text-primary" align="first-line" />
+            <span className="min-w-0">{title}</span>
           </p>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
-            <StatusPill row={intent} />
+            {/* A merged row's chip is the item's; the intention shows in the schedule line. */}
+            <StatusPill row={asItem ? row.item : intent} />
             {/* The one live event is a date on the row, not a nested card. */}
-            {(actions.live || actions.open) && (
+            {(asItem || actions.live || actions.open) && (
               <ScheduledLine actions={actions} className="text-xs text-foreground" />
             )}
             {showScheduling && (
@@ -402,14 +414,14 @@ export default function IntentionCard({
                 🔔 {reminder.text}
               </span>
             )}
-            {intent.tags && intent.tags.length > 0 && intent.tags.slice(0, 3).map((tag) => (
+            {shownTags.slice(0, 3).map((tag) => (
               <span key={tag} className="px-2 py-0.5 bg-warning-light text-accent-foreground text-xs rounded-full">
                 {tag}
               </span>
             ))}
-            {intent.tags && intent.tags.length > 3 && (
+            {shownTags.length > 3 && (
               <span className="px-2 py-0.5 bg-secondary/50 text-muted-foreground text-xs rounded-full">
-                +{intent.tags.length - 3} more
+                +{shownTags.length - 3} more
               </span>
             )}
           </div>
@@ -419,17 +431,18 @@ export default function IntentionCard({
               Same format and same placement as ItemCard's: a text-xs muted span
               below the metadata row. No element count here — an intention has no
               elements — so it is the timestamp alone. */}
-          {(intent.updatedAt || intent.lastCompletedAt) && (
+          {(shownUpdatedAt || intent.lastCompletedAt) && (
             <span className="text-xs text-muted-foreground mt-1 block">
               {/* last_completed_at is set by trigger (Restructure P2); shown only once done. */}
               {[
                 intent.lastCompletedAt && `last done: ${shortDate(intent.lastCompletedAt)}`,
-                intent.updatedAt && `last updated: ${shortDate(intent.updatedAt)}`,
+                shownUpdatedAt && `last updated: ${shortDate(shownUpdatedAt)}`,
               ].filter(Boolean).join(" · ")}
             </span>
           )}
           {/* The open execution's latest notes, one line each (batched across the list). */}
           {actions.open && <CardExecutionNotes executionId={actions.open.id} />}
+          {onClose && closeBlocked && <span className="text-xs text-muted-foreground mt-1 block">{closeBlocked}</span>}
         </div>
         {/* Row action strip — Step 12.1. Matches the one EventCard took in 8a:
             gap-3 because 8px is Material's documented FLOOR for adjacent targets
@@ -442,7 +455,7 @@ export default function IntentionCard({
             The strip renders when it has something in it. Start Now / Schedule keep
             their own condition; Archive has a different one, which is the whole
             point of the restructure below. */}
-        {(showScheduling || (onArchive && intent.id)) && (
+        {(showScheduling || onClose || (onArchive && intent.id)) && (
           <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
             {/* Same rule as the detail pages (recordActions): always shown,
                 labels follow the open execution and the one live event. */}
@@ -498,8 +511,11 @@ export default function IntentionCard({
                 Step 3, so without it this would archive AND open the detail page.
 
                 No Edit button: per 8b, clicking the row already opens detail, and a
-                row action never duplicates the row click. */}
-            {onArchive && intent.id && (
+                row action never duplicates the row click.
+
+                Restructure P4: rows in the merged lists pass onClose instead. */}
+            {onClose && <CloseRowButton onClose={onClose} closeBlocked={closeBlocked} />}
+            {!onClose && onArchive && intent.id && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();

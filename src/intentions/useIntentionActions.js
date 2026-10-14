@@ -5,6 +5,7 @@ import { getTodayDate, formatEventDate } from "../utils/eventDates";
 import { intentionUpdateRow } from "../utils/intentionRows";
 import { liveEventsFor, carriedItems, STATUS_LABELS } from "../utils/status";
 import { cancelRemindersForStatus, restoreRemindersAfterStatus } from "../utils/remindersApi";
+import { getRecurrenceConfig } from "../utils/recurrence";
 
 const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
@@ -23,6 +24,7 @@ export function useIntentionActions({
   intents,
   setIntents,
   items,
+  setItems,
   events,
   setEvents,
   view,
@@ -281,5 +283,81 @@ export function useIntentionActions({
     });
   }
 
-  return { moveToPlanner, scheduleFromItem, updateIntent, archiveIntention, setIntentionStatus };
+  // Close from a list row (Restructure P4): the item, if any, and every listed
+  // intention go to closed. Closing keeps no plan, so every live event is archived
+  // and scheduled reminders cancelled; a recurring intention also gets end_date
+  // today, as Stop does. Undo restores statuses (not someday, which status_guard
+  // refuses), end dates, events dated today or later, and reminders still ahead.
+  async function closeRecords({ item = null, intentIds = [], label }) {
+    const targets = intents.filter((i) => intentIds.includes(i.id));
+    const today = getTodayDate();
+    return withLoading("Closing...", async () => {
+      const before = [];
+      for (const intent of targets) {
+        const stop = getRecurrenceConfig(intent).type !== "once" && (!intent.endDate || intent.endDate > today);
+        const saved = await storage.patch(`intent:${intent.id}`, { status: "closed", ...(stop ? { endDate: today } : {}) });
+        if (!saved) throw new Error("Close was not saved.");
+        setIntents((prev) => prev.map((i) => (i.id === intent.id ? saved : i)));
+        before.push({ intent, stop });
+      }
+      let itemBefore = null;
+      if (item && item.status !== "closed") {
+        const saved = await storage.patch(`item:${item.id}`, { status: "closed" });
+        if (!saved) throw new Error("Close was not saved.");
+        setItems?.((prev) => prev.map((i) => (i.id === item.id ? saved : i)));
+        itemBefore = item;
+      }
+
+      const archivedEvents = [];
+      for (const { intent } of before) {
+        for (const event of liveEventsFor(events, intent.id)) {
+          const archivedEvent = { ...event, archived: true };
+          await storage.set(`event:${event.id}`, archivedEvent);
+          setEvents((prev) => prev.map((e) => (e.id === event.id ? archivedEvent : e)));
+          archivedEvents.push(event);
+        }
+      }
+      let cancelledReminders = [];
+      try {
+        for (const { intent } of before) cancelledReminders.push(...(await cancelRemindersForStatus(intent.id)));
+      } catch (err) {
+        console.error("[Reminders] cancel on close failed:", err);
+        window.alert("Closed, but its reminders could not be cancelled and may still fire.");
+      }
+      if (before.length) refreshReminderIndex?.();
+
+      const what = statusUndoWhat(archivedEvents.length, cancelledReminders.length);
+      const restorable = (s) => s && s !== "someday";
+      const futureEvents = archivedEvents.filter((e) => String(e.time).slice(0, 10) >= today);
+      const canUndo =
+        before.some(({ intent, stop }) => stop || restorable(intent.status)) ||
+        restorable(itemBefore?.status) || futureEvents.length > 0 || cancelledReminders.length > 0;
+      // Nothing to put back (all were someday, which status_guard refuses): a plain notice.
+      offerUndoFor(`Closed "${label}"${what}.`, canUndo ? async () => {
+        for (const { intent, stop } of before) {
+          const fields = {
+            ...(intent.status && intent.status !== "someday" ? { status: intent.status } : {}),
+            ...(stop ? { endDate: intent.endDate || null } : {}),
+          };
+          if (!Object.keys(fields).length) continue;
+          const back = await storage.patch(`intent:${intent.id}`, fields);
+          if (back) setIntents((prev) => prev.map((i) => (i.id === intent.id ? back : i)));
+        }
+        if (itemBefore?.status && itemBefore.status !== "someday") {
+          const back = await storage.patch(`item:${itemBefore.id}`, { status: itemBefore.status });
+          if (back) setItems?.((prev) => prev.map((i) => (i.id === itemBefore.id ? back : i)));
+        }
+        for (const event of futureEvents) {
+          if (!(await storage.set(`event:${event.id}`, event))) throw writeError("Restoring its event");
+          setEvents((prev) => prev.map((e) => (e.id === event.id ? event : e)));
+        }
+        if (cancelledReminders.length) {
+          await restoreRemindersAfterStatus(cancelledReminders);
+          refreshReminderIndex?.();
+        }
+      } : null);
+    });
+  }
+
+  return { moveToPlanner, scheduleFromItem, updateIntent, archiveIntention, setIntentionStatus, closeRecords };
 }

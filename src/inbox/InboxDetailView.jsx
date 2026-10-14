@@ -640,7 +640,9 @@ export default function InboxDetailView({
     onDiscard(inboxItem.id);
   }
 
-  const liveContexts = contexts.filter((c) => !c.archived);
+  const liveContexts = contexts
+    .filter((c) => !c.archived)
+    .sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
 
   return (
     <div>

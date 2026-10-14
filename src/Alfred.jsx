@@ -277,11 +277,12 @@ export default function Alfred() {
     withLoading,
     offerUndoFor,
   });
-  const { moveToPlanner, scheduleFromItem, updateIntent, archiveIntention, setIntentionStatus } = useIntentionActions({
+  const { moveToPlanner, scheduleFromItem, updateIntent, archiveIntention, setIntentionStatus, closeRecords } = useIntentionActions({
     user,
     intents,
     setIntents,
     items,
+    setItems,
     events,
     setEvents,
     view,
@@ -291,6 +292,7 @@ export default function Alfred() {
     withLoading,
     offerUndoFor,
     watchStatus,
+    refreshReminderIndex,
   });
   const { updateItem, deepCloneItem, setItemStatus } = useItemActions({
     user,
@@ -1313,7 +1315,9 @@ export default function Alfred() {
             onActivate={activate}
             onCancelExecution={cancelExecutionForEvent}
             onStartNow={startNowFromIntention}
-            onArchiveIntention={archiveIntention}
+            onCloseRecords={closeRecords}
+            onStartNowItem={startNowFromItem}
+            onScheduleItem={scheduleFromItem}
             filterTag={filterTag}
             onFilterTag={setFilterTag}
             tagsCollapsed={tagsCollapsedFor("context-detail")}

@@ -102,6 +102,18 @@ describe("the page, as the README orders it", () => {
     expect(screen.queryByRole("option", { name: "Retired" })).not.toBeInTheDocument();
   });
 
+  it("lists contexts alphabetically, ignoring case", () => {
+    setup({}, {
+      contexts: [
+        { id: "c1", name: "work" },
+        { id: "c2", name: "Home" },
+        { id: "c3", name: "alfred" },
+      ],
+    });
+    const names = Array.from(screen.getByLabelText("Context").options).map((o) => o.text);
+    expect(names).toEqual(["No context", "alfred", "Home", "work"]);
+  });
+
   it("has no Enrich, no Re-enrich and no Collection section", () => {
     setup({ suggestItem: true, suggestIntent: true });
     expect(screen.queryByText(/Enrich/i)).not.toBeInTheDocument();

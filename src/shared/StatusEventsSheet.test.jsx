@@ -28,6 +28,19 @@ test("counts an event and reminders together", () => {
   expect(screen.getByRole("button", { name: "Keep them" })).toBeTruthy();
 });
 
+test("a row closing several events names them all", () => {
+  expect(sheetWording("closed", "Oct 20", 1, 2)).toEqual({
+    summary: "2 scheduled events (from Oct 20) and 1 reminder. Closing archives the dates and cancels the reminder.",
+    archive: "Close, archive the dates and cancel the reminder",
+    keep: "Keep them",
+  });
+});
+
+test("takes a title", () => {
+  render(<StatusEventsSheet status="closed" title='Close "Fan"' event={event} onArchive={noop} onCancel={noop} />);
+  expect(screen.getByText('Close "Fan"')).toBeTruthy();
+});
+
 test("reminders with no event still ask", () => {
   expect(sheetWording("background", "", 1)).toEqual({
     summary: "1 reminder pending.",

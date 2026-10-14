@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Copy, GripVertical, X } from "lucide-react";
+import { Copy, GripVertical, Play, X } from "lucide-react";
+import SchedulePopover from "../shared/recurrence/SchedulePopover";
+import { getTodayDate } from "../utils/eventDates";
 import { offsetPatch, isFirstStep } from "../utils/elementOffsets";
 import EditCard from "../shared/EditCard";
 import PinnedFooter from "../shared/PinnedFooter";
@@ -13,7 +15,8 @@ import CardExecutionNotes from "../notes/CardExecutionNotes";
 import { shortDate } from "../notes/noteFormat";
 import StatusPill from "../shared/StatusPill";
 import StatusPicker from "../shared/StatusPicker";
-import { statusOf, statusOptionsFor } from "../utils/status";
+import { CloseRowButton } from "../shared/useRowClose";
+import { closedBlockTitle, statusOf, statusOptionsFor } from "../utils/status";
 
 export default function ItemCard({
   item,
@@ -37,7 +40,17 @@ export default function ItemCard({
   reminder = null,
   // Edit form only: a status picker whose choice goes out with Save, as `status`.
   editableStatus = false,
+  // A merged row whose intentions are all closed: "Not scheduled" (Restructure P4).
+  scheduleLine = null,
+  // List rows (useRowClose): Close, and why it is disabled.
+  onClose = null,
+  closeBlocked = null,
+  // List rows with no live intention: item detail's Start Now `(itemId)` and
+  // Schedule `(item, date)`.
+  onStartNow = null,
+  onSchedule = null,
 }) {
+  const closedTitle = closedBlockTitle(item, "item");
   const [isEditing, setIsEditing] = useState(initialEditing);
   const [name, setName] = useState(item.name);
   const [description, setDescription] = useState(item.description || "");
@@ -628,12 +641,15 @@ export default function ItemCard({
         }
       }}
     >
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+      <div className="flex-1 min-w-0">
       <p className="flex items-start gap-1.5 font-medium mb-2">
         <ObjectIcon type="item" className="w-4 h-4 text-primary" align="first-line" />
         <span className="min-w-0">{item.name}</span>
       </p>
-      <div className="mb-2">
+      <div className="flex items-center gap-2 mb-2">
         <StatusPill row={item} />
+        {scheduleLine && <span className="text-xs text-foreground">{scheduleLine}</span>}
       </div>
       {reminder && (
         <p
@@ -690,6 +706,41 @@ export default function ItemCard({
           ))}
         </div>
       )}
+      {onClose && closeBlocked && <span className="text-xs text-muted-foreground mt-1 block">{closeBlocked}</span>}
+      </div>
+      {/* List rows: the same strip as IntentionCard's. Start Now and Schedule are
+          item detail's own (startNowFromItem, scheduleFromItem). */}
+      {(onStartNow || onSchedule || onClose) && (
+        <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
+          {onStartNow && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onStartNow(item.id);
+              }}
+              disabled={Boolean(closedTitle)}
+              title={closedTitle || undefined}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] whitespace-nowrap bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Play className="w-4 h-4" />
+              Start Now
+            </button>
+          )}
+          {onSchedule && (
+            <span onClick={(e) => e.stopPropagation()} title={closedTitle || undefined}>
+              <SchedulePopover
+                label="Schedule"
+                initialDate={getTodayDate()}
+                onPick={(date) => onSchedule(item, date)}
+                disabled={Boolean(closedTitle)}
+                className="px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-secondary disabled:hover:bg-secondary disabled:text-foreground disabled:shadow-none disabled:hover:shadow-none"
+              />
+            </span>
+          )}
+          {onClose && <CloseRowButton onClose={onClose} closeBlocked={closeBlocked} />}
+        </div>
+      )}
+      </div>
     </div>
   );
 }
