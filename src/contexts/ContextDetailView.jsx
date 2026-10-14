@@ -5,9 +5,10 @@ import { matchesQuery } from "../utils/search";
 import {
   NAMED_RECORD_SORT_OPTIONS,
   NAMED_RECORD_ACCESSORS,
-  INTENTION_ACCESSORS,
   itemSearchFields,
 } from "../utils/listSortOptions";
+import { buildRows, rankRows, rowSearchFields, ROW_ACCESSORS } from "../utils/rowModel";
+import useRowClose from "../shared/useRowClose";
 import ObjectIcon from "../shared/ObjectIcon";
 import StatusFilterChips from "../shared/StatusFilterChips";
 import {
@@ -17,7 +18,6 @@ import {
   statusCounts,
   filterByStatus,
   rankByStatus,
-  rankByActivity,
   withTag,
 } from "../utils/status";
 import ListToolbar, { NoMatches } from "../shared/ListToolbar";
@@ -61,7 +61,10 @@ export default function ContextDetailView({
   onActivate,
   onCancelExecution,
   onStartNow,
-  onArchiveIntention,
+  onCloseRecords,
+  // Item detail's own Start Now and Schedule, for item rows with no live intention.
+  onStartNowItem,
+  onScheduleItem,
   filterTag,
   onFilterTag,
   // Owned by Alfred alongside `search`, for the same reason: both must survive
@@ -84,8 +87,8 @@ export default function ContextDetailView({
   archivedItems = [],
   archivedIntents = [],
 }) {
-  const [itemsExpanded, setItemsExpanded] = useState(true);
-  const [intentionsExpanded, setIntentionsExpanded] = useState(true);
+  const [rowsExpanded, setRowsExpanded] = useState(true);
+  const rowClose = useRowClose({ events, executions, onCloseRecords });
   const [archivedExpanded, setArchivedExpanded] = useState(false);
   // Editing happens here now. It used to set two pieces of Alfred state and
   // then navigate to the Contexts list to render the form there, so "Edit" on
@@ -98,23 +101,23 @@ export default function ContextDetailView({
   if (!context) return null;
   const app = findApp(apps, context.appId);
 
-  // One sort and one search drive all three lists, each filtered on its own —
-  // nothing is merged or ranked. Filters what is already loaded: elements come
-  // in with `select("*")` on items, so element text is searchable without a
-  // fetch.
+  // One row per thing (Restructure P4): an item and its intentions are one row.
+  // Status chips, tag filter, sort and search all apply to the same rows, so the
+  // counts match what the list shows.
   const sortBy = (rows, accessors) =>
     rankByStatus(sortRows(rows, sort.sortKey, accessors, sort.sortDir));
-  // The tag filter here applies to items only, so only items are narrowed by it.
-  const statusCountsHere = statusCounts([...withTag(items, filterTag), ...intents]);
-  const visibleItems = sortBy(filterByStatus(items, statusFilter.selected), NAMED_RECORD_ACCESSORS)
-    .filter((item) => !filterTag || (item.tags && item.tags.includes(filterTag)))
-    .filter((item) => matchesQuery(search, ...itemSearchFields(item)));
-  // Intentions: what is happening now first, the chosen sort within each group.
-  const visibleIntents = rankByActivity(
-    sortRows(filterByStatus(intents, statusFilter.selected), sort.sortKey, INTENTION_ACCESSORS, sort.sortDir),
-    events,
-    executions,
-  ).filter((intent) => matchesQuery(search, getIntentDisplay(intent)));
+  const rows = buildRows({ items, intents, events, openExecutions: executions });
+  // Tag and search first, so each chip counts the rows it would show on its own.
+  // Each filter's counts apply every other filter: tags count under search and
+  // status chips, status chips under search and tag.
+  const searched = rows.filter((row) => matchesQuery(search, ...rowSearchFields(row, itemSearchFields)));
+  const matching = withTag(searched, filterTag);
+  const statusCountsHere = statusCounts(matching);
+  const tagCountRows = filterByStatus(searched, statusFilter.selected);
+  // What is happening now first, the chosen sort within each group.
+  const visibleRows = rankRows(
+    sortRows(filterByStatus(matching, statusFilter.selected), sort.sortKey, ROW_ACCESSORS, sort.sortDir),
+  );
   // "n of m" whenever anything is hidden, by search or by a chip.
   const countLabel = (shown, total) => (shown === total ? `${total}` : `${shown} of ${total}`);
   const archivedRows = [
@@ -239,119 +242,102 @@ export default function ContextDetailView({
 
       <div className="space-y-6">
         <div>
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <button
-              onClick={() => setItemsExpanded(!itemsExpanded)}
+              onClick={() => setRowsExpanded(!rowsExpanded)}
               className="flex items-center gap-2 text-base sm:text-lg font-medium text-foreground"
             >
-              <ChevronDown className={`w-4 h-4 transition-transform ${itemsExpanded ? "" : "-rotate-90"}`} />
-              Items ({countLabel(visibleItems.length, items.length)})
+              <ChevronDown className={`w-4 h-4 transition-transform ${rowsExpanded ? "" : "-rotate-90"}`} />
+              Items and intentions ({countLabel(visibleRows.length, rows.length)})
             </button>
-            <button
-              onClick={() => onOpenAddItem()}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-            >
-              <Plus className="w-4 h-4" />
-              Add Item
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => onOpenAddItem()}
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              >
+                <Plus className="w-4 h-4" />
+                Add Item
+              </button>
+              <button
+                onClick={() => onOpenAddIntention()}
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+              >
+                <Plus className="w-4 h-4" />
+                Add Intention
+              </button>
+            </div>
           </div>
 
-          {itemsExpanded && (
+          {rowsExpanded && (
             <>
-              {/* Counts only items the status chips let through. */}
+              {/* Counts rows the search and status chips let through. */}
               <TagFilter
-                entities={filterByStatus(items, statusFilter.selected)}
+                entities={tagCountRows}
                 activeTag={filterTag}
                 onFilter={onFilterTag}
                 collapsed={tagsCollapsed}
                 onToggleCollapsed={onToggleTags}
               />
-              {items.length === 0 ? (
-                <p className="text-muted-foreground text-sm">No items in this context</p>
-              ) : searching && visibleItems.length === 0 ? (
-                <NoMatches noun="items" query={search} />
-              ) : visibleItems.length === 0 ? (
-                <p className="text-muted-foreground text-sm">No items match the chips above</p>
+              {rows.length === 0 ? (
+                <p className="text-muted-foreground text-sm">Nothing in this context yet</p>
+              ) : searching && visibleRows.length === 0 ? (
+                <NoMatches noun="items or intentions" query={search} />
+              ) : visibleRows.length === 0 ? (
+                <p className="text-muted-foreground text-sm">Nothing matches the filters above</p>
               ) : (
                 <div className="space-y-2">
-                  {visibleItems.map((item) => (
-                    <ItemCard
-                      tagPool={tagPool}
-                      key={item.id}
-                      item={item}
-                      contexts={contexts}
-                      onUpdate={onUpdateItem}
-                      onViewDetail={onViewItemDetail}
-                      allItems={allItems}
-                      executions={executions.filter((ex) => ex.itemIds?.includes(item.id))}
-                      // Every intention, not this context's: a run's intention may
-                      // live elsewhere, and a badge that cannot find it reads "Execution".
-                      intents={allIntents || intents}
-                      getIntentDisplay={getIntentDisplay}
-                      onOpenExecution={onOpenExecution}
-                    />
-                  ))}
+                  {visibleRows.map((row) =>
+                    row.intent ? (
+                      <IntentionCard
+                        tagPool={tagPool}
+                        key={row.key}
+                        row={row}
+                        intent={row.intent}
+                        contexts={contexts}
+                        items={items}
+                        collections={collections}
+                        getIntentDisplay={getIntentDisplay}
+                        onUpdate={onUpdateIntent}
+                        onSchedule={onSchedule}
+                        onStartNow={onStartNow}
+                        showScheduling={true}
+                        // A merged row is the item: it opens item detail, and has no
+                        // Archive, which would archive only the intention.
+                        onViewDetail={row.item ? () => onViewItemDetail?.(row.item.id) : onViewIntentionDetail}
+                        events={events}
+                        onUpdateEvent={onUpdateEvent}
+                        onActivate={onActivate}
+                        executions={executions}
+                        onOpenExecution={onOpenExecution}
+                        onCancelExecution={onCancelExecution}
+                        // Rows close; Archive is on the detail pages.
+                        {...rowClose.closeProps(row)}
+                      />
+                    ) : (
+                      <ItemCard
+                        tagPool={tagPool}
+                        key={row.key}
+                        item={row.item}
+                        contexts={contexts}
+                        onUpdate={onUpdateItem}
+                        onViewDetail={onViewItemDetail}
+                        allItems={allItems}
+                        executions={executions.filter((ex) => ex.itemIds?.includes(row.item.id))}
+                        // Every intention, not this context's: a run's intention may
+                        // live elsewhere, and a badge that cannot find it reads "Execution".
+                        intents={allIntents || intents}
+                        getIntentDisplay={getIntentDisplay}
+                        onOpenExecution={onOpenExecution}
+                        scheduleLine={row.intents.length > 0 ? "Not scheduled" : null}
+                        onStartNow={onStartNowItem}
+                        onSchedule={onScheduleItem}
+                        {...rowClose.closeProps(row)}
+                      />
+                    ),
+                  )}
                 </div>
               )}
-            </>
-          )}
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <button
-              onClick={() => setIntentionsExpanded(!intentionsExpanded)}
-              className="flex items-center gap-2 text-base sm:text-lg font-medium text-foreground"
-            >
-              <ChevronDown className={`w-4 h-4 transition-transform ${intentionsExpanded ? "" : "-rotate-90"}`} />
-              Intentions ({countLabel(visibleIntents.length, intents.length)})
-            </button>
-            <button
-              onClick={() => onOpenAddIntention()}
-              className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
-            >
-              <Plus className="w-4 h-4" />
-              Add Intention
-            </button>
-          </div>
-
-          {intentionsExpanded && (
-            <>
-              {intents.length === 0 ? (
-                <p className="text-muted-foreground text-sm">
-                  No intentions in this context
-                </p>
-              ) : searching && visibleIntents.length === 0 ? (
-                <NoMatches noun="intentions" query={search} />
-              ) : visibleIntents.length === 0 ? (
-                <p className="text-muted-foreground text-sm">No intentions match the chips above</p>
-              ) : (
-                <div className="space-y-2">
-                  {visibleIntents.map((intent) => (
-                    <IntentionCard
-                      tagPool={tagPool}
-                      key={intent.id}
-                      intent={intent}
-                      contexts={contexts}
-                      items={items}
-                      collections={collections}
-                      getIntentDisplay={getIntentDisplay}
-                      onUpdate={onUpdateIntent}
-                      onSchedule={onSchedule}
-                      onStartNow={onStartNow}
-                      showScheduling={true}
-                      onViewDetail={onViewIntentionDetail}
-                      events={events}
-                      onUpdateEvent={onUpdateEvent}
-                      onActivate={onActivate}
-                      executions={executions}
-                      onOpenExecution={onOpenExecution}
-                      onCancelExecution={onCancelExecution}
-                      onArchive={onArchiveIntention}
-                    />
-                  ))}
-                </div>
-              )}
+              {rowClose.sheet}
             </>
           )}
         </div>

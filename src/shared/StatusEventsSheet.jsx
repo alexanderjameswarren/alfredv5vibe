@@ -8,11 +8,20 @@ const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
  * The sheet's words for an intention with a live event, scheduled reminders, or both.
  * One answer covers both: archive the date and cancel the reminders, or keep them.
  */
-export function sheetWording(status, date, reminderCount) {
+export function sheetWording(status, date, reminderCount, eventCount = date ? 1 : 0) {
   const closing = status === "closed";
   const hasEvent = Boolean(date);
   const r = reminderCount > 0 ? plural(reminderCount, "reminder") : "";
   const them = reminderCount === 1 ? "the reminder" : "the reminders";
+  // Several events: only from a list row closing an item with several intentions.
+  if (eventCount > 1) {
+    const events = `${eventCount} scheduled events (from ${date})`;
+    return {
+      summary: `${events}${r ? ` and ${r}` : ""}. Closing archives the dates${r ? ` and cancels ${them}` : ""}.`,
+      archive: `Close, archive the dates${r ? ` and cancel ${them}` : ""}`,
+      keep: "Keep them",
+    };
+  }
   if (hasEvent && !r) {
     return {
       summary: `Scheduled for ${date}.${closing ? " Closing archives that date." : ""}`,
@@ -37,10 +46,11 @@ export function sheetWording(status, date, reminderCount) {
 // Asked before an intention with its one live event, or scheduled reminders, moves
 // to background or closed. Closing always archives the date and cancels the
 // reminders (a closed intention keeps no plan); parking may keep them.
-export default function StatusEventsSheet({ status, event, reminderCount = 0, onArchive, onKeep, onCancel }) {
+// `eventCount` and `title` are for a list row's Close (Restructure P4).
+export default function StatusEventsSheet({ status, event, eventCount, reminderCount = 0, title, onArchive, onKeep, onCancel }) {
   const date = event?.time ? formatEventDate(String(event.time).slice(0, 10)) : "";
   const closing = status === "closed";
-  const words = sheetWording(status, date, reminderCount);
+  const words = sheetWording(status, date, reminderCount, eventCount);
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={onCancel}>
       <div
@@ -49,7 +59,7 @@ export default function StatusEventsSheet({ status, event, reminderCount = 0, on
         className="bg-background border border-border rounded-lg shadow-xl p-5 w-full max-w-sm mx-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="text-lg font-semibold mb-2">Move to {STATUS_LABELS[status]}</h3>
+        <h3 className="text-lg font-semibold mb-2">{title || `Move to ${STATUS_LABELS[status]}`}</h3>
         <p className="text-sm mb-4">{words.summary}</p>
         <div className="flex flex-col gap-2">
           <button type="button" onClick={onArchive} className="px-4 py-2 min-h-[44px] text-sm bg-primary text-white rounded hover:opacity-90">
