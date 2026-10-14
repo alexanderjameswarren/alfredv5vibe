@@ -16,7 +16,7 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
 | 7 | Migration B + tools: subscriptions, price history, monthly detection | done 2026-10-12 | Plan approved 2026-10-11 (D1–D6). 7d done: Review tab actions, and 122/123 ("Keep watching") applied. 7a: 120 applied 2026-10-12 (conformant), 121 39/39. 7b done: wb-sync v6, whose first run detected 19 watching rows. 7c done: mcp v148, 116 tools, fresh-thread check passed. |
 | 8 | Subscriptions seeding (in claude.ai), then Subscriptions tab UI | done 2026-10-13 | Seeding nearly done (35 active). 8a done: billing intervals and the hand-unlink tool, 124/125 applied, mcp v150. 8b (Subscriptions screen) verified by Alex on 2026-10-13; the breakdown table was added after |
 | 9 | Phase 2 review and Phase 3 steps | not started | Runs last: Step 10 goes first (decided 2026-10-13), and the Step 9 review closes Phase 2 |
-| 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | build done 2026-10-14; weekly task setup and first run to do | Migrations 127–132 applied. mcp v153 (121 tools): `get_wb_rule_health`, `acknowledge_wb_rule_health`, `bulk_create_wb_taxonomy`. Weekly task prompt `docs/wb-weekly-cleanup-task-prompt.md` v2026-10-13b, not set up yet; Alex will report back after setup |
+| 10 | Rule health: `wb_rule_health` view, `get_wb_rule_health` tool, weekly claude.ai cleanup task that files one inbox item | done 2026-10-14 | Migrations 127–132 applied. mcp v153 (121 tools): `get_wb_rule_health`, `acknowledge_wb_rule_health`, `bulk_create_wb_taxonomy`. Weekly task "Money cleanup" set up, Sunday 18:00 Pacific (schedule row f457ee6e). The first manual run was ok; prompt now v2026-10-14a (records `manual`) |
 
 ## Carried from Phase 1
 
@@ -277,3 +277,12 @@ Rule: one step at a time. The CLI finishes a step, records it here, reports, and
     - the dry-run id is null.
     - ATM withdrawal and The Pool Doctor were acknowledged (often_overridden, by rule). Only Quill Health remains, with `acknowledged_hidden` 2.
 - **Step 10 build done (2026-10-14).** Still to do: set up the weekly task (schedule row and claude.ai scheduled task) and check its first run. Alex will report back.
+- **Step 10 done (2026-10-14).** Alex set up the claude.ai scheduled task "Money cleanup", Sunday 18:00 Pacific, with `platform_schedules` row f457ee6e-4e76-4ea0-9791-ec91b1383cf8.
+  - The first manual run, dff8201a, closed ok on prompt 2026-10-13b.
+    - Findings: 1 often_overridden (Quill Health), with 2 acknowledged and hidden.
+    - Review queue 2, overdue 0, reviews due 1.
+    - It filed inbox item fe503777.
+  - **Miss:** the details lacked `manual: true`, although the run was started by hand. The prompt never said how to decide it.
+  - **Fixed in prompt 2026-10-14a:** Step 2 decides `manual` from the message that started the run, and Step 8 always records `manual` as true or false. The schedule id is in the header.
+  - **Alex must paste the new prompt into the task.** The task runs the pasted text, not the file.
+- Step 9 (Phase 2 review) started 2026-10-14: draft `docs/review-warren_buffet_p2-m4t.md`.
