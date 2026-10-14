@@ -24,8 +24,9 @@ import {
 import PendingReminder from "../inbox/PendingReminder";
 import OriginalCapture from "../inbox/OriginalCapture";
 import ItemCard from "./ItemCard";
-import IntentionCard from "../intentions/IntentionCard";
-import ExecutionBadge from "../executions/ExecutionBadge";
+import RowList from "../shared/RowList";
+import { buildRows } from "../utils/rowModel";
+import InProgressSection from "../executions/InProgressSection";
 import NoteTimeline from "../notes/NoteTimeline";
 import RecentCompletions from "../notes/RecentCompletions";
 import OpenExecutionNotes from "../notes/OpenExecutionNotes";
@@ -63,7 +64,8 @@ export default function ItemDetailView({
   onAddIntention,
   onCancelExecution,
   onStartNowIntention,
-  onArchiveIntention,
+  // Related Intentions rows close (Restructure P4); Archive is on intention detail.
+  onCloseRecords,
   onViewItem,
   onViewIntentionDetail,
   onViewContextDetail,
@@ -522,28 +524,15 @@ export default function ItemDetailView({
         );
       })()}
 
-      {/* Active/Paused Executions Section */}
-      {executions.length > 0 && (
-        <div className="mb-6">
-          <h3 className="text-lg font-medium mb-3">
-            Executions ({executions.length})
-          </h3>
-          <div className="space-y-2">
-            {executions.map((exec) => (
-              <ExecutionBadge
-                key={exec.id}
-                exec={exec}
-                intents={intents}
-                contexts={contexts}
-                getIntentDisplay={getIntentDisplay}
-                onOpen={onOpenExecution}
-              >
-                <OpenExecutionNotes executionId={exec.id} />
-              </ExecutionBadge>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Running and paused runs: the same "In progress" section as every list. */}
+      <InProgressSection
+        executions={executions}
+        intents={intents}
+        contexts={contexts}
+        getIntentDisplay={getIntentDisplay}
+        onOpen={onOpenExecution}
+        extraFor={(exec) => <OpenExecutionNotes executionId={exec.id} />}
+      />
 
       {/* Related Intentions Section */}
       <div>
@@ -568,35 +557,28 @@ export default function ItemDetailView({
         ) : visibleIntentions.length === 0 ? (
           <p className="text-muted-foreground text-sm">No intentions match the chips above</p>
         ) : (
-          <div className="space-y-2">
-            {visibleIntentions.map((intent) => (
-              <IntentionCard
-                tagPool={tagPool}
-                key={intent.id}
-                intent={intent}
-                contexts={contexts}
-                items={items}
-                collections={collections}
-                onUpdate={onUpdateIntent}
-                onSchedule={onSchedule}
-                onStartNow={onStartNowIntention}
-                getIntentDisplay={getIntentDisplay}
-                showScheduling={true}
-                // Without onViewDetail this card fell through to inline edit —
-                // the only edit surface in the app with no dirty guard behind
-                // it. Navigating matches the other two list sites and removes
-                // the unguarded form rather than guarding it.
-                onViewDetail={onViewIntentionDetail}
-                events={events}
-                onUpdateEvent={onUpdateEvent}
-                onActivate={onActivate}
-                executions={executions}
-                onOpenExecution={onOpenExecution}
-                onCancelExecution={onCancelExecution}
-                onArchive={onArchiveIntention}
-              />
-            ))}
-          </div>
+          // The shared rows (Restructure P4): each intention its own row, Close not
+          // Archive, the same layout as every list.
+          <RowList
+            rows={buildRows({ intents: visibleIntentions, events, openExecutions: executions })}
+            events={events}
+            executions={executions}
+            contexts={contexts}
+            allItems={items}
+            allIntents={intents}
+            collections={collections}
+            tagPool={tagPool}
+            getIntentDisplay={getIntentDisplay}
+            onUpdateIntent={onUpdateIntent}
+            onSchedule={onSchedule}
+            onStartNow={onStartNowIntention}
+            onViewIntentionDetail={onViewIntentionDetail}
+            onUpdateEvent={onUpdateEvent}
+            onActivate={onActivate}
+            onOpenExecution={onOpenExecution}
+            onCancelExecution={onCancelExecution}
+            onCloseRecords={onCloseRecords}
+          />
         )}
       </div>
 

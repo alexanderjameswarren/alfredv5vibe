@@ -1,5 +1,6 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
+import "@testing-library/jest-dom";
 import IntentionCard from "./IntentionCard";
 import * as notesApi from "../notes/notesApi";
 import { _resetCardNotesCache } from "../notes/useCardExecutionNotes";
@@ -27,6 +28,19 @@ function renderCard(intent, props = {}) {
   return handlers;
 }
 
+test("row: a non-repeating row says Not scheduled and nothing about repeating", () => {
+  renderCard({ recurrenceConfig: { type: "once" } });
+  expect(screen.getByText("Not scheduled")).toBeTruthy();
+  expect(screen.queryByText("Does not repeat")).toBeNull();
+  expect(screen.queryByLabelText("Repeats")).toBeNull();
+});
+
+test("row: a repeating row shows the repeat with its icon beside the schedule", () => {
+  renderCard({ recurrenceConfig: { type: "fixed", frequency: "daily", interval: 1 } });
+  expect(screen.getByLabelText("Repeats")).toBeTruthy();
+  expect(screen.getByText("Every day")).toBeTruthy();
+});
+
 test("row: Start Now first, then Schedule, and a status pill", () => {
   renderCard({ status: "active" });
   const labels = screen.getAllByRole("button").map((b) => b.textContent);
@@ -36,8 +50,17 @@ test("row: Start Now first, then Schedule, and a status pill", () => {
 
 test("row: the context name carries its folder icon", () => {
   renderCard({ status: "active", contextId: "c1" }, { contexts: [{ id: "c1", name: "Home" }] });
-  const chip = screen.getByText("Home");
+  // The name sits in its own truncating span, beside the icon.
+  const chip = screen.getByText("Home").parentElement;
   expect(chip.querySelector("svg")).not.toBeNull();
+  expect(chip).toHaveAttribute("title", "Home");
+});
+
+test("row: the name is clamped to two lines, with the full name as its tooltip", () => {
+  renderCard({ text: "A very long intention name" });
+  const name = screen.getByText("A very long intention name");
+  expect(name.className).toContain("line-clamp-2");
+  expect(name).toHaveAttribute("title", "A very long intention name");
 });
 
 test("row: Schedule opens a picker set to today without opening the detail", () => {

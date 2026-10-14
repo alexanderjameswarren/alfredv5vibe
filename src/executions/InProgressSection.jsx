@@ -2,7 +2,8 @@ import React from "react";
 import ExecutionBadge from "./ExecutionBadge";
 
 /** Home's Active and Paused list: one teal ExecutionBadge per run, tapping opens it. */
-export function ExecutionList({ executions, intents, contexts, getIntentDisplay, onOpen, emptyText = null }) {
+// `extraFor(exec)` is optional content under a card (item detail's run notes).
+export function ExecutionList({ executions, intents, contexts, getIntentDisplay, onOpen, emptyText = null, extraFor = null }) {
   return (
     <div className="space-y-2">
       {executions.length > 0
@@ -14,7 +15,9 @@ export function ExecutionList({ executions, intents, contexts, getIntentDisplay,
               contexts={contexts}
               getIntentDisplay={getIntentDisplay}
               onOpen={onOpen}
-            />
+            >
+              {extraFor?.(exec)}
+            </ExecutionBadge>
           ))
         : emptyText && <p className="text-muted-foreground text-sm">{emptyText}</p>}
     </div>

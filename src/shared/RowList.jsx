@@ -81,7 +81,7 @@ export default function RowList({
               intents={allIntents}
               getIntentDisplay={getIntentDisplay}
               onOpenExecution={onOpenExecution}
-              scheduleLine={row.intents.length > 0 ? "Not scheduled" : null}
+              scheduleLine="Not scheduled"
               onStartNow={onStartNowItem}
               onSchedule={onScheduleItem}
               showContext

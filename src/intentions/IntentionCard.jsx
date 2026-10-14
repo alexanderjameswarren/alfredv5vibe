@@ -4,7 +4,8 @@ import { detailsForStorage } from "../utils/intentionRows";
 import { formatEventDate, getTodayDate } from "../utils/eventDates";
 import WhenButton from "../shared/WhenButton";
 import { getRecurrenceConfig } from "../utils/recurrence";
-import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
+import { describeRepeat, repeats } from "../utils/recurrenceDisplay";
+import { RowMetaLine } from "../shared/TagChips";
 import EditCard from "../shared/EditCard";
 import PinnedFooter from "../shared/PinnedFooter";
 import TagPicker from "../shared/TagPicker";
@@ -13,7 +14,6 @@ import ObjectIcon from "../shared/ObjectIcon";
 import SchedulePopover from "../shared/recurrence/SchedulePopover";
 import RecurrenceQuickSelect from "../shared/recurrence/RecurrenceQuickSelect";
 import ScheduledLine from "../shared/ScheduledLine";
-import StatusPill from "../shared/StatusPill";
 import StatusPicker from "../shared/StatusPicker";
 import { CloseRowButton } from "../shared/useRowClose";
 import CardExecutionNotes from "../notes/CardExecutionNotes";
@@ -386,45 +386,42 @@ export default function IntentionCard({
         <div className="flex-1 min-w-0">
           <p className="flex items-start gap-1.5 font-medium">
             <ObjectIcon type={asItem ? "item" : "intention"} className="w-4 h-4 text-primary" align="first-line" />
-            <span className="min-w-0">{title}</span>
+            {/* At most two lines on a row; the detail page has the whole name. */}
+            <span className="min-w-0 line-clamp-2" title={title}>{title}</span>
           </p>
-          <div className="flex items-center gap-2 mt-1 flex-wrap">
-            {/* A merged row's chip is the item's; the intention shows in the schedule line. */}
-            <StatusPill row={asItem ? row.item : intent} />
-            {/* The one live event is a date on the row, not a nested card. */}
-            {(asItem || actions.live || actions.open) && (
-              <ScheduledLine actions={actions} className="text-xs text-foreground" />
-            )}
-            {showScheduling && (
-              <span className="text-sm text-muted-foreground">
-                {getRecurrenceDisplayString(getRecurrenceConfig(intent), intent.endDate)}
-              </span>
-            )}
-            {contextName && (
-              <span className="inline-flex items-center gap-1 text-xs bg-warning-light text-foreground px-2 py-0.5 rounded">
-                <ObjectIcon type="context" className="w-3.5 h-3.5" />
-                {contextName}
-              </span>
-            )}
-            {reminder && (
-              <span
-                className={`text-xs text-muted-foreground${reminder.muted ? " opacity-70" : ""}`}
-                title={reminder.muted ? "Reminder sent (Pacific time)" : "Pending reminder (Pacific time)"}
-              >
-                🔔 {reminder.text}
-              </span>
-            )}
-            {shownTags.slice(0, 3).map((tag) => (
-              <span key={tag} className="px-2 py-0.5 bg-warning-light text-accent-foreground text-xs rounded-full">
-                {tag}
-              </span>
-            ))}
-            {shownTags.length > 3 && (
-              <span className="px-2 py-0.5 bg-secondary/50 text-muted-foreground text-xs rounded-full">
-                +{shownTags.length - 3} more
-              </span>
-            )}
-          </div>
+          {/* Restructure P4: one line per kind of information — what it is, then when. */}
+          {/* A merged row's chip is the item's; the intention shows in the when line. */}
+          <RowMetaLine statusRow={asItem ? row.item : intent} contextName={contextName} tags={shownTags} />
+          {(showScheduling || reminder) && (
+            <div className="flex items-center gap-x-3 gap-y-1 mt-1 flex-wrap text-xs text-foreground">
+              {showScheduling && (
+                <span className="inline-flex items-center gap-1">
+                  <ObjectIcon type="event" className="w-3.5 h-3.5 text-muted-foreground" />
+                  <ScheduledLine actions={actions} />
+                </span>
+              )}
+              {/* Only repeating rows say so; no "next": the date is just left of it. */}
+              {showScheduling && repeats(getRecurrenceConfig(intent)) && (
+                <span className="inline-flex items-center gap-1 text-muted-foreground">
+                  <Repeat className="w-3.5 h-3.5" aria-label="Repeats" />
+                  {describeRepeat({
+                    config: getRecurrenceConfig(intent),
+                    endDate: intent.endDate,
+                    today: getTodayDate(),
+                    showNext: false,
+                  })}
+                </span>
+              )}
+              {reminder && (
+                <span
+                  className={`text-muted-foreground${reminder.muted ? " opacity-70" : ""}`}
+                  title={reminder.muted ? "Reminder sent (Pacific time)" : "Pending reminder (Pacific time)"}
+                >
+                  🔔 {reminder.text}
+                </span>
+              )}
+            </div>
+          )}
           {/* Step 12.8. ItemCard has carried one of these since Phase 6;
               IntentionCard never got one, so an intention was the only record in
               Alfred whose "Last modified" order you could sort by but not see.

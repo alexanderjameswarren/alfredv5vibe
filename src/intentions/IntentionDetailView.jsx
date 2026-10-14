@@ -5,7 +5,7 @@ import OverflowMenu from "../shared/OverflowMenu";
 import { ACTION_BUTTON } from "../shared/actionButton";
 import { getTodayDate } from "../utils/eventDates";
 import { getRecurrenceConfig } from "../utils/recurrence";
-import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
+import { describeRepeat } from "../utils/recurrenceDisplay";
 import ObjectIcon from "../shared/ObjectIcon";
 import DetailMeta from "../shared/DetailMeta";
 import SchedulePopover from "../shared/recurrence/SchedulePopover";
@@ -254,7 +254,13 @@ export default function IntentionDetailView({
         <DetailMeta tags={intention.tags} />
 
         <p className="text-sm text-muted-foreground mt-2">
-          Recurrence: {getRecurrenceDisplayString(getRecurrenceConfig(intention), intention.endDate)}
+          Repeats:{" "}
+          {describeRepeat({
+            config: getRecurrenceConfig(intention),
+            endDate: intention.endDate,
+            nextDate: actions.live?.time || null,
+            today: getTodayDate(),
+          })}
         </p>
         {/* The one live event, as part of the intention; its actions are in the row below. */}
         <p className="text-sm mt-1">

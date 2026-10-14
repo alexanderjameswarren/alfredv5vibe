@@ -1,121 +1,28 @@
 /**
- * Human-readable display string helper for recurrence configurations.
+ * Repeats in plain words (Restructure P4 Step 5). The one formatter for every
+ * repeat line: rows, intention detail, the repeat picker, inbox triage, recycle bin.
  *
- * Pure function — no side effects, no app imports, no React.
- */
-
-const DAY_NAMES = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const DAY_ABBR = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-/**
- * Returns a human-readable display string for a recurrence configuration.
+ * Two kinds, and the words say which:
+ *   fixed schedule      "Every week on Tuesday"        (the calendar decides)
+ *   after completion    "3 weeks after you last did it" (the last time decides)
  *
- * @param {Object} config - A recurrence_config JSONB object
- * @param {string} [endDate] - Optional end date string ("YYYY-MM-DD") to append "until ..." suffix
- * @returns {string} e.g. "Weekly on Tuesday", "Every 3 months on the first weekday"
+ * Pure — no React, no app state.
  */
-export function getRecurrenceDisplayString(config, endDate) {
-  if (!config || config.type === 'once') {
-    return 'Does not repeat';
-  }
 
-  let text = '';
+const DAY_NAMES = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+const ORDINAL_WORDS = { first: "first", second: "second", third: "third", fourth: "fourth", last: "last" };
 
-  if (config.type === 'fixed') {
-    text = formatFixed(config);
-  } else if (config.type === 'interval') {
-    text = formatInterval(config);
-  } else {
-    return 'Does not repeat';
-  }
-
-  if (endDate) {
-    text += ` · until ${formatEndDate(endDate)}`;
-  }
-
-  return text;
+/** "Monday", "Monday and Friday", "Monday, Wednesday and Friday" */
+function listWords(words) {
+  if (words.length <= 1) return words.join("");
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
 
-/**
- * Formats a fixed-schedule recurrence config into a display string.
- */
-function formatFixed(config) {
-  const { frequency, interval = 1 } = config;
-
-  switch (frequency) {
-    case 'daily':
-      return formatDaily(interval);
-    case 'weekly':
-      return formatWeekly(config);
-    case 'monthly':
-      return formatMonthly(config);
-    default:
-      return 'Does not repeat';
-  }
-}
-
-/** "Every day" or "Every N days" */
-function formatDaily(interval) {
-  if (interval === 1) return 'Every day';
-  return `Every ${interval} days`;
-}
-
-/** "Weekly on Tuesday" / "Every 2 weeks on Tuesday" / "Weekly on Mon, Wed, Fri" */
-function formatWeekly(config) {
-  const { interval = 1, daysOfWeek = [] } = config;
-
-  if (daysOfWeek.length === 0) {
-    return interval === 1 ? 'Weekly' : `Every ${interval} weeks`;
-  }
-
-  const sorted = [...daysOfWeek].sort((a, b) => a - b);
-  const dayStr = sorted.length === 1
-    ? DAY_NAMES[sorted[0]]
-    : sorted.map((d) => DAY_ABBR[d]).join(', ');
-
-  if (interval === 1) {
-    return `Weekly on ${dayStr}`;
-  }
-  return `Every ${interval} weeks on ${dayStr}`;
-}
-
-/** "Monthly on the 15th" / "Monthly on the first Monday" / "Every 3 months on the first weekday" */
-function formatMonthly(config) {
-  const { interval = 1 } = config;
-  const prefix = interval === 1 ? 'Monthly' : `Every ${interval} months`;
-
-  if (config.ordinal) {
-    const dayStr = config.dayOfWeek === 'weekday'
-      ? 'weekday'
-      : DAY_NAMES[config.dayOfWeek] || '';
-    return `${prefix} on the ${config.ordinal} ${dayStr}`;
-  }
-
-  if (config.dayOfMonth) {
-    return `${prefix} on the ${ordinalSuffix(config.dayOfMonth)}`;
-  }
-
-  return prefix;
-}
-
-/**
- * Formats an interval-from-completion config.
- * "Every 2 days after completion" / "Every 6 months after completion"
- */
-function formatInterval(config) {
-  const { every, unit } = config;
-  if (!every || !unit) return 'After completion';
-
-  // Singularise unit when every === 1 ("Every 1 day" → "Every day")
-  const unitStr = every === 1 ? unit.replace(/s$/, '') : unit;
-
-  if (every === 1) {
-    return `Every ${unitStr} after completion`;
-  }
-  return `Every ${every} ${unitStr} after completion`;
-}
-
-/** Turns 1→"1st", 2→"2nd", 3→"3rd", 15→"15th", 21→"21st", etc. */
+/** 1→"1st", 2→"2nd", 11→"11th", 22→"22nd" */
 function ordinalSuffix(n) {
   const mod100 = n % 100;
   if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
@@ -127,12 +34,85 @@ function ordinalSuffix(n) {
   }
 }
 
-/** Formats "2026-05-29" → "May 29, 2026" */
-function formatEndDate(dateStr) {
-  const months = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December',
-  ];
-  const [year, month, day] = dateStr.split('-').map(Number);
-  return `${months[month - 1]} ${day}, ${year}`;
+const plural = (n, unit) => `${n} ${n === 1 ? unit : `${unit}s`}`;
+
+/** True when the config repeats at all ({type:"once"}, null and unknown shapes do not). */
+export function repeats(config) {
+  if (!config) return false;
+  if (config.type === "interval") return Boolean(config.every && config.unit);
+  return config.type === "fixed" && ["daily", "weekly", "monthly"].includes(config.frequency);
+}
+
+/** The pattern alone: "Every day", "3 weeks after you last did it", "Does not repeat". */
+export function repeatPattern(config) {
+  if (!repeats(config)) return "Does not repeat";
+  if (config.type === "interval") {
+    const unit = String(config.unit).replace(/s$/, "");
+    return `${plural(config.every, unit)} after you last did it`;
+  }
+  const n = config.interval || 1;
+  if (config.frequency === "daily") return n === 1 ? "Every day" : `Every ${n} days`;
+  if (config.frequency === "weekly") {
+    const every = n === 1 ? "Every week" : `Every ${n} weeks`;
+    const days = [...(config.daysOfWeek || [])].sort((a, b) => a - b);
+    if (days.length === 0) return `${every}, with no day chosen`;
+    if (n === 1 && days.join() === "1,2,3,4,5") return "Every weekday, Monday to Friday";
+    if (n === 1 && days.length === 7) return "Every day";
+    return `${every} on ${listWords(days.map((d) => DAY_NAMES[d]))}`;
+  }
+  const every = n === 1 ? "Every month" : `Every ${n} months`;
+  if (config.ordinal) {
+    const day = config.dayOfWeek === "weekday" ? "weekday" : DAY_NAMES[config.dayOfWeek] || "day";
+    return `${every} on the ${ORDINAL_WORDS[config.ordinal] || config.ordinal} ${day}`;
+  }
+  if (config.dayOfMonth) return `${every} on the ${ordinalSuffix(config.dayOfMonth)}`;
+  return `${every}, with no day chosen`;
+}
+
+/** "Wednesday, October 15", with the year when it is not this year's. */
+export function longDate(dateStr, today) {
+  const [y, m, d] = String(dateStr).slice(0, 10).split("-").map(Number);
+  const weekday = DAY_NAMES[((new Date(y, m - 1, d).getDay() + 6) % 7) + 1];
+  const year = y !== Number(String(today).slice(0, 4)) ? `, ${y}` : "";
+  return `${weekday}, ${MONTHS[m - 1]} ${d}${year}`;
+}
+
+/** "October 13" (or with the year), for until and ended. */
+function shortLongDate(dateStr, today) {
+  const [y, m, d] = String(dateStr).slice(0, 10).split("-").map(Number);
+  const year = y !== Number(String(today).slice(0, 4)) ? `, ${y}` : "";
+  return `${MONTHS[m - 1]} ${d}${year}`;
+}
+
+/**
+ * The full repeat line.
+ *   config     the intention's recurrence (getRecurrenceConfig)
+ *   endDate    intents.end_date ("YYYY-MM-DD") or null
+ *   nextDate   the next occurrence: the live event's date, or null. Only a live event
+ *              is shown as "next" — nothing creates an occurrence without one.
+ *   today      "YYYY-MM-DD"
+ *   showNext   false where the row's schedule line already shows that date
+ */
+export function describeRepeat({ config, endDate = null, nextDate = null, today, showNext = true }) {
+  if (!repeats(config)) return "Does not repeat";
+  // Today counts as ended: no occurrence can follow it (Stop writes today).
+  if (endDate && endDate <= today) return `Ended ${shortLongDate(endDate, today)}`;
+  let text = repeatPattern(config);
+  if (endDate) text += ` · until ${shortLongDate(endDate, today)}`;
+  const next = nextDate ? String(nextDate).slice(0, 10) : null;
+  // An overdue date is not "next"; the schedule line already calls it Overdue.
+  if (showNext && next && next >= today && (!endDate || next <= endDate)) {
+    text += ` · next ${longDate(next, today)}`;
+  }
+  return text;
+}
+
+/**
+ * Pattern plus end date, for the repeat picker and triage, where there is no event yet.
+ * Kept under its old name for those callers.
+ */
+export function getRecurrenceDisplayString(config, endDate, today = null) {
+  if (!repeats(config)) return "Does not repeat";
+  const text = repeatPattern(config);
+  return endDate ? `${text} · until ${shortLongDate(endDate, today || endDate)}` : text;
 }

@@ -1418,7 +1418,7 @@ export default function Alfred() {
             onAddIntention={handleAddIntentionToContext}
             onCancelExecution={cancelExecutionForEvent}
             onStartNowIntention={startNowFromIntention}
-            onArchiveIntention={archiveIntention}
+            onCloseRecords={closeRecords}
             onViewItem={viewItemDetail}
             onViewContextDetail={viewContextDetail}
             onViewIntentionDetail={(id) => viewIntentionDetail(id, "item-detail")}
