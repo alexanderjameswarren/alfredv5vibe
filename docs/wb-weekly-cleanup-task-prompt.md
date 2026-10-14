@@ -5,7 +5,7 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
 
 - **Schedule:** weekly, **Sunday 18:00 America/Los_Angeles**. That is after Saturday's sync, so
   the item is waiting at the start of the week.
-- **App / job:** `warren_buffet` / `wb_weekly_cleanup`.
+- **App / job:** `warren_buffet` / `wb_weekly_cleanup` (schedule row `f457ee6e-4e76-4ea0-9791-ec91b1383cf8`).
 - **Tools:** Alfred connector only. It needs **mcp v153 or later**, which has
   `get_wb_rule_health` returning `{ counts_by_finding, items }` and `acknowledge_wb_rule_health`.
 - **Spec:** `docs/technical-spec-warren_buffet_p2-m4t.md`, Step 10 and §4.9.
@@ -17,7 +17,7 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
 > version, and Step 9 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-10-13b`
+> ### `PROMPT VERSION: 2026-10-14a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -37,11 +37,11 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
      enabled and no other connectors.
    - Name it "Money cleanup".
    - Paste everything below "THE PROMPT" line as its instructions.
-3. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual, so
-   Step 8 adds `manual: true`. Check three things:
+3. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
+   Step 2 reads that, and Step 8 records `manual: true`. Check three things:
    - a `platform_runs` row for `warren_buffet` / `wb_weekly_cleanup` closed `ok`;
    - one inbox item, or none on a quiet week;
-   - a final report that shows `PROMPT VERSION: 2026-10-13b`.
+   - a final report that shows `PROMPT VERSION: 2026-10-14a`.
 
 ## The record and the notification are SEPARATE
 
@@ -60,7 +60,7 @@ A quiet week raises nothing. A signal that fires on the normal case teaches its 
 ---
 
 You are running the weekly Money cleanup for Alex and Elise's household finances in Alfred.
-`PROMPT VERSION: 2026-10-13b`. Follow these steps in order. **Do not improvise.**
+`PROMPT VERSION: 2026-10-14a`. Follow these steps in order. **Do not improvise.**
 
 ### The rules that override everything else
 
@@ -85,10 +85,16 @@ Call `create_platform_run` with `app: "warren_buffet"`, `job: "wb_weekly_cleanup
 `executor: "claude"`, `status: "running"`. **Keep the run id.** If this call fails, skip Step 8,
 create the failure item (Step 8, "On failed"), then Step 9.
 
-### Step 2 — The dates
+### Step 2 — The dates, and whether this run is manual
 
 Work out **today's date in America/Los_Angeles** (`local_date`), and `review_horizon` = local_date
 plus 30 days.
+
+Then decide `manual`, **now, before reading anything else**. Write it down: Step 8 records it
+whatever happens.
+- `manual = true` if the message that started this run (any text besides these instructions)
+  says it is manual, by hand, a test, or a "run now".
+- Otherwise `manual = false`. A scheduled run starts with these instructions and nothing else.
 
 ### Step 3 — Read, and only read
 
@@ -218,11 +224,11 @@ errors, STOP with `failure_kind: "inbox_write"`.
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `ok` unless a step said STOP; then `failed`.
 - **`details`**, always:
-  - `local_date` and `prompt_version: "2026-10-13b"`;
+  - `local_date`, `prompt_version: "2026-10-14a"` and `manual` (true or false, from Step 2);
   - `rule_health` (the counts by finding), `review_queue_total`, `overdue_count`,
     `reviews_due_count`;
   - then one of `inbox_item_id` or `quiet: true`;
-  - also `previous_item_id`, `inbox_read_failed` and `manual: true` when they apply.
+  - also `previous_item_id` and `inbox_read_failed` when they apply.
 - **On `failed`:** `error_message` is the verbatim error, and `details.failure_kind` is one of
   `rule_health_read`, `review_queue_read`, `subscriptions_read`, `read_truncated`, `inbox_write`,
   `run_open`, `unknown`. **Never downgrade a failure to `ok` to get past a rejected close.**
@@ -241,8 +247,8 @@ Run: <run id>
 ### Step 9 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-13b`;
-- the run id and its status;
+- `PROMPT VERSION: 2026-10-14a`;
+- the run id and its status, and `manual: true` or `manual: false`;
 - the counts from Step 8;
 - the inbox item id, or "quiet week, no item";
 - any error, verbatim.
