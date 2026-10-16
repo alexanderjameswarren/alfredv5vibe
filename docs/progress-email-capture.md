@@ -9,7 +9,8 @@ Spec: docs/technical-spec-email-capture.md.
 | 3 | Text clean-up + webhook secret (parse.ts, index.ts, config.toml comment) | v18 18:25 UTC; test failed on row 59ecd744 (forward of a forward: second signature and inner block left in, outer block's headers recorded). Fixed: signature stripped repeatedly and tolerantly, every block's headers removed, innermost block → original_*. v19 deployed 18:41 UTC (verify_jwt false, no-token → 401); checkpointed to main at bebb8ec |
 | 4 | Dedupe index + 23505 handling + original_message_id | migration 126 applied by Alex 2026-10-13 (conformant, index present); v20 deployed 20:13 UTC (verify_jwt false, no-token → 401); checkpointed to main at 06e68a0 |
 | 5 | Trusted auto-forward acceptance, forwarder → user | v21 deployed 20:29 UTC; gap found by Alex (anyone accepted via the secorus filter's caf_ forward). 5c: rule 1 (capture address → allowlisted From, Delivered-To counts), X-Forwarded-For scan, rejection notices. parse 41/41, CLI 224/224, app 2465/2465. v22 deployed 21:20 UTC; live tests passed (gmail hand-forward captured; katieporter blocked with notice, Postmark URL pattern confirmed). 5d: rule 1(b) for Gmail rules forwarding into capture addresses (option A, decided risk). parse 46/46; v23 deployed 22:25 UTC (verify_jwt false, no-token → 401); awaiting real Gmail-rule forwards |
-| 6 | Finish (gitpush Finish) | – |
+| 6 | Finish (gitpush Finish) | done (email_capture-f4m) |
+| fix-r2w s1 | Rule 1(b) on a real auto-forward (email_capture_fix-r2w, 2026-10-16): Google auth-results +caf_ mailfrom (preferred) or renamed X-…-Forwarded-For; stranger check reads renamed headers. s1b: the real payload (.scratch/amazon-autoforward.json) accepted via signal 1 (topmost ARC-Authentication-Results i=4); the Amazon test is now built from its headers. parse 57/57, CLI 224/224, app 2596/2596. Drift check: gitsync brought nothing (HEAD = main = origin/main b1dc642). v24 deployed 21:17 UTC (verify_jwt false, no-token → 401); awaiting next real auto-forward, then Checkpoint |
 
 ## Decisions
 
@@ -38,5 +39,10 @@ Spec: docs/technical-spec-email-capture.md.
 - Step 5 drift check: gitsync to 3615e2b brought Money/SAM front-end, docs, and
   two intents-only edits in alfred-tools (getIntents select and recurring filter,
   Intent type). Nothing touches inbox or email-capture.
+- 2026-10-16: a real Amazon auto-forward (gmail → alfred@ → Postmark) was blocked
+  as "sender is not on the allowlist". Google renames the earlier hop's
+  X-Forwarded-For to X-X-Forwarded-For on a second forward, so 1(b) never saw
+  it; Google's Authentication-Results / ARC-Authentication-Results (i=3, i=4)
+  showed spf=pass for `alexanderjameswarren+caf_=alfred=secorus.com@gmail.com`.
 - Step 5 removed the pre-decision debug logs (full From/To/Subject); logs now
   carry domains and a rejection reason only.

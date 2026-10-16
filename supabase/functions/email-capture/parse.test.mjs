@@ -246,6 +246,145 @@ test("1(b): the secorus → Postmark hop alone never counts", () => {
   assert.equal(d.reason, "capture_address_sender_not_allowed");
 });
 
+// Real data: .scratch/amazon-autoforward.json, 2026-10-16 (Amazon → Alex's
+// gmail → alfred@ → Postmark). Its decision headers, in payload order; DKIM,
+// ARC seals and Received lines left out. Google renamed the gmail.com hop's
+// X-Forwarded-For to X-X-Forwarded-For on the second forward.
+const AMZ_BOUNCE = "20261016010908d2dc51738dab49aa88175a2f13c0p0na-c2fajtwl31sk4m@bounces.amazon.com";
+const AMZ_DKIM = "dkim=pass header.i=@amazon.com header.s=v52wzeq2nhi2ivaga2mkkcxigoeqeycs header.b=mve1oZ9+;       dkim=pass header.i=@amazonses.com header.s=224i4yxa5dv7c2xz3womw6peuasteono header.b=Bu2cuxKR;";
+const AMZ_DMARC = "dmarc=pass (p=QUARANTINE sp=QUARANTINE dis=NONE) header.from=amazon.com";
+const AMZ_INTO_ALFRED = `mx.google.com;       ${AMZ_DKIM}       arc=pass (i=2 spf=pass spfdomain=bounces.amazon.com dkim=pass dkdomain=amazon.com dkim=pass dkdomain=amazonses.com dmarc=pass fromdomain=amazon.com);       spf=pass (google.com: domain of alexanderjameswarren+caf_=alfred=secorus.com@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom="alexanderjameswarren+caf_=alfred=secorus.com@gmail.com";       ${AMZ_DMARC};       dara=neutral header.i=@secorus.com`;
+const AMZ_INTO_GMAIL = `mx.google.com;       ${AMZ_DKIM}       spf=pass (google.com: domain of ${AMZ_BOUNCE} designates 54.240.15.176 as permitted sender) smtp.mailfrom=20261016010908d2dc51738dab49aa88175a2f13c0p0na-C2FAJTWL31SK4M@bounces.amazon.com;       ${AMZ_DMARC}`;
+const REAL_AMAZON = [
+  { Name: "Return-Path", Value: "<alex.warren+caf_=22edead6c8585c5cdd11b72d6d1b3e01=inbound.postmarkapp.com@secorus.com>" },
+  { Name: "Received-SPF", Value: postmarkSpf(caf("alex.warren", "secorus.com"), "secorus.com") },
+  { Name: "ARC-Authentication-Results", Value: `i=4; ${AMZ_INTO_ALFRED}` },
+  { Name: "X-Forwarded-To", Value: `${PM}@inbound.postmarkapp.com` },
+  { Name: "X-Forwarded-For", Value: `alex.warren@secorus.com ${PM}@inbound.postmarkapp.com` },
+  { Name: "Delivered-To", Value: "alfred@secorus.com" },
+  { Name: "ARC-Authentication-Results", Value: `i=3; ${AMZ_INTO_ALFRED}` },
+  { Name: "Received-SPF", Value: "pass (google.com: domain of alexanderjameswarren+caf_=alfred=secorus.com@gmail.com designates 209.85.220.41 as permitted sender) client-ip=209.85.220.41;" },
+  { Name: "Authentication-Results", Value: AMZ_INTO_ALFRED },
+  { Name: "ARC-Authentication-Results", Value: `i=2; ${AMZ_INTO_GMAIL}` },
+  { Name: "X-Forwarded-To", Value: "alfred@secorus.com" },
+  { Name: "X-X-Forwarded-For", Value: "alexanderjameswarren@gmail.com alfred@secorus.com" },
+  { Name: "Delivered-To", Value: "alexanderjameswarren@gmail.com" },
+  { Name: "ARC-Authentication-Results", Value: `i=1; ${AMZ_INTO_GMAIL}` },
+  { Name: "Received-SPF", Value: `pass (google.com: domain of ${AMZ_BOUNCE} designates 54.240.15.176 as permitted sender) client-ip=54.240.15.176;` },
+  { Name: "Message-ID", Value: "<010001a142417607-848bcd2a-be19-438c-bf23-2bd73d3c542c-000000@email.amazonses.com>" },
+];
+const AMAZON_TO = ["alexanderjameswarren@gmail.com", "alexanderjameswarren@gmail.com"];
+const without = (headers, name) => headers.filter((h) => h.Name !== name);
+
+test("real Amazon auto-forward: accepted, Alex, auto-forwarded", () => {
+  assert.deepEqual(p.googleForwardHop(REAL_AMAZON), { account: "alexanderjameswarren@gmail.com", to: "alfred@secorus.com" });
+  assert.deepEqual(p.decideCapture("store-news@amazon.com", AMAZON_TO, REAL_AMAZON), {
+    accept: true,
+    userEmail: "alexanderjameswarren@gmail.com",
+    label: "Alex",
+    captureAddress: undefined,
+    via: "forward",
+  });
+});
+
+test("real Amazon: either signal alone accepts", () => {
+  const authOnly = without(REAL_AMAZON, "X-X-Forwarded-For");
+  assert.equal(p.decideCapture("store-news@amazon.com", AMAZON_TO, authOnly).via, "forward");
+  const headerOnly = without(without(REAL_AMAZON, "ARC-Authentication-Results"), "Authentication-Results");
+  assert.equal(p.googleForwardHop(headerOnly), null);
+  assert.equal(p.decideCapture("store-news@amazon.com", AMAZON_TO, headerOnly).via, "forward");
+});
+
+const cafTo = (local, domain, capture) => `${local}+caf_=${capture.replace("@", "=")}@${domain}`;
+const googleAr = (mailfrom, i) =>
+  `${i ? `i=${i}; ` : ""}mx.google.com;\r\n       dkim=pass header.i=@amazon.com;\r\n       spf=pass (google.com: domain of ${mailfrom} designates 209.85.220.41 as permitted sender) smtp.mailfrom="${mailfrom}";\r\n       dmarc=pass (p=QUARANTINE) header.from=amazon.com`;
+
+function autoForward(account, capture, { mailfrom, xxff = `${account} ${capture}`, ar = true, extra = [] } = {}) {
+  const [local, domain] = account.split("@");
+  const envelope = mailfrom ?? cafTo(local, domain, capture);
+  return [
+    ...forwardHeaders("alex.warren", "secorus.com").filter((h) => h.Name !== "Delivered-To" && h.Name !== "Received-SPF" && h.Name !== "Message-Id"),
+    { Name: "Delivered-To", Value: capture },
+    ...(ar ? [
+      { Name: "ARC-Authentication-Results", Value: googleAr(envelope, 4) },
+      { Name: "ARC-Authentication-Results", Value: googleAr(envelope, 3) },
+    ] : []),
+    { Name: "Return-Path", Value: `<${envelope}>` },
+    ...(ar ? [{ Name: "Authentication-Results", Value: googleAr(envelope) }] : []),
+    { Name: "X-Forwarded-To", Value: capture },
+    ...(xxff ? [{ Name: "X-X-Forwarded-For", Value: xxff }] : []),
+    { Name: "Delivered-To", Value: account },
+    ...extra,
+    { Name: "Authentication-Results", Value: googleAr("bounces@amazon.com") },
+    { Name: "Message-Id", Value: "<0100019a@email.amazonses.com>" },
+  ];
+}
+test("real Amazon as Elise → recipes@: Alex, recipes", () => {
+  const h = REAL_AMAZON.map((x) => ({
+    Name: x.Name,
+    Value: x.Value.replaceAll("alexanderjameswarren", "enhdesigns").replaceAll("alfred=secorus.com", "recipes=secorus.com")
+      .replaceAll("alfred@secorus.com", "recipes@secorus.com"),
+  }));
+  assert.equal(p.googleForwardHop(h).account, "enhdesigns@gmail.com");
+  const d = p.decideCapture("auto-confirm@amazon.com", ["enhdesigns@gmail.com"], h);
+  assert.equal(d.accept, true);
+  assert.equal(d.captureAddress, "recipes");
+  assert.equal(d.via, "forward");
+});
+
+test("auth results alone, no forwarding header: accepted", () => {
+  const h = autoForward("alexanderjameswarren@gmail.com", "alfred@secorus.com", { xxff: null });
+  assert.equal(p.decideCapture("auto-confirm@amazon.com", [], h).accept, true);
+});
+
+test("renamed header alone, no auth results: accepted", () => {
+  const h = autoForward("alexanderjameswarren@gmail.com", "alfred@secorus.com", { ar: false });
+  assert.equal(p.decideCapture("auto-confirm@amazon.com", [], h).accept, true);
+});
+
+test("stranger's gmail.com in the mailfrom: rejected", () => {
+  const h = autoForward("stranger@gmail.com", "alfred@secorus.com", { xxff: null });
+  assert.equal(p.googleForwardHop(h).account, "stranger@gmail.com");
+  assert.equal(p.decideCapture("auto-confirm@amazon.com", [], h).reason, "capture_address_sender_not_allowed");
+});
+
+test("mailfrom pointing at another capture address: rejected", () => {
+  const h = autoForward("alexanderjameswarren@gmail.com", "alfred@secorus.com", {
+    mailfrom: cafTo("alexanderjameswarren", "gmail.com", "recipes@secorus.com"),
+    xxff: null,
+  });
+  assert.equal(p.decideCapture("auto-confirm@amazon.com", [], h).reason, "capture_address_sender_not_allowed");
+});
+
+test("renamed X-X-Forwarded-For naming a stranger: rejected", () => {
+  const h = autoForward("alexanderjameswarren@gmail.com", "alfred@secorus.com", { xxff: "stranger@gmail.com alfred@secorus.com" });
+  const d = p.decideCapture("auto-confirm@amazon.com", [], h);
+  assert.equal(d.reason, "forwarded_by_unknown_account");
+  assert.equal(d.domain, "gmail.com");
+});
+
+test("X-X-X-Forwarded-For counts as a hop", () => {
+  const h = [{ Name: "X-X-X-Forwarded-For", Value: "Stranger@Gmail.com alfred@secorus.com" }];
+  assert.deepEqual(p.forwardHops(h), [{ account: "stranger@gmail.com", to: "alfred@secorus.com" }]);
+});
+
+test("sender-written auth results below Google's: ignored", () => {
+  const fake = { Name: "Authentication-Results", Value: googleAr(cafTo("alexanderjameswarren", "gmail.com", "alfred@secorus.com")) };
+  const h = [
+    ...viaSecorus("alfred@secorus.com"),
+    { Name: "Authentication-Results", Value: googleAr("stranger@other.example") },
+    fake,
+    { Name: "ARC-Authentication-Results", Value: googleAr(cafTo("alexanderjameswarren", "gmail.com", "alfred@secorus.com"), 9) },
+  ];
+  assert.equal(p.googleForwardHop(h), null);
+  assert.equal(p.decideCapture("x@other.example", [], h).reason, "capture_address_sender_not_allowed");
+});
+
+test("spf not pass in Google's results: no hop", () => {
+  const h = [{ Name: "Authentication-Results", Value: googleAr(cafTo("alexanderjameswarren", "gmail.com", "alfred@secorus.com")).replace("spf=pass", "spf=softfail") }];
+  assert.equal(p.googleForwardHop(h), null);
+});
+
 // --- Rejection notices ---
 
 function fakeStore() {

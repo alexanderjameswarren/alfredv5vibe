@@ -219,15 +219,46 @@ export function findCaptureHit(addresses: string[]): { address: string; mapping:
   return null;
 }
 
-/** Every X-Forwarded-For hop: `<forwarding account> <forwarded-to>`. */
+// Google renames an earlier hop's X-Forwarded-For to X-X-Forwarded-For when it
+// forwards again, so any number of "X-" prefixes counts.
+const FORWARDED_FOR = /^(?:x-)+forwarded-for$/i;
+
+/** Every X-Forwarded-For hop, renamed ones too: `<forwarding account> <forwarded-to>`. */
 export function forwardHops(headers: PostmarkHeader[] | null | undefined): { account: string; to: string }[] {
   return (headers ?? [])
-    .filter((h) => h?.Name?.toLowerCase() === "x-forwarded-for")
+    .filter((h) => FORWARDED_FOR.test(h?.Name ?? ""))
     .map((h) => {
       const [account = "", to = ""] = (h.Value ?? "").trim().toLowerCase().split(/\s+/);
       return { account, to };
     })
     .filter((hop) => hop.account);
+}
+
+/**
+ * The +caf_ envelope Google authenticated on the delivery into the capture
+ * mailbox: `<account local>+caf_=<capture local>=<capture domain>@<account domain>`.
+ * Only results headers down to the first Authentication-Results are read:
+ * Google prepends its own, so anything a sender wrote sits lower.
+ */
+export function googleForwardHop(headers: PostmarkHeader[] | null | undefined): { account: string; to: string } | null {
+  for (const h of headers ?? []) {
+    const name = h?.Name?.toLowerCase();
+    if (name !== "authentication-results" && name !== "arc-authentication-results") continue;
+    const value = (h.Value ?? "").replace(/^\s*i=\d+\s*;/i, "");
+    const [servId, ...rest] = value.split(";");
+    const last = name === "authentication-results";
+    if (servId.trim().toLowerCase() !== "mx.google.com") {
+      if (last) return null;
+      continue;
+    }
+    if (servId.trim().toLowerCase() !== "mx.google.com") continue;
+    const results = rest.join(";");
+    const mailfrom = /\bsmtp\.mailfrom="?([^";\s]+)"?/i.exec(results)?.[1]?.toLowerCase() ?? "";
+    const caf = /^([^@+\s]+)\+caf_=([^=@\s]+)=([^=@\s]+)@([^@\s]+)$/.exec(mailfrom);
+    if (caf && /\bspf=pass\b/i.test(results)) return { account: `${caf[1]}@${caf[4]}`, to: `${caf[2]}@${caf[3]}` };
+    if (last) return null;
+  }
+  return null;
 }
 
 /** First address of every X-Forwarded-For header: the accounts that forwarded it. */
@@ -241,11 +272,12 @@ export function forwardingAccounts(headers: PostmarkHeader[] | null | undefined)
  * Bcc still counts.
  *
  * Rule 1: a capture address is a recipient → accept if (a) the From is
- *   allowlisted, or (b) an earlier hop's X-Forwarded-For shows an allowlisted
- *   account forwarding to that same capture address (option A, decided risk:
- *   the header can be faked; see the spec).
+ *   allowlisted, or (b) an earlier hop shows an allowlisted account forwarding
+ *   to that same capture address: Google's spf=pass +caf_ mailfrom
+ *   (googleForwardHop), or an X-Forwarded-For, renamed or not (option A,
+ *   decided risk: that header can be faked; see the spec).
  * Rule 2: otherwise a trusted auto-forward (checkAutoForward) is accepted.
- * Either way, any X-Forwarded-For naming a non-allowlisted account rejects.
+ * Either way, any X-Forwarded-For (renamed too) naming a non-allowlisted account rejects.
  * Rejections carry a reason and one domain, never content or a full address.
  */
 export function decideCapture(
@@ -269,9 +301,12 @@ export function decideCapture(
     if (fromAllowed) {
       return { accept: true, userEmail: m.userEmail, label: m.label, captureAddress: m.captureAddress, via: "from" };
     }
-    // (b): the capture address's own filter hop forwards to Postmark, so a hop
-    // whose forwarded-to IS the capture address can only be an earlier one.
-    const allowedHop = forwardHops(headers).some((hop) => hop.to === hit.address && isSenderAllowed(hop.account));
+    // (b): Google's authenticated +caf_ envelope first, else a forwarding header.
+    // The capture address's own hop forwards to Postmark, so a hop whose
+    // forwarded-to IS the capture address can only be an earlier one.
+    const intoCapture = (hop: { account: string; to: string } | null) =>
+      !!hop && hop.to === hit.address && isSenderAllowed(hop.account);
+    const allowedHop = intoCapture(googleForwardHop(headers)) || forwardHops(headers).some(intoCapture);
     if (allowedHop) {
       return { accept: true, userEmail: m.userEmail, label: m.label, captureAddress: m.captureAddress, via: "forward" };
     }
