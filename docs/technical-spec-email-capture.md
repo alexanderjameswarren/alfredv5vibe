@@ -48,6 +48,26 @@ sent to one, `alex.warren@secorus.com` on input A.
   since the capture address's own hop forwards to Postmark. (b) rows carry
   `auto_forwarded: true`; the capture address still decides the user (D2).
   Else reject `capture_address_sender_not_allowed`.
+- **Rule 1(b) fix, 2026-10-16 (email_capture_fix-r2w).** A real Amazon
+  auto-forward (Alex's gmail → alfred@ → Postmark) was blocked: on the second
+  forward Google **renames** the earlier hop's `X-Forwarded-For` to
+  `X-X-Forwarded-For` (beside `X-Forwarded-To: alfred@secorus.com`), so only the
+  secorus → Postmark hop kept the plain name. (b) now accepts either:
+  1. **Preferred:** Google's results for the delivery into the capture mailbox —
+     `Authentication-Results` / `ARC-Authentication-Results` with authserv-id
+     `mx.google.com`, `spf=pass`, and `smtp.mailfrom` =
+     `<allowlisted local>+caf_=<capture local>=<capture domain>@<allowlisted domain>`
+     whose capture address is the one rule 1 hit. Why preferred: Google writes it
+     from the connecting IP, only Google's servers pass SPF for gmail.com, and
+     Gmail builds the +caf_ envelope from the forwarding account and target, so a
+     stranger's mail cannot produce it. Only results headers down to the first
+     `Authentication-Results` are read: Google prepends its own, so a copy written
+     by the sender sits lower and is ignored (`googleForwardHop`).
+  2. A forwarding header under any number of `X-` prefixes (`X-Forwarded-For`,
+     `X-X-Forwarded-For`, …) naming an allowlisted account and that capture
+     address — still the option A decided risk below.
+  The stranger check (first bullet) reads renamed headers too. Elise's
+  `enhdesigns+caf_=recipes=secorus.com@gmail.com` works the same way.
 - **Decided risk, 2026-10-13:** rule 1(b) trusts an X-Forwarded-For header that
   a stranger could write into their own message, so a stranger who knows an
   allowlisted address and a capture address can get a row in. Alex accepted
