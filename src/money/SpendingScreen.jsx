@@ -2,7 +2,28 @@ import React, { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { getCashFlow, getSpending, getTagTree } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
+import { HelpAfter } from "./HelpButton";
 import { addMonths, formatMonth, formatMoney, monthOf, pacificToday, spendingForMonth, toNumber } from "./moneyFormat";
+
+/** Live working for cash flow: the six months added up, and which ran negative. */
+export function CashFlowWorking({ flow }) {
+  if (!flow.length) return <p>No months recorded yet.</p>;
+  const sum = (k) => flow.reduce((t, f) => t + (toNumber(f[k]) || 0), 0);
+  const negative = flow.filter((f) => toNumber(f.net) < 0).map((f) => formatMonth(f.month));
+  const unprocessed = sum("unprocessed");
+  return (
+    <>
+      <p>
+        {formatMonth(flow[0].month)} to {formatMonth(flow[flow.length - 1].month)}: in {formatMoney(sum("income"), { whole: true })},
+        {" "}out {formatMoney(-sum("spending"), { whole: true })}, net {formatMoney(sum("net"), { whole: true })}.
+      </p>
+      <p className="mt-1">
+        {negative.length ? `More went out than came in during ${negative.join(", ")}.` : "No month had more going out than coming in."}
+      </p>
+      {unprocessed > 0 && <p className="mt-1">{unprocessed} transaction{unprocessed === 1 ? " is" : "s are"} not processed yet, so not counted.</p>}
+    </>
+  );
+}
 
 const SECTION = "bg-card border border-border rounded-lg p-4";
 
@@ -53,7 +74,15 @@ export default function SpendingScreen() {
           <>
             <section className={SECTION}>
               <div className="flex items-baseline justify-between gap-3 mb-2">
-                <h3 className="font-medium">Spending by category, {formatMonth(month)}</h3>
+                <h3 className="font-medium">
+                  Spending by category,{" "}
+                  <HelpAfter helpKey="spending.by_category" working={
+                    <p>
+                      {formatMonth(month)}: {spent(view.total)} in all
+                      {view.untagged !== 0 ? `, of which ${spent(view.untagged)} has no category yet` : ", all of it with a category"}.
+                    </p>
+                  }>{formatMonth(month)}</HelpAfter>
+                </h3>
                 <span className="tabular-nums font-medium">{spent(view.total)}</span>
               </div>
               {view.groups.length === 0 && view.untagged === 0 ? (
@@ -96,7 +125,10 @@ export default function SpendingScreen() {
             </section>
 
             <section className={SECTION}>
-              <h3 className="font-medium mb-2">Cash flow, last 6 months</h3>
+              <h3 className="font-medium mb-2">
+                Cash flow, last 6{" "}
+                <HelpAfter helpKey="spending.cash_flow" working={<CashFlowWorking flow={data.flow.slice(-6)} />}>months</HelpAfter>
+              </h3>
               <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
                 <span className="text-muted-foreground">Month</span>
                 <span className="text-muted-foreground text-right">In</span>

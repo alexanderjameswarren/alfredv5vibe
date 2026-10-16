@@ -1,0 +1,277 @@
+// All help wording for the Money section (Phase 3 spec, decision 13). Each "?"
+// names one key here. helpText.test.js checks every key a screen uses exists,
+// every entry is used or reserved, no heading is blank, and every number below
+// matches the constant the code uses. No amounts belong in this file.
+
+export const HELP_HEADINGS = [
+  { field: "what", label: "What this is" },
+  { field: "included", label: "What's included" },
+  { field: "leftOut", label: "What's left out" },
+  { field: "todo", label: "What to do" },
+];
+
+export const HELP = {
+  // --- Review ---
+  "review.no_kind": {
+    title: "Not processed yet",
+    what: "A transaction the app has not sorted yet, so it does not know whether it is spending, income or a transfer.",
+    included: "New transactions the daily sync could not finish, usually because something went wrong partway through.",
+    leftOut: "Nothing: any transaction can land here.",
+    todo: "Tap \"Process now\". If it comes back, open it and set the kind by hand.",
+  },
+  "review.missing_required_tag": {
+    title: "Needs a category",
+    what: "Spending, refunds, income and fees each need a Category, so every dollar shows up somewhere in Spending.",
+    included: "Settled transactions with no Category on at least one part, that you have not marked reviewed.",
+    leftOut: "Transfers and investments, which never need one, and pending charges, which can still change.",
+    todo: "Pick a category. If it should always get that category, use \"Always do this\" so a rule does it next time.",
+  },
+  "review.transfer_candidate": {
+    title: "Looks like a transfer",
+    what: "Money that looks like it moved between two of your own accounts, where the app could not find the other side for sure.",
+    included: "Transactions described as a transfer or card payment with no single match: the opposite amount on another of your accounts within 5 days.",
+    leftOut: "Transfers already paired, and payments to people (Venmo, Zelle and so on), which are never flagged.",
+    todo: "\"Find the other side\" to pair it, or \"Not a transfer\" if it is really spending.",
+  },
+  "review.split_mismatch": {
+    title: "Splits don't add up",
+    what: "A transaction split into parts whose amounts no longer add up to the total.",
+    included: "Usually a charge whose amount changed at the bank after you split it.",
+    leftOut: "Nothing. It shows even after you mark it reviewed, because the totals would be wrong.",
+    todo: "\"Fix the parts\" and adjust the amounts until they match.",
+  },
+  "review.price_change": {
+    title: "Subscription price changed",
+    what: "A charge on an active subscription that differs from the price on record for that date.",
+    included: "Differences bigger than the subscription's tolerance, the allowed wobble for bills that move by cents. Each row shows the price that was expected.",
+    leftOut: "Watching, paused and cancelled subscriptions.",
+    todo: "\"Record new price\" if the price really changed, or \"Mark reviewed\" if it was a one-off.",
+  },
+  "review.new_recurring": {
+    title: "Looks like a subscription",
+    what: "The app spotted a charge that looks like it repeats every month.",
+    included: "A merchant with 3 or more charges in the last 120 days, each 26 to 35 days after the one before and within 10% of their usual amount.",
+    leftOut: "Merchants marked \"Not a subscription\", and anything charged less often than monthly: add those by hand.",
+    todo: "Confirm it on Subscriptions. \"Not a subscription\" stops it for good. \"Keep watching\" hides it until the next charge, which brings it back.",
+  },
+  "review.planned_match": {
+    reserved: true, // shown from Phase 3 step 4
+    title: "Suggested match",
+    what: "The app thinks this payment settles one of your planned items.",
+    included: "The same merchant, an amount within the item's tolerance, and a date within its window.",
+    leftOut: "Pending charges, and pairs you already turned down.",
+    todo: "\"Confirm\", or \"Not this one\".",
+  },
+
+  // --- Subscriptions ---
+  "subscriptions.monthly_total": {
+    title: "Active subscriptions, per month",
+    what: "What your active subscriptions cost in an average month, at today's prices.",
+    included: "Every active subscription with a price and a regular interval. Yearly ones are divided by 12; weekly ones are multiplied by 52 and divided by 12.",
+    leftOut: "Watching, paused and cancelled subscriptions, and any with no price or no regular interval, which are listed underneath.",
+    todo: "Give an uncounted one a price or interval in its detail, or open the breakdown to see each one.",
+  },
+  "subscriptions.breakdown": {
+    title: "Breakdown",
+    what: "Each counted subscription's share of the monthly total, highest first.",
+    included: "The price, how often it bills, the multiplier that turns it into a month (÷12 for yearly; 52 weeks ÷ 12 months for weekly), and the result. Each row is rounded to the cent, so the rows add up exactly to the total.",
+    leftOut: "The subscriptions under \"Not counted\", each with the reason.",
+    todo: "Check that the biggest ones are the ones you expect.",
+  },
+  "subscription.status.overdue": {
+    title: "Overdue",
+    what: "An active subscription that has not charged when it should have.",
+    included: "More than 7 days past its next expected charge.",
+    leftOut: "Subscriptions inside a prepaid term, and ones with no regular interval.",
+    todo: "Check whether it was cancelled, moved to another card, or billed through someone else, then change its status or link the charge by hand.",
+  },
+  "subscription.status.active": {
+    title: "Active",
+    what: "Subscriptions you have confirmed and expect to keep paying.",
+    included: "Every active one, including yearly ones and ones paid ahead.",
+    leftOut: "Watching, paused and cancelled subscriptions.",
+    todo: "Open one to check its price, next charge and review date.",
+  },
+  "subscription.status.watching": {
+    title: "Watching",
+    what: "Possible subscriptions the app found that nobody has confirmed yet.",
+    included: "Merchants with 3 or more charges in the last 120 days, each 26 to 35 days apart and within 10% of their usual amount.",
+    leftOut: "Everything you have confirmed or dismissed.",
+    todo: "Confirm it, or \"Not a subscription\". To decide later, use \"Keep watching\" in Review: it hides the row until the next charge.",
+  },
+  "subscription.status.paused": {
+    title: "Paused",
+    what: "A subscription you have stopped for now but expect to restart.",
+    included: "Anything you set to Paused.",
+    leftOut: "It is not in the monthly total and is never overdue.",
+    todo: "Reactivate it when billing starts again.",
+  },
+  "subscription.status.cancelled": {
+    title: "Cancelled",
+    what: "Subscriptions you have ended, kept for their history.",
+    included: "Anything you set to Cancelled.",
+    leftOut: "No new charges link to them, and they are in no total.",
+    todo: "Nothing. Reactivate one if it comes back.",
+  },
+  "subscription.next_expected": {
+    title: "Next expected",
+    what: "When the next charge should arrive, and when to review the subscription.",
+    included: "The last charge date plus the billing interval, or the end of a prepaid term if that is later. The \"Review\" badge shows from 30 days before the review date.",
+    leftOut: "Subscriptions with no regular interval, which have no next date.",
+    todo: "If the date is wrong, check the interval in Edit. Set a review date to be reminded before a renewal.",
+  },
+  "subscription.price": {
+    title: "Price",
+    what: "What this subscription costs per charge, and how that changed over time.",
+    included: "The newest price on or before each date. The tolerance is how far a charge may differ and still count as this price.",
+    leftOut: "One-off charges that were marked reviewed rather than recorded as a price.",
+    todo: "\"Record price\" when the price changes, with the date it started.",
+  },
+  "subscription.linked_charges": {
+    title: "Linked charges",
+    what: "The charges the app counts as this subscription.",
+    included: "Settled spending at this merchant; when the merchant has several subscriptions, a charge is linked by price. Links made by hand are included.",
+    leftOut: "Pending charges, and charges unlinked by hand, which the app never links again.",
+    todo: "\"Link charges\" or \"Unlink\" to correct them.",
+  },
+
+  // --- Transactions ---
+  "transactions.needs_review": {
+    title: "Needs review",
+    what: "Transactions that are in the Review tab for any reason.",
+    included: "The same rules as Review: not processed, needs a category, looks like a transfer, splits don't add up, price changed, looks like a subscription.",
+    leftOut: "Anything marked reviewed, except splits that don't add up.",
+    todo: "Work through them in the Review tab.",
+  },
+  "transaction.kind": {
+    title: "Kind",
+    what: "What sort of money this is: spending, income, transfer, refund, investment, interest or fee.",
+    included: "Worked out in this order: the account (investment accounts give investment), the merchant's usual kind, transfer wording, interest and fee wording, then whether money came in or went out. A rule can then change it.",
+    leftOut: "A kind set by you or by Claude, which no rule ever changes.",
+    todo: "Change it here. To make it stick for this merchant, use \"Always do this\".",
+  },
+  "transaction.removed_tags": {
+    title: "Removed by you",
+    what: "A tag someone took off this transaction by hand.",
+    included: "Removals by you or by Claude.",
+    leftOut: "The tag stays off for good: when a rule is changed or a new rule is added, rules skip a tag removed by hand from this transaction, though they still add their other tags.",
+    todo: "\"Undo\" puts it back.",
+  },
+  "transaction.splits": {
+    title: "Splits",
+    what: "One charge divided into parts, such as pet food and clothes, each with its own category.",
+    included: "Every part; together they must add up to the charge.",
+    leftOut: "Rules only tag transactions with a single part. Split ones are left to you.",
+    todo: "\"Split\" or \"Edit parts\" to change the parts or their categories.",
+  },
+  "transaction.transfer": {
+    title: "Transfer",
+    what: "Money moving between two of your own accounts. It is neither spending nor income.",
+    included: "Both sides, paired: the opposite amount on another of your accounts within 5 days.",
+    leftOut: "Transfers count in no spending or cash-flow total.",
+    todo: "Pair or unpair here. If it is not a transfer, change its kind.",
+  },
+  "always_do_this": {
+    title: "Always do this",
+    what: "Turns the fix you just made into a rule, so future charges from this merchant are handled the same way.",
+    included: "The rule matches the merchant, not this exact description. It shows how many past transactions it would catch, and warns when that is only one.",
+    leftOut: "Transactions where you or Claude already set the value by hand.",
+    todo: "Check the pattern and the count, then save. If the merchant already has a rule, update it instead.",
+  },
+
+  // --- Spending ---
+  "spending.by_category": {
+    title: "Spending by category",
+    what: "What you spent this month, by Category. Sub-categories roll up into their parent.",
+    included: "Settled spending and fees, less refunds, counted part by part.",
+    leftOut: "Transfers, investments, income and pending charges. \"No category yet\" is spending still waiting for a category.",
+    todo: "Give the \"No category yet\" items a category in Review.",
+  },
+  "spending.cash_flow": {
+    title: "Cash flow",
+    what: "Money in against money out, month by month.",
+    included: "In is income plus interest. Out is spending and fees, less any refunds. Net is In minus Out.",
+    leftOut: "Transfers between your accounts, investments, and pending charges.",
+    todo: "A red Net means more went out than came in that month.",
+  },
+
+  // --- Overview, net worth and accounts (Phase 1 screens) ---
+  "overview.net_worth": {
+    title: "Net worth",
+    what: "Everything you own minus everything you owe, from each account's latest balance.",
+    included: "Each account's newest balance, grouped by its role. A day with no new balance keeps the last one. Cards and loans count as negative. Rewards count only where a value per point is set. A closed account counts up to its last balance.",
+    leftOut: "Accounts with no role yet, and history accounts outside their active dates.",
+    todo: "Give every account a role in Accounts.",
+  },
+  "net_worth.unassigned": {
+    title: "No role yet",
+    what: "Accounts the sync found that nobody has given a role.",
+    included: "Every new synced account starts here.",
+    leftOut: "Their balances are left out of net worth until they have a role.",
+    todo: "Open the account in Accounts and choose its role.",
+  },
+  "overview.sync_status": {
+    title: "Sync status",
+    what: "Whether the daily bank sync is up to date.",
+    included: "A warning when the last sync is over 36 hours old, when an account has had no new balance for 2 days or more, or when the last sync failed.",
+    leftOut: "Hidden and closed accounts, and accounts you enter by hand.",
+    todo: "If a warning stays for more than a day, reconnect the bank in SimpleFIN.",
+  },
+  "accounts.roles": {
+    title: "Account roles",
+    what: "The role decides which net-worth group an account counts in.",
+    included: "Spending cash, reserve cash, credit card, emergency credit, loan, retirement, taxable investment, rewards, history and closed.",
+    leftOut: "Accounts with no role, which are left out of net worth.",
+    todo: "Open an account to change its role.",
+  },
+
+  // --- Rule health: read in claude.ai and the weekly cleanup; no screen in any phase (A9) ---
+  "rule_health.never_fires": {
+    reserved: true,
+    title: "Never fires",
+    what: "A rule that has never matched a single transaction.",
+    included: "Active rules with no match at all, more than 14 days after they were made.",
+    leftOut: "Rules whose notes say quarterly, annual or yearly, and rules for a merchant with a subscription billed every 3 months or more.",
+    todo: "Delete it or widen it, or acknowledge it if it waits for a rare charge.",
+  },
+  "rule_health.too_broad": {
+    reserved: true,
+    title: "Too broad",
+    what: "A merchant with a rule whose charges come from several different payees, which may be different shops.",
+    included: "Merchants with 3 or more different payees, after ignoring digits and anything after a \"*\".",
+    leftOut: "Merchants with no rule.",
+    todo: "Split the merchant, or acknowledge it if the payees really are one business.",
+  },
+  "rule_health.often_overridden": {
+    reserved: true,
+    title: "Often overridden",
+    what: "A rule that people keep correcting by hand.",
+    included: "A rule corrected on at least 2 of its matches and at least a quarter of them: a tag swapped or removed, a kind changed, or a re-split.",
+    leftOut: "Corrections to things the rule never set.",
+    todo: "Change what the rule sets, or acknowledge it if the corrections are one-offs.",
+  },
+  "rule_health.duplicate_rules": {
+    reserved: true,
+    title: "Duplicate rules",
+    what: "A merchant with more than one active rule.",
+    included: "Merchants with 2 or more active rules.",
+    leftOut: "Inactive rules.",
+    todo: "Merge them into one rule.",
+  },
+  "rule_health.rule_missing": {
+    reserved: true,
+    title: "Rule missing",
+    what: "A merchant tagged by hand again and again with no rule to do it.",
+    included: "Merchants with 3 or more settled transactions tagged by you or by Claude, and no rule.",
+    leftOut: "Merchants that already have a rule.",
+    todo: "Use \"Always do this\" to make the rule.",
+  },
+  "rule_health.merchant_no_category": {
+    reserved: true,
+    title: "Merchant with no category",
+    what: "A merchant whose spending never has a Category.",
+    included: "Merchants with settled spending, fees or refunds, none of it with a Category.",
+    leftOut: "Income and transfers.",
+    todo: "Add a rule that sets the category.",
+  },
+};

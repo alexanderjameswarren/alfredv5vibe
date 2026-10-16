@@ -61,7 +61,7 @@ it("groups by status with Overdue first and Cancelled collapsed", async () => {
   expect(headings).toEqual(["Overdue (1)", "Active (3)", "Watching (1)", "Cancelled (1)"]);
   expect(screen.getByText("Overdue 9 days")).toBeInTheDocument();
   expect(screen.queryByText("Test Old")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: /Cancelled/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Cancelled/ }));
   expect(screen.getByText("Test Old")).toBeInTheDocument();
   expect(screen.getByText(/Every 2 weeks/)).toBeInTheDocument();
 });

@@ -38,8 +38,10 @@ export const NET_WORTH_GROUPS = [
   { key: "closed", label: "Closed accounts", always: false },
 ];
 
+// If you change this, update help entry overview.sync_status in helpText.js and its test.
 export const STALE_SYNC_HOURS = 36;
 // A synced account whose newest snapshot is this many days old counts as stale.
+// If you change this, update help entry overview.sync_status in helpText.js and its test.
 export const STALE_ACCOUNT_DAYS = 2;
 
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -320,7 +322,12 @@ export const SUB_STATUS_LABELS = {
   overdue: "Overdue", active: "Active", watching: "Watching", paused: "Paused", cancelled: "Cancelled",
 };
 export const SUB_GROUP_ORDER = ["overdue", "active", "watching", "paused", "cancelled"];
+// If you change this, update help entry subscription.next_expected in helpText.js and its test.
 export const REVIEW_SOON_DAYS = 30;
+// The monthly conversion. If you change these, update help entries subscriptions.monthly_total
+// and subscriptions.breakdown in helpText.js, its test, and wb_ SQL that normalizes to a month.
+export const WEEKS_PER_YEAR = 52;
+export const MONTHS_PER_YEAR = 12;
 
 /** "Monthly", "Every 2 weeks", "Irregular" — from cadence and the billing interval. */
 export function intervalLabel(sub) {
@@ -338,7 +345,7 @@ export function monthlyEquivalent(sub) {
   const n = sub?.interval_count;
   if (price === null || !n) return null;
   if (sub.interval_unit === "month") return price / n;
-  if (sub.interval_unit === "week") return (price * 52) / 12 / n;
+  if (sub.interval_unit === "week") return (price * WEEKS_PER_YEAR) / MONTHS_PER_YEAR / n;
   return null;
 }
 
@@ -347,7 +354,7 @@ export function multiplierLabel(sub) {
   const n = sub?.interval_count;
   if (!n) return null;
   if (sub.interval_unit === "month") return n === 1 ? "×1" : `÷${n}`;
-  if (sub.interval_unit === "week") return `×${(52 / 12 / n).toFixed(2)}`;
+  if (sub.interval_unit === "week") return `×${(WEEKS_PER_YEAR / MONTHS_PER_YEAR / n).toFixed(2)}`;
   return null;
 }
 

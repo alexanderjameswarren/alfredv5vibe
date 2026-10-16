@@ -1,5 +1,6 @@
 import { supabase } from "../supabaseClient";
 import { daysBefore, pacificToday } from "./moneyFormat";
+import { TRANSFER_WINDOW_DAYS } from "./ruleNumbers";
 
 /**
  * Warren Buffet persistence for the Money section. Spec:
@@ -268,6 +269,24 @@ export async function getTransactionDetail(id) {
   return { ...txn, splits: splits || [], pair: pair.data || null };
 }
 
+/**
+ * The rule that set a transaction's kind: the last of its matched rules (they
+ * run in order, and a later set_kind overwrites) that sets a kind. Null if none.
+ */
+export async function getKindRule(transactionId) {
+  const { data: txn, error } = await supabase.from("wb_transactions")
+    .select("matched_rule_ids").eq("id", transactionId).maybeSingle();
+  if (error) fail("Couldn't load the matched rules", error);
+  const ids = txn?.matched_rule_ids || [];
+  if (ids.length === 0) return null;
+  const { data: rules, error: re } = await supabase.from("wb_rules")
+    .select("id, name, set_kind").in("id", ids).limit(50);
+  if (re) fail("Couldn't load the rules", re);
+  const byId = new Map((rules || []).map((r) => [r.id, r]));
+  const setters = ids.map((id) => byId.get(id)).filter((r) => r && r.set_kind);
+  return setters.length ? setters[setters.length - 1] : null;
+}
+
 /** Tag groups and tags, for pickers and the Spending tab. */
 export async function getTagTree() {
   const [{ data: groups, error: ge }, { data: tags, error: te }] = await Promise.all([
@@ -337,7 +356,7 @@ export async function findPairCandidates(txn) {
   const { data, error } = await supabase.from("wb_transaction_list")
     .select("id, account_label, txn_date, amount, clean_description")
     .eq("amount", -Number(txn.amount)).neq("account_id", txn.account_id).is("transfer_pair_id", null)
-    .gte("txn_date", shift(-5)).lte("txn_date", shift(5)).order("txn_date").limit(10);
+    .gte("txn_date", shift(-TRANSFER_WINDOW_DAYS)).lte("txn_date", shift(TRANSFER_WINDOW_DAYS)).order("txn_date").limit(10);
   if (error) fail("Couldn't look for the other side", error);
   return data || [];
 }

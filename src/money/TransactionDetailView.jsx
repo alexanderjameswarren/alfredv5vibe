@@ -2,11 +2,28 @@ import React, { useState } from "react";
 import { ArrowLeft, Undo2, X } from "lucide-react";
 import AlwaysDoThisSheet from "./AlwaysDoThisSheet";
 import SplitEditor from "./SplitEditor";
+import HelpButton, { HelpAfter } from "./HelpButton";
 import {
-  applyTags, findPairCandidates, getTagTree, getTransactionDetail, saveNotes, setKind, setReviewed, setTransferPair,
+  applyTags, findPairCandidates, getKindRule, getTagTree, getTransactionDetail, saveNotes, setKind, setReviewed,
+  setTransferPair,
 } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
 import { KIND_LABELS, KIND_ORDER, exclusionLabel, formatDay, formatMoney, tagOptions } from "./moneyFormat";
+
+/** Live working for Kind: who set it and, when a rule did, which rule. */
+export function KindWorking({ txn }) {
+  const ruleSet = txn.kind_source === "rule";
+  const { data: rule, loading } = useLoad(() => (ruleSet ? getKindRule(txn.id) : Promise.resolve(null)), [txn.id, ruleSet]);
+  const kind = KIND_LABELS[txn.kind] || "not set";
+  if (!txn.kind) return <p>Not processed yet, so there is no kind.</p>;
+  if (txn.kind_source === "manual") return <p>{kind}, set by hand. No rule will change it.</p>;
+  if (txn.kind_source === "claude") return <p>{kind}, set by Claude. No rule will change it.</p>;
+  if (ruleSet) {
+    const name = loading ? "…" : rule ? `"${rule.name}"` : "that is no longer active";
+    return <p>{kind}, set by the rule {name}.</p>;
+  }
+  return <p>{kind}, worked out automatically; no rule changed it.</p>;
+}
 
 const SECTION = "bg-card border border-border rounded-lg p-4";
 const FIELD = "w-full min-h-[44px] px-3 rounded-lg border border-border bg-background text-sm";
@@ -48,7 +65,9 @@ function GroupTags({ group, tags, current, excluded, onAdd, onRemove, disabled }
       )}
       {gone.map((e) => (
         <p key={e.tag_id} className="flex flex-wrap items-center gap-2 mt-1 text-sm text-muted-foreground">
-          <span><span className="line-through">{e.tag_name}</span> — {exclusionLabel(e)}</span>
+          <span>
+            <span className="line-through">{e.tag_name}</span> — <HelpAfter helpKey="transaction.removed_tags">{exclusionLabel(e)}</HelpAfter>
+          </span>
           <button type="button" onClick={() => onAdd(e.tag_id)} disabled={disabled} className={LINK}>
             <Undo2 className="w-4 h-4" aria-hidden="true" /> Undo
           </button>
@@ -164,7 +183,10 @@ export default function TransactionDetailView({ transactionId, onBack, onOpenTra
         )}
 
         <section className={SECTION}>
-          <label htmlFor="txn-kind" className="block font-medium mb-1">Kind</label>
+          <p className="mb-1 whitespace-nowrap">
+            <label htmlFor="txn-kind" className="font-medium">Kind</label>
+            <HelpButton helpKey="transaction.kind" working={<KindWorking txn={txn} />} />
+          </p>
           <select id="txn-kind" value={txn.kind || ""} disabled={busy}
             onChange={(e) => act(() => setKind(txn, e.target.value), { kind: true })} className={FIELD}>
             {!txn.kind && <option value="">Not processed</option>}
@@ -191,7 +213,7 @@ export default function TransactionDetailView({ transactionId, onBack, onOpenTra
 
         <section className={SECTION}>
           <div className="flex items-center justify-between">
-            <h4 className="font-medium">Splits</h4>
+            <h4 className="font-medium whitespace-nowrap">Splits<HelpButton helpKey="transaction.splits" /></h4>
             {!splitting && (
               <button type="button" onClick={() => setSplitting(true)} className={LINK}>
                 {single ? "Split" : "Edit parts"}
@@ -221,7 +243,7 @@ export default function TransactionDetailView({ transactionId, onBack, onOpenTra
 
         {(txn.kind === "transfer" || txn.transfer_pair_id || txn.transfer_candidate) && (
           <section className={SECTION}>
-            <h4 className="font-medium mb-1">Transfer</h4>
+            <h4 className="font-medium mb-1 whitespace-nowrap">Transfer<HelpButton helpKey="transaction.transfer" /></h4>
             {txn.pair ? (
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <button type="button" onClick={() => onOpenTransaction(txn.pair.id)} className={`${LINK} px-0 text-left`}>

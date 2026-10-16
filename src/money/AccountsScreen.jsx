@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { ChevronRight, Plus } from "lucide-react";
 import { getAccounts } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
+import { HelpTitle } from "./HelpButton";
 import {
   OWNER_LABELS, accountLabel, accountSubtitle, formatDay, formatMoney, groupAccounts, rewardDisplay,
 } from "./moneyFormat";
@@ -60,7 +61,10 @@ export default function AccountsScreen({ onOpen, onAdd }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm text-muted-foreground">
+          <HelpTitle helpKey="accounts.roles" text="Grouped by role" />
+        </span>
         <button
           type="button"
           onClick={onAdd}
@@ -74,7 +78,7 @@ export default function AccountsScreen({ onOpen, onAdd }) {
       {unassigned.length > 0 && (
         <section className="rounded-lg bg-warning-light p-3 space-y-2">
           <h3 className="text-sm font-medium text-warning">
-            Assign a role — these are left out of net worth until you do
+            <HelpTitle helpKey="net_worth.unassigned" text="Assign a role — these are left out of net worth until you do" />
           </h3>
           {unassigned.map((a) => <AccountRow key={a.account_id} account={a} onOpen={onOpen} />)}
         </section>

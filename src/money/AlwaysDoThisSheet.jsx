@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { applyFix, getFixPlan } from "./moneyApi";
 import { KIND_LABELS } from "./moneyFormat";
+import { HelpTitle } from "./HelpButton";
 
 const BUTTON = "min-h-[44px] px-4 py-2 rounded-lg text-sm";
 
@@ -76,7 +77,7 @@ export default function AlwaysDoThisSheet({ txn, kind, kindPicked = false, tags 
       <div className="bg-background border border-border rounded-t-lg sm:rounded-lg shadow-xl w-full sm:max-w-md max-h-[90vh] overflow-y-auto p-5">
         <div className="flex items-start justify-between gap-3 mb-3">
           <h3 className="text-lg font-medium">
-            Always do this{merchant?.name ? ` for ${merchant.name}` : ""}
+            <HelpTitle helpKey="always_do_this" text={`Always do this${merchant?.name ? ` for ${merchant.name}` : ""}`} />
           </h3>
           <button type="button" onClick={onClose} aria-label="Close"
             className="min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground rounded">

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { dismissSubscription, getSubscriptions, setSubscriptionStatus } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
+import HelpButton, { HelpAfter } from "./HelpButton";
 import {
   OWNER_LABELS, formatDay, formatMoney, groupSubscriptions, intervalLabel, pacificToday, reviewSoon, subscriptionBreakdown,
 } from "./moneyFormat";
@@ -20,6 +21,34 @@ export function SubscriptionBadges({ sub, today }) {
         <span className={`${BADGE} border border-border text-muted-foreground`}>Prepaid to {formatDay(sub.term_end_date)}</span>
       )}
     </>
+  );
+}
+
+/** Live working for the monthly total: how many counted, and why the rest were not. */
+export function TotalWorking({ totals }) {
+  return (
+    <>
+      <p>{totals.rows.length} active subscription{totals.rows.length === 1 ? "" : "s"} counted.</p>
+      {totals.notCounted.length > 0 && (
+        <ul className="mt-1 list-disc pl-5">
+          {totals.notCounted.map((n) => <li key={n.sub.id}>{n.sub.name}: not counted, {n.reason.toLowerCase()}.</li>)}
+        </ul>
+      )}
+    </>
+  );
+}
+
+/** Live working for Overdue: each one's expected date and how far past it is. */
+export function OverdueWorking({ rows }) {
+  return (
+    <ul className="list-disc pl-5">
+      {rows.map((s) => (
+        <li key={s.id}>
+          {s.name}: last charged {formatDay(s.last_charged_on)}, expected {formatDay(s.next_expected_on)},
+          {" "}{s.days_past_expected} days ago.
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -136,7 +165,10 @@ export default function SubscriptionsScreen({ onOpen }) {
   return (
     <div className="space-y-6">
       <section className="bg-card border border-border rounded-lg p-4">
-        <p className="text-sm text-muted-foreground">Active subscriptions, per month</p>
+        <p className="text-sm text-muted-foreground">
+          Active subscriptions, per{" "}
+          <HelpAfter helpKey="subscriptions.monthly_total" working={<TotalWorking totals={totals} />}>month</HelpAfter>
+        </p>
         <p className="text-2xl font-medium tabular-nums">{formatMoney(totals.total)}</p>
         <p className="text-sm text-muted-foreground mt-1 flex flex-wrap gap-x-4">
           {OWNER_KEYS.filter((k) => totals.byOwner[k]).map((k) => (
@@ -153,6 +185,7 @@ export default function SubscriptionsScreen({ onOpen }) {
           {showBreakdown ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           {showBreakdown ? "Hide breakdown" : "Show breakdown"}
         </button>
+        {showBreakdown && <HelpButton helpKey="subscriptions.breakdown" />}
         {showBreakdown && <Breakdown breakdown={totals} />}
       </section>
 
@@ -164,13 +197,22 @@ export default function SubscriptionsScreen({ onOpen }) {
           <section key={g.key}>
             <h3 className="font-medium mb-2">
               {g.key === "cancelled" ? (
-                <button type="button" onClick={() => setShowCancelled(!showCancelled)} aria-expanded={!collapsed}
-                  className="min-h-[44px] inline-flex items-center gap-1">
-                  {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                  {g.label} <span className="text-muted-foreground font-normal">({g.rows.length})</span>
-                </button>
+                <>
+                  <button type="button" onClick={() => setShowCancelled(!showCancelled)} aria-expanded={!collapsed}
+                    className="min-h-[44px] inline-flex items-center gap-1 align-middle">
+                    {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    {g.label} <span className="text-muted-foreground font-normal">({g.rows.length})</span>
+                  </button>
+                  <HelpButton helpKey={`subscription.status.${g.key}`} />
+                </>
               ) : (
-                <>{g.label} <span className="text-muted-foreground font-normal">({g.rows.length})</span></>
+                <>
+                  {g.label}{" "}
+                  <HelpAfter helpKey={`subscription.status.${g.key}`}
+                    working={g.key === "overdue" ? <OverdueWorking rows={g.rows} /> : null}>
+                    <span className="text-muted-foreground font-normal">({g.rows.length})</span>
+                  </HelpAfter>
+                </>
               )}
             </h3>
             {!collapsed && (
