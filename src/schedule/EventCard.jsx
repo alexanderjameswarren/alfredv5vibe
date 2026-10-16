@@ -279,7 +279,7 @@ export default function EventCard({
             <button
               onClick={handleCancelEvent}
               disabled={hasActiveExecution}
-              className={`px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ml-auto ${hasActiveExecution ? 'bg-secondary text-muted-foreground cursor-not-allowed' : 'bg-destructive hover:bg-destructive-hover text-white'}`}
+              className={`px-4 py-2.5 min-h-[44px] rounded-lg transition-colors duration-200 ml-auto ${hasActiveExecution ? 'bg-secondary text-muted-foreground cursor-not-allowed' : 'border-2 border-destructive text-destructive hover:bg-destructive/10'}`}
               title={hasActiveExecution ? 'Cannot archive: active execution in progress' : 'Archive this event'}
             >
               Archive Event

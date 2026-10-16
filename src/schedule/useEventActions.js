@@ -1,7 +1,7 @@
 import { storage, writeError } from "../utils/storage";
 import { uid } from "../utils/flattenElements";
-import { toLocalDateString } from "../utils/eventDates";
-import { calculateNextEventDate, getRecurrenceConfig } from "../utils/recurrence";
+import { getTodayDate } from "../utils/eventDates";
+import { getRecurrenceConfig, nextOccurrence } from "../utils/recurrence";
 import { liveEventsFor, statusOf } from "../utils/status";
 import { assertNoActiveRun } from "../utils/runGuard";
 
@@ -28,7 +28,8 @@ export function useEventActions({
       // If archiving a recurring event, trigger recurrence to create next event
       let successor = null;
       if (updates.archived === true && event.intentId) {
-        successor = await triggerRecurrence(event.intentId, event);
+        // Archiving a live event is skipping it: an interval counts from its date.
+        successor = await triggerRecurrence(event.intentId, event, { skipped: true });
       }
 
       if (updates.archived === true) {
@@ -59,7 +60,9 @@ export function useEventActions({
   // an undo of the archive that triggered it can take that successor back out.
   // Without this, undoing left the successor behind and the intention ended up
   // with two live events.
-  async function triggerRecurrence(intentId, archivedEvent) {
+  // `nextDate` ("YYYY-MM-DD") is used as given (the completion dialog's edit, Step 7);
+  // otherwise nextOccurrence decides, by completion or by `skipped`.
+  async function triggerRecurrence(intentId, archivedEvent, { nextDate: chosen = null, skipped = false } = {}) {
     const intent = intents.find((i) => i.id === intentId);
     if (!intent) return null;
 
@@ -78,20 +81,22 @@ export function useEventActions({
       return null;
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const nextDate = calculateNextEventDate(config, today);
+    const today = getTodayDate();
+    const nextDate =
+      chosen ||
+      nextOccurrence(config, {
+        eventDate: archivedEvent?.time ? String(archivedEvent.time).slice(0, 10) : null,
+        completedOn: today,
+        today,
+        skipped,
+      });
 
-    if (nextDate && (!intent.endDate || nextDate <= new Date(intent.endDate + "T23:59:59"))) {
+    if (nextDate && (!intent.endDate || nextDate <= intent.endDate)) {
       const newEvent = {
         id: uid(),
         user_id: user.id,
         intentId: intent.id,
-        // Local fields, not toISOString: calculateNextEventDate returns a
-        // LOCAL-midnight Date (it normalises with setHours and parses via
-        // parseLocalDate), and converting that to UTC moves it back a day in
-        // any zone east of Greenwich.
-        time: toLocalDateString(nextDate),
+        time: nextDate,
         itemIds: archivedEvent?.itemIds || [],
         contextId: intent.contextId,
         collectionId: intent.collectionId || null,

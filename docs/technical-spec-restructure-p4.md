@@ -50,6 +50,11 @@ One pure function in `src/utils/recurrence.js`; `triggerRecurrence` takes an exp
 Micro Workout case: daily, event Monday, run left open, closed Tuesday → next = Tuesday
 (today's code gives Wednesday, because it always counts from the close day).
 
+As built (Step 6): `nextOccurrence(config, { eventDate, completedOn, today, skipped })` in
+`src/utils/recurrence.js`; `triggerRecurrence(intentId, event, { nextDate, skipped })` takes
+a chosen date or applies the rule. Today's Archive Event on a live event already passes
+`skipped: true`.
+
 The completion dialog and the Done popover show the computed date and let it be edited before
 saving. No date is written when the intention is once, not active, past `end_date`, or already
 has another live event (existing guards).
@@ -147,16 +152,25 @@ Context detail and the Intentions list share `listRows` (rowModel) and `src/shar
   it asks "Archive this context?" (Archive / Cancel). Archiving returns to the previous page
   and the toast keeps its existing Undo (un-archiving is one write).
 - "Archive Collection" uses the same red outline; nothing else on that form changed.
+- Every Archive button in an edit form's footer uses it too (Step 6 follow-up): intention
+  edit (IntentionCard), item edit (ItemCard), event edit (EventCard "Archive Event").
+  Style only. Inbox detail's "Discard" keeps its solid fill (not an Archive button).
 
 ## Repeat line (Step 5, as built)
 `src/utils/recurrenceDisplay.js` is the only formatter. Fixed schedules read "Every …";
-interval repeats read "N units after you last did it". `{type:"once"}`, null and unknown
+interval repeats read "N units after last completion" ("1 day after last completion",
+"3 weeks after last completion", "6 months after last completion"). `{type:"once"}`, null and unknown
 shapes read "Does not repeat". Weekly with no days, and monthly with neither a day nor an
 ordinal (legacy shapes the engine never repeats), read "…, with no day chosen". An end date
-ahead adds "· until October 20"; one today or earlier reads "Ended October 13". "· next
-Wednesday, October 15" is the live event's date, shown only when it is today or later and
-not past the end date, and not on rows, whose schedule line already shows it. Dates gain
-the year when it is not the current one.
+ahead adds "· until October 20"; one today or earlier reads "Ended October 13". Dates gain
+the year when it is not the current one. **No "· next …" anywhere** (Step 6 follow-up): the
+schedule line beside every repeat line already carries the date.
+
+**Number boxes in the repeat dialogs** (`src/shared/NumberInput.jsx`, Step 6 follow-up):
+"Repeat after completion" (how many) and "Custom recurrence" (repeat every, day of month)
+hold raw text: empty is allowed while typing, nothing snaps back, focus selects the whole
+value; an empty or invalid value shows "Required" (or "At most N") under the box and
+disables Done. Other number boxes in the app are left for Alfred record 790410b6.
 
 ## Row layout (Step 5 follow-up, as built)
 Every row card in the shared layout (RowList: context page, Intentions list, item detail's

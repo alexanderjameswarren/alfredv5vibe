@@ -1,16 +1,20 @@
 import React, { useState } from "react";
+import NumberInput, { parseWhole } from "../NumberInput";
 
 /**
  * Interval-from-completion dialog — schedule next event N days/weeks/months after done.
  */
 export default function IntervalRecurrenceDialog({ initialConfig, onDone, onCancel }) {
   const init = initialConfig && initialConfig.type === "interval" ? initialConfig : null;
-  const [every, setEvery] = useState(init?.every || 2);
+  // The raw text: it may be empty while typing (NumberInput).
+  const [everyText, setEveryText] = useState(String(init?.every || 2));
+  const every = parseWhole(everyText, { min: 1, max: 99 });
   const [unit, setUnit] = useState(init?.unit || "days");
   const [endMode, setEndMode] = useState("never");
   const [endDate, setEndDate] = useState("");
 
   function handleDone() {
+    if (every === null) return;
     const config = { type: "interval", every, unit };
     onDone(config, endMode === "on" && endDate ? endDate : null);
   }
@@ -23,26 +27,31 @@ export default function IntervalRecurrenceDialog({ initialConfig, onDone, onCanc
       >
         <h3 className="text-lg font-semibold mb-4">Repeat after completion</h3>
 
-        <div className="flex items-center gap-2 mb-4">
-          <span className="text-sm">Schedule next event</span>
-          <input
-            type="number"
-            min={1}
-            max={99}
-            value={every}
-            onChange={(e) => setEvery(Math.max(1, parseInt(e.target.value) || 1))}
-            className="w-16 px-2 py-1 border border-border rounded text-center text-sm"
-          />
-          <select
-            value={unit}
-            onChange={(e) => setUnit(e.target.value)}
-            className="px-2 py-1 border border-border rounded text-sm"
-          >
-            <option value="days">{every > 1 ? "days" : "day"}</option>
-            <option value="weeks">{every > 1 ? "weeks" : "week"}</option>
-            <option value="months">{every > 1 ? "months" : "month"}</option>
-          </select>
-          <span className="text-sm">after done</span>
+        {/* One phrase: "Schedule next event / [3] [days] after last completion". The
+            number and unit stay together; the trailing words wrap beneath them. */}
+        <p className="text-sm mb-2">Schedule next event</p>
+        <div className="flex items-start gap-x-2 gap-y-1 mb-4 flex-wrap">
+          <span className="inline-flex items-start gap-2 whitespace-nowrap">
+            <NumberInput
+              aria-label="How many"
+              value={everyText}
+              onChange={setEveryText}
+              min={1}
+              max={99}
+              className="w-16 px-2 py-1 border border-border rounded text-center text-sm"
+            />
+            <select
+              aria-label="Unit"
+              value={unit}
+              onChange={(e) => setUnit(e.target.value)}
+              className="px-2 py-1 border border-border rounded text-sm"
+            >
+              <option value="days">{every === 1 ? "day" : "days"}</option>
+              <option value="weeks">{every === 1 ? "week" : "weeks"}</option>
+              <option value="months">{every === 1 ? "month" : "months"}</option>
+            </select>
+          </span>
+          <span className="text-sm py-1">after last completion</span>
         </div>
 
         <div className="mb-4 space-y-2">
@@ -68,7 +77,12 @@ export default function IntervalRecurrenceDialog({ initialConfig, onDone, onCanc
           <button type="button" onClick={onCancel} className="px-4 py-2 text-sm border border-border rounded hover:bg-muted transition-colors">
             Cancel
           </button>
-          <button type="button" onClick={handleDone} className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 transition-colors">
+          <button
+            type="button"
+            onClick={handleDone}
+            disabled={every === null}
+            className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
             Done
           </button>
         </div>

@@ -624,7 +624,7 @@ export default function ItemCard({
                   onUpdate(item.id, { archived: true });
                   setIsEditing(false);
                 }}
-                className="px-4 py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 ml-auto"
+                className="px-4 py-2.5 min-h-[44px] border-2 border-destructive text-destructive hover:bg-destructive/10 rounded-lg transition-colors duration-200 ml-auto"
               >
                 Archive
               </button>

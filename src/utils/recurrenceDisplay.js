@@ -4,7 +4,7 @@
  *
  * Two kinds, and the words say which:
  *   fixed schedule      "Every week on Tuesday"        (the calendar decides)
- *   after completion    "3 weeks after you last did it" (the last time decides)
+ *   after completion    "3 weeks after last completion" (the last time decides)
  *
  * Pure — no React, no app state.
  */
@@ -43,12 +43,12 @@ export function repeats(config) {
   return config.type === "fixed" && ["daily", "weekly", "monthly"].includes(config.frequency);
 }
 
-/** The pattern alone: "Every day", "3 weeks after you last did it", "Does not repeat". */
+/** The pattern alone: "Every day", "3 weeks after last completion", "Does not repeat". */
 export function repeatPattern(config) {
   if (!repeats(config)) return "Does not repeat";
   if (config.type === "interval") {
     const unit = String(config.unit).replace(/s$/, "");
-    return `${plural(config.every, unit)} after you last did it`;
+    return `${plural(config.every, unit)} after last completion`;
   }
   const n = config.interval || 1;
   if (config.frequency === "daily") return n === 1 ? "Every day" : `Every ${n} days`;
@@ -85,26 +85,18 @@ function shortLongDate(dateStr, today) {
 }
 
 /**
- * The full repeat line.
+ * The full repeat line: the pattern, "· until …" or "Ended …". No next date: the
+ * schedule line beside it always carries the date.
  *   config     the intention's recurrence (getRecurrenceConfig)
  *   endDate    intents.end_date ("YYYY-MM-DD") or null
- *   nextDate   the next occurrence: the live event's date, or null. Only a live event
- *              is shown as "next" — nothing creates an occurrence without one.
  *   today      "YYYY-MM-DD"
- *   showNext   false where the row's schedule line already shows that date
  */
-export function describeRepeat({ config, endDate = null, nextDate = null, today, showNext = true }) {
+export function describeRepeat({ config, endDate = null, today }) {
   if (!repeats(config)) return "Does not repeat";
   // Today counts as ended: no occurrence can follow it (Stop writes today).
   if (endDate && endDate <= today) return `Ended ${shortLongDate(endDate, today)}`;
-  let text = repeatPattern(config);
-  if (endDate) text += ` · until ${shortLongDate(endDate, today)}`;
-  const next = nextDate ? String(nextDate).slice(0, 10) : null;
-  // An overdue date is not "next"; the schedule line already calls it Overdue.
-  if (showNext && next && next >= today && (!endDate || next <= endDate)) {
-    text += ` · next ${longDate(next, today)}`;
-  }
-  return text;
+  const text = repeatPattern(config);
+  return endDate ? `${text} · until ${shortLongDate(endDate, today)}` : text;
 }
 
 /**

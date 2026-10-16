@@ -124,7 +124,9 @@ export default function ItemDetailView({
   const itemIntentions = intents.filter(
     (i) => i.itemId === item.id && !i.archived,
   );
-  const visibleIntentions = rankByActivity(filterByStatus(itemIntentions, relatedStatus), events, executions);
+  // One with an open run shows only under In progress, as on the lists.
+  const relatedIntentions = itemIntentions.filter((i) => !executions.some((x) => x.intentId === i.id));
+  const visibleIntentions = rankByActivity(filterByStatus(relatedIntentions, relatedStatus), events, executions);
   const closedTitle = closedBlockTitle(item, "item");
   // Item Start Now and Schedule act on the intention Run Now would pick.
   // One picker for every item button: an intention mid-run first (itemActionTarget).
@@ -538,13 +540,13 @@ export default function ItemDetailView({
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-medium">
-            Related Intentions ({itemIntentions.length})
+            Related Intentions ({relatedIntentions.length})
           </h3>
         </div>
 
-        {itemIntentions.length > 0 && (
+        {relatedIntentions.length > 0 && (
           <StatusFilterChips
-            counts={statusCounts(itemIntentions)}
+            counts={statusCounts(relatedIntentions)}
             selected={relatedStatus}
             onToggle={toggleRelatedStatus}
           />
@@ -554,6 +556,8 @@ export default function ItemDetailView({
           <p className="text-muted-foreground text-sm">
             No intentions linked to this item
           </p>
+        ) : relatedIntentions.length === 0 ? (
+          <p className="text-muted-foreground text-sm">Everything here is in progress</p>
         ) : visibleIntentions.length === 0 ? (
           <p className="text-muted-foreground text-sm">No intentions match the chips above</p>
         ) : (

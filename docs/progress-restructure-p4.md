@@ -9,8 +9,8 @@ Test every step in desktop Chrome's mobile view against the local dev server.
 | 2 | Row model (pure, tested) + extra: inbox Context picker sorted | Done, tested 2026-10-13 |
 | 3 | Context detail: merged rows + bug (c); Close replaces Archive on rows; fixes from testing | Done, checkpointed d00dfcf |
 | 4 | Intentions list: merged rows + bug (a); follow-ups (In progress section, context edit page, archive buttons, duplicate run card) | Done, checkpointed 59a700b |
-| 5 | Recurrence in plain words; follow-ups: four-line rows, Related Intentions close, name clamp, one-line line 2 | Done, tested 2026-10-14; awaiting Checkpoint |
-| 6 | Next-date function + `triggerRecurrence` takes a date | |
+| 5 | Recurrence in plain words; follow-ups: four-line rows, Related Intentions close, name clamp, one-line line 2 | Done, checkpointed e8a7b0c |
+| 6 | Next-date function + `triggerRecurrence` takes a date (+ item detail duplicate fix, no "next" in repeat lines, repeat-dialog number boxes) | Done, tested 2026-10-14; awaiting Checkpoint |
 | 7 | Completion dialog: next-date field | |
 | 8 | Done control | |
 | 9 | Skip control (+ EventCard Archive Event → Skip; audit closed-as-done readers) | |
@@ -87,6 +87,23 @@ Test: add a reminder on detail, go back, the card badge is there without reload.
 ## Log
 - 2026-10-13 Step 1 code done. Related tests pass (intentionRows, intentions, contexts).
   `deno check` not run: the local deno cache lacks the supabase-js npm packages.
+- 2026-10-16 Step 6 follow-ups 2: interval repeats read "N days after last completion";
+  the "Repeat after completion" dialog reads "Schedule next event / [N] [unit] after last
+  completion" with the number and unit kept together; Archive in the intention, item and
+  event edit footers is the red outline. EventCard.jsx newly claimed.
+- 2026-10-14 Step 6 COMPLETE (testing passed). Follow-ups: the repeat line never says
+  "· next …" (the schedule line carries the date; "until" and "Ended" stay); the repeat
+  dialogs' number boxes use a new shared `src/shared/NumberInput.jsx` (raw text, select on
+  focus, "Required" and Done disabled when unusable), with tests for it and both dialogs.
+- 2026-10-14 Step 6 built. `nextOccurrence` in `src/utils/recurrence.js` (fixed: first
+  occurrence after the event's date, stepped forward to today at the earliest; interval:
+  completion + interval; interval skipped: skipped date + interval, clamped to today), with
+  `recurrence.test.js` incl. the Micro Workout case. `triggerRecurrence(intentId, event,
+  { nextDate, skipped })` uses a given date or that rule; completion passes nothing, the
+  existing Archive Event path passes `skipped: true` (the skipped history line is Step 9);
+  end date compared as dates. New `useEventActions.test.js`. Also: item detail no longer
+  lists an intention with an open run under Related Intentions (it is in In progress), and
+  that section's count and chips skip it.
 - 2026-10-14 Step 5 COMPLETE, all testing passed. In full: one repeat formatter
   (`recurrenceDisplay.js`) everywhere, with next on intention detail only and honest wording
   for legacy no-day shapes; picker presets read as the repeat line; rows are four lines
