@@ -1,12 +1,58 @@
 import React, { useState } from "react";
 import AlwaysDoThisSheet from "./AlwaysDoThisSheet";
+import { HelpAfter } from "./HelpButton";
 import {
-  applyTags, dismissSubscription, getReviewQueue, getTagTree, recordSubscriptionPrice, reprocess, setKind, setReviewed,
+  applyTags, dismissSubscription, getReviewQueue, getSubscriptionDetail, getSubscriptions, getTagTree,
+  recordSubscriptionPrice, reprocess, setKind, setReviewed,
 } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
-import { formatDay, formatMoney, groupQueue, tagOptions } from "./moneyFormat";
+import { formatDay, formatMoney, groupQueue, tagOptions, toNumber } from "./moneyFormat";
 
 const SMALL = "min-h-[44px] px-3 rounded-lg border border-border text-sm";
+
+/** Live working for price changes: each charge against the price expected on its date, and the tolerance. */
+export function PriceChangeWorking({ rows }) {
+  const { data, error } = useLoad(() => getSubscriptions(), []);
+  if (error) return <p>{error.message}</p>;
+  if (!data) return <p>Loading…</p>;
+  const subs = new Map(data.map((s) => [s.id, s]));
+  return (
+    <ul className="list-disc pl-5 space-y-1">
+      {rows.map((r) => {
+        const sub = subs.get(r.subscription_id);
+        const tolerance = toNumber(sub?.amount_tolerance) || 0;
+        return (
+          <li key={r.transaction_id}>
+            {formatDay(r.txn_date)}: charged {formatMoney(-toNumber(r.amount))}. {r.detail}.
+            {" "}{tolerance > 0 ? `Tolerance ± ${formatMoney(tolerance)}.` : "No tolerance: it must match to the cent."}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function ChargeDates({ subscriptionId }) {
+  const { data } = useLoad(() => getSubscriptionDetail(subscriptionId), [subscriptionId]);
+  if (!data) return null;
+  return <>: {data.charges.slice().reverse().map((c) => formatDay(c.txn_date)).join(", ")}</>;
+}
+
+/** Live working for possible subscriptions: the charges that made each one look monthly. */
+export function NewRecurringWorking({ rows }) {
+  return (
+    <ul className="list-disc pl-5 space-y-1">
+      {rows.map((r) => (
+        <li key={r.transaction_id}>
+          {r.detail || r.merchant_name}: charges linked
+          {r.subscription_id ? <ChargeDates subscriptionId={r.subscription_id} /> : null}.
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const WORKING = { price_change: PriceChangeWorking, new_recurring: NewRecurringWorking };
 
 /**
  * The review queue (spec §7.3), newest first, grouped by reason, with one tap
@@ -60,7 +106,12 @@ export default function ReviewScreen({ onOpen }) {
       {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
       {groups.map((g) => (
         <section key={g.reason}>
-          <h3 className="font-medium mb-2">{g.label} <span className="text-muted-foreground font-normal">({g.rows.length})</span></h3>
+          <h3 className="font-medium mb-2">
+            {g.label}{" "}
+            <HelpAfter helpKey={`review.${g.reason}`} working={WORKING[g.reason] ? React.createElement(WORKING[g.reason], { rows: g.rows }) : null}>
+              <span className="text-muted-foreground font-normal">({g.rows.length})</span>
+            </HelpAfter>
+          </h3>
           <ul className="divide-y divide-border bg-card border border-border rounded-lg px-4">
             {g.rows.map((r) => {
               const busy = busyId === r.transaction_id;

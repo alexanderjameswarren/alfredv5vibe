@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { getAccounts, getTagTree, listTransactions, PAGE_SIZE } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
+import HelpButton from "./HelpButton";
 import { KIND_LABELS, KIND_ORDER, accountLabel, formatDay, formatMoney } from "./moneyFormat";
 
 const FIELD = "w-full min-h-[44px] px-3 py-2 rounded-lg border border-border bg-background text-sm";
@@ -107,10 +108,13 @@ export default function TransactionsScreen({ onOpen }) {
           <option value="">All tags</option>
           {tagNames.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
-        <label className="flex items-center gap-2 min-h-[44px] text-sm">
-          <input type="checkbox" checked={filters.needsReview} onChange={set("needsReview")} className="w-5 h-5" />
-          Needs review only
-        </label>
+        <div className="flex items-center gap-2 min-h-[44px] text-sm">
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={filters.needsReview} onChange={set("needsReview")} className="w-5 h-5" />
+            <span>Needs review only</span>
+          </label>
+          <HelpButton helpKey="transactions.needs_review" />
+        </div>
       </div>
 
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}

@@ -245,3 +245,18 @@ describe("subscriptions in review", () => {
     expect(op("wb_subscriptions", "delete")).toHaveLength(0);
   });
 });
+
+describe("getKindRule", () => {
+  it("names the last matched rule that sets a kind", async () => {
+    mockRespond = (table) => table === "wb_transactions"
+      ? { data: { matched_rule_ids: ["r1", "r2", "r3"] }, error: null }
+      : { data: [{ id: "r3", name: "Tags only", set_kind: null }, { id: "r1", name: "First", set_kind: "spend" },
+        { id: "r2", name: "Second", set_kind: "fee" }], error: null };
+    expect((await api.getKindRule("t1")).name).toBe("Second");
+  });
+
+  it("is null with no matched rules", async () => {
+    mockRespond = () => ({ data: { matched_rule_ids: [] }, error: null });
+    expect(await api.getKindRule("t1")).toBeNull();
+  });
+});

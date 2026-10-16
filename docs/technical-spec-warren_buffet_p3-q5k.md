@@ -92,6 +92,8 @@ Phase 3 answers "can we afford it?":
 | A11 | Out of scope: `set_project_id` in `wb_rule_preview`, `wb_bulk_create` and `wb_fix_plan`. |
 | A12 | A test keeps the SQL monthly-equivalent rule in step with `moneyFormat.monthlyEquivalent`. |
 | A13 | The platform spec is `docs/history/technical-spec-platform-layer.md`. |
+| A15 | Help numbers in SQL (Alex, 2026-10-14, run tag `warren_buffet_p3-q5k-s3-h6tz`). Applied migrations are never edited. The next time a migration redefines `wb_transfer_match`, `wb_detect_subscriptions`, `wb_subscription_overview` or `wb_rule_health_all` (or any object whose number the help states), that migration adds a comment next to each such number saying "if you change this value, update help entry <key> in src/money/helpText.js and its test". The JS mirrors live in `src/money/ruleNumbers.js`, and `helpText.test.js` checks them against the newest SQL definition. |
+| A16 | `never_fires` is fixed in step 10, the weekly cleanup step (Alex, same run tag). The new rule: flag a rule when its last match is older than about 1.5 times its expected interval, and give a brand-new rule that long before its first match is due. Step 3 does not change the check. |
 | A14 | Recurring "what if" items are wanted (Alex, 2026-10-14, run tag `warren_buffet_p3-q5k-s2-m3qd`). `wb_planned_items.is_draft boolean not null default false`, for recurring items only; a one-off draft stays stage `draft`. Drafts of either kind stay out of free cash unless the drafts toggle includes them. |
 
 ---

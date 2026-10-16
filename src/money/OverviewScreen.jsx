@@ -2,6 +2,7 @@ import React from "react";
 import { AlertTriangle, CheckCircle2, ChevronRight } from "lucide-react";
 import { getAccounts, getLatestNetWorth, getLatestSyncRun } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
+import HelpButton, { HelpTitle } from "./HelpButton";
 import {
   NET_WORTH_GROUPS, formatDateTime, formatDay, formatMoney, syncStatus, toNumber,
 } from "./moneyFormat";
@@ -48,7 +49,7 @@ export default function OverviewScreen({ onOpenAccounts }) {
     <div className="space-y-4">
       <section className="bg-card border border-border rounded-lg p-4">
         <p className="text-sm text-muted-foreground">
-          Net worth{latest ? ` · ${formatDay(latest.as_of)}` : ""}
+          <HelpTitle helpKey="overview.net_worth" text={`Net worth${latest ? ` · ${formatDay(latest.as_of)}` : ""}`} />
         </p>
         <p className="text-3xl font-medium tabular-nums mt-1">
           {latest ? formatMoney(latest.net_worth, { whole: true }) : "—"}
@@ -63,20 +64,26 @@ export default function OverviewScreen({ onOpenAccounts }) {
         </dl>
       </section>
 
-      <SyncLine status={status} />
+      <div className="flex items-start gap-1">
+        <div className="flex-1 min-w-0"><SyncLine status={status} /></div>
+        <HelpButton helpKey="overview.sync_status" />
+      </div>
 
       {unassigned > 0 && (
-        <button
-          type="button"
-          onClick={onOpenAccounts}
-          className="w-full text-left p-4 min-h-[44px] rounded-lg bg-warning-light text-warning flex items-center justify-between gap-3"
-        >
-          <span>
-            {unassigned} account{unassigned > 1 ? "s have" : " has"} no role and {unassigned > 1 ? "are" : "is"} left
-            out of net worth. Assign a role.
-          </span>
-          <ChevronRight className="w-5 h-5 shrink-0" aria-hidden="true" />
-        </button>
+        <div className="flex items-start gap-1">
+          <button
+            type="button"
+            onClick={onOpenAccounts}
+            className="flex-1 min-w-0 text-left p-4 min-h-[44px] rounded-lg bg-warning-light text-warning flex items-center justify-between gap-3"
+          >
+            <span>
+              {unassigned} account{unassigned > 1 ? "s have" : " has"} no role and {unassigned > 1 ? "are" : "is"} left
+              out of net worth. Assign a role.
+            </span>
+            <ChevronRight className="w-5 h-5 shrink-0" aria-hidden="true" />
+          </button>
+          <HelpButton helpKey="net_worth.unassigned" />
+        </div>
       )}
     </div>
   );

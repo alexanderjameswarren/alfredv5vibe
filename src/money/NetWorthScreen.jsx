@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import LineChart from "./LineChart";
 import { getNetWorth } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
+import HelpButton, { HelpTitle } from "./HelpButton";
 import { NET_WORTH_GROUPS, daysBefore, formatDay, formatMoney, pacificToday, toNumber } from "./moneyFormat";
 
 export const RANGES = [
@@ -64,13 +65,13 @@ function LatestTable({ row }) {
             <dd className="tabular-nums">{formatMoney(row[g.key], { whole: true })}</dd>
           </div>
         ))}
-        <div className="flex justify-between py-2 font-medium">
-          <dt>Net worth</dt>
+        <div className="flex items-center justify-between py-2 font-medium">
+          <dt className="whitespace-nowrap">Net worth<HelpButton helpKey="overview.net_worth" /></dt>
           <dd className="tabular-nums">{formatMoney(row.net_worth, { whole: true })}</dd>
         </div>
         {toNumber(row.unassigned) ? (
-          <div className="flex justify-between py-2 text-sm text-muted-foreground">
-            <dt>Unassigned (not counted)</dt>
+          <div className="flex items-center justify-between py-2 text-sm text-muted-foreground">
+            <dt><HelpTitle helpKey="net_worth.unassigned" text="Unassigned (not counted)" /></dt>
             <dd className="tabular-nums">{formatMoney(row.unassigned, { whole: true })}</dd>
           </div>
         ) : null}

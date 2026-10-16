@@ -6,8 +6,10 @@ import {
   dismissSubscription, findLinkCandidates, getSubscriptionDetail, linkCharges, recordPrice, setSubscriptionStatus,
 } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
+import HelpButton, { HelpAfter } from "./HelpButton";
 import {
   OWNER_LABELS, SUB_STATUS_LABELS, formatDay, formatMoney, intervalLabel, monthlyEquivalent, pacificToday, parseAmountInput,
+  reviewSoon,
 } from "./moneyFormat";
 
 const SECTION = "bg-card border border-border rounded-lg p-4";
@@ -15,10 +17,10 @@ const FIELD = "w-full min-h-[44px] px-3 rounded-lg border border-border bg-backg
 const SMALL = "min-h-[44px] px-3 rounded-lg border border-border text-sm";
 const LINK = "min-h-[44px] text-sm text-primary text-left";
 
-function Fact({ label, children }) {
+function Fact({ label, help, children }) {
   return (
     <div className="py-1.5 flex flex-wrap justify-between gap-x-4">
-      <dt className="text-sm text-muted-foreground">{label}</dt>
+      <dt className="text-sm text-muted-foreground whitespace-nowrap">{label}{help}</dt>
       <dd className="text-sm text-right break-words">{children}</dd>
     </div>
   );
@@ -176,10 +178,16 @@ export default function SubscriptionDetailView({ subscriptionId, onBack, onOpenS
       ) : (
         <section className={SECTION}>
           <dl className="divide-y divide-border">
-            <Fact label="Price">{formatMoney(sub.current_price)}{monthly !== null && sub.interval_count !== 1 ? ` (${formatMoney(monthly)} a month)` : ""}</Fact>
+            <Fact label="Price" help={<HelpButton helpKey="subscription.price" />}>{formatMoney(sub.current_price)}{monthly !== null && sub.interval_count !== 1 ? ` (${formatMoney(monthly)} a month)` : ""}</Fact>
             <Fact label="Billing">{intervalLabel(sub)}</Fact>
             <Fact label="Last charged">{formatDay(sub.last_charged_on)}</Fact>
-            <Fact label="Next expected">
+            <Fact label="Next expected" help={<HelpButton helpKey="subscription.next_expected" working={
+              <p>
+                Last charged {formatDay(sub.last_charged_on)}, billed {intervalLabel(sub).toLowerCase()}
+                {sub.term_end_date ? `, prepaid until ${formatDay(sub.term_end_date)}` : ""}: next expected {formatDay(sub.next_expected_on)}.
+                {sub.review_date ? ` Review date ${formatDay(sub.review_date)}${reviewSoon(sub, pacificToday()) ? ", so the Review badge shows" : ""}.` : " No review date set."}
+              </p>
+            } />}>
               {formatDay(sub.next_expected_on)}{sub.overdue ? ` · overdue ${sub.days_past_expected} days` : ""}
             </Fact>
             {sub.term_end_date && <Fact label="Prepaid until">{formatDay(sub.term_end_date)}</Fact>}
@@ -221,7 +229,12 @@ export default function SubscriptionDetailView({ subscriptionId, onBack, onOpenS
 
       <section className={SECTION}>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h4 className="font-medium">Linked charges <span className="text-muted-foreground font-normal">({charges.length})</span></h4>
+          <h4 className="font-medium">
+            Linked charges{" "}
+            <HelpAfter helpKey="subscription.linked_charges">
+              <span className="text-muted-foreground font-normal">({charges.length})</span>
+            </HelpAfter>
+          </h4>
           <button type="button" className={SMALL} onClick={() => setMode(mode === "link" ? null : "link")}>Link charges</button>
         </div>
         {mode === "link" && <LinkPicker sub={sub} onDone={done} />}
