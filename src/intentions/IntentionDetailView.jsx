@@ -258,7 +258,6 @@ export default function IntentionDetailView({
           {describeRepeat({
             config: getRecurrenceConfig(intention),
             endDate: intention.endDate,
-            nextDate: actions.live?.time || null,
             today: getTodayDate(),
           })}
         </p>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import NumberInput, { parseWhole } from "../NumberInput";
 
 /**
  * Custom recurrence dialog — Google Calendar-style fixed schedule builder.
@@ -13,10 +14,13 @@ export default function CustomRecurrenceDialog({ initialConfig, onDone, onCancel
   // Parse initialConfig into local state
   const init = initialConfig && initialConfig.type === "fixed" ? initialConfig : null;
   const [frequency, setFrequency] = useState(init?.frequency || "week");
-  const [interval, setInterval] = useState(init?.interval || 1);
+  // Number boxes hold raw text (NumberInput); parsed values are null while unusable.
+  const [intervalText, setIntervalText] = useState(String(init?.interval || 1));
+  const interval = parseWhole(intervalText, { min: 1, max: 99 });
   const [daysOfWeek, setDaysOfWeek] = useState(init?.daysOfWeek || []);
   const [monthlyMode, setMonthlyMode] = useState(init?.ordinal ? "ordinal" : "dayOfMonth");
-  const [dayOfMonth, setDayOfMonth] = useState(init?.dayOfMonth || new Date().getDate());
+  const [dayOfMonthText, setDayOfMonthText] = useState(String(init?.dayOfMonth || new Date().getDate()));
+  const dayOfMonth = parseWhole(dayOfMonthText, { min: 1, max: 31 });
   const [ordinal, setOrdinal] = useState(init?.ordinal || "first");
   const [dayOfWeek, setDayOfWeek] = useState(init?.dayOfWeek || 1);
   const [endMode, setEndMode] = useState("never");
@@ -43,7 +47,11 @@ export default function CustomRecurrenceDialog({ initialConfig, onDone, onCancel
     );
   }
 
+  const usesDayOfMonth = frequency === "month" && monthlyMode === "dayOfMonth";
+  const valid = interval !== null && (!usesDayOfMonth || dayOfMonth !== null);
+
   function handleDone() {
+    if (!valid) return;
     const config = { type: "fixed", frequency: freqToConfig[frequency], interval };
 
     if (frequency === "week") {
@@ -74,14 +82,14 @@ export default function CustomRecurrenceDialog({ initialConfig, onDone, onCancel
         <h3 className="text-lg font-semibold mb-4">Custom recurrence</h3>
 
         {/* Repeat every [N] [frequency] */}
-        <div className="flex items-center gap-2 mb-4">
-          <span className="text-sm">Repeat every</span>
-          <input
-            type="number"
+        <div className="flex items-start gap-2 mb-4">
+          <span className="text-sm py-1">Repeat every</span>
+          <NumberInput
+            aria-label="Repeat every"
+            value={intervalText}
+            onChange={setIntervalText}
             min={1}
             max={99}
-            value={interval}
-            onChange={(e) => setInterval(Math.max(1, parseInt(e.target.value) || 1))}
             className="w-16 px-2 py-1 border border-border rounded text-center text-sm"
           />
           <select
@@ -151,12 +159,12 @@ export default function CustomRecurrenceDialog({ initialConfig, onDone, onCancel
                 onChange={() => setMonthlyMode("dayOfMonth")}
               />
               <span>On day</span>
-              <input
-                type="number"
+              <NumberInput
+                aria-label="Day of the month"
+                value={dayOfMonthText}
+                onChange={setDayOfMonthText}
                 min={1}
                 max={31}
-                value={dayOfMonth}
-                onChange={(e) => setDayOfMonth(Math.min(31, Math.max(1, parseInt(e.target.value) || 1)))}
                 className="w-14 px-2 py-1 border border-border rounded text-center text-sm"
                 disabled={monthlyMode !== "dayOfMonth"}
               />
@@ -239,7 +247,8 @@ export default function CustomRecurrenceDialog({ initialConfig, onDone, onCancel
           <button
             type="button"
             onClick={handleDone}
-            className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 transition-colors"
+            disabled={!valid}
+            className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Done
           </button>

@@ -70,6 +70,43 @@ export function calculateNextEventDate(config, referenceDate) {
   return null;
 }
 
+/**
+ * The next occurrence after a run is completed or skipped (Restructure P4 Step 6).
+ * All dates are "YYYY-MM-DD"; returns one, or null when the config does not repeat.
+ *
+ * - Fixed schedule: the first occurrence after the EVENT's scheduled date, and never
+ *   earlier than today (stepping forward along the schedule). A daily run started
+ *   Monday and closed Tuesday gives Tuesday, not Wednesday.
+ * - Interval from completion: the completion date plus the interval.
+ * - Interval, skipped: the skipped event's date plus the interval, clamped to today.
+ */
+export function nextOccurrence(config, { eventDate = null, completedOn = null, today, skipped = false }) {
+  if (!config || config.type === 'once') return null;
+  const todayDate = parseLocalDate(today);
+
+  if (config.type === 'interval') {
+    if (skipped) {
+      const next = calculateNextEventDate(config, parseLocalDate(eventDate || today));
+      return next ? dateString(next < todayDate ? todayDate : next) : null;
+    }
+    const next = calculateNextEventDate(config, parseLocalDate(completedOn || today));
+    return next ? dateString(next) : null;
+  }
+
+  // No event date: the first occurrence on or after today.
+  let next = calculateNextEventDate(config, eventDate ? parseLocalDate(eventDate) : addDays(todayDate, -1));
+  for (let i = 0; next && next < todayDate && i < 1000; i++) {
+    next = calculateNextEventDate(config, next);
+  }
+  return next ? dateString(next) : null;
+}
+
+/** A local-midnight Date as "YYYY-MM-DD" (never via toISOString, which shifts the day). */
+function dateString(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 // ─── Date Helpers ───────────────────────────────────────────────────────────
 
 /**

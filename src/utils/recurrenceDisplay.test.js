@@ -21,9 +21,10 @@ describe("repeatPattern: every shape", () => {
     [fixed("monthly", { ordinal: "first", dayOfWeek: 1 }), "Every month on the first Monday"],
     [fixed("monthly", { ordinal: "last", dayOfWeek: "weekday" }), "Every month on the last weekday"],
     [fixed("monthly"), "Every month, with no day chosen"],
-    [{ type: "interval", every: 3, unit: "weeks" }, "3 weeks after you last did it"],
-    [{ type: "interval", every: 1, unit: "days" }, "1 day after you last did it"],
-    [{ type: "interval", every: 6, unit: "months" }, "6 months after you last did it"],
+    [{ type: "interval", every: 3, unit: "weeks" }, "3 weeks after last completion"],
+    [{ type: "interval", every: 1, unit: "days" }, "1 day after last completion"],
+    [{ type: "interval", every: 1, unit: "months" }, "1 month after last completion"],
+    [{ type: "interval", every: 6, unit: "months" }, "6 months after last completion"],
   ])("%j", (config, text) => {
     expect(repeatPattern(config)).toBe(text);
   });
@@ -34,32 +35,18 @@ describe("repeatPattern: every shape", () => {
 });
 
 describe("describeRepeat", () => {
-  test("adds the next occurrence with its day name", () => {
-    expect(describeRepeat({ config: fixed("daily"), nextDate: "2026-10-15", today })).toBe(
-      "Every day · next Thursday, October 15",
-    );
+  test("never names a next date: the schedule line carries it", () => {
+    expect(describeRepeat({ config: fixed("daily"), nextDate: "2026-10-15", today })).toBe("Every day");
   });
 
   test("names the year when it is not this year's", () => {
     expect(longDate("2027-01-05", today)).toBe("Tuesday, January 5, 2027");
   });
 
-  test("an overdue live event is not called next", () => {
-    expect(describeRepeat({ config: fixed("daily"), nextDate: "2026-10-07", today })).toBe("Every day");
-    expect(describeRepeat({ config: fixed("daily"), nextDate: today, today })).toBe(
-      "Every day · next Wednesday, October 14",
+  test("an end date ahead reads until", () => {
+    expect(describeRepeat({ config: fixed("daily"), endDate: "2026-10-20", today })).toBe(
+      "Every day · until October 20",
     );
-  });
-
-  test("no next without a live event, and none where the row already shows it", () => {
-    expect(describeRepeat({ config: fixed("daily"), today })).toBe("Every day");
-    expect(describeRepeat({ config: fixed("daily"), nextDate: "2026-10-15", today, showNext: false })).toBe("Every day");
-  });
-
-  test("an end date ahead reads until, and a next past it is not shown", () => {
-    expect(
-      describeRepeat({ config: fixed("daily"), endDate: "2026-10-20", nextDate: "2026-10-21", today }),
-    ).toBe("Every day · until October 20");
   });
 
   test("an end date today or before reads Ended", () => {
@@ -67,8 +54,8 @@ describe("describeRepeat", () => {
     expect(describeRepeat({ config: fixed("daily"), endDate: "2025-12-01", today })).toBe("Ended December 1, 2025");
   });
 
-  test("once never shows an end or a next", () => {
-    expect(describeRepeat({ config: { type: "once" }, endDate: "2025-01-01", nextDate: today, today })).toBe(
+  test("once never shows an end", () => {
+    expect(describeRepeat({ config: { type: "once" }, endDate: "2025-01-01", today })).toBe(
       "Does not repeat",
     );
   });

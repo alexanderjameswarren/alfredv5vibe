@@ -359,7 +359,7 @@ export default function IntentionCard({
               <button
                 onClick={() => onArchive(intent.id)}
                 disabled={hasActiveExecutions}
-                className={`px-3 sm:px-4 py-2.5 min-h-[44px] rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base ml-auto ${hasActiveExecutions ? 'bg-secondary text-muted-foreground cursor-not-allowed' : 'bg-destructive hover:bg-destructive-hover text-white'}`}
+                className={`px-3 sm:px-4 py-2.5 min-h-[44px] rounded-lg transition-colors duration-200 text-sm sm:text-base ml-auto ${hasActiveExecutions ? 'bg-secondary text-muted-foreground cursor-not-allowed' : 'border-2 border-destructive text-destructive hover:bg-destructive/10'}`}
                 title={hasActiveExecutions ? 'Cannot archive: active execution in progress' : 'Archive this intention and all related events'}
               >
                 Archive
@@ -400,7 +400,7 @@ export default function IntentionCard({
                   <ScheduledLine actions={actions} />
                 </span>
               )}
-              {/* Only repeating rows say so; no "next": the date is just left of it. */}
+              {/* Only repeating rows say so. */}
               {showScheduling && repeats(getRecurrenceConfig(intent)) && (
                 <span className="inline-flex items-center gap-1 text-muted-foreground">
                   <Repeat className="w-3.5 h-3.5" aria-label="Repeats" />
@@ -408,7 +408,6 @@ export default function IntentionCard({
                     config: getRecurrenceConfig(intent),
                     endDate: intent.endDate,
                     today: getTodayDate(),
-                    showNext: false,
                   })}
                 </span>
               )}
