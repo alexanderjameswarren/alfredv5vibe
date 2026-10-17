@@ -50,6 +50,22 @@ One pure function in `src/utils/recurrence.js`; `triggerRecurrence` takes an exp
 Micro Workout case: daily, event Monday, run left open, closed Tuesday → next = Tuesday
 (today's code gives Wednesday, because it always counts from the close day).
 
+As built (Step 7): the Complete pop-up has "Completed on" for every execution (default
+today; ANY past day, so backfills work, never a future one; no lower limit), which sets
+`closed_at` (`closedAtFor`: now for today, else midday that day) and so `last_completed_at`;
+and, for an active repeat, "Next" with the repeat line, defaulting by the rule below,
+recomputed from Completed on for an interval repeat (clamped to today) unless Next was
+changed by hand. While a date is being changed, the picker (labelled "Completed on" or
+"Next") replaces its line: one date, one label. A completed execution's page has Change on
+its "Completed … · read only" line (`CompletedOnDialog`, `changeCompletionDate`): the same
+any-past-day rule, saved at midday; events and the next date do not move. The existing
+`executions_last_completed` trigger (100) already recomputes `last_completed_at` as the
+LATEST done execution whenever a done execution's `closed_at` changes, so no migration is
+needed. After a completion or a date change the app re-reads the intention and item(s)
+(`refreshCompletedRecords`) so rows show the new "last done" without a reload.
+Event dates are never picked in the past: SchedulePopover's `minDate`, EventCard's edit form
+(a moved date) and inbox triage's date all refuse with "Pick today or a later date."
+
 As built (Step 6): `nextOccurrence(config, { eventDate, completedOn, today, skipped })` in
 `src/utils/recurrence.js`; `triggerRecurrence(intentId, event, { nextDate, skipped })` takes
 a chosen date or applies the rule. Today's Archive Event on a live event already passes
@@ -237,6 +253,25 @@ recurring intention (closing also stops the repeat via end_date) — explicit te
 date, archived event and cancelled reminder (as today), and `last_completed_at` falls back to
 its earlier value by itself (the 100 triggers recalculate on execution delete). Undo may
 return a record to Someday (needs the Step 11 guard exception).
+
+**Closed on** (added 2026-10-16). The Close pop-up also has a "Closed on" date, with the
+same Change pattern as the Complete pop-up. Default: the intention's live event date if it
+has one (even a past one), otherwise today. Any past date, never the future (no lower
+limit, as Completed on). It is
+written to `status_changed_at` on every record the close closes (items and intents), so an
+item with no intention records its close date too. When the reason is Completed and the
+close creates the done execution, that execution's completion date (`closed_at`, via
+`closedAtFor`) is the Closed on date, so `last_completed_at` shows the real day. Undo
+restores the previous `status_changed_at` as well. Database note for Step 11:
+`status_guard` stamps `status_changed_at` itself and ignores client writes today, so it must
+accept a client-supplied value on a move to closed (no later than now()).
+
+**Automatic close on completion** (added 2026-10-17). Completing a one-time intention's
+execution already closes the intention (`closeExecution`). That close saves
+`closed_reason = 'done'`, and its Closed on date (`status_changed_at`) is the Completed on
+date, not the day of the tap. Step 11's backfill treats existing automatic closes the same
+way where it can tell: a one-time intention whose latest done execution's `closed_at` sits
+just before its `status_changed_at` gets 'done' and that completion date.
 
 **Disabled rule**, all six places: Closed cannot be chosen while an execution is open (for an
 item, an open execution on any of its intentions or one carrying the item). Pills and edit

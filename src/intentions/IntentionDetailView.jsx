@@ -298,6 +298,7 @@ export default function IntentionDetailView({
                 label={actions.scheduleLabel}
                 icon={<CalendarPlus className="w-4 h-4" />}
                 initialDate={actions.liveDate || getTodayDate()}
+                minDate={getTodayDate()}
                 onPick={(date) => onSchedule(intention.id, date)}
                 disabled={Boolean(closedTitle || actions.moveBlocked)}
                 className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}

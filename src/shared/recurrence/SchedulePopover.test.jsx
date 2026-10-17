@@ -63,3 +63,16 @@ test("time mode: its own label, a time input, onPick(date, time)", () => {
   fireEvent.click(screen.getByRole("button", { name: "Set reminder" }));
   expect(onPick).toHaveBeenCalledWith("2026-10-07", "09:30");
 });
+
+test("minDate: past days are greyed out and refused, and an overdue date opens on the minimum", () => {
+  const onPick = jest.fn();
+  render(<SchedulePopover label="Reschedule" initialDate="2026-10-07" minDate="2026-10-16" onPick={onPick} />);
+  fireEvent.click(screen.getByRole("button", { name: "Reschedule" }));
+  const input = screen.getByLabelText("Date");
+  expect(input.getAttribute("min")).toBe("2026-10-16");
+  expect(input.value).toBe("2026-10-16");
+  fireEvent.change(input, { target: { value: "2026-10-10" } });
+  fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+  expect(screen.getByText("Pick today or a later date.")).toBeTruthy();
+  expect(onPick).not.toHaveBeenCalled();
+});

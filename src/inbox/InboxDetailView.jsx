@@ -82,6 +82,8 @@ import { splitCaptureName } from "../utils/captureName";
 import { isFirstStep } from "../utils/elementOffsets";
 import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
 import WhenButton from "../shared/WhenButton";
+import { getTodayDate } from "../utils/eventDates";
+import { PAST_DATE_MESSAGE } from "../shared/recurrence/SchedulePopover";
 
 /**
  * This page's baseline: the shared triage baseline plus the capture's app. One
@@ -483,10 +485,13 @@ export default function InboxDetailView({
   // Neither toggle on means nothing would be created, so there is nothing to
   // process — the same rule the old card's Save used. Discard is the button for
   // "this capture should just go away", and it says so.
+  // An event date may not be in the past (Restructure P4).
+  const eventDatePast = intentionOn && whenMode === "date" && Boolean(eventDate) && eventDate < getTodayDate();
   const canProcess =
     (itemOn || intentionOn) &&
     (!itemOn || itemName.trim().length > 0) &&
-    (!intentionOn || intentText.trim().length > 0);
+    (!intentionOn || intentText.trim().length > 0) &&
+    !eventDatePast;
 
   /**
    * File the capture.
@@ -1037,13 +1042,21 @@ export default function InboxDetailView({
                 </div>
 
                 {whenMode === "date" && (
-                  <input
-                    type="date"
-                    value={eventDate}
-                    onChange={(e) => setEventDate(e.target.value)}
-                    aria-label="Date"
-                    className={`${FIELD} mt-2`}
-                  />
+                  <>
+                    <input
+                      type="date"
+                      value={eventDate}
+                      min={getTodayDate()}
+                      onChange={(e) => setEventDate(e.target.value)}
+                      aria-label="Date"
+                      className={`${FIELD} mt-2`}
+                    />
+                    {eventDatePast && (
+                      <p role="alert" className="mt-1 text-xs text-destructive">
+                        {PAST_DATE_MESSAGE}
+                      </p>
+                    )}
+                  </>
                 )}
 
                 {whenMode === "repeat" && (

@@ -346,6 +346,7 @@ export default function Alfred() {
   const {
     activate,
     closeExecution,
+    changeCompletionDate,
     cancelExecutionForEvent,
     pauseExecution,
     makeExecutionActive,
@@ -376,6 +377,8 @@ export default function Alfred() {
     clearCompletedFromCollection,
     withLoading,
     watchStatus,
+    setItems,
+    notify,
   });
   const {
     handleCapture,
@@ -1457,6 +1460,7 @@ export default function Alfred() {
             saveMemberQuantity={saveMemberQuantity}
             refreshCollection={refreshCollection}
             closeExecution={closeExecution}
+            changeCompletionDate={changeCompletionDate}
             pauseExecution={pauseExecution}
             makeExecutionActive={makeExecutionActive}
             // Back from these lands on Home (Active/Paused/Today), one tap from

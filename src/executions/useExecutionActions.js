@@ -1,6 +1,6 @@
 import { storage, writeError } from "../utils/storage";
 import { uid, flattenElements } from "../utils/flattenElements";
-import { getTodayDate } from "../utils/eventDates";
+import { formatEventDate, getTodayDate } from "../utils/eventDates";
 import { getRecurrenceConfig } from "../utils/recurrence";
 import { itemActionTarget, isDueBy } from "../utils/runNow";
 import { carriedItems, liveEventsFor } from "../utils/status";
@@ -16,6 +16,19 @@ import {
 // must not add the same run a second time (two "p4 test" cards, Restructure P4).
 export function withActive(list, execution) {
   return list.some((x) => x.id === execution.id) ? list : [execution, ...list];
+}
+
+/**
+ * closed_at for a completion on `completedOn` ("YYYY-MM-DD", local): now when it is
+ * today (or not given), otherwise midday that day. Any past day is allowed: it may be
+ * a backfill from before the execution was even started.
+ */
+export function closedAtFor(completedOn, now = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  if (!completedOn || completedOn >= today) return now.toISOString();
+  const [y, m, d] = completedOn.split("-").map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0).toISOString();
 }
 
 // Execution writers and the notification chain, moved out of Alfred.jsx unchanged.
@@ -44,6 +57,8 @@ export function useExecutionActions({
   clearCompletedFromCollection,
   withLoading,
   watchStatus,
+  setItems,
+  notify,
 }) {
   // The rows an execution insert can flip to active (088): its intention, that
   // intention's item, and every item it carries.
@@ -239,7 +254,10 @@ export function useExecutionActions({
     }
   }
 
-  async function closeExecution(outcome) {
+  // From the completion pop-up (Step 7): `nextDate`, the next event's date (without
+  // one, triggerRecurrence applies the shared rule itself); `completedOn`, the day it
+  // was done ("YYYY-MM-DD"), which sets closed_at and so last_completed_at.
+  async function closeExecution(outcome, { nextDate = null, completedOn = null } = {}) {
     if (!writable(activeExecution)) return;
     return withLoading('Completing...', async () => {
       // Cancel = Delete: just remove active execution, don't archive anything
@@ -260,7 +278,7 @@ export function useExecutionActions({
 
       const closed = {
         ...activeExecution,
-        closedAt: new Date().toISOString(),
+        closedAt: closedAtFor(completedOn),
         outcome,
         status: "closed",
       };
@@ -290,9 +308,11 @@ export function useExecutionActions({
           }
         } else {
           // Recurring: calculate and create next event
-          await triggerRecurrence(intent.id, event);
+          await triggerRecurrence(intent.id, event, { nextDate });
         }
       }
+      // The database has just written last_completed_at (trigger); show it now.
+      if (outcome === "done") await refreshCompletedRecords(closed);
 
       // Remove completed items from collection. Only an affirmative completion
       // clears anything — cancel returns above, and pause never reaches here.
@@ -656,9 +676,48 @@ export function useExecutionActions({
     });
   }
 
+  /**
+   * Re-read the intention and item(s) an execution counts for. Their
+   * last_completed_at is written by the database (executions_last_completed), and
+   * the list must not wait on a realtime message that may not come.
+   */
+  async function refreshCompletedRecords(execution) {
+    const intent = intents.find((i) => i.id === execution.intentId);
+    const itemIds = [...new Set([...(execution.itemIds || []), intent?.itemId].filter(Boolean))];
+    const fresh = await storage.get(`intent:${execution.intentId}`);
+    if (fresh) setIntents((prev) => prev.map((i) => (i.id === fresh.id ? fresh : i)));
+    if (!setItems) return;
+    for (const id of itemIds) {
+      const item = await storage.get(`item:${id}`);
+      if (item) setItems((prev) => prev.map((i) => (i.id === item.id ? item : i)));
+    }
+  }
+
+  /**
+   * A completed execution's one editable field: the day it was done (Step 7). Saved
+   * at midday, as Complete does; the database then sets each record's
+   * last_completed_at to its LATEST done execution, so an older edit never hides a
+   * newer completion. Events and the next date do not move.
+   */
+  async function changeCompletionDate(completedOn) {
+    const execution = activeExecution;
+    if (!execution || execution.status !== "closed" || execution.outcome !== "done") return false;
+    let ok = false;
+    await withLoading("Saving...", async () => {
+      const saved = await storage.patch(`execution:${execution.id}`, { closedAt: closedAtFor(completedOn) });
+      if (!saved) throw writeError("The completion date");
+      setActiveExecution(saved);
+      await refreshCompletedRecords(saved);
+      notify?.(`Completed on ${formatEventDate(completedOn)}.`);
+      ok = true;
+    });
+    return ok;
+  }
+
   return {
     activate,
     closeExecution,
+    changeCompletionDate,
     cancelExecutionForEvent,
     pauseExecution,
     makeExecutionActive,

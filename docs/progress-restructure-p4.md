@@ -10,8 +10,8 @@ Test every step in desktop Chrome's mobile view against the local dev server.
 | 3 | Context detail: merged rows + bug (c); Close replaces Archive on rows; fixes from testing | Done, checkpointed d00dfcf |
 | 4 | Intentions list: merged rows + bug (a); follow-ups (In progress section, context edit page, archive buttons, duplicate run card) | Done, checkpointed 59a700b |
 | 5 | Recurrence in plain words; follow-ups: four-line rows, Related Intentions close, name clamp, one-line line 2 | Done, checkpointed e8a7b0c |
-| 6 | Next-date function + `triggerRecurrence` takes a date (+ item detail duplicate fix, no "next" in repeat lines, repeat-dialog number boxes) | Done, tested 2026-10-14; awaiting Checkpoint |
-| 7 | Completion dialog: next-date field | |
+| 6 | Next-date function + `triggerRecurrence` takes a date (+ item detail duplicate fix, no "next" in repeat lines, repeat-dialog number boxes) | Done, checkpointed 858e4f5 |
+| 7 | Completion dialog: next-date field, Completed on; no past event dates; edit a completed date | Done, tested 2026-10-17 (last edit awaiting its short test); awaiting Checkpoint |
 | 8 | Done control | |
 | 9 | Skip control (+ EventCard Archive Event → Skip; audit closed-as-done readers) | |
 | 10 | Stop control | |
@@ -87,6 +87,32 @@ Test: add a reminder on detail, go back, the card badge is there without reload.
 ## Log
 - 2026-10-13 Step 1 code done. Related tests pass (intentionRows, intentions, contexts).
   `deno check` not run: the local deno cache lacks the supabase-js npm packages.
+- 2026-10-17 Step 7 COMPLETE. Last additions: Change on a completed execution's date
+  (`CompletedOnDialog`, `changeCompletionDate`; any past day; events untouched); no
+  migration needed, the 100 trigger already keeps last_completed_at at the latest done
+  date when closed_at changes; rows now refresh "last done" at once (`refreshCompletedRecords`
+  re-reads the intention and item after a completion or a date change, instead of relying on
+  the realtime message). Designed: an automatic close on completion saves reason 'done' and
+  the Completed on date. Step 7 in full: Next date and Completed on in the Complete pop-up,
+  no past event dates anywhere a person picks one, edit a completed date.
+- 2026-10-16 Step 7 fixes from testing: Completed on has no lower limit (any past day,
+  never ahead; Closed on in the design likewise); the picker carries only max=today (the
+  "all days greyed" report: see report s8c); while picking, the picker replaces the date
+  line (one date, one label) for Completed on and Next; no "run" in any new message.
+- 2026-10-16 Step 7 follow-ups: "Completed on" in the Complete pop-up (all runs; back to
+  the start day, not ahead; sets closed_at via `closedAtFor`; moves an interval repeat's
+  Next unless Next was changed by hand); no past event dates in SchedulePopover (`minDate`,
+  four call sites), the event edit form and inbox triage (fixtures moved to future dates in
+  InboxDetailView.test and oneTapMatchesDetailPage.test). "Closed on" designed for 10a/11.
+  Execution page header shows the event's scheduled date (`formatEventDate(event.time)`).
+- 2026-10-16 Step 7 built. The Complete pop-up, for an ACTIVE repeating intention, shows
+  "Next: Saturday, October 17" with the repeat line under it (describeRepeat) and a Change
+  link opening a date input in the pop-up; dates before today, or after the repeat's end,
+  are refused with the reason. An ended repeat reads "Repeat has ended". The default is
+  `nextOccurrence` (ExecutionDetailView); the chosen date goes `onComplete(text, date)` →
+  `closeExecution("done", { nextDate })` → `triggerRecurrence(…, { nextDate })`. One-offs and
+  non-active intentions show nothing new. Tests: CompleteNoteDialog.test.jsx (new),
+  ExecutionDetailView.test.jsx.
 - 2026-10-16 Step 6 follow-ups 2: interval repeats read "N days after last completion";
   the "Repeat after completion" dialog reads "Schedule next event / [N] [unit] after last
   completion" with the number and unit kept together; Archive in the intention, item and

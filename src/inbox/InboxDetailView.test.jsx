@@ -376,13 +376,21 @@ describe("When", () => {
   it("turns a date into an event", () => {
     const { onProcess } = setup({ suggestIntent: true, suggestedIntentText: "Fix it" });
     fireEvent.click(screen.getByRole("button", { name: /Pick a date/ }));
-    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2026-09-26" } });
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2099-09-26" } });
     fireEvent.click(processButton());
     expect(onProcess.mock.calls[0][1].intentionData).toMatchObject({
       createEvent: true,
-      eventDate: "2026-09-26",
+      eventDate: "2099-09-26",
       recurrenceConfig: null,
     });
+  });
+
+  it("refuses a date before today, and Process waits", () => {
+    setup({ suggestIntent: true, suggestedIntentText: "Fix it" });
+    fireEvent.click(screen.getByRole("button", { name: /Pick a date/ }));
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2020-01-01" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Pick today or a later date.");
+    expect(processButton()).toBeDisabled();
   });
 
   it("sends a recurrence on Repeat, and no event", () => {

@@ -1,10 +1,10 @@
 // A completed (closed) execution is read only: no writer touches it.
-import { useExecutionActions, withActive } from "./useExecutionActions";
+import { useExecutionActions, withActive, closedAtFor } from "./useExecutionActions";
 import { storage } from "../utils/storage";
 import * as chainApi from "../utils/notificationStepsApi";
 
 jest.mock("../utils/storage", () => ({
-  storage: { set: jest.fn(), delete: jest.fn(), patch: jest.fn() },
+  storage: { set: jest.fn(), delete: jest.fn(), patch: jest.fn(), get: jest.fn() },
   writeError: jest.fn(),
 }));
 jest.mock("../utils/notificationStepsApi", () => ({
@@ -79,6 +79,59 @@ test("an open execution still writes", async () => {
   storage.set.mockResolvedValue({});
   await actionsFor({ ...closedRun, status: "active" }).pauseExecution();
   expect(storage.set).toHaveBeenCalled();
+});
+
+test("completing re-reads the intention and item, so the row's last done shows without a reload", async () => {
+  storage.set.mockResolvedValue({});
+  storage.patch.mockResolvedValue({ id: "i1", status: "closed" });
+  storage.get.mockImplementation(async (key) =>
+    key === "intent:i1" ? { id: "i1", itemId: "it1", lastCompletedAt: "2026-10-14T12:00:00Z" } : { id: "it1", lastCompletedAt: "2026-10-14T12:00:00Z" },
+  );
+  let intents = [{ id: "i1", itemId: "it1" }];
+  let items = [{ id: "it1" }];
+  await actionsFor(
+    { ...closedRun, status: "active" },
+    {
+      intents,
+      setIntents: (f) => { intents = typeof f === "function" ? f(intents) : f; },
+      setItems: (f) => { items = typeof f === "function" ? f(items) : f; },
+    },
+  ).closeExecution("done", { completedOn: "2026-10-14" });
+  expect(intents[0].lastCompletedAt).toBe("2026-10-14T12:00:00Z");
+  expect(items[0].lastCompletedAt).toBe("2026-10-14T12:00:00Z");
+});
+
+test("changeCompletionDate: only a done execution's date, then the rows refresh and a toast confirms", async () => {
+  const saved = { ...closedRun, closedAt: "2026-10-07T12:00:00Z" };
+  storage.patch.mockResolvedValue(saved);
+  storage.get.mockResolvedValue({ id: "i1", lastCompletedAt: "2026-10-09T12:00:00Z" });
+  const notify = jest.fn();
+  const setActiveExecution = jest.fn();
+  let intents = [{ id: "i1" }];
+  const a = actionsFor(closedRun, {
+    intents,
+    notify,
+    setActiveExecution,
+    setIntents: (f) => { intents = typeof f === "function" ? f(intents) : f; },
+  });
+  expect(await a.changeCompletionDate("2026-10-07")).toBe(true);
+  expect(storage.patch).toHaveBeenCalledWith("execution:x", { closedAt: expect.any(String) });
+  expect(setActiveExecution).toHaveBeenCalledWith(saved);
+  // The database keeps the LATEST done date; the row shows what it says.
+  expect(intents[0].lastCompletedAt).toBe("2026-10-09T12:00:00Z");
+  expect(notify).toHaveBeenCalledWith(expect.stringMatching(/^Completed on /));
+  storage.patch.mockClear();
+  expect(await actionsFor({ ...closedRun, outcome: "skipped" }).changeCompletionDate("2026-10-07")).toBe(false);
+  expect(await actionsFor({ ...closedRun, status: "active" }).changeCompletionDate("2026-10-07")).toBe(false);
+  expect(storage.patch).not.toHaveBeenCalled();
+});
+
+test("closedAtFor: now for today, midday for any earlier day", () => {
+  const now = new Date(2026, 9, 16, 9, 30);
+  expect(closedAtFor(null, now)).toBe(now.toISOString());
+  expect(closedAtFor("2026-10-16", now)).toBe(now.toISOString());
+  expect(closedAtFor("2026-10-07", now)).toBe(new Date(2026, 9, 7, 12, 0).toISOString());
+  expect(closedAtFor("2025-12-01", now)).toBe(new Date(2025, 11, 1, 12, 0).toISOString());
 });
 
 test("a run realtime already added is not added twice", () => {

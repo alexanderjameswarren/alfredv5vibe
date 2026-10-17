@@ -480,6 +480,7 @@ export default function IntentionCard({
                     <SchedulePopover
                       label={actions.scheduleLabel}
                       initialDate={actions.liveDate || getTodayDate()}
+                      minDate={getTodayDate()}
                       onPick={(date) => onSchedule(intent.id, date)}
                       disabled={Boolean(closedTitle || actions.moveBlocked)}
                       // Faded brown still read as live beside a faded Start Now; disabled is tan and flat.
