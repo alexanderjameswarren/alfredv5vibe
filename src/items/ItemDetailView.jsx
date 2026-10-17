@@ -249,6 +249,7 @@ export default function ItemDetailView({
                 label={actions.scheduleLabel}
                 icon={<CalendarPlus className="w-4 h-4" />}
                 initialDate={actions.liveDate || getTodayDate()}
+                minDate={getTodayDate()}
                 onPick={(date) => onScheduleItem(item, date, target?.intent.id)}
                 disabled={Boolean(closedTitle || actions.moveBlocked)}
                 className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}

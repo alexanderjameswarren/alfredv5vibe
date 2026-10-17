@@ -24,6 +24,9 @@ import React, { useState, useEffect, useRef } from "react";
 const PANEL_WIDTH = 240; // w-60
 const EDGE = 16; // the page gutter
 
+// The one wording for an event date before today (Restructure P4).
+export const PAST_DATE_MESSAGE = "Pick today or a later date.";
+
 export default function SchedulePopover({
   label,
   icon = null,
@@ -41,10 +44,14 @@ export default function SchedulePopover({
   // (date, time) => error text or null. An error shows inside the popover, which
   // stays open with what was entered; changing either input clears it.
   validate = null,
+  // "YYYY-MM-DD": earlier dates are greyed out and refused (event dates: today).
+  minDate = null,
 }) {
   const withTime = initialTime !== null;
+  // An overdue date being moved opens on the earliest allowed day instead.
+  const startDate = minDate && initialDate && initialDate < minDate ? minDate : initialDate;
   const [open, setOpen] = useState(false);
-  const [date, setDate] = useState(initialDate);
+  const [date, setDate] = useState(startDate);
   const [time, setTime] = useState(initialTime || "");
   const [error, setError] = useState(null);
   const [align, setAlign] = useState("left");
@@ -68,7 +75,7 @@ export default function SchedulePopover({
       // Reset on every open, so Do Today always offers today even after the
       // popover was left holding some other date from a previous visit.
       if (!wasOpen) {
-        setDate(initialDate);
+        setDate(startDate);
         setTime(initialTime || "");
         setError(null);
       }
@@ -80,7 +87,9 @@ export default function SchedulePopover({
 
   function commit() {
     if (!ready) return;
-    const problem = validate ? validate(date, withTime ? time : undefined) : null;
+    const problem =
+      (minDate && date < minDate ? PAST_DATE_MESSAGE : null) ||
+      (validate ? validate(date, withTime ? time : undefined) : null);
     if (problem) {
       setError(problem);
       return;
@@ -121,6 +130,7 @@ export default function SchedulePopover({
             type="date"
             aria-label="Date"
             value={date}
+            min={minDate || undefined}
             onChange={(e) => {
               setDate(e.target.value);
               setError(null);

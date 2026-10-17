@@ -44,6 +44,27 @@ test("edit form: the date is locked while its run is active, not when paused", (
   }
 });
 
+test("edit form: a date moved into the past is refused; an overdue date left alone still saves", () => {
+  const onUpdate = jest.fn();
+  const { container } = render(
+    <EventCard
+      event={{ id: "e1", intentId: "i1", time: "2020-01-10" }}
+      intent={{ id: "i1", text: "Water plants", status: "active" }}
+      contexts={[]}
+      onActivate={jest.fn()}
+      onUpdate={onUpdate}
+      getIntentDisplay={(i) => i.text}
+    />,
+  );
+  fireEvent.click(screen.getByText("Water plants"));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(onUpdate).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByText("Water plants"));
+  fireEvent.change(container.querySelector('input[type="date"]'), { target: { value: "2020-01-05" } });
+  expect(screen.getByText("Pick today or a later date.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Save" }).disabled).toBe(true);
+});
+
 test("edit form: teal Start Now leftmost; blocked by an open run", () => {
   for (const [executions, blocked] of [[[], false], [[{ id: "x", intentId: "i1", eventId: "other", status: "paused" }], true]]) {
     const onActivate = jest.fn();

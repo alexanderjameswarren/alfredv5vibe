@@ -72,7 +72,8 @@ const CASES = {
       { text: "Rest", type: "step", offset_minutes: 30 },
     ],
   },
-  "an intention with a date": { suggestIntent: true, suggestedEventDate: "2026-10-01" },
+  // Far ahead: the detail page refuses an event date before today.
+  "an intention with a date": { suggestIntent: true, suggestedEventDate: "2099-10-01" },
   "an intention linked to an existing item": { suggestIntent: true, suggestedItemId: "item-1" },
   "both, where a suggested existing item must lose to the new one": {
     suggestItem: true,

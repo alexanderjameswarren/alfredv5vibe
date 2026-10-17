@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { ArrowLeft, Check, Pause, Pencil, Play, Timer, Trash2 } from "lucide-react";
-import { formatEventDate, toLocalDateString } from "../utils/eventDates";
+import { formatEventDate, getTodayDate, toLocalDateString } from "../utils/eventDates";
+import { statusOf } from "../utils/status";
 import ObjectIcon from "../shared/ObjectIcon";
 import {
   useNotificationChain,
@@ -12,6 +13,9 @@ import ItemNameLabel from "../items/ItemNameLabel";
 import { useExecutionNotes } from "../notes/useExecutionNotes";
 import RecordLinks from "../shared/RecordLinks";
 import CompleteNoteDialog from "../notes/CompleteNoteDialog";
+import CompletedOnDialog from "./CompletedOnDialog";
+import { getRecurrenceConfig, nextOccurrence } from "../utils/recurrence";
+import { describeRepeat, repeats } from "../utils/recurrenceDisplay";
 import { NoteList, ARCHIVED_NOTICE } from "../notes/NoteTimeline";
 import { useRecordNotes } from "../notes/useRecordNotes";
 
@@ -43,12 +47,16 @@ export default function ExecutionDetailView({
   onViewIntention,
   onViewItem,
   onOpenExecution,
+  // (date) => Promise<boolean>: a completed execution's date, its one editable field.
+  onChangeCompletionDate,
 }) {
   const [, setTick] = useState(0);
   const [completing, setCompleting] = useState(false);
+  const [editingCompletedOn, setEditingCompletedOn] = useState(false);
   // A completed execution is a record: nothing on this page writes to it, apart
-  // from notes. useExecutionActions refuses the same writes for a closed run.
+  // from notes and its completion date. useExecutionActions refuses other writes.
   const closed = execution.status === "closed";
+  const completedOnDate = execution.closedAt ? toLocalDateString(new Date(execution.closedAt)) : null;
   // Notification state lives ON the elements now, so the chain is loaded here
   // and threaded into the element rows rather than rendered as its own list.
   const chain = useNotificationChain(execution.id, execution.elements);
@@ -150,12 +158,42 @@ export default function ExecutionDetailView({
     onOpenExecution: onOpenExecution && ((exec) => leaveTo(() => onOpenExecution(exec))),
   };
 
-  async function completeWithNote(text) {
+  async function completeWithNote(text, nextDate, completedOn) {
     notes.setDraft(text);
     if (!(await notes.save(text))) return false;
-    onComplete();
+    onComplete(nextDate, completedOn);
     return true;
   }
+
+  // Step 7: "Completed on" for every execution: any past day, never a future one.
+  const today = getTodayDate();
+  const completionOnComplete = { today };
+
+  // A repeating, active intention also offers its next date, by the shared rule
+  // (nextOccurrence). Only an active intention gets a successor (triggerRecurrence),
+  // so nothing is promised for one parked in background.
+  const nextOnComplete = (() => {
+    if (!intent || statusOf(intent) !== "active") return null;
+    const config = getRecurrenceConfig(intent);
+    if (!repeats(config)) return null;
+    const endDate = intent.endDate || null;
+    const recompute = (completedOn) => {
+      let date = nextOccurrence(config, {
+        eventDate: event?.time ? String(event.time).slice(0, 10) : null,
+        completedOn,
+        today,
+      });
+      if (date && date < today) date = today; // an earlier completion never suggests the past
+      return date && (!endDate || date <= endDate) ? date : null;
+    };
+    return {
+      defaultDate: recompute(today),
+      kind: describeRepeat({ config, endDate, today }),
+      today,
+      endDate,
+      recompute,
+    };
+  })();
 
   return (
     <div>
@@ -208,9 +246,33 @@ export default function ExecutionDetailView({
           <p className="text-sm text-muted-foreground mt-1">{dateDisplay}</p>
         )}
         {closed && (
-          <p className="text-sm font-medium text-foreground mt-1">
-            Completed{execution.closedAt ? ` ${formatEventDate(toLocalDateString(new Date(execution.closedAt)))}` : ""} · read only
+          <p className="flex items-center gap-2 text-sm font-medium text-foreground mt-1">
+            <span>
+              Completed{completedOnDate ? ` ${formatEventDate(completedOnDate)}` : ""} · read only
+            </span>
+            {/* Only the date may change (Step 7), for cleanup and backfills. */}
+            {onChangeCompletionDate && execution.outcome === "done" && (
+              <button
+                type="button"
+                onClick={() => setEditingCompletedOn(true)}
+                aria-label="Change completion date"
+                className="text-sm text-primary hover:text-primary-hover min-h-[44px] px-2 font-normal"
+              >
+                Change
+              </button>
+            )}
           </p>
+        )}
+        {editingCompletedOn && (
+          <CompletedOnDialog
+            initialDate={completedOnDate}
+            onCancel={() => setEditingCompletedOn(false)}
+            onSave={async (date) => {
+              const ok = await onChangeCompletionDate(date);
+              if (ok) setEditingCompletedOn(false);
+              return ok;
+            }}
+          />
         )}
         {/* Linked records, the event edit form's pattern: context, intention and
             item, each tappable, so a running or paused run is never a dead end.
@@ -492,6 +554,8 @@ export default function ExecutionDetailView({
         <CompleteNoteDialog
           initialNote={notes.draft}
           onComplete={completeWithNote}
+          next={nextOnComplete}
+          completion={completionOnComplete}
           onCancel={() => setCompleting(false)}
         />
       )}

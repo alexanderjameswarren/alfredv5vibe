@@ -22,6 +22,7 @@ export default function ExecutionDetailScreen({
   saveMemberQuantity,
   refreshCollection,
   closeExecution,
+  changeCompletionDate,
   pauseExecution,
   makeExecutionActive,
   onViewContext,
@@ -63,7 +64,8 @@ export default function ExecutionDetailScreen({
           onToggleCollectionItem={toggleCollectionItem}
           onUpdateCollectionItemQty={saveMemberQuantity}
           onRefreshCollection={refreshCollection}
-          onComplete={() => closeExecution("done")}
+          onComplete={(nextDate, completedOn) => closeExecution("done", { nextDate, completedOn })}
+          onChangeCompletionDate={changeCompletionDate}
           onPause={pauseExecution}
           onMakeActive={makeExecutionActive}
           onCancel={() => closeExecution("cancelled")}

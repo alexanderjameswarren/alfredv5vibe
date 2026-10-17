@@ -2,7 +2,8 @@ import React, { useState } from "react";
 import { Archive, Play } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import ObjectIcon from "../shared/ObjectIcon";
-import { formatEventDate } from "../utils/eventDates";
+import { formatEventDate, getTodayDate } from "../utils/eventDates";
+import { PAST_DATE_MESSAGE } from "../shared/recurrence/SchedulePopover";
 import { closedBlockTitle, RUN_ACTIVE_MOVE_REASON } from "../utils/status";
 import EventMetaLink from "./EventMetaLink";
 
@@ -37,7 +38,11 @@ export default function EventCard({
   const [scheduledDate, setScheduledDate] = useState(event.time);
   const [eventName, setEventName] = useState(event.text || intent?.text || "");
 
+  // A moved date may not be in the past; an overdue date left as it is may stay.
+  const pastDate = scheduledDate !== event.time && scheduledDate < getTodayDate();
+
   function handleSave() {
+    if (pastDate) return;
     // The date stays put while its run is active; the name may still change.
     onUpdate(event.id, runIsActive ? { text: eventName } : { time: scheduledDate, text: eventName });
     setIsEditing(false);
@@ -209,12 +214,18 @@ export default function EventCard({
             <input
               type="date"
               value={scheduledDate}
+              min={getTodayDate()}
               onChange={(e) => setScheduledDate(e.target.value)}
               disabled={runIsActive}
               title={runIsActive ? RUN_ACTIVE_MOVE_REASON : undefined}
               className="w-full px-3 py-2 min-h-[44px] border border-border rounded disabled:opacity-50"
             />
             {runIsActive && <p className="mt-1 text-xs text-muted-foreground">{RUN_ACTIVE_MOVE_REASON}</p>}
+            {pastDate && (
+              <p role="alert" className="mt-1 text-xs text-destructive">
+                {PAST_DATE_MESSAGE}
+              </p>
+            )}
           </div>
 
           {/* The same chips the display row carries. Opening the form used to
@@ -262,7 +273,8 @@ export default function EventCard({
             </button>
             <button
               onClick={handleSave}
-              className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
+              disabled={pastDate}
+              className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Save
             </button>

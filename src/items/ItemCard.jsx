@@ -742,6 +742,7 @@ export default function ItemCard({
               <SchedulePopover
                 label="Schedule"
                 initialDate={getTodayDate()}
+                minDate={getTodayDate()}
                 onPick={(date) => onSchedule(item, date)}
                 disabled={Boolean(closedTitle)}
                 className="px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-secondary disabled:hover:bg-secondary disabled:text-foreground disabled:shadow-none disabled:hover:shadow-none"

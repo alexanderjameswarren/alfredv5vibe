@@ -2,6 +2,8 @@ import React from "react";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import ExecutionDetailView, { DELETE_EXECUTION_CONFIRM } from "./ExecutionDetailView";
 import * as api from "../notes/notesApi";
+import { getTodayDate } from "../utils/eventDates";
+import { longDate } from "../utils/recurrenceDisplay";
 
 jest.mock("../NotificationChainInline", () => ({
   useNotificationChain: () => ({ reload: async () => {} }),
@@ -135,6 +137,26 @@ test("Complete asks for a note only, saves it, then completes", async () => {
   expect(api.saveNote).toHaveBeenCalledWith(expect.objectContaining({ body: "went well", executionId: "x" }));
 });
 
+test("a daily repeat's Complete offers today as next when its event is overdue, and passes it on", async () => {
+  const h = renderRun("active", {
+    intent: {
+      id: "i1",
+      text: "Water plants",
+      itemId: "it1",
+      status: "active",
+      recurrenceConfig: { type: "fixed", frequency: "daily", interval: 1 },
+    },
+  });
+  await screen.findByPlaceholderText(PLACEHOLDER);
+  fireEvent.click(screen.getByRole("button", { name: "Complete" }));
+  const today = getTodayDate();
+  expect(screen.getByText(`Next: ${longDate(today, today)}`)).toBeTruthy();
+  expect(screen.getByText("Every day")).toBeTruthy();
+  confirmComplete();
+  // The next date, then the completion date (today by default).
+  await waitFor(() => expect(h.onComplete).toHaveBeenCalledWith(today, today));
+});
+
 test("Complete without a note writes nothing", async () => {
   const h = renderRun();
   await screen.findByPlaceholderText(PLACEHOLDER);
@@ -189,6 +211,32 @@ test("Complete is brown, Pause amber outline, Make Active teal", () => {
   renderRun("active");
   expect(screen.getByRole("button", { name: "Complete" }).className).toMatch(/bg-primary/);
   expect(screen.getByRole("button", { name: "Pause" }).className).toMatch(/border-warning bg-warning-light/);
+});
+
+test("a completed execution's date has a Change link opening the date pop-up", async () => {
+  const onChangeCompletionDate = jest.fn().mockResolvedValue(true);
+  render(
+    <ExecutionDetailView
+      execution={{ id: "x", status: "closed", outcome: "done", closedAt: "2026-10-09T12:00:00Z", intentId: "i1", itemIds: [], elements: [] }}
+      intent={{ id: "i1", text: "P4 backfill test" }}
+      items={[]}
+      contexts={[]}
+      getIntentDisplay={(i) => i.text}
+      onComplete={jest.fn()}
+      onPause={jest.fn()}
+      onMakeActive={jest.fn()}
+      onCancel={jest.fn()}
+      onBack={jest.fn()}
+      onChangeCompletionDate={onChangeCompletionDate}
+    />,
+  );
+  await screen.findByText(/Completed .* · read only/);
+  fireEvent.click(screen.getByRole("button", { name: "Change completion date" }));
+  const input = screen.getByLabelText("Completed on");
+  expect(input.value).toBe("2026-10-09");
+  fireEvent.change(input, { target: { value: "2026-10-07" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onChangeCompletionDate).toHaveBeenCalledWith("2026-10-07"));
 });
 
 test("a completed run is read only, apart from notes", async () => {
